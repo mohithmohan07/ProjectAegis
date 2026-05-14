@@ -1,20 +1,21 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from app import config
 from app.db import Base, SessionLocal, engine, init_db
 from app.main import app, bootstrap
-from app.services import pipeline as pipeline_svc
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _prepare_db():
+def _prepare():
     Base.metadata.drop_all(bind=engine)
     init_db()
-    pipeline_svc.cleanup_artifacts()
+    # Fresh output workbook per test session.
+    config.BULK_IMPORT_OUTPUT.unlink(missing_ok=True)
     bootstrap()
     yield
     Base.metadata.drop_all(bind=engine)
-    pipeline_svc.cleanup_artifacts()
+    config.BULK_IMPORT_OUTPUT.unlink(missing_ok=True)
 
 
 @pytest.fixture()
@@ -29,3 +30,15 @@ def db():
         yield s
     finally:
         s.close()
+
+
+@pytest.fixture()
+def first_chapter(client):
+    tree = client.get("/directory/tree").json()
+    return tree[0]["grades"][0]["subjects"][0]["units"][0]["chapters"][0]
+
+
+@pytest.fixture()
+def first_concept(client, first_chapter):
+    detail = client.get(f"/directory/chapters/{first_chapter['id']}").json()
+    return detail["topics"][0]["concepts"][0]

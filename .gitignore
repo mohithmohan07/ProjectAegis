@@ -26,8 +26,8 @@ dist/
 backend/aegis.db
 backend/aegis_test.db
 backend/data/uploads/
-backend/data/artifacts/
-backend/data/mmds/
-backend/data/pdfs/
-backend/data/*.xlsx
+# The append-only generation output is runtime state, not source.
+backend/data/bulk_import_output.xlsx
 *.xlsx~
+
+# data/bulk_import_database.xlsx IS committed — it is the database fixture.

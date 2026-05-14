@@ -16,13 +16,14 @@ beforeEach(() => {
   );
 });
 
-test("renders brand and nav", () => {
+test("renders brand and the integrated-tool navigation", () => {
   render(
-    <MemoryRouter initialEntries={["/dashboard"]}>
+    <MemoryRouter initialEntries={["/home"]}>
       <App />
     </MemoryRouter>,
   );
   expect(screen.getByText("Aegis")).toBeDefined();
-  expect(screen.getByText("Pipeline")).toBeDefined();
-  expect(screen.getByText("Assessment Tagging")).toBeDefined();
+  expect(screen.getByText("Build Assessments")).toBeDefined();
+  expect(screen.getByText("Build Concepts")).toBeDefined();
+  expect(screen.getByText("Database")).toBeDefined();
 });

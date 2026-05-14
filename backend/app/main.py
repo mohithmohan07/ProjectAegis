@@ -1,39 +1,27 @@
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .config import DATA_DIR
+from . import config
+from .bulk_import import reader
 from .db import SessionLocal, init_db
 from .api import (
-    concepts as concepts_api,
-    questions as questions_api,
-    pipeline as pipeline_api,
-    tags as tags_api,
-    export as export_api,
-    stats as stats_api,
+    directory as directory_api,
+    build_assessments as build_assessments_api,
+    build_concepts as build_concepts_api,
+    data as data_api,
 )
 
 
 def bootstrap() -> None:
+    """Load the Bulk Import database workbook into the normalized DB on first run."""
     init_db()
     db = SessionLocal()
     try:
         from . import models
-        from .services import concepts as concept_svc
-        from .services import questions as question_svc
-
-        if db.query(models.Concept).count() == 0:
-            for fname, is_pl in [("concepts.xlsx", False), ("pre_learning.xlsx", True)]:
-                p = DATA_DIR / fname
-                if p.exists():
-                    concept_svc.import_excel(db, p, is_pre_learning=is_pl)
-
-        if db.query(models.Question).count() == 0:
-            p = DATA_DIR / "bulk_upload.xlsx"
-            if p.exists():
-                question_svc.import_excel(db, p)
+        if db.query(models.Chapter).count() == 0 and config.BULK_IMPORT_DB.exists():
+            reader.import_workbook(db, config.BULK_IMPORT_DB)
     finally:
         db.close()
 
@@ -45,9 +33,13 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Aegis",
-    description="Content intelligence and assessment-building engine for Clarius.",
-    version="0.1.0",
+    title="Aegis — Integrated Content Management Tool",
+    description=(
+        "Build Assessments and Build Concepts over a Bulk Import workbook "
+        "database. All output is written in the canonical Bulk Import format, "
+        "append-only."
+    ),
+    version="0.2.0",
     lifespan=lifespan,
 )
 
@@ -64,9 +56,7 @@ def health():
     return {"status": "ok"}
 
 
-app.include_router(concepts_api.router)
-app.include_router(questions_api.router)
-app.include_router(pipeline_api.router)
-app.include_router(tags_api.router)
-app.include_router(export_api.router)
-app.include_router(stats_api.router)
+app.include_router(directory_api.router)
+app.include_router(build_assessments_api.router)
+app.include_router(build_concepts_api.router)
+app.include_router(data_api.router)

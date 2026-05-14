@@ -1,211 +1,189 @@
-"""Generate canonical Aegis dummy fixtures.
+"""Generate the dummy Bulk Import database workbook.
 
-Writes:
-- data/concepts.xlsx          (sheet "Concepts") matching mmd_to_concepts_excel.py
-- data/pre_learning.xlsx      (sheet "Concepts") matching excel_to_concepts_prelearning.py
-- data/bulk_upload.xlsx       (sheets Objective | Subjective | Descriptive)
-- data/manifest.json          (fake PDF manifest mirroring extract_pdfs)
+The integrated tool treats a Bulk Import workbook as its database, so the
+fixture is itself a canonical workbook (``data/bulk_import_database.xlsx``).
+It is built by seeding ORM objects into a throwaway SQLite DB and writing them
+out through the real ``bulk_import.writer`` — guaranteeing the fixture always
+matches the canonical layout.
 
-The same fixtures are committed as CSV equivalents so the repo is browseable.
+Replace this file with the real Clarius Bulk Import workbook later; nothing
+else needs to change.
 """
 from __future__ import annotations
 
-import json
+import sys
 from pathlib import Path
 
-import pandas as pd
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from app.db import Base
+from app import models
+from app.bulk_import import writer
+from app.services import directory
+
+DATA_DIR = ROOT / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
-
-CONCEPTS = [
-    {
-        "Board": "ICSE", "Book": "SE", "Grade": "09", "Subject": "Mathematics",
-        "Chapter No": "01", "Chapter Code": "09ICMA_CH01",
-        "Chapter Title": "Number Systems",
-        "Topic": "Topic 01: Real Numbers",
-        "Parent Concept": "",
-        "Concept": "Rational Numbers",
-        "Concept Description": "A rational number can be expressed as p/q where q != 0.",
-        "Concept ID": "09ICMA_CH01-C001",
-        "MMD Path": "data/mmds/09ICMA_CH01.mmd",
-        "PDF Path": "data/pdfs/09ICMA_CH01.pdf",
-    },
-    {
-        "Board": "ICSE", "Book": "SE", "Grade": "09", "Subject": "Mathematics",
-        "Chapter No": "01", "Chapter Code": "09ICMA_CH01",
-        "Chapter Title": "Number Systems",
-        "Topic": "Topic 01: Real Numbers",
-        "Parent Concept": "Rational Numbers",
-        "Concept": "Irrational Numbers",
-        "Concept Description": "Real numbers that cannot be expressed as p/q.",
-        "Concept ID": "09ICMA_CH01-C002",
-        "MMD Path": "data/mmds/09ICMA_CH01.mmd",
-        "PDF Path": "data/pdfs/09ICMA_CH01.pdf",
-    },
-    {
-        "Board": "ICSE", "Book": "SE", "Grade": "09", "Subject": "Mathematics",
-        "Chapter No": "02", "Chapter Code": "09ICMA_CH02",
-        "Chapter Title": "Polynomials",
-        "Topic": "Topic 01: Polynomial Basics",
-        "Parent Concept": "",
-        "Concept": "Degree of a Polynomial",
-        "Concept Description": "Highest power of the variable in a polynomial.",
-        "Concept ID": "09ICMA_CH02-C001",
-        "MMD Path": "data/mmds/09ICMA_CH02.mmd",
-        "PDF Path": "data/pdfs/09ICMA_CH02.pdf",
-    },
-    {
-        "Board": "ICSE", "Book": "SE", "Grade": "09", "Subject": "Physics",
-        "Chapter No": "03", "Chapter Code": "09ICPH_CH03",
-        "Chapter Title": "Laws of Motion",
-        "Topic": "Topic 02: Newton's Laws",
-        "Parent Concept": "",
-        "Concept": "Newton's Third Law",
-        "Concept Description": "Every action has an equal and opposite reaction.",
-        "Concept ID": "09ICPH_CH03-C005",
-        "MMD Path": "data/mmds/09ICPH_CH03.mmd",
-        "PDF Path": "data/pdfs/09ICPH_CH03.pdf",
-    },
-    {
-        "Board": "ICSE", "Book": "SE", "Grade": "09", "Subject": "Physics",
-        "Chapter No": "03", "Chapter Code": "09ICPH_CH03",
-        "Chapter Title": "Laws of Motion",
-        "Topic": "Topic 03: Friction",
-        "Parent Concept": "",
-        "Concept": "Coefficient of Friction",
-        "Concept Description": "Ratio of friction force to normal force.",
-        "Concept ID": "09ICPH_CH03-C010",
-        "MMD Path": "data/mmds/09ICPH_CH03.mmd",
-        "PDF Path": "data/pdfs/09ICPH_CH03.pdf",
-    },
-]
+DEST = DATA_DIR / "bulk_import_database.xlsx"
 
 
-def _pre_learning_rows() -> list[dict]:
-    enriched = []
-    for c in CONCEPTS:
-        row = dict(c)
-        row["Concept Description"] = (
-            f"Description: {c['Concept Description']} "
-            "// Types: Type 01: Standard Case 01: introductory example "
-            "// Misconception: students often confuse this with related concepts."
+def _label(chapter_code: str, topic_no: int, concept_slug: str, g_type: str, n: int) -> str:
+    return f"{chapter_code}_PL_T{topic_no:02d}_{concept_slug}_{g_type[:1]}G Q{n:02d}"
+
+
+def _seed(db) -> None:
+    blueprint = [
+        # board, grade, subject, chapter_title, [topics...]
+        ("CBSE", "10", "Mathematics", "Circles", [
+            ("Secant and Tangent - Definitions and Positions", [
+                ("Conceptual Meaning of Chord versus Tangent",
+                 "A chord joins two points of a circle; a tangent meets it at exactly one point."),
+                ("Position of a Line Relative to a Circle",
+                 "A line can miss, touch, or cut a circle - giving 0, 1, or 2 intersection points."),
+            ]),
+            ("Perpendicularity and Construction of Tangent", [
+                ("Tangent is Perpendicular to Radius at Point of Contact",
+                 "The radius drawn to the point of contact is perpendicular to the tangent."),
+                ("Constructing a Tangent from an External Point",
+                 "Two tangents can be drawn to a circle from any external point; they are equal in length."),
+            ]),
+        ]),
+        ("ICSE", "09", "Physics", "Laws of Motion", [
+            ("Newton's Laws", [
+                ("Newton's First Law and Inertia",
+                 "A body continues in its state of rest or uniform motion unless acted on by a force."),
+                ("Newton's Third Law",
+                 "Every action has an equal and opposite reaction."),
+            ]),
+            ("Friction", [
+                ("Static and Kinetic Friction",
+                 "Static friction prevents motion up to a limit; kinetic friction opposes ongoing sliding."),
+            ]),
+        ]),
+        ("ICSE", "10", "English Grammar", "Tenses", [
+            ("Past Tense", [
+                ("Past Continuous Tense",
+                 "Describes actions in progress at a point in the past, formed with was/were + -ing."),
+            ]),
+        ]),
+    ]
+
+    for board, grade, subject, ch_title, topics in blueprint:
+        code = directory.make_chapter_code(board, grade, subject, ch_title)
+        chapter = models.Chapter(
+            chapter_code=code, board=board, grade=grade, subject=subject,
+            unit=f"{subject} Unit",
+            chapter_title=ch_title,
+            chapter_display_name=f"{ch_title} ({code})",
+            chapter_duration="3",
+            chapter_description=f"Auto-seeded {board} Grade {grade} {subject} chapter.",
         )
-        enriched.append(row)
-    return enriched
+        db.add(chapter)
+        db.flush()
 
+        for t_idx, (topic_title, concepts) in enumerate(topics, start=1):
+            topic = models.Topic(
+                chapter_id=chapter.id,
+                topic_title=f"Topic {t_idx:02d}: {topic_title} ({code}_PL)",
+                topic_display_name=topic_title,
+                pre_post_learning="Post",
+                topic_description=f"{topic_title} - seeded topic.",
+            )
+            db.add(topic)
+            db.flush()
 
-def _objective_rows() -> list[dict]:
-    return [
-        {
-            "Question Label": "09ICMA_CH01_PL_Q01",
-            "Question Category": "Multiple Choice Question",
-            "Cognitive Skills": "Remembering",
-            "Question Source": "ICSE Past Paper 2024",
-            "Question Appears in": "Chapter 1 - Number Systems",
-            "Level of Difficulty": "Less",
-            "Question": "Which of the following is a rational number?",
-            "Marks": 1,
-            "Answer Type1": "Phrases", "Answer Content1": "1/2", "Correct Answer1": "TRUE", "Answer Weightage1": 1,
-            "Answer Type2": "Phrases", "Answer Content2": "sqrt(2)", "Correct Answer2": "FALSE", "Answer Weightage2": 0,
-            "Answer Type3": "Phrases", "Answer Content3": "pi", "Correct Answer3": "FALSE", "Answer Weightage3": 0,
-            "Answer Type4": "Phrases", "Answer Content4": "e", "Correct Answer4": "FALSE", "Answer Weightage4": 0,
-            "Answer Explanation": "1/2 fits the form p/q with integer p,q and q != 0.",
-        },
-        {
-            "Question Label": "09ICPH_CH03_PL_Q01",
-            "Question Category": "True/False",
-            "Cognitive Skills": "Understanding",
-            "Question Source": "ICSE Sample 2023",
-            "Question Appears in": "Chapter 3 - Laws of Motion",
-            "Level of Difficulty": "Less",
-            "Question": "Newton's third law states that for every action there is an equal and opposite reaction.",
-            "Marks": 1,
-            "Answer Type1": "Phrases", "Answer Content1": "True", "Correct Answer1": "TRUE", "Answer Weightage1": 1,
-            "Answer Type2": "Phrases", "Answer Content2": "False", "Correct Answer2": "FALSE", "Answer Weightage2": 0,
-            "Answer Explanation": "Direct statement of the law.",
-        },
-    ]
+            for c_idx, (concept_title, details) in enumerate(concepts, start=1):
+                slug = "".join(w[0] for w in concept_title.split())[:14]
+                concept = models.Concept(
+                    topic_id=topic.id,
+                    concept_title=concept_title,
+                    concept_display_name=f"{concept_title} ({code}_PL_{topic_title.replace(' ', '_')})",
+                    concept_details=(
+                        f"Description: {details} "
+                        "// Types: Type 01: Standard application Case 01: introductory example "
+                        "// Misconception: learners often confuse this with neighbouring ideas."
+                    ),
+                    keywords=", ".join(concept_title.lower().split()),
+                )
+                db.add(concept)
+                db.flush()
 
+                for g_type in ("Basic", "Intermediate", "Advanced"):
+                    group = models.Group(
+                        concept_id=concept.id, group_type=g_type,
+                        group_name=f"({code}_PL_T{t_idx:02d}_{slug}) {g_type[:1]}G{c_idx:02d}",
+                        group_display_name=f"{concept_title} - {g_type}",
+                        group_description=f"{g_type} group for {concept_title}.",
+                        group_status="Active",
+                    )
+                    db.add(group)
+                    db.flush()
 
-def _subjective_rows() -> list[dict]:
-    return [
-        {
-            "Question Label": "09ICMA_CH01_PL_Q05",
-            "Question Category": "Short Answer (3 marks)",
-            "Cognitive Skills": "Applying",
-            "Question Source": "ICSE Past Paper 2024",
-            "Question Appears in": "Chapter 1 - Number Systems",
-            "Level of Difficulty": "Moderate",
-            "Question": "Express 0.8333... as a rational number in the form p/q.",
-            "Marks": 3,
-            "Answer Type": "Phrases",
-            "Answer Weightage": 3,
-            "Answer Content": "Step 1: let x = 0.8333... (1 mark) // Step 2: 10x - x = 7.5 (1 mark) // Step 3: x = 5/6 (1 mark)",
-            "Answer Explanation": "Use repeating decimal trick to convert.",
-            "Display Answer": "5/6",
-        },
-    ]
-
-
-def _descriptive_rows() -> list[dict]:
-    return [
-        {
-            "Question Label": "09ICPH_CH03_PL_Q08",
-            "Question Category": "Long Answer (5 marks)",
-            "Cognitive Skills": "Analysing",
-            "Question Source": "ICSE Past Paper 2023",
-            "Question Appears in": "Chapter 3 - Laws of Motion",
-            "Level of Difficulty": "High",
-            "Question": "Derive the equation for friction force on a block on an inclined plane and explain assumptions.",
-            "Marks": 5,
-            "Answer Type": "Phrases",
-            "Answer Weightage": 5,
-            "Answer Content": (
-                "Step 1: free body diagram (1 mark) // Step 2: resolve forces along/perpendicular to incline (1 mark) "
-                "// Step 3: write friction = mu * N (1 mark) // Step 4: substitute N = mg cos(theta) (1 mark) "
-                "// Step 5: state assumption: rigid body, no air drag (1 mark)"
-            ),
-            "Answer Explanation": "Standard inclined-plane derivation; mark per labelled step.",
-            "Display Answer": "F = mu * mg * cos(theta)",
-        },
-    ]
+                    # One seed question per group, spread across sheet kinds.
+                    kind = {"Basic": "objective", "Intermediate": "subjective",
+                            "Advanced": "descriptive"}[g_type]
+                    label = _label(code, t_idx, slug, g_type, c_idx)
+                    q = models.Question(
+                        group_id=group.id, sheet_kind=kind, question_label=label,
+                        question_category={
+                            "objective": "Multiple Choice Question",
+                            "subjective": "Short Answer",
+                            "descriptive": "Long Answer",
+                        }[kind],
+                        cognitive_skills={"Basic": "Remembering", "Intermediate": "Applying",
+                                          "Advanced": "Analysing"}[g_type],
+                        question_source="Aegis Seed",
+                        level_of_difficulty={"Basic": "Less", "Intermediate": "Moderate",
+                                             "Advanced": "High"}[g_type],
+                        question=f"[{g_type}] Explain or apply: {concept_title}.",
+                        marks={"objective": 1, "subjective": 3, "descriptive": 5}[kind],
+                        answer_explanation=f"Refer to: {details}",
+                        origin="seed",
+                    )
+                    if kind == "objective":
+                        q.answers = [
+                            {"answer_type": "Words", "answer_content": "Correct option",
+                             "correct_answer": "Yes", "answer_weightage": "1"},
+                            {"answer_type": "Words", "answer_content": "Distractor A",
+                             "correct_answer": "No", "answer_weightage": "0"},
+                        ]
+                    elif kind == "subjective":
+                        q.answers = [
+                            {"answer_type": "Words", "answer": concept_title,
+                             "answer_display": "Yes", "weightage": "3", "placeholder": "answer"},
+                        ]
+                    else:
+                        q.display_answer = "Yes"
+                        q.answers = [
+                            {"answer_type": "Words", "answer_weightage": "5",
+                             "answer_content": f"Full explanation of {concept_title}."},
+                        ]
+                        q.sub_questions = [
+                            {"text": f"i. Define {concept_title}.", "marks": "2",
+                             "keywords": [{"answer_type": "Words", "weightage": "2",
+                                           "keyword": concept_title}]},
+                            {"text": f"ii. Give an example of {concept_title}.", "marks": "3",
+                             "keywords": [{"answer_type": "Words", "weightage": "3",
+                                           "keyword": "worked example"}]},
+                        ]
+                    db.add(q)
+    db.commit()
 
 
 def main() -> None:
-    pd.DataFrame(CONCEPTS).to_csv(DATA_DIR / "concepts.csv", index=False)
-    with pd.ExcelWriter(DATA_DIR / "concepts.xlsx", engine="openpyxl") as w:
-        pd.DataFrame(CONCEPTS).to_excel(w, index=False, sheet_name="Concepts")
-
-    pd.DataFrame(_pre_learning_rows()).to_csv(DATA_DIR / "pre_learning.csv", index=False)
-    with pd.ExcelWriter(DATA_DIR / "pre_learning.xlsx", engine="openpyxl") as w:
-        pd.DataFrame(_pre_learning_rows()).to_excel(w, index=False, sheet_name="Concepts")
-
-    with pd.ExcelWriter(DATA_DIR / "bulk_upload.xlsx", engine="openpyxl") as w:
-        pd.DataFrame(_objective_rows()).to_excel(w, index=False, sheet_name="Objective")
-        pd.DataFrame(_subjective_rows()).to_excel(w, index=False, sheet_name="Subjective")
-        pd.DataFrame(_descriptive_rows()).to_excel(w, index=False, sheet_name="Descriptive")
-    pd.DataFrame(_objective_rows()).to_csv(DATA_DIR / "bulk_upload_objective.csv", index=False)
-    pd.DataFrame(_subjective_rows()).to_csv(DATA_DIR / "bulk_upload_subjective.csv", index=False)
-    pd.DataFrame(_descriptive_rows()).to_csv(DATA_DIR / "bulk_upload_descriptive.csv", index=False)
-
-    manifest = [
-        {"chapter_code": c["Chapter Code"], "drive_ids": [f"drive-stub-{c['Chapter Code']}"],
-         "local_pdf_path": c["PDF Path"], "status": "PDF_DOWNLOADED"}
-        for c in CONCEPTS
-    ]
-    (DATA_DIR / "manifest.json").write_text(json.dumps(manifest, indent=2))
-
-    for c in CONCEPTS:
-        mmd_path = DATA_DIR.parent / c["MMD Path"]
-        mmd_path.parent.mkdir(parents=True, exist_ok=True)
-        if not mmd_path.exists():
-            mmd_path.write_text(
-                f"# {c['Chapter Title']}\n\n## {c['Topic']}\n\n"
-                f"### {c['Concept']}\n{c['Concept Description']}\n"
-            )
-
-    print(f"wrote canonical fixtures into {DATA_DIR}")
+    engine = create_engine("sqlite://")  # in-memory
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine)()
+    try:
+        _seed(db)
+        writer.write_workbook(db, dest=DEST)
+        n = db.query(models.Question).count()
+        print(f"wrote {DEST} ({n} seed questions across 3 sheets)")
+    finally:
+        db.close()
 
 
 if __name__ == "__main__":

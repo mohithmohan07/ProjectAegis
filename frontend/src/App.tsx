@@ -1,16 +1,14 @@
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
-import Dashboard from "./pages/Dashboard";
-import Pipeline from "./pages/Pipeline";
-import Concepts from "./pages/Concepts";
-import Questions from "./pages/Questions";
-import Tagging from "./pages/Tagging";
+import Home from "./pages/Home";
+import BuildAssessments from "./pages/BuildAssessments";
+import BuildConcepts from "./pages/BuildConcepts";
+import Database from "./pages/Database";
 
 const NAV = [
-  { to: "/dashboard", label: "Dashboard" },
-  { to: "/pipeline", label: "Pipeline" },
-  { to: "/concepts", label: "Concepts" },
-  { to: "/questions", label: "Questions" },
-  { to: "/tagging", label: "Assessment Tagging" },
+  { to: "/home", label: "Home" },
+  { to: "/build-assessments", label: "Build Assessments" },
+  { to: "/build-concepts", label: "Build Concepts" },
+  { to: "/database", label: "Database" },
 ];
 
 export default function App() {
@@ -19,7 +17,7 @@ export default function App() {
       <aside className="sidebar">
         <div className="brand">
           Aegis
-          <small>Content Intelligence Engine</small>
+          <small>Integrated Content Tool</small>
         </div>
         <nav className="nav">
           {NAV.map((n) => (
@@ -28,15 +26,18 @@ export default function App() {
             </NavLink>
           ))}
         </nav>
+        <div className="sidebar-note">
+          The Bulk Import workbook is the single source of truth. Every
+          generation is written back to it — append-only.
+        </div>
       </aside>
       <main className="main">
         <Routes>
-          <Route path="/" element={<Navigate to="/dashboard" replace />} />
-          <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/pipeline" element={<Pipeline />} />
-          <Route path="/concepts" element={<Concepts />} />
-          <Route path="/questions" element={<Questions />} />
-          <Route path="/tagging" element={<Tagging />} />
+          <Route path="/" element={<Navigate to="/home" replace />} />
+          <Route path="/home" element={<Home />} />
+          <Route path="/build-assessments" element={<BuildAssessments />} />
+          <Route path="/build-concepts" element={<BuildConcepts />} />
+          <Route path="/database" element={<Database />} />
         </Routes>
       </main>
     </div>

@@ -1,23 +1,30 @@
 import type {
-  Chapter,
-  Concept,
-  PipelineRun,
+  BlueprintBatch,
+  BoardNode,
+  ChapterDetail,
   Question,
-  StageDescriptor,
+  Session,
   Stats,
-  TagSuggestion,
+  UploadJob,
+  Vocab,
 } from "../types";
 
 const BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
 
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
-    headers: { "Content-Type": "application/json" },
+    headers: init?.body instanceof FormData ? {} : { "Content-Type": "application/json" },
     ...init,
   });
   if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`${res.status} ${res.statusText}: ${body}`);
+    let detail = `${res.status} ${res.statusText}`;
+    try {
+      const body = await res.json();
+      if (body.detail) detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
+    } catch {
+      /* keep status text */
+    }
+    throw new Error(detail);
   }
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
@@ -25,34 +32,95 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   base: BASE,
-
   health: () => http<{ status: string }>("/health"),
-  stats: () => http<Stats>("/stats"),
 
-  concepts: (params: Record<string, string> = {}) =>
-    http<Concept[]>(`/concepts?${new URLSearchParams(params)}`),
-  chapters: () => http<Chapter[]>("/concepts/chapters"),
-
+  // Directory / database
+  tree: () => http<BoardNode[]>("/directory/tree"),
+  chapter: (id: number) => http<ChapterDetail>(`/directory/chapters/${id}`),
+  vocab: () => http<Vocab>("/directory/vocab"),
+  stats: () => http<Stats>("/directory/stats"),
   questions: (params: Record<string, string> = {}) =>
-    http<Question[]>(`/questions?${new URLSearchParams(params)}`),
-  createQuestion: (q: Partial<Question>) =>
-    http<Question>("/questions", { method: "POST", body: JSON.stringify(q) }),
-  applyTag: (id: number) =>
-    http<Question>(`/tags/apply/${id}`, { method: "POST" }),
+    http<Question[]>(`/data/questions?${new URLSearchParams(params)}`),
+  exportUrl: (scope: "all" | "output") => `${BASE}/data/export?scope=${scope}`,
+  importWorkbook: (file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return http<Record<string, number>>("/data/import", { method: "POST", body: fd });
+  },
 
-  suggestTag: (text: string) =>
-    http<TagSuggestion>("/tags/suggest", {
+  // Build Assessments — concept mapping
+  createSession: (scope_type: string, scope_ids: number[]) =>
+    http<Session>("/build-assessments/sessions", {
       method: "POST",
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ scope_type, scope_ids }),
     }),
-
-  stages: () => http<StageDescriptor[]>("/pipeline/stages"),
-  runStage: (key: string, mode: string, inputs: Record<string, unknown> = {}) =>
-    http<PipelineRun>(`/pipeline/stages/${key}/run`, {
+  getSession: (id: number) => http<Session>(`/build-assessments/sessions/${id}`),
+  addBatch: (sessionId: number, batch: Omit<BlueprintBatch, "id">) =>
+    http<BlueprintBatch>(`/build-assessments/sessions/${sessionId}/batches`, {
       method: "POST",
-      body: JSON.stringify({ mode, inputs }),
+      body: JSON.stringify(batch),
     }),
-  runs: () => http<PipelineRun[]>("/pipeline/runs"),
+  generateSession: (sessionId: number) =>
+    http<{ session_id: number; created: number; pipeline: Record<string, unknown> }>(
+      `/build-assessments/sessions/${sessionId}/generate`,
+      { method: "POST" },
+    ),
 
-  exportUrl: () => `${BASE}/export/bulk-upload`,
+  // Build Assessments — upload
+  createAssessmentUpload: (uploadType: string, file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return http<UploadJob>(
+      `/build-assessments/uploads?upload_type=${encodeURIComponent(uploadType)}`,
+      { method: "POST", body: fd },
+    );
+  },
+  setTextbookMode: (jobId: number, mode: string) =>
+    http<UploadJob>(`/build-assessments/uploads/${jobId}/textbook-mode`, {
+      method: "POST",
+      body: JSON.stringify({ mode }),
+    }),
+  setDeposit: (jobId: number, scope_type: string, scope_ids: number[]) =>
+    http<UploadJob>(`/build-assessments/uploads/${jobId}/deposit`, {
+      method: "POST",
+      body: JSON.stringify({ scope_type, scope_ids }),
+    }),
+  generateFromUpload: (jobId: number, question_type: string) =>
+    http<{ job_id: number; created: number; pipeline: Record<string, unknown> }>(
+      `/build-assessments/uploads/${jobId}/generate`,
+      { method: "POST", body: JSON.stringify({ question_type }) },
+    ),
+
+  // Build Concepts
+  postLearningUpload: (file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return http<UploadJob>("/build-concepts/post-learning/uploads", {
+      method: "POST",
+      body: fd,
+    });
+  },
+  postLearningGenerate: (jobId: number, target_chapter_id: number) =>
+    http<Record<string, unknown>>(
+      `/build-concepts/post-learning/uploads/${jobId}/generate`,
+      { method: "POST", body: JSON.stringify({ target_chapter_id }) },
+    ),
+  preLearningUpload: (file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return http<UploadJob>("/build-concepts/pre-learning/uploads", {
+      method: "POST",
+      body: fd,
+    });
+  },
+  preLearningGenerateFromUpload: (jobId: number, target_chapter_id: number) =>
+    http<Record<string, unknown>>(
+      `/build-concepts/pre-learning/uploads/${jobId}/generate`,
+      { method: "POST", body: JSON.stringify({ target_chapter_id }) },
+    ),
+  preLearningFromExisting: (chapter_ids: number[]) =>
+    http<Record<string, unknown>>("/build-concepts/pre-learning/from-existing", {
+      method: "POST",
+      body: JSON.stringify({ chapter_ids }),
+    }),
 };

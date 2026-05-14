@@ -122,3 +122,57 @@ input, select, textarea {
 
 .error-box { background: rgba(248,81,73,.1); border: 1px solid var(--red); color: var(--red); padding: 10px; border-radius: 6px; font-size: 12px; white-space: pre-wrap; }
 .empty { color: var(--muted); padding: 40px; text-align: center; }
+
+.grid.cols-2 { grid-template-columns: repeat(2, 1fr); }
+
+.sidebar-note {
+  margin-top: 24px; padding: 10px; font-size: 11px; color: var(--muted);
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px;
+}
+
+.module-card {
+  background: var(--panel); border: 1px solid var(--border); color: var(--text);
+  border-radius: 10px; padding: 20px; text-align: left; cursor: pointer;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.module-card:hover { border-color: var(--accent); filter: none; }
+.module-title { font-size: 16px; font-weight: 700; }
+.module-desc { font-size: 12px; color: var(--muted); line-height: 1.5; }
+
+.field { margin-bottom: 14px; }
+.field-label { font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .03em; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip {
+  background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+  padding: 5px 12px; border-radius: 999px; font-size: 12px; font-weight: 500;
+}
+.chip-on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.chip:disabled { opacity: .4; }
+
+.radio { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text); }
+.radio input { width: auto; }
+
+.pick-list { display: flex; flex-direction: column; gap: 4px; max-height: 280px; overflow-y: auto; }
+.pick-item {
+  display: flex; align-items: center; gap: 10px; padding: 6px 8px;
+  border-radius: 6px; font-size: 13px;
+}
+.pick-item:hover { background: var(--panel-2); }
+.pick-item input { width: auto; }
+.pick-item .muted { margin-left: auto; font-size: 11px; }
+
+.dir-picker select { min-width: 130px; }
+
+.mmd-preview {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+  padding: 10px; font-size: 11px; max-height: 180px; overflow: auto;
+  white-space: pre-wrap; margin-top: 8px; color: var(--muted);
+}
+
+.success-card { border-color: var(--green); }
+.success-card pre { font-size: 11px; max-height: 240px; overflow: auto; }
+
+.upload-label {
+  background: var(--accent); color: #fff; padding: 7px 14px; border-radius: 6px;
+  font-weight: 600; font-size: 13px; cursor: pointer;
+}

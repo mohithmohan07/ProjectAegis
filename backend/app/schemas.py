@@ -1,150 +1,158 @@
 from datetime import datetime
-from typing import Any
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
-# ---------- Concept ----------
+# --------------------------------------------------------------------------- #
+# Directory
+# --------------------------------------------------------------------------- #
 
-class ConceptBase(BaseModel):
-    concept_id: str | None = None
-    board: str = ""
-    book: str = ""
-    grade: str = ""
-    subject: str = ""
-    chapter_no: str = ""
-    chapter_code: str = ""
-    chapter_title: str = ""
-    topic: str = ""
-    parent_concept: str = ""
-    concept: str = ""
-    concept_description: str = ""
-    mmd_path: str = ""
-    pdf_path: str = ""
-    is_pre_learning: int = 0
+class ChapterRef(BaseModel):
+    id: int
+    chapter_code: str
+    chapter_title: str
+    chapter_display_name: str
+    topic_count: int
+    concept_count: int
 
 
-class ConceptOut(ConceptBase):
+class ConceptOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
-    created_at: datetime
+    concept_title: str
+    concept_display_name: str
+    concept_details: str
+    keywords: str
 
 
-class ConceptIn(ConceptBase):
-    pass
-
-
-# ---------- Question ----------
-
-QUESTION_CATEGORIES = [
-    "Multiple Choice Question", "Assertion & Reasons", "True/False", "Fill in the Blanks",
-    "Very Short Answer", "Short Answer (2 marks)", "Short Answer (3 marks)",
-    "Long Answer (4 marks)", "Long Answer (5 marks)", "Long Answer (6 marks)",
-    "Case-Based", "Passage-based", "Extract-based", "Map-based",
-    "Sentence Transformation", "Error Correction", "Composition Writing",
-]
-COGNITIVE_SKILLS = ["Remembering", "Understanding", "Applying", "Analysing", "Evaluating", "Creating"]
-DIFFICULTY_LEVELS = ["Less", "Moderate", "High"]
-SHEET_KINDS = ["objective", "subjective", "descriptive"]
-
-
-class AnswerOption(BaseModel):
-    answer_type: str = "Phrases"
-    answer_content: str = ""
-    correct_answer: bool = False
-    answer_weightage: float = 0.0
-
-
-class QuestionBase(BaseModel):
-    question_label: str | None = None
-    sheet_kind: str = "objective"
-    question_category: str = ""
-    cognitive_skills: str = ""
-    question_source: str = ""
-    question_appears_in: str = ""
-    level_of_difficulty: str = ""
-    question: str
-    marks: float = 0.0
-    answers: list[AnswerOption] = Field(default_factory=list)
-    answer_explanation: str = ""
-    display_answer: str = ""
-    rubric: str = ""
-    concept_id: int | None = None
-    assessment_label: str = ""
-    tagging_notes: str = ""
-
-
-class QuestionOut(QuestionBase):
+class QuestionOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
-    created_at: datetime
-
-
-class QuestionIn(QuestionBase):
-    pass
-
-
-# ---------- Pipeline ----------
-
-class StageDescriptor(BaseModel):
-    key: str
-    title: str
-    order: int
-    description: str
-    inputs: list[str]
-    outputs: list[str]
-    dependencies: list[str]
-    requires_keys: list[str]
-    available: bool  # true if live mode is possible (keys present)
-
-
-class StageRunRequest(BaseModel):
-    mode: str = "dry"  # dry | live
-    inputs: dict[str, Any] = Field(default_factory=dict)
-
-
-class PipelineRunOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-    id: int
-    stage: str
-    mode: str
-    status: str
-    phase: str
-    progress: float
-    detail: str
-    inputs: dict
-    outputs: dict
-    artifact_path: str
-    started_at: datetime
-    finished_at: datetime | None
-    error: str
-
-
-# ---------- Misc ----------
-
-class TagSuggestion(BaseModel):
-    concept_id: int | None
-    concept_path: str
+    group_id: int
+    sheet_kind: str
+    question_label: str
+    question_category: str
     cognitive_skills: str
+    question_source: str
     level_of_difficulty: str
-    confidence: float
+    question: str
+    marks: float
+    math_keyboard: str
+    display_answer: str
+    answer_explanation: str
+    answers: list
+    sub_questions: list
+    origin: str
+    created_at: datetime
 
 
-class TagRequest(BaseModel):
-    text: str
+# --------------------------------------------------------------------------- #
+# Build Assessments — concept mapping
+# --------------------------------------------------------------------------- #
+
+class CreateSessionRequest(BaseModel):
+    scope_type: str  # chapter | topic | concept
+    scope_ids: list[int]
 
 
-class StatsOut(BaseModel):
+class BlueprintBatchRequest(BaseModel):
+    cognitive_skills: list[str] = Field(default_factory=list)
+    difficulty_levels: list[str] = Field(default_factory=list)
+    categories: list[str] = Field(default_factory=list)
+    question_type: str = "objective"
+    num_questions: int = 1
+
+
+class BlueprintBatchOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    cognitive_skills: list
+    difficulty_levels: list
+    categories: list
+    question_type: str
+    num_questions: int
+
+
+class SessionOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    source: str
+    scope_type: str
+    scope_ids: list
+    status: str
+    generated_question_ids: list
+    batches: list[BlueprintBatchOut]
+    created_at: datetime
+
+
+# --------------------------------------------------------------------------- #
+# Uploads (shared by Build Assessments path B and Build Concepts)
+# --------------------------------------------------------------------------- #
+
+class UploadJobOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    module: str
+    upload_type: str
+    textbook_mode: str
+    learning_kind: str
+    filename: str
+    mmd_text: str
+    deposit_scope_type: str
+    deposit_scope_ids: list
+    status: str
+    result_ids: list
+    detail: str
+    created_at: datetime
+
+
+class TextbookModeRequest(BaseModel):
+    mode: str  # extract | create
+
+
+class DepositRequest(BaseModel):
+    scope_type: str  # chapter | topic | concept
+    scope_ids: list[int]
+
+
+class GenerateFromUploadRequest(BaseModel):
+    question_type: str = "objective"
+
+
+# --------------------------------------------------------------------------- #
+# Build Concepts
+# --------------------------------------------------------------------------- #
+
+class PostLearningGenerateRequest(BaseModel):
+    target_chapter_id: int
+
+
+class PreLearningExistingRequest(BaseModel):
+    chapter_ids: list[int]
+
+
+# --------------------------------------------------------------------------- #
+# Misc
+# --------------------------------------------------------------------------- #
+
+class Vocab(BaseModel):
+    boards: list[str]
+    grades: list[str]
+    question_types: list[str]
+    cognitive_skills: list[str]
+    difficulty_levels: list[str]
+    question_categories: dict[str, list[str]]
+    group_types: list[str]
+    upload_types: list[str]
+
+
+class Stats(BaseModel):
+    chapters: int
+    topics: int
     concepts: int
-    pre_learning_concepts: int
+    groups: int
     questions: int
     questions_by_sheet: dict[str, int]
-    questions_by_difficulty: dict[str, int]
-    runs: int
-    runs_by_status: dict[str, int]
-
-
-class IngestPaste(BaseModel):
-    title: str
-    text: str
-    delimiter: str = "\n\n"
-    sheet_kind: str = "objective"
+    sessions: int
+    upload_jobs: int
+    openai_live: bool
+    mathpix_live: bool

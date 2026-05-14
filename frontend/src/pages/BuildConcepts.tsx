@@ -1,0 +1,265 @@
+import { useState } from "react";
+import { api } from "../api/client";
+import DirectoryPicker from "../components/DirectoryPicker";
+import type { Scope, UploadJob } from "../types";
+
+type Path = null | "post" | "pre";
+
+export default function BuildConcepts() {
+  const [path, setPath] = useState<Path>(null);
+
+  return (
+    <>
+      <h1>Build Concepts</h1>
+      <div className="subtitle">
+        Generate concepts from documents (Post Learning) or derive prerequisite
+        concepts (Pre Learning). Output is written to the Bulk Import workbook.
+      </div>
+
+      {!path && (
+        <div className="grid cols-2">
+          <button className="module-card" onClick={() => setPath("post")}>
+            <div className="module-title">1 · Post Learning</div>
+            <div className="module-desc">
+              Upload a document (any format) → convert to MMD → parse concepts →
+              deposit under a chapter.
+            </div>
+          </button>
+          <button className="module-card" onClick={() => setPath("pre")}>
+            <div className="module-title">2 · Pre Learning</div>
+            <div className="module-desc">
+              Upload a document, or derive pre-learning concepts from one or more
+              existing Post Learning chapters.
+            </div>
+          </button>
+        </div>
+      )}
+
+      {path && (
+        <button className="ghost" onClick={() => setPath(null)} style={{ marginBottom: 16 }}>
+          ← Back to options
+        </button>
+      )}
+      {path === "post" && <PostLearningFlow />}
+      {path === "pre" && <PreLearningFlow />}
+    </>
+  );
+}
+
+/* ----------------------------- post learning ----------------------------- */
+
+function PostLearningFlow() {
+  const [job, setJob] = useState<UploadJob | null>(null);
+  const [scope, setScope] = useState<Scope | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<Record<string, unknown> | null>(null);
+
+  async function upload(file: File) {
+    setBusy(true);
+    setError(null);
+    try {
+      setJob(await api.postLearningUpload(file));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function generate() {
+    if (!job || !scope) return;
+    setBusy(true);
+    setError(null);
+    try {
+      setResult(await api.postLearningGenerate(job.id, scope.ids[0]));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <div className="section-title">1 · Upload document</div>
+      <div className="card">
+        <input type="file" disabled={busy || !!job}
+          onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
+        {job && (
+          <div style={{ marginTop: 10 }}>
+            <span className="badge green">converted to MMD</span>{" "}
+            <span className="muted mono">{job.filename}</span>
+            <pre className="mmd-preview">{job.mmd_text.slice(0, 600)}</pre>
+          </div>
+        )}
+      </div>
+
+      {job && (
+        <>
+          <div className="section-title">2 · Deposit concepts under a chapter</div>
+          <div className="card">
+            <DirectoryPicker onScope={setScope} chapterOnly />
+            <div className="row" style={{ marginTop: 12 }}>
+              <span className="muted">{scope ? `Chapter: ${scope.label}` : "Pick a chapter"}</span>
+              <div className="spacer" />
+              <button disabled={!scope || busy} onClick={generate}>Parse & generate concepts</button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {error && <div className="error-box" style={{ marginTop: 16 }}>{error}</div>}
+      {result && <ConceptResult result={result} />}
+    </>
+  );
+}
+
+/* ----------------------------- pre learning ----------------------------- */
+
+function PreLearningFlow() {
+  const [mode, setMode] = useState<"upload" | "existing">("upload");
+
+  return (
+    <>
+      <div className="card row" style={{ marginBottom: 16 }}>
+        <strong>Pre Learning source:</strong>
+        <label className="radio">
+          <input type="radio" checked={mode === "upload"} onChange={() => setMode("upload")} />
+          Upload a document
+        </label>
+        <label className="radio">
+          <input type="radio" checked={mode === "existing"} onChange={() => setMode("existing")} />
+          Use existing Post Learning
+        </label>
+      </div>
+      {mode === "upload" ? <PreLearningUpload /> : <PreLearningExisting />}
+    </>
+  );
+}
+
+function PreLearningUpload() {
+  const [job, setJob] = useState<UploadJob | null>(null);
+  const [scope, setScope] = useState<Scope | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<Record<string, unknown> | null>(null);
+
+  async function upload(file: File) {
+    setBusy(true);
+    setError(null);
+    try {
+      setJob(await api.preLearningUpload(file));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function generate() {
+    if (!job || !scope) return;
+    setBusy(true);
+    setError(null);
+    try {
+      setResult(await api.preLearningGenerateFromUpload(job.id, scope.ids[0]));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <div className="section-title">1 · Upload document</div>
+      <div className="card">
+        <input type="file" disabled={busy || !!job}
+          onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
+        {job && (
+          <div style={{ marginTop: 10 }}>
+            <span className="badge green">converted to MMD</span>{" "}
+            <span className="muted mono">{job.filename}</span>
+            <pre className="mmd-preview">{job.mmd_text.slice(0, 600)}</pre>
+          </div>
+        )}
+      </div>
+      {job && (
+        <>
+          <div className="section-title">2 · Deposit pre-learning concepts under a chapter</div>
+          <div className="card">
+            <DirectoryPicker onScope={setScope} chapterOnly />
+            <div className="row" style={{ marginTop: 12 }}>
+              <span className="muted">{scope ? `Chapter: ${scope.label}` : "Pick a chapter"}</span>
+              <div className="spacer" />
+              <button disabled={!scope || busy} onClick={generate}>Generate pre-learning concepts</button>
+            </div>
+          </div>
+        </>
+      )}
+      {error && <div className="error-box" style={{ marginTop: 16 }}>{error}</div>}
+      {result && <ConceptResult result={result} />}
+    </>
+  );
+}
+
+function PreLearningExisting() {
+  const [scope, setScope] = useState<Scope | null>(null);
+  const [chapterIds, setChapterIds] = useState<number[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<Record<string, unknown> | null>(null);
+
+  // The picker resolves a single chapter; "Add" stacks it for multi-chapter selection.
+  function addChapter() {
+    if (scope && scope.type === "chapter" && !chapterIds.includes(scope.ids[0])) {
+      setChapterIds([...chapterIds, scope.ids[0]]);
+    }
+  }
+
+  async function generate() {
+    setBusy(true);
+    setError(null);
+    try {
+      setResult(await api.preLearningFromExisting(chapterIds));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <div className="section-title">Choose Post Learning chapters (one or more)</div>
+      <div className="card">
+        <DirectoryPicker onScope={setScope} chapterOnly />
+        <div className="row" style={{ marginTop: 12 }}>
+          <button className="ghost" disabled={!scope} onClick={addChapter}>
+            + Add chapter {scope ? `(${scope.label})` : ""}
+          </button>
+          <div className="spacer" />
+          <button disabled={busy || chapterIds.length === 0} onClick={generate}>
+            Generate pre-learning concepts
+          </button>
+        </div>
+        {chapterIds.length > 0 && (
+          <div className="muted" style={{ marginTop: 8 }}>
+            Selected chapter ids: {chapterIds.join(", ")}
+          </div>
+        )}
+      </div>
+      {error && <div className="error-box" style={{ marginTop: 16 }}>{error}</div>}
+      {result && <ConceptResult result={result} />}
+    </>
+  );
+}
+
+function ConceptResult({ result }: { result: Record<string, unknown> }) {
+  return (
+    <div className="card success-card" style={{ marginTop: 16 }}>
+      <strong>Concepts written to the Bulk Import workbook (append-only)</strong>
+      <pre className="mono" style={{ marginTop: 8 }}>{JSON.stringify(result, null, 2)}</pre>
+    </div>
+  );
+}
