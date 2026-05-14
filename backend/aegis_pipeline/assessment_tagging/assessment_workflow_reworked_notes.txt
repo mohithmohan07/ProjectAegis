@@ -1,0 +1,16 @@
+Updated files included:
+1. Code_reworked.gs
+2. SmartWorkflow_reworked.gs
+
+Key changes:
+- Rewrite Full now follows: topic routing -> concept routing -> difficulty mapping -> variant clustering -> group description -> write -> QA review.
+- Cross-topic conflicts now choose the later topic and write to that topic's culmination concept.
+- Yellow highlight is limited to cross-topic culmination cases.
+- Comments column text is rewritten into cleaner reviewer-facing notes.
+- Tag New now routes new questions with the same canonical pipeline before appending or writing.
+- Tag New appends to existing rows within the same concept and difficulty bucket when a matching cluster is found.
+- Existing labels are skipped.
+- Touched rows only are QA-reviewed and light red is used for probable mismatches.
+- Range dimension bugs for highlight/clear operations were corrected.
+- Hardcoded OpenAI key was removed from the code file. Store OPENAI_API_KEY in Apps Script Properties.
+- Progress and stop flags now use user properties instead of shared script properties.

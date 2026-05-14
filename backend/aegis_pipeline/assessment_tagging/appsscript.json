@@ -1,0 +1,42 @@
+{
+  "timeZone": "Asia/Kolkata",
+  "urlFetchWhitelist": [
+    "https://api.openai.com/",
+    "https://www.googleapis.com/"
+  ],
+  "dependencies": {
+    "enabledAdvancedServices": [
+      {
+        "userSymbol": "Drive",
+        "version": "v2",
+        "serviceId": "drive"
+      }
+    ]
+  },
+  "exceptionLogging": "STACKDRIVER",
+  "runtimeVersion": "V8",
+  "oauthScopes": [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/script.container.ui",
+    "https://www.googleapis.com/auth/script.external_request"
+  ],
+  "addOns": {
+    "common": {
+      "name": "Assessment Tagging Tool",
+      "logoUrl": "https://www.gstatic.com/images/icons/material/system/1x/description_black_24dp.png",
+      "layoutProperties": {
+        "primaryColor": "#1a73e8",
+        "secondaryColor": "#4285f4"
+      },
+      "homepageTrigger": {
+        "runFunction": "buildHomepage"
+      }
+    },
+    "sheets": {
+      "homepageTrigger": {
+        "runFunction": "buildHomepage"
+      }
+    }
+  }
+}

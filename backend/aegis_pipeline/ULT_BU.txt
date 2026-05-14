@@ -1,0 +1,538 @@
+# ============================================
+# IMPORTS  (keep only what you don't already have)
+# ============================================
+import re
+import json
+import pandas as pd
+import openpyxl
+import openai
+
+# ============================================
+# NOTE: Keep your existing `question_categories` list as-is.
+# Do NOT change labels; this code only USES that list.
+# ============================================
+# example (DO NOT overwrite your real one):
+# question_categories = [
+#     "Very Short Answer Type (1 Mark)",
+#     "Short Answer Type (2 Marks)",
+#     "Short Answer Type (3 Marks)",
+#     "Long Answer Type (4 Marks)",
+#     "Long Answer Type (5 Marks)",
+#     ...
+# ]
+
+
+# ============================================
+# HELPERS: marks, cleaning, answer type
+# ============================================
+
+def extract_marks_from_question(question_text, fallback_marks):
+    """
+    Extract marks from patterns like [5], [5M], [ 3 m ] at the end of the question.
+    If not found, fall back to Excel 'Marks' column.
+    """
+    if not question_text:
+        try:
+            return int(float(fallback_marks)) if fallback_marks not in (None, "", "nan") else 1
+        except Exception:
+            return 1
+
+    q = str(question_text).strip()
+    m = re.search(r'\[(\d+)\s*[mM]?\]\s*$', q)
+    if m:
+        return int(m.group(1))
+
+    try:
+        return int(float(fallback_marks)) if fallback_marks not in (None, "", "nan") else 1
+    except Exception:
+        return 1
+
+
+def clean_question_text(q: str) -> str:
+    """
+    Remove leading question numbers and trailing marks like '..... [3]' from the question.
+    """
+    if not q:
+        return q
+    q = q.strip()
+    # Remove leading question numbers like "1.", "39.", "Q1.", "Q.49"
+    q = re.sub(r'^\s*(?:Q\.?\s*\d+\.?|\d+\.?)\s*', '', q)
+    # Remove trailing "..... [4]" or "[3]" style marks (any dots + bracketed number at end)
+    q = re.sub(r'\.*\s*\[\s*\d+\s*[mM]?\s*\]\s*$', '', q)
+    return q.strip()
+
+
+def detect_answer_type_from_text(answer_text: str) -> str:
+    """
+    Rough heuristic to decide Answer Type: Phrases | Equation | Image
+    - Equation: mostly symbolic / math
+    - Image: answer clearly demands a diagram / labelled figure
+    - Default: Phrases
+    """
+    if not answer_text:
+        return "Phrases"
+
+    lower = answer_text.lower()
+
+    # Image cues
+    image_keywords = [
+        "draw a diagram", "labelled diagram", "labeled diagram",
+        "sketch", "draw the figure", "diagrammatic", "flowchart"
+    ]
+    if any(kw in lower for kw in image_keywords):
+        return "Image"
+
+    # Equation cues – lots of symbols, <, >, =, ^, fractions, etc.
+    symbolic_chars = sum(ch in "+-*/=^<>π√" for ch in answer_text)
+    digits = sum(ch.isdigit() for ch in answer_text)
+    letters = sum(ch.isalpha() for ch in answer_text)
+
+    if (symbolic_chars + digits) > letters * 1.2:
+        return "Equation"
+
+    return "Phrases"
+
+
+# ============================================
+# HIGH-STAKES: DESCRIPTIVE DETAILS + RUBRICS
+# ============================================
+
+def get_descriptive_details(question_content, answer_explanation, marks):
+    """
+    Generate structured metadata + high-stakes rubrics for Descriptive questions.
+
+    Uses global `question_categories` list; returns a dict with:
+      question_category, cognitive_skills, question_source, question_appears_in,
+      level_of_difficulty, question, marks, display_answer, answer_type,
+      answer_weightage, answer_content, answer_explanation, needs_review, review_html.
+    """
+
+    raw_q = question_content or ""
+    provided_answer = (answer_explanation or "").strip()
+
+    marks_int = extract_marks_from_question(raw_q, marks)
+    cleaned_question = clean_question_text(raw_q)
+
+    # Build explicit category list string with your standard labels
+    categories_str = ", ".join(f'"{c}"' for c in question_categories)
+
+    prompt = f"""
+You are Joe, an AI assistant that analyses school exam questions for UpSchool and generates
+structured metadata and marking schemes (rubrics).
+
+You are given:
+- The question text (possibly with a number and marks).
+- The provided official answer from the solutions PDF.
+- The total marks.
+
+Your tasks:
+
+1. **Validate and minimally correct the provided answer.**
+   - Treat the provided answer as PRIMARY.
+   - If it is conceptually correct and grade-appropriate, KEEP IT as-is.
+   - Only fix clear factual or conceptual errors (e.g., "mitochondria is the kitchen of the cell").
+   - Do NOT expand with extra grade-level content that is not needed.
+   - Do NOT add new concepts beyond what is required to score full marks.
+   - If you correct anything, keep the corrections minimal and board-appropriate.
+
+2. **Decide if the answer needs human review.**
+   - needs_review = true IF:
+       a. You had to correct a major conceptual error, OR
+       b. There is remaining ambiguity that might be wrong.
+   - Otherwise, needs_review = false.
+   - If needs_review is true, fill review_html with a brief explanation,
+     using HTML with red-highlight for the problematic part, e.g.:
+     "<span style='color:red;font-weight:bold'>Incorrect: ...</span>"
+
+3. **Classify question metadata.**
+
+   question_category:
+     - Choose exactly ONE value from this list (copy string verbatim):
+       [{categories_str}]
+     - Use the total marks and the style of the question to choose the closest match.
+     - Do NOT invent new labels.
+
+   cognitive_skills:
+     - EXACTLY ONE of:
+       "Remembering", "Understanding", "Applying", "Analysing", "Evaluating", "Creating".
+
+   question_source:
+     - Always "UpSchool DB".
+
+   question_appears_in:
+     - Always "Pre/Post-Worksheet/Test".
+
+   level_of_difficulty:
+     - One of: "Less", "Moderate", "High".
+     - Simple recall → "Less".
+     - Multi-part but straightforward reasoning → "Moderate".
+     - Deep multi-step / abstract reasoning → "High".
+
+4. **Clean the question text.**
+   - Remove leading question numbers like "1.", "39.", "Q1.", "Q.49".
+   - Remove trailing mark patterns like "..... [3]" or "[4]" or "[5M]".
+   - The "question" field must contain only the clean student-facing question.
+
+5. **Decide answer_type (for UI Answer Type dropdown).**
+   - One of: "Phrases", "Equation", "Image".
+   - Use these rules:
+       - If answer is mostly words/sentences → "Phrases".
+       - If answer is mainly symbolic maths/equations → "Equation".
+       - If answer clearly requires a diagram or labelled figure → "Image".
+
+6. **Generate high-stakes rubrics (answer_content).**
+
+   - Use the FINAL_CORRECT_ANSWER (after your minimal corrections) as the basis.
+   - Divide the marks into small scoring units called "rubrics".
+   - Each rubric should be one simple, clear criterion that earns some marks.
+
+   Rubric count and mark split:
+     - Total of rubric marks MUST equal the total marks {marks_int}.
+     - Prefer equal 1-mark rubrics.
+     - If you need unequal marks (e.g., 2+3 for a 5-mark question),
+       keep them simple and clearly justified.
+     - Do NOT exceed total marks.
+
+   Special case: "any two/three/four" type questions:
+     - If the question or answer says
+        "mention any 2/3/4", "state any two/three/four",
+        "list any two/three/four", "give any two/three/four",
+        or ends with "(Any three)" etc:
+       - List ALL valid points as rubrics.
+       - Give each rubric 1 mark (or as appropriate).
+       - You may include an extra rubric that explains:
+         "Award 1 mark per correct point mentioned (any X correct points earn full marks)."
+
+   **CRITICAL FORMAT REQUIREMENT FOR EACH RUBRIC LINE**
+
+   For each rubric, produce a line in this exact format:
+
+     [RUBRIC|<AnswerType>|<MarksForThisRubric>] Rubric <Letter> (<MarksForThisRubric> mark/marks): <criterion> $$and$$
+
+   Example for a 3-mark "Phrases" question:
+
+     [RUBRIC|Phrases|1] Rubric A (1 mark): Explaining the historical or political context of Ireland $$and$$
+     [RUBRIC|Phrases|1] Rubric B (1 mark): Discussing the significant events that have shaped Ireland’s fate $$and$$
+     [RUBRIC|Phrases|1] Rubric C (1 mark): Analyzing the current situation or outcomes $$and$$
+
+   - Letter sequence: A, B, C, D, ...
+   - "AnswerType" in [RUBRIC|...] must match the chosen "answer_type" field.
+   - MarksForThisRubric is an integer.
+   - Sum of all MarksForThisRubric across rubrics MUST equal total marks {marks_int}.
+   - End EVERY line with "$$and$$" so the backend can split rubrics automatically.
+
+7. **Final answer and explanation.**
+   - display_answer: the final corrected answer that should be shown to teachers.
+   - answer_explanation: for now, make it EXACTLY the same as display_answer.
+
+Return your answer as ONE valid JSON object with EXACTLY these keys:
+
+{{
+  "question_category": "",
+  "cognitive_skills": "",
+  "question_source": "UpSchool DB",
+  "question_appears_in": "Pre/Post-Worksheet/Test",
+  "level_of_difficulty": "",
+  "question": "",
+  "marks": {marks_int},
+  "display_answer": "",
+  "answer_type": "",
+  "answer_weightage": {marks_int},
+  "answer_content": "",
+  "answer_explanation": "",
+  "needs_review": false,
+  "review_html": ""
+}}
+
+### INPUT
+
+Question (raw, possibly with number and marks):
+{raw_q}
+
+Cleaned question (for reference):
+{cleaned_question}
+
+Provided official answer:
+{provided_answer}
+
+Total marks you must respect:
+{marks_int}
+
+Remember:
+- RESPOND WITH JSON ONLY.
+- NO extra commentary, no backticks, no headings.
+"""
+
+    response = openai.ChatCompletion.create(
+        model="gpt-5.1",  # Intelligence model for high-stakes rubrics
+        messages=[
+            {
+                "role": "system",
+                "content": "You are an AI that outputs ONLY valid JSON objects exactly matching the requested schema for educational marking schemes."
+            },
+            {"role": "user", "content": prompt}
+        ],
+        max_completion_tokens=1500
+    )
+
+    raw = response.choices[0].message["content"].strip()
+    data = json.loads(raw)
+    return data
+
+
+# ============================================
+# EXCEL PROCESSOR – USES JSON FOR DESCRIPTIVE
+# ============================================
+
+def process_excel_file_with_gpt(input_path, output_path):
+    """Process Excel file with GPT enhancements - using structured JSON for Descriptive."""
+    xls = pd.ExcelFile(input_path)
+    with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+        for sheet_name in xls.sheet_names:
+            df = xls.parse(sheet_name)
+
+            # Sheet-specific setup
+            if 'Objective' in sheet_name:
+                required_columns = ['Question Category', 'Cognitive Skills', 'Question Source',
+                                    'Level of Difficulty', 'Marks', 'Answer Type']
+
+            elif 'Subjective' in sheet_name:
+                # keep your existing subjective logic; we only ensure columns
+                required_columns = ['Question Category', 'Cognitive Skills', 'Question Source',
+                                    'Level of Difficulty', 'Marks', 'Answer Type', 'Answer Content']
+
+            elif 'Descriptive' in sheet_name:
+                required_columns = ['Question Category', 'Cognitive Skills', 'Question Source',
+                                    'Level of Difficulty', 'Marks', 'Answer Type', 'Answer Content']
+
+            else:
+                # Unknown sheet – write as-is
+                df.to_excel(writer, sheet_name=sheet_name, index=False)
+                continue
+
+            # Ensure required columns exist
+            for col in required_columns:
+                if col not in df.columns:
+                    df[col] = pd.NA if col == 'Marks' else ""
+
+            # Additional columns we may use
+            if 'Question Appears in' not in df.columns:
+                df['Question Appears in'] = ""
+            if 'Answer Weightage' not in df.columns:
+                df['Answer Weightage'] = pd.NA
+            if 'Display Answer' not in df.columns:
+                df['Display Answer'] = ""
+            if 'Answer Explanation' not in df.columns:
+                df['Answer Explanation'] = ""
+            if 'Comments' not in df.columns:
+                df['Comments'] = ""  # use this for review_html / flags
+
+            # Ensure Marks is numeric where relevant
+            if 'Marks' in df.columns:
+                df['Marks'] = pd.to_numeric(df['Marks'], errors='coerce')
+
+            # Row-wise processing
+            for index, row in df.iterrows():
+                question_content = str(row.get('Question', '') or "")
+                if not question_content.strip():
+                    continue
+
+                # Prefer Answer Explanation; fall back to Display Answer
+                answer_explanation = str(row.get('Answer Explanation', '') or row.get('Display Answer', '') or "")
+                marks_value = row.get('Marks', '')
+
+                try:
+                    # =======================
+                    # OBJECTIVE SHEETS
+                    # =======================
+                    if 'Objective' in sheet_name:
+                        # uses your existing function
+                        details = get_objective_details(
+                            question_content,
+                            answer_explanation,
+                            marks_value
+                        )
+
+                        parsed_data = {}
+                        answer_content_lines = []
+                        in_answer_content = False
+
+                        for line in str(details).split('\n'):
+                            line = line.strip()
+                            if not line:
+                                continue
+
+                            if (re.match(r'^(\d+\.\s*)?(Answer Content|Answer):', line, re.IGNORECASE) or
+                                    'solution will involve' in line.lower()):
+                                in_answer_content = True
+                                line = re.sub(r'^(\d+\.\s*)?(Answer Content|Answer):\s*', '',
+                                              line, flags=re.IGNORECASE).strip()
+                                if line:
+                                    answer_content_lines.append(line)
+                                continue
+
+                            if in_answer_content:
+                                clean_line = re.sub(r'^[\s\-•*]+', '', line)
+                                if clean_line:
+                                    answer_content_lines.append(clean_line)
+                            else:
+                                if ': ' in line:
+                                    line = re.sub(r'^\d+\.\s*', '', line)
+                                    key, value = line.split(': ', 1)
+                                    parsed_data[key.strip()] = value.strip()
+
+                        column_mapping = {
+                            'Question Category': ['Question Category'],
+                            'Cognitive Skills': ['Cognitive Skills'],
+                            'Question Source': ['Question Source'],
+                            'Level of Difficulty': ['Level of Difficulty'],
+                            'Marks': ['Marks'],
+                            'Answer Type': ['Answer Type'],
+                        }
+
+                        details_list = []
+                        for col in required_columns:
+                            found = False
+                            for key in column_mapping.get(col, [col]):
+                                if key in parsed_data:
+                                    details_list.append(parsed_data[key])
+                                    found = True
+                                    break
+                            if not found and col in ['Answer Content', 'Answer']:
+                                details_list.append('\n'.join(answer_content_lines) if answer_content_lines else "")
+                            elif not found:
+                                details_list.append(pd.NA if col == 'Marks' else "")
+
+                        for i, col in enumerate(required_columns):
+                            if i >= len(details_list):
+                                continue
+                            if col == 'Marks':
+                                try:
+                                    match = re.search(r'\d+', str(details_list[i]))
+                                    df.at[index, col] = float(match.group()) if match else pd.NA
+                                except (ValueError, TypeError):
+                                    df.at[index, col] = pd.NA
+                            else:
+                                val = str(details_list[i]).strip('"\'')
+                                df.at[index, col] = val
+
+                    # =======================
+                    # DESCRIPTIVE SHEETS
+                    # =======================
+                    elif 'Descriptive' in sheet_name:
+                        data = get_descriptive_details(
+                            question_content,
+                            answer_explanation,
+                            marks_value
+                        )
+
+                        df.at[index, 'Question Category']   = data.get('question_category', '')
+                        df.at[index, 'Cognitive Skills']    = data.get('cognitive_skills', '')
+                        df.at[index, 'Question Source']     = data.get('question_source', 'UpSchool DB')
+                        df.at[index, 'Question Appears in'] = data.get('question_appears_in', 'Pre/Post-Worksheet/Test')
+                        df.at[index, 'Level of Difficulty'] = data.get('level_of_difficulty', '')
+                        df.at[index, 'Question']            = data.get('question', question_content)
+                        df.at[index, 'Marks']               = data.get('marks', marks_value)
+
+                        final_answer = data.get('display_answer', answer_explanation)
+                        df.at[index, 'Display Answer']      = final_answer
+                        df.at[index, 'Answer Explanation']  = data.get('answer_explanation', final_answer)
+
+                        df.at[index, 'Answer Type']         = data.get(
+                            'answer_type',
+                            detect_answer_type_from_text(final_answer)
+                        )
+                        df.at[index, 'Answer Weightage']    = data.get(
+                            'answer_weightage',
+                            data.get('marks', marks_value)
+                        )
+
+                        # RUBRICS in canonical pattern with [RUBRIC|...|w] ... $$and$$
+                        df.at[index, 'Answer Content']      = data.get('answer_content', '')
+
+                        # Conceptual review flag -> Comments column as HTML (if any)
+                        needs_review = data.get('needs_review', False)
+                        review_html  = data.get('review_html', '')
+                        if needs_review and review_html:
+                            df.at[index, 'Comments'] = review_html
+
+                    # =======================
+                    # SUBJECTIVE SHEETS
+                    # (uses your existing subjective GPT function)
+                    # =======================
+                    elif 'Subjective' in sheet_name:
+                        details = get_subjective_details(
+                            question_content,
+                            answer_explanation,
+                            marks_value
+                        )
+
+                        parsed_data = {}
+                        answer_content_lines = []
+                        in_answer_content = False
+
+                        for line in str(details).split('\n'):
+                            line = line.strip()
+                            if not line:
+                                continue
+
+                            if (re.match(r'^(\d+\.\s*)?(Answer Content|Answer):', line, re.IGNORECASE) or
+                                    'solution will involve' in line.lower()):
+                                in_answer_content = True
+                                line = re.sub(r'^(\d+\.\s*)?(Answer Content|Answer):\s*', '',
+                                              line, flags=re.IGNORECASE).strip()
+                                if line:
+                                    answer_content_lines.append(line)
+                                continue
+
+                            if in_answer_content:
+                                clean_line = re.sub(r'^[\s\-•*]+', '', line)
+                                if clean_line:
+                                    answer_content_lines.append(clean_line)
+                            else:
+                                if ': ' in line:
+                                    line = re.sub(r'^\d+\.\s*', '', line)
+                                    key, value = line.split(': ', 1)
+                                    parsed_data[key.strip()] = value.strip()
+
+                        column_mapping = {
+                            'Question Category': ['Question Category'],
+                            'Cognitive Skills': ['Cognitive Skills'],
+                            'Question Source': ['Question Source'],
+                            'Level of Difficulty': ['Level of Difficulty'],
+                            'Marks': ['Marks'],
+                            'Answer Type': ['Answer Type'],
+                            'Answer Content': ['Answer Content'],
+                        }
+
+                        details_list = []
+                        for col in required_columns:
+                            found = False
+                            for key in column_mapping.get(col, [col]):
+                                if key in parsed_data:
+                                    details_list.append(parsed_data[key])
+                                    found = True
+                                    break
+                            if not found and col in ['Answer Content', 'Answer']:
+                                details_list.append('\n'.join(answer_content_lines) if answer_content_lines else "")
+                            elif not found:
+                                details_list.append(pd.NA if col == 'Marks' else "")
+
+                        for i, col in enumerate(required_columns):
+                            if i >= len(details_list):
+                                continue
+                            if col == 'Marks':
+                                try:
+                                    match = re.search(r'\d+', str(details_list[i]))
+                                    df.at[index, col] = float(match.group()) if match else pd.NA
+                                except (ValueError, TypeError):
+                                    df.at[index, col] = pd.NA
+                            else:
+                                val = str(details_list[i]).strip('"\'')
+                                df.at[index, col] = val
+
+                except Exception as e:
+                    print(f"Error processing question {index + 1} on sheet {sheet_name}: {str(e)}")
+                    continue
+
+            df.to_excel(writer, sheet_name=sheet_name, index=False)

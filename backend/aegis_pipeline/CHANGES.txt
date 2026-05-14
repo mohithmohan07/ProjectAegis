@@ -1,0 +1,942 @@
+from flask import Flask, request, jsonify, send_file
+import os
+import requests
+import json
+import time
+import pandas as pd
+import re
+import openai
+from flask_cors import CORS
+import tempfile
+import shutil
+
+# Mathpix API credentials
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+MATHPIX_API_KEY = os.getenv("MATHPIX_API_KEY")
+MATHPIX_APP_ID = os.getenv("MATHPIX_APP_ID")
+
+app = Flask(__name__)
+CORS(app)  # Enable CORS for all routes
+
+openai.api_key = OPENAI_API_KEY
+
+# Question categories list
+question_categories = [
+    "Choose the ODD one Out", "Numerical/application based", "Very Short Answer Questions",
+    "True or False", "Case Based Question",
+    "Long Answer Type (6 Marks)",
+    "Rearrange the following words",
+    "Sentence Transformation",
+    "Error correction", "Fill in the Blanks",
+    "Passage based questions", "Composition writing", "Short Answer Type (3 Marks)",
+    "Short Answer Type (2 Marks)", "Extract based question",
+    "Locating and Plotting on map", "Extract based on Map Survey", "Assertion & Reasons Type",
+    "Long Answer Type (5 Marks)", "Long Answer Type (4 Marks)",
+    "Multiple Choice Question"
+]
+
+# ----------------------
+# Mathpix Functions
+# ----------------------
+
+def poll_status(pdf_id, headers, poll_interval=30, max_polls=30):
+    url = f"https://api.mathpix.com/v3/pdf/{pdf_id}.json"
+    last_completed = 0
+    stuck_count = 0
+    
+    for poll_count in range(max_polls):
+        print(f"Polling attempt {poll_count + 1} for PDF ID {pdf_id}")
+        response = requests.get(url, headers=headers)
+        status_data = response.json()
+        print("Polling Status:", status_data)
+        
+        if status_data.get("status") == "completed":
+            return status_data
+            
+        # Check if processing is stuck
+        current_completed = status_data.get("num_pages_completed", 0)
+        if current_completed == last_completed:
+            stuck_count += 1
+            if stuck_count > 5:  # If no progress for 5 polls
+                print(f"Processing stuck at page {current_completed}")
+                return None
+        else:
+            stuck_count = 0
+            last_completed = current_completed
+            
+        time.sleep(poll_interval)
+    return None
+
+def process_with_mathpix(file):
+    options = {
+        "conversion_formats": {"docx": True, "tex.zip": True},
+        "math_inline_delimiters": ["$", "$"],
+        "rm_spaces": True
+    }
+
+    r = requests.post("https://api.mathpix.com/v3/pdf",
+        headers={
+            "app_id": MATHPIX_APP_ID,
+            "app_key": MATHPIX_API_KEY
+        },
+        data={
+            "options_json": json.dumps(options)
+        },
+        files={
+            "file": (file.filename, file.stream, file.content_type)
+        }
+    )
+
+    API_resp = r.json()
+    pdf_id = API_resp.get("pdf_id")
+    if not pdf_id:
+        return None
+
+    headers = {
+        "app_key": MATHPIX_API_KEY,
+        "app_id": MATHPIX_APP_ID
+    }
+
+    status_data = poll_status(pdf_id, headers)
+    if not status_data:
+        return None
+
+    url = f"https://api.mathpix.com/v3/pdf/{pdf_id}.mmd"
+    response = requests.get(url, headers=headers)
+    mmd_content = response.text
+
+    mmd_content = convert_to_katex_format(mmd_content)
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".txt")
+    temp_file.write(mmd_content.encode('utf-8'))
+    temp_file.close()
+
+    return temp_file.name
+
+def clean_question_text(q: str) -> str:
+    if not q:
+        return q
+    q = q.strip()
+    # Remove leading question numbers like "1.", "39.", "Q1.", "Q.49"
+    q = re.sub(r'^\s*(?:Q\.?\s*\d+\.?|\d+\.?)\s*', '', q)
+    # Remove trailing "..... [4]" or "[3]" style marks (any dots + bracketed number at end)
+    q = re.sub(r'\.*\s*\[\s*\d+\s*\]\s*$', '', q)
+    return q.strip()def convert_to_katex_format(latex_text):
+    if not latex_text:
+        return latex_text
+    
+    latex_text = latex_text.replace("\section*", "")
+    latex_text = latex_text.replace("$\qquad$", "__")
+    latex_text = latex_text.replace(r'\begin{tabular}', r'\begin{array}')
+    latex_text = latex_text.replace(r'\end{tabular}', r'\end{array}')
+    latex_text = re.sub(r'\\begin{array}{\|[lcr|]+\|}', r'\\begin{array}{|l|l|l|l|}', latex_text)
+    latex_text = latex_text.replace('$', '')
+    latex_text = re.sub(r'\\(?:mathrm|mathbf)\{([^\}]+)\}', r'\1', latex_text)
+    
+    def wrap_text(match):
+        return r'\text{' + match.group(1).strip() + '}'
+    latex_text = re.sub(r'(?<=\|)([^&\\]+)(?=\s*&)', wrap_text, latex_text)
+
+    latex_text = re.sub(r'\bfi\b', r'f_i', latex_text)
+    latex_text = re.sub(r'\bxi\b', r'x_i', latex_text)
+    latex_text = re.sub(r'\bxif\b', r'x_i f_i', latex_text)
+    latex_text = re.sub(r'(\d+\.?\d*)\s+f\b', r'\1f', latex_text)
+    latex_text = re.sub(r'(\\end{array})', r'\1\\[1em]', latex_text)
+    latex_text = re.sub(r'(\\text{Mean})', r'\n\1', latex_text)
+    latex_text = re.sub(r'^\s*(\d+)\.', r'\\textbf{\1.}\\\\[1em]', latex_text)
+    latex_text = re.sub(r'\\underline{([^}]+)}\s*=\s*(\d+\.?\d*)', r'\\underline{\1} = \2', latex_text)
+    
+    return latex_text.strip()
+
+# ----------------------
+# Parsing Functions
+# ----------------------
+
+def parse_questions(file_path):
+    with open(file_path, 'r', encoding='utf-8') as file:
+        content = file.read()
+    
+    question_blocks = re.split(r'(\n\d+[).])', content)
+    questions = []
+    current_question = ""
+    
+    for block in question_blocks:
+        if re.match(r'^\d+[).]', block.strip()):
+            if current_question:
+                match = re.match(r'^(\d+)[).]\s*(.*)', current_question.strip(), re.DOTALL)
+                if match:
+                    questions.append({
+                        'number': int(match.group(1)),
+                        'text': current_question.strip()
+                    })
+            current_question = block
+        else:
+            current_question += block
+    
+    if current_question:
+        match = re.match(r'^(\d+)[).]\s*(.*)', current_question.strip(), re.DOTALL)
+        if match:
+            questions.append({
+                'number': int(match.group(1)),
+                'text': current_question.strip()
+            })
+    
+    existing_numbers = {q['number'] for q in questions}
+    if existing_numbers:
+        max_num = max(existing_numbers)
+        for num in range(1, max_num + 1):
+            if num not in existing_numbers:
+                questions.append({
+                    'number': num,
+                    'text': f"{num}. [MANUALLY ADDED QUESTION {num}]"
+                })
+    
+    questions.sort(key=lambda x: x['number'])
+    print(f"Parsed {len(questions)} questions")
+    return questions
+
+def parse_solutions(file_path):
+    solutions = []
+    current_solution = ""
+    current_number = None
+    
+    with open(file_path, 'r', encoding='utf-8') as file:
+        for line in file:
+            line = line.strip()
+            
+            # Check if this line starts a new solution
+            match = re.match(r'^(\d+)[).]|^\((\d+)\)|^(\d+)\.', line)
+            if match:
+                # Save previous solution if exists
+                if current_number is not None and current_solution:
+                    solutions.append({
+                        'number': current_number,
+                        'text': current_solution.strip()
+                    })
+                
+                # Extract the number from the match
+                num = match.group(1) or match.group(2) or match.group(3)
+                current_number = int(num)
+                
+                # Remove the number prefix from the line
+                current_solution = re.sub(r'^(\d+[).]|\(\d+\)|\d+\.)\s*', '', line)
+            else:
+                # Continue building the current solution
+                if current_solution:
+                    current_solution += '\n' + line
+                else:
+                    current_solution = line
+    
+    # Add the last solution
+    if current_number is not None and current_solution:
+        solutions.append({
+            'number': current_number,
+            'text': current_solution.strip()
+        })
+    
+    # Fill in missing solution numbers 
+    existing_numbers = {s['number'] for s in solutions}
+    if existing_numbers:
+        max_num = max(existing_numbers)
+        for num in range(1, max_num + 1):
+            if num not in existing_numbers:
+                solutions.append({
+                    'number': num,
+                    'text': f"{num}. [MANUALLY ADDED SOLUTION {num}]"
+                })
+    
+    solutions.sort(key=lambda x: x['number'])
+    print(f"Parsed {len(solutions)} solutions")
+    return solutions
+
+# ----------------------
+# Processing Functions
+# ----------------------
+
+def process_all_questions(questions, solutions):
+    """Process all questions with enhanced sub-question handling (from code #2)"""
+    objective_data = []
+    descriptive_data = []
+    subjective_data = []
+    solution_dict = {sol['number']: sol['text'] for sol in solutions}
+
+    for question in questions:
+        solution = solution_dict.get(question['number'], '[SOLUTION NOT FOUND]')
+        question_text = question['text'].strip()
+        
+        # Check if it's an MCQ (objective)
+        options = re.findall(r'^[a-dA-D][).]\s*.+$', question_text, re.MULTILINE)
+        
+        if options and len(options) == 4:  
+            clean_text = re.sub(r'^[a-dA-D][).]\s*.+$', '', question_text, flags=re.MULTILINE).strip()
+            
+            objective_data.append({
+                'Question Label': f'Q{question["number"]}',
+                 'Question Category': '',
+                'Cognitive Skills': '',
+                'Question Source': '',
+                'Question Appears in': 'Pre/Post-Worksheet/Test',
+                'Level of Difficulty': '',
+                'Question': clean_text,
+                'Marks': 1,
+                'Answer Type1': 'Words', 
+                'Answer Content1': options[0] if len(options) > 0 else '',
+                'Correct Answer1': 'No',
+                'Answer Weightage1': 0,
+                'Answer Type2': 'Words',  
+                'Answer Content2': options[1] if len(options) > 1 else '',
+                'Correct Answer2': 'No',
+                'Answer Weightage2': 0,
+                'Answer Type3': 'Words',  
+                'Answer Content3': options[2] if len(options) > 2 else '',
+                'Correct Answer3': 'No',
+                'Answer Weightage3': 0,
+                'Answer Type4': 'Words',  
+                'Answer Content4': options[3] if len(options) > 3 else '',
+                'Correct Answer4': 'No',
+                'Answer Weightage4': 0,
+                'Answer Explanation': solution
+            })
+        # Check if it's a fill-in-the-blank question 
+        elif re.search(r'_{2,}', question_text):
+            blank_num = 0
+            while re.search(r'__{2,}', question_text):
+                letter = chr(97 + blank_num)
+                question_text = re.sub(
+                    r'_{2,}',
+                    f'$${letter}$$',
+                    question_text,
+                    count=1
+                )
+                blank_num += 1
+
+            row = {
+                'Question Label': f'Q{question["number"]}',
+                'Question Category': 'Fill in the Blanks',
+                'Cognitive Skills': '',
+                'Question Source': 'Upschool DB',
+                'Question Appears in': 'Pre/Post-Worksheet/Test',
+                'Level of Difficulty': '',
+                'Question': question_text,
+                'Marks': 1,
+                'answer_explanation': solution
+                
+            }
+            
+            # Initialize answer columns (to be filled by GPT later)
+            for i in range(1, 11):
+                if i <= blank_num:
+                    row[f'Answer Type{i}'] = 'Words'
+                    row[f'Answer{i}'] = ''  # Placeholder for GPT content
+                    row[f'Answer Display{i}'] = 'Yes'
+                    row[f'Weightage{i}'] = 1
+                    row[f'Placeholder{i}'] = chr(96 + i)
+                else:
+                    row[f'Answer Type{i}'] = ''
+                    row[f'Answer{i}'] = ''
+                    row[f'Answer Display{i}'] = ''
+                    row[f'Weightage{i}'] = ''
+                    row[f'Placeholder{i}'] = ''
+            
+            subjective_data.append(row)
+        
+        else:
+            # Process as descriptive question with sub-question handling
+            main_question = []
+            sub_questions = []
+            
+            lines = question_text.split('\n')
+            current_sub = None
+            
+            for line in lines:
+                # Detect sub-questions (a), b), i), ii), etc.
+                sub_match = re.match(r'^\s*([a-z]\)|\d+\.\d+|\d+\)|[ivx]+\))\s*(.*)', line.strip())
+                if sub_match:
+                    if current_sub:
+                        sub_questions.append(current_sub)
+                    current_sub = {
+                        'label': sub_match.group(1),
+                        'text': sub_match.group(2),
+                        'parts': []
+                    }
+                elif current_sub:
+                    # Detect sub-sub-questions (i), ii), etc.
+                    sub_sub_match = re.match(r'^\s*([a-z]\)|\d+\.\d+|\d+\)|[ivx]+\))\s*(.*)', line.strip())
+                    if sub_sub_match:
+                        current_sub['parts'].append({
+                            'label': sub_sub_match.group(1),
+                            'text': sub_sub_match.group(2)
+                        })
+                    else:
+                        current_sub['text'] += '\n' + line.strip()
+                else:
+                    main_question.append(line.strip())
+            
+            if current_sub:
+                sub_questions.append(current_sub)
+            
+            # Format the question text with sub-questions
+            formatted_text = '\n'.join(main_question)
+            if sub_questions:
+                formatted_text += '\n\nSub-questions:\n'
+                for sub in sub_questions:
+                    formatted_text += f"\n{sub['label']} {sub['text']}"
+                    if sub['parts']:
+                        formatted_text += '\n'
+                        for part in sub['parts']:
+                            formatted_text += f"\n  {part['label']} {part['text']}"
+            
+            descriptive_data.append({
+                'Question Label': f'Q{question["number"]}',
+                'Question Category': 'Descriptive',
+                'Cognitive Skills': '',
+                'Question Source': '',
+                'Question Appears in': 'Pre/Post-Worksheet/Test',
+                'Level of Difficulty': '',
+                'Question': formatted_text.replace('\n', ' ').strip(),
+                'Marks': 1 if '[1]' in question_text else 2 if '[2]' in question_text else 1,
+                'Display Answer': solution.strip(),
+                'Answer Type': '',
+                'Answer Weightage': '',
+                'Answer Content': '',  
+                'Answer Explanation': solution.strip()  
+            })
+    
+    return objective_data, descriptive_data, subjective_data
+
+def extract_correct_answer(explanation):
+    if not explanation or not isinstance(explanation, str):
+        return None
+    
+    match = re.search(r'[\(\s]([a-dA-D])[\).\s]|correct.?([a-dA-D])|answer.?([a-dA-D])', 
+                     explanation, re.IGNORECASE)
+    if match:
+        return (match.group(1) or match.group(2) or match.group(3)).lower()
+    return None
+
+def mark_correct_answers(objective_df):
+    for index, row in objective_df.iterrows():
+        correct_answer = extract_correct_answer(row['Answer Explanation'])
+        
+        for i in range(1, 5):
+            answer_content = row[f'Answer Content{i}']
+            if pd.isna(answer_content):
+                objective_df.at[index, f'Correct Answer{i}'] = 'No'
+                objective_df.at[index, f'Answer Weightage{i}'] = 0
+            elif correct_answer and answer_content.startswith(f"{correct_answer})"):
+                objective_df.at[index, f'Correct Answer{i}'] = 'Yes'
+                objective_df.at[index, f'Answer Weightage{i}'] = row['Marks'] if not pd.isna(row['Marks']) else 0
+            else:
+                objective_df.at[index, f'Correct Answer{i}'] = 'No'
+                objective_df.at[index, f'Answer Weightage{i}'] = 0
+    
+    return objective_df
+
+# ----------------------
+# GPT Processing
+# ----------------------
+
+def get_objective_details(question_content, answer_explanation, marks):
+    prompt = f"""
+    Based on the following question content, answer explanation, and marks, provide the following details:
+    1. Question Category: [Multiple Choice Question / Assertion & Reasons Type] please select any one of this
+    2. Cognitive Skills: [Remembering, Understanding, Applying, Analysing, Evaluating, Creating]
+    3. Question Source: UpSchool DB
+    4. Question Appears in: Pre/Post-Worksheet/Test
+    5. Level of Difficulty: Less/Moderate/Highly
+    6. Marks: {marks if marks else 1}
+    7. Answer Type: Words/Equation/Alpha Numeric please select any one of these.
+
+    Question Content: {question_content}
+    Answer Explanation: {answer_explanation}
+    Marks: {marks if marks else 1}
+    """
+    
+    response = openai.ChatCompletion.create(
+        model="gpt-4o-mini-2024-07-18",
+        messages=[
+            {"role": "system", "content": "You are a helpful assistant that categorizes questions."},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=0,
+        max_tokens=150
+    )
+    
+    return response.choices[0].message['content'].strip()
+
+def get_subjective_details(question_content, answer_explanation, marks):
+    """Get answer content from GPT for subjective questions"""
+    prompt = f"""
+    Based on the following question content, answer explanation, and marks, provide the following details:
+    1. Question Category: {question_categories} from the provided list
+    2. Cognitive Skills (Remembering, Understanding, Applying, Analysing, Evaluating, Creating) please select any one of these only
+    3. Question Source (UpSchool DB)
+    4. Level of Difficulty ('Less' - Remembering, Understanding (simple), 'Moderate'- Understanding (complex), Applying (simple), Creating (Simple) 'High' - Applying (complex), Analysing, Evaluating, Creating (Complex). Just give the response as 'Less', 'Moderate' or 'High' only.)
+    5. Marks: {marks if marks else '1, 2, 3, 4, 5 as given in the question paper within brackets[]'}
+    6. Answer Type (Words,Numbers,Equation) Please select any one of these
+    7. Answer Content: Creates structured marking schemes for evaluations. You are Joe and you are here to assist educators in generating automated marking schemes for evaluating students' answers. The user provides the question, the expected answer, and the total marks for the question. Based on this, the GPT generates a clear and concise marking scheme, formatted as a breakdown of marks. Each section is titled with the concept it addresses, followed by a list of criteria under specific marks. The GPT ensures flexibility by recognizing alternative phrasings that convey the same meaning, confirming the presence of the required points in the student's response. Each marking criterion is stated in simple, non-technical terms and grouped clearly under the corresponding marks. This structured format ensures clarity and consistency across marking schemes. I need you to put everything under each mark, in one line.
+    
+    Question: {question_content}
+    Answer Explanation: {answer_explanation}
+    Marks: {marks if marks else 'Not specified'}
+    """
+    response = openai.ChatCompletion.create(
+        model="gpt-4.1-mini-2025-04-14",
+        messages=[
+            {"role": "system", "content": "You provide complete answer explanations."},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=0,
+        max_tokens=1500
+    )
+    return response.choices[0].message['content']
+
+def get_descriptive_details(question_content, answer_explanation, marks):
+    """
+    Generate structured metadata + rubrics for Descriptive questions.
+
+    Uses global `question_categories` list; returns a dict with:
+    question_category, cognitive_skills, question_source, question_appears_in,
+    level_of_difficulty, question, marks, display_answer, answer_type,
+    answer_weightage, answer_content, answer_explanation.
+    """
+
+    # Use bracketed marks at end of question if present; else fall back to Marks column
+    raw_q = question_content or ""
+    bracket_match = re.search(r'\[(\d+)\]\s*$', raw_q.strip())
+    if bracket_match:
+        marks_int = int(bracket_match.group(1))
+    else:
+        try:
+            marks_int = int(float(marks)) if marks not in (None, "", "nan") else 1
+        except Exception:
+            marks_int = 1
+
+    cleaned_question = clean_question_text(raw_q)
+    cleaned_answer = (answer_explanation or "").strip()
+
+    categories_str = ", ".join(f'"{c}"' for c in question_categories)
+
+    prompt = f"""
+You are Joe, an AI assistant that analyses school exam questions and generates structured metadata and marking schemes.
+
+Return your answer as ONE valid JSON object with EXACTLY these keys:
+
+{{
+  "question_category": "",
+  "cognitive_skills": "",
+  "question_source": "UpSchool DB",
+  "question_appears_in": "Pre/Post-Worksheet/Test",
+  "level_of_difficulty": "",
+  "question": "",
+  "marks": {marks_int},
+  "display_answer": "",
+  "answer_type": "",
+  "answer_weightage": {marks_int},
+  "answer_content": "",
+  "answer_explanation": ""
+}}
+
+### FIELD RULES
+
+1. "question_category"
+   - Choose exactly ONE value from this list (copy the string verbatim):
+     [{categories_str}]
+   - Use a category that matches the type and marks of the question.
+   - Do NOT invent new labels.
+
+2. "cognitive_skills"
+   - Choose exactly ONE:
+     "Remembering", "Understanding", "Applying", "Analysing", "Evaluating", "Creating".
+
+3. "question_source"
+   - Always "UpSchool DB".
+
+4. "question_appears_in"
+   - Always "Pre/Post-Worksheet/Test".
+
+5. "level_of_difficulty"
+   - One of: "Less", "Moderate", "High".
+   - Rough guide:
+     - Simple recall / direct facts → "Less"
+     - Multi-part but straightforward reasoning → "Moderate"
+     - Deep, multi-step, abstract reasoning → "High".
+
+6. "question"
+   - Start from the original question text.
+   - REMOVE:
+     - Any leading question numbers like "1.", "39.", "Q1.", "Q.49".
+     - Any trailing mark patterns like "..... [3]" or "[4]".
+   - Output ONLY the clean, student-facing question sentence.
+
+7. "marks" and "answer_weightage"
+   - Both MUST equal the total marks you are using: {marks_int}.
+
+8. "answer_type"
+   - Choose exactly ONE: "Phrases" or "Equation".
+
+9. "display_answer"
+   - A clear, concise, fully correct model answer.
+   - You may refine or complete the given answer if it is missing key points.
+   - Do NOT include question numbers or mark brackets.
+
+10. "answer_explanation"
+   - For this pipeline, make it EXACTLY the same text as "display_answer".
+
+11. "answer_content" (MARKING SCHEME / RUBRICS)
+   - Generate a line-by-line marking scheme.
+   - EACH line = one simple sentence describing what earns a mark.
+   - NO numbering, NO prefixes like "1 mark:".
+   - Include alternative valid phrasings in parentheses where relevant.
+
+   A. For normal questions (NOT "any two/three/four"):
+      - Use EXACTLY {marks_int} scoring lines, one per mark.
+
+   B. For "any X" questions:
+      - If the question or given answer includes phrases like:
+        "mention any 2/3/4", "state any two/three/four",
+        "list any two/three/four", "give any two/three/four",
+        or ends with "(Any three)", "(Any four)", etc.:
+        - List ALL DISTINCT acceptable points as separate lines.
+        - Then add ONE final line:
+          "Award 1 mark per correct point mentioned (any X correct points earn full marks)."
+
+   - Do NOT give more marks than the total marks:
+       - Normal questions → exactly {marks_int} rubric lines.
+       - Any-X questions → [number of acceptable points] lines + exactly one awarding-rule line.
+
+12. If the provided answer text clearly does NOT answer this question
+    (e.g., it is about a completely different topic),
+    infer and use a correct answer based on the question content.
+
+### INPUT
+
+Question (raw, possibly with number and marks):
+{raw_q}
+
+Cleaned question (for your reference):
+{cleaned_question}
+
+Given answer / explanation:
+{cleaned_answer}
+
+Total marks you must respect:
+{marks_int}
+
+Remember:
+- RESPOND WITH JSON ONLY.
+- NO extra commentary, no backticks, no leading text.
+"""
+
+    response = openai.ChatCompletion.create(
+        model="gpt-5-nano-2025-08-07",
+        messages=[
+            {
+                "role": "system",
+                "content": "You are an AI that outputs ONLY valid JSON objects exactly matching the requested schema."
+            },
+            {"role": "user", "content": prompt}
+        ],
+        max_completion_tokens=1500
+    )
+
+    raw = response.choices[0].message["content"].strip()
+    data = json.loads(raw)
+    return datadef process_excel_file_with_gpt(input_path, output_path):
+    """Process Excel file with GPT enhancements - Updated to use structured JSON for Descriptive."""
+    xls = pd.ExcelFile(input_path)
+    with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+        for sheet_name in xls.sheet_names:
+            df = xls.parse(sheet_name)
+
+            # Sheet-specific setup
+            if 'Objective' in sheet_name:
+                required_columns = ['Question Category', 'Cognitive Skills', 'Question Source',
+                                    'Level of Difficulty', 'Marks', 'Answer Type']
+
+            elif 'Subjective' in sheet_name:
+                # Pre-fill Subjective blanks with GPT-generated answers
+                for index, row in df.iterrows():
+                    if pd.notna(row.get('Question')):
+                        answer_explanation = row.get('Answer Explanation', '') if 'Answer Explanation' in df.columns else ''
+                        marks = row.get('Marks', '') if 'Marks' in df.columns else ''
+                        gpt_response = get_subjective_details(
+                            row['Question'],
+                            answer_explanation,
+                            marks
+                        )
+                        answer_content = extract_gpt_answer_content(gpt_response)
+
+                        blank_count = str(row['Question']).count('$$') // 2
+                        for i in range(1, blank_count + 1):
+                            df.at[index, f'Answer{i}'] = answer_content
+
+                required_columns = ['Question Category', 'Cognitive Skills', 'Question Source',
+                                    'Level of Difficulty', 'Marks', 'Answer Type']
+
+            elif 'Descriptive' in sheet_name:
+                required_columns = ['Question Category', 'Cognitive Skills', 'Question Source',
+                                    'Level of Difficulty', 'Marks', 'Answer Type', 'Answer Content']
+
+            else:
+                # Unknown sheet – write as-is
+                df.to_excel(writer, sheet_name=sheet_name, index=False)
+                continue
+
+            # Ensure required columns exist
+            for col in required_columns:
+                if col not in df.columns:
+                    df[col] = pd.NA if col == 'Marks' else ""
+
+            # Ensure Marks is numeric where relevant
+            if 'Marks' in df.columns:
+                df['Marks'] = pd.to_numeric(df['Marks'], errors='coerce')
+
+            # Row-wise processing
+            for index, row in df.iterrows():
+                question_content = str(row.get('Question', '') or "")
+                if not question_content.strip():
+                    continue
+
+                answer_explanation = str(row.get('Answer Explanation', '') or "")
+                marks_value = row.get('Marks', '')
+
+                try:
+                    # OBJECTIVE: use original free-text parsing approach
+                    if 'Objective' in sheet_name:
+                        details = get_objective_details(
+                            question_content,
+                            answer_explanation,
+                            marks_value
+                        )
+
+                        parsed_data = {}
+                        answer_content_lines = []
+                        in_answer_content = False
+
+                        for line in str(details).split('\n'):
+                            line = line.strip()
+                            if not line:
+                                continue
+
+                            if (re.match(r'^(\d+\.\s*)?(Answer Content|Answer):', line, re.IGNORECASE) or
+                                    'solution will involve' in line.lower()):
+                                in_answer_content = True
+                                line = re.sub(r'^(\d+\.\s*)?(Answer Content|Answer):\s*', '',
+                                              line, flags=re.IGNORECASE).strip()
+                                if line:
+                                    answer_content_lines.append(line)
+                                continue
+
+                            if in_answer_content:
+                                clean_line = re.sub(r'^[\s\-•*]+', '', line)
+                                if clean_line:
+                                    answer_content_lines.append(clean_line)
+                            else:
+                                if ': ' in line:
+                                    line = re.sub(r'^\d+\.\s*', '', line)
+                                    key, value = line.split(': ', 1)
+                                    parsed_data[key.strip()] = value.strip()
+
+                        column_mapping = {
+                            'Question Category': ['Question Category'],
+                            'Cognitive Skills': ['Cognitive Skills'],
+                            'Question Source': ['Question Source'],
+                            'Level of Difficulty': ['Level of Difficulty'],
+                            'Marks': ['Marks'],
+                            'Answer Type': ['Answer Type'],
+                        }
+
+                        details_list = []
+                        for col in required_columns:
+                            found = False
+                            for key in column_mapping.get(col, [col]):
+                                if key in parsed_data:
+                                    details_list.append(parsed_data[key])
+                                    found = True
+                                    break
+                            if not found and col in ['Answer Content', 'Answer']:
+                                details_list.append('\n'.join(answer_content_lines) if answer_content_lines else "")
+                            elif not found:
+                                details_list.append(pd.NA if col == 'Marks' else "")
+
+                        for i, col in enumerate(required_columns):
+                            if i >= len(details_list):
+                                continue
+                            if col == 'Marks':
+                                try:
+                                    match = re.search(r'\d+', str(details_list[i]))
+                                    df.at[index, col] = float(match.group()) if match else pd.NA
+                                except (ValueError, TypeError):
+                                    df.at[index, col] = pd.NA
+                            else:
+                                val = str(details_list[i]).strip('"'')
+                                df.at[index, col] = val
+
+                    # DESCRIPTIVE: strict JSON and direct mapping – HIGH-STAKES RUBRICS
+                    elif 'Descriptive' in sheet_name:
+                        data = get_descriptive_details(
+                            question_content,
+                            answer_explanation,
+                            marks_value
+                        )
+
+                        df.at[index, 'Question Category'] = data.get('question_category', '')
+                        df.at[index, 'Cognitive Skills'] = data.get('cognitive_skills', '')
+                        df.at[index, 'Question Source'] = data.get('question_source', 'UpSchool DB')
+
+                        if 'Question Appears in' not in df.columns:
+                            df['Question Appears in'] = ""
+                        df.at[index, 'Question Appears in'] = data.get('question_appears_in', 'Pre/Post-Worksheet/Test')
+
+                        df.at[index, 'Level of Difficulty'] = data.get('level_of_difficulty', '')
+                        df.at[index, 'Question'] = data.get('question', question_content)
+                        df.at[index, 'Marks'] = data.get('marks', marks_value)
+                        df.at[index, 'Display Answer'] = data.get('display_answer', answer_explanation)
+                        df.at[index, 'Answer Type'] = data.get('answer_type', '')
+
+                        if 'Answer Weightage' not in df.columns:
+                            df['Answer Weightage'] = pd.NA
+                        df.at[index, 'Answer Weightage'] = data.get('answer_weightage', data.get('marks', marks_value))
+
+                        # Rubrics: single-sentence lines, mark-wise, any-X logic enforced in prompt
+                        df.at[index, 'Answer Content'] = data.get('answer_content', '')
+                        df.at[index, 'Answer Explanation'] = data.get('answer_explanation', data.get('display_answer', ''))
+
+                    # SUBJECTIVE: keep existing parsing logic
+                    elif 'Subjective' in sheet_name:
+                        details = get_subjective_details(
+                            question_content,
+                            answer_explanation,
+                            marks_value
+                        )
+
+                        parsed_data = {}
+                        answer_content_lines = []
+                        in_answer_content = False
+
+                        for line in str(details).split('\n'):
+                            line = line.strip()
+                            if not line:
+                                continue
+
+                            if (re.match(r'^(\d+\.\s*)?(Answer Content|Answer):', line, re.IGNORECASE) or
+                                    'solution will involve' in line.lower()):
+                                in_answer_content = True
+                                line = re.sub(r'^(\d+\.\s*)?(Answer Content|Answer):\s*', '',
+                                              line, flags=re.IGNORECASE).strip()
+                                if line:
+                                    answer_content_lines.append(line)
+                                continue
+
+                            if in_answer_content:
+                                clean_line = re.sub(r'^[\s\-•*]+', '', line)
+                                if clean_line:
+                                    answer_content_lines.append(clean_line)
+                            else:
+                                if ': ' in line:
+                                    line = re.sub(r'^\d+\.\s*', '', line)
+                                    key, value = line.split(': ', 1)
+                                    parsed_data[key.strip()] = value.strip()
+
+                        column_mapping = {
+                            'Question Category': ['Question Category'],
+                            'Cognitive Skills': ['Cognitive Skills'],
+                            'Question Source': ['Question Source'],
+                            'Level of Difficulty': ['Level of Difficulty'],
+                            'Marks': ['Marks'],
+                            'Answer Type': ['Answer Type'],
+                        }
+
+                        details_list = []
+                        for col in required_columns:
+                            found = False
+                            for key in column_mapping.get(col, [col]):
+                                if key in parsed_data:
+                                    details_list.append(parsed_data[key])
+                                    found = True
+                                    break
+                            if not found and col in ['Answer Content', 'Answer']:
+                                details_list.append('\n'.join(answer_content_lines) if answer_content_lines else "")
+                            elif not found:
+                                details_list.append(pd.NA if col == 'Marks' else "")
+
+                        for i, col in enumerate(required_columns):
+                            if i >= len(details_list):
+                                continue
+                            if col == 'Marks':
+                                try:
+                                    match = re.search(r'\d+', str(details_list[i]))
+                                    df.at[index, col] = float(match.group()) if match else pd.NA
+                                except (ValueError, TypeError):
+                                    df.at[index, col] = pd.NA
+                            else:
+                                val = str(details_list[i]).strip('"'')
+                                df.at[index, col] = val
+
+                except Exception as e:
+                    print(f"Error processing question {index + 1} on sheet {sheet_name}: {str(e)}")
+                    continue
+
+            df.to_excel(writer, sheet_name=sheet_name, index=False)def process_files_to_excel(questions_file, solutions_file, output_excel_path):
+    """Process questions and solutions into Excel format"""
+    questions = parse_questions(questions_file)
+    solutions = parse_solutions(solutions_file)
+    
+    objective_data, descriptive_data, subjective_data = process_all_questions(questions, solutions)
+    objective_df = pd.DataFrame(objective_data)
+    descriptive_df = pd.DataFrame(descriptive_data)
+    subjective_df = pd.DataFrame(subjective_data)
+
+    objective_df = mark_correct_answers(objective_df)
+    
+    with pd.ExcelWriter(output_excel_path, engine='openpyxl') as writer:
+        if not objective_df.empty:
+            objective_df.to_excel(writer, sheet_name='Objective', index=False)
+        if not subjective_df.empty:
+            subjective_df.to_excel(writer, sheet_name='Subjective', index=False)
+        if not descriptive_df.empty:
+            descriptive_df.to_excel(writer, sheet_name='Descriptive', index=False)
+
+    print(f"Excel file created successfully at: {output_excel_path}")
+
+# ----------------------
+# Flask Endpoints
+# ----------------------
+
+@app.route('/upload', methods=['POST'])
+def upload_file():
+    """Handle file upload and processing"""
+    if 'questionPaper' not in request.files or 'answerSheet' not in request.files:
+        return jsonify({'error': 'Missing files'}), 400
+
+    question_paper = request.files['questionPaper']
+    answer_sheet = request.files['answerSheet']
+
+    if question_paper.filename == '' or answer_sheet.filename == '':
+        return jsonify({'error': 'No selected file'}), 400
+
+    print("Processing files with Mathpix...")
+    question_txt_path = process_with_mathpix(question_paper)
+    answer_txt_path = process_with_mathpix(answer_sheet)
+
+    if not question_txt_path or not answer_txt_path:
+        return jsonify({'error': 'Failed to process files with Mathpix'}), 500
+
+    print("Generating intermediate Excel file...")
+    intermediate_excel_path = "intermediate_output.xlsx"
+    process_files_to_excel(question_txt_path, answer_txt_path, intermediate_excel_path)
+
+    print("Processing Excel file with GPT...")
+    final_excel_path = "final_output.xlsx"
+    process_excel_file_with_gpt(intermediate_excel_path, final_excel_path)
+
+    print("Sending final Excel file to the user...")
+    return send_file(
+        final_excel_path,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        as_attachment=True,
+        download_name='final_output.xlsx'
+    )
+
+if __name__ == '__main__':
+    app.run(debug=True, port=5000)

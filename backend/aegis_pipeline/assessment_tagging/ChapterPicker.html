@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <style>
+    :root {
+      --text: #202124;
+      --muted: #5f6368;
+      --line: #e8eaed;
+      --primary: #1a73e8;
+      --primary-dark: #1557b0;
+      --surface: #fff;
+      --elevated: #f8f9fa;
+      --success-bg: #e6f4ea;
+      --success-border: #81c995;
+      --success-text: #137333;
+      --error-bg: #fce8e6;
+      --error-border: #ea4335;
+      --error-text: #c5221f;
+      --progress-bg: linear-gradient(145deg, #e8f0fe 0%, #f3f8ff 50%, #fafbff 100%);
+      --radius: 10px;
+      --font: 'Google Sans', 'Segoe UI', Roboto, Arial, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: var(--font);
+      padding: 14px 16px 20px;
+      margin: 0;
+      font-size: 14px;
+      color: var(--text);
+      background: var(--surface);
+      line-height: 1.45;
+    }
+    .header-row {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    h3 {
+      margin: 0;
+      font-weight: 500;
+      font-size: 17px;
+      letter-spacing: -0.01em;
+    }
+    .subtitle { font-size: 12px; color: var(--muted); margin-top: 4px; max-width: 280px; }
+
+    .filter-row { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+    .filter-btn {
+      padding: 6px 12px;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      border-radius: 999px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--muted);
+    }
+    .filter-btn:hover { background: var(--elevated); border-color: #dadce0; color: var(--text); }
+    .filter-btn.active { background: var(--primary); color: white; border-color: var(--primary); }
+
+    .mode-section {
+      margin: 10px 0 12px;
+      padding: 12px 14px;
+      background: var(--elevated);
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+    }
+    .mode-section > label:first-child { display: block; margin-bottom: 8px; font-weight: 600; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+    .mode-section .mode-line { margin: 8px 0; display: flex; align-items: flex-start; gap: 8px; }
+    .mode-section .mode-line input { margin-top: 3px; flex-shrink: 0; }
+    .mode-section .mode-line label { font-weight: 400; font-size: 13px; color: var(--text); cursor: pointer; }
+
+    #search {
+      width: 100%;
+      padding: 10px 12px;
+      margin-bottom: 6px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      font-size: 14px;
+    }
+    #search:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 2px rgba(26,115,232,0.2); }
+
+    #chapters {
+      width: 100%;
+      height: 200px;
+      min-height: 160px;
+      overflow-y: auto;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 4px;
+      margin: 6px 0 8px;
+      background: var(--surface);
+    }
+    .chapter-item {
+      padding: 8px 12px;
+      cursor: pointer;
+      border-radius: 8px;
+      margin: 2px 0;
+      font-size: 13px;
+    }
+    .chapter-item:hover { background: #e8f0fe; }
+    .chapter-item.selected { background: var(--primary); color: white; }
+    .chapter-item:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+    .count { color: var(--muted); font-size: 12px; margin-left: 6px; }
+    .chapter-item.selected .count { color: rgba(255,255,255,0.88); }
+
+    .hint { font-size: 12px; color: var(--muted); margin: 0 0 10px; }
+
+    .action-row { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+    .action-btn {
+      padding: 10px 18px;
+      border-radius: var(--radius);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      flex: 1;
+      min-width: 100px;
+    }
+    .action-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .run-btn { background: var(--primary); color: white; }
+    .run-btn:hover:not(:disabled) { background: var(--primary-dark); }
+    .terminate-btn { background: var(--surface); color: #d93025; border: 1px solid #d93025; flex: 0 1 auto; }
+    .terminate-btn:hover:not(:disabled) { background: #fce8e6; }
+
+    .log-panel {
+      margin-top: 14px;
+      border-radius: var(--radius);
+      overflow: hidden;
+      border: 1px solid var(--line);
+      display: none;
+    }
+    .log-panel.visible { display: block; }
+    .log-panel.progress { background: var(--progress-bg); border-color: #c9d9f5; }
+    .log-panel.success { background: var(--success-bg); border-color: var(--success-border); }
+    .log-panel.error { background: var(--error-bg); border-color: var(--error-border); }
+
+    .log-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 10px 12px;
+      background: rgba(255,255,255,0.55);
+      border-bottom: 1px solid rgba(0,0,0,0.06);
+    }
+    .log-toolbar-left { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .phase-badge {
+      background: var(--primary);
+      color: white;
+      padding: 3px 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .log-panel.success .phase-badge { background: var(--success-text); }
+    .log-panel.error .phase-badge { background: var(--error-text); }
+    .elapsed {
+      font-size: 11px;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+      flex: 1 1 auto;
+      min-width: 0;
+      text-align: right;
+      line-height: 1.35;
+    }
+    .pct-label { font-size: 12px; font-weight: 600; color: var(--text); }
+
+    .stepper-wrap { padding: 10px 12px 8px; border-bottom: 1px solid rgba(0,0,0,0.06); }
+    .stepper {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }
+    .step-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      min-height: 28px;
+    }
+    .step-marker {
+      width: 22px;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .step-dot {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      border: 2px solid #dadce0;
+      background: var(--surface);
+      font-size: 11px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+    }
+    .step-row.done .step-dot {
+      border-color: var(--success-text);
+      background: var(--success-text);
+      color: white;
+      font-size: 13px;
+    }
+    .step-row.active .step-dot {
+      border-color: var(--primary);
+      background: var(--primary);
+      color: white;
+      box-shadow: 0 0 0 3px rgba(26,115,232,0.25);
+    }
+    .step-connector {
+      width: 2px;
+      flex: 1;
+      min-height: 10px;
+      background: #dadce0;
+      margin: 2px 0;
+    }
+    .step-row.done .step-connector { background: #81c995; }
+    .step-text { font-size: 11px; color: var(--muted); padding-top: 2px; line-height: 1.35; }
+    .step-row.active .step-text { color: var(--text); font-weight: 600; }
+    .step-row.done .step-text { color: var(--success-text); }
+
+    .progress-bar { height: 5px; background: rgba(26,115,232,0.18); margin: 0 12px 10px; border-radius: 3px; overflow: hidden; }
+    .progress-bar-fill { height: 100%; background: var(--primary); border-radius: 3px; transition: width 0.35s ease; }
+    .log-panel.success .progress-bar-fill { background: var(--success-text); }
+    .log-panel.error .progress-bar-fill { background: var(--error-text); }
+
+    .detail-block {
+      padding: 0 12px 8px;
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.5;
+      word-break: break-word;
+      max-height: 4.5em;
+      overflow-y: auto;
+    }
+    .detail-block strong { color: var(--text); }
+
+    .activity-head {
+      padding: 6px 12px 4px;
+      font-size: 10px;
+ font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+    }
+    .activity-log {
+      margin: 0 8px 10px;
+      max-height: 140px;
+      overflow-y: auto;
+      padding: 8px 10px;
+      background: rgba(255,255,255,0.7);
+      border-radius: 8px;
+      border: 1px solid rgba(0,0,0,0.06);
+      font-family: 'Consolas', 'Roboto Mono', monospace;
+      font-size: 11px;
+      line-height: 1.5;
+    }
+    .activity-log:empty { display: none; }
+    .log-line { margin: 0 0 6px; color: var(--text); }
+    .log-line .t { color: #80868b; margin-right: 6px; }
+    .log-line .d { color: var(--muted); }
+
+    .result-body { padding: 12px 14px; font-size: 13px; line-height: 1.55; }
+    .result-body.success-body { color: var(--success-text); }
+    .result-body.error-body { color: var(--error-text); }
+    .result-body ul { margin: 8px 0 0; padding-left: 18px; }
+    .result-body li { margin: 4px 0; }
+
+    [aria-live="polite"] { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0; }
+  </style>
+</head>
+<body>
+  <div class="header-row">
+    <div>
+      <h3>Assessment Tagging</h3>
+      <p class="subtitle">Pick a chapter, choose a workflow, then run. Routing reads the full chapter JSON, objective questions use the correct answer, and live status appears below.</p>
+    </div>
+  </div>
+
+  <div class="filter-row">
+    <button type="button" class="filter-btn active" data-filter="all">All</button>
+    <button type="button" class="filter-btn" data-filter="PL">PL</button>
+    <button type="button" class="filter-btn" data-filter="PrL">PrL</button>
+    <button type="button" class="filter-btn" data-filter="Other">Other</button>
+  </div>
+
+  <div class="mode-section">
+    <label>Workflow</label>
+    <div class="mode-line"><input type="radio" name="mode" value="rewrite_full" id="m1" checked /><label for="m1">Rewrite Full — Rebuild labels, gists, descriptions, comments, and QA flags for the chapter using full-question JSON routing.</label></div>
+    <div class="mode-line"><input type="radio" name="mode" value="tag_new" id="m2" /><label for="m2">Tag New — Back up the sheet, skip existing labels, route only new questions through the same engine, then append into matching rows or empty slots.</label></div>
+  </div>
+
+  <input type="text" id="search" placeholder="Search chapter codes or names…" autocomplete="off" />
+  <div id="chapters" role="listbox" aria-label="Chapters"></div>
+  <p class="hint">Tip: Click a row to select, then Run. Objective questions are routed using the correct answer, not distractor options. Terminate stops the server run as soon as it checks the flag.</p>
+
+  <div class="action-row">
+    <button type="button" id="runBtn" class="action-btn run-btn" disabled>Run</button>
+    <button type="button" id="terminateBtn" class="action-btn terminate-btn" disabled>Terminate</button>
+  </div>
+
+  <div id="ariaStatus" aria-live="polite"></div>
+
+  <div id="logPanel" class="log-panel" role="region" aria-label="Run status">
+    <div class="log-toolbar">
+      <div class="log-toolbar-left">
+        <span id="logBadge" class="phase-badge"></span>
+        <span id="logTitle" class="pct-label"></span>
+      </div>
+      <span id="elapsed" class="elapsed" style="display:none;"></span>
+    </div>
+
+    <div id="stepperWrap" class="stepper-wrap" style="display:none;">
+      <div id="stepper" class="stepper"></div>
+    </div>
+
+    <div id="progressBar" class="progress-bar" style="display:none;">
+      <div id="progressBarFill" class="progress-bar-fill" style="width:0%"></div>
+    </div>
+
+    <div id="detailBlock" class="detail-block" style="display:none;"></div>
+
+    <div id="activityHead" class="activity-head" style="display:none;">Activity log</div>
+    <div id="activityLog" class="activity-log" aria-label="Recent status lines"></div>
+
+    <div id="resultBody" class="result-body" style="display:none;"></div>
+  </div>
+
+  <script>
+    let chapters = [];
+    let phaseLabels = [
+      'Loading data',
+      'Topic routing',
+      'Variant clustering',
+      'Group descriptions',
+      'Writing',
+      'QA review'
+    ];
+    let selectedPrefix = null;
+    let currentFilter = 'all';
+    let isRunning = false;
+    let progressInterval = null;
+    let elapsedInterval = null;
+    let runStartedAt = null;
+    let lastPollSignature = '';
+    let lastPhaseSeen = -2;
+    let lastProgressPayload = null;
+
+    function escapeHtml(s) {
+      const d = document.createElement('div');
+      d.textContent = s == null ? '' : String(s);
+      return d.innerHTML;
+    }
+
+    function escapeAttr(s) {
+      return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/</g, '&lt;');
+    }
+
+    function formatMultilineResult(text, success) {
+      const raw = (text || '').trim();
+      if (!raw) return '';
+      const lines = raw.split(/\n/).map(function(l) { return l.trim(); }).filter(Boolean);
+      if (lines.length <= 1) return '<p>' + escapeHtml(raw) + '</p>';
+      const cls = success ? 'success-body' : 'error-body';
+      return '<ul class="' + cls + '">' + lines.map(function(l) { return '<li>' + escapeHtml(l) + '</li>'; }).join('') + '</ul>';
+    }
+
+    function formatClock(d) {
+      const h = d.getHours();
+      const m = d.getMinutes();
+      const s = d.getSeconds();
+      return (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
+    }
+
+    function formatRunDuration(ms) {
+      if (ms < 0) ms = 0;
+      const sec = Math.floor(ms / 1000);
+      const m = Math.floor(sec / 60);
+      const s = sec % 60;
+      if (m > 0) return m + 'm ' + (s < 10 ? '0' : '') + s + 's';
+      return s + 's';
+    }
+
+    function pad2(n) {
+      n = parseInt(n, 10) || 0;
+      return n < 10 ? ('0' + n) : String(n);
+    }
+
+    /** Progress line beside elapsed: question/setup counts from server qTotal + phase counters. */
+    function formatRunFooter(p) {
+      if (!p || p.phase < 0) return '';
+      var qT = p.qTotal || 0;
+      if (qT <= 0 && p.phase === 0) return '';
+      if (p.phase === 0 && qT > 0) {
+        var cur = (p.current != null && p.total > 0) ? pad2(p.current) : '00';
+        var tot = (p.total > 0) ? pad2(p.total) : pad2(qT);
+        return ' · ' + cur + '/' + tot + ' setup · ' + qT + ' qs';
+      }
+      if (p.phase === 1 && p.total > 0 && qT > 0) {
+        if (p.total === qT) {
+          return ' · ' + pad2(p.current) + '/' + pad2(p.qTotal) + ' questions';
+        }
+        return ' · ' + pad2(p.current) + '/' + pad2(p.total) + ' new · ' + qT + ' in chapter';
+      }
+      if (p.phase === 2 && p.total > 0 && qT > 0) {
+        return ' · ' + pad2(p.current) + '/' + pad2(p.total) + ' remainder · ' + qT + ' in chapter';
+      }
+      if (p.phase >= 3 && p.total > 0 && qT > 0) {
+        return ' · ' + pad2(p.current) + '/' + pad2(p.total) + ' · ' + qT + ' qs';
+      }
+      if (qT > 0) return ' · ' + qT + ' questions';
+      return '';
+    }
+
+    function updateRunFooterText() {
+      var el = document.getElementById('elapsed');
+      if (!runStartedAt || !isRunning) return;
+      var dur = 'Elapsed: ' + formatRunDuration(Date.now() - runStartedAt);
+      var extra = formatRunFooter(lastProgressPayload) || '';
+      el.textContent = dur + extra;
+    }
+
+    function getChapterType(prefix) {
+      if (!prefix) return 'Other';
+      const p = prefix.toString();
+      if (p.indexOf('|| PL') >= 0 || p.endsWith(' PL') || /_PL$/.test(p) || p.endsWith('_PL')) return 'PL';
+      if (p.indexOf('PrL') >= 0 || p.indexOf('PrL/Pre') >= 0 || /_PrL$/.test(p)) return 'PrL';
+      return 'Other';
+    }
+
+    function filterChapters(list) {
+      if (currentFilter === 'all') return list;
+      return list.filter(function(c) { return getChapterType(c.prefix) === currentFilter; });
+    }
+
+    function renderChapters() {
+      const container = document.getElementById('chapters');
+      const searchVal = (document.getElementById('search').value || '').toLowerCase();
+      let filtered = filterChapters(chapters);
+      if (searchVal) {
+        filtered = filtered.filter(function(c) { return c.prefix.toLowerCase().indexOf(searchVal) >= 0; });
+      }
+      container.innerHTML = filtered.map(function(c) {
+        const sel = selectedPrefix === c.prefix ? ' selected' : '';
+        return '<div class="chapter-item' + sel + '" role="option" tabindex="0" aria-selected="' + (selectedPrefix === c.prefix) + '" data-prefix="' + escapeAttr(c.prefix) + '">' +
+          escapeHtml(c.prefix) + '<span class="count">(' + c.count + ' questions)</span></div>';
+      }).join('');
+      container.querySelectorAll('.chapter-item').forEach(function(el) {
+        el.onclick = function() { selectChapter(el.getAttribute('data-prefix')); };
+        el.onkeydown = function(e) {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectChapter(el.getAttribute('data-prefix')); }
+        };
+      });
+    }
+
+    function selectChapter(prefix) {
+      if (!prefix) return;
+      selectedPrefix = prefix;
+      renderChapters();
+      document.getElementById('runBtn').disabled = !selectedPrefix || isRunning;
+    }
+
+    function setRunning(running) {
+      isRunning = running;
+      document.getElementById('runBtn').disabled = !selectedPrefix || running;
+      document.getElementById('terminateBtn').disabled = !running;
+    }
+
+    function renderStepper(activePhase, nSteps) {
+      const wrap = document.getElementById('stepperWrap');
+      const el = document.getElementById('stepper');
+      if (!nSteps || nSteps < 1) { wrap.style.display = 'none'; return; }
+      wrap.style.display = 'block';
+      const labels = phaseLabels.length >= nSteps ? phaseLabels : phaseLabels.concat(new Array(nSteps - phaseLabels.length).fill('Step'));
+      var html = '';
+      for (var i = 0; i < nSteps; i++) {
+        var label = labels[i] || ('Step ' + (i + 1));
+        var rowClass = 'step-row';
+        if (activePhase > i) rowClass += ' done';
+        else if (activePhase === i) rowClass += ' active';
+        var mark = (activePhase > i) ? '✓' : String(i + 1);
+        html += '<div class="' + rowClass + '">';
+        html += '<div class="step-marker">';
+        html += '<div class="step-dot">' + mark + '</div>';
+        if (i < nSteps - 1) html += '<div class="step-connector"></div>';
+        html += '</div>';
+        html += '<div class="step-text">' + escapeHtml(label) + '</div>';
+        html += '</div>';
+      }
+      el.innerHTML = html;
+    }
+
+    function appendActivityLine(phaseName, detail) {
+      const log = document.getElementById('activityLog');
+      const head = document.getElementById('activityHead');
+      const line = document.createElement('div');
+      line.className = 'log-line';
+      var d = formatClock(new Date());
+      var msg = (detail && String(detail).trim()) ? String(detail).trim() : (phaseName || '');
+      line.innerHTML = '<span class="t">' + escapeHtml(d) + '</span><span class="d">' + escapeHtml(msg) + '</span>';
+      log.appendChild(line);
+      head.style.display = 'block';
+      log.scrollTop = log.scrollHeight;
+    }
+
+    function clearActivityLog() {
+      document.getElementById('activityLog').innerHTML = '';
+      document.getElementById('activityHead').style.display = 'none';
+    }
+
+    function setAriaStatus(text) {
+      document.getElementById('ariaStatus').textContent = text || '';
+    }
+
+    function showLog(kind, title, bodyHtmlOrText, options) {
+      options = options || {};
+      const panel = document.getElementById('logPanel');
+      const badge = document.getElementById('logBadge');
+      const logTitle = document.getElementById('logTitle');
+      const barWrap = document.getElementById('progressBar');
+      const barFill = document.getElementById('progressBarFill');
+      const detailBlock = document.getElementById('detailBlock');
+      const resultBody = document.getElementById('resultBody');
+      const stepperWrap = document.getElementById('stepperWrap');
+
+      panel.className = 'log-panel visible ' + (kind || '');
+      badge.textContent = options.badge || (kind === 'success' ? 'Done' : kind === 'error' ? 'Error' : 'Running');
+      logTitle.textContent = title || '';
+
+      if (kind === 'success' || kind === 'error') {
+        stepperWrap.style.display = 'none';
+        barWrap.style.display = 'none';
+        detailBlock.style.display = 'none';
+        resultBody.style.display = 'block';
+        resultBody.className = 'result-body ' + (kind === 'success' ? 'success-body' : 'error-body');
+        resultBody.innerHTML = typeof bodyHtmlOrText === 'string' && bodyHtmlOrText.indexOf('<') >= 0
+          ? bodyHtmlOrText
+          : formatMultilineResult(bodyHtmlOrText, kind === 'success');
+      } else {
+        resultBody.style.display = 'none';
+        resultBody.innerHTML = '';
+        if (options.showStepper !== false) {
+          renderStepper(options.phase != null ? options.phase : 0, options.phaseTotal || phaseLabels.length);
+        } else {
+          stepperWrap.style.display = 'none';
+        }
+        if (options.progressPct != null) {
+          barWrap.style.display = 'block';
+          barFill.style.width = Math.min(100, Math.max(0, options.progressPct)) + '%';
+        } else {
+          barWrap.style.display = 'none';
+        }
+        if (options.detail) {
+          detailBlock.style.display = 'block';
+          detailBlock.innerHTML = '<strong>Current</strong> · ' + escapeHtml(options.detail);
+        } else {
+          detailBlock.style.display = 'none';
+          detailBlock.innerHTML = '';
+        }
+      }
+
+      document.getElementById('elapsed').style.display = isRunning ? 'block' : 'none';
+      if (isRunning) updateRunFooterText();
+    }
+
+    function startElapsedTicker() {
+      stopElapsedTicker();
+      var el = document.getElementById('elapsed');
+      el.style.display = 'block';
+      updateRunFooterText();
+      elapsedInterval = setInterval(updateRunFooterText, 250);
+    }
+
+    function stopElapsedTicker() {
+      if (elapsedInterval) {
+        clearInterval(elapsedInterval);
+        elapsedInterval = null;
+      }
+    }
+
+    function startProgressPolling() {
+      lastPollSignature = '';
+      lastPhaseSeen = -2;
+      lastProgressPayload = null;
+      clearActivityLog();
+      var nSteps = phaseLabels.length;
+      showLog('progress', 'Starting…', '', { phase: 0, phaseTotal: nSteps, progressPct: 0, detail: 'Connecting to script…' });
+
+      progressInterval = setInterval(function() {
+        google.script.run
+          .withSuccessHandler(function(p) {
+            var phaseTotal = p.phaseTotal || phaseLabels.length;
+            if (p.phase < 0 || !isRunning) return;
+
+            lastProgressPayload = p;
+            updateRunFooterText();
+
+            var within = (p.total > 0) ? (p.current / p.total) * (100 / phaseTotal) : 0;
+            var base = (p.phase / phaseTotal) * 100;
+            var pct = Math.min(100, base + within);
+
+            var stepNum = Math.min(phaseTotal, p.phase + 1);
+            var header = 'Step ' + stepNum + ' of ' + phaseTotal + ': ' + (p.phaseName || '');
+            var counter = (p.total > 0) ? (' · ' + p.current + ' / ' + p.total) : '';
+            showLog('progress', header + counter, '', {
+                phase: p.phase,
+                phaseTotal: phaseTotal,
+                progressPct: pct,
+                detail: p.detail || ''
+            });
+
+            var sig = p.phase + '|' + (p.current || 0) + '|' + (p.detail || '');
+            if (sig !== lastPollSignature) {
+              lastPollSignature = sig;
+              if (lastPhaseSeen !== p.phase) {
+                lastPhaseSeen = p.phase;
+                var stepLine = 'Step ' + (p.phase + 1) + ': ' + (p.phaseName || '');
+                appendActivityLine('', (p.detail ? stepLine + ' — ' + p.detail : stepLine));
+              } else if (p.detail) {
+                appendActivityLine('', p.detail);
+              }
+            }
+
+            setAriaStatus((p.phaseName || '') + '. ' + (p.detail || ''));
+          })
+          .getProgress();
+      }, 450);
+    }
+
+    function stopProgressPolling() {
+      if (progressInterval) {
+        clearInterval(progressInterval);
+        progressInterval = null;
+      }
+      stopElapsedTicker();
+      document.getElementById('elapsed').style.display = 'none';
+    }
+
+    function doRun() {
+      if (!selectedPrefix || isRunning) return;
+      runStartedAt = Date.now();
+      setRunning(true);
+      startElapsedTicker();
+      var mode = document.querySelector('input[name="mode"]:checked').value;
+
+      startProgressPolling();
+      google.script.run
+        .withSuccessHandler(function(msg) {
+          stopProgressPolling();
+          setRunning(false);
+          var duration = runStartedAt ? formatRunDuration(Date.now() - runStartedAt) : '';
+          showLog('success', 'Completed in ' + duration, msg, { badge: 'Complete' });
+          setAriaStatus('Completed. ' + (msg || '').split('\n')[0]);
+        })
+        .withFailureHandler(function(err) {
+          stopProgressPolling();
+          setRunning(false);
+          var errText = (err.message || err).toString();
+          showLog('error', 'Run failed', '<p class="error-body">' + escapeHtml(errText) + '</p>', { badge: 'Error' });
+          setAriaStatus('Error: ' + errText);
+        })
+        .runForChapter(selectedPrefix, mode);
+    }
+
+    function doTerminate() {
+      if (!isRunning) return;
+      google.script.run.requestTerminate();
+      appendActivityLine('', 'Terminate requested — run will stop at next check.');
+      setAriaStatus('Terminate requested.');
+      showLog('progress', 'Terminating…', '', { showStepper: false, progressPct: null, detail: 'Waiting for server to stop…' });
+    }
+
+    document.getElementById('runBtn').onclick = doRun;
+    document.getElementById('terminateBtn').onclick = doTerminate;
+
+    document.querySelectorAll('.filter-btn').forEach(function(btn) {
+      btn.onclick = function() {
+        document.querySelectorAll('.filter-btn').forEach(function(b) { b.classList.remove('active'); });
+        btn.classList.add('active');
+        currentFilter = btn.dataset.filter;
+        renderChapters();
+      };
+    });
+
+    document.getElementById('search').oninput = function() { renderChapters(); };
+
+    document.getElementById('search').addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' && selectedPrefix && !isRunning) doRun();
+    });
+
+    google.script.run.withSuccessHandler(function(labels) {
+      if (labels && labels.length) phaseLabels = labels;
+    }).getWorkflowPhaseLabels();
+
+    google.script.run
+      .withSuccessHandler(function(data) {
+        chapters = data;
+        renderChapters();
+      })
+      .withFailureHandler(function(err) {
+        var panel = document.getElementById('logPanel');
+        panel.className = 'log-panel visible error';
+        document.getElementById('stepperWrap').style.display = 'none';
+        document.getElementById('progressBar').style.display = 'none';
+        document.getElementById('detailBlock').style.display = 'none';
+        document.getElementById('activityHead').style.display = 'none';
+        document.getElementById('activityLog').innerHTML = '';
+        document.getElementById('logBadge').textContent = 'Error';
+        document.getElementById('logTitle').textContent = 'Could not load chapters';
+        document.getElementById('resultBody').style.display = 'block';
+        document.getElementById('resultBody').className = 'result-body error-body';
+        document.getElementById('resultBody').innerHTML = '<p class="error-body">' + escapeHtml((err.message || err).toString()) + '</p>';
+      })
+      .getChapterList();
+  </script>
+</body>
+</html>

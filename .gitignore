@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+dist/
+.vite/
+*.log
+*.tsbuildinfo
+
+# Editor
+.vscode/
+.idea/
+.DS_Store
+
+# Aegis runtime
+backend/aegis.db
+backend/aegis_test.db
+backend/data/uploads/
+backend/data/artifacts/
+backend/data/mmds/
+backend/data/pdfs/
+backend/data/*.xlsx
+*.xlsx~
