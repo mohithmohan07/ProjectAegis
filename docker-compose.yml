@@ -5,6 +5,8 @@ services:
       - "8000:8000"
     volumes:
       - ./backend/data:/app/data
+    env_file:
+      - .env
     environment:
       AEGIS_DATA_DIR: /app/data
   frontend:
