@@ -22,6 +22,11 @@ dist/
 .idea/
 .DS_Store
 
+# Local secrets (never commit)
+.env
+.env.local
+.env.*.local
+
 # Aegis runtime
 backend/aegis.db
 backend/aegis_test.db

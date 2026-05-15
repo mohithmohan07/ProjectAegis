@@ -13,24 +13,24 @@ import re
 # ====================================================
 
 # ---- API KEYS ----
-# Preferred: set as environment variables before running:
-#   setx OPENAI_API_KEY "sk-..."
-#   setx MATHPIX_APP_ID "..."
-#   setx MATHPIX_API_KEY "..."
-#
-# Or, if you really want, you can hardcode below instead of os.getenv,
-# but don't commit that file anywhere.
+# All credentials are read from environment variables. Set them on the
+# host/server before running, e.g.:
+#   export OPENAI_API_KEY=sk-...
+#   export MATHPIX_APP_ID=...
+#   export MATHPIX_APP_KEY=...
+# Locally with Docker Compose, put them in a .env file at the repo root
+# (.env is gitignored). See .env.example.
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or "YOUR_OPENAI_KEY_HERE"
-MATHPIX_APP_ID = "upschooledtechpvtltd_a5ac24_bc4cd2"
-MATHPIX_API_KEY = "911a76bbdc85df5bae0c2271ed9b20b33b8aa4cba60540c7e169de7c5712933d"
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+MATHPIX_APP_ID = os.getenv("MATHPIX_APP_ID", "")
+MATHPIX_APP_KEY = os.getenv("MATHPIX_APP_KEY", "")
 
 openai.api_key = OPENAI_API_KEY
 
 if not OPENAI_API_KEY:
     raise RuntimeError("OPENAI_API_KEY not set")
-if not MATHPIX_APP_ID or not MATHPIX_API_KEY:
-    raise RuntimeError("MATHPIX_APP_ID / MATHPIX_API_KEY not set")
+if not MATHPIX_APP_ID or not MATHPIX_APP_KEY:
+    raise RuntimeError("MATHPIX_APP_ID / MATHPIX_APP_KEY not set")
 
 # ---- GPT MODELS ----
 # Adjust to whatever deployed names you actually have.
@@ -464,7 +464,7 @@ def mathpix_pdf_to_markdown(pdf_path: str) -> str:
     base_url = "https://api.mathpix.com/v3/pdf"
     headers = {
         "app_id": MATHPIX_APP_ID,
-        "app_key": MATHPIX_API_KEY,
+        "app_key": MATHPIX_APP_KEY,
     }
 
     # Step 1: POST PDF to Mathpix

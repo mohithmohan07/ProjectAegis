@@ -45,7 +45,7 @@ from openai import OpenAI
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 MATHPIX_APP_ID = os.getenv("MATHPIX_APP_ID")
-MATHPIX_API_KEY = os.getenv("MATHPIX_API_KEY")
+MATHPIX_APP_KEY = os.getenv("MATHPIX_APP_KEY")
 
 if not OPENAI_API_KEY:
     raise RuntimeError("OPENAI_API_KEY not set in environment")
@@ -274,7 +274,7 @@ def mathpix_pdf_to_text_filelike(file_storage) -> Optional[str]:
     (Legacy) Uploads a PDF-like object to Mathpix and returns plaintext.
     Not used in CLI; kept for future integration if needed.
     """
-    if not MATHPIX_APP_ID or not MATHPIX_API_KEY:
+    if not MATHPIX_APP_ID or not MATHPIX_APP_KEY:
         raise RuntimeError("Mathpix credentials not set in environment")
 
     options = {
@@ -287,7 +287,7 @@ def mathpix_pdf_to_text_filelike(file_storage) -> Optional[str]:
         "https://api.mathpix.com/v3/pdf",
         headers={
             "app_id": MATHPIX_APP_ID,
-            "app_key": MATHPIX_API_KEY,
+            "app_key": MATHPIX_APP_KEY,
         },
         data={"options_json": json.dumps(options)},
         files={"file": (file_storage.filename, file_storage.stream,
@@ -299,7 +299,7 @@ def mathpix_pdf_to_text_filelike(file_storage) -> Optional[str]:
     if not pdf_id:
         return None
 
-    headers = {"app_id": MATHPIX_APP_ID, "app_key": MATHPIX_API_KEY}
+    headers = {"app_id": MATHPIX_APP_ID, "app_key": MATHPIX_APP_KEY}
     status_data = poll_mathpix_pdf_status(pdf_id, headers)
     if not status_data:
         return None
@@ -323,7 +323,7 @@ def mathpix_pdf_to_text_path(path: str) -> str:
     We request 'tex.zip' (which your account supports), download the zip,
     extract all .tex files, and concatenate them into a single text string.
     """
-    if not MATHPIX_APP_ID or not MATHPIX_API_KEY:
+    if not MATHPIX_APP_ID or not MATHPIX_APP_KEY:
         raise RuntimeError("Mathpix credentials not set in environment")
 
     # Use tex.zip as conversion format (supported on your account)
@@ -340,7 +340,7 @@ def mathpix_pdf_to_text_path(path: str) -> str:
             "https://api.mathpix.com/v3/pdf",
             headers={
                 "app_id": MATHPIX_APP_ID,
-                "app_key": MATHPIX_API_KEY,
+                "app_key": MATHPIX_APP_KEY,
             },
             data={"options_json": json.dumps(options)},
             files=files,
@@ -351,7 +351,7 @@ def mathpix_pdf_to_text_path(path: str) -> str:
     if not pdf_id:
         raise RuntimeError(f"Mathpix did not return pdf_id. Response: {api_resp}")
 
-    headers = {"app_id": MATHPIX_APP_ID, "app_key": MATHPIX_API_KEY}
+    headers = {"app_id": MATHPIX_APP_ID, "app_key": MATHPIX_APP_KEY}
     status_data = poll_mathpix_pdf_status(pdf_id, headers)
     if not status_data:
         raise RuntimeError("Mathpix processing stuck or timed out")
