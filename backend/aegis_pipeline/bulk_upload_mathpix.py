@@ -34,8 +34,8 @@ if not MATHPIX_APP_ID or not MATHPIX_API_KEY:
 
 # ---- GPT MODELS ----
 # Adjust to whatever deployed names you actually have.
-MODEL_PARSE = "gpt-5.1-2025-11-13"   # for parsing Q & A structure from OCR text
-MODEL_ENRICH = "gpt-5.1-2025-11-13"  # for metadata + rubrics + wrong phrases
+MODEL_PARSE = "gpt-5.4-mini-2026-03-17"   # for parsing Q & A structure from OCR text
+MODEL_ENRICH = "gpt-5.4-mini-2026-03-17"  # for metadata + rubrics + wrong phrases
 
 
 # ---- UpSchool Question Categories (DO NOT RENAME) ----

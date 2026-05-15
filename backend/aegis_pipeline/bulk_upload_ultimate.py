@@ -84,8 +84,8 @@ QUESTION_CATEGORIES: List[str] = [
     "Extract based on Map Survey",
 ]
 
-MODEL_PARSE = "gpt-5.1-2025-11-13"
-MODEL_ENRICH = "gpt-5.1-2025-11-13"
+MODEL_PARSE = "gpt-5.4-mini-2026-03-17"
+MODEL_ENRICH = "gpt-5.4-mini-2026-03-17"
 
 # --------------------------------------------------------------------------
 # Utility Helpers
