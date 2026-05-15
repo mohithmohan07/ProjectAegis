@@ -136,7 +136,7 @@ MMDS_SYMBIOSIS_CONFIG = {
     "OUTPUT": Path(r"C:\Users\FCI\OneDrive\Documents\CM\MSBSHSE_M-State_G11_Symbiosis_Concepts.xlsx"),
 }
 
-MODEL = "gpt-5-mini"  # change if you want
+MODEL = "gpt-5.4-mini-2026-03-17"  # change if you want
 CONCEPTS_PER_CHAPTER_MIN = 40
 
 # Temporary: models to compare for Chapter 01 (use 2nd arg "compare")

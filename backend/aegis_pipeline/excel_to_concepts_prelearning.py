@@ -33,7 +33,7 @@ OUTPUT_DIR = Path(r"C:\Users\FCI\OneDrive\Documents\CM")
 BOARD = "ICSE"
 BOOK = "Selina"
 GRADE = 9
-MODEL = "gpt-5-mini"
+MODEL = "gpt-5.4-mini-2026-03-17"
 
 # Subject code for topic/concept display: MA=Math, PH=Physics
 SUBJECT_CODES = {"Math": "MA", "Mathematics": "MA", "Physics": "PH"}
