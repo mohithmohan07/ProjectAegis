@@ -1,7 +1,11 @@
+import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from . import config
 from .bulk_import import reader
@@ -60,3 +64,21 @@ app.include_router(directory_api.router)
 app.include_router(build_assessments_api.router)
 app.include_router(build_concepts_api.router)
 app.include_router(data_api.router)
+
+
+# Serve the built frontend from the same origin when available. In dev
+# (uvicorn --reload, no `npm run build`) this directory won't exist and
+# the block is skipped — Vite's dev server handles the UI on :5173.
+FRONTEND_DIST = Path(os.environ.get("FRONTEND_DIST_DIR", "/app/frontend_dist"))
+
+if FRONTEND_DIST.is_dir():
+    assets_dir = FRONTEND_DIST / "assets"
+    if assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="frontend-assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa(full_path: str):
+        candidate = FRONTEND_DIST / full_path
+        if full_path and candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(FRONTEND_DIST / "index.html")

@@ -1,0 +1,39 @@
+.git
+.gitignore
+.github
+
+# Python
+__pycache__
+*.py[cod]
+*.egg-info
+.venv
+venv
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
+
+# Node
+node_modules
+frontend/dist
+.vite
+*.log
+*.tsbuildinfo
+
+# Local secrets — must never enter the image
+.env
+.env.local
+.env.*.local
+
+# Editor / OS
+.vscode
+.idea
+.DS_Store
+
+# Runtime state — image rebuilds the fixture from scripts
+backend/aegis.db
+backend/aegis_test.db
+backend/data/uploads
+backend/data/bulk_import_output.xlsx
+*.xlsx~
