@@ -70,7 +70,7 @@ def add_batch(
     return batch
 
 
-def _group_for(concept: models.Concept, difficulty: str) -> models.Group:
+def _group_for(db: Session, concept: models.Concept, difficulty: str) -> models.Group:
     """Pick (or lazily create) the concept group a question of this difficulty lands in."""
     g_type = DIFFICULTY_TO_GROUP.get(difficulty, "Intermediate")
     for g in concept.groups:
@@ -82,6 +82,8 @@ def _group_for(concept: models.Concept, difficulty: str) -> models.Group:
         group_display_name=f"{concept.concept_title} — {g_type}",
         group_status="Active",
     )
+    db.add(group)
+    db.flush()
     concept.groups.append(group)
     return group
 
@@ -111,7 +113,7 @@ def generate(db: Session, session_id: int) -> dict:
                     count=batch.num_questions, start_index=counters[concept.id],
                 )
                 counters[concept.id] += len(records)
-                group = _group_for(concept, difficulty)
+                group = _group_for(db, concept, difficulty)
                 for rec in records:
                     q = models.Question(group_id=group.id, **_question_kwargs(rec))
                     db.add(q)
@@ -216,7 +218,7 @@ def generate_from_upload(db: Session, job_id: int, question_type: str = "objecti
         concept = concepts[i % len(concepts)]
         rec.setdefault("question_label", generation.question_label(concept, counters[concept.id]))
         counters[concept.id] += 1
-        group = _group_for(concept, rec.get("level_of_difficulty", "Moderate"))
+        group = _group_for(db, concept, rec.get("level_of_difficulty", "Moderate"))
         q = models.Question(group_id=group.id, **_question_kwargs(rec))
         db.add(q)
         db.flush()

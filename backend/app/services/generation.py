@@ -11,8 +11,27 @@ from __future__ import annotations
 import re
 
 from .. import config, models
+from . import katex_rules as kr
 
 _SLUG_RE = re.compile(r"[^A-Za-z0-9]")
+_MATH_SUBJECTS = {"Mathematics", "Physics", "Chemistry"}
+
+
+def _is_math(concept: models.Concept) -> bool:
+    return concept.topic.chapter.subject in _MATH_SUBJECTS
+
+
+def _sample_equation(concept: models.Concept) -> str:
+    """A representative [katex] expression that references the concept."""
+    name = _slug(concept.concept_title, 16) or "X"
+    return kr.katex(rf"\text{{{name}}} = f(x)")
+
+
+def _concept_reference_link(concept: models.Concept) -> str:
+    """Link to a public reference for the concept (Wikipedia search)."""
+    from urllib.parse import quote_plus
+    q = quote_plus(f"{concept.concept_title} {concept.topic.chapter.subject or ''}".strip())
+    return kr.link(concept.concept_title, f"https://en.wikipedia.org/wiki/Special:Search?search={q}")
 
 
 def _slug(text: str, length: int = 22) -> str:
@@ -40,8 +59,11 @@ def question_label(concept: models.Concept, n: int) -> str:
 # --------------------------------------------------------------------------- #
 
 def _objective_answers(concept: models.Concept) -> list[dict]:
+    correct = f"{concept.concept_title} (correct)"
+    if _is_math(concept):
+        correct = f"{correct} — {_sample_equation(concept)}"
     return [
-        {"answer_type": "Words", "answer_content": f"{concept.concept_title} (correct)",
+        {"answer_type": "Words", "answer_content": correct,
          "correct_answer": "Yes", "answer_weightage": "1"},
         {"answer_type": "Words", "answer_content": "Plausible distractor A",
          "correct_answer": "No", "answer_weightage": "0"},
@@ -53,17 +75,23 @@ def _objective_answers(concept: models.Concept) -> list[dict]:
 
 
 def _subjective_answers(concept: models.Concept, marks: float) -> list[dict]:
+    ans = concept.concept_title
+    if _is_math(concept):
+        ans = f"{ans} {_sample_equation(concept)}"
     return [
-        {"answer_type": "Words", "answer": concept.concept_title,
+        {"answer_type": "Words", "answer": ans,
          "answer_display": "Yes", "weightage": str(marks), "placeholder": "answer"},
     ]
 
 
 def _descriptive_answers(concept: models.Concept, marks: float) -> tuple[list[dict], list[dict]]:
+    body = f"Model answer covering {concept.concept_title}. See {_concept_reference_link(concept)}."
+    if _is_math(concept):
+        body = f"{body} Key relation: {_sample_equation(concept)}."
     answers = [
-        {"answer_type": "Words", "answer_weightage": str(marks),
-         "answer_content": f"Model answer covering {concept.concept_title}."},
+        {"answer_type": "Words", "answer_weightage": str(marks), "answer_content": body},
     ]
+    # Keyword cells are NOT rich text — they hold raw KaTeX / plain text.
     sub = [
         {"text": f"i. Define {concept.concept_title}.", "marks": "2",
          "keywords": [{"answer_type": "Words", "weightage": "2",
@@ -71,7 +99,8 @@ def _descriptive_answers(concept: models.Concept, marks: float) -> tuple[list[di
         {"text": f"ii. Apply {concept.concept_title} to a worked example.",
          "marks": str(max(marks - 2, 1)),
          "keywords": [{"answer_type": "Words", "weightage": str(max(marks - 2, 1)),
-                       "keyword": "worked example"}]},
+                       "keyword": rf"\text{{{concept.concept_title}}} = f(x)"
+                       if _is_math(concept) else "worked example"}]},
     ]
     return answers, sub
 
@@ -95,15 +124,26 @@ def generate_questions_for_concept(
     use_live = config.use_live_generation() if live is None else live
     if use_live:
         from aegis_pipeline import bulk_upload_ultimate  # noqa: F401
+        # Future implementer: prepend kr.PROMPT_PREAMBLE to the system prompt so
+        # the model emits rich-text columns in the bracket format the importer
+        # expects (and keeps keyword cells in raw KaTeX).
         raise NotImplementedError(
             "Live question generation: wire bulk_upload_ultimate's GPT parsing/"
-            "generation with OPENAI_API_KEY and the concept_details payload."
+            "generation with OPENAI_API_KEY and the concept_details payload. "
+            "Inject app.services.katex_rules.PROMPT_PREAMBLE as the system prompt."
         )
 
     marks = _default_marks(question_type)
     out: list[dict] = []
+    details = (concept.concept_details or "").split("//")[0].strip()[:160]
     for i in range(count):
         idx = start_index + i
+        question_text = (
+            f"({difficulty} · {cognitive_skill}) "
+            f"{category} on '{concept.concept_title}': {details}"
+        )
+        if _is_math(concept):
+            question_text = f"{question_text} Express it as {_sample_equation(concept)}."
         record: dict = {
             "sheet_kind": question_type,
             "question_label": question_label(concept, idx),
@@ -112,12 +152,11 @@ def generate_questions_for_concept(
             "question_source": "Aegis Concept Mapping",
             "level_of_difficulty": difficulty,
             "marks": marks,
-            "question": (
-                f"[{difficulty} · {cognitive_skill}] "
-                f"{category} on '{concept.concept_title}': "
-                f"{concept.concept_details.split('//')[0].strip()[:160]}"
+            "question": question_text,
+            "answer_explanation": (
+                f"Assesses {concept.concept_title} ({cognitive_skill}). "
+                f"Reference: {_concept_reference_link(concept)}."
             ),
-            "answer_explanation": f"Assesses {concept.concept_title} ({cognitive_skill}).",
             "answers": [],
             "sub_questions": [],
             "origin": "concept_mapping",
@@ -150,7 +189,8 @@ def identify_questions_from_mmd(
     if use_live:
         from aegis_pipeline import bulk_upload_mathpix  # noqa: F401
         raise NotImplementedError(
-            "Live extraction: wire bulk_upload_mathpix parsing with OPENAI_API_KEY."
+            "Live extraction: wire bulk_upload_mathpix parsing with OPENAI_API_KEY. "
+            "Inject app.services.katex_rules.PROMPT_PREAMBLE as the system prompt."
         )
     # Dry: split the MMD body into question-like chunks.
     chunks = [c.strip() for c in re.split(r"\n\s*\n+", mmd_text) if c.strip()]

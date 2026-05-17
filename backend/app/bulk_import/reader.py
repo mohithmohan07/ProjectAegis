@@ -143,7 +143,10 @@ def import_workbook(db: Session, path: Path) -> dict[str, int]:
             # ---- Chapter ----
             meta = directory.derive_chapter_meta(
                 chap["chapter_title"], chap.get("chapter_display_name", ""),
-                con.get("concept_display_name", ""),
+                top.get("topic_title", ""), top.get("topic_display_name", ""),
+                top.get("concept", ""), top.get("related_topics", ""),
+                con.get("concept_title", ""), con.get("concept_display_name", ""),
+                chap.get("post_topics", ""), chap.get("pre_topics", ""),
             )
             ch_key = meta["chapter_code"]
             chapter = chapters.get(ch_key)
