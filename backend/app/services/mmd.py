@@ -27,7 +27,7 @@ def _read_text(path: Path) -> str:
 
 def to_mmd(path: Path, *, live: bool | None = None) -> str:
     """Convert an uploaded document to MMD text."""
-    use_live = config.has_mathpix() if live is None else live
+    use_live = config.use_live_mmd() if live is None else live
     raw = _read_text(path)
     if use_live and path.suffix.lower() in {".pdf", ".png", ".jpg", ".jpeg"}:
         # Live hook: delegate to the vendored Mathpix script. Kept lazy so the

@@ -92,7 +92,7 @@ def generate_questions_for_concept(
     live: bool | None = None,
 ) -> list[dict]:
     """Return ``count`` question dicts for one concept under one blueprint cell."""
-    use_live = config.has_openai() if live is None else live
+    use_live = config.use_live_generation() if live is None else live
     if use_live:
         from aegis_pipeline import bulk_upload_ultimate  # noqa: F401
         raise NotImplementedError(
@@ -146,7 +146,7 @@ def identify_questions_from_mmd(
     live: bool | None = None,
 ) -> list[dict]:
     """Extract / create question records from an uploaded document's MMD."""
-    use_live = config.has_openai() if live is None else live
+    use_live = config.use_live_generation() if live is None else live
     if use_live:
         from aegis_pipeline import bulk_upload_mathpix  # noqa: F401
         raise NotImplementedError(
@@ -186,7 +186,7 @@ def identify_questions_from_mmd(
 
 def concepts_from_mmd(mmd_text: str, *, live: bool | None = None) -> list[dict]:
     """Parse an MMD document into concept records (post-learning)."""
-    use_live = config.has_openai() if live is None else live
+    use_live = config.use_live_generation() if live is None else live
     if use_live:
         from aegis_pipeline import mmd_to_concepts_excel  # noqa: F401
         raise NotImplementedError(
@@ -225,7 +225,7 @@ def concepts_from_mmd(mmd_text: str, *, live: bool | None = None) -> list[dict]:
 
 def pre_learning_from_concepts(concepts: list[models.Concept], *, live: bool | None = None) -> list[dict]:
     """Derive pre-learning concept records from existing post-learning concepts."""
-    use_live = config.has_openai() if live is None else live
+    use_live = config.use_live_generation() if live is None else live
     if use_live:
         from aegis_pipeline import concept_mapping_to_prelearning  # noqa: F401
         raise NotImplementedError(
