@@ -21,3 +21,17 @@ def has_openai() -> bool:
 
 def has_mathpix() -> bool:
     return bool(os.environ.get("MATHPIX_APP_ID") and os.environ.get("MATHPIX_APP_KEY"))
+
+
+def _flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def use_live_generation() -> bool:
+    """Opt-in switch for the (currently stubbed) OpenAI-backed generation path."""
+    return has_openai() and _flag("AEGIS_USE_LIVE")
+
+
+def use_live_mmd() -> bool:
+    """Opt-in switch for the (currently stubbed) Mathpix-backed MMD conversion path."""
+    return has_mathpix() and _flag("AEGIS_USE_LIVE")
