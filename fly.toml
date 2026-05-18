@@ -1,9 +1,9 @@
-# fly.toml app configuration file generated for projectaegis on 2026-05-18T07:34:32Z
+# fly.toml app configuration file generated for clarius-aegis on 2026-05-18T07:55:59Z
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
-app = 'projectaegis'
+app = 'clarius-aegis'
 primary_region = 'ams'
 
 [build]
