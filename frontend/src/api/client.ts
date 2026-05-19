@@ -123,47 +123,4 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ chapter_ids }),
     }),
-
-  // Manual entry (form-driven create, no uploads)
-  manualCreateConcept: (body: ManualConceptBody) =>
-    http<ManualConcept>("/manual/concepts", {
-      method: "POST",
-      body: JSON.stringify(body),
-    }),
-  manualCreateQuestion: (body: ManualQuestionBody) =>
-    http<Question>("/manual/questions", {
-      method: "POST",
-      body: JSON.stringify(body),
-    }),
 };
-
-export interface ManualConcept {
-  id: number;
-  concept_title: string;
-  concept_display_name: string;
-  concept_details: string;
-  keywords: string;
-}
-export interface ManualConceptBody {
-  board: string;
-  grade: string;
-  subject: string;
-  chapter_title: string;
-  topic_title: string;
-  concept_title: string;
-  summary: string;
-  formula?: string;
-  keywords: string;
-}
-export interface ManualQuestionBody {
-  concept_id: number;
-  sheet_kind: string;
-  category: string;
-  cognitive_skills: string;
-  difficulty: string;
-  marks: number;
-  question: string;
-  answer_explanation: string;
-  answers: Record<string, string>[];
-  sub_questions: Record<string, unknown>[];
-}

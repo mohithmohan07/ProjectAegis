@@ -3,11 +3,9 @@ import Home from "./pages/Home";
 import BuildAssessments from "./pages/BuildAssessments";
 import BuildConcepts from "./pages/BuildConcepts";
 import Database from "./pages/Database";
-import ManualEntry from "./pages/ManualEntry";
 
 const NAV = [
   { to: "/home", label: "Home" },
-  { to: "/create", label: "Create" },
   { to: "/build-assessments", label: "Build Assessments" },
   { to: "/build-concepts", label: "Build Concepts" },
   { to: "/database", label: "Database" },
@@ -37,7 +35,6 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Navigate to="/home" replace />} />
           <Route path="/home" element={<Home />} />
-          <Route path="/create" element={<ManualEntry />} />
           <Route path="/build-assessments" element={<BuildAssessments />} />
           <Route path="/build-concepts" element={<BuildConcepts />} />
           <Route path="/database" element={<Database />} />
