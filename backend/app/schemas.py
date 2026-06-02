@@ -131,6 +131,27 @@ class PreLearningExistingRequest(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
+# Tagging (many-to-many) + import preview
+# --------------------------------------------------------------------------- #
+
+class TagToConceptRequest(BaseModel):
+    concept_id: int
+
+
+class TagToGroupRequest(BaseModel):
+    group_id: int
+
+
+class TagToTopicRequest(BaseModel):
+    topic_id: int
+
+
+class PreviewRequest(BaseModel):
+    question_ids: list[int] = Field(default_factory=list)
+    concept_ids: list[int] = Field(default_factory=list)
+
+
+# --------------------------------------------------------------------------- #
 # Misc
 # --------------------------------------------------------------------------- #
 
