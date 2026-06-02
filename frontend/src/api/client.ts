@@ -2,9 +2,11 @@ import type {
   BlueprintBatch,
   BoardNode,
   ChapterDetail,
+  PreviewResult,
   Question,
   Session,
   Stats,
+  TagResult,
   UploadJob,
   Vocab,
 } from "../types";
@@ -122,5 +124,22 @@ export const api = {
     http<Record<string, unknown>>("/build-concepts/pre-learning/from-existing", {
       method: "POST",
       body: JSON.stringify({ chapter_ids }),
+    }),
+
+  // Tagging (many-to-many) + import preview
+  tagQuestionToConcept: (questionId: number, concept_id: number) =>
+    http<TagResult>(`/tagging/questions/${questionId}/tag-to-concept`, {
+      method: "POST",
+      body: JSON.stringify({ concept_id }),
+    }),
+  tagConceptToTopic: (conceptId: number, topic_id: number) =>
+    http<TagResult>(`/tagging/concepts/${conceptId}/tag-to-topic`, {
+      method: "POST",
+      body: JSON.stringify({ topic_id }),
+    }),
+  preview: (question_ids: number[], concept_ids: number[]) =>
+    http<PreviewResult>("/tagging/preview", {
+      method: "POST",
+      body: JSON.stringify({ question_ids, concept_ids }),
     }),
 };

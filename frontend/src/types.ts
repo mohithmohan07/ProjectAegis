@@ -136,3 +136,26 @@ export interface Scope {
   ids: number[];
   label: string;
 }
+
+export interface TagResult {
+  status: string;
+  reason?: string;
+  question_label?: string;
+  concept_title?: string;
+  chapter_title?: string;
+  topic_title?: string;
+}
+
+export type Outcome = "ADD" | "TAG" | "SKIP";
+export interface PreviewRow {
+  kind: string;
+  outcome: Outcome;
+  identity: string;
+  sheet?: string;
+  placement: Record<string, string>;
+}
+export interface PreviewResult {
+  rows: PreviewRow[];
+  summary: Record<string, number>;
+  workbook: string;
+}

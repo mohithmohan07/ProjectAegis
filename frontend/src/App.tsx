@@ -2,12 +2,14 @@ import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 import Home from "./pages/Home";
 import BuildAssessments from "./pages/BuildAssessments";
 import BuildConcepts from "./pages/BuildConcepts";
+import Tagging from "./pages/Tagging";
 import Database from "./pages/Database";
 
 const NAV = [
   { to: "/home", label: "Home" },
   { to: "/build-assessments", label: "Build Assessments" },
   { to: "/build-concepts", label: "Build Concepts" },
+  { to: "/tagging", label: "Tagging" },
   { to: "/database", label: "Database" },
 ];
 
@@ -37,6 +39,7 @@ export default function App() {
           <Route path="/home" element={<Home />} />
           <Route path="/build-assessments" element={<BuildAssessments />} />
           <Route path="/build-concepts" element={<BuildConcepts />} />
+          <Route path="/tagging" element={<Tagging />} />
           <Route path="/database" element={<Database />} />
         </Routes>
       </main>
