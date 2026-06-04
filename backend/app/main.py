@@ -15,6 +15,7 @@ from .api import (
     build_assessments as build_assessments_api,
     build_concepts as build_concepts_api,
     data as data_api,
+    tagging as tagging_api,
 )
 
 
@@ -64,6 +65,7 @@ app.include_router(directory_api.router)
 app.include_router(build_assessments_api.router)
 app.include_router(build_concepts_api.router)
 app.include_router(data_api.router)
+app.include_router(tagging_api.router)
 
 
 # Serve the built frontend from the same origin when available. In dev

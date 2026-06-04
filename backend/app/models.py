@@ -14,7 +14,7 @@ Round-tripping back to the canonical sheets is handled by ``bulk_import.writer``
 """
 from datetime import datetime
 
-from sqlalchemy import String, Integer, Text, ForeignKey, DateTime, JSON, Float
+from sqlalchemy import String, Integer, Text, ForeignKey, DateTime, JSON, Float, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -70,6 +70,11 @@ class Concept(Base):
 
     topic = relationship("Topic", back_populates="concepts")
     groups = relationship("Group", back_populates="concept", cascade="all, delete-orphan")
+    # Additional (many-to-many) placements: the same concept tagged under other
+    # topics/chapters. The concept's `topic_id` above stays its authoring "home";
+    # these rows are extra placements that the Bulk Import sheet expresses by
+    # repeating the concept row under each parent (see bulk_import.writer).
+    tags = relationship("ConceptTag", back_populates="concept", cascade="all, delete-orphan")
 
 
 class Group(Base):
@@ -86,6 +91,9 @@ class Group(Base):
 
     concept = relationship("Concept", back_populates="groups")
     questions = relationship("Question", back_populates="group", cascade="all, delete-orphan")
+    # Reverse side of QuestionTag: questions that are *tagged* into this group
+    # (in addition to the questions whose primary home is this group).
+    tagged_in = relationship("QuestionTag", back_populates="group", cascade="all, delete-orphan")
 
 
 class Question(Base):
@@ -115,6 +123,59 @@ class Question(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     group = relationship("Group", back_populates="questions")
+    # Additional (many-to-many) placements: the same assessment tagged into
+    # other groups/concepts. `group_id` above stays the authoring "home"; these
+    # rows are extra placements the Bulk Import sheet expresses by repeating the
+    # question row (same question_label) under each parent.
+    tags = relationship("QuestionTag", back_populates="question", cascade="all, delete-orphan")
+
+
+class QuestionTag(Base):
+    """An additional placement of a Question into a Group (many-to-many tag).
+
+    The pair (question_id, group_id) is unique. On export, every tag produces
+    one extra row carrying the *same* ``question_label`` under the tagged
+    group's concept/topic/chapter — exactly the repeated-row convention the CMS
+    reads as a tag rather than a duplicate.
+    """
+
+    __tablename__ = "question_tags"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    question_id: Mapped[int] = mapped_column(ForeignKey("questions.id"), index=True)
+    group_id: Mapped[int] = mapped_column(ForeignKey("groups.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    question = relationship("Question", back_populates="tags")
+    group = relationship("Group", back_populates="tagged_in")
+
+    __table_args__ = (
+        UniqueConstraint("question_id", "group_id", name="uq_question_tag"),
+    )
+
+
+class ConceptTag(Base):
+    """An additional placement of a Concept under a Topic (many-to-many tag).
+
+    A concept is a free-standing entity keyed by ``concept_title``; it can be
+    tagged under any number of topics/chapters. The pair (concept_id, topic_id)
+    is unique. On export, every tag produces one extra concept row under the
+    tagged topic's chapter.
+    """
+
+    __tablename__ = "concept_tags"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    concept_id: Mapped[int] = mapped_column(ForeignKey("concepts.id"), index=True)
+    topic_id: Mapped[int] = mapped_column(ForeignKey("topics.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    concept = relationship("Concept", back_populates="tags")
+    topic = relationship("Topic")
+
+    __table_args__ = (
+        UniqueConstraint("concept_id", "topic_id", name="uq_concept_tag"),
+    )
 
 
 class BlueprintBatch(Base):
