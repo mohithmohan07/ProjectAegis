@@ -84,12 +84,34 @@ def strip_dangling_references(text: str) -> str:
     return _tidy(out)
 
 
+# "MMD" is a source-format artifact ("Reference MMD in CD"); concept rows must
+# speak in normal academic language. Mirrors the pipeline's sanitize_mmd_references.
+_MMD_REPLACEMENTS = [
+    (re.compile(r"\bMMD\s+problems\b", re.IGNORECASE), "problems"),
+    (re.compile(r"\bMMD\s+problem\b", re.IGNORECASE), "problem"),
+    (re.compile(r"\b(in|from)\s+the\s+MMDs?\b", re.IGNORECASE), r"\1 the chapter"),
+    (re.compile(r"\bthe\s+MMDs?\b", re.IGNORECASE), "the chapter"),
+    (re.compile(r"\bMMDs?\b", re.IGNORECASE), "chapter"),
+]
+
+
+def replace_mmd_references(text: str) -> str:
+    """Rewrite 'MMD' source references into natural chapter language."""
+    if not text:
+        return text
+    for pat, repl in _MMD_REPLACEMENTS:
+        text = pat.sub(repl, text)
+    return text
+
+
 def clean_concept_record(rec: dict) -> dict:
     """Return ``rec`` with its name + description normalized (mutates in place)."""
     if rec.get("concept_title"):
-        rec["concept_title"] = clean_concept_name(rec["concept_title"])
+        rec["concept_title"] = replace_mmd_references(
+            clean_concept_name(rec["concept_title"]))
     if rec.get("concept_details"):
-        rec["concept_details"] = strip_dangling_references(rec["concept_details"])
+        rec["concept_details"] = replace_mmd_references(
+            strip_dangling_references(rec["concept_details"]))
     return rec
 
 

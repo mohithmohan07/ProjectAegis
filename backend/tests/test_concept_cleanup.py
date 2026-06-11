@@ -65,6 +65,29 @@ def test_worded_example_without_number_is_not_stripped():
     assert strip_dangling_references(text) == text
 
 
+# ------------------------ MMD references (Input 02b) -------------------------- #
+
+def test_mmd_references_replaced_with_chapter_language():
+    from app.services.concept_cleanup import replace_mmd_references
+
+    assert replace_mmd_references("Solve the MMD problem on rates.") == (
+        "Solve the problem on rates.")
+    assert replace_mmd_references("As shown in the MMD, compare values.") == (
+        "As shown in the chapter, compare values.")
+    assert replace_mmd_references("Reference MMD for the diagram.") == (
+        "Reference chapter for the diagram.")
+
+
+def test_clean_concept_record_applies_mmd_replacement():
+    rec = {
+        "concept_title": "Reading the MMD table",
+        "concept_details": "Description: derived from the MMD problems in this chapter.",
+    }
+    out = concept_cleanup.clean_concept_record(rec)
+    assert "MMD" not in out["concept_title"]
+    assert "MMD" not in out["concept_details"]
+
+
 # --------------------- repetition detector (Input 02c) ------------------------ #
 
 def test_detects_repeated_leading_phrase():
