@@ -173,7 +173,7 @@ SECTION_BANDS = {
 # --------------------------------------------------------------------------- #
 
 BOARDS = ["CBSE", "ICSE"]
-GRADES = ["09", "10"]
+GRADES = ["08", "09", "10"]
 QUESTION_TYPES = ["objective", "subjective", "descriptive"]
 GROUP_TYPES = ["Basic", "Intermediate", "Advanced"]
 GROUP_TYPE_CODE = {"Basic": "BG", "Intermediate": "IG", "Advanced": "AG"}
@@ -205,5 +205,7 @@ BOARD_CODE_INV = {v: k for k, v in BOARD_CODE.items()}
 SUBJECT_CODE = {
     "MA": "Mathematics", "PH": "Physics", "BI": "Biology",
     "CH": "Chemistry", "EG": "English Grammar", "EL": "English Literature",
+    # Combined middle-school subjects (e.g. Class 08 NCERT sources).
+    "SC": "Science", "SS": "Social Science", "EN": "English",
 }
 SUBJECT_CODE_INV = {v: k for k, v in SUBJECT_CODE.items()}

@@ -25,6 +25,52 @@ _CODE_PREFIX = re.compile(r"\b(\d{2})([A-Z]{2})([A-Z]{2})(?=[_A-Z0-9 ]|$)")
 # Fuller chapter code incl. the chapter slug, e.g. "10CBMA_Circles".
 _CHAPTER_CODE = re.compile(r"\b\d{2}[A-Z]{2}[A-Z]{2}_[A-Za-z0-9]+")
 
+# NCERT source-file convention, e.g.
+#   CBSE_NCERT_G08_CH04_QUADRILATERALS.pdf
+#   CBSE_NCERT_G08_UN02_VALUES_AND_DISPOSITIONS.pdf   (UN = unit)
+_NCERT_SOURCE = re.compile(
+    r"\b(CBSE|ICSE)_NCERT_G(\d{2})_(CH|UN)0?(\d+)_([A-Za-z0-9_]+)", re.IGNORECASE)
+
+# Subject inference from free text (folder names like CBSE_NCERT_G08_SocialScience,
+# display names, etc). Longest/most specific keys first so SOCIALSCIENCE wins
+# over SCIENCE and ENGLISHGRAMMAR over ENGLISH.
+_SUBJECT_WORDS = [
+    ("SOCIALSCIENCE", "Social Science"),
+    ("ENGLISHGRAMMAR", "English Grammar"),
+    ("ENGLISHLITERATURE", "English Literature"),
+    ("MATHEMATICS", "Mathematics"),
+    ("PHYSICS", "Physics"),
+    ("CHEMISTRY", "Chemistry"),
+    ("BIOLOGY", "Biology"),
+    ("ENGLISH", "English"),
+    ("SCIENCE", "Science"),
+]
+
+
+def parse_ncert_source(text: str) -> dict | None:
+    """Parse the NCERT source-file convention into chapter metadata."""
+    m = _NCERT_SOURCE.search(text or "")
+    if not m:
+        return None
+    board, grade, kind, number, slug = m.groups()
+    title = " ".join(w.capitalize() for w in slug.split("_") if w)
+    return {
+        "board": board.upper(), "grade": grade,
+        "unit_kind": kind.upper(), "number": int(number), "title": title,
+    }
+
+
+def infer_subject(*probes: str) -> str:
+    """Best-effort subject from any text (folder/display names)."""
+    for candidate in probes:
+        if not candidate:
+            continue
+        flat = re.sub(r"[^A-Za-z]", "", candidate).upper()
+        for key, subject in _SUBJECT_WORDS:
+            if key in flat:
+                return subject
+    return ""
+
 
 def parse_code_prefix(text: str) -> tuple[str, str, str] | None:
     """Return (grade, board, subject) parsed from any ID-bearing string."""
@@ -54,11 +100,25 @@ def derive_chapter_meta(chapter_title: str, chapter_display_name: str, *probes: 
                 "chapter_code": code or (chapter_title or "CHAPTER").upper().replace(" ", "_"),
                 "unit": f"{subject} Unit",
             }
+    # NCERT source-file convention (e.g. CBSE_NCERT_G08_CH04_QUADRILATERALS).
+    candidates = (chapter_display_name, chapter_title, *probes)
+    for candidate in candidates:
+        ncert = parse_ncert_source(candidate or "")
+        if ncert:
+            subject = infer_subject(*candidates) or "General"
+            return {
+                "grade": ncert["grade"], "board": ncert["board"], "subject": subject,
+                "chapter_code": make_chapter_code(
+                    ncert["board"], ncert["grade"], subject, ncert["title"]),
+                "unit": f"{subject} Unit",
+            }
+
     # Fallback when nothing parses.
+    subject = infer_subject(*candidates) or "General"
     return {
-        "grade": "", "board": "", "subject": "General",
+        "grade": "", "board": "", "subject": subject,
         "chapter_code": (chapter_title or "CHAPTER").upper().replace(" ", "_"),
-        "unit": "General Unit",
+        "unit": f"{subject} Unit" if subject != "General" else "General Unit",
     }
 
 
