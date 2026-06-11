@@ -54,6 +54,34 @@ def export_workbook(
     )
 
 
+@router.get("/workbook/new")
+def create_subject_workbook(
+    subject: str,
+    board: str = "",
+    grade: str = "",
+    mode: str = Query("content", pattern="^(blank|content)$"),
+    db: Session = Depends(get_db),
+):
+    """Create a canonical Bulk Import workbook scoped to one subject.
+
+    mode=blank   -> empty authoring template (exact canonical headers)
+    mode=content -> pre-filled with the subject's existing chapters' content
+    """
+    if not subject.strip():
+        raise HTTPException(400, "subject is required")
+    data = writer.write_subject_workbook(
+        db, subject=subject.strip(), board=board.strip(), grade=grade.strip(),
+        include_content=(mode == "content"),
+    )
+    parts = [p.replace(" ", "") for p in (subject, board, grade) if p.strip()]
+    fname = "bulk_import_" + "_".join(parts) + ".xlsx"
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
 @router.get("/questions", response_model=list[schemas.QuestionOut])
 def list_questions(
     sheet_kind: str | None = None,

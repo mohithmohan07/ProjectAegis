@@ -378,6 +378,69 @@ def write_workbook(db: Session, dest: Path | None = None,
     return data
 
 
+def write_subject_workbook(
+    db: Session, *, subject: str, board: str = "", grade: str = "",
+    include_content: bool = True,
+) -> bytes:
+    """Create a canonical workbook scoped to one subject.
+
+    ``include_content=False`` yields a blank authoring template (headers only,
+    exact canonical layout). With content, every question placement and every
+    concept placement falling inside the scoped chapters is emitted; concepts
+    without questions still get concept-catalog rows on the Objective sheet so
+    the full hierarchy is represented.
+    """
+    wb = _new_workbook()
+    if include_content:
+        q = db.query(models.Chapter).filter(models.Chapter.subject == subject)
+        if board:
+            q = q.filter(models.Chapter.board == board)
+        if grade:
+            q = q.filter(models.Chapter.grade == grade)
+        chapter_ids = {c.id for c in q.all()}
+
+        next_row = {k: 3 for k in SHEET_BY_KIND}
+        concepts_with_rows: set[int] = set()
+        for question in db.query(models.Question).order_by(models.Question.id):
+            for group in _question_placements(question):
+                if group.concept.topic.chapter_id not in chapter_ids:
+                    continue
+                ws = wb[SHEET_BY_KIND[question.sheet_kind]]
+                for i, value in enumerate(
+                    _question_to_row(question, question.sheet_kind, group), start=1
+                ):
+                    ws.cell(row=next_row[question.sheet_kind], column=i, value=value)
+                next_row[question.sheet_kind] += 1
+                concepts_with_rows.add(group.concept_id)
+
+        # Concept-catalog rows for in-scope concepts that have no question rows.
+        # In-scope = home topic in a scoped chapter OR tagged into one.
+        ws_obj = wb[SHEET_BY_KIND["objective"]]
+        home = (
+            db.query(models.Concept).join(models.Topic)
+            .filter(models.Topic.chapter_id.in_(chapter_ids)).all()
+        )
+        tagged = (
+            db.query(models.Concept).join(models.ConceptTag).join(
+                models.Topic, models.ConceptTag.topic_id == models.Topic.id)
+            .filter(models.Topic.chapter_id.in_(chapter_ids)).all()
+        )
+        in_scope: dict[int, models.Concept] = {c.id: c for c in home + tagged}
+        for concept in sorted(in_scope.values(), key=lambda c: c.id):
+            if concept.id in concepts_with_rows:
+                continue
+            for topic in _concept_placements(concept):
+                if topic.chapter_id not in chapter_ids:
+                    continue
+                for i, value in enumerate(_concept_to_row(concept, "objective", topic), start=1):
+                    ws_obj.cell(row=next_row["objective"], column=i, value=value)
+                next_row["objective"] += 1
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
 def append_questions(db: Session, path: Path, question_ids: list[int]) -> dict[str, int]:
     """Append-only write, placement-aware.
 

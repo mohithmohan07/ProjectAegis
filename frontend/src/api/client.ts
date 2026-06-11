@@ -44,6 +44,8 @@ export const api = {
   questions: (params: Record<string, string> = {}) =>
     http<Question[]>(`/data/questions?${new URLSearchParams(params)}`),
   exportUrl: (scope: "all" | "output") => `${BASE}/data/export?scope=${scope}`,
+  createWorkbookUrl: (subject: string, board: string, grade: string, mode: "blank" | "content") =>
+    `${BASE}/data/workbook/new?${new URLSearchParams({ subject, board, grade, mode })}`,
   importWorkbook: (file: File) => {
     const fd = new FormData();
     fd.append("file", file);
