@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from .. import config, models
 from ..bulk_import import writer
-from . import generation, mmd
+from . import concept_cleanup, generation, mmd
 
 
 def _find_or_create_topic(
@@ -38,6 +38,9 @@ def _find_or_create_topic(
 
 def _add_concept(db: Session, topic: models.Topic, rec: dict) -> models.Concept:
     chapter = topic.chapter
+    # Normalize name (& collapse) and description (strip dangling refs) before
+    # persisting, so dry and live output are equally import-clean.
+    rec = concept_cleanup.clean_concept_record(dict(rec))
     concept = models.Concept(
         topic_id=topic.id,
         concept_title=rec["concept_title"],
