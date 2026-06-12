@@ -224,15 +224,77 @@ def identify_questions_from_mmd(
 # Concepts from MMD (Build Concepts - post learning)
 # --------------------------------------------------------------------------- #
 
+# System prompt for live concept extraction. Based on the vendored
+# mmd_to_concepts_excel prompt, with the team's review fixes built in:
+# inline worked examples (never bare "Example 19" refs), no '&' chains in
+# names, distinct concept-name stems, Types must carry example prompts,
+# concise syllabus-scoped descriptions, no 'MMD' references.
+_CONCEPTS_SYSTEM = """\
+You are a STRICT concept mapping engine for school subjects (board-level rigor).
+Return ONLY a JSON object: {"rows": [{"topic": "", "concept": "", "concept_description": "", "keywords": ""}, ...]}.
+
+CONTRACT:
+- concept_description is ONE string with sections separated by " // " in this order:
+  Description: <complete definition, explanation, key points, with worked examples INLINED in full>
+  // Types: <Type 01: Name Case 01: <example prompt, e.g. 'Evaluate: ...'> Case 02: ... Type 02: ...>
+  // Misconception: <common student misconceptions> (omit section if none apply)
+- Topics group 5-15 related concepts; the LAST concept of each topic is a culmination row
+  named "Culmination - <A>, <B> and <C>" (comma list with a final 'and'; NEVER use '&' chains).
+- NEVER reference source artifacts: no "Example 19", "Examples Type III", "Fig 2",
+  "Table no. 1", "ex 1", and never the words "MMD" or "MMDs". Resolve every example
+  reference by inlining its actual worked content.
+- Every Type's Cases MUST include a concrete example question/prompt.
+- Concept names must be specific, content-based, and must NOT repeat the same
+  leading phrase across sibling concepts.
+- Keep each Description focused and within syllabus scope (max ~90 words per section).
+- keywords: 3-6 comma-separated lowercase terms.
+"""
+
+
+def _openai_json(system: str, user: str, max_tokens: int = 16000) -> dict:
+    """One JSON-mode chat call; returns the parsed object."""
+    import json
+    from openai import OpenAI
+
+    client = OpenAI()
+    resp = client.chat.completions.create(
+        model=config.OPENAI_MODEL,
+        messages=[{"role": "system", "content": system},
+                  {"role": "user", "content": user}],
+        response_format={"type": "json_object"},
+        max_completion_tokens=max_tokens,
+    )
+    return json.loads(resp.choices[0].message.content or "{}")
+
+
+def _trim(text: str, max_chars: int = 120_000) -> str:
+    if len(text) <= max_chars:
+        return text
+    return text[: int(max_chars * 0.7)] + "\n\n[...TRIMMED...]\n\n" + text[-int(max_chars * 0.3):]
+
+
 def concepts_from_mmd(mmd_text: str, *, live: bool | None = None) -> list[dict]:
     """Parse an MMD document into concept records (post-learning)."""
     use_live = config.use_live_generation() if live is None else live
     if use_live:
-        from aegis_pipeline import mmd_to_concepts_excel  # noqa: F401
-        raise NotImplementedError(
-            "Live concept extraction: wire mmd_to_concepts_excel.process_mmd_file "
-            "with OPENAI_API_KEY."
+        data = _openai_json(
+            _CONCEPTS_SYSTEM,
+            "Extract the full concept map from this chapter:\n\n" + _trim(mmd_text),
         )
+        out = []
+        for row in data.get("rows", []):
+            title = (row.get("concept") or "").strip()
+            if not title:
+                continue
+            out.append({
+                "topic": (row.get("topic") or "Topic 01").strip(),
+                "concept_title": title,
+                "concept_details": (row.get("concept_description") or "").strip(),
+                "keywords": (row.get("keywords") or "").strip(),
+            })
+        if not out:
+            raise RuntimeError("live concept extraction returned no rows")
+        return out
     # Dry: treat markdown headings as topics and bullet/para lines as concepts.
     topic = "Topic 01: Overview"
     out: list[dict] = []
@@ -263,14 +325,45 @@ def concepts_from_mmd(mmd_text: str, *, live: bool | None = None) -> list[dict]:
     }]
 
 
+_PRELEARNING_SYSTEM = """\
+You derive PRE-LEARNING (prerequisite) concepts that a student must already
+master before studying the given post-learning concepts.
+Return ONLY a JSON object: {"rows": [{"topic": "", "concept": "", "concept_description": "", "keywords": ""}, ...]}.
+- concept_description format: "Description: ... // Types: Type 01: Name Case 01: <example prompt> ... // Misconception: ..."
+- Topic names should end with "(Pre-Learning)".
+- One prerequisite concept per distinct foundational idea; merge overlaps.
+- Same style rules as concept mapping: no '&' chains in names, no source
+  references ("Example N", "Fig N", "MMD"), concise syllabus-scoped text,
+  every Type's Cases carry a concrete example prompt.
+"""
+
+
 def pre_learning_from_concepts(concepts: list[models.Concept], *, live: bool | None = None) -> list[dict]:
     """Derive pre-learning concept records from existing post-learning concepts."""
     use_live = config.use_live_generation() if live is None else live
     if use_live:
-        from aegis_pipeline import concept_mapping_to_prelearning  # noqa: F401
-        raise NotImplementedError(
-            "Live pre-learning: wire concept_mapping_to_prelearning with OPENAI_API_KEY."
+        listing = "\n".join(
+            f"- {c.concept_title}: {(c.concept_details or '')[:300]}" for c in concepts
         )
+        data = _openai_json(
+            _PRELEARNING_SYSTEM,
+            "Derive prerequisite (pre-learning) concepts for these post-learning "
+            "concepts:\n\n" + _trim(listing, 60_000),
+        )
+        out = []
+        for row in data.get("rows", []):
+            title = (row.get("concept") or "").strip()
+            if not title:
+                continue
+            out.append({
+                "topic": (row.get("topic") or "Foundations (Pre-Learning)").strip(),
+                "concept_title": title,
+                "concept_details": (row.get("concept_description") or "").strip(),
+                "keywords": (row.get("keywords") or "").strip(),
+            })
+        if not out:
+            raise RuntimeError("live pre-learning derivation returned no rows")
+        return out
     out: list[dict] = []
     for c in concepts:
         out.append({

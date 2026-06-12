@@ -42,11 +42,8 @@ def _vendor():
 
 
 def use_live() -> bool:
-    import os
-    return (
-        config.has_openai() and config.has_mathpix()
-        and os.environ.get("AEGIS_USE_LIVE", "").strip().lower() in {"1", "true", "yes", "on"}
-    )
+    """Live by default whenever both OpenAI and Mathpix keys are present."""
+    return config.has_openai() and config.has_mathpix() and not config._live_disabled()
 
 
 def infer_workbook_metadata(filename: str, subject: str = "") -> dict:

@@ -23,15 +23,21 @@ def has_mathpix() -> bool:
     return bool(os.environ.get("MATHPIX_APP_ID") and os.environ.get("MATHPIX_APP_KEY"))
 
 
-def _flag(name: str) -> bool:
-    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+def _live_disabled() -> bool:
+    """AEGIS_USE_LIVE=0/false/off explicitly forces dry mode."""
+    return os.environ.get("AEGIS_USE_LIVE", "").strip().lower() in {"0", "false", "no", "off"}
 
 
 def use_live_generation() -> bool:
-    """Opt-in switch for the (currently stubbed) OpenAI-backed generation path."""
-    return has_openai() and _flag("AEGIS_USE_LIVE")
+    """Live OpenAI generation: ON by default whenever the key is present."""
+    return has_openai() and not _live_disabled()
 
 
 def use_live_mmd() -> bool:
-    """Opt-in switch for the (currently stubbed) Mathpix-backed MMD conversion path."""
-    return has_mathpix() and _flag("AEGIS_USE_LIVE")
+    """Live Mathpix MMD conversion: ON by default whenever keys are present."""
+    return has_mathpix() and not _live_disabled()
+
+
+# OpenAI model for concept extraction / pre-learning derivation. The same
+# model family the Create Workbooks pipeline is validated with.
+OPENAI_MODEL = os.environ.get("AEGIS_OPENAI_MODEL", "gpt-5.4-mini-2026-03-17")
