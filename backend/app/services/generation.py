@@ -224,62 +224,174 @@ def identify_questions_from_mmd(
 # Concepts from MMD (Build Concepts - post learning)
 # --------------------------------------------------------------------------- #
 
-# System prompt for live concept extraction. Based on the vendored
-# mmd_to_concepts_excel prompt, with the team's review fixes built in:
-# inline worked examples (never bare "Example 19" refs), no '&' chains in
-# names, distinct concept-name stems, Types must carry example prompts,
-# concise syllabus-scoped descriptions, no 'MMD' references.
-_CONCEPTS_SYSTEM = """\
-You are a STRICT concept mapping engine for school subjects (board-level rigor).
-Return ONLY a JSON object: {"rows": [{"topic": "", "concept": "", "concept_description": "", "keywords": ""}, ...]}.
+# Live concept-extraction prompts: ported from the vendored
+# mmd_to_concepts_excel engine (subject-specific variants, 40-60 concept
+# quota, quality rules) PLUS the team's review fixes, which the vendored
+# prompt predates: inline worked examples (never bare "Example 19" refs),
+# no '&' chains in names, distinct concept-name stems, Types must carry
+# example prompts, syllabus-scoped length, no 'MMD' references.
 
-CONTRACT:
+_MATH_NAME_TEMPLATES = """\
+   - Properties and Applications of <X>
+   - Proof and Derivation of <rule/law>
+   - Conditions for Applying <rule/law>
+   - Representation of <X>
+   - Conceptual Meaning of <X>
+   - Methods of <procedure>
+   - Laws and Applications of <X>
+   - Converting Between <A> and <B>
+   - Simplifying Using <rule/law>"""
+
+_DESCRIPTIVE_NAME_TEMPLATES = """\
+   - Structure and Function of <X>
+   - Process of <X>
+   - Types and Classification of <X>
+   - Characteristics of <X>
+   - Relationship between <A> and <B>
+   - Causes and Effects of <X>
+   - Importance and Significance of <X>
+   - Comparison of <A> and <B>"""
+
+
+def _concepts_system(subject: str) -> str:
+    s = (subject or "the subject").strip() or "the subject"
+    math_like = s.lower() in {"mathematics", "math", "physics"}
+    templates = _MATH_NAME_TEMPLATES if math_like else _DESCRIPTIVE_NAME_TEMPLATES
+    detail_line = (
+        "definition, explanation, key properties, when/how to use, with worked "
+        "examples and step-by-step reasoning INLINED in full"
+        if math_like else
+        "complete definition and explanation, key characteristics, processes or "
+        "relationships, with concrete examples INLINED within the description"
+    )
+    return f"""\
+You are a STRICT concept mapping engine for school {s} (board-level rigor).
+Return ONLY a JSON object: {{"rows": [{{"topic": "", "concept": "", "concept_description": "", "keywords": ""}}, ...]}}.
+
+OUTPUT CONTRACT (MUST FOLLOW EXACTLY):
 - concept_description is ONE string with sections separated by " // " in this order:
-  Description: <complete definition, explanation, key points, with worked examples INLINED in full>
-  // Types: <Type 01: Name Case 01: <example prompt, e.g. 'Evaluate: ...'> Case 02: ... Type 02: ...>
-  // Misconception: <common student misconceptions> (omit section if none apply)
-- Topics group 5-15 related concepts; the LAST concept of each topic is a culmination row
-  named "Culmination - <A>, <B> and <C>" (comma list with a final 'and'; NEVER use '&' chains).
-- NEVER reference source artifacts: no "Example 19", "Examples Type III", "Fig 2",
-  "Table no. 1", "ex 1", and never the words "MMD" or "MMDs". Resolve every example
-  reference by inlining its actual worked content.
-- Every Type's Cases MUST include a concrete example question/prompt.
-- Concept names must be specific, content-based, and must NOT repeat the same
-  leading phrase across sibling concepts.
-- Keep each Description focused and within syllabus scope (max ~90 words per section).
+  Description: <{detail_line}> // Types: <Type 01: Name Case 01: <concrete example prompt, e.g. 'Evaluate: ...', 'Prove: ...'> Case 02: ... Type 02: ...> // Misconception: <common student misconceptions> (omit section if none apply)
+- Use " // " as the separator. Do NOT use newlines inside concept_description.
+
+CONCEPT NAMING:
+1) Names must be academic, specific and content-based. Prefer these templates:
+{templates}
+2) Sibling concepts must NOT repeat the same leading phrase; vary the stems.
+3) NEVER chain names with '&'. Culmination rows are named
+   "Culmination - <A>, <B> and <C>" (comma list with a final 'and').
+
+TOPIC SEGREGATION:
+- A topic groups 5-15 related concepts; follow the chapter's section flow.
+- The LAST concept of every topic is exactly one culmination row synthesizing it.
+- NEVER create a topic for exercises (Exercise 1.1, Ex 2.1...). Distribute
+  exercise problems into the content topics they test, as extra Types/Cases.
+
+TYPES:
+- Classify EVERY question/numerical/problem variety found in the chapter
+  (including exercise sections) under its concept.
+- Zero-padded numbering (Type 01, Case 01). Every Case MUST carry a concrete
+  example question/prompt.
+
+SOURCE HYGIENE:
+- NEVER reference source artifacts: no "Example 19", "Examples Type III",
+  "Fig 2", "Table no. 1", "ex 1" - resolve each reference by inlining its
+  actual worked content instead.
+- NEVER use the words "MMD" or "MMDs"; say "chapter", "problem", "example".
+
+QUALITY RULES:
+- Produce 40-60 concepts (excluding culmination rows).
+- No duplicates or near-duplicates: theory + exercise overlap -> output ONCE.
+- No vague filler ("Introduction", "Misc", "Basics").
+- Small, testable, taggable concepts; descriptions stay within syllabus scope
+  (max ~90 words per section).
 - keywords: 3-6 comma-separated lowercase terms.
 """
 
 
-def _openai_json(system: str, user: str, max_tokens: int = 16000) -> dict:
-    """One JSON-mode chat call; returns the parsed object."""
+def _openai_json(system: str, user: str, max_tokens: int = 32000,
+                 retries: int = 3) -> dict:
+    """One JSON-mode chat call with retries; returns the parsed object."""
     import json
+    import time
     from openai import OpenAI
 
     client = OpenAI()
-    resp = client.chat.completions.create(
-        model=config.OPENAI_MODEL,
-        messages=[{"role": "system", "content": system},
-                  {"role": "user", "content": user}],
-        response_format={"type": "json_object"},
-        max_completion_tokens=max_tokens,
-    )
-    return json.loads(resp.choices[0].message.content or "{}")
+    last_err: Exception | None = None
+    for attempt in range(1, retries + 1):
+        try:
+            resp = client.chat.completions.create(
+                model=config.OPENAI_MODEL,
+                messages=[{"role": "system", "content": system},
+                          {"role": "user", "content": user}],
+                response_format={"type": "json_object"},
+                max_completion_tokens=max_tokens,
+            )
+            return json.loads(resp.choices[0].message.content or "{}")
+        except Exception as e:  # noqa: BLE001 — retry then surface
+            last_err = e
+            if attempt < retries:
+                time.sleep(2)
+    raise RuntimeError(f"OpenAI extraction failed after {retries} retries: {last_err!r}")
 
 
-def _trim(text: str, max_chars: int = 120_000) -> str:
+def _trim(text: str, max_chars: int = 220_000) -> str:
     if len(text) <= max_chars:
         return text
     return text[: int(max_chars * 0.7)] + "\n\n[...TRIMMED...]\n\n" + text[-int(max_chars * 0.3):]
 
 
-def concepts_from_mmd(mmd_text: str, *, live: bool | None = None) -> list[dict]:
+def _is_culmination(title: str) -> bool:
+    return (title or "").strip().lower().startswith("culmination")
+
+
+def _ensure_culmination_per_topic(records: list[dict]) -> list[dict]:
+    """Guarantee exactly one culmination row, last, for every topic.
+
+    Mirrors the vendored engine's deterministic post-pass: keep the first
+    culmination if several exist, synthesize one if the model omitted it.
+    """
+    topic_order: list[str] = []
+    by_topic: dict[str, list[dict]] = {}
+    for rec in records:
+        topic = (rec.get("topic") or "General").strip() or "General"
+        if topic not in by_topic:
+            by_topic[topic] = []
+            topic_order.append(topic)
+        by_topic[topic].append(rec)
+
+    out: list[dict] = []
+    for topic in topic_order:
+        rows = by_topic[topic]
+        regular = [r for r in rows if not _is_culmination(r.get("concept_title", ""))]
+        culms = [r for r in rows if _is_culmination(r.get("concept_title", ""))]
+        out.extend(regular)
+        if culms:
+            out.append(culms[0])
+        else:
+            out.append({
+                "topic": topic,
+                "concept_title": f"Culmination - {topic}",
+                "concept_details": (
+                    f"Description: Consolidates the key ideas of '{topic}' into one "
+                    "integrated understanding. // Types: Type 01: Mixed application "
+                    "Case 01: Solve questions combining multiple concepts from this topic."
+                ),
+                "keywords": "",
+            })
+    return out
+
+
+def concepts_from_mmd(mmd_text: str, *, subject: str = "",
+                      live: bool | None = None) -> list[dict]:
     """Parse an MMD document into concept records (post-learning)."""
     use_live = config.use_live_generation() if live is None else live
     if use_live:
         data = _openai_json(
-            _CONCEPTS_SYSTEM,
-            "Extract the full concept map from this chapter:\n\n" + _trim(mmd_text),
+            _concepts_system(subject),
+            "Extract 40-60 high-quality concepts from this chapter. Group them "
+            "under topics (5-15+ concepts each, last row per topic is the "
+            "culmination), following the chapter's section flow:\n\n"
+            + _trim(mmd_text),
         )
         out = []
         for row in data.get("rows", []):
@@ -294,7 +406,7 @@ def concepts_from_mmd(mmd_text: str, *, live: bool | None = None) -> list[dict]:
             })
         if not out:
             raise RuntimeError("live concept extraction returned no rows")
-        return out
+        return _ensure_culmination_per_topic(out)
     # Dry: treat markdown headings as topics and bullet/para lines as concepts.
     topic = "Topic 01: Overview"
     out: list[dict] = []

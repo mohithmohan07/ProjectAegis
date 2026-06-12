@@ -42,11 +42,14 @@ def _find_or_create_topic(
     for t in chapter.topics:
         if t.topic_title == topic_title and t.pre_post_learning == pre_post:
             return t
+    # Create through the relationship so chapter.topics stays current within
+    # this session — otherwise every repeat of the same topic title would
+    # miss the lookup above and create a duplicate Topic row.
     topic = models.Topic(
-        chapter_id=chapter.id, topic_title=topic_title,
+        topic_title=topic_title,
         topic_display_name=topic_title, pre_post_learning=pre_post,
     )
-    db.add(topic)
+    chapter.topics.append(topic)
     db.flush()
     return topic
 
@@ -137,7 +140,7 @@ def generate_post_learning(db: Session, job_id: int, target_chapter_id: int) -> 
     if not job or not chapter:
         raise ValueError("upload job or target chapter not found")
 
-    records = generation.concepts_from_mmd(job.mmd_text)
+    records = generation.concepts_from_mmd(job.mmd_text, subject=chapter.subject)
     created_ids, merged_ids = _deposit_concepts(
         db, chapter, records, "Post", job.source_book)
     _sync_chapter_topic_summary(chapter)
@@ -191,7 +194,7 @@ def generate_pre_learning_from_upload(db: Session, job_id: int, target_chapter_i
         raise ValueError("upload job or target chapter not found")
 
     # Treat parsed concepts as the base, then derive pre-learning framing.
-    base = generation.concepts_from_mmd(job.mmd_text)
+    base = generation.concepts_from_mmd(job.mmd_text, subject=chapter.subject)
     pre_records = [
         {
             "topic": f"{rec['topic']} (Pre-Learning)",
