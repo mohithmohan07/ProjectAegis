@@ -201,6 +201,8 @@ class BlueprintBatch(Base):
     categories: Mapped[list] = mapped_column(JSON, default=list)
     question_type: Mapped[str] = mapped_column(String(16), default="objective")
     num_questions: Mapped[int] = mapped_column(Integer, default=1)
+    # Assessment purpose (Appears In): Pre-test / Post-test / Worksheet / Test.
+    appears_in: Mapped[list] = mapped_column(JSON, default=list)
 
     session = relationship("AssessmentSession", back_populates="batches")
 

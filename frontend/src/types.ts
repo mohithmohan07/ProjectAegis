@@ -61,6 +61,7 @@ export interface Vocab {
   group_types: string[];
   upload_types: string[];
   book_sources: string[];
+  appears_in: string[];
 }
 
 export interface Stats {
@@ -83,6 +84,7 @@ export interface BlueprintBatch {
   categories: string[];
   question_type: string;
   num_questions: number;
+  appears_in?: string[];
 }
 
 export interface Session {

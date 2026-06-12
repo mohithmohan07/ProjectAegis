@@ -87,6 +87,7 @@ function ConceptMappingFlow({ vocab }: { vocab: Vocab }) {
   const [skills, setSkills] = useState<string[]>([]);
   const [difficulties, setDifficulties] = useState<string[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
+  const [appearsIn, setAppearsIn] = useState<string[]>([]);
   const [qType, setQType] = useState("objective");
   const [count, setCount] = useState(1);
 
@@ -114,10 +115,11 @@ function ConceptMappingFlow({ vocab }: { vocab: Vocab }) {
         categories,
         question_type: qType,
         num_questions: count,
+        appears_in: appearsIn,
       };
       await api.addBatch(session.id, batch);
       setSession(await api.getSession(session.id));
-      setSkills([]); setDifficulties([]); setCategories([]); setCount(1);
+      setSkills([]); setDifficulties([]); setCategories([]); setAppearsIn([]); setCount(1);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -174,6 +176,8 @@ function ConceptMappingFlow({ vocab }: { vocab: Vocab }) {
             </div>
             <MultiSelect label="Category Level" options={vocab.question_categories[qType] ?? []}
               value={categories} onChange={setCategories} />
+            <MultiSelect label="Appears In (assessment purpose)" options={vocab.appears_in}
+              value={appearsIn} onChange={setAppearsIn} />
             <div className="row" style={{ marginTop: 8 }}>
               <div className="field-label" style={{ margin: 0 }}>No. of questions per sub-category</div>
               <input type="number" min={1} max={20} value={count}

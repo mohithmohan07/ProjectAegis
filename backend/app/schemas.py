@@ -62,6 +62,7 @@ class BlueprintBatchRequest(BaseModel):
     categories: list[str] = Field(default_factory=list)
     question_type: str = "objective"
     num_questions: int = 1
+    appears_in: list[str] = Field(default_factory=list)
 
 
 class BlueprintBatchOut(BaseModel):
@@ -72,6 +73,7 @@ class BlueprintBatchOut(BaseModel):
     categories: list
     question_type: str
     num_questions: int
+    appears_in: list = Field(default_factory=list)
 
 
 class SessionOut(BaseModel):
@@ -169,6 +171,7 @@ class Vocab(BaseModel):
     group_types: list[str]
     upload_types: list[str]
     book_sources: list[str]
+    appears_in: list[str]
 
 
 class Stats(BaseModel):

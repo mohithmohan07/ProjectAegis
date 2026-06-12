@@ -35,6 +35,7 @@ def _ensure_columns() -> None:
         ("concepts", "sources", "TEXT DEFAULT ''"),
         ("upload_jobs", "source_book", "VARCHAR(128) DEFAULT ''"),
         ("questions", "question_text", "TEXT DEFAULT ''"),
+        ("blueprint_batches", "appears_in", "TEXT DEFAULT '[]'"),
     ]
     with engine.connect() as conn:
         for table, column, ddl in additions:
@@ -71,6 +72,10 @@ def _backfill_and_normalize() -> None:
             norm_app = bi.normalize_appears_in(q.question_appears_in)
             if norm_app != (q.question_appears_in or ""):
                 q.question_appears_in = norm_app
+                changed = True
+            norm_diff = bi.normalize_difficulty(q.level_of_difficulty)
+            if norm_diff != (q.level_of_difficulty or ""):
+                q.level_of_difficulty = norm_diff
                 changed = True
             if q.answers:
                 new_answers = []

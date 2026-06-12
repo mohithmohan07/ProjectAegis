@@ -38,6 +38,7 @@ def add_batch(session_id: int, req: schemas.BlueprintBatchRequest, db: Session =
             categories=req.categories,
             question_type=req.question_type,
             num_questions=req.num_questions,
+            appears_in=req.appears_in,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))

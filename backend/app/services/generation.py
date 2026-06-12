@@ -110,6 +110,116 @@ def _default_marks(kind: str) -> float:
     return {"objective": 1, "subjective": 3, "descriptive": 5}[kind]
 
 
+# Varied question stems per cognitive skill (anti-monotony: rotated per
+# question index so a batch never repeats one opening pattern). {t} = concept
+# title, {d} = short concept description.
+_DRY_STEMS: dict[str, list[str]] = {
+    "Remember": [
+        "Identify the term described here: {d}",
+        "Name the concept that matches: {d}",
+        "Complete the statement: '{t}' is best described as ____.",
+        "Select the option that correctly states '{t}'.",
+        "Match '{t}' with its correct description from the options.",
+    ],
+    "Understand": [
+        "Explain why '{t}' matters, using the idea that {d}",
+        "Describe how '{t}' works in your own words.",
+        "Give a reason why {d}",
+        "Distinguish '{t}' from a closely related idea, with one example.",
+        "Interpret what '{t}' means in a classroom example.",
+    ],
+    "Apply": [
+        "A classmate faces this situation: {d} Use '{t}' to resolve it.",
+        "Use '{t}' to solve the following case: {d}",
+        "Predict what happens when '{t}' is applied here: {d}",
+        "Apply the rule behind '{t}' to a new example and show the steps.",
+        "Choose the correct method based on '{t}' and carry it out.",
+    ],
+    "Analyse": [
+        "A student's working contains an error involving '{t}'. Identify the error and correct it.",
+        "Analyse the relationship described here and explain its cause: {d}",
+        "Compare the two cases implied by '{t}' and infer the difference.",
+        "Find the pattern behind '{t}' and explain what produces it.",
+        "Break the process of '{t}' into its parts and explain each briefly.",
+    ],
+    "Evaluate": [
+        "A student claims: \"{d}\" Is this claim fully correct? Justify your judgment.",
+        "Evaluate whether '{t}' is the better approach in this case, with reasons.",
+        "Support or refute: '{t}' always holds. Use evidence from the concept.",
+        "Decide which of two interpretations of '{t}' is stronger and explain why.",
+        "Assess the validity of this conclusion about '{t}': {d}",
+    ],
+    "Create": [
+        "Design a simple example or demonstration that shows '{t}' in action.",
+        "Construct a short plan (or flowchart) that uses '{t}' step by step.",
+        "Propose a solution to a real-life problem using '{t}'.",
+        "Frame your own example question that tests '{t}', and answer it.",
+        "Develop a brief method to verify '{t}' experimentally or by calculation.",
+    ],
+}
+
+# Mark-wise rubric point templates per difficulty (spec section 6).
+_RUBRIC_POINTS = {
+    "Less": [
+        "1 mark: States the correct term/fact/answer for '{t}'.",
+        "1 mark: Gives the correct explanation or example for '{t}'.",
+        "1 mark: Uses correct terminology/units where applicable.",
+        "1 mark: Presents the answer clearly and completely.",
+        "1 mark: Connects the answer back to the question correctly.",
+    ],
+    "Moderate": [
+        "1 mark: Identifies the relevant concept/principle ('{t}').",
+        "1 mark: Applies or explains it correctly in this context.",
+        "1 mark: Gives the correct conclusion/final answer/example.",
+        "1 mark: Shows the working/reasoning clearly.",
+        "1 mark: Uses correct terminology and units where applicable.",
+    ],
+    "High": [
+        "1 mark: Identifies the relevant concept/principle ('{t}').",
+        "1 mark: Selects the correct approach/method.",
+        "1 mark: Applies the concept with correct reasoning/intermediate steps.",
+        "1 mark: Interprets/justifies the result against the given context.",
+        "1 mark: Gives the final conclusion with correct terminology.",
+    ],
+}
+
+
+def _stem_for(skill: str, difficulty: str, concept: models.Concept, idx: int) -> str:
+    stems = _DRY_STEMS.get(skill, _DRY_STEMS["Understand"])
+    details = (concept.concept_details or "").split("//")[0]
+    details = details.replace("Description:", "").strip()[:140] or concept.concept_title
+    if not details.endswith((".", "?", "!")):
+        details += "."
+    stem = stems[(idx - 1) % len(stems)].format(t=concept.concept_title, d=details)
+    if difficulty == "High" and skill in {"Apply", "Analyse", "Evaluate", "Create"}:
+        stem += " Justify each step of your reasoning."
+    elif difficulty == "Moderate" and skill in {"Understand", "Apply"}:
+        stem += " Give a reason for your answer."
+    return stem
+
+
+def _rubric_points(marks: float, difficulty: str, concept: models.Concept) -> list[str]:
+    n = max(int(marks), 1)
+    pool = _RUBRIC_POINTS.get(difficulty, _RUBRIC_POINTS["Moderate"])
+    return [pool[i % len(pool)].format(t=concept.concept_title) for i in range(n)]
+
+
+def _dry_distractors(concept: models.Concept) -> list[str]:
+    """Plausible same-family distractors built from the concept's own context."""
+    kws = [k.strip() for k in (concept.keywords or "").split(",") if k.strip()]
+    siblings = [c.concept_title for c in concept.topic.concepts
+                if c.id != concept.id][:2]
+    out = []
+    if siblings:
+        out.append(f"A property of '{siblings[0]}' (related but not '{concept.concept_title}')")
+    if kws:
+        out.append(f"The converse of the {kws[0]} relationship (common student error)")
+    while len(out) < 3:
+        out.append(f"A partially-correct restatement of '{concept.concept_title}' "
+                   f"missing the key condition ({len(out) + 1})")
+    return out[:3]
+
+
 def generate_questions_for_concept(
     concept: models.Concept,
     *,
@@ -120,18 +230,15 @@ def generate_questions_for_concept(
     count: int,
     start_index: int = 1,
     live: bool | None = None,
+    appears_in: str = "",
 ) -> list[dict]:
     """Return ``count`` question dicts for one concept under one blueprint cell."""
     use_live = config.use_live_generation() if live is None else live
     if use_live:
-        from aegis_pipeline import bulk_upload_ultimate  # noqa: F401
-        # Future implementer: prepend kr.PROMPT_PREAMBLE to the system prompt so
-        # the model emits rich-text columns in the bracket format the importer
-        # expects (and keeps keyword cells in raw KaTeX).
-        raise NotImplementedError(
-            "Live question generation: wire bulk_upload_ultimate's GPT parsing/"
-            "generation with OPENAI_API_KEY and the concept_details payload. "
-            "Inject app.services.katex_rules.PROMPT_PREAMBLE as the system prompt."
+        return _live_questions_for_concept(
+            concept, question_type=question_type, cognitive_skill=cognitive_skill,
+            difficulty=difficulty, category=category, count=count,
+            start_index=start_index, appears_in=appears_in,
         )
 
     marks = _default_marks(question_type)
@@ -139,12 +246,13 @@ def generate_questions_for_concept(
     details = (concept.concept_details or "").split("//")[0].strip()[:160]
     for i in range(count):
         idx = start_index + i
-        question_text = (
-            f"({difficulty} · {cognitive_skill}) "
-            f"{category} on '{concept.concept_title}': {details}"
-        )
+        question_text = _stem_for(cognitive_skill, difficulty, concept, idx)
         if _is_math(concept):
-            question_text = f"{question_text} Express it as {_sample_equation(concept)}."
+            question_text = f"{question_text} Express the key relation as {_sample_equation(concept)}."
+        model_answer = (
+            f"{concept.concept_title}: {details or 'see concept details'} "
+            f"(complete, mark-worthy answer covering every rubric point)."
+        )
         record: dict = {
             "sheet_kind": question_type,
             "question_label": question_label(concept, idx),
@@ -154,31 +262,172 @@ def generate_questions_for_concept(
             "level_of_difficulty": difficulty,
             "marks": marks,
             "question": question_text,
+            "question_appears_in": appears_in,
             # Plain-text question (+ concept context) for the AI evaluator.
             "question_text": bi.to_plain_text(
                 f"{question_text}\nConcept context: {details}" if details
                 else question_text),
             "answer_explanation": (
-                f"Assesses {concept.concept_title} ({cognitive_skill}). "
-                f"Reference: {_concept_reference_link(concept)}."
+                f"{model_answer} Reference: {_concept_reference_link(concept)}."
             ),
             "answers": [],
             "sub_questions": [],
             "origin": "concept_mapping",
         }
         if question_type == "objective":
-            record["answers"] = _objective_answers(concept)
+            correct = f"{concept.concept_title} (correct: {details[:80] or 'as defined'})"
+            if _is_math(concept):
+                correct = f"{correct} — {_sample_equation(concept)}"
+            record["answers"] = [
+                {"answer_type": "Phrases", "answer_content": correct,
+                 "correct_answer": "Yes", "answer_weightage": "1"},
+            ] + [
+                {"answer_type": "Phrases", "answer_content": d,
+                 "correct_answer": "No", "answer_weightage": "0"}
+                for d in _dry_distractors(concept)
+            ]
+            record["answer_explanation"] = (
+                f"The correct option states '{concept.concept_title}' accurately. "
+                "The distractors are wrong because they describe a related concept, "
+                "the converse relation, or omit the key condition."
+            )
         elif question_type == "subjective":
-            record["answers"] = _subjective_answers(concept, marks)
+            # Rubric points live in the answer blocks; each carries weightage 1.
+            record["answers"] = [
+                {"answer_type": "Phrases", "answer": point,
+                 "answer_display": "Yes" if n == 0 else "",
+                 "weightage": "1", "placeholder": "answer"}
+                for n, point in enumerate(_rubric_points(marks, difficulty, concept))
+            ]
             record["math_keyboard"] = "Yes" if concept.topic.chapter.subject in {
                 "Mathematics", "Physics", "Chemistry"} else ""
-        else:
-            answers, sub = _descriptive_answers(concept, marks)
-            record["answers"] = answers
-            record["sub_questions"] = sub
-            record["display_answer"] = "Yes"
+        else:  # descriptive
+            # display_answer = clean model answer; answer_content = rubric points.
+            record["display_answer"] = model_answer
+            record["answers"] = [
+                {"answer_type": "Phrases", "answer_weightage": "1",
+                 "answer_content": point}
+                for point in _rubric_points(marks, difficulty, concept)
+            ]
+            record["sub_questions"] = [
+                {"text": f"(a) Define '{concept.concept_title}' in your own words.",
+                 "marks": "2",
+                 "keywords": [{"answer_type": "Phrases", "weightage": "2",
+                               "keyword": concept.concept_title}]},
+                {"text": f"(b) Apply '{concept.concept_title}' to a worked example.",
+                 "marks": str(max(marks - 2, 1)),
+                 "keywords": [{"answer_type": "Phrases",
+                               "weightage": str(max(marks - 2, 1)),
+                               "keyword": rf"\text{{{concept.concept_title}}} = f(x)"
+                               if _is_math(concept) else "worked example"}]},
+            ]
         out.append(record)
     return out
+
+
+def _live_questions_for_concept(
+    concept: models.Concept, *, question_type: str, cognitive_skill: str,
+    difficulty: str, category: str, count: int, start_index: int,
+    appears_in: str = "",
+) -> list[dict]:
+    """Live generation: modular prompt assembly + review/repair before accept."""
+    import json as _json
+    from . import assessment_prompts as ap
+
+    chapter = concept.topic.chapter
+    marks = _default_marks(question_type)
+    system = ap.build_prompt(
+        question_type=question_type, difficulty=difficulty, skill=cognitive_skill,
+        subject=chapter.subject, grade=chapter.grade, board=chapter.board,
+        marks=marks, category=category, purpose=appears_in,
+    )
+    user = (
+        f"CONCEPT: {concept.concept_title}\n"
+        f"CONCEPT DETAILS: {concept.concept_details}\n"
+        f"KEYWORDS: {concept.keywords}\n"
+        f"CHAPTER: {chapter.chapter_title} | TOPIC: {concept.topic.topic_title}\n\n"
+        f"Generate exactly {count} question(s) of type {question_type}, "
+        f"category '{category}', difficulty {difficulty}, cognitive skill "
+        f"{cognitive_skill}, {marks:g} mark(s) each. Vary the stems/framing "
+        f"across the batch (batch seed {start_index})."
+    )
+
+    def _parse(data: dict) -> list[dict]:
+        records: list[dict] = []
+        for n, row in enumerate(data.get("questions", [])[:count]):
+            answers = []
+            for a in row.get("answers", []) or []:
+                a = dict(a)
+                a["answer_type"] = bi.normalize_answer_type(
+                    a.get("answer_type", "")) or "Phrases"
+                # Normalize block shape per sheet kind (the model may emit
+                # either objective-style or subjective-style keys).
+                if question_type == "subjective":
+                    a.setdefault("answer", a.pop("answer_content", ""))
+                    a.setdefault("weightage", str(a.pop("answer_weightage", "") or "1"))
+                    a.setdefault("answer_display", "Yes" if not answers else "")
+                    a.setdefault("placeholder", "answer")
+                else:
+                    a.setdefault("answer_content", a.pop("answer", ""))
+                    a.setdefault("answer_weightage", str(a.pop("weightage", "") or
+                                                         ("1" if question_type == "descriptive" else "0")))
+                answers.append(a)
+            rec = {
+                "sheet_kind": question_type,
+                "question_label": question_label(concept, start_index + n),
+                "question_category": row.get("question_category") or category,
+                "cognitive_skills": bi.normalize_cognitive_skills(
+                    row.get("cognitive_skills") or cognitive_skill),
+                "question_source": bi.QUESTION_SOURCE_DEFAULT,
+                "level_of_difficulty": bi.normalize_difficulty(
+                    row.get("level_of_difficulty") or difficulty),
+                "marks": float(row.get("marks") or marks),
+                "question": row.get("question", ""),
+                "question_appears_in": appears_in,
+                "question_text": (row.get("question_text", "").strip()
+                                  or bi.to_plain_text(row.get("question", ""))),
+                "display_answer": row.get("display_answer", ""),
+                "answer_explanation": row.get("answer_explanation", ""),
+                "answers": answers,
+                "sub_questions": row.get("sub_questions", []) or [],
+                "origin": "concept_mapping",
+            }
+            records.append(rec)
+        return records
+
+    records = _parse(_openai_json(system, user))
+    # Deterministic review; one repair round for failing questions.
+    failing = {i: ap.review_question(r) for i, r in enumerate(records)}
+    failing = {i: p for i, p in failing.items() if p}
+    if failing or len(records) < count:
+        feedback = "; ".join(
+            f"question {i + 1}: {', '.join(p)}" for i, p in failing.items())
+        retry = _openai_json(
+            system,
+            user + "\n\nREVIEW FEEDBACK — regenerate the FULL batch fixing these "
+            f"problems and keep everything else compliant: {feedback or 'wrong count'}",
+        )
+        retry_records = _parse(retry)
+        if retry_records:
+            for i, r in enumerate(retry_records):
+                if i < len(records) and (i in failing or len(records) < count):
+                    records[i] = r
+            if len(retry_records) > len(records):
+                records = retry_records[:count]
+    # Anti-monotony: regenerate once if the batch repeats one stem too much.
+    report = ap.stem_monotony_report([r["question"] for r in records])
+    if report["monotonous"]:
+        varied = _openai_json(
+            system,
+            user + "\n\nThe previous batch was too repetitive (opening "
+            f"'{report['worst']}' used {report['worst_count']}x). Regenerate "
+            "with clearly varied framings/patterns per question.",
+        )
+        varied_records = _parse(varied)
+        if varied_records and not ap.stem_monotony_report(
+                [r["question"] for r in varied_records])["monotonous"]:
+            records = varied_records[:count]
+    return records
 
 
 # --------------------------------------------------------------------------- #

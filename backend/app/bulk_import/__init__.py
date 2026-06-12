@@ -236,6 +236,17 @@ _COGNITIVE_LEGACY = {
     "evaluate": "Evaluate", "create": "Create",
 }
 DIFFICULTY_LEVELS = ["Less", "Moderate", "High"]
+# Real assessment sheets contain Easy/Medium/Hard variants — normalize them.
+_DIFFICULTY_LEGACY = {
+    "easy": "Less", "low": "Less", "less": "Less",
+    "medium": "Moderate", "moderate": "Moderate", "average": "Moderate",
+    "hard": "High", "difficult": "High", "high": "High",
+}
+
+
+def normalize_difficulty(value: str) -> str:
+    v = (value or "").strip()
+    return _DIFFICULTY_LEGACY.get(v.lower(), v) if v else v
 
 APPEARS_IN = ["Pre-test", "Post-test", "Worksheet", "Test"]
 APPEARS_IN_ALL = ", ".join(APPEARS_IN)

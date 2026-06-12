@@ -51,12 +51,14 @@ def add_batch(
     db: Session, session_id: int, *,
     cognitive_skills: list[str], difficulty_levels: list[str],
     categories: list[str], question_type: str, num_questions: int,
+    appears_in: list[str] | None = None,
 ) -> models.BlueprintBatch:
     session = db.get(models.AssessmentSession, session_id)
     if not session:
         raise ValueError("session not found")
     if question_type not in {"objective", "subjective", "descriptive"}:
         raise ValueError("question_type must be objective | subjective | descriptive")
+    purposes = [p for p in (appears_in or []) if p in bi.APPEARS_IN]
     batch = models.BlueprintBatch(
         session_id=session_id,
         # Old gerund forms (Remembering, Understanding...) normalize to the
@@ -64,10 +66,13 @@ def add_batch(
         cognitive_skills=[
             bi.normalize_cognitive_skills(s) for s in cognitive_skills
         ] or ["Understand"],
-        difficulty_levels=difficulty_levels or ["Moderate"],
+        difficulty_levels=[
+            bi.normalize_difficulty(d) for d in difficulty_levels
+        ] or ["Moderate"],
         categories=categories or ["Multiple Choice Question"],
         question_type=question_type,
         num_questions=max(int(num_questions), 1),
+        appears_in=purposes,
     )
     db.add(batch)
     db.commit()
@@ -103,8 +108,12 @@ def generate(db: Session, session_id: int) -> dict:
 
     concepts = directory.resolve_scope_concepts(db, session.scope_type, session.scope_ids)
     created_ids: list[int] = []
-    # Per-concept running index keeps question labels unique & ordered.
-    counters: dict[int, int] = {c.id: 1 for c in concepts}
+    # Per-concept running index keeps question labels unique & ordered —
+    # continuing AFTER existing questions so labels never collide across
+    # generation sessions.
+    counters: dict[int, int] = {
+        c.id: sum(len(g.questions) for g in c.groups) + 1 for c in concepts
+    }
 
     for concept in concepts:
         for batch in session.batches:
@@ -116,6 +125,7 @@ def generate(db: Session, session_id: int) -> dict:
                     question_type=batch.question_type,
                     cognitive_skill=skill, difficulty=difficulty, category=category,
                     count=batch.num_questions, start_index=counters[concept.id],
+                    appears_in=", ".join(batch.appears_in or []),
                 )
                 counters[concept.id] += len(records)
                 group = _group_for(db, concept, difficulty)
@@ -130,7 +140,27 @@ def generate(db: Session, session_id: int) -> dict:
     session.status = "generated"
     session.generated_question_ids = created_ids
     db.commit()
-    return {"session_id": session_id, "created": len(created_ids), "pipeline": pipeline}
+
+    # Quality review summary: deterministic checks + anti-monotony report.
+    from . import assessment_prompts as ap
+    created = db.query(models.Question).filter(models.Question.id.in_(created_ids)).all()
+    problems: list[str] = []
+    for q in created:
+        for p in ap.review_question({
+            "sheet_kind": q.sheet_kind, "question": q.question,
+            "question_text": q.question_text, "cognitive_skills": q.cognitive_skills,
+            "level_of_difficulty": q.level_of_difficulty, "marks": q.marks,
+            "answers": q.answers,
+        }):
+            problems.append(f"{q.question_label}: {p}")
+    monotony = ap.stem_monotony_report([q.question for q in created])
+    return {
+        "session_id": session_id, "created": len(created_ids),
+        "pipeline": pipeline,
+        "review": {"problems": problems[:50],
+                   "monotony": {k: monotony[k] for k in
+                                ("worst", "worst_count", "generic_ratio", "monotonous")}},
+    }
 
 
 def _question_kwargs(rec: dict) -> dict:
@@ -144,6 +174,7 @@ def _question_kwargs(rec: dict) -> dict:
         "math_keyboard": rec.get("math_keyboard", ""),
         "question": rec.get("question", ""),
         "question_text": rec.get("question_text", ""),
+        "question_appears_in": rec.get("question_appears_in", ""),
         "marks": rec.get("marks", 1.0),
         "display_answer": rec.get("display_answer", ""),
         "answer_explanation": rec.get("answer_explanation", ""),
@@ -235,7 +266,9 @@ def generate_from_upload(db: Session, job_id: int, question_type: str = "objecti
 
     created_ids: list[int] = []
     merged_ids: list[int] = []
-    counters: dict[int, int] = {c.id: 1 for c in concepts}
+    counters: dict[int, int] = {
+        c.id: sum(len(g.questions) for g in c.groups) + 1 for c in concepts
+    }
     # Round-robin the identified questions across the deposit concepts.
     for i, rec in enumerate(records):
         if job.source_book:

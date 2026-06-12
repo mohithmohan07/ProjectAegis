@@ -47,6 +47,7 @@ def get_vocab():
         group_types=bi.GROUP_TYPES,
         upload_types=mmd.UPLOAD_TYPES,
         book_sources=bi.BOOK_SOURCES,
+        appears_in=bi.APPEARS_IN,
     )
 
 
