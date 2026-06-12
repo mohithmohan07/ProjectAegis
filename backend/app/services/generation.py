@@ -437,45 +437,197 @@ def concepts_from_mmd(mmd_text: str, *, subject: str = "",
     }]
 
 
-_PRELEARNING_SYSTEM = """\
-You derive PRE-LEARNING (prerequisite) concepts that a student must already
-master before studying the given post-learning concepts.
-Return ONLY a JSON object: {"rows": [{"topic": "", "concept": "", "concept_description": "", "keywords": ""}, ...]}.
-- concept_description format: "Description: ... // Types: Type 01: Name Case 01: <example prompt> ... // Misconception: ..."
-- Topic names should end with "(Pre-Learning)".
-- One prerequisite concept per distinct foundational idea; merge overlaps.
-- Same style rules as concept mapping: no '&' chains in names, no source
-  references ("Example N", "Fig N", "MMD"), concise syllabus-scoped text,
-  every Type's Cases carry a concrete example prompt.
-"""
+# Pre-learning derivation: ported from the vendored
+# concept_mapping_to_prelearning engine — dependency-architecture prompt with
+# CRITICAL SYLLABUS FILTER, naming patterns, cognitive tags (FL/NU/VC/RS/GR),
+# strict topic/concept counts, and a second "syllabus boundary" auditor pass.
+_PRE_MIN_T, _PRE_MAX_T = 4, 6
+_PRE_MIN_CT, _PRE_MAX_CT = 5, 7
+
+
+def _board_guidance(board: str) -> str:
+    b = (board or "").strip().upper()
+    if "CBSE" in b:
+        return ("BOARD-SPECIFIC CURRICULUM: CBSE-aligned. Judge previous-grade vs "
+                "current-grade content and chapter order using official CBSE/NCERT "
+                "progression (Classes 6-10) for this subject — not ICSE ordering.")
+    if "ICSE" in b:
+        return ("BOARD-SPECIFIC CURRICULUM: ICSE-aligned. Use typical official ICSE "
+                "syllabus progression for this subject and grade; do not substitute "
+                "NCERT/CBSE chapter order.")
+    return f"BOARD-SPECIFIC CURRICULUM: Board {board!r}; use its official progression."
+
+
+def _prelearning_system(subject: str, grade: str, board: str) -> str:
+    return f"""\
+You are an expert curriculum designer specializing in dependency-based learning
+architecture aligned with formal school syllabi (ICSE/CBSE and equivalents).
+Generate PRE-LEARNING concepts for the given chapter.
+
+OBJECTIVE — output ONLY concepts that are strict prerequisites for the chapter,
+belong to previous grade levels OR foundational knowledge expected before this
+grade, and were reasonably taught/encountered before this chapter. They are NOT
+chapter content, simplified re-teaching, or topic introductions.
+
+CRITICAL SYLLABUS FILTER (MANDATORY): reject any concept explicitly taught as
+new in the CURRENT grade for this subject, and any concept typically introduced
+in this chapter or later chapters of the same course. Only include
+previous-grade or clearly foundational concepts (basic arithmetic, basic
+algebra, general science literacy, earlier-level graph reading...).
+
+STRICT EXCLUSIONS: no "Introduction to...", "Definition of...", "Overview
+of...", "Examples of..."; nothing taught inside the chapter itself.
+
+INCLUSION TEST per concept: "If a student does NOT know this, will they
+struggle to understand the chapter even after teaching?" Include only if YES.
+
+CONCEPT DESIGN: atomic but meaningful; each concept is a skill, relationship,
+or reasoning structure; do not fragment definition/formula/example apart.
+
+NAMING RULES: prefer patterns like "Relationship Between _ and _",
+"Application of _ in _ Contexts", "Interpretation of _ in
+Mathematical/Scientific Situations", "Quantitative Handling of _",
+"Structural Understanding of _", "Transformation and Manipulation of _".
+NEVER "Types of _", "Definition of _", "Basics of _". NEVER chain names
+with '&' (use commas with a final 'and'). Sibling concepts must not repeat
+the same leading phrase.
+
+COGNITIVE TAGGING (MANDATORY): one primary tag per concept:
+FL=Foundational Logic | NU=Numerical Handling | VC=Vocabulary Concept |
+RS=Real-world Sense | GR=Graphical Reasoning.
+
+COUNTS (STRICT): {_PRE_MIN_T}-{_PRE_MAX_T} topics; every topic has
+{_PRE_MIN_CT}-{_PRE_MAX_CT} concepts. Order by dependency. No duplicates.
+
+CONCEPT DESCRIPTION FORMAT (MANDATORY): one string, exactly three sections,
+separated by " // ":
+Description: <what the student should already know; 2-4 short lines; must not
+teach the chapter> // Types: <at least two numbered types, each with concrete
+cases: Type 01: <title> Case 01: <example prompt> Case 02: ... Type 02: ...>
+// Misconception: <typical prior-knowledge gaps, or N/A>.
+Zero-padded labels exactly (Type 01:, Case 01:). NEVER reference source
+artifacts ("Example 19", "Fig 2", "Table no. 1") and never the words "MMD".
+
+OUTPUT (STRICT JSON ONLY): {{"topics": [{{"topic_name": "", "concepts":
+[{{"parent_concept": "", "concept_name": "", "concept_description": "",
+"tag": ""}}]}}]}}.
+
+FINAL VALIDATION: for each concept ask "Was this already expected knowledge
+BEFORE this grade (or clearly foundational)?" — if unsure or borderline,
+REMOVE or REPLACE with a safer prior-grade prerequisite.
+
+RUN CONTEXT: Subject: {subject} | Grade: {grade} | Board: {board}
+{_board_guidance(board)}"""
+
+
+_PRE_AUDITOR_SYSTEM = """\
+You are a strict curriculum auditor for ICSE/CBSE-aligned pre-learning.
+You receive draft pre-learning JSON ("topics" with nested "concepts") plus
+chapter context. REMOVE or REPLACE any concept that is taught as new in the
+current grade, introduced in this chapter or later in the same course, or
+fails "was this already expected knowledge before this grade?" (unsure or
+borderline -> REPLACE). Allow previous-grade ideas and foundational skills.
+STRUCTURE: output exactly the same number of topics, and per topic exactly
+the same number of concepts — substitute rejected rows, never delete slots.
+Keep the same schema and the Description: // Types: // Misconception: format
+with Type 01/02 and Case 01/02 labels, plus the tag (FL|NU|VC|RS|GR).
+Return ONLY JSON with one key "topics". No markdown, no commentary."""
+
+
+def _flatten_pre_topics(data: dict) -> list[dict]:
+    out: list[dict] = []
+    for topic in data.get("topics", []):
+        t_name = (topic.get("topic_name") or "Foundations").strip()
+        if "(pre-learning)" not in t_name.lower():
+            t_name = f"{t_name} (Pre-Learning)"
+        for c in topic.get("concepts", []):
+            title = (c.get("concept_name") or "").strip()
+            if not title:
+                continue
+            tag = (c.get("tag") or "").strip().upper()
+            parent = (c.get("parent_concept") or "").strip()
+            keyword_bits = [b for b in (f"tag {tag}" if tag else "",
+                                        f"parent: {parent}" if parent else "") if b]
+            out.append({
+                "topic": t_name,
+                "concept_title": title,
+                "concept_details": (c.get("concept_description") or "").strip(),
+                "keywords": "; ".join(keyword_bits),
+            })
+    return out
+
+
+def pre_learning_from_rows(
+    rows: list[dict], *, subject: str = "", grade: str = "", board: str = "",
+    chapter_title: str = "", live: bool | None = None,
+) -> list[dict]:
+    """Derive pre-learning records from concept-mapping rows (dicts).
+
+    rows: [{concept_title, concept_details, topic}, ...] — the chapter's
+    post-learning concept map.
+    """
+    use_live = config.use_live_generation() if live is None else live
+    if not use_live:
+        return [{
+            "topic": f"{(r.get('topic') or 'Topic 01')} (Pre-Learning)",
+            "concept_title": f"Pre: {r['concept_title']}",
+            "concept_details": (
+                f"Description: foundational idea required before learning "
+                f"'{r['concept_title']}'. // Types: Type 01: Prerequisite recall "
+                "// Misconception: assuming the prerequisite is already mastered."
+            ),
+            "keywords": r.get("keywords", ""),
+        } for r in rows]
+
+    listing = "\n".join(
+        f"- [{(r.get('topic') or '')[:60]}] {r['concept_title']}: "
+        f"{(r.get('concept_details') or '')[:260]}"
+        for r in rows
+    )
+    user = (
+        f"CHAPTER: {chapter_title or '(untitled)'}\n"
+        f"Subject: {subject} | Grade: {grade} | Board: {board}\n\n"
+        "CONCEPT MAPPING (current chapter content — exclude from pre-learning):\n"
+        + _trim(listing, 80_000)
+    )
+    system = _prelearning_system(subject, grade, board)
+    draft = _openai_json(system, user)
+    if not draft.get("topics"):
+        raise RuntimeError("live pre-learning derivation returned no topics")
+
+    # Stage 2: syllabus boundary auditor (replaces violating rows in place).
+    import json as _json
+    audited = _openai_json(
+        _PRE_AUDITOR_SYSTEM,
+        f"Chapter: {chapter_title} | Subject: {subject} | Grade: {grade} | "
+        f"Board: {board}\n\nDRAFT:\n" + _json.dumps(draft)[:120_000],
+    )
+    final = audited if audited.get("topics") else draft
+
+    out = _flatten_pre_topics(final)
+    if not out:
+        raise RuntimeError("live pre-learning derivation returned no concepts")
+    return out
 
 
 def pre_learning_from_concepts(concepts: list[models.Concept], *, live: bool | None = None) -> list[dict]:
     """Derive pre-learning concept records from existing post-learning concepts."""
     use_live = config.use_live_generation() if live is None else live
     if use_live:
-        listing = "\n".join(
-            f"- {c.concept_title}: {(c.concept_details or '')[:300]}" for c in concepts
+        chapter = concepts[0].topic.chapter if concepts else None
+        return pre_learning_from_rows(
+            [{
+                "topic": c.topic.topic_title,
+                "concept_title": c.concept_title,
+                "concept_details": c.concept_details,
+                "keywords": c.keywords,
+            } for c in concepts],
+            subject=chapter.subject if chapter else "",
+            grade=chapter.grade if chapter else "",
+            board=chapter.board if chapter else "",
+            chapter_title=chapter.chapter_title if chapter else "",
+            live=True,
         )
-        data = _openai_json(
-            _PRELEARNING_SYSTEM,
-            "Derive prerequisite (pre-learning) concepts for these post-learning "
-            "concepts:\n\n" + _trim(listing, 60_000),
-        )
-        out = []
-        for row in data.get("rows", []):
-            title = (row.get("concept") or "").strip()
-            if not title:
-                continue
-            out.append({
-                "topic": (row.get("topic") or "Foundations (Pre-Learning)").strip(),
-                "concept_title": title,
-                "concept_details": (row.get("concept_description") or "").strip(),
-                "keywords": (row.get("keywords") or "").strip(),
-            })
-        if not out:
-            raise RuntimeError("live pre-learning derivation returned no rows")
-        return out
     out: list[dict] = []
     for c in concepts:
         out.append({

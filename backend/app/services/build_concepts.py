@@ -193,21 +193,15 @@ def generate_pre_learning_from_upload(db: Session, job_id: int, target_chapter_i
     if not job or not chapter:
         raise ValueError("upload job or target chapter not found")
 
-    # Treat parsed concepts as the base, then derive pre-learning framing.
+    # Extract the chapter's concept map first, then derive prerequisites from
+    # it. Live mode runs the full dependency-architecture derivation (syllabus
+    # filter + auditor pass); dry mode keeps the deterministic framing.
     base = generation.concepts_from_mmd(job.mmd_text, subject=chapter.subject)
-    pre_records = [
-        {
-            "topic": f"{rec['topic']} (Pre-Learning)",
-            "concept_title": f"Pre: {rec['concept_title']}",
-            "concept_details": (
-                f"Description: prerequisite for '{rec['concept_title']}'. "
-                "// Types: Type 01: Prerequisite recall "
-                "// Misconception: assuming the prerequisite is already mastered."
-            ),
-            "keywords": rec.get("keywords", ""),
-        }
-        for rec in base
-    ]
+    pre_records = generation.pre_learning_from_rows(
+        base,
+        subject=chapter.subject, grade=chapter.grade, board=chapter.board,
+        chapter_title=chapter.chapter_title,
+    )
     created_ids, merged_ids = _deposit_concepts(
         db, chapter, pre_records, "Pre", job.source_book)
     _sync_chapter_topic_summary(chapter)
