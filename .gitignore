@@ -35,4 +35,10 @@ backend/data/uploads/
 backend/data/bulk_import_output.xlsx
 *.xlsx~
 
+# Create Workbooks runtime state (generated PDFs + vendored tool caches)
+backend/data/workbooks/
+backend/aegis_pipeline/create_workbooks/output/
+backend/aegis_pipeline/create_workbooks/mmd_cache/
+backend/aegis_pipeline/create_workbooks/plan_cache/
+
 # data/bulk_import_database.xlsx IS committed — it is the database fixture.

@@ -136,12 +136,13 @@ function CreateWorkbook() {
 
   return (
     <>
-      <div className="section-title">Create Workbook (subject-wise)</div>
+      <div className="section-title">Create Bulk Import Workbook (subject-wise)</div>
       <div className="card">
         <div className="muted" style={{ marginBottom: 8 }}>
-          Generate a canonical 3-sheet Bulk Import workbook for one subject —
-          a blank authoring template, or pre-filled with the subject's existing
-          content. Headers always match the canonical format exactly.
+          Generate a canonical 3-sheet <strong>Bulk Import Excel workbook</strong> for
+          one subject — a blank authoring template, or pre-filled with the subject's
+          existing content. Headers always match the canonical format exactly.
+          (For student revision-workbook PDFs, use the Create Workbooks tab.)
         </div>
         <div className="row">
           <select value={board} onChange={(e) => { setBoard(e.target.value); setSubject(""); }}>

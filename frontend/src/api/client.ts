@@ -9,6 +9,8 @@ import type {
   TagResult,
   UploadJob,
   Vocab,
+  WorkbookEntry,
+  WorkbookResult,
 } from "../types";
 
 const BASE = import.meta.env.VITE_API_BASE ?? "";
@@ -127,6 +129,18 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ chapter_ids }),
     }),
+
+  // Create Workbooks (revision-PDF generator)
+  workbookSubjects: () =>
+    http<{ subjects: string[]; live: boolean }>("/workbooks/subjects"),
+  generateWorkbook: (file: File, subject: string) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("subject", subject);
+    return http<WorkbookResult>("/workbooks/generate", { method: "POST", body: fd });
+  },
+  workbookLibrary: () => http<WorkbookEntry[]>("/workbooks/library"),
+  workbookFileUrl: (rel: string) => `${BASE}/workbooks/file?rel=${encodeURIComponent(rel)}`,
 
   // Tagging (many-to-many) + import preview
   tagQuestionToConcept: (questionId: number, concept_id: number) =>

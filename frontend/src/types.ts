@@ -159,3 +159,22 @@ export interface PreviewResult {
   summary: Record<string, number>;
   workbook: string;
 }
+
+export interface WorkbookResult {
+  output_pdf: string;
+  build_log: string;
+  valid: boolean;
+  issues: string[];
+  mode: "dry" | "live";
+  meta: Record<string, string>;
+  log: string;
+}
+
+export interface WorkbookEntry {
+  class_folder: string;
+  subject: string;
+  name: string;
+  rel: string;
+  size: number;
+  has_log: boolean;
+}
