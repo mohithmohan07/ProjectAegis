@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 
+from .. import bulk_import as bi
 from .. import config, models
 from . import katex_rules as kr
 
@@ -63,13 +64,13 @@ def _objective_answers(concept: models.Concept) -> list[dict]:
     if _is_math(concept):
         correct = f"{correct} — {_sample_equation(concept)}"
     return [
-        {"answer_type": "Words", "answer_content": correct,
+        {"answer_type": "Phrases", "answer_content": correct,
          "correct_answer": "Yes", "answer_weightage": "1"},
-        {"answer_type": "Words", "answer_content": "Plausible distractor A",
+        {"answer_type": "Phrases", "answer_content": "Plausible distractor A",
          "correct_answer": "No", "answer_weightage": "0"},
-        {"answer_type": "Words", "answer_content": "Plausible distractor B",
+        {"answer_type": "Phrases", "answer_content": "Plausible distractor B",
          "correct_answer": "No", "answer_weightage": "0"},
-        {"answer_type": "Words", "answer_content": "Plausible distractor C",
+        {"answer_type": "Phrases", "answer_content": "Plausible distractor C",
          "correct_answer": "No", "answer_weightage": "0"},
     ]
 
@@ -79,7 +80,7 @@ def _subjective_answers(concept: models.Concept, marks: float) -> list[dict]:
     if _is_math(concept):
         ans = f"{ans} {_sample_equation(concept)}"
     return [
-        {"answer_type": "Words", "answer": ans,
+        {"answer_type": "Phrases", "answer": ans,
          "answer_display": "Yes", "weightage": str(marks), "placeholder": "answer"},
     ]
 
@@ -89,16 +90,16 @@ def _descriptive_answers(concept: models.Concept, marks: float) -> tuple[list[di
     if _is_math(concept):
         body = f"{body} Key relation: {_sample_equation(concept)}."
     answers = [
-        {"answer_type": "Words", "answer_weightage": str(marks), "answer_content": body},
+        {"answer_type": "Phrases", "answer_weightage": str(marks), "answer_content": body},
     ]
     # Keyword cells are NOT rich text — they hold raw KaTeX / plain text.
     sub = [
         {"text": f"i. Define {concept.concept_title}.", "marks": "2",
-         "keywords": [{"answer_type": "Words", "weightage": "2",
+         "keywords": [{"answer_type": "Phrases", "weightage": "2",
                        "keyword": concept.concept_title}]},
         {"text": f"ii. Apply {concept.concept_title} to a worked example.",
          "marks": str(max(marks - 2, 1)),
-         "keywords": [{"answer_type": "Words", "weightage": str(max(marks - 2, 1)),
+         "keywords": [{"answer_type": "Phrases", "weightage": str(max(marks - 2, 1)),
                        "keyword": rf"\text{{{concept.concept_title}}} = f(x)"
                        if _is_math(concept) else "worked example"}]},
     ]
@@ -149,10 +150,14 @@ def generate_questions_for_concept(
             "question_label": question_label(concept, idx),
             "question_category": category,
             "cognitive_skills": cognitive_skill,
-            "question_source": "Aegis Concept Mapping",
+            "question_source": bi.QUESTION_SOURCE_DEFAULT,
             "level_of_difficulty": difficulty,
             "marks": marks,
             "question": question_text,
+            # Plain-text question (+ concept context) for the AI evaluator.
+            "question_text": bi.to_plain_text(
+                f"{question_text}\nConcept context: {details}" if details
+                else question_text),
             "answer_explanation": (
                 f"Assesses {concept.concept_title} ({cognitive_skill}). "
                 f"Reference: {_concept_reference_link(concept)}."
@@ -195,25 +200,42 @@ def identify_questions_from_mmd(
     # Dry: split the MMD body into question-like chunks.
     chunks = [c.strip() for c in re.split(r"\n\s*\n+", mmd_text) if c.strip()]
     chunks = [c for c in chunks if not c.startswith("#")] or ["(no question content detected)"]
+
+    # Shared-context handling: when a question references surrounding context
+    # ("based on the above passage", "from the conversation", "refer to the
+    # diagram"...), the preceding block is attached into question_text so the
+    # AI evaluator receives the full context.
+    context_triggers = re.compile(
+        r"based on the (above|following)|from the (conversation|passage|dialogue)|"
+        r"refer(ring)? to the (diagram|table|figure|graph)|using the table|"
+        r"according to the (case study|passage)|answer the following",
+        re.IGNORECASE,
+    )
     records: list[dict] = []
+    prev_chunk = ""
     for i, chunk in enumerate(chunks[:25], start=1):
+        q_text = bi.to_plain_text(chunk[:400])
+        if prev_chunk and context_triggers.search(chunk):
+            q_text = f"Context: {bi.to_plain_text(prev_chunk[:600])}\n\n{q_text}"
         rec = {
             "sheet_kind": question_type,
             "question_category": "Multiple Choice Question" if question_type == "objective"
             else "Short Answer" if question_type == "subjective" else "Long Answer",
-            "cognitive_skills": "Understanding",
-            "question_source": f"Upload · {upload_type}",
+            "cognitive_skills": "Understand",
+            "question_source": bi.QUESTION_SOURCE_DEFAULT,
             "level_of_difficulty": "Moderate",
             "marks": _default_marks(question_type),
             "question": chunk[:400],
+            "question_text": q_text,
             "answer_explanation": "",
             "answers": [],
             "sub_questions": [],
             "origin": "upload",
         }
+        prev_chunk = chunk
         if upload_type in {"questions_and_answers", "textbook"} and question_type == "objective":
             rec["answers"] = [
-                {"answer_type": "Words", "answer_content": "Extracted option",
+                {"answer_type": "Phrases", "answer_content": "Extracted option",
                  "correct_answer": "Yes", "answer_weightage": "1"},
             ]
         records.append(rec)

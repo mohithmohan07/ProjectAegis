@@ -17,12 +17,13 @@ from collections import defaultdict
 
 from sqlalchemy.orm import Session
 
+from .. import bulk_import as bi
 from .. import config, models
 from ..bulk_import import writer
 
 
 def _cluster_key(q: models.Question) -> tuple:
-    return (q.group_id, q.cognitive_skills or "Understanding")
+    return (q.group_id, q.cognitive_skills or "Understand")
 
 
 def assessment_tagging(db: Session, questions: list[models.Question]) -> dict:
@@ -65,19 +66,26 @@ def column_mapping(db: Session, questions: list[models.Question]) -> int:
     for q in questions:
         changed = False
         if not q.question_source:
-            q.question_source = "Aegis"
+            q.question_source = bi.QUESTION_SOURCE_DEFAULT
             changed = True
-        if not q.question_appears_in:
-            q.question_appears_in = "Pre/Post-Worksheet/Test"
+        appears = bi.normalize_appears_in(q.question_appears_in) or bi.APPEARS_IN_ALL
+        if appears != q.question_appears_in:
+            q.question_appears_in = appears
             changed = True
         if not q.question_duration:
             q.question_duration = max(q.marks, 1.0)
             changed = True
-        if not q.cognitive_skills:
-            q.cognitive_skills = "Understanding"
+        skills = bi.normalize_cognitive_skills(q.cognitive_skills) or "Understand"
+        if skills != q.cognitive_skills:
+            q.cognitive_skills = skills
             changed = True
         if not q.level_of_difficulty:
             q.level_of_difficulty = "Moderate"
+            changed = True
+        # question_text: never blank when the question has content; backfill
+        # with the plain-text question (the AI evaluator's context field).
+        if not q.question_text and q.question:
+            q.question_text = bi.to_plain_text(q.question)
             changed = True
         if q.sheet_kind in {"subjective", "descriptive"} and not q.math_keyboard:
             q.math_keyboard = "Yes" if q.group.concept.topic.chapter.subject in {

@@ -36,6 +36,7 @@ class QuestionOut(BaseModel):
     question_source: str
     level_of_difficulty: str
     question: str
+    question_text: str = ""
     marks: float
     math_keyboard: str
     display_answer: str

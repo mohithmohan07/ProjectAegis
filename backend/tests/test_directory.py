@@ -100,7 +100,10 @@ def test_chapter_detail_drills_to_concepts(client, first_chapter):
 
 def test_vocab_endpoint(client):
     v = client.get("/directory/vocab").json()
-    assert "Applying" in v["cognitive_skills"]
+    # Standard action-verb cognitive skills (gerunds are legacy).
+    assert v["cognitive_skills"] == [
+        "Remember", "Understand", "Apply", "Analyse", "Evaluate", "Create",
+    ]
     assert v["difficulty_levels"] == ["Less", "Moderate", "High"]
     assert set(v["question_types"]) == {"objective", "subjective", "descriptive"}
 

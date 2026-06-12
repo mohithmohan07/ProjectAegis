@@ -244,6 +244,7 @@ def _question_to_row(q: models.Question, kind: str,
                 a.get("correct_answer", ""), a.get("answer_weightage", ""),
             ]
         row.append(q.answer_explanation)
+        row.append(q.question_text)
     elif kind == "subjective":
         row += [
             q.question_label, q.question_category, q.cognitive_skills,
@@ -259,6 +260,7 @@ def _question_to_row(q: models.Question, kind: str,
                 a.get("placeholder", ""),
             ]
         row.append(q.answer_explanation)
+        row.append(q.question_text)
     else:  # descriptive
         row += [
             q.question_label, q.question_category, q.cognitive_skills,
@@ -280,6 +282,7 @@ def _question_to_row(q: models.Question, kind: str,
             for m in range(6):
                 kw = kws[m] if m < len(kws) else {}
                 row += [kw.get("answer_type", ""), kw.get("weightage", ""), kw.get("keyword", "")]
+        row.append(q.question_text)
 
     expected = len(FIELDS_BY_KIND[kind])
     if len(row) < expected:

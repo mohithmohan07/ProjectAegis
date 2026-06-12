@@ -59,7 +59,11 @@ def add_batch(
         raise ValueError("question_type must be objective | subjective | descriptive")
     batch = models.BlueprintBatch(
         session_id=session_id,
-        cognitive_skills=cognitive_skills or ["Understanding"],
+        # Old gerund forms (Remembering, Understanding...) normalize to the
+        # standard action-verb values instead of failing.
+        cognitive_skills=[
+            bi.normalize_cognitive_skills(s) for s in cognitive_skills
+        ] or ["Understand"],
         difficulty_levels=difficulty_levels or ["Moderate"],
         categories=categories or ["Multiple Choice Question"],
         question_type=question_type,
@@ -139,6 +143,7 @@ def _question_kwargs(rec: dict) -> dict:
         "level_of_difficulty": rec.get("level_of_difficulty", ""),
         "math_keyboard": rec.get("math_keyboard", ""),
         "question": rec.get("question", ""),
+        "question_text": rec.get("question_text", ""),
         "marks": rec.get("marks", 1.0),
         "display_answer": rec.get("display_answer", ""),
         "answer_explanation": rec.get("answer_explanation", ""),

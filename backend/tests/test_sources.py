@@ -9,8 +9,9 @@ from app.bulk_import import writer
 
 
 def test_merge_sources_dedupes_case_insensitively():
-    assert bi.merge_sources("NCERT", "RD Sharma") == "NCERT; RD Sharma"
-    assert bi.merge_sources("NCERT; RD Sharma", "ncert") == "NCERT; RD Sharma"
+    assert bi.merge_sources("NCERT", "RD Sharma") == "NCERT, RD Sharma"
+    # comma is the only supported separator; legacy "; " input normalizes
+    assert bi.merge_sources("NCERT; RD Sharma", "ncert") == "NCERT, RD Sharma"
     assert bi.merge_sources("", "Arihant") == "Arihant"
     assert bi.merge_sources("S Chand", "") == "S Chand"
 
@@ -93,7 +94,7 @@ def test_concept_resused_across_books_merges_sources(client, db, first_chapter):
 
     c = (db.query(models.Concept)
          .filter(models.Concept.concept_title.like("Refraction of light%")).one())
-    assert c.sources == "NCERT; RD Sharma"
+    assert c.sources == "NCERT, RD Sharma"
 
 
 def test_duplicate_questions_across_books_merge_sources(client, db, first_chapter):
@@ -126,7 +127,7 @@ def test_duplicate_questions_across_books_merge_sources(client, db, first_chapte
 
     q = (db.query(models.Question)
          .filter(models.Question.question.like("State the law of refraction%")).one())
-    assert q.question_source == "S Chand; Arihant"
+    assert q.question_source == "S Chand, Arihant"
 
 
 def test_output_workbook_source_cells_update_in_place(db, tmp_path, client, first_chapter):
@@ -157,4 +158,4 @@ def test_output_workbook_source_cells_update_in_place(db, tmp_path, client, firs
         for row in ws.iter_rows(min_row=3, values_only=True)
         if writer._cell_str(row, 12) == concept.concept_title
     }
-    assert "NCERT; RS Aggarwal" in values
+    assert "NCERT, RS Aggarwal" in values

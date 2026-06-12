@@ -13,9 +13,12 @@ import openpyxl
 from sqlalchemy.orm import Session
 
 from . import (
-    CHAPTER_FIELDS, TOPIC_FIELDS, CONCEPT_FIELDS, FIELDS_BY_KIND, SHEET_BY_KIND,
-    OBJECTIVE_GROUP_FIELDS, DESCRIPTIVE_GROUP_FIELDS, LEGACY_CONCEPT_LEN,
-    merge_sources, normalize_question_text,
+    ANSWER_TYPES, CHAPTER_FIELDS, COGNITIVE_SKILLS, CONCEPT_FIELDS,
+    DESCRIPTIVE_GROUP_FIELDS, DIFFICULTY_LEVELS, FIELDS_BY_KIND,
+    LEGACY_CONCEPT_LEN, OBJECTIVE_GROUP_FIELDS, SHEET_BY_KIND, TOPIC_FIELDS,
+    merge_sources, normalize_answer_type, normalize_appears_in,
+    normalize_cognitive_skills, normalize_question_text, split_multi,
+    to_plain_text,
 )
 from .. import models
 from ..services import directory
@@ -113,10 +116,52 @@ def _parse_answers(row: tuple, kind: str, q_start: int) -> tuple[list[dict], lis
     return answers, sub_questions
 
 
-def import_workbook(db: Session, path: Path) -> dict[str, int]:
-    """Import every content sheet; returns counts of created nodes."""
+_MAX_ISSUES = 200
+
+
+def _format_issues(label: str, *texts: str) -> list[str]:
+    """Content-format validation: katex/img/link rules (allowed CMS formats)."""
+    import re as _re
+    issues: list[str] = []
+    blob = "\n".join(t for t in texts if t)
+    if "$$" in blob:
+        issues.append(f"{label}: raw $$...$$ delimiters found — use [katex]...[/katex]")
+    if _re.search(r"\[katex\]\s*\[/katex\]", blob):
+        issues.append(f"{label}: empty [katex] tag")
+    for m in _re.finditer(r"\[img([^\]]*)\]", blob):
+        attrs = m.group(1)
+        if 'src="http' not in attrs:
+            issues.append(f"{label}: [img] without a full http(s) src URL")
+        elif 'alt="' not in attrs:
+            issues.append(f"{label}: [img] missing alt text")
+    return issues
+
+
+def _weightage_sum(answers: list[dict], kind: str) -> float | None:
+    key = "weightage" if kind == "subjective" else "answer_weightage"
+    total = 0.0
+    found = False
+    for a in answers:
+        raw = str(a.get(key, "") or "").strip()
+        if not raw:
+            continue
+        try:
+            total += float(raw)
+            found = True
+        except ValueError:
+            return None
+    return total if found else None
+
+
+def import_workbook(db: Session, path: Path) -> dict:
+    """Import every content sheet; returns counts of created nodes + issues."""
     wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
-    counts = {"chapters": 0, "topics": 0, "concepts": 0, "groups": 0, "questions": 0}
+    counts: dict = {"chapters": 0, "topics": 0, "concepts": 0, "groups": 0,
+                    "questions": 0, "issues": []}
+
+    def _flag(msg: str) -> None:
+        if len(counts["issues"]) < _MAX_ISSUES:
+            counts["issues"].append(msg)
 
     # Caches keyed by natural keys for de-duplication within one import.
     chapters: dict[str, models.Chapter] = {}
@@ -157,7 +202,7 @@ def import_workbook(db: Session, path: Path) -> dict[str, int]:
         # Question-band field NAMES are canonical regardless of sheet layout.
         q_band_fields = fields[_CONCEPT_START + len(CONCEPT_FIELDS) + len(gf):]
 
-        for row in ws.iter_rows(min_row=3, values_only=True):
+        for row_i, row in enumerate(ws.iter_rows(min_row=3, values_only=True), start=3):
             if row is None or not any(row):
                 continue
             chap = _band(row, CHAPTER_FIELDS, _CHAPTER_SLICE)
@@ -166,6 +211,7 @@ def import_workbook(db: Session, path: Path) -> dict[str, int]:
             grp = _band(row, gf, gslice)
 
             if not chap.get("chapter_title"):
+                _flag(f"{sheet_name!r} row {row_i}: skipped — missing chapter_title")
                 continue
 
             # ---- Chapter ----
@@ -293,22 +339,57 @@ def import_workbook(db: Session, path: Path) -> dict[str, int]:
                 marks = float(qd.get("marks") or 0)
             except ValueError:
                 marks = 0.0
+                _flag(f"{label or 'row ' + str(row_i)}: marks not numeric "
+                      f"({qd.get('marks')!r})")
             try:
                 duration = float(qd.get("question_duration") or 1)
             except ValueError:
                 duration = 1.0
 
+            # ---- Normalization to standard values ----
+            skills = normalize_cognitive_skills(qd.get("cognitive_skills", ""))
+            for part in split_multi(skills):
+                if part not in COGNITIVE_SKILLS:
+                    _flag(f"{label}: unknown cognitive skill {part!r}")
+            difficulty = qd.get("level_of_difficulty", "")
+            if difficulty and difficulty not in DIFFICULTY_LEVELS:
+                _flag(f"{label}: unknown level_of_difficulty {difficulty!r}")
+            appears = normalize_appears_in(qd.get("question_appears_in", ""))
+            for a in answers:
+                a["answer_type"] = normalize_answer_type(a.get("answer_type", ""))
+                if a["answer_type"] and a["answer_type"] not in ANSWER_TYPES:
+                    _flag(f"{label}: unknown answer_type {a['answer_type']!r}")
+
+            # ---- Validation: weightage sum vs marks; content formats ----
+            if kind in {"subjective", "descriptive"} and marks:
+                total = _weightage_sum(answers, kind)
+                if total is not None and abs(total - marks) > 0.01:
+                    _flag(f"{label}: answer weightage sum {total:g} != marks {marks:g}")
+            for issue in _format_issues(
+                label or f"row {row_i}", qd.get("question", ""),
+                qd.get("answer_explanation", ""),
+                *(str(a.get("answer_content", "")) + str(a.get("answer", ""))
+                  for a in answers),
+            ):
+                _flag(issue)
+
+            # ---- question_text: parse if present, else backfill (plain text) ----
+            question_text = qd.get("question_text", "").strip()
+            if not question_text and qd.get("question"):
+                question_text = to_plain_text(qd.get("question", ""))
+
             new_q = models.Question(
                 group_id=group.id, sheet_kind=kind, question_label=label,
                 question_category=qd.get("question_category", ""),
-                cognitive_skills=qd.get("cognitive_skills", ""),
+                cognitive_skills=skills,
                 question_source=qd.get("question_source", ""),
                 question_disclaimer=qd.get("question_disclaimer", ""),
                 question_duration=duration,
                 math_keyboard=qd.get("math_keyboard", ""),
-                question_appears_in=qd.get("question_appears_in", "Pre/Post-Worksheet/Test"),
-                level_of_difficulty=qd.get("level_of_difficulty", ""),
+                question_appears_in=appears or "Pre-test, Post-test, Worksheet, Test",
+                level_of_difficulty=difficulty,
                 question=qd.get("question", ""),
+                question_text=question_text,
                 marks=marks,
                 display_answer=qd.get("display_answer", ""),
                 answer_explanation=qd.get("answer_explanation", ""),

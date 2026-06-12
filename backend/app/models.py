@@ -111,9 +111,13 @@ class Question(Base):
     question_disclaimer: Mapped[str] = mapped_column(Text, default="")
     question_duration: Mapped[float] = mapped_column(Float, default=1.0)
     math_keyboard: Mapped[str] = mapped_column(String(16), default="")
-    question_appears_in: Mapped[str] = mapped_column(String(128), default="Pre/Post-Worksheet/Test")
+    question_appears_in: Mapped[str] = mapped_column(
+        String(128), default="Pre-test, Post-test, Worksheet, Test")
     level_of_difficulty: Mapped[str] = mapped_column(String(16), default="")
     question: Mapped[str] = mapped_column(Text, default="")
+    # Plain-text question + any shared context (passage/conversation/diagram
+    # description); passed to the AI evaluator. Never HTML.
+    question_text: Mapped[str] = mapped_column(Text, default="")
     marks: Mapped[float] = mapped_column(Float, default=1.0)
     display_answer: Mapped[str] = mapped_column(Text, default="")
     answer_explanation: Mapped[str] = mapped_column(Text, default="")

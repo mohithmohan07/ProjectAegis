@@ -73,6 +73,11 @@ OBJECTIVE_QUESTION_FIELDS = (
         for prefix in ("answer_type", "answer_content", "correct_answer", "answer_weightage")
     ]
     + ["answer_explanation"]
+    # question_text: plain-text question + any shared context (passage,
+    # conversation, diagram description...) passed to the AI evaluator.
+    # Appended as the LAST column of the sheet so no existing column shifts;
+    # the reader auto-detects templates without it (non-breaking).
+    + ["question_text"]
 )
 OBJECTIVE_FIELDS = (
     CHAPTER_FIELDS + TOPIC_FIELDS + CONCEPT_FIELDS
@@ -97,6 +102,7 @@ SUBJECTIVE_QUESTION_FIELDS = (
         for prefix in ("answer_type", "answer", "answer_display", "weightage", "placeholder")
     ]
     + ["answer_explanation"]
+    + ["question_text"]  # last column; see Objective note
 )
 SUBJECTIVE_FIELDS = (
     CHAPTER_FIELDS + TOPIC_FIELDS + CONCEPT_FIELDS
@@ -142,6 +148,7 @@ DESCRIPTIVE_FIELDS = (
     CHAPTER_FIELDS + TOPIC_FIELDS + CONCEPT_FIELDS
     + DESCRIPTIVE_GROUP_FIELDS + DESCRIPTIVE_QUESTION_FIELDS
     + DESCRIPTIVE_SUBQUESTION_FIELDS
+    + ["question_text"]  # last column; see Objective note
 )
 
 FIELDS_BY_KIND = {
@@ -171,7 +178,8 @@ SECTION_BANDS = {
         ("Topic", len(TOPIC_FIELDS)),
         ("Concept", len(CONCEPT_FIELDS) + 1),
         ("Group", len(DESCRIPTIVE_GROUP_FIELDS) - 1),
-        ("Question", len(DESCRIPTIVE_QUESTION_FIELDS) + len(DESCRIPTIVE_SUBQUESTION_FIELDS)),
+        # +1: trailing question_text column.
+        ("Question", len(DESCRIPTIVE_QUESTION_FIELDS) + len(DESCRIPTIVE_SUBQUESTION_FIELDS) + 1),
     ],
 }
 
@@ -199,22 +207,96 @@ def normalize_question_text(text: str) -> str:
 
 
 def merge_sources(existing: str, new: str) -> str:
-    """Merge '; '-separated source lists, preserving order, case-insensitive dedupe."""
+    """Merge multi-value source lists (comma-separated, order-preserving,
+    case-insensitive dedupe). Legacy '; '-separated data is normalized to
+    commas on the way through — comma is the only supported separator."""
     out: list[str] = []
     seen: set[str] = set()
-    for part in list((existing or "").split(";")) + list((new or "").split(";")):
-        p = part.strip()
-        if p and p.lower() not in seen:
-            seen.add(p.lower())
-            out.append(p)
-    return "; ".join(out)
+    for blob in (existing, new):
+        for part in (blob or "").replace(";", ",").split(","):
+            p = part.strip()
+            if p and p.lower() not in seen:
+                seen.add(p.lower())
+                out.append(p)
+    return ", ".join(out)
 
 
+# Standard action-verb form (the gerund forms are legacy and are normalized).
 COGNITIVE_SKILLS = [
-    "Remembering", "Understanding", "Applying",
-    "Analysing", "Evaluating", "Creating",
+    "Remember", "Understand", "Apply",
+    "Analyse", "Evaluate", "Create",
 ]
+_COGNITIVE_LEGACY = {
+    "remembering": "Remember", "understanding": "Understand",
+    "applying": "Apply", "analysing": "Analyse", "analyzing": "Analyse",
+    "evaluating": "Evaluate", "creating": "Create",
+    # canonical values map to themselves (case-insensitive)
+    "remember": "Remember", "understand": "Understand", "apply": "Apply",
+    "analyse": "Analyse", "analyze": "Analyse",
+    "evaluate": "Evaluate", "create": "Create",
+}
 DIFFICULTY_LEVELS = ["Less", "Moderate", "High"]
+
+APPEARS_IN = ["Pre-test", "Post-test", "Worksheet", "Test"]
+APPEARS_IN_ALL = ", ".join(APPEARS_IN)
+# Legacy composite value used across earlier imports/generations.
+_APPEARS_IN_LEGACY = {"pre/post-worksheet/test": APPEARS_IN_ALL}
+
+ANSWER_TYPES = ["Phrases", "Equation", "Image"]
+_ANSWER_TYPE_LEGACY = {"words": "Phrases", "phrases": "Phrases",
+                       "equation": "Equation", "image": "Image"}
+
+QUESTION_SOURCE_DEFAULT = "UpSchool DB"
+
+
+def split_multi(value: str) -> list[str]:
+    """Split a multi-value field. COMMA is the only supported separator —
+    newline, semicolon and pipe are content, never separators."""
+    return [p.strip() for p in (value or "").split(",") if p.strip()]
+
+
+def join_multi(values: list[str]) -> str:
+    return ", ".join(v.strip() for v in values if v and v.strip())
+
+
+def normalize_cognitive_skills(value: str) -> str:
+    """Normalize one or more (comma-separated) skills to the standard form."""
+    out = []
+    for part in split_multi(value):
+        out.append(_COGNITIVE_LEGACY.get(part.lower(), part))
+    return join_multi(out)
+
+
+def normalize_appears_in(value: str) -> str:
+    v = (value or "").strip()
+    if not v:
+        return v
+    legacy = _APPEARS_IN_LEGACY.get(v.lower())
+    if legacy:
+        return legacy
+    canon = {a.lower(): a for a in APPEARS_IN}
+    return join_multi([canon.get(p.lower(), p) for p in split_multi(v)])
+
+
+def normalize_answer_type(value: str) -> str:
+    v = (value or "").strip()
+    return _ANSWER_TYPE_LEGACY.get(v.lower(), v) if v else v
+
+
+def to_plain_text(text: str) -> str:
+    """Rich-text bracket formats -> plain text (for question_text).
+
+    [katex] x [/katex] -> x ; [img src=.. alt="d"] -> (Image: d) ;
+    [Text](url) -> Text. Newlines are preserved as content.
+    """
+    import re as _re3
+    s = text or ""
+    s = _re3.sub(r"\[katex\]\s*(.*?)\s*\[/katex\]", r"\1", s, flags=_re3.DOTALL)
+    s = _re3.sub(r'\[img[^\]]*alt="([^"]*)"[^\]]*\]', r"(Image: \1)", s)
+    s = _re3.sub(r"\[img[^\]]*\]", "(Image)", s)
+    s = _re3.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)", r"\1", s)
+    s = _re3.sub(r"[ \t]{2,}", " ", s)
+    return s.strip()
 
 QUESTION_CATEGORIES = {
     "objective": [
