@@ -23,3 +23,20 @@ def get_db():
 def init_db() -> None:
     from . import models  # noqa: F401  ensure models register on Base
     Base.metadata.create_all(bind=engine)
+    _ensure_columns()
+
+
+def _ensure_columns() -> None:
+    """Lightweight additive migration for pre-existing SQLite databases."""
+    if not DB_URL.startswith("sqlite"):
+        return
+    additions = [
+        ("concepts", "sources", "TEXT DEFAULT ''"),
+        ("upload_jobs", "source_book", "VARCHAR(128) DEFAULT ''"),
+    ]
+    with engine.connect() as conn:
+        for table, column, ddl in additions:
+            cols = [r[1] for r in conn.exec_driver_sql(f"PRAGMA table_info({table})")]
+            if cols and column not in cols:
+                conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+        conn.commit()

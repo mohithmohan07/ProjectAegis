@@ -58,6 +58,7 @@ def generate(session_id: int, db: Session = Depends(get_db)):
 @router.post("/uploads", response_model=schemas.UploadJobOut)
 async def create_upload(
     upload_type: str,
+    source_book: str = "",
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ):
@@ -66,6 +67,7 @@ async def create_upload(
             db, upload_type=upload_type,
             filename=file.filename or "upload.txt",
             raw_bytes=await file.read(),
+            source_book=source_book,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))

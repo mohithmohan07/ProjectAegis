@@ -22,6 +22,7 @@ class ConceptOut(BaseModel):
     concept_display_name: str
     concept_details: str
     keywords: str
+    sources: str = ""
 
 
 class QuestionOut(BaseModel):
@@ -95,6 +96,7 @@ class UploadJobOut(BaseModel):
     upload_type: str
     textbook_mode: str
     learning_kind: str
+    source_book: str = ""
     filename: str
     mmd_text: str
     deposit_scope_type: str
@@ -128,6 +130,7 @@ class PostLearningGenerateRequest(BaseModel):
 
 class PreLearningExistingRequest(BaseModel):
     chapter_ids: list[int]
+    source_book: str = ""
 
 
 # --------------------------------------------------------------------------- #
@@ -164,6 +167,7 @@ class Vocab(BaseModel):
     question_categories: dict[str, list[str]]
     group_types: list[str]
     upload_types: list[str]
+    book_sources: list[str]
 
 
 class Stats(BaseModel):

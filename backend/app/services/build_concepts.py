@@ -17,8 +17,23 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from .. import config, models
+from .. import bulk_import as bi
 from ..bulk_import import writer
 from . import concept_cleanup, generation, mmd
+
+
+def _find_concept_in_chapter(chapter: models.Chapter, title: str) -> models.Concept | None:
+    """Locate an existing concept anywhere under the chapter by normalized title.
+
+    Schools use different books; the same concept arriving from another book
+    must be reused (and its sources extended), never duplicated.
+    """
+    norm = bi.normalize_question_text(title)
+    for t in chapter.topics:
+        for c in t.concepts:
+            if bi.normalize_question_text(c.concept_title) == norm:
+                return c
+    return None
 
 
 def _find_or_create_topic(
@@ -36,7 +51,8 @@ def _find_or_create_topic(
     return topic
 
 
-def _add_concept(db: Session, topic: models.Topic, rec: dict) -> models.Concept:
+def _add_concept(db: Session, topic: models.Topic, rec: dict,
+                 source_book: str = "") -> models.Concept:
     chapter = topic.chapter
     # Normalize name (& collapse) and description (strip dangling refs) before
     # persisting, so dry and live output are equally import-clean.
@@ -47,6 +63,7 @@ def _add_concept(db: Session, topic: models.Topic, rec: dict) -> models.Concept:
         concept_display_name=f"{rec['concept_title']} ({chapter.chapter_code}_{topic.pre_post_learning})",
         concept_details=rec.get("concept_details", ""),
         keywords=rec.get("keywords", ""),
+        sources=source_book.strip(),
     )
     db.add(concept)
     db.flush()
@@ -61,6 +78,32 @@ def _add_concept(db: Session, topic: models.Topic, rec: dict) -> models.Concept:
     return concept
 
 
+def _deposit_concepts(
+    db: Session, chapter: models.Chapter, records: list[dict],
+    pre_post: str, source_book: str,
+) -> tuple[list[int], list[int]]:
+    """Create concepts under the chapter, reusing existing ones across books.
+
+    Returns (created_ids, merged_ids): merged = concept already existed (any
+    topic of this chapter, normalized-title match) and only its sources grew.
+    """
+    created_ids: list[int] = []
+    merged_ids: list[int] = []
+    for rec in records:
+        rec = concept_cleanup.clean_concept_record(dict(rec))
+        existing = _find_concept_in_chapter(chapter, rec["concept_title"])
+        if existing is not None:
+            if source_book.strip():
+                existing.sources = bi.merge_sources(existing.sources, source_book)
+            merged_ids.append(existing.id)
+            continue
+        topic = _find_or_create_topic(db, chapter, rec["topic"], pre_post)
+        concept = _add_concept(db, topic, rec, source_book)
+        db.flush()
+        created_ids.append(concept.id)
+    return created_ids, merged_ids
+
+
 def _sync_chapter_topic_summary(chapter: models.Chapter) -> None:
     pre = [t.topic_title for t in chapter.topics if t.pre_post_learning == "Pre"]
     post = [t.topic_title for t in chapter.topics if t.pre_post_learning == "Post"]
@@ -73,13 +116,14 @@ def _sync_chapter_topic_summary(chapter: models.Chapter) -> None:
 # --------------------------------------------------------------------------- #
 
 def create_post_learning_job(
-    db: Session, *, filename: str, raw_bytes: bytes,
+    db: Session, *, filename: str, raw_bytes: bytes, source_book: str = "",
 ) -> models.UploadJob:
     dest = config.UPLOAD_DIR / filename
     dest.write_bytes(raw_bytes)
     job = models.UploadJob(
         module="build_concepts", upload_type="document", learning_kind="post",
         filename=filename, mmd_text=mmd.to_mmd(dest), status="converted",
+        source_book=source_book.strip(),
     )
     db.add(job)
     db.commit()
@@ -94,25 +138,29 @@ def generate_post_learning(db: Session, job_id: int, target_chapter_id: int) -> 
         raise ValueError("upload job or target chapter not found")
 
     records = generation.concepts_from_mmd(job.mmd_text)
-    created_ids: list[int] = []
-    for rec in records:
-        topic = _find_or_create_topic(db, chapter, rec["topic"], "Post")
-        concept = _add_concept(db, topic, rec)
-        db.flush()
-        created_ids.append(concept.id)
+    created_ids, merged_ids = _deposit_concepts(
+        db, chapter, records, "Post", job.source_book)
     _sync_chapter_topic_summary(chapter)
     db.commit()
 
-    written = writer.append_concepts(db, config.BULK_IMPORT_OUTPUT, created_ids)
+    written = writer.append_concepts(
+        db, config.BULK_IMPORT_OUTPUT, created_ids + merged_ids)
     job.status = "generated"
     job.deposit_scope_type = "chapter"
     job.deposit_scope_ids = [target_chapter_id]
     job.result_ids = created_ids
-    job.detail = f"created {len(created_ids)} post-learning concepts"
+    job.detail = (
+        f"created {len(created_ids)} post-learning concepts, "
+        f"merged sources into {len(merged_ids)} existing"
+    )
     db.commit()
     return {
-        "job_id": job_id, "concepts_created": len(created_ids),
-        "rows_appended": written, "output_workbook": str(config.BULK_IMPORT_OUTPUT),
+        "job_id": job_id,
+        "concepts_created": len(created_ids),
+        "concepts_merged": len(merged_ids),
+        "rows_appended": written["written"],
+        "sources_updated": written["sources_updated"],
+        "output_workbook": str(config.BULK_IMPORT_OUTPUT),
     }
 
 
@@ -121,13 +169,14 @@ def generate_post_learning(db: Session, job_id: int, target_chapter_id: int) -> 
 # --------------------------------------------------------------------------- #
 
 def create_pre_learning_upload_job(
-    db: Session, *, filename: str, raw_bytes: bytes,
+    db: Session, *, filename: str, raw_bytes: bytes, source_book: str = "",
 ) -> models.UploadJob:
     dest = config.UPLOAD_DIR / filename
     dest.write_bytes(raw_bytes)
     job = models.UploadJob(
         module="build_concepts", upload_type="document", learning_kind="pre",
         filename=filename, mmd_text=mmd.to_mmd(dest), status="converted",
+        source_book=source_book.strip(),
     )
     db.add(job)
     db.commit()
@@ -143,10 +192,9 @@ def generate_pre_learning_from_upload(db: Session, job_id: int, target_chapter_i
 
     # Treat parsed concepts as the base, then derive pre-learning framing.
     base = generation.concepts_from_mmd(job.mmd_text)
-    created_ids: list[int] = []
-    for rec in base:
-        topic = _find_or_create_topic(db, chapter, f"{rec['topic']} (Pre-Learning)", "Pre")
-        pre_rec = {
+    pre_records = [
+        {
+            "topic": f"{rec['topic']} (Pre-Learning)",
             "concept_title": f"Pre: {rec['concept_title']}",
             "concept_details": (
                 f"Description: prerequisite for '{rec['concept_title']}'. "
@@ -155,32 +203,44 @@ def generate_pre_learning_from_upload(db: Session, job_id: int, target_chapter_i
             ),
             "keywords": rec.get("keywords", ""),
         }
-        concept = _add_concept(db, topic, pre_rec)
-        db.flush()
-        created_ids.append(concept.id)
+        for rec in base
+    ]
+    created_ids, merged_ids = _deposit_concepts(
+        db, chapter, pre_records, "Pre", job.source_book)
     _sync_chapter_topic_summary(chapter)
     db.commit()
 
-    written = writer.append_concepts(db, config.BULK_IMPORT_OUTPUT, created_ids)
+    written = writer.append_concepts(
+        db, config.BULK_IMPORT_OUTPUT, created_ids + merged_ids)
     job.status = "generated"
     job.deposit_scope_type = "chapter"
     job.deposit_scope_ids = [target_chapter_id]
     job.result_ids = created_ids
-    job.detail = f"created {len(created_ids)} pre-learning concepts from upload"
+    job.detail = (
+        f"created {len(created_ids)} pre-learning concepts from upload, "
+        f"merged sources into {len(merged_ids)} existing"
+    )
     db.commit()
     return {
-        "job_id": job_id, "concepts_created": len(created_ids),
-        "rows_appended": written, "output_workbook": str(config.BULK_IMPORT_OUTPUT),
+        "job_id": job_id,
+        "concepts_created": len(created_ids),
+        "concepts_merged": len(merged_ids),
+        "rows_appended": written["written"],
+        "sources_updated": written["sources_updated"],
+        "output_workbook": str(config.BULK_IMPORT_OUTPUT),
     }
 
 
-def generate_pre_learning_from_existing(db: Session, chapter_ids: list[int]) -> dict:
+def generate_pre_learning_from_existing(
+    db: Session, chapter_ids: list[int], source_book: str = "",
+) -> dict:
     """Option B: derive pre-learning concepts from existing post-learning chapters."""
     chapters = db.query(models.Chapter).filter(models.Chapter.id.in_(chapter_ids)).all()
     if not chapters:
         raise ValueError("no chapters selected")
 
     created_ids: list[int] = []
+    merged_ids: list[int] = []
     per_chapter: dict[int, int] = {}
     for chapter in chapters:
         post_concepts = [
@@ -190,24 +250,29 @@ def generate_pre_learning_from_existing(db: Session, chapter_ids: list[int]) -> 
             per_chapter[chapter.id] = 0
             continue
         pre_records = generation.pre_learning_from_concepts(post_concepts)
-        for rec in pre_records:
-            topic = _find_or_create_topic(db, chapter, rec["topic"], "Pre")
-            concept = _add_concept(db, topic, {
+        created, merged = _deposit_concepts(db, chapter, [
+            {
+                "topic": rec["topic"],
                 "concept_title": rec["concept_title"],
                 "concept_details": rec["concept_details"],
                 "keywords": rec.get("keywords", ""),
-            })
-            db.flush()
-            created_ids.append(concept.id)
+            }
+            for rec in pre_records
+        ], "Pre", source_book)
+        created_ids += created
+        merged_ids += merged
         _sync_chapter_topic_summary(chapter)
-        per_chapter[chapter.id] = len(pre_records)
+        per_chapter[chapter.id] = len(created)
     db.commit()
 
-    written = writer.append_concepts(db, config.BULK_IMPORT_OUTPUT, created_ids)
+    written = writer.append_concepts(
+        db, config.BULK_IMPORT_OUTPUT, created_ids + merged_ids)
     return {
         "chapters": len(chapters),
         "concepts_created": len(created_ids),
+        "concepts_merged": len(merged_ids),
         "per_chapter": per_chapter,
-        "rows_appended": written,
+        "rows_appended": written["written"],
+        "sources_updated": written["sources_updated"],
         "output_workbook": str(config.BULK_IMPORT_OUTPUT),
     }

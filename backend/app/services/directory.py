@@ -199,6 +199,7 @@ def chapter_detail(db: Session, chapter_id: int) -> dict | None:
                         "id": c.id,
                         "concept_title": c.concept_title,
                         "concept_display_name": c.concept_display_name,
+                        "sources": c.sources,
                         "group_count": len(c.groups),
                         "question_count": sum(len(g.questions) for g in c.groups),
                     }

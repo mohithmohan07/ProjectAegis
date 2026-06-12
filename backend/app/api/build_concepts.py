@@ -13,9 +13,14 @@ router = APIRouter(prefix="/build-concepts", tags=["build-concepts"])
 # --------------------------------------------------------------------------- #
 
 @router.post("/post-learning/uploads", response_model=schemas.UploadJobOut)
-async def post_learning_upload(file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def post_learning_upload(
+    source_book: str = "",
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
     return svc.create_post_learning_job(
         db, filename=file.filename or "document.txt", raw_bytes=await file.read(),
+        source_book=source_book,
     )
 
 
@@ -34,9 +39,14 @@ def post_learning_generate(
 # --------------------------------------------------------------------------- #
 
 @router.post("/pre-learning/uploads", response_model=schemas.UploadJobOut)
-async def pre_learning_upload(file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def pre_learning_upload(
+    source_book: str = "",
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
     return svc.create_pre_learning_upload_job(
         db, filename=file.filename or "document.txt", raw_bytes=await file.read(),
+        source_book=source_book,
     )
 
 
@@ -59,6 +69,7 @@ def pre_learning_from_existing(
     req: schemas.PreLearningExistingRequest, db: Session = Depends(get_db)
 ):
     try:
-        return svc.generate_pre_learning_from_existing(db, req.chapter_ids)
+        return svc.generate_pre_learning_from_existing(
+            db, req.chapter_ids, req.source_book)
     except ValueError as e:
         raise HTTPException(400, str(e))

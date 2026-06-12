@@ -66,6 +66,8 @@ class Concept(Base):
     keywords: Mapped[str] = mapped_column(Text, default="")
     digicards: Mapped[str] = mapped_column(Text, default="")
     related_concepts: Mapped[str] = mapped_column(Text, default="")
+    # Multi-source book tags, "; "-joined (e.g. "NCERT; RD Sharma").
+    sources: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     topic = relationship("Topic", back_populates="concepts")
@@ -226,6 +228,8 @@ class UploadJob(Base):
     # textbook|questions|questions_and_answers|handwritten|document
     textbook_mode: Mapped[str] = mapped_column(String(16), default="")  # extract|create
     learning_kind: Mapped[str] = mapped_column(String(16), default="")  # post|pre (build_concepts)
+    # Book this upload came from (e.g. "RD Sharma"); drives multi-source tagging.
+    source_book: Mapped[str] = mapped_column(String(128), default="")
     filename: Mapped[str] = mapped_column(String(255), default="")
     mmd_text: Mapped[str] = mapped_column(Text, default="")
     deposit_scope_type: Mapped[str] = mapped_column(String(16), default="chapter")

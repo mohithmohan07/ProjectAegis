@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from . import (
     CHAPTER_FIELDS, TOPIC_FIELDS, CONCEPT_FIELDS, FIELDS_BY_KIND, SHEET_BY_KIND,
     SHEET_DOC_LINK, SECTION_BANDS, OBJECTIVE_GROUP_FIELDS, DESCRIPTIVE_GROUP_FIELDS,
+    LEGACY_CONCEPT_LEN, merge_sources,
 )
 from .. import models
 
@@ -42,6 +43,13 @@ _IDX_GROUP_TYPE = _IDX_CONCEPT_TITLE + len(CONCEPT_FIELDS) + 5
 def _q_start(kind: str) -> int:
     """Column index where the Question band's first ``question_label`` lives."""
     return _IDX_CONCEPT_TITLE + len(CONCEPT_FIELDS) + len(_group_fields(kind))
+
+
+def _sheet_concept_len(header_row: tuple) -> int:
+    """Concept-band length for a sheet: current (with concept_source) or legacy."""
+    idx = _IDX_CONCEPT_TITLE + LEGACY_CONCEPT_LEN
+    val = header_row[idx] if idx < len(header_row) else None
+    return LEGACY_CONCEPT_LEN + 1 if str(val or "").strip() == "concept_source" else LEGACY_CONCEPT_LEN
 
 
 def _cell_str(row: tuple, idx: int) -> str:
@@ -70,13 +78,14 @@ def concept_placement_key(concept: models.Concept, topic: models.Topic) -> tuple
     return (concept.concept_title, chapter.chapter_title, topic.topic_title)
 
 
-def _row_question_placement_key(row: tuple, kind: str) -> tuple | None:
-    qs = _q_start(kind)
+def _row_question_placement_key(row: tuple, kind: str, concept_len: int) -> tuple | None:
+    qs = _IDX_CONCEPT_TITLE + concept_len + len(_group_fields(kind))
     label = _cell_str(row, qs)
     if not label:
         return None
+    g_type = _IDX_CONCEPT_TITLE + concept_len + 5
     return (label, _cell_str(row, _IDX_CHAPTER_TITLE), _cell_str(row, _IDX_TOPIC_TITLE),
-            _cell_str(row, _IDX_CONCEPT_TITLE), _cell_str(row, _IDX_GROUP_TYPE))
+            _cell_str(row, _IDX_CONCEPT_TITLE), _cell_str(row, g_type))
 
 
 def _row_concept_placement_key(row: tuple) -> tuple | None:
@@ -92,15 +101,23 @@ class WorkbookIndex:
     - ``q_placements`` / ``c_placements``: exact (identity, placement) tuples present.
     - ``labels`` / ``concept_titles``: entity identities present anywhere (used to
       classify a new placement as a *tag* vs a brand-new *add*).
+    - ``q_rows``: placement key -> (sheet, row) for in-place source merges.
+    - ``concept_rows``: (concept_title, chapter_title) -> [(sheet, row), ...] —
+      every row carrying that concept's band, for source refreshes.
+    - ``sheet_meta``: per-sheet column geometry (legacy vs current layout).
     """
 
-    __slots__ = ("q_placements", "labels", "c_placements", "concept_titles")
+    __slots__ = ("q_placements", "labels", "c_placements", "concept_titles",
+                 "q_rows", "concept_rows", "sheet_meta")
 
     def __init__(self) -> None:
         self.q_placements: set[tuple] = set()
         self.labels: set[str] = set()
         self.c_placements: set[tuple] = set()
         self.concept_titles: set[str] = set()
+        self.q_rows: dict[tuple, tuple] = {}
+        self.concept_rows: dict[tuple, list[tuple]] = {}
+        self.sheet_meta: dict[str, dict] = {}
 
 
 def scan_workbook(path: Path) -> WorkbookIndex:
@@ -111,17 +128,32 @@ def scan_workbook(path: Path) -> WorkbookIndex:
     for kind, sheet_name in SHEET_BY_KIND.items():
         if sheet_name not in wb.sheetnames:
             continue
-        for row in wb[sheet_name].iter_rows(min_row=3, values_only=True):
+        ws = wb[sheet_name]
+        header = next(ws.iter_rows(min_row=2, max_row=2, values_only=True), ())
+        concept_len = _sheet_concept_len(header)
+        q_start = _IDX_CONCEPT_TITLE + concept_len + len(_group_fields(kind))
+        idx.sheet_meta[sheet_name] = {
+            "concept_len": concept_len,
+            "q_start": q_start,
+            # question_source is the 4th question-band field on every sheet.
+            "q_src_col": q_start + 3,
+            # concept_source only exists in the current layout.
+            "c_src_col": (_IDX_CONCEPT_TITLE + concept_len - 1
+                          if concept_len > LEGACY_CONCEPT_LEN else None),
+        }
+        for row_i, row in enumerate(ws.iter_rows(min_row=3, values_only=True), start=3):
             if not row or not any(row):
                 continue
-            qk = _row_question_placement_key(row, kind)
+            qk = _row_question_placement_key(row, kind, concept_len)
             if qk:
                 idx.q_placements.add(qk)
                 idx.labels.add(qk[0])
+                idx.q_rows[qk] = (sheet_name, row_i)
             ck = _row_concept_placement_key(row)
             if ck:
                 idx.c_placements.add(ck)
                 idx.concept_titles.add(ck[0])
+                idx.concept_rows.setdefault((ck[0], ck[1]), []).append((sheet_name, row_i))
     wb.close()
     return idx
 
@@ -175,7 +207,7 @@ def _question_to_row(q: models.Question, kind: str,
         topic.topic_title, topic.topic_display_name, topic.pre_post_learning,
         concept.concept_title, topic.related_topics, topic.topic_description,
     ]
-    # ---- Concept band (9) ----
+    # ---- Concept band ----
     by_type = {"Basic": "", "Intermediate": "", "Advanced": ""}
     for g in concept.groups:
         by_type[g.group_type] = g.group_display_name or g.group_name
@@ -183,6 +215,7 @@ def _question_to_row(q: models.Question, kind: str,
         concept.concept_title, concept.concept_display_name, concept.concept_details,
         concept.keywords, concept.digicards, concept.related_concepts,
         by_type["Basic"], by_type["Intermediate"], by_type["Advanced"],
+        concept.sources,
     ]
     # ---- Group band ----
     if kind == "descriptive":
@@ -280,18 +313,39 @@ def _concept_to_row(concept: models.Concept, kind: str = "objective",
         concept.concept_title, concept.concept_display_name, concept.concept_details,
         concept.keywords, concept.digicards, concept.related_concepts,
         by_type["Basic"], by_type["Intermediate"], by_type["Advanced"],
+        concept.sources,
     ]
     expected = len(FIELDS_BY_KIND[kind])
     row += [""] * (expected - len(row))
     return row[:expected]
 
 
-def append_concepts(db: Session, path: Path, concept_ids: list[int]) -> int:
+def _refresh_concept_sources(wb, index: WorkbookIndex, concept: models.Concept,
+                             chapter_title: str) -> int:
+    """Merge ``concept.sources`` into the concept_source cell of every existing
+    row that carries this concept's band (concept-only rows AND question rows)."""
+    updated = 0
+    for sheet_name, row_i in index.concept_rows.get(
+            (concept.concept_title, chapter_title), []):
+        meta = index.sheet_meta.get(sheet_name) or {}
+        col = meta.get("c_src_col")
+        if col is None:  # legacy-layout sheet: no concept_source column to update
+            continue
+        cell = wb[sheet_name].cell(row=row_i, column=col + 1)
+        merged = merge_sources(str(cell.value or ""), concept.sources)
+        if merged != str(cell.value or ""):
+            cell.value = merged
+            updated += 1
+    return updated
+
+
+def append_concepts(db: Session, path: Path, concept_ids: list[int]) -> dict[str, int]:
     """Append concept-catalog rows (no questions) to the Objective sheet.
 
     One row per (concept, placement): the concept's home topic plus every
-    tagged topic/chapter. Placements already present are skipped, so re-running
-    never duplicates a concept under the same parent (matching the CMS).
+    tagged topic/chapter. Placements already present are never re-added —
+    instead their ``concept_source`` cells are refreshed in place so a concept
+    re-used from another book accumulates sources (e.g. "NCERT; RD Sharma").
     """
     index = scan_workbook(path)
     wb = openpyxl.load_workbook(path) if path.exists() else _new_workbook()
@@ -300,19 +354,21 @@ def append_concepts(db: Session, path: Path, concept_ids: list[int]) -> int:
         db.query(models.Concept).filter(models.Concept.id.in_(concept_ids))
         .order_by(models.Concept.id).all()
     )
-    written = 0
+    result = {"written": 0, "sources_updated": 0}
     for c in concepts:
         for topic in _concept_placements(c):
             key = concept_placement_key(c, topic)
             if key in index.c_placements:
+                result["sources_updated"] += _refresh_concept_sources(
+                    wb, index, c, topic.chapter.chapter_title)
                 continue
             index.c_placements.add(key)
             target = ws.max_row + 1 if ws.max_row >= 2 else 3
             for i, value in enumerate(_concept_to_row(c, "objective", topic), start=1):
                 ws.cell(row=target, column=i, value=value)
-            written += 1
+            result["written"] += 1
     wb.save(path)
-    return written
+    return result
 
 
 def _write_headers(ws, kind: str) -> None:
@@ -455,12 +511,24 @@ def append_questions(db: Session, path: Path, question_ids: list[int]) -> dict[s
         wb = _new_workbook()
 
     appended = {"objective": 0, "subjective": 0, "descriptive": 0,
-                "tagged": 0, "skipped": 0}
+                "tagged": 0, "skipped": 0, "sources_updated": 0}
     for q in _questions(db, question_ids):
         for n, group in enumerate(_question_placements(q)):
             key = question_placement_key(q.question_label, group)
             if q.question_label and key in index.q_placements:
                 appended["skipped"] += 1
+                # Existing row: refresh its question_source in place so a
+                # duplicate question arriving from another book accumulates
+                # sources instead of duplicating the row.
+                loc = index.q_rows.get(key)
+                if loc and q.question_source:
+                    sheet_name, row_i = loc
+                    col = index.sheet_meta[sheet_name]["q_src_col"]
+                    cell = wb[sheet_name].cell(row=row_i, column=col + 1)
+                    merged = merge_sources(str(cell.value or ""), q.question_source)
+                    if merged != str(cell.value or ""):
+                        cell.value = merged
+                        appended["sources_updated"] += 1
                 continue
             is_tag = q.question_label in index.labels
             index.q_placements.add(key)

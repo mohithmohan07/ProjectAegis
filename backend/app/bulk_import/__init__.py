@@ -43,7 +43,14 @@ CONCEPT_FIELDS = [
     "concept_title", "concept_display_name", "concept_details",
     "keywords", "digicards", "related_concepts",
     "basic_groups", "intermediate_groups", "advanced_groups",
+    # Multi-source tag (e.g. "NCERT; RD Sharma") — concepts overlap between the
+    # books different schools prefer; one concept carries every book it appears
+    # in. Appended at the END of the Concept band so all earlier columns keep
+    # their positions; the reader auto-detects workbooks without this column.
+    "concept_source",
 ]
+# Concept band length of the legacy layout (pre concept_source).
+LEGACY_CONCEPT_LEN = len(CONCEPT_FIELDS) - 1
 
 # --------------------------------------------------------------------------- #
 # Objective sheet
@@ -177,6 +184,31 @@ GRADES = ["08", "09", "10"]
 QUESTION_TYPES = ["objective", "subjective", "descriptive"]
 GROUP_TYPES = ["Basic", "Intermediate", "Advanced"]
 GROUP_TYPE_CODE = {"Basic": "BG", "Intermediate": "IG", "Advanced": "AG"}
+
+# Common book sources for multi-source tagging (free text is also allowed).
+BOOK_SOURCES = [
+    "NCERT", "RD Sharma", "RS Aggarwal", "S Chand", "Arihant",
+    "Selina", "Frank", "Together With", "Oswaal", "Xam Idea",
+]
+
+
+def normalize_question_text(text: str) -> str:
+    """Normalization used for duplicate-question detection across books."""
+    import re as _re2
+    return _re2.sub(r"\s+", " ", (text or "")).strip().lower()
+
+
+def merge_sources(existing: str, new: str) -> str:
+    """Merge '; '-separated source lists, preserving order, case-insensitive dedupe."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for part in list((existing or "").split(";")) + list((new or "").split(";")):
+        p = part.strip()
+        if p and p.lower() not in seen:
+            seen.add(p.lower())
+            out.append(p)
+    return "; ".join(out)
+
 
 COGNITIVE_SKILLS = [
     "Remembering", "Understanding", "Applying",

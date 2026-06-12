@@ -28,6 +28,7 @@ export interface ConceptRef {
   id: number;
   concept_title: string;
   concept_display_name: string;
+  sources?: string;
   group_count: number;
   question_count: number;
 }
@@ -59,6 +60,7 @@ export interface Vocab {
   question_categories: Record<string, string[]>;
   group_types: string[];
   upload_types: string[];
+  book_sources: string[];
 }
 
 export interface Stats {
@@ -100,6 +102,7 @@ export interface UploadJob {
   upload_type: string;
   textbook_mode: string;
   learning_kind: string;
+  source_book?: string;
   filename: string;
   mmd_text: string;
   deposit_scope_type: string;

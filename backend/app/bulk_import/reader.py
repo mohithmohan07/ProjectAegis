@@ -14,7 +14,8 @@ from sqlalchemy.orm import Session
 
 from . import (
     CHAPTER_FIELDS, TOPIC_FIELDS, CONCEPT_FIELDS, FIELDS_BY_KIND, SHEET_BY_KIND,
-    OBJECTIVE_GROUP_FIELDS, DESCRIPTIVE_GROUP_FIELDS,
+    OBJECTIVE_GROUP_FIELDS, DESCRIPTIVE_GROUP_FIELDS, LEGACY_CONCEPT_LEN,
+    merge_sources, normalize_question_text,
 )
 from .. import models
 from ..services import directory
@@ -23,12 +24,18 @@ from ..services import directory
 _CHAPTER_SLICE = slice(0, len(CHAPTER_FIELDS))
 _TOPIC_SLICE = slice(len(CHAPTER_FIELDS), len(CHAPTER_FIELDS) + len(TOPIC_FIELDS))
 _CONCEPT_START = len(CHAPTER_FIELDS) + len(TOPIC_FIELDS)
-_CONCEPT_SLICE = slice(_CONCEPT_START, _CONCEPT_START + len(CONCEPT_FIELDS))
 
 
-def _group_slice(kind: str) -> slice:
+def _concept_len(header_row: tuple) -> int:
+    """Concept-band length: current layout (with concept_source) or legacy."""
+    idx = _CONCEPT_START + LEGACY_CONCEPT_LEN
+    val = header_row[idx] if idx < len(header_row) else None
+    return LEGACY_CONCEPT_LEN + 1 if str(val or "").strip() == "concept_source" else LEGACY_CONCEPT_LEN
+
+
+def _group_slice(kind: str, concept_len: int) -> slice:
     gf = DESCRIPTIVE_GROUP_FIELDS if kind == "descriptive" else OBJECTIVE_GROUP_FIELDS
-    start = _CONCEPT_START + len(CONCEPT_FIELDS)
+    start = _CONCEPT_START + concept_len
     return slice(start, start + len(gf))
 
 
@@ -120,21 +127,42 @@ def import_workbook(db: Session, path: Path) -> dict[str, int]:
         q.question_label for q in db.query(models.Question).all() if q.question_label
     }
 
+    # Cache of existing question texts per chapter, for cross-book dedupe.
+    qtext_cache: dict[int, dict[str, models.Question]] = {}
+
+    def _chapter_qtexts(chapter_id: int) -> dict[str, models.Question]:
+        if chapter_id not in qtext_cache:
+            qtext_cache[chapter_id] = {
+                normalize_question_text(qq.question): qq
+                for qq in (
+                    db.query(models.Question)
+                    .join(models.Group).join(models.Concept).join(models.Topic)
+                    .filter(models.Topic.chapter_id == chapter_id)
+                )
+                if qq.question
+            }
+        return qtext_cache[chapter_id]
+
     for kind, sheet_name in SHEET_BY_KIND.items():
         if sheet_name not in wb.sheetnames:
             continue
         ws = wb[sheet_name]
         fields = FIELDS_BY_KIND[kind]
-        gslice = _group_slice(kind)
+        header = next(ws.iter_rows(min_row=2, max_row=2, values_only=True), ())
+        concept_len = _concept_len(header)
+        concept_slice = slice(_CONCEPT_START, _CONCEPT_START + concept_len)
+        gf = DESCRIPTIVE_GROUP_FIELDS if kind == "descriptive" else OBJECTIVE_GROUP_FIELDS
+        gslice = _group_slice(kind, concept_len)
         q_start = gslice.stop
+        # Question-band field NAMES are canonical regardless of sheet layout.
+        q_band_fields = fields[_CONCEPT_START + len(CONCEPT_FIELDS) + len(gf):]
 
         for row in ws.iter_rows(min_row=3, values_only=True):
             if row is None or not any(row):
                 continue
             chap = _band(row, CHAPTER_FIELDS, _CHAPTER_SLICE)
             top = _band(row, TOPIC_FIELDS, _TOPIC_SLICE)
-            con = _band(row, CONCEPT_FIELDS, _CONCEPT_SLICE)
-            gf = DESCRIPTIVE_GROUP_FIELDS if kind == "descriptive" else OBJECTIVE_GROUP_FIELDS
+            con = _band(row, CONCEPT_FIELDS[:concept_len], concept_slice)
             grp = _band(row, gf, gslice)
 
             if not chap.get("chapter_title"):
@@ -190,6 +218,7 @@ def import_workbook(db: Session, path: Path) -> dict[str, int]:
 
             # ---- Concept ----
             c_title = con.get("concept_title") or "Concept"
+            c_source = con.get("concept_source", "")
             c_key = (topic.id, c_title)
             concept = concepts.get(c_key)
             if concept is None:
@@ -203,10 +232,14 @@ def import_workbook(db: Session, path: Path) -> dict[str, int]:
                     keywords=con.get("keywords", ""),
                     digicards=con.get("digicards", ""),
                     related_concepts=con.get("related_concepts", ""),
+                    sources=c_source,
                 )
                 db.add(concept)
                 db.flush()
                 counts["concepts"] += 1
+            elif c_source:
+                # Same concept arriving from another book: accumulate sources.
+                concept.sources = merge_sources(concept.sources, c_source)
             concepts[c_key] = concept
 
             # ---- Group ----
@@ -231,17 +264,28 @@ def import_workbook(db: Session, path: Path) -> dict[str, int]:
             groups[g_key] = group
 
             # ---- Question ----
-            q_fields = fields[q_start:]
             q_values = list(row[q_start:])
             qd = {
-                q_fields[i]: ("" if q_values[i] is None else str(q_values[i]).strip())
-                for i in range(min(len(q_fields), len(q_values)))
+                q_band_fields[i]: ("" if q_values[i] is None else str(q_values[i]).strip())
+                for i in range(min(len(q_band_fields), len(q_values)))
             }
             label = qd.get("question_label", "")
             if not (label or qd.get("question")):
                 continue
             if label and label in seen_labels:
                 continue  # append-only: never re-import an existing label
+            # Cross-book duplicate check: same question text under the same
+            # chapter (any label) is not re-added — its sources merge instead.
+            norm = normalize_question_text(qd.get("question", ""))
+            if norm:
+                existing_q = _chapter_qtexts(chapter.id).get(norm)
+                if existing_q is not None:
+                    existing_q.question_source = merge_sources(
+                        existing_q.question_source, qd.get("question_source", ""))
+                    counts["question_sources_merged"] = counts.get(
+                        "question_sources_merged", 0) + 1
+                    seen_labels.add(label)
+                    continue
             seen_labels.add(label)
 
             answers, sub_questions = _parse_answers(row, kind, q_start)
@@ -254,7 +298,7 @@ def import_workbook(db: Session, path: Path) -> dict[str, int]:
             except ValueError:
                 duration = 1.0
 
-            db.add(models.Question(
+            new_q = models.Question(
                 group_id=group.id, sheet_kind=kind, question_label=label,
                 question_category=qd.get("question_category", ""),
                 cognitive_skills=qd.get("cognitive_skills", ""),
@@ -269,7 +313,10 @@ def import_workbook(db: Session, path: Path) -> dict[str, int]:
                 display_answer=qd.get("display_answer", ""),
                 answer_explanation=qd.get("answer_explanation", ""),
                 answers=answers, sub_questions=sub_questions, origin="seed",
-            ))
+            )
+            db.add(new_q)
+            if norm:
+                _chapter_qtexts(chapter.id)[norm] = new_q
             counts["questions"] += 1
 
     db.commit()

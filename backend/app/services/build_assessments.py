@@ -21,6 +21,7 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
+from .. import bulk_import as bi
 from .. import config, models
 from . import directory, generation, mmd, post_generation
 
@@ -153,6 +154,7 @@ def _question_kwargs(rec: dict) -> dict:
 
 def create_upload_job(
     db: Session, *, upload_type: str, filename: str, raw_bytes: bytes,
+    source_book: str = "",
 ) -> models.UploadJob:
     if upload_type not in mmd.UPLOAD_TYPES:
         raise ValueError(f"upload_type must be one of {mmd.UPLOAD_TYPES}")
@@ -162,6 +164,7 @@ def create_upload_job(
     job = models.UploadJob(
         module="build_assessments", upload_type=upload_type,
         filename=filename, mmd_text=mmd_text, status="converted",
+        source_book=source_book.strip(),
     )
     db.add(job)
     db.commit()
@@ -211,10 +214,34 @@ def generate_from_upload(db: Session, job_id: int, question_type: str = "objecti
     records = generation.identify_questions_from_mmd(
         job.mmd_text, upload_type=job.upload_type, question_type=question_type,
     )
+
+    # Cross-book duplicate check: existing question texts in the deposit
+    # chapters. A duplicate is not re-added; its sources are merged instead.
+    chapter_ids = {c.topic.chapter_id for c in concepts}
+    existing_by_text: dict[str, models.Question] = {}
+    for qq in (
+        db.query(models.Question)
+        .join(models.Group).join(models.Concept).join(models.Topic)
+        .filter(models.Topic.chapter_id.in_(chapter_ids))
+    ):
+        norm = bi.normalize_question_text(qq.question)
+        if norm:
+            existing_by_text.setdefault(norm, qq)
+
     created_ids: list[int] = []
+    merged_ids: list[int] = []
     counters: dict[int, int] = {c.id: 1 for c in concepts}
     # Round-robin the identified questions across the deposit concepts.
     for i, rec in enumerate(records):
+        if job.source_book:
+            rec["question_source"] = job.source_book
+        norm = bi.normalize_question_text(rec.get("question", ""))
+        dup = existing_by_text.get(norm) if norm else None
+        if dup is not None:
+            dup.question_source = bi.merge_sources(
+                dup.question_source, rec.get("question_source", ""))
+            merged_ids.append(dup.id)
+            continue
         concept = concepts[i % len(concepts)]
         rec.setdefault("question_label", generation.question_label(concept, counters[concept.id]))
         counters[concept.id] += 1
@@ -222,12 +249,22 @@ def generate_from_upload(db: Session, job_id: int, question_type: str = "objecti
         q = models.Question(group_id=group.id, **_question_kwargs(rec))
         db.add(q)
         db.flush()
+        if norm:
+            existing_by_text[norm] = q
         created_ids.append(q.id)
     db.commit()
 
-    pipeline = post_generation.run(db, created_ids)
+    # Run the pipeline over new questions AND source-merged duplicates so the
+    # output workbook's question_source cells refresh in place.
+    pipeline = post_generation.run(db, created_ids + merged_ids)
     job.status = "generated"
     job.result_ids = created_ids
-    job.detail = f"identified {len(records)} questions from {job.upload_type} upload"
+    job.detail = (
+        f"identified {len(records)} questions from {job.upload_type} upload "
+        f"({len(created_ids)} new, {len(merged_ids)} duplicates source-merged)"
+    )
     db.commit()
-    return {"job_id": job_id, "created": len(created_ids), "pipeline": pipeline}
+    return {
+        "job_id": job_id, "created": len(created_ids),
+        "duplicates_merged": len(merged_ids), "pipeline": pipeline,
+    }
