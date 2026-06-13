@@ -249,6 +249,7 @@ def generate_from_upload(db: Session, job_id: int, question_type: str = "objecti
     concepts = directory.resolve_scope_concepts(db, job.deposit_scope_type, job.deposit_scope_ids)
     records = generation.identify_questions_from_mmd(
         job.mmd_text, upload_type=job.upload_type, question_type=question_type,
+        textbook_mode=job.textbook_mode,
     )
 
     # Cross-book duplicate check: existing question texts in the deposit

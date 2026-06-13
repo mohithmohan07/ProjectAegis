@@ -436,15 +436,14 @@ def _live_questions_for_concept(
 
 def identify_questions_from_mmd(
     mmd_text: str, *, upload_type: str, question_type: str = "objective",
-    live: bool | None = None,
+    textbook_mode: str = "", live: bool | None = None,
 ) -> list[dict]:
     """Extract / create question records from an uploaded document's MMD."""
     use_live = config.use_live_generation() if live is None else live
     if use_live:
-        from aegis_pipeline import bulk_upload_mathpix  # noqa: F401
-        raise NotImplementedError(
-            "Live extraction: wire bulk_upload_mathpix parsing with OPENAI_API_KEY. "
-            "Inject app.services.katex_rules.PROMPT_PREAMBLE as the system prompt."
+        return _live_identify_questions_from_mmd(
+            mmd_text, upload_type=upload_type, question_type=question_type,
+            textbook_mode=textbook_mode,
         )
     # Dry: split the MMD body into question-like chunks.
     chunks = [c.strip() for c in re.split(r"\n\s*\n+", mmd_text) if c.strip()]
@@ -488,6 +487,144 @@ def identify_questions_from_mmd(
                  "correct_answer": "Yes", "answer_weightage": "1"},
             ]
         records.append(rec)
+    return records
+
+
+# Cap on questions identified from a single upload (keeps the JSON response and
+# the round-robin deposit bounded for very large documents).
+_IDENTIFY_MAX = 40
+
+
+def _identify_is_extract(upload_type: str, textbook_mode: str) -> bool:
+    """Whether the upload should EXTRACT existing questions vs CREATE new ones.
+
+    Question banks / Q&A sheets / handwritten work and textbooks explicitly set
+    to 'extract' carry questions to lift out verbatim; a textbook set to
+    'create' (or a generic document) is content to author fresh questions from.
+    """
+    if upload_type == "textbook":
+        return textbook_mode != "create"
+    return upload_type in {"questions", "questions_and_answers", "handwritten"}
+
+
+def _coerce_answers(raw_answers: list, question_type: str) -> list[dict]:
+    """Normalize model-emitted answer blocks to the per-sheet canonical shape.
+
+    The model may emit either objective-style ({answer_type, answer_content,
+    correct_answer, answer_weightage}) or subjective-style ({answer_type,
+    answer, answer_display, weightage, placeholder}) keys; coerce to the shape
+    the writer expects for ``question_type``.
+    """
+    answers: list[dict] = []
+    for a in raw_answers or []:
+        if not isinstance(a, dict):
+            continue
+        a = dict(a)
+        a["answer_type"] = bi.normalize_answer_type(a.get("answer_type", "")) or "Phrases"
+        if question_type == "subjective":
+            a.setdefault("answer", a.pop("answer_content", ""))
+            a.setdefault("weightage", str(a.pop("answer_weightage", "") or "1"))
+            a.setdefault("answer_display", "Yes" if not answers else "")
+            a.setdefault("placeholder", "answer")
+        else:
+            a.setdefault("answer_content", a.pop("answer", ""))
+            a.setdefault("answer_weightage", str(a.pop("weightage", "") or
+                         ("1" if question_type == "descriptive" else "0")))
+        answers.append(a)
+    return answers
+
+
+def _identify_system(upload_type: str, question_type: str, *, extract: bool) -> str:
+    """System prompt for live question identification from an uploaded document."""
+    from . import assessment_prompts as ap
+
+    intent = (
+        "EXTRACT every assessment question already present in the document. "
+        "Preserve each question's original wording and intent — do NOT invent "
+        "new questions. When a question's options, answer, solution or marking "
+        "scheme is present, capture it faithfully; otherwise leave answers empty."
+        if extract else
+        "CREATE fresh, exam-grade questions from the document's content. Cover "
+        "the key ideas across the material; never copy sentences verbatim as "
+        "questions, and never drift off the document's topic."
+    )
+    type_hint = {
+        "objective": "OBJECTIVE — MCQ / fill-in-the-blank. For MCQs emit 3-4 "
+                     "options with exactly one correct_answer = 'Yes'.",
+        "subjective": "SUBJECTIVE — short answer; emit mark-wise rubric points "
+                      "whose weightages sum to the marks.",
+        "descriptive": "DESCRIPTIVE — long answer; emit mark-wise rubric points "
+                       "(and sub_questions for multi-part questions) summing to marks.",
+    }[question_type]
+    return f"""\
+You are an assessment digitizer for Indian school boards (ICSE/CBSE). You read
+a document already converted to Markdown/MMD (mathematics in LaTeX) and return
+assessment questions in a STRICT JSON schema.
+
+TASK: {intent}
+TARGET QUESTION TYPE: {type_hint}
+Classify each question's question_category, cognitive_skills and
+level_of_difficulty.
+
+STANDARD VALUES (use EXACTLY these):
+- cognitive_skills: Remember | Understand | Apply | Analyse | Evaluate | Create
+- level_of_difficulty: Less | Moderate | High
+- answer_type: Phrases | Equation | Image
+
+{ap.CONTENT_FORMAT_BLOCK}
+
+{ap.OUTPUT_BLOCK}
+
+Return ONLY the JSON object. Emit at most {_IDENTIFY_MAX} questions."""
+
+
+def _live_identify_questions_from_mmd(
+    mmd_text: str, *, upload_type: str, question_type: str, textbook_mode: str = "",
+) -> list[dict]:
+    """Live (OpenAI) question identification from an uploaded document's MMD."""
+    extract = _identify_is_extract(upload_type, textbook_mode)
+    system = _identify_system(upload_type, question_type, extract=extract)
+    user = (
+        "DOCUMENT (MMD):\n" + _trim(mmd_text, 200_000) + "\n\n"
+        f"Return up to {_IDENTIFY_MAX} {question_type} question(s) as specified "
+        "above, as a JSON object with a \"questions\" array."
+    )
+    data = _openai_json(system, user)
+    default_category = ("Multiple Choice Question" if question_type == "objective"
+                        else "Short Answer" if question_type == "subjective"
+                        else "Long Answer")
+    records: list[dict] = []
+    for row in (data.get("questions") or [])[:_IDENTIFY_MAX]:
+        if not isinstance(row, dict):
+            continue
+        question = (row.get("question") or "").strip()
+        if not question:
+            continue
+        try:
+            marks = float(row.get("marks") or _default_marks(question_type))
+        except (TypeError, ValueError):
+            marks = _default_marks(question_type)
+        records.append({
+            "sheet_kind": question_type,
+            "question_category": row.get("question_category") or default_category,
+            "cognitive_skills": bi.normalize_cognitive_skills(
+                row.get("cognitive_skills") or "Understand") or "Understand",
+            "question_source": bi.QUESTION_SOURCE_DEFAULT,
+            "level_of_difficulty": bi.normalize_difficulty(
+                row.get("level_of_difficulty") or "Moderate") or "Moderate",
+            "marks": marks,
+            "question": question,
+            "question_appears_in": "",
+            "question_text": (str(row.get("question_text", "")).strip()
+                              or bi.to_plain_text(question)),
+            "display_answer": row.get("display_answer", ""),
+            "answer_explanation": row.get("answer_explanation", ""),
+            "answers": _coerce_answers(row.get("answers", []), question_type),
+            "sub_questions": row.get("sub_questions") or [],
+            "origin": "upload",
+        })
+    if not records:
+        raise RuntimeError("live question identification returned no questions")
     return records
 
 
