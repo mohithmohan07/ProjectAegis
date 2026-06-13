@@ -1,10 +1,10 @@
-# fly.toml app configuration file generated for project001 on 2026-05-18T10:34:54Z
+# fly.toml app configuration file generated for projectaegis on 2026-06-13T10:50:09Z
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
-app = 'project001'
-primary_region = 'bom'
+app = 'projectaegis'
+primary_region = 'ams'
 
 [build]
   dockerfile = 'Dockerfile'
