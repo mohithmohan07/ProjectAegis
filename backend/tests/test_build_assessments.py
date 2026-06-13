@@ -85,3 +85,51 @@ def test_invalid_upload_type_rejected(client):
     files = {"file": ("x.txt", io.BytesIO(b"x"), "text/plain")}
     r = client.post("/build-assessments/uploads?upload_type=bogus", files=files)
     assert r.status_code == 400
+
+
+def test_upload_auto_is_default_and_generates(client, first_chapter):
+    """No question_type -> 'auto'; the upload is absorbed without forcing a type."""
+    files = {"file": ("mix.txt", io.BytesIO(
+        b"What is a tangent?\n\nExplain why a tangent is perpendicular to the radius."
+        b"\n\nDescribe and prove the two-tangent theorem."
+    ), "text/plain")}
+    job = client.post("/build-assessments/uploads?upload_type=questions", files=files).json()
+    client.post(f"/build-assessments/uploads/{job['id']}/deposit", json={
+        "scope_type": "chapter", "scope_ids": [first_chapter["id"]],
+    })
+    # Empty body -> question_type defaults to "auto".
+    result = client.post(
+        f"/build-assessments/uploads/{job['id']}/generate", json={}).json()
+    assert result["created"] == 3
+    assert "question_ids" in result
+
+
+def test_upload_invalid_question_type_rejected(client, first_chapter):
+    files = {"file": ("q.txt", io.BytesIO(b"What is a tangent?"), "text/plain")}
+    job = client.post("/build-assessments/uploads?upload_type=questions", files=files).json()
+    client.post(f"/build-assessments/uploads/{job['id']}/deposit", json={
+        "scope_type": "chapter", "scope_ids": [first_chapter["id"]],
+    })
+    r = client.post(f"/build-assessments/uploads/{job['id']}/generate",
+                    json={"question_type": "bogus"})
+    assert r.status_code == 400
+
+
+def test_identify_auto_dry_falls_back_to_objective():
+    from app.services import generation as g
+
+    recs = g.identify_questions_from_mmd(
+        "# t\n\nQ1?\n\nQ2?", upload_type="questions",
+        question_type="auto", live=False)
+    assert recs and all(r["sheet_kind"] == "objective" for r in recs)
+
+
+def test_normalize_sheet_kind():
+    from app.services import generation as g
+
+    assert g._normalize_sheet_kind("Descriptive") == "descriptive"
+    assert g._normalize_sheet_kind("SUBJECTIVE") == "subjective"
+    assert g._normalize_sheet_kind("mcq") == "objective"
+    assert g._normalize_sheet_kind("long answer") == "descriptive"
+    assert g._normalize_sheet_kind("") == "objective"
+    assert g._normalize_sheet_kind("weird", default="descriptive") == "descriptive"

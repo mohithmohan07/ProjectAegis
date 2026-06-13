@@ -228,7 +228,7 @@ function UploadFlow({ vocab }: { vocab: Vocab }) {
   const [uploadType, setUploadType] = useState("textbook");
   const [job, setJob] = useState<UploadJob | null>(null);
   const [scope, setScope] = useState<Scope | null>(null);
-  const [qType, setQType] = useState("objective");
+  const [qType, setQType] = useState("auto");
   const [sourceBook, setSourceBook] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -349,13 +349,22 @@ function UploadFlow({ vocab }: { vocab: Vocab }) {
       {job?.status === "deposited" && (
         <>
           <div className="section-title">Generate</div>
-          <div className="card row">
-            <div className="field-label" style={{ margin: 0 }}>Question type</div>
-            <select value={qType} onChange={(e) => setQType(e.target.value)}>
-              {vocab.question_types.map((t) => <option key={t}>{t}</option>)}
-            </select>
-            <div className="spacer" />
-            <button disabled={busy} onClick={generate}>Identify & generate questions</button>
+          <div className="card">
+            <div className="muted" style={{ marginBottom: 8 }}>
+              Aegis absorbs whatever the document contains. Leave this on{" "}
+              <strong>Auto</strong> to detect and extract a mix of objective,
+              subjective and descriptive questions (sub-questions included), or
+              force a single type.
+            </div>
+            <div className="row">
+              <div className="field-label" style={{ margin: 0 }}>Question type</div>
+              <select value={qType} onChange={(e) => setQType(e.target.value)}>
+                <option value="auto">Auto — detect all types</option>
+                {vocab.question_types.map((t) => <option key={t} value={t}>{t}</option>)}
+              </select>
+              <div className="spacer" />
+              <button disabled={busy} onClick={generate}>Identify & generate questions</button>
+            </div>
           </div>
         </>
       )}

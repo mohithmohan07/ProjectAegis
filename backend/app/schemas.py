@@ -120,7 +120,9 @@ class DepositRequest(BaseModel):
 
 
 class GenerateFromUploadRequest(BaseModel):
-    question_type: str = "objective"
+    # "auto" (default) detects each question's type and absorbs a mix of
+    # objective / subjective / descriptive; or force a single type.
+    question_type: str = "auto"
 
 
 # --------------------------------------------------------------------------- #
