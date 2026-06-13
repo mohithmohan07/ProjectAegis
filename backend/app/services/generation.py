@@ -434,18 +434,48 @@ def _live_questions_for_concept(
 # Questions identified from an uploaded document (Build Assessments - upload path)
 # --------------------------------------------------------------------------- #
 
+# Question types the upload path can deposit. "auto" means: detect each
+# question's type from the document and absorb a mix (the default).
+_SHEET_KINDS = ("objective", "subjective", "descriptive")
+
+
+def _default_category_for(kind: str) -> str:
+    return {"objective": "Multiple Choice Question",
+            "subjective": "Short Answer",
+            "descriptive": "Long Answer"}.get(kind, "Multiple Choice Question")
+
+
+def _normalize_sheet_kind(value: str, default: str = "objective") -> str:
+    v = (value or "").strip().lower()
+    if v in _SHEET_KINDS:
+        return v
+    # Map a few common synonyms the model might emit.
+    aliases = {"mcq": "objective", "objective question": "objective",
+               "short answer": "subjective", "short": "subjective",
+               "long answer": "descriptive", "long": "descriptive",
+               "essay": "descriptive"}
+    return aliases.get(v, default)
+
+
 def identify_questions_from_mmd(
-    mmd_text: str, *, upload_type: str, question_type: str = "objective",
+    mmd_text: str, *, upload_type: str, question_type: str = "auto",
     textbook_mode: str = "", live: bool | None = None,
 ) -> list[dict]:
-    """Extract / create question records from an uploaded document's MMD."""
+    """Extract / create question records from an uploaded document's MMD.
+
+    ``question_type`` is one of objective | subjective | descriptive, or
+    ``auto`` (the default) to detect each question's type and absorb a mix of
+    all three (descriptive questions may carry sub-questions).
+    """
     use_live = config.use_live_generation() if live is None else live
     if use_live:
         return _live_identify_questions_from_mmd(
             mmd_text, upload_type=upload_type, question_type=question_type,
             textbook_mode=textbook_mode,
         )
-    # Dry: split the MMD body into question-like chunks.
+    # Dry: split the MMD body into question-like chunks. Dry mode can't truly
+    # classify, so "auto" falls back to objective for a deterministic stub.
+    effective = "objective" if question_type == "auto" else question_type
     chunks = [c.strip() for c in re.split(r"\n\s*\n+", mmd_text) if c.strip()]
     chunks = [c for c in chunks if not c.startswith("#")] or ["(no question content detected)"]
 
@@ -466,13 +496,12 @@ def identify_questions_from_mmd(
         if prev_chunk and context_triggers.search(chunk):
             q_text = f"Context: {bi.to_plain_text(prev_chunk[:600])}\n\n{q_text}"
         rec = {
-            "sheet_kind": question_type,
-            "question_category": "Multiple Choice Question" if question_type == "objective"
-            else "Short Answer" if question_type == "subjective" else "Long Answer",
+            "sheet_kind": effective,
+            "question_category": _default_category_for(effective),
             "cognitive_skills": "Understand",
             "question_source": bi.QUESTION_SOURCE_DEFAULT,
             "level_of_difficulty": "Moderate",
-            "marks": _default_marks(question_type),
+            "marks": _default_marks(effective),
             "question": chunk[:400],
             "question_text": q_text,
             "answer_explanation": "",
@@ -481,7 +510,7 @@ def identify_questions_from_mmd(
             "origin": "upload",
         }
         prev_chunk = chunk
-        if upload_type in {"questions_and_answers", "textbook"} and question_type == "objective":
+        if upload_type in {"questions_and_answers", "textbook"} and effective == "objective":
             rec["answers"] = [
                 {"answer_type": "Phrases", "answer_content": "Extracted option",
                  "correct_answer": "Yes", "answer_weightage": "1"},
@@ -534,6 +563,16 @@ def _coerce_answers(raw_answers: list, question_type: str) -> list[dict]:
     return answers
 
 
+_TYPE_HINTS = {
+    "objective": "OBJECTIVE — MCQ / fill-in-the-blank. For MCQs emit 3-4 "
+                 "options with exactly one correct_answer = 'Yes'.",
+    "subjective": "SUBJECTIVE — short answer; emit mark-wise rubric points "
+                  "whose weightages sum to the marks.",
+    "descriptive": "DESCRIPTIVE — long answer; emit mark-wise rubric points "
+                   "(and sub_questions for multi-part questions) summing to marks.",
+}
+
+
 def _identify_system(upload_type: str, question_type: str, *, extract: bool) -> str:
     """System prompt for live question identification from an uploaded document."""
     from . import assessment_prompts as ap
@@ -548,23 +587,35 @@ def _identify_system(upload_type: str, question_type: str, *, extract: bool) -> 
         "the key ideas across the material; never copy sentences verbatim as "
         "questions, and never drift off the document's topic."
     )
-    type_hint = {
-        "objective": "OBJECTIVE — MCQ / fill-in-the-blank. For MCQs emit 3-4 "
-                     "options with exactly one correct_answer = 'Yes'.",
-        "subjective": "SUBJECTIVE — short answer; emit mark-wise rubric points "
-                      "whose weightages sum to the marks.",
-        "descriptive": "DESCRIPTIVE — long answer; emit mark-wise rubric points "
-                       "(and sub_questions for multi-part questions) summing to marks.",
-    }[question_type]
+    if question_type == "auto":
+        type_block = (
+            "QUESTION TYPES — the document may contain a MIX of types. For EACH "
+            "question, set \"sheet_kind\" to the type that best fits it and shape "
+            "it accordingly:\n"
+            f"- objective: {_TYPE_HINTS['objective']}\n"
+            f"- subjective: {_TYPE_HINTS['subjective']}\n"
+            f"- descriptive: {_TYPE_HINTS['descriptive']}\n"
+            "Preserve a question's natural type — do NOT force everything into one "
+            "type. A long/multi-part question with parts (a),(b),(c) is descriptive "
+            "and MUST keep its parts in the sub_questions slots, never split into "
+            "separate questions."
+        )
+    else:
+        type_block = (
+            f"TARGET QUESTION TYPE (every question is this type): "
+            f"{_TYPE_HINTS[question_type]}\n"
+            f"Set \"sheet_kind\" to \"{question_type}\" on every question."
+        )
     return f"""\
 You are an assessment digitizer for Indian school boards (ICSE/CBSE). You read
 a document already converted to Markdown/MMD (mathematics in LaTeX) and return
 assessment questions in a STRICT JSON schema.
 
 TASK: {intent}
-TARGET QUESTION TYPE: {type_hint}
+{type_block}
 Classify each question's question_category, cognitive_skills and
-level_of_difficulty.
+level_of_difficulty. Add a "sheet_kind" field (objective|subjective|descriptive)
+to every question object.
 
 STANDARD VALUES (use EXACTLY these):
 - cognitive_skills: Remember | Understand | Apply | Analyse | Evaluate | Create
@@ -584,15 +635,17 @@ def _live_identify_questions_from_mmd(
     """Live (OpenAI) question identification from an uploaded document's MMD."""
     extract = _identify_is_extract(upload_type, textbook_mode)
     system = _identify_system(upload_type, question_type, extract=extract)
+    auto = question_type == "auto"
     user = (
         "DOCUMENT (MMD):\n" + _trim(mmd_text, 200_000) + "\n\n"
-        f"Return up to {_IDENTIFY_MAX} {question_type} question(s) as specified "
-        "above, as a JSON object with a \"questions\" array."
+        + (f"Return up to {_IDENTIFY_MAX} question(s), each tagged with its own "
+           "\"sheet_kind\" (objective|subjective|descriptive), as a JSON object "
+           "with a \"questions\" array."
+           if auto else
+           f"Return up to {_IDENTIFY_MAX} {question_type} question(s) as "
+           "specified above, as a JSON object with a \"questions\" array.")
     )
     data = _openai_json(system, user)
-    default_category = ("Multiple Choice Question" if question_type == "objective"
-                        else "Short Answer" if question_type == "subjective"
-                        else "Long Answer")
     records: list[dict] = []
     for row in (data.get("questions") or [])[:_IDENTIFY_MAX]:
         if not isinstance(row, dict):
@@ -600,13 +653,17 @@ def _live_identify_questions_from_mmd(
         question = (row.get("question") or "").strip()
         if not question:
             continue
+        # In auto mode each question carries its own type; otherwise force the
+        # requested type.
+        kind = (_normalize_sheet_kind(row.get("sheet_kind") or row.get("question_type"))
+                if auto else question_type)
         try:
-            marks = float(row.get("marks") or _default_marks(question_type))
+            marks = float(row.get("marks") or _default_marks(kind))
         except (TypeError, ValueError):
-            marks = _default_marks(question_type)
+            marks = _default_marks(kind)
         records.append({
-            "sheet_kind": question_type,
-            "question_category": row.get("question_category") or default_category,
+            "sheet_kind": kind,
+            "question_category": row.get("question_category") or _default_category_for(kind),
             "cognitive_skills": bi.normalize_cognitive_skills(
                 row.get("cognitive_skills") or "Understand") or "Understand",
             "question_source": bi.QUESTION_SOURCE_DEFAULT,
@@ -619,8 +676,8 @@ def _live_identify_questions_from_mmd(
                               or bi.to_plain_text(question)),
             "display_answer": row.get("display_answer", ""),
             "answer_explanation": row.get("answer_explanation", ""),
-            "answers": _coerce_answers(row.get("answers", []), question_type),
-            "sub_questions": row.get("sub_questions") or [],
+            "answers": _coerce_answers(row.get("answers", []), kind),
+            "sub_questions": row.get("sub_questions") or [] if kind == "descriptive" else [],
             "origin": "upload",
         })
     if not records:

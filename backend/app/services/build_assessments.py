@@ -239,8 +239,15 @@ def set_deposit(db: Session, job_id: int, scope_type: str, scope_ids: list[int])
     return job
 
 
-def generate_from_upload(db: Session, job_id: int, question_type: str = "objective") -> dict:
-    """Identify questions from the uploaded MMD and deposit them in the chosen scope."""
+def generate_from_upload(db: Session, job_id: int, question_type: str = "auto") -> dict:
+    """Identify questions from the uploaded MMD and deposit them in the chosen scope.
+
+    ``question_type`` is ``auto`` (detect & absorb a mix of objective /
+    subjective / descriptive) or one specific type to force.
+    """
+    if question_type not in {"auto", "objective", "subjective", "descriptive"}:
+        raise ValueError(
+            "question_type must be auto | objective | subjective | descriptive")
     job = db.get(models.UploadJob, job_id)
     if not job:
         raise ValueError("upload job not found")
