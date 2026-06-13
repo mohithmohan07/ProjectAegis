@@ -18,10 +18,13 @@ async def post_learning_upload(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ):
-    return svc.create_post_learning_job(
-        db, filename=file.filename or "document.txt", raw_bytes=await file.read(),
-        source_book=source_book,
-    )
+    try:
+        return svc.create_post_learning_job(
+            db, filename=file.filename or "document.txt", raw_bytes=await file.read(),
+            source_book=source_book,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @router.post("/post-learning/uploads/{job_id}/generate")
@@ -44,10 +47,13 @@ async def pre_learning_upload(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ):
-    return svc.create_pre_learning_upload_job(
-        db, filename=file.filename or "document.txt", raw_bytes=await file.read(),
-        source_book=source_book,
-    )
+    try:
+        return svc.create_pre_learning_upload_job(
+            db, filename=file.filename or "document.txt", raw_bytes=await file.read(),
+            source_book=source_book,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @router.post("/pre-learning/uploads/{job_id}/generate")
