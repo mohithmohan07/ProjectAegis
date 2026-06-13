@@ -156,6 +156,7 @@ def generate(db: Session, session_id: int) -> dict:
     monotony = ap.stem_monotony_report([q.question for q in created])
     return {
         "session_id": session_id, "created": len(created_ids),
+        "question_ids": created_ids,
         "pipeline": pipeline,
         "review": {"problems": problems[:50],
                    "monotony": {k: monotony[k] for k in
@@ -305,5 +306,7 @@ def generate_from_upload(db: Session, job_id: int, question_type: str = "objecti
     db.commit()
     return {
         "job_id": job_id, "created": len(created_ids),
-        "duplicates_merged": len(merged_ids), "pipeline": pipeline,
+        "duplicates_merged": len(merged_ids),
+        "question_ids": created_ids + merged_ids,
+        "pipeline": pipeline,
     }
