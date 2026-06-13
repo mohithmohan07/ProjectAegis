@@ -28,6 +28,7 @@ export interface ConceptRef {
   id: number;
   concept_title: string;
   concept_display_name: string;
+  sources?: string;
   group_count: number;
   question_count: number;
 }
@@ -59,6 +60,8 @@ export interface Vocab {
   question_categories: Record<string, string[]>;
   group_types: string[];
   upload_types: string[];
+  book_sources: string[];
+  appears_in: string[];
 }
 
 export interface Stats {
@@ -81,6 +84,7 @@ export interface BlueprintBatch {
   categories: string[];
   question_type: string;
   num_questions: number;
+  appears_in?: string[];
 }
 
 export interface Session {
@@ -100,6 +104,7 @@ export interface UploadJob {
   upload_type: string;
   textbook_mode: string;
   learning_kind: string;
+  source_book?: string;
   filename: string;
   mmd_text: string;
   deposit_scope_type: string;
@@ -158,4 +163,23 @@ export interface PreviewResult {
   rows: PreviewRow[];
   summary: Record<string, number>;
   workbook: string;
+}
+
+export interface WorkbookResult {
+  output_pdf: string;
+  build_log: string;
+  valid: boolean;
+  issues: string[];
+  mode: "dry" | "live";
+  meta: Record<string, string>;
+  log: string;
+}
+
+export interface WorkbookEntry {
+  class_folder: string;
+  subject: string;
+  name: string;
+  rel: string;
+  size: number;
+  has_log: boolean;
 }

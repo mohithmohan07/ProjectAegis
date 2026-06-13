@@ -66,6 +66,8 @@ class Concept(Base):
     keywords: Mapped[str] = mapped_column(Text, default="")
     digicards: Mapped[str] = mapped_column(Text, default="")
     related_concepts: Mapped[str] = mapped_column(Text, default="")
+    # Multi-source book tags, "; "-joined (e.g. "NCERT; RD Sharma").
+    sources: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     topic = relationship("Topic", back_populates="concepts")
@@ -109,9 +111,13 @@ class Question(Base):
     question_disclaimer: Mapped[str] = mapped_column(Text, default="")
     question_duration: Mapped[float] = mapped_column(Float, default=1.0)
     math_keyboard: Mapped[str] = mapped_column(String(16), default="")
-    question_appears_in: Mapped[str] = mapped_column(String(128), default="Pre/Post-Worksheet/Test")
+    question_appears_in: Mapped[str] = mapped_column(
+        String(128), default="Pre-test, Post-test, Worksheet, Test")
     level_of_difficulty: Mapped[str] = mapped_column(String(16), default="")
     question: Mapped[str] = mapped_column(Text, default="")
+    # Plain-text question + any shared context (passage/conversation/diagram
+    # description); passed to the AI evaluator. Never HTML.
+    question_text: Mapped[str] = mapped_column(Text, default="")
     marks: Mapped[float] = mapped_column(Float, default=1.0)
     display_answer: Mapped[str] = mapped_column(Text, default="")
     answer_explanation: Mapped[str] = mapped_column(Text, default="")
@@ -195,6 +201,8 @@ class BlueprintBatch(Base):
     categories: Mapped[list] = mapped_column(JSON, default=list)
     question_type: Mapped[str] = mapped_column(String(16), default="objective")
     num_questions: Mapped[int] = mapped_column(Integer, default=1)
+    # Assessment purpose (Appears In): Pre-test / Post-test / Worksheet / Test.
+    appears_in: Mapped[list] = mapped_column(JSON, default=list)
 
     session = relationship("AssessmentSession", back_populates="batches")
 
@@ -226,6 +234,8 @@ class UploadJob(Base):
     # textbook|questions|questions_and_answers|handwritten|document
     textbook_mode: Mapped[str] = mapped_column(String(16), default="")  # extract|create
     learning_kind: Mapped[str] = mapped_column(String(16), default="")  # post|pre (build_concepts)
+    # Book this upload came from (e.g. "RD Sharma"); drives multi-source tagging.
+    source_book: Mapped[str] = mapped_column(String(128), default="")
     filename: Mapped[str] = mapped_column(String(255), default="")
     mmd_text: Mapped[str] = mapped_column(Text, default="")
     deposit_scope_type: Mapped[str] = mapped_column(String(16), default="chapter")

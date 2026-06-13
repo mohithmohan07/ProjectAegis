@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api } from "../api/client";
 import { useAsync } from "../hooks";
 import DirectoryPicker from "../components/DirectoryPicker";
+import SourceBookInput from "../components/SourceBookInput";
 import type { BlueprintBatch, Scope, Session, UploadJob, Vocab } from "../types";
 
 type Path = null | "concept_mapping" | "upload";
@@ -86,6 +87,7 @@ function ConceptMappingFlow({ vocab }: { vocab: Vocab }) {
   const [skills, setSkills] = useState<string[]>([]);
   const [difficulties, setDifficulties] = useState<string[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
+  const [appearsIn, setAppearsIn] = useState<string[]>([]);
   const [qType, setQType] = useState("objective");
   const [count, setCount] = useState(1);
 
@@ -113,10 +115,11 @@ function ConceptMappingFlow({ vocab }: { vocab: Vocab }) {
         categories,
         question_type: qType,
         num_questions: count,
+        appears_in: appearsIn,
       };
       await api.addBatch(session.id, batch);
       setSession(await api.getSession(session.id));
-      setSkills([]); setDifficulties([]); setCategories([]); setCount(1);
+      setSkills([]); setDifficulties([]); setCategories([]); setAppearsIn([]); setCount(1);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -173,6 +176,8 @@ function ConceptMappingFlow({ vocab }: { vocab: Vocab }) {
             </div>
             <MultiSelect label="Category Level" options={vocab.question_categories[qType] ?? []}
               value={categories} onChange={setCategories} />
+            <MultiSelect label="Appears In (assessment purpose)" options={vocab.appears_in}
+              value={appearsIn} onChange={setAppearsIn} />
             <div className="row" style={{ marginTop: 8 }}>
               <div className="field-label" style={{ margin: 0 }}>No. of questions per sub-category</div>
               <input type="number" min={1} max={20} value={count}
@@ -224,6 +229,7 @@ function UploadFlow({ vocab }: { vocab: Vocab }) {
   const [job, setJob] = useState<UploadJob | null>(null);
   const [scope, setScope] = useState<Scope | null>(null);
   const [qType, setQType] = useState("objective");
+  const [sourceBook, setSourceBook] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
@@ -232,7 +238,7 @@ function UploadFlow({ vocab }: { vocab: Vocab }) {
     setBusy(true);
     setError(null);
     try {
-      setJob(await api.createAssessmentUpload(uploadType, file));
+      setJob(await api.createAssessmentUpload(uploadType, file, sourceBook));
     } catch (e) {
       setError(String(e));
     } finally {
@@ -295,12 +301,15 @@ function UploadFlow({ vocab }: { vocab: Vocab }) {
             ))}
           </div>
         </div>
+        <SourceBookInput value={sourceBook} onChange={setSourceBook}
+          options={vocab.book_sources} disabled={busy || !!job} />
         <input type="file" disabled={busy || !!job}
           onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
         {job && (
           <div style={{ marginTop: 10 }}>
             <span className="badge green">converted to MMD</span>{" "}
             <span className="muted mono">{job.filename}</span>
+            {job.source_book && <span className="badge accent">{job.source_book}</span>}
             <pre className="mmd-preview">{job.mmd_text.slice(0, 600)}</pre>
           </div>
         )}

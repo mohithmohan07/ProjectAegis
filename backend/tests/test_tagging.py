@@ -95,7 +95,7 @@ def test_concept_tag_emits_repeated_concept_row(client, db, first_chapter, tmp_p
     db.expire_all()
     path = tmp_path / "concepts.xlsx"
     written = writer.append_concepts(db, path, [concept["id"]])
-    assert written == 2  # home topic + tagged topic
+    assert written["written"] == 2  # home topic + tagged topic
 
     wb = openpyxl.load_workbook(path)
     ws = wb[SHEET_OBJECTIVE]

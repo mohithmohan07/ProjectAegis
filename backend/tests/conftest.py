@@ -1,3 +1,9 @@
+import os
+
+# Tests are always deterministic dry-mode, even when live API keys are present
+# in the environment (live is default-on when keys exist).
+os.environ["AEGIS_USE_LIVE"] = "0"
+
 import pytest
 from fastapi.testclient import TestClient
 

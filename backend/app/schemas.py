@@ -22,6 +22,7 @@ class ConceptOut(BaseModel):
     concept_display_name: str
     concept_details: str
     keywords: str
+    sources: str = ""
 
 
 class QuestionOut(BaseModel):
@@ -35,6 +36,7 @@ class QuestionOut(BaseModel):
     question_source: str
     level_of_difficulty: str
     question: str
+    question_text: str = ""
     marks: float
     math_keyboard: str
     display_answer: str
@@ -60,6 +62,7 @@ class BlueprintBatchRequest(BaseModel):
     categories: list[str] = Field(default_factory=list)
     question_type: str = "objective"
     num_questions: int = 1
+    appears_in: list[str] = Field(default_factory=list)
 
 
 class BlueprintBatchOut(BaseModel):
@@ -70,6 +73,7 @@ class BlueprintBatchOut(BaseModel):
     categories: list
     question_type: str
     num_questions: int
+    appears_in: list = Field(default_factory=list)
 
 
 class SessionOut(BaseModel):
@@ -95,6 +99,7 @@ class UploadJobOut(BaseModel):
     upload_type: str
     textbook_mode: str
     learning_kind: str
+    source_book: str = ""
     filename: str
     mmd_text: str
     deposit_scope_type: str
@@ -128,6 +133,7 @@ class PostLearningGenerateRequest(BaseModel):
 
 class PreLearningExistingRequest(BaseModel):
     chapter_ids: list[int]
+    source_book: str = ""
 
 
 # --------------------------------------------------------------------------- #
@@ -164,6 +170,8 @@ class Vocab(BaseModel):
     question_categories: dict[str, list[str]]
     group_types: list[str]
     upload_types: list[str]
+    book_sources: list[str]
+    appears_in: list[str]
 
 
 class Stats(BaseModel):

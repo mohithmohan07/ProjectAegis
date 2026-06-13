@@ -28,15 +28,24 @@ def _read_text(path: Path) -> str:
 def to_mmd(path: Path, *, live: bool | None = None) -> str:
     """Convert an uploaded document to MMD text."""
     use_live = config.use_live_mmd() if live is None else live
-    raw = _read_text(path)
     if use_live and path.suffix.lower() in {".pdf", ".png", ".jpg", ".jpeg"}:
-        # Live hook: delegate to the vendored Mathpix script. Kept lazy so the
-        # import never runs (and never needs keys) in dry mode.
-        from aegis_pipeline import extract_mmds  # noqa: F401
-        raise NotImplementedError(
-            "Live MMD conversion: wire extract_mmds.process_* with MATHPIX_APP_ID/KEY "
-            "and the uploaded file path."
-        )
+        return _live_to_mmd(path)
+    raw = _read_text(path)
     # Dry MMD stub: wrap the text with a minimal MMD structure.
     body = raw.strip() or "(empty document)"
     return f"# {path.stem}\n\n{body}\n"
+
+
+def _live_to_mmd(path: Path) -> str:
+    """Mathpix PDF/image -> MMD via the vendored client (sha-keyed disk cache).
+
+    The cache directory is shared with the Create Workbooks pipeline so the
+    same source document is never billed twice across modules.
+    """
+    from . import workbooks
+    workbooks._vendor()
+    from mathpix import MathpixClient  # vendored (create_workbooks/src)
+
+    cache_dir = workbooks.CACHE_ROOT / "mmd"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return MathpixClient(cache_dir=cache_dir).convert_to_mmd(path)

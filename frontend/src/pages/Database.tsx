@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { api } from "../api/client";
 import { useAsync } from "../hooks";
+import type { BoardNode } from "../types";
 
 const SHEETS = ["objective", "subjective", "descriptive"];
 
@@ -62,6 +63,8 @@ export default function Database() {
         </div>
       )}
 
+      <CreateWorkbook />
+
       <div className="section-title">Questions ({sheet})</div>
       <div className="card" style={{ marginBottom: 12 }}>
         <div className="row">
@@ -102,6 +105,71 @@ export default function Database() {
           </tbody>
         </table>
         {questions.data?.length === 0 && <div className="empty">No questions in this sheet yet.</div>}
+      </div>
+    </>
+  );
+}
+
+function CreateWorkbook() {
+  const tree = useAsync(() => api.tree(), []);
+  const [board, setBoard] = useState("");
+  const [grade, setGrade] = useState("");
+  const [subject, setSubject] = useState("");
+  const [mode, setMode] = useState<"blank" | "content">("content");
+
+  // Subjects available under the chosen board/grade (or all, when unfiltered).
+  const { boards, grades, subjects } = useMemo(() => {
+    const t: BoardNode[] = tree.data ?? [];
+    const boards = t.map((b) => b.board);
+    const gradeSet = new Set<string>();
+    const subjectSet = new Set<string>();
+    for (const b of t) {
+      if (board && b.board !== board) continue;
+      for (const g of b.grades) {
+        gradeSet.add(g.grade);
+        if (grade && g.grade !== grade) continue;
+        for (const s of g.subjects) subjectSet.add(s.subject);
+      }
+    }
+    return { boards, grades: [...gradeSet].sort(), subjects: [...subjectSet].sort() };
+  }, [tree.data, board, grade]);
+
+  return (
+    <>
+      <div className="section-title">Create Bulk Import Workbook (subject-wise)</div>
+      <div className="card">
+        <div className="muted" style={{ marginBottom: 8 }}>
+          Generate a canonical 3-sheet <strong>Bulk Import Excel workbook</strong> for
+          one subject — a blank authoring template, or pre-filled with the subject's
+          existing content. Headers always match the canonical format exactly.
+          (For student revision-workbook PDFs, use the Create Workbooks tab.)
+        </div>
+        <div className="row">
+          <select value={board} onChange={(e) => { setBoard(e.target.value); setSubject(""); }}>
+            <option value="">All boards</option>
+            {boards.map((b) => <option key={b}>{b}</option>)}
+          </select>
+          <select value={grade} onChange={(e) => { setGrade(e.target.value); setSubject(""); }}>
+            <option value="">All grades</option>
+            {grades.map((g) => <option key={g}>{g}</option>)}
+          </select>
+          <select value={subject} onChange={(e) => setSubject(e.target.value)}>
+            <option value="">Subject…</option>
+            {subjects.map((s) => <option key={s}>{s}</option>)}
+          </select>
+          <label className="radio">
+            <input type="radio" checked={mode === "content"} onChange={() => setMode("content")} />
+            With existing content
+          </label>
+          <label className="radio">
+            <input type="radio" checked={mode === "blank"} onChange={() => setMode("blank")} />
+            Blank template
+          </label>
+          <div className="spacer" />
+          <a href={subject ? api.createWorkbookUrl(subject, board, grade, mode) : undefined}>
+            <button disabled={!subject}>Create workbook (.xlsx)</button>
+          </a>
+        </div>
       </div>
     </>
   );

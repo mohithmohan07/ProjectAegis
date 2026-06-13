@@ -2,9 +2,23 @@ from app import bulk_import as bi
 
 
 def test_canonical_field_counts():
-    assert len(bi.OBJECTIVE_FIELDS) == 63
-    assert len(bi.SUBJECTIVE_FIELDS) == 90
-    assert len(bi.DESCRIPTIVE_FIELDS) == 372
+    # +2 vs the legacy layout: concept_source (end of Concept band) and
+    # question_text (last column of every sheet).
+    assert len(bi.OBJECTIVE_FIELDS) == 65
+    assert len(bi.SUBJECTIVE_FIELDS) == 92
+    assert len(bi.DESCRIPTIVE_FIELDS) == 374
+
+
+def test_question_text_is_last_column_everywhere():
+    for fields in (bi.OBJECTIVE_FIELDS, bi.SUBJECTIVE_FIELDS, bi.DESCRIPTIVE_FIELDS):
+        assert fields[-1] == "question_text"
+
+
+def test_concept_source_position():
+    # concept_source closes the Concept band, right before the Group band.
+    idx = bi.OBJECTIVE_FIELDS.index("concept_source")
+    assert bi.OBJECTIVE_FIELDS[idx - 1] == "advanced_groups"
+    assert bi.OBJECTIVE_FIELDS[idx + 1] == "question_label"
 
 
 def test_section_bands_sum_to_field_counts():

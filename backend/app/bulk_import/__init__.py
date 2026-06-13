@@ -43,7 +43,14 @@ CONCEPT_FIELDS = [
     "concept_title", "concept_display_name", "concept_details",
     "keywords", "digicards", "related_concepts",
     "basic_groups", "intermediate_groups", "advanced_groups",
+    # Multi-source tag (e.g. "NCERT; RD Sharma") — concepts overlap between the
+    # books different schools prefer; one concept carries every book it appears
+    # in. Appended at the END of the Concept band so all earlier columns keep
+    # their positions; the reader auto-detects workbooks without this column.
+    "concept_source",
 ]
+# Concept band length of the legacy layout (pre concept_source).
+LEGACY_CONCEPT_LEN = len(CONCEPT_FIELDS) - 1
 
 # --------------------------------------------------------------------------- #
 # Objective sheet
@@ -66,6 +73,11 @@ OBJECTIVE_QUESTION_FIELDS = (
         for prefix in ("answer_type", "answer_content", "correct_answer", "answer_weightage")
     ]
     + ["answer_explanation"]
+    # question_text: plain-text question + any shared context (passage,
+    # conversation, diagram description...) passed to the AI evaluator.
+    # Appended as the LAST column of the sheet so no existing column shifts;
+    # the reader auto-detects templates without it (non-breaking).
+    + ["question_text"]
 )
 OBJECTIVE_FIELDS = (
     CHAPTER_FIELDS + TOPIC_FIELDS + CONCEPT_FIELDS
@@ -90,6 +102,7 @@ SUBJECTIVE_QUESTION_FIELDS = (
         for prefix in ("answer_type", "answer", "answer_display", "weightage", "placeholder")
     ]
     + ["answer_explanation"]
+    + ["question_text"]  # last column; see Objective note
 )
 SUBJECTIVE_FIELDS = (
     CHAPTER_FIELDS + TOPIC_FIELDS + CONCEPT_FIELDS
@@ -135,6 +148,7 @@ DESCRIPTIVE_FIELDS = (
     CHAPTER_FIELDS + TOPIC_FIELDS + CONCEPT_FIELDS
     + DESCRIPTIVE_GROUP_FIELDS + DESCRIPTIVE_QUESTION_FIELDS
     + DESCRIPTIVE_SUBQUESTION_FIELDS
+    + ["question_text"]  # last column; see Objective note
 )
 
 FIELDS_BY_KIND = {
@@ -164,7 +178,8 @@ SECTION_BANDS = {
         ("Topic", len(TOPIC_FIELDS)),
         ("Concept", len(CONCEPT_FIELDS) + 1),
         ("Group", len(DESCRIPTIVE_GROUP_FIELDS) - 1),
-        ("Question", len(DESCRIPTIVE_QUESTION_FIELDS) + len(DESCRIPTIVE_SUBQUESTION_FIELDS)),
+        # +1: trailing question_text column.
+        ("Question", len(DESCRIPTIVE_QUESTION_FIELDS) + len(DESCRIPTIVE_SUBQUESTION_FIELDS) + 1),
     ],
 }
 
@@ -173,16 +188,126 @@ SECTION_BANDS = {
 # --------------------------------------------------------------------------- #
 
 BOARDS = ["CBSE", "ICSE"]
-GRADES = ["09", "10"]
+GRADES = ["08", "09", "10"]
 QUESTION_TYPES = ["objective", "subjective", "descriptive"]
 GROUP_TYPES = ["Basic", "Intermediate", "Advanced"]
 GROUP_TYPE_CODE = {"Basic": "BG", "Intermediate": "IG", "Advanced": "AG"}
 
-COGNITIVE_SKILLS = [
-    "Remembering", "Understanding", "Applying",
-    "Analysing", "Evaluating", "Creating",
+# Common book sources for multi-source tagging (free text is also allowed).
+BOOK_SOURCES = [
+    "NCERT", "RD Sharma", "RS Aggarwal", "S Chand", "Arihant",
+    "Selina", "Frank", "Together With", "Oswaal", "Xam Idea",
 ]
+
+
+def normalize_question_text(text: str) -> str:
+    """Normalization used for duplicate-question detection across books."""
+    import re as _re2
+    return _re2.sub(r"\s+", " ", (text or "")).strip().lower()
+
+
+def merge_sources(existing: str, new: str) -> str:
+    """Merge multi-value source lists (comma-separated, order-preserving,
+    case-insensitive dedupe). Legacy '; '-separated data is normalized to
+    commas on the way through — comma is the only supported separator."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for blob in (existing, new):
+        for part in (blob or "").replace(";", ",").split(","):
+            p = part.strip()
+            if p and p.lower() not in seen:
+                seen.add(p.lower())
+                out.append(p)
+    return ", ".join(out)
+
+
+# Standard action-verb form (the gerund forms are legacy and are normalized).
+COGNITIVE_SKILLS = [
+    "Remember", "Understand", "Apply",
+    "Analyse", "Evaluate", "Create",
+]
+_COGNITIVE_LEGACY = {
+    "remembering": "Remember", "understanding": "Understand",
+    "applying": "Apply", "analysing": "Analyse", "analyzing": "Analyse",
+    "evaluating": "Evaluate", "creating": "Create",
+    # canonical values map to themselves (case-insensitive)
+    "remember": "Remember", "understand": "Understand", "apply": "Apply",
+    "analyse": "Analyse", "analyze": "Analyse",
+    "evaluate": "Evaluate", "create": "Create",
+}
 DIFFICULTY_LEVELS = ["Less", "Moderate", "High"]
+# Real assessment sheets contain Easy/Medium/Hard variants — normalize them.
+_DIFFICULTY_LEGACY = {
+    "easy": "Less", "low": "Less", "less": "Less",
+    "medium": "Moderate", "moderate": "Moderate", "average": "Moderate",
+    "hard": "High", "difficult": "High", "high": "High",
+}
+
+
+def normalize_difficulty(value: str) -> str:
+    v = (value or "").strip()
+    return _DIFFICULTY_LEGACY.get(v.lower(), v) if v else v
+
+APPEARS_IN = ["Pre-test", "Post-test", "Worksheet", "Test"]
+APPEARS_IN_ALL = ", ".join(APPEARS_IN)
+# Legacy composite value used across earlier imports/generations.
+_APPEARS_IN_LEGACY = {"pre/post-worksheet/test": APPEARS_IN_ALL}
+
+ANSWER_TYPES = ["Phrases", "Equation", "Image"]
+_ANSWER_TYPE_LEGACY = {"words": "Phrases", "phrases": "Phrases",
+                       "equation": "Equation", "image": "Image"}
+
+QUESTION_SOURCE_DEFAULT = "UpSchool DB"
+
+
+def split_multi(value: str) -> list[str]:
+    """Split a multi-value field. COMMA is the only supported separator —
+    newline, semicolon and pipe are content, never separators."""
+    return [p.strip() for p in (value or "").split(",") if p.strip()]
+
+
+def join_multi(values: list[str]) -> str:
+    return ", ".join(v.strip() for v in values if v and v.strip())
+
+
+def normalize_cognitive_skills(value: str) -> str:
+    """Normalize one or more (comma-separated) skills to the standard form."""
+    out = []
+    for part in split_multi(value):
+        out.append(_COGNITIVE_LEGACY.get(part.lower(), part))
+    return join_multi(out)
+
+
+def normalize_appears_in(value: str) -> str:
+    v = (value or "").strip()
+    if not v:
+        return v
+    legacy = _APPEARS_IN_LEGACY.get(v.lower())
+    if legacy:
+        return legacy
+    canon = {a.lower(): a for a in APPEARS_IN}
+    return join_multi([canon.get(p.lower(), p) for p in split_multi(v)])
+
+
+def normalize_answer_type(value: str) -> str:
+    v = (value or "").strip()
+    return _ANSWER_TYPE_LEGACY.get(v.lower(), v) if v else v
+
+
+def to_plain_text(text: str) -> str:
+    """Rich-text bracket formats -> plain text (for question_text).
+
+    [katex] x [/katex] -> x ; [img src=.. alt="d"] -> (Image: d) ;
+    [Text](url) -> Text. Newlines are preserved as content.
+    """
+    import re as _re3
+    s = text or ""
+    s = _re3.sub(r"\[katex\]\s*(.*?)\s*\[/katex\]", r"\1", s, flags=_re3.DOTALL)
+    s = _re3.sub(r'\[img[^\]]*alt="([^"]*)"[^\]]*\]', r"(Image: \1)", s)
+    s = _re3.sub(r"\[img[^\]]*\]", "(Image)", s)
+    s = _re3.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)", r"\1", s)
+    s = _re3.sub(r"[ \t]{2,}", " ", s)
+    return s.strip()
 
 QUESTION_CATEGORIES = {
     "objective": [
@@ -205,5 +330,7 @@ BOARD_CODE_INV = {v: k for k, v in BOARD_CODE.items()}
 SUBJECT_CODE = {
     "MA": "Mathematics", "PH": "Physics", "BI": "Biology",
     "CH": "Chemistry", "EG": "English Grammar", "EL": "English Literature",
+    # Combined middle-school subjects (e.g. Class 08 NCERT sources).
+    "SC": "Science", "SS": "Social Science", "EN": "English",
 }
 SUBJECT_CODE_INV = {v: k for k, v in SUBJECT_CODE.items()}

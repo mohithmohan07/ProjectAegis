@@ -21,6 +21,7 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
+from .. import bulk_import as bi
 from .. import config, models
 from . import directory, generation, mmd, post_generation
 
@@ -50,19 +51,28 @@ def add_batch(
     db: Session, session_id: int, *,
     cognitive_skills: list[str], difficulty_levels: list[str],
     categories: list[str], question_type: str, num_questions: int,
+    appears_in: list[str] | None = None,
 ) -> models.BlueprintBatch:
     session = db.get(models.AssessmentSession, session_id)
     if not session:
         raise ValueError("session not found")
     if question_type not in {"objective", "subjective", "descriptive"}:
         raise ValueError("question_type must be objective | subjective | descriptive")
+    purposes = [p for p in (appears_in or []) if p in bi.APPEARS_IN]
     batch = models.BlueprintBatch(
         session_id=session_id,
-        cognitive_skills=cognitive_skills or ["Understanding"],
-        difficulty_levels=difficulty_levels or ["Moderate"],
+        # Old gerund forms (Remembering, Understanding...) normalize to the
+        # standard action-verb values instead of failing.
+        cognitive_skills=[
+            bi.normalize_cognitive_skills(s) for s in cognitive_skills
+        ] or ["Understand"],
+        difficulty_levels=[
+            bi.normalize_difficulty(d) for d in difficulty_levels
+        ] or ["Moderate"],
         categories=categories or ["Multiple Choice Question"],
         question_type=question_type,
         num_questions=max(int(num_questions), 1),
+        appears_in=purposes,
     )
     db.add(batch)
     db.commit()
@@ -98,8 +108,12 @@ def generate(db: Session, session_id: int) -> dict:
 
     concepts = directory.resolve_scope_concepts(db, session.scope_type, session.scope_ids)
     created_ids: list[int] = []
-    # Per-concept running index keeps question labels unique & ordered.
-    counters: dict[int, int] = {c.id: 1 for c in concepts}
+    # Per-concept running index keeps question labels unique & ordered —
+    # continuing AFTER existing questions so labels never collide across
+    # generation sessions.
+    counters: dict[int, int] = {
+        c.id: sum(len(g.questions) for g in c.groups) + 1 for c in concepts
+    }
 
     for concept in concepts:
         for batch in session.batches:
@@ -111,6 +125,7 @@ def generate(db: Session, session_id: int) -> dict:
                     question_type=batch.question_type,
                     cognitive_skill=skill, difficulty=difficulty, category=category,
                     count=batch.num_questions, start_index=counters[concept.id],
+                    appears_in=", ".join(batch.appears_in or []),
                 )
                 counters[concept.id] += len(records)
                 group = _group_for(db, concept, difficulty)
@@ -125,7 +140,27 @@ def generate(db: Session, session_id: int) -> dict:
     session.status = "generated"
     session.generated_question_ids = created_ids
     db.commit()
-    return {"session_id": session_id, "created": len(created_ids), "pipeline": pipeline}
+
+    # Quality review summary: deterministic checks + anti-monotony report.
+    from . import assessment_prompts as ap
+    created = db.query(models.Question).filter(models.Question.id.in_(created_ids)).all()
+    problems: list[str] = []
+    for q in created:
+        for p in ap.review_question({
+            "sheet_kind": q.sheet_kind, "question": q.question,
+            "question_text": q.question_text, "cognitive_skills": q.cognitive_skills,
+            "level_of_difficulty": q.level_of_difficulty, "marks": q.marks,
+            "answers": q.answers,
+        }):
+            problems.append(f"{q.question_label}: {p}")
+    monotony = ap.stem_monotony_report([q.question for q in created])
+    return {
+        "session_id": session_id, "created": len(created_ids),
+        "pipeline": pipeline,
+        "review": {"problems": problems[:50],
+                   "monotony": {k: monotony[k] for k in
+                                ("worst", "worst_count", "generic_ratio", "monotonous")}},
+    }
 
 
 def _question_kwargs(rec: dict) -> dict:
@@ -138,6 +173,8 @@ def _question_kwargs(rec: dict) -> dict:
         "level_of_difficulty": rec.get("level_of_difficulty", ""),
         "math_keyboard": rec.get("math_keyboard", ""),
         "question": rec.get("question", ""),
+        "question_text": rec.get("question_text", ""),
+        "question_appears_in": rec.get("question_appears_in", ""),
         "marks": rec.get("marks", 1.0),
         "display_answer": rec.get("display_answer", ""),
         "answer_explanation": rec.get("answer_explanation", ""),
@@ -153,6 +190,7 @@ def _question_kwargs(rec: dict) -> dict:
 
 def create_upload_job(
     db: Session, *, upload_type: str, filename: str, raw_bytes: bytes,
+    source_book: str = "",
 ) -> models.UploadJob:
     if upload_type not in mmd.UPLOAD_TYPES:
         raise ValueError(f"upload_type must be one of {mmd.UPLOAD_TYPES}")
@@ -162,6 +200,7 @@ def create_upload_job(
     job = models.UploadJob(
         module="build_assessments", upload_type=upload_type,
         filename=filename, mmd_text=mmd_text, status="converted",
+        source_book=source_book.strip(),
     )
     db.add(job)
     db.commit()
@@ -211,10 +250,36 @@ def generate_from_upload(db: Session, job_id: int, question_type: str = "objecti
     records = generation.identify_questions_from_mmd(
         job.mmd_text, upload_type=job.upload_type, question_type=question_type,
     )
+
+    # Cross-book duplicate check: existing question texts in the deposit
+    # chapters. A duplicate is not re-added; its sources are merged instead.
+    chapter_ids = {c.topic.chapter_id for c in concepts}
+    existing_by_text: dict[str, models.Question] = {}
+    for qq in (
+        db.query(models.Question)
+        .join(models.Group).join(models.Concept).join(models.Topic)
+        .filter(models.Topic.chapter_id.in_(chapter_ids))
+    ):
+        norm = bi.normalize_question_text(qq.question)
+        if norm:
+            existing_by_text.setdefault(norm, qq)
+
     created_ids: list[int] = []
-    counters: dict[int, int] = {c.id: 1 for c in concepts}
+    merged_ids: list[int] = []
+    counters: dict[int, int] = {
+        c.id: sum(len(g.questions) for g in c.groups) + 1 for c in concepts
+    }
     # Round-robin the identified questions across the deposit concepts.
     for i, rec in enumerate(records):
+        if job.source_book:
+            rec["question_source"] = job.source_book
+        norm = bi.normalize_question_text(rec.get("question", ""))
+        dup = existing_by_text.get(norm) if norm else None
+        if dup is not None:
+            dup.question_source = bi.merge_sources(
+                dup.question_source, rec.get("question_source", ""))
+            merged_ids.append(dup.id)
+            continue
         concept = concepts[i % len(concepts)]
         rec.setdefault("question_label", generation.question_label(concept, counters[concept.id]))
         counters[concept.id] += 1
@@ -222,12 +287,22 @@ def generate_from_upload(db: Session, job_id: int, question_type: str = "objecti
         q = models.Question(group_id=group.id, **_question_kwargs(rec))
         db.add(q)
         db.flush()
+        if norm:
+            existing_by_text[norm] = q
         created_ids.append(q.id)
     db.commit()
 
-    pipeline = post_generation.run(db, created_ids)
+    # Run the pipeline over new questions AND source-merged duplicates so the
+    # output workbook's question_source cells refresh in place.
+    pipeline = post_generation.run(db, created_ids + merged_ids)
     job.status = "generated"
     job.result_ids = created_ids
-    job.detail = f"identified {len(records)} questions from {job.upload_type} upload"
+    job.detail = (
+        f"identified {len(records)} questions from {job.upload_type} upload "
+        f"({len(created_ids)} new, {len(merged_ids)} duplicates source-merged)"
+    )
     db.commit()
-    return {"job_id": job_id, "created": len(created_ids), "pipeline": pipeline}
+    return {
+        "job_id": job_id, "created": len(created_ids),
+        "duplicates_merged": len(merged_ids), "pipeline": pipeline,
+    }

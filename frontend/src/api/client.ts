@@ -9,6 +9,8 @@ import type {
   TagResult,
   UploadJob,
   Vocab,
+  WorkbookEntry,
+  WorkbookResult,
 } from "../types";
 
 const BASE = import.meta.env.VITE_API_BASE ?? "";
@@ -44,6 +46,8 @@ export const api = {
   questions: (params: Record<string, string> = {}) =>
     http<Question[]>(`/data/questions?${new URLSearchParams(params)}`),
   exportUrl: (scope: "all" | "output") => `${BASE}/data/export?scope=${scope}`,
+  createWorkbookUrl: (subject: string, board: string, grade: string, mode: "blank" | "content") =>
+    `${BASE}/data/workbook/new?${new URLSearchParams({ subject, board, grade, mode })}`,
   importWorkbook: (file: File) => {
     const fd = new FormData();
     fd.append("file", file);
@@ -69,13 +73,14 @@ export const api = {
     ),
 
   // Build Assessments — upload
-  createAssessmentUpload: (uploadType: string, file: File) => {
+  createAssessmentUpload: (uploadType: string, file: File, sourceBook = "") => {
     const fd = new FormData();
     fd.append("file", file);
-    return http<UploadJob>(
-      `/build-assessments/uploads?upload_type=${encodeURIComponent(uploadType)}`,
-      { method: "POST", body: fd },
-    );
+    const qs = new URLSearchParams({ upload_type: uploadType, source_book: sourceBook });
+    return http<UploadJob>(`/build-assessments/uploads?${qs}`, {
+      method: "POST",
+      body: fd,
+    });
   },
   setTextbookMode: (jobId: number, mode: string) =>
     http<UploadJob>(`/build-assessments/uploads/${jobId}/textbook-mode`, {
@@ -94,37 +99,49 @@ export const api = {
     ),
 
   // Build Concepts
-  postLearningUpload: (file: File) => {
+  postLearningUpload: (file: File, sourceBook = "") => {
     const fd = new FormData();
     fd.append("file", file);
-    return http<UploadJob>("/build-concepts/post-learning/uploads", {
-      method: "POST",
-      body: fd,
-    });
+    return http<UploadJob>(
+      `/build-concepts/post-learning/uploads?source_book=${encodeURIComponent(sourceBook)}`,
+      { method: "POST", body: fd },
+    );
   },
   postLearningGenerate: (jobId: number, target_chapter_id: number) =>
     http<Record<string, unknown>>(
       `/build-concepts/post-learning/uploads/${jobId}/generate`,
       { method: "POST", body: JSON.stringify({ target_chapter_id }) },
     ),
-  preLearningUpload: (file: File) => {
+  preLearningUpload: (file: File, sourceBook = "") => {
     const fd = new FormData();
     fd.append("file", file);
-    return http<UploadJob>("/build-concepts/pre-learning/uploads", {
-      method: "POST",
-      body: fd,
-    });
+    return http<UploadJob>(
+      `/build-concepts/pre-learning/uploads?source_book=${encodeURIComponent(sourceBook)}`,
+      { method: "POST", body: fd },
+    );
   },
   preLearningGenerateFromUpload: (jobId: number, target_chapter_id: number) =>
     http<Record<string, unknown>>(
       `/build-concepts/pre-learning/uploads/${jobId}/generate`,
       { method: "POST", body: JSON.stringify({ target_chapter_id }) },
     ),
-  preLearningFromExisting: (chapter_ids: number[]) =>
+  preLearningFromExisting: (chapter_ids: number[], source_book = "") =>
     http<Record<string, unknown>>("/build-concepts/pre-learning/from-existing", {
       method: "POST",
-      body: JSON.stringify({ chapter_ids }),
+      body: JSON.stringify({ chapter_ids, source_book }),
     }),
+
+  // Create Workbooks (revision-PDF generator)
+  workbookSubjects: () =>
+    http<{ subjects: string[]; live: boolean }>("/workbooks/subjects"),
+  generateWorkbook: (file: File, subject: string) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("subject", subject);
+    return http<WorkbookResult>("/workbooks/generate", { method: "POST", body: fd });
+  },
+  workbookLibrary: () => http<WorkbookEntry[]>("/workbooks/library"),
+  workbookFileUrl: (rel: string) => `${BASE}/workbooks/file?rel=${encodeURIComponent(rel)}`,
 
   // Tagging (many-to-many) + import preview
   tagQuestionToConcept: (questionId: number, concept_id: number) =>
