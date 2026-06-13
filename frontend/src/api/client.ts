@@ -46,6 +46,10 @@ export const api = {
   questions: (params: Record<string, string> = {}) =>
     http<Question[]>(`/data/questions?${new URLSearchParams(params)}`),
   exportUrl: (scope: "all" | "output") => `${BASE}/data/export?scope=${scope}`,
+  exportQuestionsUrl: (ids: number[]) =>
+    `${BASE}/data/export/questions?ids=${ids.join(",")}`,
+  exportConceptsUrl: (ids: number[]) =>
+    `${BASE}/data/export/concepts?ids=${ids.join(",")}`,
   createWorkbookUrl: (subject: string, board: string, grade: string, mode: "blank" | "content") =>
     `${BASE}/data/workbook/new?${new URLSearchParams({ subject, board, grade, mode })}`,
   importWorkbook: (file: File) => {

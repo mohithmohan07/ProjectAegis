@@ -369,12 +369,22 @@ function UploadFlow({ vocab }: { vocab: Vocab }) {
 /* ------------------------------- result ------------------------------- */
 
 function ResultCard({ result }: { result: Record<string, unknown> }) {
+  const ids = (result.question_ids as number[] | undefined) ?? [];
   return (
     <div className="card success-card" style={{ marginTop: 16 }}>
       <strong>Generated · post-generation pipeline complete</strong>
       <pre className="mono" style={{ marginTop: 8 }}>{JSON.stringify(result, null, 2)}</pre>
-      <div className="muted" style={{ marginTop: 8 }}>
-        Rows were appended to the Bulk Import output workbook — download it from the Database tab.
+      <div className="row" style={{ marginTop: 12 }}>
+        {ids.length > 0 && (
+          <a href={api.exportQuestionsUrl(ids)}>
+            <button>⬇ Download Excel (Bulk Import)</button>
+          </a>
+        )}
+        <span className="muted">
+          {ids.length > 0
+            ? `${ids.length} question(s) in the canonical Bulk Import format.`
+            : "Rows were appended to the Bulk Import output workbook — download it from the Database tab."}
+        </span>
       </div>
     </div>
   );

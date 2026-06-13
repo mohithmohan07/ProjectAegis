@@ -54,6 +54,62 @@ def export_workbook(
     )
 
 
+_XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _parse_ids(ids: str) -> list[int]:
+    out: list[int] = []
+    for part in (ids or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            out.append(int(part))
+        except ValueError:
+            raise HTTPException(400, f"invalid id {part!r}")
+    return out
+
+
+@router.get("/export/questions")
+def export_questions(
+    ids: str = Query(..., description="comma-separated question ids"),
+    db: Session = Depends(get_db),
+):
+    """Download a canonical Bulk Import workbook for a specific set of questions.
+
+    Powers the per-functionality export on each Build Assessments result, so
+    the user can download exactly what was just generated (in Bulk Import
+    format) without going to the Database tab.
+    """
+    question_ids = _parse_ids(ids)
+    if not question_ids:
+        raise HTTPException(400, "no question ids provided")
+    data = writer.write_workbook(db, question_ids=question_ids)
+    return Response(
+        content=data, media_type=_XLSX_MEDIA,
+        headers={"Content-Disposition": 'attachment; filename="bulk_import_questions.xlsx"'},
+    )
+
+
+@router.get("/export/concepts")
+def export_concepts(
+    ids: str = Query(..., description="comma-separated concept ids"),
+    db: Session = Depends(get_db),
+):
+    """Download a canonical Bulk Import workbook for a specific set of concepts.
+
+    Powers the per-functionality export on each Build Concepts result.
+    """
+    concept_ids = _parse_ids(ids)
+    if not concept_ids:
+        raise HTTPException(400, "no concept ids provided")
+    data = writer.write_concepts_workbook(db, concept_ids)
+    return Response(
+        content=data, media_type=_XLSX_MEDIA,
+        headers={"Content-Disposition": 'attachment; filename="bulk_import_concepts.xlsx"'},
+    )
+
+
 @router.get("/workbook/new")
 def create_subject_workbook(
     subject: str,
