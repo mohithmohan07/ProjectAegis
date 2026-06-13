@@ -273,10 +273,23 @@ function PreLearningExisting({ bookSources }: { bookSources: string[] }) {
 }
 
 function ConceptResult({ result }: { result: Record<string, unknown> }) {
+  const ids = (result.concept_ids as number[] | undefined) ?? [];
   return (
     <div className="card success-card" style={{ marginTop: 16 }}>
       <strong>Concepts written to the Bulk Import workbook (append-only)</strong>
       <pre className="mono" style={{ marginTop: 8 }}>{JSON.stringify(result, null, 2)}</pre>
+      <div className="row" style={{ marginTop: 12 }}>
+        {ids.length > 0 && (
+          <a href={api.exportConceptsUrl(ids)}>
+            <button>⬇ Download Excel (Bulk Import)</button>
+          </a>
+        )}
+        <span className="muted">
+          {ids.length > 0
+            ? `${ids.length} concept(s) in the canonical Bulk Import format.`
+            : "Download the full output workbook from the Database tab."}
+        </span>
+      </div>
     </div>
   );
 }

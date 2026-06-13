@@ -437,6 +437,33 @@ def write_workbook(db: Session, dest: Path | None = None,
     return data
 
 
+def write_concepts_workbook(db: Session, concept_ids: list[int]) -> bytes:
+    """Write a fresh canonical workbook holding only the given concepts.
+
+    Concepts have no questions of their own here, so they are emitted as
+    concept-catalog rows on the Objective sheet — one row per (concept,
+    placement) (the authoring home topic plus every tagged topic/chapter) —
+    exactly the shape ``append_concepts`` writes to the app-data output
+    workbook. Used by the per-functionality "download Bulk Import Excel"
+    export for the Build Concepts flows.
+    """
+    wb = _new_workbook()
+    ws = wb[SHEET_BY_KIND["objective"]]
+    concepts = (
+        db.query(models.Concept).filter(models.Concept.id.in_(concept_ids))
+        .order_by(models.Concept.id).all()
+    )
+    next_row = 3
+    for c in concepts:
+        for topic in _concept_placements(c):
+            for i, value in enumerate(_concept_to_row(c, "objective", topic), start=1):
+                ws.cell(row=next_row, column=i, value=value)
+            next_row += 1
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
 def write_subject_workbook(
     db: Session, *, subject: str, board: str = "", grade: str = "",
     include_content: bool = True,

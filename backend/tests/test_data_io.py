@@ -63,6 +63,55 @@ def test_append_only_never_overwrites(client, first_concept, db):
     assert again["objective"] == again["subjective"] == 0
 
 
+def test_export_questions_selection(client, first_concept):
+    """Per-functionality export: download just the generated questions."""
+    session = client.post("/build-assessments/sessions", json={
+        "scope_type": "concept", "scope_ids": [first_concept["id"]],
+    }).json()
+    client.post(f"/build-assessments/sessions/{session['id']}/batches", json={
+        "cognitive_skills": ["Understanding"], "difficulty_levels": ["Moderate"],
+        "categories": ["Multiple Choice Question"], "question_type": "objective",
+        "num_questions": 2,
+    })
+    gen = client.post(f"/build-assessments/sessions/{session['id']}/generate").json()
+    ids = gen["question_ids"]
+    assert len(ids) == 2
+
+    r = client.get("/data/export/questions", params={"ids": ",".join(map(str, ids))})
+    assert r.status_code == 200
+    assert r.headers["content-disposition"].endswith('bulk_import_questions.xlsx"')
+    wb = openpyxl.load_workbook(io.BytesIO(r.content))
+    ws = wb[bi.SHEET_OBJECTIVE]
+    # Header rows + exactly the two generated questions.
+    assert ws.max_row == 2 + 2
+
+
+def test_export_questions_requires_ids(client):
+    assert client.get("/data/export/questions", params={"ids": ""}).status_code == 400
+    assert client.get("/data/export/questions", params={"ids": "x"}).status_code == 400
+
+
+def test_export_concepts_selection(client, first_chapter, db):
+    """Per-functionality export for Build Concepts: download generated concepts."""
+    from app import models
+
+    concept_ids = [
+        c.id for t in db.get(models.Chapter, first_chapter["id"]).topics
+        for c in t.concepts
+    ][:2]
+    assert concept_ids
+
+    r = client.get("/data/export/concepts", params={"ids": ",".join(map(str, concept_ids))})
+    assert r.status_code == 200
+    assert r.headers["content-disposition"].endswith('bulk_import_concepts.xlsx"')
+    wb = openpyxl.load_workbook(io.BytesIO(r.content))
+    ws = wb[bi.SHEET_OBJECTIVE]
+    field_row = [c.value for c in ws[2]]
+    assert field_row[: len(bi.OBJECTIVE_FIELDS)] == bi.OBJECTIVE_FIELDS
+    # One concept-catalog row per concept (no tags here).
+    assert ws.max_row == 2 + len(concept_ids)
+
+
 def test_import_workbook_roundtrip(client):
     """Export the DB then re-import it: append-only means no new questions land."""
     export = client.get("/data/export?scope=all")
