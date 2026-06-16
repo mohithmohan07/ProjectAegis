@@ -220,6 +220,130 @@ def _dry_distractors(concept: models.Concept) -> list[str]:
     return out[:3]
 
 
+def _dry_objective(category: str, concept: models.Concept, details: str, idx: int,
+                   base_stem: str) -> tuple[str, list[dict], str]:
+    """Category-shaped objective question: (question, answers, explanation).
+
+    MCQ (and unknown categories) keep the skill-rotated stem + 1-correct +
+    3-distractor layout; True/False, Assertion & Reasons and Fill in the Blanks
+    get their distinctive stem + option structure.
+    """
+    from . import assessment_prompts as ap
+    cat = ap.canonical_category(category)
+    t = concept.concept_title
+    fact = details[:90].rstrip(".") or "as defined in the chapter"
+
+    if cat == "True/False":
+        framings = [
+            f"State whether the following is True or False: '{t}' is {fact}.",
+            f"True or False: '{t}' is correctly described as — {fact}.",
+            f"Decide if this statement is True or False: '{t}' means {fact}.",
+        ]
+        answers = [
+            {"answer_type": "Phrases", "answer_content": "True",
+             "correct_answer": "Yes", "answer_weightage": "1"},
+            {"answer_type": "Phrases", "answer_content": "False",
+             "correct_answer": "No", "answer_weightage": "0"},
+        ]
+        return (framings[(idx - 1) % len(framings)], answers,
+                f"The statement accurately describes '{t}', so it is True.")
+
+    if cat == "Assertion & Reasons":
+        kws = [k.strip() for k in (concept.keywords or "").split(",") if k.strip()]
+        because = kws[0] if kws else "the defining condition of the concept"
+        stem = (f"Assertion (A): '{t}' is {fact}. "
+                f"Reason (R): This holds because {because} ensures '{t}' behaves as stated. "
+                "Choose the correct option:")
+        opts = [
+            "Both A and R are true, and R is the correct explanation of A.",
+            "Both A and R are true, but R is not the correct explanation of A.",
+            "A is true, but R is false.",
+            "A is false, but R is true.",
+        ]
+        answers = [{"answer_type": "Phrases", "answer_content": opts[0],
+                    "correct_answer": "Yes", "answer_weightage": "1"}] + [
+            {"answer_type": "Phrases", "answer_content": o,
+             "correct_answer": "No", "answer_weightage": "0"} for o in opts[1:]]
+        return (stem, answers,
+                "Both the Assertion and the Reason are true, and the Reason "
+                "correctly explains the Assertion.")
+
+    if cat == "Fill in the Blanks":
+        framings = [
+            f"Fill in the blank: '{t}' is best defined as ____.",
+            f"Complete the statement by choosing the correct option: the key idea here is ____.",
+            f"Fill in the blank: in this topic, ____ refers to '{t}'.",
+        ]
+        correct = f"{t} ({fact})"
+        if _is_math(concept):
+            correct = f"{correct} — {_sample_equation(concept)}"
+        answers = [{"answer_type": "Phrases", "answer_content": correct,
+                    "correct_answer": "Yes", "answer_weightage": "1"}] + [
+            {"answer_type": "Phrases", "answer_content": d,
+             "correct_answer": "No", "answer_weightage": "0"}
+            for d in _dry_distractors(concept)]
+        return (framings[(idx - 1) % len(framings)], answers,
+                f"The blank is correctly filled by '{t}'; the other options name "
+                "related but incorrect ideas.")
+
+    # Multiple Choice Question (and any unknown objective category).
+    correct = f"{t} (correct: {details[:80] or 'as defined'})"
+    if _is_math(concept):
+        correct = f"{correct} — {_sample_equation(concept)}"
+    answers = [{"answer_type": "Phrases", "answer_content": correct,
+                "correct_answer": "Yes", "answer_weightage": "1"}] + [
+        {"answer_type": "Phrases", "answer_content": d,
+         "correct_answer": "No", "answer_weightage": "0"}
+        for d in _dry_distractors(concept)]
+    return (base_stem, answers,
+            f"The correct option states '{t}' accurately. The distractors are wrong "
+            "because they describe a related concept, the converse relation, or omit "
+            "the key condition.")
+
+
+def _dry_subjective_stem(category: str, concept: models.Concept, details: str,
+                         idx: int) -> str | None:
+    """Category-shaped subjective stem, or None to use the skill-rotated default."""
+    from . import assessment_prompts as ap
+    cat = ap.canonical_category(category)
+    t = concept.concept_title
+    if cat == "Fill in the Blanks":
+        return f"Complete the sentence about '{t}': the key idea is that {t} is ____."
+    if cat == "Sentence Transformation":
+        return (f"Rewrite the following sentence without changing its meaning, as a "
+                f"complex sentence: 'The idea of {t} is important and it is used often.'")
+    if cat == "Error Correction":
+        return (f"The following sentence contains one grammatical error. Identify and "
+                f"correct it: 'The concept of {t} are explained in this chapter.'")
+    if cat == "Very Short Answer":
+        return f"In one word or short phrase, state the key idea of '{t}'."
+    return None
+
+
+def _dry_descriptive_stem(category: str, concept: models.Concept, details: str,
+                          idx: int) -> str | None:
+    """Category-shaped descriptive stem (with embedded context where the category
+    needs it), or None to use the skill-rotated default."""
+    from . import assessment_prompts as ap
+    cat = ap.canonical_category(category)
+    t = concept.concept_title
+    ctx = details[:160] or f"the chapter's treatment of {t}"
+    if cat == "Case Based Questions":
+        return (f"Read the case and answer the parts that follow. CASE: A student "
+                f"encounters a real situation where {ctx} Using '{t}', work through "
+                "the parts below.")
+    if cat == "Passage Based Questions":
+        return (f"Read the passage and answer the parts that follow. PASSAGE: {ctx} "
+                "Answer the questions below, citing the passage.")
+    if cat == "Extract Based Questions":
+        return (f"Read the extract and answer the parts that follow. EXTRACT: \"{ctx}\" "
+                "Answer the reference-to-context parts below.")
+    if cat == "Composition Writing":
+        return (f"Write a short composition (about 120-150 words) on a topic that uses "
+                f"'{t}'. Plan your ideas, organise them clearly, and use accurate language.")
+    return None
+
+
 def generate_questions_for_concept(
     concept: models.Concept,
     *,
@@ -246,9 +370,21 @@ def generate_questions_for_concept(
     details = (concept.concept_details or "").split("//")[0].strip()[:160]
     for i in range(count):
         idx = start_index + i
-        question_text = _stem_for(cognitive_skill, difficulty, concept, idx)
+        base_stem = _stem_for(cognitive_skill, difficulty, concept, idx)
         if _is_math(concept):
-            question_text = f"{question_text} Express the key relation as {_sample_equation(concept)}."
+            base_stem = f"{base_stem} Express the key relation as {_sample_equation(concept)}."
+
+        # Category shapes the stem (and, for objective, the option set).
+        obj_answers: list[dict] | None = None
+        obj_explanation = ""
+        if question_type == "objective":
+            stem, obj_answers, obj_explanation = _dry_objective(
+                category, concept, details, idx, base_stem)
+        elif question_type == "subjective":
+            stem = _dry_subjective_stem(category, concept, details, idx) or base_stem
+        else:
+            stem = _dry_descriptive_stem(category, concept, details, idx) or base_stem
+
         model_answer = (
             f"{concept.concept_title}: {details or 'see concept details'} "
             f"(complete, mark-worthy answer covering every rubric point)."
@@ -261,12 +397,11 @@ def generate_questions_for_concept(
             "question_source": bi.QUESTION_SOURCE_DEFAULT,
             "level_of_difficulty": difficulty,
             "marks": marks,
-            "question": question_text,
+            "question": stem,
             "question_appears_in": appears_in,
             # Plain-text question (+ concept context) for the AI evaluator.
             "question_text": bi.to_plain_text(
-                f"{question_text}\nConcept context: {details}" if details
-                else question_text),
+                f"{stem}\nConcept context: {details}" if details else stem),
             "answer_explanation": (
                 f"{model_answer} Reference: {_concept_reference_link(concept)}."
             ),
@@ -275,22 +410,8 @@ def generate_questions_for_concept(
             "origin": "concept_mapping",
         }
         if question_type == "objective":
-            correct = f"{concept.concept_title} (correct: {details[:80] or 'as defined'})"
-            if _is_math(concept):
-                correct = f"{correct} — {_sample_equation(concept)}"
-            record["answers"] = [
-                {"answer_type": "Phrases", "answer_content": correct,
-                 "correct_answer": "Yes", "answer_weightage": "1"},
-            ] + [
-                {"answer_type": "Phrases", "answer_content": d,
-                 "correct_answer": "No", "answer_weightage": "0"}
-                for d in _dry_distractors(concept)
-            ]
-            record["answer_explanation"] = (
-                f"The correct option states '{concept.concept_title}' accurately. "
-                "The distractors are wrong because they describe a related concept, "
-                "the converse relation, or omit the key condition."
-            )
+            record["answers"] = obj_answers or []
+            record["answer_explanation"] = obj_explanation
         elif question_type == "subjective":
             # Rubric points live in the answer blocks; each carries weightage 1.
             record["answers"] = [

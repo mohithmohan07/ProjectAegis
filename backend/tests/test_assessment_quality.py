@@ -35,6 +35,126 @@ def test_unnatural_combo_flagged_but_allowed():
     assert "usually not ideal" in p
 
 
+# --------------------------- category prompting --------------------------- #
+
+def test_prompt_includes_category_contract():
+    p = ap.build_prompt(
+        question_type="objective", difficulty="Moderate", skill="Understand",
+        category="Assertion & Reasons")
+    assert "CATEGORY: ASSERTION & REASONS" in p
+    assert "Reason (R)" in p
+
+
+def test_prompt_differs_per_category():
+    a = ap.build_prompt(question_type="objective", difficulty="Less",
+                        skill="Remember", category="True/False")
+    b = ap.build_prompt(question_type="objective", difficulty="Less",
+                        skill="Remember", category="Fill in the Blanks")
+    assert a != b
+    assert "CATEGORY: TRUE/FALSE" in a
+    assert "CATEGORY: FILL IN THE BLANKS" in b
+
+
+def test_every_category_has_a_block():
+    from app import bulk_import as bi
+    for cats in bi.QUESTION_CATEGORIES.values():
+        for cat in cats:
+            assert ap.canonical_category(cat) in ap.CATEGORY_BLOCKS, cat
+
+
+def test_canonical_category_maps_legacy_labels():
+    assert ap.canonical_category("Short Answer Type (3 Marks)") == "Short Answer"
+    assert ap.canonical_category("Long Answer Type (5 Marks)") == "Long Answer"
+    assert ap.canonical_category("True or False") == "True/False"
+    assert ap.canonical_category("Assertion & Reasons Type") == "Assertion & Reasons"
+    assert ap.canonical_category("Case Study") == "Case Based Questions"
+    assert ap.canonical_category("MCQ") == "Multiple Choice Question"
+
+
+def test_category_guidance_falls_back_per_type():
+    # Unknown category -> sensible per-type default block, never empty.
+    assert "CATEGORY: LONG ANSWER" in ap.category_guidance("descriptive", "Mystery")
+    assert "CATEGORY: SHORT ANSWER" in ap.category_guidance("subjective", "")
+
+
+# --------------------- deterministic category checks ---------------------- #
+
+def test_review_flags_fill_in_blanks_without_blank():
+    bad = {"sheet_kind": "objective", "question": "What is osmosis?",
+           "question_text": "What is osmosis?", "cognitive_skills": "Remember",
+           "level_of_difficulty": "Less", "marks": 1,
+           "question_category": "Fill in the Blanks",
+           "answers": [{"answer_type": "Phrases", "answer_content": "x",
+                        "correct_answer": "Yes", "answer_weightage": "1"}]}
+    assert any("no blank" in p for p in ap.review_question(bad))
+
+
+def test_review_flags_assertion_reason_missing_parts():
+    bad = {"sheet_kind": "objective", "question": "Pick the right statement.",
+           "question_text": "Pick the right statement.", "cognitive_skills": "Understand",
+           "level_of_difficulty": "Moderate", "marks": 1,
+           "question_category": "Assertion & Reasons",
+           "answers": [{"answer_type": "Phrases", "answer_content": "x",
+                        "correct_answer": "Yes", "answer_weightage": "1"}]}
+    assert any("Assertion (A) and a Reason (R)" in p for p in ap.review_question(bad))
+
+
+# --------------------- dry generation per category ------------------------ #
+
+def test_dry_true_false(db, first_concept):
+    concept = _concept(db, first_concept)
+    rec = generation.generate_questions_for_concept(
+        concept, question_type="objective", cognitive_skill="Remember",
+        difficulty="Less", category="True/False", count=1, live=False)[0]
+    contents = sorted(a["answer_content"] for a in rec["answers"])
+    assert contents == ["False", "True"]
+    assert sum(1 for a in rec["answers"] if a["correct_answer"] == "Yes") == 1
+    assert ap.review_question(rec) == []
+
+
+def test_dry_assertion_reasons(db, first_concept):
+    concept = _concept(db, first_concept)
+    rec = generation.generate_questions_for_concept(
+        concept, question_type="objective", cognitive_skill="Understand",
+        difficulty="Moderate", category="Assertion & Reasons", count=1, live=False)[0]
+    assert "Assertion (A)" in rec["question"] and "Reason (R)" in rec["question"]
+    assert len(rec["answers"]) == 4
+    assert sum(1 for a in rec["answers"] if a["correct_answer"] == "Yes") == 1
+    assert ap.review_question(rec) == []
+
+
+def test_dry_fill_in_the_blanks_objective(db, first_concept):
+    concept = _concept(db, first_concept)
+    rec = generation.generate_questions_for_concept(
+        concept, question_type="objective", cognitive_skill="Remember",
+        difficulty="Less", category="Fill in the Blanks", count=1, live=False)[0]
+    assert "____" in rec["question"]
+    assert sum(1 for a in rec["answers"] if a["correct_answer"] == "Yes") == 1
+    assert ap.review_question(rec) == []
+
+
+def test_dry_case_based_embeds_context(db, first_concept):
+    concept = _concept(db, first_concept)
+    rec = generation.generate_questions_for_concept(
+        concept, question_type="descriptive", cognitive_skill="Apply",
+        difficulty="High", category="Case Based Questions", count=1, live=False)[0]
+    assert "CASE:" in rec["question"]
+    weights = [float(a["answer_weightage"]) for a in rec["answers"]]
+    assert sum(weights) == rec["marks"]
+    assert ap.review_question(rec) == []
+
+
+def test_dry_mcq_unchanged_default(db, first_concept):
+    concept = _concept(db, first_concept)
+    rec = generation.generate_questions_for_concept(
+        concept, question_type="objective", cognitive_skill="Remember",
+        difficulty="Less", category="Multiple Choice Question", count=1, live=False)[0]
+    correct = [a for a in rec["answers"] if a["correct_answer"] == "Yes"]
+    wrong = [a for a in rec["answers"] if a["correct_answer"] == "No"]
+    assert len(correct) == 1 and len(wrong) == 3
+    assert "distractors" in rec["answer_explanation"].lower()
+
+
 # ------------------------- dry generation variety -------------------------- #
 
 def _concept(db, first_concept):
