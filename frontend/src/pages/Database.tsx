@@ -9,6 +9,7 @@ export default function Database() {
   const [sheet, setSheet] = useState("objective");
   const [importMsg, setImportMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [resetMsg, setResetMsg] = useState<string | null>(null);
 
   const stats = useAsync(() => api.stats(), []);
   const questions = useAsync(() => api.questions({ sheet_kind: sheet, limit: "100" }), [sheet]);
@@ -23,6 +24,25 @@ export default function Database() {
       questions.reload();
     } catch (e) {
       setImportMsg(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function clearAll() {
+    if (!window.confirm(
+      "Clear everything? This removes all chapters, concepts, questions, uploads, "
+      + "output workbook, and generated PDFs. This cannot be undone.",
+    )) return;
+    setBusy(true);
+    setResetMsg(null);
+    try {
+      const result = await api.resetData(false);
+      setResetMsg(`Cleared: ${JSON.stringify(result)}`);
+      stats.reload();
+      questions.reload();
+    } catch (e) {
+      setResetMsg(String(e));
     } finally {
       setBusy(false);
     }
@@ -50,8 +70,12 @@ export default function Database() {
             <input type="file" accept=".xlsx" disabled={busy} style={{ display: "none" }}
               onChange={(e) => e.target.files?.[0] && importWorkbook(e.target.files[0])} />
           </label>
+          <button className="ghost" disabled={busy} onClick={clearAll}>
+            Clear all data
+          </button>
         </div>
         {importMsg && <div className="muted mono" style={{ marginTop: 8 }}>{importMsg}</div>}
+        {resetMsg && <div className="muted mono" style={{ marginTop: 8 }}>{resetMsg}</div>}
       </div>
 
       {stats.data && (

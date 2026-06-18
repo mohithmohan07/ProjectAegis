@@ -43,14 +43,18 @@ export default function Home() {
           </div>
           <div className="row" style={{ marginTop: 12 }}>
             <span className={`badge ${stats.data.openai_live ? "green" : "yellow"}`}>
-              OpenAI {stats.data.openai_live ? "live" : "dry-mode"}
+              OpenAI {stats.data.openai_live ? "live" : "keys missing"}
             </span>
             <span className={`badge ${stats.data.mathpix_live ? "green" : "yellow"}`}>
-              Mathpix {stats.data.mathpix_live ? "live" : "dry-mode"}
+              Mathpix {stats.data.mathpix_live ? "live" : "keys missing"}
             </span>
-            <span className="muted">
-              Dry-mode produces realistic stub content so every flow runs without API keys.
-            </span>
+            {stats.data.openai_live && stats.data.mathpix_live ? (
+              <span className="muted">All generation runs live — no dry stubs.</span>
+            ) : (
+              <span className="muted">
+                Set API keys to enable live generation. Dry mode is disabled.
+              </span>
+            )}
           </div>
         </>
       )}

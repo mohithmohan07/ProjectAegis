@@ -57,6 +57,11 @@ export const api = {
     fd.append("file", file);
     return http<Record<string, number>>("/data/import", { method: "POST", body: fd });
   },
+  resetData: (keepSeed = false) =>
+    http<{ status: string; chapters: number; questions: number }>(
+      `/data/reset?keep_seed=${keepSeed ? "true" : "false"}`,
+      { method: "POST" },
+    ),
 
   // Build Assessments — concept mapping
   createSession: (scope_type: string, scope_ids: number[]) =>

@@ -2,6 +2,7 @@ import os
 
 # Tests are always deterministic dry-mode, even when live API keys are present
 # in the environment (live is default-on when keys exist).
+os.environ["AEGIS_ALLOW_DRY"] = "1"
 os.environ["AEGIS_USE_LIVE"] = "0"
 
 import pytest
@@ -14,6 +15,15 @@ from app.main import app, bootstrap
 
 @pytest.fixture(scope="session", autouse=True)
 def _prepare():
+    if not config.BULK_IMPORT_DB.exists():
+        import subprocess
+        import sys
+
+        subprocess.run(
+            [sys.executable, "scripts/generate_dummy_data.py"],
+            check=True,
+            cwd=str(config.ROOT),
+        )
     Base.metadata.drop_all(bind=engine)
     init_db()
     # Fresh output workbook per test session.
