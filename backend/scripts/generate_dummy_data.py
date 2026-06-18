@@ -28,15 +28,15 @@ sys.path.insert(0, str(ROOT))
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app import models
+from app import config, models
 from app.bulk_import import writer
 from app.db import Base
 from app.services import directory
 from app.services import katex_rules as kr
 
-DATA_DIR = ROOT / "data"
+DATA_DIR = config.DATA_DIR
 DATA_DIR.mkdir(parents=True, exist_ok=True)
-DEST = DATA_DIR / "bulk_import_database.xlsx"
+DEST = config.BULK_IMPORT_DB
 
 MATH_LIKE = {"Mathematics", "Physics", "Chemistry"}
 
