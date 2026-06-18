@@ -23,19 +23,65 @@ def has_mathpix() -> bool:
     return bool(os.environ.get("MATHPIX_APP_ID") and os.environ.get("MATHPIX_APP_KEY"))
 
 
+def allow_dry() -> bool:
+    """Dry/stub generation is opt-in (tests/CI only). Production runs live-only."""
+    return os.environ.get("AEGIS_ALLOW_DRY", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _live_disabled() -> bool:
-    """AEGIS_USE_LIVE=0/false/off explicitly forces dry mode."""
+    """AEGIS_USE_LIVE=0/false/off explicitly forces dry mode (tests only)."""
     return os.environ.get("AEGIS_USE_LIVE", "").strip().lower() in {"0", "false", "no", "off"}
 
 
+class LiveRequiredError(ValueError):
+    """Raised when live APIs are required but credentials are missing."""
+
+
+MSG_OPENAI = (
+    "Live OpenAI generation is required (dry mode is disabled). "
+    "Set OPENAI_API_KEY in your environment."
+)
+MSG_MATHPIX = (
+    "Live Mathpix conversion is required (dry mode is disabled). "
+    "Set MATHPIX_APP_ID and MATHPIX_APP_KEY in your environment."
+)
+MSG_WORKBOOKS = (
+    "Live Create Workbooks is required (dry mode is disabled). "
+    "Set OPENAI_API_KEY, MATHPIX_APP_ID, and MATHPIX_APP_KEY."
+)
+
+
 def use_live_generation() -> bool:
-    """Live OpenAI generation: ON by default whenever the key is present."""
+    """Live OpenAI generation when the key is present and live is not disabled."""
     return has_openai() and not _live_disabled()
 
 
 def use_live_mmd() -> bool:
-    """Live Mathpix MMD conversion: ON by default whenever keys are present."""
+    """Live Mathpix MMD conversion when keys are present and live is not disabled."""
     return has_mathpix() and not _live_disabled()
+
+
+def use_live_workbooks() -> bool:
+    """Live revision-workbook pipeline (OpenAI + Mathpix)."""
+    return use_live_generation() and use_live_mmd()
+
+
+def require_generation_live() -> None:
+    if use_live_generation() or allow_dry():
+        return
+    raise LiveRequiredError(MSG_OPENAI)
+
+
+def require_mmd_live(*, pdf_or_image: bool = False) -> None:
+    if not pdf_or_image or use_live_mmd() or allow_dry():
+        return
+    raise LiveRequiredError(MSG_MATHPIX)
+
+
+def require_workbooks_live() -> None:
+    if use_live_workbooks() or allow_dry():
+        return
+    raise LiveRequiredError(MSG_WORKBOOKS)
 
 
 # OpenAI model for concept extraction / pre-learning derivation. The same

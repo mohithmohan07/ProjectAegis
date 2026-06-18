@@ -43,7 +43,7 @@ def _vendor():
 
 def use_live() -> bool:
     """Live by default whenever both OpenAI and Mathpix keys are present."""
-    return config.has_openai() and config.has_mathpix() and not config._live_disabled()
+    return config.use_live_workbooks()
 
 
 def infer_workbook_metadata(filename: str, subject: str = "") -> dict:
@@ -142,9 +142,11 @@ def _dry_chapter(meta: dict, source_pdf: Path):
 def generate(source_pdf: Path, subject: str = "", live: bool | None = None) -> dict:
     """Generate a revision-workbook PDF for one chapter source PDF."""
     _vendor()
+    go_live = use_live() if live is None else live
+    if not go_live:
+        config.require_workbooks_live()
     meta = infer_workbook_metadata(source_pdf.name, subject)
     out_pdf, build_log = _output_paths(meta)
-    go_live = use_live() if live is None else live
 
     if go_live:
         from pipeline import run as pipeline_run  # vendored (needs keys)
@@ -183,8 +185,7 @@ def generate(source_pdf: Path, subject: str = "", live: bool | None = None) -> d
         f"Title: {meta['chapter_title']}",
         f"Topics: {len(chapter.topics)} · glossary: {len(chapter.glossary)}",
         f"PDF: {out_pdf}",
-        "Live mode (GPT + Mathpix) requires OPENAI_API_KEY, MATHPIX_APP_ID/KEY "
-        "and AEGIS_USE_LIVE=1.",
+        "Live mode (GPT + Mathpix) requires OPENAI_API_KEY and MATHPIX_APP_ID/KEY.",
     ]
     validator.write_log(str(build_log), messages, issues)
     return {

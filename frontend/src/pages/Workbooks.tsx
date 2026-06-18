@@ -38,7 +38,7 @@ export default function Workbooks() {
           <>
             {" "}
             <span className={`badge ${meta.data.live ? "green" : ""}`}>
-              {meta.data.live ? "live mode" : "dry mode (no API keys)"}
+              {meta.data.live ? "live mode" : "keys missing — live required"}
             </span>
           </>
         )}

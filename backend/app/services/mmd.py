@@ -63,6 +63,8 @@ def to_mmd(path: Path, *, live: bool | None = None) -> str:
             raise ConversionError(
                 f"Could not convert {path.name!r} to MMD: {exc}"
             ) from exc
+    if suffix in (_PDF_SUFFIXES | _IMAGE_SUFFIXES):
+        config.require_mmd_live(pdf_or_image=True)
     raw = _read_text(path)
     # Dry MMD stub: wrap the text with a minimal MMD structure.
     body = raw.strip() or "(empty document)"

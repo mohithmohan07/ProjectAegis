@@ -2,6 +2,7 @@ import os
 
 # Tests are always deterministic dry-mode, even when live API keys are present
 # in the environment (live is default-on when keys exist).
+os.environ["AEGIS_ALLOW_DRY"] = "1"
 os.environ["AEGIS_USE_LIVE"] = "0"
 
 import pytest

@@ -240,7 +240,7 @@ def generate_questions_for_concept(
             difficulty=difficulty, category=category, count=count,
             start_index=start_index, appears_in=appears_in,
         )
-
+    config.require_generation_live()
     marks = _default_marks(question_type)
     out: list[dict] = []
     details = (concept.concept_details or "").split("//")[0].strip()[:160]
@@ -473,6 +473,7 @@ def identify_questions_from_mmd(
             mmd_text, upload_type=upload_type, question_type=question_type,
             textbook_mode=textbook_mode,
         )
+    config.require_generation_live()
     # Dry: split the MMD body into question-like chunks. Dry mode can't truly
     # classify, so "auto" falls back to objective for a deterministic stub.
     effective = "objective" if question_type == "auto" else question_type
@@ -872,6 +873,7 @@ def concepts_from_mmd(mmd_text: str, *, subject: str = "",
         if not out:
             raise RuntimeError("live concept extraction returned no rows")
         return _ensure_culmination_per_topic(out)
+    config.require_generation_live()
     # Dry: treat markdown headings as topics and bullet/para lines as concepts.
     topic = "Topic 01: Overview"
     out: list[dict] = []
@@ -1033,6 +1035,8 @@ def pre_learning_from_rows(
     """
     use_live = config.use_live_generation() if live is None else live
     if not use_live:
+        config.require_generation_live()
+    if not use_live:
         return [{
             "topic": f"{(r.get('topic') or 'Topic 01')} (Pre-Learning)",
             "concept_title": f"Pre: {r['concept_title']}",
@@ -1093,6 +1097,7 @@ def pre_learning_from_concepts(concepts: list[models.Concept], *, live: bool | N
             chapter_title=chapter.chapter_title if chapter else "",
             live=True,
         )
+    config.require_generation_live()
     out: list[dict] = []
     for c in concepts:
         out.append({
