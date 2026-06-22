@@ -14,13 +14,8 @@ from app.services.data_reset import reset_all  # noqa: E402
 
 def main() -> None:
     p = argparse.ArgumentParser(description="Reset Aegis to an empty database.")
-    p.add_argument(
-        "--keep-seed",
-        action="store_true",
-        help="Keep bulk_import_database.xlsx (demo seed will reload on restart).",
-    )
-    args = p.parse_args()
-    result = reset_all(keep_seed=args.keep_seed)
+    p.parse_args()
+    result = reset_all()
     print("Reset complete:")
     for k, v in result.items():
         print(f"  {k}: {v}")

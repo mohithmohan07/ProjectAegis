@@ -57,9 +57,9 @@ export const api = {
     fd.append("file", file);
     return http<Record<string, number>>("/data/import", { method: "POST", body: fd });
   },
-  resetData: (keepSeed = false) =>
+  resetData: () =>
     http<{ status: string; chapters: number; questions: number }>(
-      `/data/reset?keep_seed=${keepSeed ? "true" : "false"}`,
+      "/data/reset",
       { method: "POST" },
     ),
 
