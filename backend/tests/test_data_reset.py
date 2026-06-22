@@ -4,7 +4,7 @@ import sys
 
 from app import config, models
 from app.bulk_import import reader
-from app.main import bootstrap
+from tests.conftest import _load_test_fixtures
 
 
 def _ensure_seed():
@@ -22,7 +22,7 @@ def test_reset_clears_database(client, db):
         reader.import_workbook(db, config.BULK_IMPORT_DB)
     assert db.query(models.Chapter).count() > 0
 
-    r = client.post("/data/reset?keep_seed=false")
+    r = client.post("/data/reset")
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "reset"
@@ -36,5 +36,4 @@ def test_reset_clears_database(client, db):
     assert tree == [] or all(not g.get("grades") for g in tree)
 
     # Restore shared session state for downstream tests in this run.
-    _ensure_seed()
-    bootstrap()
+    _load_test_fixtures()

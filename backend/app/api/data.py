@@ -140,12 +140,9 @@ def create_subject_workbook(
 
 
 @router.post("/reset")
-def reset_data(
-    keep_seed: bool = Query(False, description="keep bulk_import_database.xlsx if present"),
-    db: Session = Depends(get_db),
-):
+def reset_data(db: Session = Depends(get_db)):
     """Wipe the DB, output workbook, uploads, and generated PDFs for a fresh start."""
-    return reset_svc.reset_all(keep_seed=keep_seed, db=db)
+    return reset_svc.reset_all(db=db)
 
 
 @router.get("/questions", response_model=list[schemas.QuestionOut])

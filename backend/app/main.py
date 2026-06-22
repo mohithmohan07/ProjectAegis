@@ -7,9 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config
-from .bulk_import import reader
-from .db import SessionLocal, init_db
+from .db import init_db
 from .api import (
     directory as directory_api,
     build_assessments as build_assessments_api,
@@ -21,15 +19,8 @@ from .api import (
 
 
 def bootstrap() -> None:
-    """Load the Bulk Import database workbook into the normalized DB on first run."""
+    """Initialize the database schema on startup. No demo data is loaded automatically."""
     init_db()
-    db = SessionLocal()
-    try:
-        from . import models
-        if db.query(models.Chapter).count() == 0 and config.BULK_IMPORT_DB.exists():
-            reader.import_workbook(db, config.BULK_IMPORT_DB)
-    finally:
-        db.close()
 
 
 @asynccontextmanager

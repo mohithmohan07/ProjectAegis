@@ -60,8 +60,8 @@ backend/
     api/              directory, build_assessments, build_concepts, data
     models.py         normalized Chapter/Topic/Concept/Group/Question + jobs
   aegis_pipeline/     vendored prior scripts (live-mode reference impls)
-  data/               bulk_import_database.xlsx (the database fixture)
-  scripts/            generate_dummy_data.py
+  data/               user workbooks, uploads, and generated output
+  scripts/            generate_dummy_data.py (optional dev fixture)
   tests/              pytest suite (25 tests)
 frontend/             React + Vite + TypeScript UI (the two modules + Database)
 ```
@@ -88,9 +88,12 @@ The `_live_*` hooks in the service layer mark exactly where inputs must be wired
 cd backend
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-python scripts/generate_dummy_data.py     # builds data/bulk_import_database.xlsx
 uvicorn app.main:app --reload --port 8000
 ```
+
+The app starts with an **empty database**. Import a Bulk Import workbook from
+the Database tab, or run `python scripts/generate_dummy_data.py` if you want
+demo content for local development.
 
 API docs: http://localhost:8000/docs
 

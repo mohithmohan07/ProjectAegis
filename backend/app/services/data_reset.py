@@ -20,12 +20,8 @@ def _clear_dir(path: Path) -> None:
             child.unlink()
 
 
-def reset_all(*, keep_seed: bool = False, db: Session | None = None) -> dict:
-    """Drop the normalized DB and remove generated files.
-
-    keep_seed=False (default) also removes bulk_import_database.xlsx so bootstrap
-    does not reload demo content on restart.
-    """
+def reset_all(*, db: Session | None = None) -> dict:
+    """Drop the normalized DB and remove generated files."""
     if db is not None:
         db.close()
 
@@ -37,7 +33,7 @@ def reset_all(*, keep_seed: bool = False, db: Session | None = None) -> dict:
         config.BULK_IMPORT_OUTPUT.unlink()
         removed.append(str(config.BULK_IMPORT_OUTPUT.name))
 
-    if not keep_seed and config.BULK_IMPORT_DB.exists():
+    if config.BULK_IMPORT_DB.exists():
         config.BULK_IMPORT_DB.unlink()
         removed.append(str(config.BULK_IMPORT_DB.name))
 
@@ -50,7 +46,6 @@ def reset_all(*, keep_seed: bool = False, db: Session | None = None) -> dict:
 
     return {
         "status": "reset",
-        "keep_seed": keep_seed,
         "removed_files": removed,
         "chapters": 0,
         "questions": 0,

@@ -20,11 +20,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY backend/ ./
 
-# Seed the fixture workbook so first boot works without a real Bulk
-# Import file. Replace /app/data/bulk_import_database.xlsx at runtime
-# (e.g., via a Fly volume) to use the real database.
-RUN python scripts/generate_dummy_data.py
-
 COPY --from=frontend-build /frontend/dist /app/frontend_dist
 
 ENV FRONTEND_DIST_DIR=/app/frontend_dist

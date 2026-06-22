@@ -37,7 +37,7 @@ export default function Database() {
     setBusy(true);
     setResetMsg(null);
     try {
-      const result = await api.resetData(false);
+      const result = await api.resetData();
       setResetMsg(`Cleared: ${JSON.stringify(result)}`);
       stats.reload();
       questions.reload();
