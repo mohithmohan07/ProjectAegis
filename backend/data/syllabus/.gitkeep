@@ -1,0 +1,10 @@
+# Place syllabus Excel workbooks here (commit to git for automatic preload on deploy).
+#
+# Expected files:
+#   English Language Units and Chapters.xlsx
+#   Kstate Syllabus Grade 6-10.xlsx
+#   Maharashtra Board Chapter List.xlsx
+#   Unit-Chapter List_ CBSE.xlsx
+#   Unit-Chapter List_ ICSE.xlsx
+#
+# Run: python scripts/check_syllabus.py

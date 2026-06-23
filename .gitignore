@@ -42,3 +42,5 @@ backend/aegis_pipeline/create_workbooks/mmd_cache/
 backend/aegis_pipeline/create_workbooks/plan_cache/
 
 # data/bulk_import_database.xlsx IS committed — it is the database fixture.
+# Syllabus structure workbooks under backend/data/syllabus/*.xlsx SHOULD be
+# committed so units/chapters preload on deploy (not runtime-generated).

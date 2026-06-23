@@ -284,8 +284,25 @@ def _resolve_file(key: str) -> Path | None:
     name = SYLLABUS_FILES.get(key, "")
     if not name:
         return None
-    path = config.SYLLABUS_DIR / name
-    return path if path.exists() else None
+    for directory in config.syllabus_workbook_dirs():
+        path = directory / name
+        if path.exists():
+            return path
+    return None
+
+
+def _discover_workbooks() -> list[Path]:
+    """All syllabus workbooks from bundled + runtime dirs (runtime wins on clash)."""
+    by_name: dict[str, Path] = {}
+    for directory in config.syllabus_workbook_dirs():
+        for path in sorted(directory.glob("*.xlsx")):
+            by_name[path.name] = path
+    return list(by_name.values())
+
+
+def _missing_expected_files() -> list[str]:
+    found = {p.name for p in _discover_workbooks()}
+    return [name for name in SYLLABUS_FILES.values() if name not in found]
 
 
 def _infer_file_options(filename: str) -> dict:
@@ -327,17 +344,9 @@ def import_syllabus_paths(db: Session, paths: list[Path]) -> dict:
 
 
 def load_all_syllabus_files(db: Session) -> dict:
-    """Load every known syllabus workbook from ``data/syllabus/``."""
-    board_keys = ("cbse", "icse", "maharashtra", "karnataka")
-    paths = [p for p in (_resolve_file(k) for k in board_keys) if p]
-    eng = _resolve_file("english_language")
-    if eng:
-        paths.append(eng)
-
-    missing = [
-        name for name in SYLLABUS_FILES.values()
-        if not (config.SYLLABUS_DIR / name).exists()
-    ]
+    """Load every syllabus workbook found in bundled or runtime directories."""
+    paths = _discover_workbooks()
+    missing = _missing_expected_files()
 
     result = import_syllabus_paths(db, paths) if paths else {
         "created": 0, "skipped": 0, "total_rows": 0, "loaded_files": [],
@@ -350,9 +359,7 @@ def bootstrap_syllabus(db: Session) -> dict | None:
     """Load syllabus structure when the database has no chapters yet."""
     if db.query(models.Chapter).count() > 0:
         return None
-    if not config.SYLLABUS_DIR.is_dir():
-        return None
-    paths = sorted(config.SYLLABUS_DIR.glob("*.xlsx"))
+    paths = _discover_workbooks()
     if not paths:
         return None
     return import_syllabus_paths(db, paths)

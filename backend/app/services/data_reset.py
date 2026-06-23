@@ -7,7 +7,7 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from .. import config, models
-from ..db import Base, engine, init_db
+from ..db import Base, SessionLocal, engine, init_db
 
 
 def _clear_dir(path: Path) -> None:
@@ -44,11 +44,16 @@ def reset_all(*, db: Session | None = None) -> dict:
     WORKBOOK_ROOT.mkdir(parents=True, exist_ok=True)
     config.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
+    from ..services import syllabus_import as syllabus_svc
+
+    syllabus = syllabus_svc.bootstrap_syllabus(SessionLocal())
+
     return {
         "status": "reset",
         "removed_files": removed,
         "chapters": 0,
         "questions": 0,
+        "syllabus": syllabus,
     }
 
 

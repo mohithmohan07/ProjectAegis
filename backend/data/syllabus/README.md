@@ -1,15 +1,39 @@
 # Syllabus structure workbooks
 
-Place the following Excel files in this folder. On startup, Aegis loads
-unit/chapter shells (no concepts or questions) when the database is empty.
+Place the five Excel files in this folder **and commit them to git** so they
+ship with the app and preload automatically on every deploy.
 
-| File | Board(s) |
-|------|----------|
+| File | Board |
+|------|-------|
 | `Unit-Chapter List_ CBSE.xlsx` | CBSE |
 | `Unit-Chapter List_ ICSE.xlsx` | ICSE |
 | `Maharashtra Board Chapter List.xlsx` | Maharashtra |
 | `Kstate Syllabus Grade 6-10.xlsx` | Karnataka |
 | `English Language Units and Chapters.xlsx` | All boards (universal) |
+
+## From Windows (OneDrive)
+
+Copy your files from:
+
+```
+C:\Users\FCI\OneDrive\Chapters and Units For CBSE, ICSE, Maharastra Board and KSTATE\
+```
+
+Into this folder in the project:
+
+```
+backend/data/syllabus/
+```
+
+Keep the exact filenames above, then commit and push.
+
+## Verify
+
+```bash
+cd backend
+python scripts/check_syllabus.py
+python scripts/import_syllabus.py
+```
 
 ## Expected columns
 
@@ -20,15 +44,10 @@ The importer auto-detects headers. Typical columns:
 - **Unit**
 - **Chapter**
 
+Names are normalized on import: Title Case, trimmed spacing, cleaned punctuation.
 English Language is replicated across CBSE, ICSE, Maharashtra, and Karnataka.
 
-## Manual import
+## Alternative: upload via UI
 
-```bash
-cd backend
-python scripts/import_syllabus.py
-# or import a single file:
-python scripts/import_syllabus.py "/path/to/Unit-Chapter List_ CBSE.xlsx" --board CBSE
-```
-
-Names are normalized to Title Case with trimmed spacing on import.
+On **Build Concepts** step 2 or the **Database** tab, use **Upload syllabus Excel
+files** if you prefer not to commit the workbooks to git.
