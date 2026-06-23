@@ -774,13 +774,14 @@ QUALITY RULES:
 """
 
 
-def _openai_json(system: str, user: str, max_tokens: int = 32000,
+def _openai_json(system: str, user: str, max_tokens: int | None = None,
                  retries: int = 3) -> dict:
     """One JSON-mode chat call with retries; returns the parsed object."""
     import json
     import time
     from openai import OpenAI
 
+    limit = config.OPENAI_MAX_OUTPUT_TOKENS if max_tokens is None else max_tokens
     client = OpenAI()
     last_err: Exception | None = None
     for attempt in range(1, retries + 1):
@@ -790,9 +791,15 @@ def _openai_json(system: str, user: str, max_tokens: int = 32000,
                 messages=[{"role": "system", "content": system},
                           {"role": "user", "content": user}],
                 response_format={"type": "json_object"},
-                max_completion_tokens=max_tokens,
+                max_completion_tokens=limit,
             )
-            return json.loads(resp.choices[0].message.content or "{}")
+            choice = resp.choices[0]
+            if getattr(choice, "finish_reason", None) == "length":
+                raise RuntimeError(
+                    f"OpenAI response truncated at max_completion_tokens={limit}. "
+                    "Set AEGIS_OPENAI_MAX_OUTPUT_TOKENS higher or reduce input size."
+                )
+            return json.loads(choice.message.content or "{}")
         except Exception as e:  # noqa: BLE001 — retry then surface
             last_err = e
             if attempt < retries:

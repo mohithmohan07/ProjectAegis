@@ -137,7 +137,7 @@ def call_gpt_json(
     system_prompt: str,
     user_prompt: str,
     temperature: float = 0.0,
-    max_output_tokens: int = 30000,
+    max_output_tokens: int = int(os.getenv("AEGIS_OPENAI_MAX_OUTPUT_TOKENS", "128000")),
 ) -> Dict[str, Any]:
     """
     Generic JSON-mode call using gpt-5.1 (or compatible).

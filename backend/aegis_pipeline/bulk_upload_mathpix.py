@@ -250,7 +250,8 @@ def escape_newlines_in_json_strings(raw: str) -> str:
 
     return ''.join(result_chars)
 
-def call_gpt_json(model: str, system_prompt: str, user_prompt: str, max_tokens: int = 30000) -> Dict[str, Any]:
+def call_gpt_json(model: str, system_prompt: str, user_prompt: str, max_tokens: int | None = None) -> Dict[str, Any]:
+    limit = max_tokens if max_tokens is not None else int(os.getenv("AEGIS_OPENAI_MAX_OUTPUT_TOKENS", "128000"))
     """
     Call GPT, get a JSON-like string, repair any literal newlines inside string
     values, then parse with json.loads.
@@ -265,7 +266,7 @@ def call_gpt_json(model: str, system_prompt: str, user_prompt: str, max_tokens: 
                 + "\n\nRespond with ONLY a single valid JSON object, no prose.",
             },
         ],
-        max_completion_tokens=max_tokens,
+        max_completion_tokens=limit,
         temperature=0,
     )
 

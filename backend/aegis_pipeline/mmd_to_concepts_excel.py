@@ -137,6 +137,7 @@ MMDS_SYMBIOSIS_CONFIG = {
 }
 
 MODEL = "gpt-5.4-mini-2026-03-17"  # change if you want
+MAX_OUTPUT_TOKENS = int(os.getenv("AEGIS_OPENAI_MAX_OUTPUT_TOKENS", "128000"))
 CONCEPTS_PER_CHAPTER_MIN = 40
 
 # Temporary: models to compare for Chapter 01 (use 2nd arg "compare")
@@ -764,6 +765,7 @@ def gpt_extract_concepts(chapter_label: str, mmd_text: str, subject: str, model:
         try:
             resp = client.responses.create(
                 model=use_model,
+                max_output_tokens=MAX_OUTPUT_TOKENS,
                 input=[
                     {"role": "system", "content": system},
                     {"role": "user", "content": user},

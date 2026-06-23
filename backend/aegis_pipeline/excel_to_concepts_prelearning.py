@@ -34,6 +34,7 @@ BOARD = "ICSE"
 BOOK = "Selina"
 GRADE = 9
 MODEL = "gpt-5.4-mini-2026-03-17"
+MAX_OUTPUT_TOKENS = int(os.getenv("AEGIS_OPENAI_MAX_OUTPUT_TOKENS", "128000"))
 
 # Subject code for topic/concept display: MA=Math, PH=Physics
 SUBJECT_CODES = {"Math": "MA", "Mathematics": "MA", "Physics": "PH"}
@@ -212,6 +213,7 @@ def gpt_enhance_concept(
         try:
             resp = client.responses.create(
                 model=MODEL,
+                max_output_tokens=MAX_OUTPUT_TOKENS,
                 input=[
                     {"role": "system", "content": get_prelearning_system_prompt(subject)},
                     {"role": "user", "content": user},

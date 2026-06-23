@@ -114,6 +114,7 @@ SUBJECT_FILES = SUBJECT_FILES_BY_GRADE_AND_BOARD[10]["ICSE"]
 # Alias for board-only lookups at default grade (CLI uses grade + board)
 SUBJECT_FILES_BY_BOARD = SUBJECT_FILES_BY_GRADE_AND_BOARD[10]
 MODEL = "gpt-5.4-mini-2026-03-17"
+MAX_OUTPUT_TOKENS = int(os.getenv("AEGIS_OPENAI_MAX_OUTPUT_TOKENS", "128000"))
 
 
 def board_sequencing_guidance(board: str) -> str:
@@ -661,6 +662,7 @@ Chapter name: {chapter_title}
             {"role": "user", "content": user_msg},
         ],
         response_format={"type": "json_object"},
+        max_completion_tokens=MAX_OUTPUT_TOKENS,
     )
     text = resp.choices[0].message.content or "{}"
     data = json.loads(text)
@@ -885,6 +887,7 @@ Allowed tags: {", ".join(tags)}."""
                 model=MODEL,
                 messages=messages,
                 response_format={"type": "json_object"},
+                max_completion_tokens=MAX_OUTPUT_TOKENS,
             )
             content = resp.choices[0].message.content
             data = json.loads(content) if isinstance(content, str) else json.loads(content or "{}")

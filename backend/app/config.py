@@ -105,3 +105,7 @@ def require_workbooks_live() -> None:
 # OpenAI model for concept extraction / pre-learning derivation. The same
 # model family the Create Workbooks pipeline is validated with.
 OPENAI_MODEL = os.environ.get("AEGIS_OPENAI_MODEL", "gpt-5.4-mini-2026-03-17")
+# Max completion/output tokens per GPT call (gpt-5.4 family supports up to 128k).
+OPENAI_MAX_OUTPUT_TOKENS = int(
+    os.environ.get("AEGIS_OPENAI_MAX_OUTPUT_TOKENS", "128000")
+)
