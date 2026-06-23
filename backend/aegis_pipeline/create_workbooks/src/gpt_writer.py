@@ -36,20 +36,19 @@ class GPTTruncationError(RuntimeError):
 
 
 _CONCISE_TOPIC_NOTE = (
-    "IMPORTANT — BE CONCISE. Build this ONE episode compactly so the JSON is not "
-    "truncated: at most 2 short excerpts, a Language & Grammar table of at most 5 "
-    "rows, at most 6 Literary Craft bullets, and at most 3 Q&A with answers of "
-    "2–3 sentences each. Return well under 1200 words of JSON."
+    "IMPORTANT — return complete, valid JSON for this episode. Do not truncate "
+    "mid-structure; include all required fields even if the chapter is long."
 )
 
 
 class GPTWriter:
-    # Input/output budgets — set high so textbook content is not truncated.
+    # Input/output budgets — use model maximum so textbook content is not truncated.
     MAX_MMD_CHARS = 500_000          # full Mathpix MMD sent to planner + builder
-    MAX_PLANNER_OUTPUT_TOKENS = 32_000
-    MAX_BUILDER_OUTPUT_TOKENS = 32_000
-    MAX_TOPIC_OUTPUT_TOKENS = 24_000
-    MAX_SHELL_OUTPUT_TOKENS = 10_000
+    _MAX_OUT = int(os.getenv("AEGIS_OPENAI_MAX_OUTPUT_TOKENS", "128000"))
+    MAX_PLANNER_OUTPUT_TOKENS = _MAX_OUT
+    MAX_BUILDER_OUTPUT_TOKENS = _MAX_OUT
+    MAX_TOPIC_OUTPUT_TOKENS = _MAX_OUT
+    MAX_SHELL_OUTPUT_TOKENS = _MAX_OUT
 
     def __init__(self, cfg: dict) -> None:
         self.cfg = cfg
