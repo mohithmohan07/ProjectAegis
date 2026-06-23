@@ -260,6 +260,225 @@ PURPOSE_BLOCKS = {
 }
 
 # --------------------------------------------------------------------------- #
+# 7b · Question-CATEGORY blocks (the precise format/answer contract per category)
+# --------------------------------------------------------------------------- #
+#
+# The question TYPE (objective/subjective/descriptive) sets the broad answer
+# shape; the CATEGORY pins the exact structure, option/answer layout and
+# marking contract. Every controlled category in
+# ``bulk_import.QUESTION_CATEGORIES`` has a block here so generation is never
+# left to a generic default.
+
+CATEGORY_BLOCKS = {
+    # ---- Objective ----
+    "Multiple Choice Question": """\
+CATEGORY: MULTIPLE CHOICE QUESTION.
+- One clear, self-contained stem (a question or a sentence to complete).
+- Provide exactly 4 options unless the content truly demands 3 or 5.
+- EXACTLY ONE option is correct (correct_answer "Yes", answer_weightage = the
+  marks); every other option correct_answer "No", weightage 0.
+- Distractors must be plausible and from the SAME conceptual family — built from
+  typical student errors (the converse, a missing condition, a neighbouring
+  concept), never absurd or obviously wrong fillers.
+- Options parallel in length, grammar and form; no "All/None of the above"; no
+  overlapping or partially-correct options; negative stems only when flagged
+  ("... is NOT ...").
+- answer_explanation: why the key is correct AND why the main distractors are wrong.""",
+    "Assertion & Reasons": """\
+CATEGORY: ASSERTION & REASONS.
+- The question MUST contain two complete statements, clearly labelled:
+  "Assertion (A): ..." and "Reason (R): ...", both about the concept.
+- Provide EXACTLY these four options, IN THIS ORDER, with exactly one correct:
+  1) Both A and R are true, and R is the correct explanation of A.
+  2) Both A and R are true, but R is NOT the correct explanation of A.
+  3) A is true, but R is false.
+  4) A is false, but R is true.
+- Choose the truth values deliberately so the keyed option is unambiguous; A and
+  R must be genuinely related (the item tests the explanatory link, not two
+  unrelated facts).
+- answer_explanation: state the truth value of A and of R and whether R explains A.""",
+    "True/False": """\
+CATEGORY: TRUE/FALSE.
+- The question is a single declarative STATEMENT to be judged true or false
+  (no question mark needed); it must be unambiguously one or the other — never
+  opinion, never half-true.
+- Provide EXACTLY two options, "True" and "False"; mark the correct one "Yes"
+  (weightage = marks), the other "No" (0).
+- When the answer is False, prefer a statement that targets a common
+  misconception.
+- answer_explanation: say whether it is true or false, with the one-line
+  justification (and the correction when false).""",
+    "Fill in the Blanks": """\
+CATEGORY: FILL IN THE BLANKS.
+- The stem MUST contain a blank written as a run of underscores "____"; the
+  blank tests one meaningful term/value/formula, not a trivial word.
+- The sentence must read grammatically once filled; blank only one position
+  unless multiple blanks are clearly numbered.
+- OBJECTIVE: give 3-4 options (exactly one correct), distractors being plausible
+  same-family terms.
+- SUBJECTIVE: no options — the rubric/answer holds the exact accepted word(s),
+  listing genuine alternatives comma-separated when several are valid.
+- answer_explanation: the correct filler and why.""",
+    # ---- Subjective ----
+    "Very Short Answer": """\
+CATEGORY: VERY SHORT ANSWER.
+- Answerable in a single word, phrase, value, or one short sentence (usually 1 mark).
+- Crisp, unambiguous stem with ONE defensible answer; no multi-part demands.
+- Rubric: the exact term/value/fact (with accepted variants); keyword-based marking.""",
+    "Short Answer": """\
+CATEGORY: SHORT ANSWER.
+- Answerable in 2-4 sentences or a few steps (usually 2-3 marks).
+- Marks align with the number of distinct required points (1 mark = one
+  keyword/fact/step).
+- Rubric: one mark-wise point per required idea, summing exactly to the marks;
+  include accepted phrasings.""",
+    "Sentence Transformation": """\
+CATEGORY: SENTENCE TRANSFORMATION (language).
+- Give a source sentence AND an explicit transformation instruction (change the
+  voice/tense/degree, combine, convert direct<->indirect, make complex/compound,
+  etc.) — the rule under test must be stated.
+- The target must preserve the original meaning and be the single grammatically
+  correct transformation.
+- Rubric: marks for the correct structure/grammar and for retained meaning; list
+  valid alternative correct forms.""",
+    "Error Correction": """\
+CATEGORY: ERROR CORRECTION (language).
+- Give a sentence containing ONE clear, rule-based grammatical/usage error (or a
+  stated number of errors); the error must be unambiguous.
+- Ask the student to identify and correct it.
+- Rubric: marks for locating the error AND for the correct replacement; give the
+  corrected sentence and name the rule.""",
+    # ---- Descriptive ----
+    "Long Answer": """\
+CATEGORY: LONG ANSWER.
+- Use an explicit task verb (explain / justify / derive / compare / analyse /
+  evaluate / describe) with depth matching the marks.
+- May use clearly labelled subparts (a),(b),(c): keep them INSIDE this question
+  via the sub_question slots (never separate questions), each with its own marks.
+- Rubric: mark-wise, evaluation-ready points covering every subpart; weightages
+  sum exactly to the total marks.""",
+    "Case Based Questions": """\
+CATEGORY: CASE BASED QUESTIONS.
+- Open with a short, realistic CASE/scenario (2-5 lines; a small data set, table
+  or diagram description is welcome) that the subparts genuinely depend on.
+- Put the FULL case text in question_text so the evaluator has the context.
+- Follow with subparts (a),(b),(c) of graded difficulty that REQUIRE the case
+  (application/analysis), not detached recall; keep them in the sub_question
+  slots with per-part marks.
+- Rubric: mark-wise per subpart, tied to the case; weightages sum to the marks.""",
+    "Passage Based Questions": """\
+CATEGORY: PASSAGE BASED QUESTIONS.
+- Provide a short PASSAGE (unseen or concept-linked) and questions answerable
+  FROM it (comprehension, inference, vocabulary-in-context).
+- Include the full passage in question_text.
+- Subparts (a),(b),(c) in the sub_question slots with per-part marks; include at
+  least one inference/interpretation item, not only literal lifts.
+- Rubric: mark-wise, evidence-from-passage based; weightages sum to the marks.""",
+    "Extract Based Questions": """\
+CATEGORY: EXTRACT BASED QUESTIONS (literature).
+- Quote a short EXTRACT (lines from the prose/poem/text) and ask
+  reference-to-context subparts (meaning, literary device, tone, speaker,
+  significance).
+- Include the full extract in question_text.
+- Subparts (a),(b),(c) in the sub_question slots with per-part marks.
+- Rubric: mark-wise, textual-evidence based; weightages sum to the marks.""",
+    "Composition Writing": """\
+CATEGORY: COMPOSITION WRITING.
+- Give a clear writing task (essay / letter / story / report / notice / article)
+  with topic, audience/format cues and an approximate word count fitting the marks.
+- This is OPEN-ENDED: there is no single correct answer. The rubric scores
+  CONTENT/ideas, ORGANISATION/format and LANGUAGE/expression as mark-wise bands
+  summing to the marks.
+- display_answer: a brief model outline or sample — NOT a fixed key; never
+  over-constrain valid responses.""",
+}
+
+# Map common synonyms / legacy labels (incl. the vendored category list and
+# mark-tagged variants like "Short Answer Type (3 Marks)") to the controlled
+# vocabulary above. Keys are normalized (lowercased, parentheticals removed,
+# non-letters collapsed to single spaces).
+_CATEGORY_ALIASES = {
+    "multiple choice question": "Multiple Choice Question",
+    "multiple choice questions": "Multiple Choice Question",
+    "multiple choice": "Multiple Choice Question",
+    "mcq": "Multiple Choice Question",
+    "choose the odd one out": "Multiple Choice Question",
+    "assertion reasons": "Assertion & Reasons",
+    "assertion reason": "Assertion & Reasons",
+    "assertion and reason": "Assertion & Reasons",
+    "assertion and reasons": "Assertion & Reasons",
+    "assertion reasons type": "Assertion & Reasons",
+    "assertion reason type": "Assertion & Reasons",
+    "true false": "True/False",
+    "true or false": "True/False",
+    "fill in the blanks": "Fill in the Blanks",
+    "fill in the blank": "Fill in the Blanks",
+    "fill ups": "Fill in the Blanks",
+    "fill up": "Fill in the Blanks",
+    "very short answer": "Very Short Answer",
+    "very short answer questions": "Very Short Answer",
+    "very short answer type": "Very Short Answer",
+    "short answer": "Short Answer",
+    "short answer type": "Short Answer",
+    "short answer questions": "Short Answer",
+    "short answer question": "Short Answer",
+    "sentence transformation": "Sentence Transformation",
+    "transformation of sentences": "Sentence Transformation",
+    "error correction": "Error Correction",
+    "long answer": "Long Answer",
+    "long answer type": "Long Answer",
+    "long answer questions": "Long Answer",
+    "numerical application based": "Long Answer",
+    "case based questions": "Case Based Questions",
+    "case based question": "Case Based Questions",
+    "case based": "Case Based Questions",
+    "case study": "Case Based Questions",
+    "passage based questions": "Passage Based Questions",
+    "passage based question": "Passage Based Questions",
+    "passage based": "Passage Based Questions",
+    "extract based questions": "Extract Based Questions",
+    "extract based question": "Extract Based Questions",
+    "extract based": "Extract Based Questions",
+    "composition writing": "Composition Writing",
+    "composition": "Composition Writing",
+    "essay": "Composition Writing",
+    "essay writing": "Composition Writing",
+    "creative writing": "Composition Writing",
+}
+
+import re as _re_cat  # noqa: E402
+
+
+def canonical_category(category: str) -> str:
+    """Map a (possibly legacy / mark-tagged) category label to the controlled one.
+
+    Returns the original (trimmed) string when nothing matches, so unknown
+    categories still flow through harmlessly.
+    """
+    raw = (category or "").strip()
+    if not raw:
+        return ""
+    if raw in CATEGORY_BLOCKS:
+        return raw
+    key = _re_cat.sub(r"\(.*?\)", "", raw)            # drop "(3 Marks)" etc.
+    key = _re_cat.sub(r"[^a-z]+", " ", key.lower()).strip()
+    return _CATEGORY_ALIASES.get(key, raw)
+
+
+def category_guidance(question_type: str, category: str) -> str:
+    """The category-specific format/answer contract block (or a typed default)."""
+    block = CATEGORY_BLOCKS.get(canonical_category(category))
+    if block:
+        return block
+    # Unknown category: fall back to a sensible per-type default so the contract
+    # is never silently dropped.
+    default = {"objective": "Multiple Choice Question",
+               "subjective": "Short Answer",
+               "descriptive": "Long Answer"}.get(question_type, "Short Answer")
+    return CATEGORY_BLOCKS[default]
+
+
+# --------------------------------------------------------------------------- #
 # 8 · Rubric placement + variety blocks
 # --------------------------------------------------------------------------- #
 
@@ -334,6 +553,21 @@ values only (Remember/Understand/Apply/Analyse/Evaluate/Create;
 Less/Moderate/High; Phrases/Equation/Image); no hallucinated facts;
 grade-appropriate; fresh non-repetitive framing (no repeated stems across
 the batch).
+CATEGORY CONTRACT — the question MUST obey its question_category's structure:
+- Multiple Choice Question: 4 plausible options, exactly one correct.
+- Assertion & Reasons: labelled Assertion (A) and Reason (R) + the standard
+  four A/R options, exactly one correct.
+- True/False: a declarative statement with exactly the options True and False.
+- Fill in the Blanks: a "____" blank in the stem (objective: options; subjective:
+  exact accepted word in the rubric).
+- Very Short / Short Answer: scope and rubric points match the marks.
+- Sentence Transformation: a source sentence + an explicit transformation rule.
+- Error Correction: a sentence with a clear error to fix.
+- Long Answer: explicit task verb; subparts (if any) inside sub_questions.
+- Case / Passage / Extract Based: the case/passage/extract is present in
+  question_text and the subparts depend on it.
+- Composition Writing: an open writing task scored by content/organisation/language.
+Flag any question that violates its category contract.
 Return ONLY JSON: {"results": [{"index": 0, "pass": true, "problems": [""],
 "fixed_question": null}]} — when pass=false and the issue is repairable,
 put the corrected full question object in fixed_question (same schema as
@@ -365,6 +599,7 @@ def build_prompt(
     parts = [
         BASE_BLOCK,
         TYPE_BLOCKS[question_type],
+        category_guidance(question_type, category),
         DIFFICULTY_BLOCKS.get(difficulty, DIFFICULTY_BLOCKS["Moderate"]),
         SKILL_BLOCKS.get(skill, SKILL_BLOCKS["Understand"]),
         combo_guidance(difficulty, skill),
@@ -431,6 +666,38 @@ def review_question(rec: dict) -> list[str]:
         at = a.get("answer_type", "")
         if at and at not in bi.ANSWER_TYPES:
             problems.append(f"non-standard answer_type {at!r}")
+    problems += _category_problems(rec)
+    return problems
+
+
+# Distinctive, reliably-enforceable structural contracts per category. Kept
+# conservative (only the most unambiguous ones) so a competent generator never
+# trips a false positive, while a generator that ignores the category is caught.
+def _category_problems(rec: dict) -> list[str]:
+    """Category-specific structural checks (only when a category is present)."""
+    import re
+
+    cat = canonical_category(rec.get("question_category", ""))
+    if not cat:
+        return []
+    q = rec.get("question") or ""
+    ql = q.lower()
+    answers = rec.get("answers") or []
+    problems: list[str] = []
+
+    if cat == "Fill in the Blanks":
+        if not re.search(r"_{2,}|\.{4,}|\u2026{2,}", q):
+            problems.append("Fill in the Blanks: stem has no blank (use '____')")
+    elif cat == "Assertion & Reasons":
+        if "assertion" not in ql or "reason" not in ql:
+            problems.append(
+                "Assertion & Reasons: stem must state an Assertion (A) and a Reason (R)")
+    elif cat == "True/False":
+        if rec.get("sheet_kind") == "objective":
+            contents = {str(a.get("answer_content", "")).strip().lower() for a in answers}
+            if answers and contents - {"true", "false"}:
+                problems.append(
+                    "True/False: objective options must be exactly 'True' and 'False'")
     return problems
 
 
