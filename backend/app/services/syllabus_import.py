@@ -288,47 +288,62 @@ def _resolve_file(key: str) -> Path | None:
     return path if path.exists() else None
 
 
-def load_all_syllabus_files(db: Session) -> dict:
-    """Load every known syllabus workbook from ``data/syllabus/``."""
-    all_rows: list[SyllabusRow] = []
-    loaded: list[str] = []
-    missing: list[str] = []
-
-    # Board-specific files.
-    board_keys = {
+def _infer_file_options(filename: str) -> dict:
+    """Map a workbook filename to parse_workbook options."""
+    lower = filename.lower()
+    if "english" in lower and "language" in lower:
+        return {
+            "default_subject": "English Language",
+            "universal_boards": ALL_SYLLABUS_BOARDS,
+        }
+    for key, board in {
         "cbse": "CBSE",
         "icse": "ICSE",
         "maharashtra": "Maharashtra",
+        "msbshse": "Maharashtra",
+        "kstate": "Karnataka",
         "karnataka": "Karnataka",
-    }
-    for key, board in board_keys.items():
-        path = _resolve_file(key)
-        if not path:
-            missing.append(SYLLABUS_FILES[key])
+    }.items():
+        if key in lower:
+            return {"default_board": board}
+    return {}
+
+
+def import_syllabus_paths(db: Session, paths: list[Path]) -> dict:
+    """Parse and upsert chapters from explicit workbook paths."""
+    all_rows: list[SyllabusRow] = []
+    loaded: list[str] = []
+    for path in paths:
+        if not path.exists():
             continue
-        all_rows.extend(parse_workbook(path, default_board=board))
+        opts = _infer_file_options(path.name)
+        universal = opts.pop("universal_boards", None)
+        all_rows.extend(parse_workbook(path, universal_boards=universal, **opts))
         loaded.append(path.name)
-
-    # English Language — universal across all boards.
-    eng_path = _resolve_file("english_language")
-    if eng_path:
-        all_rows.extend(parse_workbook(
-            eng_path,
-            default_subject="English Language",
-            universal_boards=ALL_SYLLABUS_BOARDS,
-        ))
-        loaded.append(eng_path.name)
-    else:
-        missing.append(SYLLABUS_FILES["english_language"])
-
     counts = upsert_chapters(db, all_rows) if all_rows else {
         "created": 0, "skipped": 0, "total_rows": 0,
     }
-    return {
-        "loaded_files": loaded,
-        "missing_files": missing,
-        **counts,
+    return {"loaded_files": loaded, **counts}
+
+
+def load_all_syllabus_files(db: Session) -> dict:
+    """Load every known syllabus workbook from ``data/syllabus/``."""
+    board_keys = ("cbse", "icse", "maharashtra", "karnataka")
+    paths = [p for p in (_resolve_file(k) for k in board_keys) if p]
+    eng = _resolve_file("english_language")
+    if eng:
+        paths.append(eng)
+
+    missing = [
+        name for name in SYLLABUS_FILES.values()
+        if not (config.SYLLABUS_DIR / name).exists()
+    ]
+
+    result = import_syllabus_paths(db, paths) if paths else {
+        "created": 0, "skipped": 0, "total_rows": 0, "loaded_files": [],
     }
+    result["missing_files"] = missing
+    return result
 
 
 def bootstrap_syllabus(db: Session) -> dict | None:
@@ -337,6 +352,7 @@ def bootstrap_syllabus(db: Session) -> dict | None:
         return None
     if not config.SYLLABUS_DIR.is_dir():
         return None
-    if not any(config.SYLLABUS_DIR.glob("*.xlsx")):
+    paths = sorted(config.SYLLABUS_DIR.glob("*.xlsx"))
+    if not paths:
         return None
-    return load_all_syllabus_files(db)
+    return import_syllabus_paths(db, paths)
