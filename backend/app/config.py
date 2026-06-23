@@ -10,9 +10,11 @@ BULK_IMPORT_DB = DATA_DIR / "bulk_import_database.xlsx"
 # Every generation appends here (append-only, never overwritten).
 BULK_IMPORT_OUTPUT = DATA_DIR / "bulk_import_output.xlsx"
 UPLOAD_DIR = DATA_DIR / "uploads"
+SYLLABUS_DIR = DATA_DIR / "syllabus"
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+SYLLABUS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def has_openai() -> bool:

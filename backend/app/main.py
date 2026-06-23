@@ -7,7 +7,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from .db import init_db
+from .db import SessionLocal, init_db
+from .services import syllabus_import as syllabus_svc
 from .api import (
     directory as directory_api,
     build_assessments as build_assessments_api,
@@ -19,8 +20,13 @@ from .api import (
 
 
 def bootstrap() -> None:
-    """Initialize the database schema on startup. No demo data is loaded automatically."""
+    """Initialize the database schema and preload syllabus structure if empty."""
     init_db()
+    db = SessionLocal()
+    try:
+        syllabus_svc.bootstrap_syllabus(db)
+    finally:
+        db.close()
 
 
 @asynccontextmanager

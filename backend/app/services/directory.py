@@ -36,6 +36,7 @@ _NCERT_SOURCE = re.compile(
 # over SCIENCE and ENGLISHGRAMMAR over ENGLISH.
 _SUBJECT_WORDS = [
     ("SOCIALSCIENCE", "Social Science"),
+    ("ENGLISH LANGUAGE", "English Language"),
     ("ENGLISHGRAMMAR", "English Grammar"),
     ("ENGLISHLITERATURE", "English Literature"),
     ("MATHEMATICS", "Mathematics"),

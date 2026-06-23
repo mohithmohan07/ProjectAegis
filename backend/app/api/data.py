@@ -145,6 +145,14 @@ def reset_data(db: Session = Depends(get_db)):
     return reset_svc.reset_all(db=db)
 
 
+@router.post("/syllabus/import")
+def import_syllabus(db: Session = Depends(get_db)):
+    """Load unit/chapter syllabus workbooks from ``data/syllabus/``."""
+    from ..services import syllabus_import as syllabus_svc
+
+    return syllabus_svc.load_all_syllabus_files(db)
+
+
 @router.get("/questions", response_model=list[schemas.QuestionOut])
 def list_questions(
     sheet_kind: str | None = None,

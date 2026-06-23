@@ -91,9 +91,11 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
 
-The app starts with an **empty database**. Import a Bulk Import workbook from
-the Database tab, or run `python scripts/generate_dummy_data.py` if you want
-demo content for local development.
+The app starts with an **empty database** unless syllabus workbooks are present
+in `backend/data/syllabus/` (see that folder's README). On first startup, unit
+and chapter shells are loaded automatically so you can deposit concept mapping
+into the right place. Import a full Bulk Import workbook from the Database tab
+when you need questions and concepts too.
 
 API docs: http://localhost:8000/docs
 

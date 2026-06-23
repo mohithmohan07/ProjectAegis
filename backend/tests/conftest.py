@@ -60,7 +60,14 @@ def db():
 @pytest.fixture()
 def first_chapter(client):
     tree = client.get("/directory/tree").json()
-    return tree[0]["grades"][0]["subjects"][0]["units"][0]["chapters"][0]
+    for board in tree:
+        for grade in board["grades"]:
+            for subject in grade["subjects"]:
+                for unit in subject["units"]:
+                    for ch in unit["chapters"]:
+                        if ch.get("concept_count", 0) > 0:
+                            return ch
+    pytest.fail("no chapter with concepts in test fixture tree")
 
 
 @pytest.fixture()
