@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { api } from "../api/client";
 import { useAsync } from "../hooks";
+import SyllabusUploader from "../components/SyllabusUploader";
 import type { BoardNode } from "../types";
 
 const SHEETS = ["objective", "subjective", "descriptive"];
@@ -10,6 +11,8 @@ export default function Database() {
   const [importMsg, setImportMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [resetMsg, setResetMsg] = useState<string | null>(null);
+
+  const [syllabusMsg, setSyllabusMsg] = useState<string | null>(null);
 
   const stats = useAsync(() => api.stats(), []);
   const questions = useAsync(() => api.questions({ sheet_kind: sheet, limit: "100" }), [sheet]);
@@ -77,6 +80,16 @@ export default function Database() {
         {importMsg && <div className="muted mono" style={{ marginTop: 8 }}>{importMsg}</div>}
         {resetMsg && <div className="muted mono" style={{ marginTop: 8 }}>{resetMsg}</div>}
       </div>
+
+      <div className="section-title">Syllabus structure (units & chapters)</div>
+      <SyllabusUploader
+        disabled={busy}
+        onLoaded={() => {
+          stats.reload();
+          setSyllabusMsg("Syllabus loaded — use Build Concepts to deposit into a chapter.");
+        }}
+      />
+      {syllabusMsg && <div className="muted mono" style={{ marginTop: 8 }}>{syllabusMsg}</div>}
 
       {stats.data && (
         <div className="grid cols-4" style={{ marginTop: 16 }}>

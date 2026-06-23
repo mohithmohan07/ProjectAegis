@@ -12,12 +12,17 @@ export default function DirectoryPicker({
   onScope,
   allowConceptScope = true,
   chapterOnly = false,
+  reloadSignal = 0,
 }: {
   onScope: (scope: Scope | null) => void;
   allowConceptScope?: boolean;
   chapterOnly?: boolean;
+  /** Increment to refetch the directory tree (e.g. after syllabus upload). */
+  reloadSignal?: number;
 }) {
   const [tree, setTree] = useState<BoardNode[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [board, setBoard] = useState("");
   const [grade, setGrade] = useState("");
   const [subject, setSubject] = useState("");
@@ -28,8 +33,16 @@ export default function DirectoryPicker({
   const [picked, setPicked] = useState<number[]>([]);
 
   useEffect(() => {
-    api.tree().then(setTree).catch(() => setTree([]));
-  }, []);
+    setLoading(true);
+    setLoadError(null);
+    api.tree()
+      .then(setTree)
+      .catch((e) => {
+        setTree([]);
+        setLoadError(String(e));
+      })
+      .finally(() => setLoading(false));
+  }, [reloadSignal]);
 
   useEffect(() => {
     if (!chapter) {
@@ -83,8 +96,20 @@ export default function DirectoryPicker({
 
   return (
     <div className="dir-picker">
+      {loading && <div className="muted">Loading directory…</div>}
+      {!loading && loadError && (
+        <div className="error-box" style={{ marginBottom: 8 }}>{loadError}</div>
+      )}
+      {!loading && !loadError && tree.length === 0 && (
+        <div className="error-box" style={{ marginBottom: 8 }}>
+          No units or chapters are loaded yet. Upload your syllabus structure
+          Excel files below, then pick Board → Class → Subject → Unit → Chapter
+          manually. The PDF is never auto-matched to a chapter.
+        </div>
+      )}
       <div className="row">
-        <select value={board} onChange={(e) => { setBoard(e.target.value); reset("board"); }}>
+        <select value={board} onChange={(e) => { setBoard(e.target.value); reset("board"); }}
+          disabled={loading || tree.length === 0}>
           <option value="">Board…</option>
           {tree.map((b) => <option key={b.board}>{b.board}</option>)}
         </select>

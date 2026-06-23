@@ -153,6 +153,32 @@ def import_syllabus(db: Session = Depends(get_db)):
     return syllabus_svc.load_all_syllabus_files(db)
 
 
+@router.post("/syllabus/upload")
+async def upload_syllabus(
+    files: list[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+):
+    """Upload one or more syllabus Excel files and import unit/chapter shells."""
+    from ..services import syllabus_import as syllabus_svc
+
+    if not files:
+        raise HTTPException(400, "upload at least one .xlsx syllabus file")
+
+    saved: list[str] = []
+    paths: list[Path] = []
+    for file in files:
+        if not file.filename or not file.filename.lower().endswith((".xlsx", ".xls")):
+            raise HTTPException(400, f"expected .xlsx files, got {file.filename!r}")
+        dest = config.SYLLABUS_DIR / Path(file.filename).name
+        dest.write_bytes(await file.read())
+        saved.append(dest.name)
+        paths.append(dest)
+
+    result = syllabus_svc.import_syllabus_paths(db, paths)
+    result["uploaded_files"] = saved
+    return result
+
+
 @router.get("/questions", response_model=list[schemas.QuestionOut])
 def list_questions(
     sheet_kind: str | None = None,

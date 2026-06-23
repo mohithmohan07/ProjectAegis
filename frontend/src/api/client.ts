@@ -62,6 +62,16 @@ export const api = {
       "/data/reset",
       { method: "POST" },
     ),
+  uploadSyllabus: (files: File[]) => {
+    const fd = new FormData();
+    for (const f of files) fd.append("files", f);
+    return http<Record<string, unknown>>("/data/syllabus/upload", {
+      method: "POST",
+      body: fd,
+    });
+  },
+  importSyllabus: () =>
+    http<Record<string, unknown>>("/data/syllabus/import", { method: "POST" }),
 
   // Build Assessments — concept mapping
   createSession: (scope_type: string, scope_ids: number[]) =>

@@ -68,7 +68,9 @@ def test_upsert_chapters_creates_shells(db, cbse_xlsx):
     result = svc.upsert_chapters(db, rows)
     assert result["created"] == 3
     assert db.query(models.Chapter).count() == before + 3
-    ch = db.query(models.Chapter).filter_by(chapter_title="Knowing Our Numbers").one()
+    ch = db.query(models.Chapter).filter_by(
+        board="CBSE", chapter_title="Knowing Our Numbers",
+    ).one()
     assert ch.board == "CBSE"
     assert ch.grade == "06"
     assert ch.unit == "Number Systems"
@@ -97,10 +99,9 @@ def test_bootstrap_syllabus_only_when_empty(db, cbse_xlsx, monkeypatch):
     db.commit()
 
     syllabus_dir = cbse_xlsx.parent
+    monkeypatch.setattr(cfg, "BUNDLED_SYLLABUS_DIR", syllabus_dir)
     monkeypatch.setattr(cfg, "SYLLABUS_DIR", syllabus_dir)
-    monkeypatch.setitem(svc.SYLLABUS_FILES, "cbse", cbse_xlsx.name)
-    for key in ("icse", "maharashtra", "karnataka", "english_language"):
-        monkeypatch.setitem(svc.SYLLABUS_FILES, key, f"missing_{key}.xlsx")
+    monkeypatch.setattr(svc, "_discover_workbooks", lambda: [cbse_xlsx])
 
     result = svc.bootstrap_syllabus(db)
     assert result is not None

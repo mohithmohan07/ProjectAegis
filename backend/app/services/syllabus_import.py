@@ -22,7 +22,21 @@ from .text_normalize import (
     normalize_grade,
     normalize_subject,
     normalize_unit,
+    roman_to_grade,
 )
+
+# Grades used when English Language is replicated across boards.
+ENGLISH_LANGUAGE_GRADES = ["06", "07", "08", "09", "10"]
+
+# Maharashtra sheet tab -> canonical subject.
+_MAHARASHTRA_SUBJECTS = {
+    "math": "Mathematics",
+    "science": "Science",
+    "english": "English",
+    "h&c": "History and Civics",
+    "geography": "Geography",
+    "evs": "Environmental Studies",
+}
 
 # Boards that receive the shared English Language syllabus.
 ALL_SYLLABUS_BOARDS = list(bi.BOARDS)
@@ -134,6 +148,81 @@ def _detect_header_row(rows: list[tuple]) -> tuple[int, dict[str, int]] | None:
     return best_idx, best_map
 
 
+def _parse_english_language_workbook(path: Path) -> list[SyllabusRow]:
+    """English Language: Unit + Chapter, replicated across all boards and grades."""
+    wb = load_workbook(path, read_only=True, data_only=True)
+    ws = wb[wb.sheetnames[0]]
+    raw_rows = list(ws.iter_rows(values_only=True))
+    wb.close()
+    if not raw_rows:
+        return []
+
+    detected = _detect_header_row(raw_rows)
+    if not detected:
+        return []
+    header_idx, colmap = detected
+    if "unit" not in colmap or "chapter" not in colmap:
+        return []
+
+    rows: list[SyllabusRow] = []
+    for row in raw_rows[header_idx + 1:]:
+        unit = normalize_unit(_cell_str(row[colmap["unit"]]))
+        chapter = normalize_chapter(_cell_str(row[colmap["chapter"]]))
+        if not unit or not chapter:
+            continue
+        for board in ALL_SYLLABUS_BOARDS:
+            for grade in ENGLISH_LANGUAGE_GRADES:
+                rows.append(SyllabusRow(
+                    board=board, grade=grade, subject="English Language",
+                    unit=unit, chapter=chapter,
+                ))
+    return rows
+
+
+def _parse_maharashtra_sheet(ws, subject: str) -> list[SyllabusRow]:
+    """Maharashtra layout: row 0 = Roman grade bands, row 1 = Unit/Chapter pairs."""
+    raw_rows = list(ws.iter_rows(values_only=True))
+    if len(raw_rows) < 3:
+        return []
+
+    grade_row = raw_rows[0]
+    blocks: list[tuple[int, str]] = []
+    for col, cell in enumerate(grade_row):
+        grade = roman_to_grade(_cell_str(cell))
+        if grade:
+            blocks.append((col, grade))
+
+    out: list[SyllabusRow] = []
+    for row in raw_rows[2:]:
+        for col, grade in blocks:
+            unit = normalize_unit(_cell_str(row[col]) if col < len(row) else "")
+            chapter = normalize_chapter(
+                _cell_str(row[col + 1]) if col + 1 < len(row) else "",
+            )
+            if not unit or not chapter:
+                continue
+            if unit.lower() == "unit" or chapter.lower() in {"chapter name", "chapter"}:
+                continue
+            out.append(SyllabusRow(
+                board="Maharashtra", grade=grade, subject=subject,
+                unit=unit, chapter=chapter,
+            ))
+    return out
+
+
+def _parse_maharashtra_workbook(path: Path) -> list[SyllabusRow]:
+    wb = load_workbook(path, read_only=True, data_only=True)
+    rows: list[SyllabusRow] = []
+    for ws in wb.worksheets:
+        key = ws.title.strip().lower()
+        if "status" in key or "chapter wise" in key:
+            continue
+        subject = _MAHARASHTRA_SUBJECTS.get(key, normalize_subject(ws.title))
+        rows.extend(_parse_maharashtra_sheet(ws, subject))
+    wb.close()
+    return rows
+
+
 def _rows_from_sheet(ws, *, default_board: str = "", default_subject: str = "",
                      default_grade: str = "") -> list[SyllabusRow]:
     raw_rows = list(ws.iter_rows(values_only=True))
@@ -209,6 +298,12 @@ def parse_workbook(
     universal_boards: list[str] | None = None,
 ) -> list[SyllabusRow]:
     """Parse one syllabus Excel file into normalized rows."""
+    lower = path.name.lower()
+    if "english language" in lower:
+        return _parse_english_language_workbook(path)
+    if "maharashtra" in lower:
+        return _parse_maharashtra_workbook(path)
+
     wb = load_workbook(path, read_only=True, data_only=True)
     rows: list[SyllabusRow] = []
     boards = universal_boards or ([default_board] if default_board else [])
@@ -284,59 +379,82 @@ def _resolve_file(key: str) -> Path | None:
     name = SYLLABUS_FILES.get(key, "")
     if not name:
         return None
-    path = config.SYLLABUS_DIR / name
-    return path if path.exists() else None
+    for directory in config.syllabus_workbook_dirs():
+        path = directory / name
+        if path.exists():
+            return path
+    return None
 
 
-def load_all_syllabus_files(db: Session) -> dict:
-    """Load every known syllabus workbook from ``data/syllabus/``."""
-    all_rows: list[SyllabusRow] = []
-    loaded: list[str] = []
-    missing: list[str] = []
+def _discover_workbooks() -> list[Path]:
+    """All syllabus workbooks from bundled + runtime dirs (runtime wins on clash)."""
+    by_name: dict[str, Path] = {}
+    for directory in config.syllabus_workbook_dirs():
+        for path in sorted(directory.glob("*.xlsx")):
+            by_name[path.name] = path
+    return list(by_name.values())
 
-    # Board-specific files.
-    board_keys = {
+
+def _missing_expected_files() -> list[str]:
+    found = {p.name for p in _discover_workbooks()}
+    return [name for name in SYLLABUS_FILES.values() if name not in found]
+
+
+def _infer_file_options(filename: str) -> dict:
+    """Map a workbook filename to parse_workbook options."""
+    lower = filename.lower()
+    if "english" in lower and "language" in lower:
+        return {
+            "default_subject": "English Language",
+            "universal_boards": ALL_SYLLABUS_BOARDS,
+        }
+    for key, board in {
         "cbse": "CBSE",
         "icse": "ICSE",
         "maharashtra": "Maharashtra",
+        "msbshse": "Maharashtra",
+        "kstate": "Karnataka",
         "karnataka": "Karnataka",
-    }
-    for key, board in board_keys.items():
-        path = _resolve_file(key)
-        if not path:
-            missing.append(SYLLABUS_FILES[key])
+    }.items():
+        if key in lower:
+            return {"default_board": board}
+    return {}
+
+
+def import_syllabus_paths(db: Session, paths: list[Path]) -> dict:
+    """Parse and upsert chapters from explicit workbook paths."""
+    all_rows: list[SyllabusRow] = []
+    loaded: list[str] = []
+    for path in paths:
+        if not path.exists():
             continue
-        all_rows.extend(parse_workbook(path, default_board=board))
+        opts = _infer_file_options(path.name)
+        universal = opts.pop("universal_boards", None)
+        all_rows.extend(parse_workbook(path, universal_boards=universal, **opts))
         loaded.append(path.name)
-
-    # English Language — universal across all boards.
-    eng_path = _resolve_file("english_language")
-    if eng_path:
-        all_rows.extend(parse_workbook(
-            eng_path,
-            default_subject="English Language",
-            universal_boards=ALL_SYLLABUS_BOARDS,
-        ))
-        loaded.append(eng_path.name)
-    else:
-        missing.append(SYLLABUS_FILES["english_language"])
-
     counts = upsert_chapters(db, all_rows) if all_rows else {
         "created": 0, "skipped": 0, "total_rows": 0,
     }
-    return {
-        "loaded_files": loaded,
-        "missing_files": missing,
-        **counts,
+    return {"loaded_files": loaded, **counts}
+
+
+def load_all_syllabus_files(db: Session) -> dict:
+    """Load every syllabus workbook found in bundled or runtime directories."""
+    paths = _discover_workbooks()
+    missing = _missing_expected_files()
+
+    result = import_syllabus_paths(db, paths) if paths else {
+        "created": 0, "skipped": 0, "total_rows": 0, "loaded_files": [],
     }
+    result["missing_files"] = missing
+    return result
 
 
 def bootstrap_syllabus(db: Session) -> dict | None:
     """Load syllabus structure when the database has no chapters yet."""
     if db.query(models.Chapter).count() > 0:
         return None
-    if not config.SYLLABUS_DIR.is_dir():
+    paths = _discover_workbooks()
+    if not paths:
         return None
-    if not any(config.SYLLABUS_DIR.glob("*.xlsx")):
-        return None
-    return load_all_syllabus_files(db)
+    return import_syllabus_paths(db, paths)

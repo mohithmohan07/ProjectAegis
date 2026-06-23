@@ -10,11 +10,27 @@ BULK_IMPORT_DB = DATA_DIR / "bulk_import_database.xlsx"
 # Every generation appends here (append-only, never overwritten).
 BULK_IMPORT_OUTPUT = DATA_DIR / "bulk_import_output.xlsx"
 UPLOAD_DIR = DATA_DIR / "uploads"
+# Bundled syllabus workbooks committed in git (shipped in the Docker image).
+BUNDLED_SYLLABUS_DIR = Path(
+    os.environ.get("AEGIS_BUNDLED_SYLLABUS_DIR", ROOT / "data" / "syllabus"),
+)
+# Runtime syllabus dir (user uploads + Fly volume); overrides bundled on name clash.
 SYLLABUS_DIR = DATA_DIR / "syllabus"
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 SYLLABUS_DIR.mkdir(parents=True, exist_ok=True)
+BUNDLED_SYLLABUS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def syllabus_workbook_dirs() -> list[Path]:
+    """Directories to scan for syllabus .xlsx files (bundled first, then runtime)."""
+    dirs: list[Path] = []
+    if BUNDLED_SYLLABUS_DIR.is_dir():
+        dirs.append(BUNDLED_SYLLABUS_DIR)
+    if SYLLABUS_DIR.is_dir() and SYLLABUS_DIR.resolve() != BUNDLED_SYLLABUS_DIR.resolve():
+        dirs.append(SYLLABUS_DIR)
+    return dirs
 
 
 def has_openai() -> bool:

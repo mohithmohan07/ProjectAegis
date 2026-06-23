@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api } from "../api/client";
 import { useAsync } from "../hooks";
 import DirectoryPicker from "../components/DirectoryPicker";
+import SyllabusUploader from "../components/SyllabusUploader";
 import SourceBookInput from "../components/SourceBookInput";
 import type { Scope, UploadJob } from "../types";
 
@@ -59,6 +60,7 @@ function PostLearningFlow({ bookSources }: { bookSources: string[] }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
+  const [treeReload, setTreeReload] = useState(0);
 
   async function upload(file: File) {
     setBusy(true);
@@ -107,7 +109,11 @@ function PostLearningFlow({ bookSources }: { bookSources: string[] }) {
         <>
           <div className="section-title">2 · Deposit concepts under a chapter</div>
           <div className="card">
-            <DirectoryPicker onScope={setScope} chapterOnly />
+            <DirectoryPicker onScope={setScope} chapterOnly reloadSignal={treeReload} />
+            <SyllabusUploader
+              disabled={busy}
+              onLoaded={() => setTreeReload((n) => n + 1)}
+            />
             <div className="row" style={{ marginTop: 12 }}>
               <span className="muted">{scope ? `Chapter: ${scope.label}` : "Pick a chapter"}</span>
               <div className="spacer" />
@@ -155,6 +161,7 @@ function PreLearningUpload({ bookSources }: { bookSources: string[] }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
+  const [treeReload, setTreeReload] = useState(0);
 
   async function upload(file: File) {
     setBusy(true);
@@ -202,7 +209,11 @@ function PreLearningUpload({ bookSources }: { bookSources: string[] }) {
         <>
           <div className="section-title">2 · Deposit pre-learning concepts under a chapter</div>
           <div className="card">
-            <DirectoryPicker onScope={setScope} chapterOnly />
+            <DirectoryPicker onScope={setScope} chapterOnly reloadSignal={treeReload} />
+            <SyllabusUploader
+              disabled={busy}
+              onLoaded={() => setTreeReload((n) => n + 1)}
+            />
             <div className="row" style={{ marginTop: 12 }}>
               <span className="muted">{scope ? `Chapter: ${scope.label}` : "Pick a chapter"}</span>
               <div className="spacer" />
