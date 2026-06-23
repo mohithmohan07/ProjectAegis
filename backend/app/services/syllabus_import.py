@@ -22,7 +22,21 @@ from .text_normalize import (
     normalize_grade,
     normalize_subject,
     normalize_unit,
+    roman_to_grade,
 )
+
+# Grades used when English Language is replicated across boards.
+ENGLISH_LANGUAGE_GRADES = ["06", "07", "08", "09", "10"]
+
+# Maharashtra sheet tab -> canonical subject.
+_MAHARASHTRA_SUBJECTS = {
+    "math": "Mathematics",
+    "science": "Science",
+    "english": "English",
+    "h&c": "History and Civics",
+    "geography": "Geography",
+    "evs": "Environmental Studies",
+}
 
 # Boards that receive the shared English Language syllabus.
 ALL_SYLLABUS_BOARDS = list(bi.BOARDS)
@@ -134,6 +148,81 @@ def _detect_header_row(rows: list[tuple]) -> tuple[int, dict[str, int]] | None:
     return best_idx, best_map
 
 
+def _parse_english_language_workbook(path: Path) -> list[SyllabusRow]:
+    """English Language: Unit + Chapter, replicated across all boards and grades."""
+    wb = load_workbook(path, read_only=True, data_only=True)
+    ws = wb[wb.sheetnames[0]]
+    raw_rows = list(ws.iter_rows(values_only=True))
+    wb.close()
+    if not raw_rows:
+        return []
+
+    detected = _detect_header_row(raw_rows)
+    if not detected:
+        return []
+    header_idx, colmap = detected
+    if "unit" not in colmap or "chapter" not in colmap:
+        return []
+
+    rows: list[SyllabusRow] = []
+    for row in raw_rows[header_idx + 1:]:
+        unit = normalize_unit(_cell_str(row[colmap["unit"]]))
+        chapter = normalize_chapter(_cell_str(row[colmap["chapter"]]))
+        if not unit or not chapter:
+            continue
+        for board in ALL_SYLLABUS_BOARDS:
+            for grade in ENGLISH_LANGUAGE_GRADES:
+                rows.append(SyllabusRow(
+                    board=board, grade=grade, subject="English Language",
+                    unit=unit, chapter=chapter,
+                ))
+    return rows
+
+
+def _parse_maharashtra_sheet(ws, subject: str) -> list[SyllabusRow]:
+    """Maharashtra layout: row 0 = Roman grade bands, row 1 = Unit/Chapter pairs."""
+    raw_rows = list(ws.iter_rows(values_only=True))
+    if len(raw_rows) < 3:
+        return []
+
+    grade_row = raw_rows[0]
+    blocks: list[tuple[int, str]] = []
+    for col, cell in enumerate(grade_row):
+        grade = roman_to_grade(_cell_str(cell))
+        if grade:
+            blocks.append((col, grade))
+
+    out: list[SyllabusRow] = []
+    for row in raw_rows[2:]:
+        for col, grade in blocks:
+            unit = normalize_unit(_cell_str(row[col]) if col < len(row) else "")
+            chapter = normalize_chapter(
+                _cell_str(row[col + 1]) if col + 1 < len(row) else "",
+            )
+            if not unit or not chapter:
+                continue
+            if unit.lower() == "unit" or chapter.lower() in {"chapter name", "chapter"}:
+                continue
+            out.append(SyllabusRow(
+                board="Maharashtra", grade=grade, subject=subject,
+                unit=unit, chapter=chapter,
+            ))
+    return out
+
+
+def _parse_maharashtra_workbook(path: Path) -> list[SyllabusRow]:
+    wb = load_workbook(path, read_only=True, data_only=True)
+    rows: list[SyllabusRow] = []
+    for ws in wb.worksheets:
+        key = ws.title.strip().lower()
+        if "status" in key or "chapter wise" in key:
+            continue
+        subject = _MAHARASHTRA_SUBJECTS.get(key, normalize_subject(ws.title))
+        rows.extend(_parse_maharashtra_sheet(ws, subject))
+    wb.close()
+    return rows
+
+
 def _rows_from_sheet(ws, *, default_board: str = "", default_subject: str = "",
                      default_grade: str = "") -> list[SyllabusRow]:
     raw_rows = list(ws.iter_rows(values_only=True))
@@ -209,6 +298,12 @@ def parse_workbook(
     universal_boards: list[str] | None = None,
 ) -> list[SyllabusRow]:
     """Parse one syllabus Excel file into normalized rows."""
+    lower = path.name.lower()
+    if "english language" in lower:
+        return _parse_english_language_workbook(path)
+    if "maharashtra" in lower:
+        return _parse_maharashtra_workbook(path)
+
     wb = load_workbook(path, read_only=True, data_only=True)
     rows: list[SyllabusRow] = []
     boards = universal_boards or ([default_board] if default_board else [])

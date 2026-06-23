@@ -11,7 +11,9 @@ BULK_IMPORT_DB = DATA_DIR / "bulk_import_database.xlsx"
 BULK_IMPORT_OUTPUT = DATA_DIR / "bulk_import_output.xlsx"
 UPLOAD_DIR = DATA_DIR / "uploads"
 # Bundled syllabus workbooks committed in git (shipped in the Docker image).
-BUNDLED_SYLLABUS_DIR = ROOT / "data" / "syllabus"
+BUNDLED_SYLLABUS_DIR = Path(
+    os.environ.get("AEGIS_BUNDLED_SYLLABUS_DIR", ROOT / "data" / "syllabus"),
+)
 # Runtime syllabus dir (user uploads + Fly volume); overrides bundled on name clash.
 SYLLABUS_DIR = DATA_DIR / "syllabus"
 

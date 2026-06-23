@@ -34,7 +34,9 @@ _CANONICAL = {
     "physics": "Physics",
     "chemistry": "Chemistry",
     "biology": "Biology",
-    "history": "History",
+    "h&c": "History and Civics",
+    "history and civics": "History and Civics",
+    "history & civics": "History and Civics",
     "geography": "Geography",
     "civics": "Civics",
     "economics": "Economics",
@@ -120,9 +122,10 @@ def normalize_unit(raw: str) -> str:
     text = _collapse_whitespace(raw)
     if not text:
         return ""
-    # Strip trailing punctuation noise from spreadsheets.
+    # Strip board/grade tags embedded in unit labels, e.g. "(10_CBSE)" or "(06_KSTATE)".
+    text = re.sub(r"\s*\(\d{2}_[A-Za-z]+\)", "", text, flags=re.IGNORECASE)
     text = re.sub(r"[:;,\s]+$", "", text)
-    return title_case_phrase(text)
+    return title_case_phrase(_collapse_whitespace(text))
 
 
 def normalize_chapter(raw: str) -> str:
@@ -137,12 +140,15 @@ def normalize_chapter(raw: str) -> str:
 
 
 def normalize_grade(raw: str | int | float | None) -> str:
-    """Normalize grade/class to two-digit string (06-12)."""
+    """Normalize grade/class to two-digit string (01-12)."""
     if raw is None:
         return ""
     text = _collapse_whitespace(str(raw))
     if not text:
         return ""
+    roman = roman_to_grade(text)
+    if roman:
+        return roman
     m = re.search(r"(\d{1,2})", text)
     if not m:
         return ""
@@ -150,3 +156,21 @@ def normalize_grade(raw: str | int | float | None) -> str:
     if grade < 1 or grade > 12:
         return ""
     return f"{grade:02d}"
+
+
+_ROMAN_GRADES = (
+    "XII", "XI", "X", "IX", "VIII", "VII", "VI", "V", "IV", "III", "II", "I",
+)
+
+
+def roman_to_grade(text: str) -> str:
+    """Convert a Roman numeral class label (e.g. VI, X) to a two-digit grade."""
+    token = _collapse_whitespace(text).upper()
+    if not token:
+        return ""
+    for roman in _ROMAN_GRADES:
+        if token == roman:
+            val = {"I": 1, "II": 2, "III": 3, "IV": 4, "V": 5, "VI": 6,
+                   "VII": 7, "VIII": 8, "IX": 9, "X": 10, "XI": 11, "XII": 12}[roman]
+            return f"{val:02d}"
+    return ""
