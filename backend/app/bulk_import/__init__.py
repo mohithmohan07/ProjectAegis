@@ -187,8 +187,8 @@ SECTION_BANDS = {
 # Controlled vocabularies (used by the Blueprint UI and column mapping)
 # --------------------------------------------------------------------------- #
 
-BOARDS = ["CBSE", "ICSE"]
-GRADES = ["08", "09", "10"]
+BOARDS = ["CBSE", "ICSE", "Maharashtra", "Karnataka"]
+GRADES = ["06", "07", "08", "09", "10"]
 QUESTION_TYPES = ["objective", "subjective", "descriptive"]
 GROUP_TYPES = ["Basic", "Intermediate", "Advanced"]
 GROUP_TYPE_CODE = {"Basic": "BG", "Intermediate": "IG", "Advanced": "AG"}
@@ -325,12 +325,16 @@ QUESTION_CATEGORIES = {
 }
 
 # Board / subject codes embedded in chapter & label IDs, e.g. 10CBMA_... .
-BOARD_CODE = {"CB": "CBSE", "IC": "ICSE"}
+BOARD_CODE = {"CB": "CBSE", "IC": "ICSE", "MS": "Maharashtra", "KS": "Karnataka"}
 BOARD_CODE_INV = {v: k for k, v in BOARD_CODE.items()}
 SUBJECT_CODE = {
     "MA": "Mathematics", "PH": "Physics", "BI": "Biology",
     "CH": "Chemistry", "EG": "English Grammar", "EL": "English Literature",
+    "LG": "English Language",
     # Combined middle-school subjects (e.g. Class 08 NCERT sources).
     "SC": "Science", "SS": "Social Science", "EN": "English",
+    "HI": "Hindi", "SA": "Sanskrit", "GE": "Geography", "HS": "History",
+    "CV": "Civics", "EC": "Economics", "CS": "Computer Science",
+    "EV": "Environmental Studies",
 }
 SUBJECT_CODE_INV = {v: k for k, v in SUBJECT_CODE.items()}
