@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { api } from "../api/client";
 import { useAsync } from "../hooks";
+import { useRunConsole } from "../RunConsole";
 import DirectoryPicker from "../components/DirectoryPicker";
+import DocumentUpload from "../components/DocumentUpload";
 import SyllabusUploader from "../components/SyllabusUploader";
-import SourceBookInput from "../components/SourceBookInput";
 import type { Scope, UploadJob } from "../types";
 
 type Path = null | "post" | "pre";
@@ -26,8 +27,7 @@ export default function BuildConcepts() {
           <button className="module-card" onClick={() => setPath("post")}>
             <div className="module-title">1 · Post Learning</div>
             <div className="module-desc">
-              Upload a document (any format) → convert to MMD → parse concepts →
-              deposit under a chapter.
+              Upload a document → convert to MMD → parse concepts → deposit under a chapter.
             </div>
           </button>
           <button className="module-card" onClick={() => setPath("pre")}>
@@ -54,32 +54,25 @@ export default function BuildConcepts() {
 /* ----------------------------- post learning ----------------------------- */
 
 function PostLearningFlow({ bookSources }: { bookSources: string[] }) {
+  const { run } = useRunConsole();
   const [job, setJob] = useState<UploadJob | null>(null);
   const [scope, setScope] = useState<Scope | null>(null);
-  const [source, setSource] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
   const [treeReload, setTreeReload] = useState(0);
-
-  async function upload(file: File) {
-    setBusy(true);
-    setError(null);
-    try {
-      setJob(await api.postLearningUpload(file, source));
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
 
   async function generate() {
     if (!job || !scope) return;
     setBusy(true);
     setError(null);
     try {
-      setResult(await api.postLearningGenerate(job.id, scope.ids[0]));
+      const data = await run<Record<string, unknown>>(
+        "Post Learning — generating concepts",
+        api.paths.postLearningGenerate(job.id),
+        { body: JSON.stringify({ target_chapter_id: scope.ids[0] }) },
+      );
+      setResult(data);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -90,34 +83,18 @@ function PostLearningFlow({ bookSources }: { bookSources: string[] }) {
   return (
     <>
       <div className="section-title">1 · Upload document</div>
-      <div className="card">
-        <SourceBookInput value={source} onChange={setSource}
-          options={bookSources} disabled={busy || !!job} />
-        <input type="file" disabled={busy || !!job}
-          onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
-        {job && (
-          <div style={{ marginTop: 10 }}>
-            <span className="badge green">converted to MMD</span>{" "}
-            <span className="muted mono">{job.filename}</span>
-            {job.source_book && <span className="badge accent">{job.source_book}</span>}
-            <pre className="mmd-preview">{job.mmd_text.slice(0, 600)}</pre>
-          </div>
-        )}
-      </div>
+      <DocumentUpload module="concepts" conceptKind="post" bookSources={bookSources} onJob={setJob} />
 
-      {job && (
+      {job?.status === "converted" && (
         <>
           <div className="section-title">2 · Deposit concepts under a chapter</div>
           <div className="card">
             <DirectoryPicker onScope={setScope} chapterOnly reloadSignal={treeReload} />
-            <SyllabusUploader
-              disabled={busy}
-              onLoaded={() => setTreeReload((n) => n + 1)}
-            />
+            <SyllabusUploader disabled={busy} onLoaded={() => setTreeReload((n) => n + 1)} />
             <div className="row" style={{ marginTop: 12 }}>
               <span className="muted">{scope ? `Chapter: ${scope.label}` : "Pick a chapter"}</span>
               <div className="spacer" />
-              <button disabled={!scope || busy} onClick={generate}>Parse & generate concepts</button>
+              <button disabled={!scope || busy} onClick={generate}>Parse &amp; generate concepts</button>
             </div>
           </div>
         </>
@@ -155,32 +132,25 @@ function PreLearningFlow({ bookSources }: { bookSources: string[] }) {
 }
 
 function PreLearningUpload({ bookSources }: { bookSources: string[] }) {
+  const { run } = useRunConsole();
   const [job, setJob] = useState<UploadJob | null>(null);
   const [scope, setScope] = useState<Scope | null>(null);
-  const [source, setSource] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
   const [treeReload, setTreeReload] = useState(0);
-
-  async function upload(file: File) {
-    setBusy(true);
-    setError(null);
-    try {
-      setJob(await api.preLearningUpload(file, source));
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
 
   async function generate() {
     if (!job || !scope) return;
     setBusy(true);
     setError(null);
     try {
-      setResult(await api.preLearningGenerateFromUpload(job.id, scope.ids[0]));
+      const data = await run<Record<string, unknown>>(
+        "Pre Learning — generating concepts",
+        api.paths.preLearningGenerate(job.id),
+        { body: JSON.stringify({ target_chapter_id: scope.ids[0] }) },
+      );
+      setResult(data);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -191,29 +161,13 @@ function PreLearningUpload({ bookSources }: { bookSources: string[] }) {
   return (
     <>
       <div className="section-title">1 · Upload document</div>
-      <div className="card">
-        <SourceBookInput value={source} onChange={setSource}
-          options={bookSources} disabled={busy || !!job} />
-        <input type="file" disabled={busy || !!job}
-          onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
-        {job && (
-          <div style={{ marginTop: 10 }}>
-            <span className="badge green">converted to MMD</span>{" "}
-            <span className="muted mono">{job.filename}</span>
-            {job.source_book && <span className="badge accent">{job.source_book}</span>}
-            <pre className="mmd-preview">{job.mmd_text.slice(0, 600)}</pre>
-          </div>
-        )}
-      </div>
-      {job && (
+      <DocumentUpload module="concepts" conceptKind="pre" bookSources={bookSources} onJob={setJob} />
+      {job?.status === "converted" && (
         <>
           <div className="section-title">2 · Deposit pre-learning concepts under a chapter</div>
           <div className="card">
             <DirectoryPicker onScope={setScope} chapterOnly reloadSignal={treeReload} />
-            <SyllabusUploader
-              disabled={busy}
-              onLoaded={() => setTreeReload((n) => n + 1)}
-            />
+            <SyllabusUploader disabled={busy} onLoaded={() => setTreeReload((n) => n + 1)} />
             <div className="row" style={{ marginTop: 12 }}>
               <span className="muted">{scope ? `Chapter: ${scope.label}` : "Pick a chapter"}</span>
               <div className="spacer" />
@@ -229,6 +183,7 @@ function PreLearningUpload({ bookSources }: { bookSources: string[] }) {
 }
 
 function PreLearningExisting({ bookSources }: { bookSources: string[] }) {
+  const { run } = useRunConsole();
   const [scope, setScope] = useState<Scope | null>(null);
   const [chapterIds, setChapterIds] = useState<number[]>([]);
   const [source, setSource] = useState("");
@@ -236,7 +191,6 @@ function PreLearningExisting({ bookSources }: { bookSources: string[] }) {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
 
-  // The picker resolves a single chapter; "Add" stacks it for multi-chapter selection.
   function addChapter() {
     if (scope && scope.type === "chapter" && !chapterIds.includes(scope.ids[0])) {
       setChapterIds([...chapterIds, scope.ids[0]]);
@@ -247,7 +201,12 @@ function PreLearningExisting({ bookSources }: { bookSources: string[] }) {
     setBusy(true);
     setError(null);
     try {
-      setResult(await api.preLearningFromExisting(chapterIds, source));
+      const data = await run<Record<string, unknown>>(
+        "Pre Learning — deriving from existing chapters",
+        api.paths.preLearningFromExisting,
+        { body: JSON.stringify({ chapter_ids: chapterIds, source_book: source }) },
+      );
+      setResult(data);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -259,8 +218,9 @@ function PreLearningExisting({ bookSources }: { bookSources: string[] }) {
     <>
       <div className="section-title">Choose Post Learning chapters (one or more)</div>
       <div className="card">
-        <SourceBookInput value={source} onChange={setSource}
-          options={bookSources} disabled={busy} />
+        <input placeholder="Source book (optional)" value={source}
+          onChange={(e) => setSource(e.target.value)} list="book-sources" />
+        <datalist id="book-sources">{bookSources.map((b) => <option key={b} value={b} />)}</datalist>
         <DirectoryPicker onScope={setScope} chapterOnly />
         <div className="row" style={{ marginTop: 12 }}>
           <button className="ghost" disabled={!scope} onClick={addChapter}>
