@@ -175,6 +175,17 @@ export interface WorkbookResult {
   log: string;
 }
 
+export interface PromptInfo {
+  key: string;
+  label: string;
+  category: string;
+  description: string;
+  variables: string[];
+  default: string;
+  current: string;
+  overridden: boolean;
+}
+
 export interface WorkbookEntry {
   class_folder: string;
   subject: string;

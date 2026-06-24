@@ -21,6 +21,7 @@ six production sheets):
 from __future__ import annotations
 
 from . import katex_rules as kr
+from . import prompts
 
 # --------------------------------------------------------------------------- #
 # 1 · Base block
@@ -341,6 +342,47 @@ generation output); otherwise leave it null."""
 
 
 # --------------------------------------------------------------------------- #
+# Registration — every block above becomes an editable prompt in the Admin tab.
+# build_prompt() reads each through the registry so edits apply on the next run.
+# --------------------------------------------------------------------------- #
+
+_CAT = "Build Assessments · question generation"
+
+prompts.register("assessment.base", label="Base author persona + quality rules",
+                 category=_CAT, default=BASE_BLOCK)
+for _k, _v in TYPE_BLOCKS.items():
+    prompts.register(f"assessment.type.{_k}", label=f"Question type · {_k}",
+                     category=_CAT, default=_v)
+for _k, _v in DIFFICULTY_BLOCKS.items():
+    prompts.register(f"assessment.difficulty.{_k}", label=f"Difficulty · {_k}",
+                     category=_CAT, default=_v)
+for _k, _v in SKILL_BLOCKS.items():
+    prompts.register(f"assessment.skill.{_k}", label=f"Cognitive skill · {_k}",
+                     category=_CAT, default=_v)
+for _k, _v in SUBJECT_BLOCKS.items():
+    prompts.register(f"assessment.subject.{_k}", label=f"Subject creativity · {_k}",
+                     category=_CAT, default=_v)
+for _k, _v in PURPOSE_BLOCKS.items():
+    prompts.register(f"assessment.purpose.{_k}", label=f"Assessment purpose · {_k}",
+                     category=_CAT, default=_v)
+prompts.register("assessment.rubric", label="Rubric placement rules",
+                 category=_CAT, default=RUBRIC_BLOCK)
+prompts.register("assessment.variety", label="Creativity & variety rules",
+                 category=_CAT, default=VARIETY_BLOCK)
+prompts.register("assessment.output", label="Strict JSON output schema",
+                 category=_CAT, default=OUTPUT_BLOCK)
+prompts.register("assessment.context_footer", category=_CAT,
+                 label="Run-context footer",
+                 description="Trailing line with board/grade/subject/marks. "
+                             "Variables: {{board}} {{grade}} {{subject}} "
+                             "{{category}} {{marks}}.",
+                 variables=("board", "grade", "subject", "category", "marks"),
+                 default="RUN CONTEXT: board={{board}} | grade={{grade}} | "
+                         "subject={{subject}} | question_category={{category}} | "
+                         "marks per question={{marks}}")
+
+
+# --------------------------------------------------------------------------- #
 # Assembly
 # --------------------------------------------------------------------------- #
 
@@ -361,33 +403,40 @@ def build_prompt(
     subject: str = "", grade: str = "", board: str = "",
     marks: float = 1, category: str = "", purpose: str = "",
 ) -> str:
-    """Assemble the per-batch system prompt from the modular blocks."""
+    """Assemble the per-batch system prompt from the modular blocks.
+
+    Every block is read fresh from the prompt registry, so Admin-tab edits take
+    effect on the next generation without a restart.
+    """
+    diff_key = difficulty if difficulty in DIFFICULTY_BLOCKS else "Moderate"
+    skill_key = skill if skill in SKILL_BLOCKS else "Understand"
     parts = [
-        BASE_BLOCK,
-        TYPE_BLOCKS[question_type],
-        DIFFICULTY_BLOCKS.get(difficulty, DIFFICULTY_BLOCKS["Moderate"]),
-        SKILL_BLOCKS.get(skill, SKILL_BLOCKS["Understand"]),
+        prompts.get_text("assessment.base"),
+        prompts.get_text(f"assessment.type.{question_type}"),
+        prompts.get_text(f"assessment.difficulty.{diff_key}"),
+        prompts.get_text(f"assessment.skill.{skill_key}"),
         combo_guidance(difficulty, skill),
     ]
     warning = combo_warning(question_type, skill)
     if warning:
         parts.append(f"NOTE: {warning} Proceed only because it was explicitly "
                      "requested; keep the task evaluable.")
-    subj_block = SUBJECT_BLOCKS.get((subject or "").strip())
-    if subj_block:
-        parts.append(subj_block)
+    subj = (subject or "").strip()
+    if f"assessment.subject.{subj}" in {s.key for s in prompts.specs()}:
+        parts.append(prompts.get_text(f"assessment.subject.{subj}"))
     for p in [p.strip() for p in (purpose or "").split(",") if p.strip()]:
-        block = PURPOSE_BLOCKS.get(p)
-        if block:
-            parts.append(block)
+        if f"assessment.purpose.{p}" in {s.key for s in prompts.specs()}:
+            parts.append(prompts.get_text(f"assessment.purpose.{p}"))
     parts += [
-        RUBRIC_BLOCK,
-        VARIETY_BLOCK,
-        CONTENT_FORMAT_BLOCK,
-        OUTPUT_BLOCK,
-        f"RUN CONTEXT: board={board or 'CBSE/ICSE'} | grade={grade or 'school'}"
-        f" | subject={subject or 'general'} | question_category={category}"
-        f" | marks per question={marks:g}",
+        prompts.get_text("assessment.rubric"),
+        prompts.get_text("assessment.variety"),
+        prompts.get_text("content.katex_rules"),
+        prompts.get_text("assessment.output"),
+        prompts.render(
+            "assessment.context_footer",
+            board=board or "CBSE/ICSE", grade=grade or "school",
+            subject=subject or "general", category=category, marks=f"{marks:g}",
+        ),
     ]
     return "\n\n".join(parts)
 

@@ -1,9 +1,11 @@
 import { useState } from "react";
 import { api } from "../api/client";
 import { useAsync } from "../hooks";
+import { useRunConsole } from "../RunConsole";
 import type { WorkbookResult } from "../types";
 
 export default function Workbooks() {
+  const { run } = useRunConsole();
   const meta = useAsync(() => api.workbookSubjects(), []);
   const library = useAsync(() => api.workbookLibrary(), []);
   const [subject, setSubject] = useState("");
@@ -18,7 +20,12 @@ export default function Workbooks() {
     setError(null);
     setResult(null);
     try {
-      setResult(await api.generateWorkbook(file, subject));
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("subject", subject);
+      const data = await run<WorkbookResult>(
+        `Create Workbooks — ${file.name}`, api.paths.workbookGenerate, { body: fd });
+      setResult(data);
       library.reload();
     } catch (e) {
       setError(String(e));

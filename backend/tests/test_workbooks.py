@@ -83,9 +83,9 @@ def test_dry_generation_renders_real_pdf(source_pdf):
 def test_api_generate_library_and_download(client, source_pdf):
     files = {"file": (source_pdf.name, io.BytesIO(source_pdf.read_bytes()),
                       "application/pdf")}
-    r = client.post("/workbooks/generate", files=files, data={"subject": "Mathematics"})
-    assert r.status_code == 200
-    body = r.json()
+    from tests.conftest import stream_result
+    body = stream_result(
+        client.post("/workbooks/generate", files=files, data={"subject": "Mathematics"}))
     assert body["mode"] == "dry"
     assert "MODE: DRY" in body["log"]
 

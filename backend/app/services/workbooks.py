@@ -141,16 +141,21 @@ def _dry_chapter(meta: dict, source_pdf: Path):
 
 def generate(source_pdf: Path, subject: str = "", live: bool | None = None) -> dict:
     """Generate a revision-workbook PDF for one chapter source PDF."""
+    from . import progress
     _vendor()
     go_live = use_live() if live is None else live
     if not go_live:
         config.require_workbooks_live()
     meta = infer_workbook_metadata(source_pdf.name, subject)
     out_pdf, build_log = _output_paths(meta)
+    progress.log(
+        f"{meta['subject']} · {meta['grade']} · Chapter {meta['chapter_number']}: "
+        f"{meta['chapter_title']}")
 
     if go_live:
         from pipeline import run as pipeline_run  # vendored (needs keys)
         CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+        progress.step("Mathpix → MMD, GPT plan/build, render PDF…", value=0.1)
         result = pipeline_run({
             "source_pdf": str(source_pdf),
             "subject": meta["subject"],
@@ -165,6 +170,8 @@ def generate(source_pdf: Path, subject: str = "", live: bool | None = None) -> d
         })
         result["mode"] = "live"
         result["meta"] = meta
+        progress.set_progress(1.0, label="Workbook PDF ready")
+        progress.log("Workbook generated (live).", level="success")
         return result
 
     from config import DEFAULT_CONFIG       # vendored
@@ -172,12 +179,16 @@ def generate(source_pdf: Path, subject: str = "", live: bool | None = None) -> d
     from refiner import Refiner             # vendored
     from validate import WorkbookValidator  # vendored
 
+    progress.step("Extracting source text (dry)…", value=0.3)
     chapter = _dry_chapter(meta, source_pdf)
+    progress.step("Rendering A4 PDF…", value=0.7)
     Refiner().refine(chapter)
     WorkbookDocument(dict(DEFAULT_CONFIG)).build(chapter, str(out_pdf))
 
     validator = WorkbookValidator()
     valid, issues = validator.validate(str(out_pdf), chapter)
+    progress.set_progress(1.0, label="Workbook PDF ready")
+    progress.log(f"Workbook generated (dry): {len(chapter.topics)} topics.", level="success")
     messages = [
         "MODE: DRY (deterministic content, real renderer)",
         f"Source: {source_pdf.name}",

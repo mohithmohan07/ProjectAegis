@@ -53,8 +53,10 @@ def link(text: str, url: str) -> str:
 
 # Preamble injected as a system / instruction prefix in the live OpenAI
 # generation path so the LLM emits rich-text content in the same bracket
-# format the importer expects.
-PROMPT_PREAMBLE = """\
+# format the importer expects. Registered so it is editable from the Admin tab.
+from . import prompts as _prompts  # noqa: E402
+
+_PROMPT_PREAMBLE_DEFAULT = """\
 Rich-text rules for the question, answer_content, answer_display, and
 answer_explanation columns:
   - Plain text is typed directly.
@@ -72,3 +74,19 @@ Keyword columns hold direct KaTeX (no [katex] wrappers, no markdown).
 Forbidden: raw $$...$$ delimiters, nested [katex], single-quoted img attrs,
 empty [katex] tags, raw LaTeX outside a [katex] tag, [0.4cm]-style spacing.
 """
+
+_prompts.register(
+    "content.katex_rules",
+    label="Rich-text / KaTeX formatting rules",
+    category="Shared formatting",
+    description="Injected into every assessment-generation prompt so questions "
+                "and answers use the canonical [katex]/[img]/[link] format.",
+    default=_PROMPT_PREAMBLE_DEFAULT,
+)
+
+
+def __getattr__(name: str) -> str:
+    # Resolve PROMPT_PREAMBLE lazily so Admin edits apply on the next run.
+    if name == "PROMPT_PREAMBLE":
+        return _prompts.get_text("content.katex_rules")
+    raise AttributeError(name)

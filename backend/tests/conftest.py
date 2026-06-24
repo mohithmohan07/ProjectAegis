@@ -1,3 +1,4 @@
+import json
 import os
 
 # Tests are always deterministic dry-mode, even when live API keys are present
@@ -46,6 +47,41 @@ def _prepare():
 @pytest.fixture()
 def client():
     return TestClient(app)
+
+
+# --------------------------------------------------------------------------- #
+# Helpers for the NDJSON progress streams returned by convert/generate routes.
+# --------------------------------------------------------------------------- #
+
+def stream_events(resp) -> list[dict]:
+    assert resp.status_code == 200, getattr(resp, "text", resp)
+    return [json.loads(line) for line in resp.text.splitlines() if line.strip()]
+
+
+def stream_result(resp) -> dict:
+    """Return the final ``result`` payload of a progress stream (raises on error)."""
+    events = stream_events(resp)
+    for e in events:
+        if e.get("type") == "error":
+            raise AssertionError("stream error: " + str(e.get("message")))
+    data = [e["data"] for e in events if e.get("type") == "result"]
+    assert data, f"no result event in stream: {events}"
+    return data[-1]
+
+
+def stream_error_message(resp) -> str | None:
+    for e in stream_events(resp):
+        if e.get("type") == "error":
+            return e.get("message", "")
+    return None
+
+
+def convert_assessment_upload(client, job_id: int) -> dict:
+    return stream_result(client.post(f"/build-assessments/uploads/{job_id}/convert"))
+
+
+def convert_concept_upload(client, job_id: int) -> dict:
+    return stream_result(client.post(f"/build-concepts/uploads/{job_id}/convert"))
 
 
 @pytest.fixture()

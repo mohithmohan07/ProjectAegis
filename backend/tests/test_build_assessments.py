@@ -1,5 +1,7 @@
 import io
 
+from tests.conftest import convert_assessment_upload, stream_result
+
 
 def test_concept_mapping_stackable_batches_generate(client, first_concept):
     session = client.post("/build-assessments/sessions", json={
@@ -22,7 +24,8 @@ def test_concept_mapping_stackable_batches_generate(client, first_concept):
         "num_questions": 1,
     })
 
-    result = client.post(f"/build-assessments/sessions/{session['id']}/generate").json()
+    result = stream_result(
+        client.post(f"/build-assessments/sessions/{session['id']}/generate"))
     # batch1: 2 skills x 1 diff x 1 cat x 2 = 4 ; batch2: 1x1x1x1 = 1 -> 5
     assert result["created"] == 5
     assert result["pipeline"]["appended"]["objective"] == 4
@@ -40,7 +43,8 @@ def test_chapter_scope_fans_out_to_concepts(client, first_chapter):
         "question_type": "objective",
         "num_questions": 1,
     })
-    result = client.post(f"/build-assessments/sessions/{session['id']}/generate").json()
+    result = stream_result(
+        client.post(f"/build-assessments/sessions/{session['id']}/generate"))
     # One question per concept in the chapter.
     detail = client.get(f"/directory/chapters/{first_chapter['id']}").json()
     n_concepts = sum(len(t["concepts"]) for t in detail["topics"])
@@ -60,15 +64,20 @@ def test_upload_path_extract_and_deposit(client, first_chapter):
         b"What is a tangent line?\n\nDefine a chord.\n\nState the tangent-radius theorem."
     ), "text/plain")}
     job = client.post("/build-assessments/uploads?upload_type=questions", files=files).json()
-    assert job["status"] == "converted"
-    assert job["mmd_text"].startswith("#")
+    # Upload only stages the file — no MMD yet.
+    assert job["status"] == "uploaded"
+    assert job["mmd_text"] == ""
+
+    converted = convert_assessment_upload(client, job["id"])
+    assert converted["status"] == "converted"
+    assert converted["mmd_text"].startswith("#")
 
     client.post(f"/build-assessments/uploads/{job['id']}/deposit", json={
         "scope_type": "chapter", "scope_ids": [first_chapter["id"]],
     })
-    result = client.post(f"/build-assessments/uploads/{job['id']}/generate", json={
-        "question_type": "objective",
-    }).json()
+    result = stream_result(client.post(
+        f"/build-assessments/uploads/{job['id']}/generate",
+        json={"question_type": "objective"}))
     assert result["created"] == 3
 
 
@@ -94,12 +103,13 @@ def test_upload_auto_is_default_and_generates(client, first_chapter):
         b"\n\nDescribe and prove the two-tangent theorem."
     ), "text/plain")}
     job = client.post("/build-assessments/uploads?upload_type=questions", files=files).json()
+    convert_assessment_upload(client, job["id"])
     client.post(f"/build-assessments/uploads/{job['id']}/deposit", json={
         "scope_type": "chapter", "scope_ids": [first_chapter["id"]],
     })
     # Empty body -> question_type defaults to "auto".
-    result = client.post(
-        f"/build-assessments/uploads/{job['id']}/generate", json={}).json()
+    result = stream_result(client.post(
+        f"/build-assessments/uploads/{job['id']}/generate", json={}))
     assert result["created"] == 3
     assert "question_ids" in result
 

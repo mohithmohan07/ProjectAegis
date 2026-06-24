@@ -2,8 +2,9 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from .. import models, schemas
-from ..db import get_db
+from ..db import SessionLocal, get_db
 from ..services import build_assessments as svc
+from ..services import progress, uploads
 
 router = APIRouter(prefix="/build-assessments", tags=["build-assessments"])
 
@@ -46,14 +47,24 @@ def add_batch(session_id: int, req: schemas.BlueprintBatchRequest, db: Session =
 
 @router.post("/sessions/{session_id}/generate")
 def generate(session_id: int, db: Session = Depends(get_db)):
-    try:
-        return svc.generate(db, session_id)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
+    """Stream question generation progress (NDJSON)."""
+    session = db.get(models.AssessmentSession, session_id)
+    if not session:
+        raise HTTPException(404, "session not found")
+    if not session.batches:
+        raise HTTPException(400, "add at least one blueprint batch before generating")
+
+    def work():
+        worker_db = SessionLocal()
+        try:
+            return svc.generate(worker_db, session_id)
+        finally:
+            worker_db.close()
+    return progress.stream(work, title="Build Assessments — generating questions")
 
 
 # --------------------------------------------------------------------------- #
-# Path B — From Upload
+# Path B — From Upload (stage → convert → deposit → generate)
 # --------------------------------------------------------------------------- #
 
 @router.post("/uploads", response_model=schemas.UploadJobOut)
@@ -63,6 +74,7 @@ async def create_upload(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ):
+    """Stage the file only — does NOT convert to MMD (call /convert next)."""
     try:
         return svc.create_upload_job(
             db, upload_type=upload_type,
@@ -72,6 +84,39 @@ async def create_upload(
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+@router.get("/uploads/{job_id}", response_model=schemas.UploadJobOut)
+def get_upload(job_id: int, db: Session = Depends(get_db)):
+    try:
+        return uploads.get_job(db, job_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
+@router.put("/uploads/{job_id}/file", response_model=schemas.UploadJobOut)
+async def replace_upload_file(
+    job_id: int, file: UploadFile = File(...), db: Session = Depends(get_db),
+):
+    """Swap the staged file (e.g. wrong PDF) before conversion."""
+    try:
+        return uploads.replace_file(
+            db, job_id, filename=file.filename or "upload.txt",
+            raw_bytes=await file.read())
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/uploads/{job_id}/convert")
+def convert_upload(job_id: int):
+    """Convert the staged document to MMD (streamed progress)."""
+    def work():
+        db = SessionLocal()
+        try:
+            return uploads.convert_job(db, job_id)
+        finally:
+            db.close()
+    return progress.stream(work, title="Converting document to MMD")
 
 
 @router.post("/uploads/{job_id}/textbook-mode", response_model=schemas.UploadJobOut)
@@ -91,10 +136,16 @@ def set_deposit(job_id: int, req: schemas.DepositRequest, db: Session = Depends(
 
 
 @router.post("/uploads/{job_id}/generate")
-def generate_from_upload(
-    job_id: int, req: schemas.GenerateFromUploadRequest, db: Session = Depends(get_db)
-):
-    try:
-        return svc.generate_from_upload(db, job_id, req.question_type)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
+def generate_from_upload(job_id: int, req: schemas.GenerateFromUploadRequest):
+    """Identify & deposit questions from the uploaded MMD (streamed progress)."""
+    if req.question_type not in {"auto", "objective", "subjective", "descriptive"}:
+        raise HTTPException(
+            400, "question_type must be auto | objective | subjective | descriptive")
+
+    def work():
+        db = SessionLocal()
+        try:
+            return svc.generate_from_upload(db, job_id, req.question_type)
+        finally:
+            db.close()
+    return progress.stream(work, title="Build Assessments — generating from upload")

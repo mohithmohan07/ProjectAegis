@@ -147,7 +147,8 @@ def test_batch_appears_in_flows_to_questions(client, db, first_concept):
     assert batch["appears_in"] == ["Pre-test", "Worksheet"]
     assert batch["difficulty_levels"] == ["Less"]
 
-    result = client.post(f"/build-assessments/sessions/{s['id']}/generate").json()
+    from tests.conftest import stream_result
+    result = stream_result(client.post(f"/build-assessments/sessions/{s['id']}/generate"))
     assert result["created"] == 1
     assert result["review"]["problems"] == []
     qid = client.get(f"/build-assessments/sessions/{s['id']}").json()[

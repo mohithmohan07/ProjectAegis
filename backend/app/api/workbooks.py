@@ -5,7 +5,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
 from .. import config
-from ..services import workbooks as svc
+from ..services import progress, workbooks as svc
 
 router = APIRouter(prefix="/workbooks", tags=["workbooks"])
 
@@ -20,19 +20,21 @@ async def generate(
     file: UploadFile = File(...),
     subject: str = Form(""),
 ):
+    """Generate a workbook PDF, streaming build progress (NDJSON)."""
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(400, "expected a chapter source PDF")
-    dest = config.UPLOAD_DIR / file.filename
+    dest = config.UPLOAD_DIR / Path(file.filename).name
     dest.write_bytes(await file.read())
-    try:
+
+    def work():
         result = svc.generate(Path(dest), subject)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    log_text = ""
-    log_path = Path(result.get("build_log", ""))
-    if log_path.exists():
-        log_text = log_path.read_text(errors="ignore")
-    return {**result, "log": log_text}
+        log_text = ""
+        log_path = Path(result.get("build_log", ""))
+        if log_path.exists():
+            log_text = log_path.read_text(errors="ignore")
+        return {**result, "log": log_text}
+
+    return progress.stream(work, title=f"Create Workbooks — {file.filename}")
 
 
 @router.get("/library")

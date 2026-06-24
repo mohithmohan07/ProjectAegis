@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from .db import SessionLocal, init_db
 from .services import syllabus_import as syllabus_svc
 from .api import (
+    admin as admin_api,
     directory as directory_api,
     build_assessments as build_assessments_api,
     build_concepts as build_concepts_api,
@@ -65,6 +66,7 @@ app.include_router(build_concepts_api.router)
 app.include_router(data_api.router)
 app.include_router(tagging_api.router)
 app.include_router(workbooks_api.router)
+app.include_router(admin_api.router)
 
 
 # Serve the built frontend from the same origin when available. In dev

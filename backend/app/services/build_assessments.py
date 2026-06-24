@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from .. import bulk_import as bi
 from .. import config, models
-from . import directory, generation, mmd, post_generation
+from . import directory, generation, mmd, post_generation, progress
 
 # A blueprint's difficulty selects which concept group a question lands in.
 DIFFICULTY_TO_GROUP = {"Less": "Basic", "Moderate": "Intermediate", "High": "Advanced"}
@@ -115,11 +115,22 @@ def generate(db: Session, session_id: int) -> dict:
         c.id: sum(len(g.questions) for g in c.groups) + 1 for c in concepts
     }
 
+    total_cells = sum(
+        len(batch.cognitive_skills) * len(batch.difficulty_levels) * len(batch.categories)
+        for batch in session.batches
+    ) * max(len(concepts), 1)
+    progress.log(
+        f"Generating questions for {len(concepts)} concept(s) × "
+        f"{len(session.batches)} batch(es) = {total_cells} blueprint cell(s).")
+    done = 0
     for concept in concepts:
         for batch in session.batches:
             for skill, difficulty, category in product(
                 batch.cognitive_skills, batch.difficulty_levels, batch.categories
             ):
+                progress.step(
+                    f"{concept.concept_title}: {difficulty}/{skill}/{category}",
+                    value=done / max(total_cells, 1))
                 records = generation.generate_questions_for_concept(
                     concept,
                     question_type=batch.question_type,
@@ -134,8 +145,10 @@ def generate(db: Session, session_id: int) -> dict:
                     db.add(q)
                     db.flush()
                     created_ids.append(q.id)
+                done += 1
     db.commit()
 
+    progress.step("Tagging & column mapping", value=0.9)
     pipeline = post_generation.run(db, created_ids)
     session.status = "generated"
     session.generated_question_ids = created_ids
@@ -154,6 +167,8 @@ def generate(db: Session, session_id: int) -> dict:
         }):
             problems.append(f"{q.question_label}: {p}")
     monotony = ap.stem_monotony_report([q.question for q in created])
+    progress.set_progress(1.0, label="Done")
+    progress.log(f"Created {len(created_ids)} questions.", level="success")
     return {
         "session_id": session_id, "created": len(created_ids),
         "question_ids": created_ids,
@@ -193,14 +208,16 @@ def create_upload_job(
     db: Session, *, upload_type: str, filename: str, raw_bytes: bytes,
     source_book: str = "",
 ) -> models.UploadJob:
+    """Stage an uploaded file ONLY. Conversion to MMD is a separate step
+    (``uploads.convert_job``) so a mistakenly-chosen file can be replaced first.
+    """
     if upload_type not in mmd.UPLOAD_TYPES:
         raise ValueError(f"upload_type must be one of {mmd.UPLOAD_TYPES}")
-    dest = config.UPLOAD_DIR / filename
-    dest.write_bytes(raw_bytes)
-    mmd_text = mmd.to_mmd(dest)
+    from . import uploads
+    uploads.save_upload_file(filename, raw_bytes)
     job = models.UploadJob(
         module="build_assessments", upload_type=upload_type,
-        filename=filename, mmd_text=mmd_text, status="converted",
+        filename=Path(filename).name, mmd_text="", status="uploaded",
         source_book=source_book.strip(),
     )
     db.add(job)
@@ -251,14 +268,19 @@ def generate_from_upload(db: Session, job_id: int, question_type: str = "auto") 
     job = db.get(models.UploadJob, job_id)
     if not job:
         raise ValueError("upload job not found")
+    if not job.mmd_text:
+        raise ValueError("convert the uploaded document to MMD before generating")
     if job.status != "deposited":
         raise ValueError("set a deposit scope before generating")
 
     concepts = directory.resolve_scope_concepts(db, job.deposit_scope_type, job.deposit_scope_ids)
+    progress.log(
+        f"Generating questions from upload into {len(concepts)} concept(s).")
     records = generation.identify_questions_from_mmd(
         job.mmd_text, upload_type=job.upload_type, question_type=question_type,
         textbook_mode=job.textbook_mode,
     )
+    progress.step("Depositing & tagging questions", value=0.85)
 
     # Cross-book duplicate check: existing question texts in the deposit
     # chapters. A duplicate is not re-added; its sources are merged instead.
@@ -311,6 +333,10 @@ def generate_from_upload(db: Session, job_id: int, question_type: str = "auto") 
         f"({len(created_ids)} new, {len(merged_ids)} duplicates source-merged)"
     )
     db.commit()
+    progress.set_progress(1.0, label="Done")
+    progress.log(
+        f"Created {len(created_ids)} new questions "
+        f"({len(merged_ids)} duplicates source-merged).", level="success")
     return {
         "job_id": job_id, "created": len(created_ids),
         "duplicates_merged": len(merged_ids),

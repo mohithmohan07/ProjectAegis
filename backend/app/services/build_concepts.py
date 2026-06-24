@@ -14,12 +14,14 @@
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from sqlalchemy.orm import Session
 
 from .. import config, models
 from .. import bulk_import as bi
 from ..bulk_import import writer
-from . import concept_cleanup, generation, mmd
+from . import concept_cleanup, generation, mmd, progress
 
 
 def _find_concept_in_chapter(chapter: models.Chapter, title: str) -> models.Concept | None:
@@ -121,11 +123,12 @@ def _sync_chapter_topic_summary(chapter: models.Chapter) -> None:
 def create_post_learning_job(
     db: Session, *, filename: str, raw_bytes: bytes, source_book: str = "",
 ) -> models.UploadJob:
-    dest = config.UPLOAD_DIR / filename
-    dest.write_bytes(raw_bytes)
+    """Stage the file only — conversion to MMD is a separate explicit step."""
+    from . import uploads
+    uploads.save_upload_file(filename, raw_bytes)
     job = models.UploadJob(
         module="build_concepts", upload_type="document", learning_kind="post",
-        filename=filename, mmd_text=mmd.to_mmd(dest), status="converted",
+        filename=Path(filename).name, mmd_text="", status="uploaded",
         source_book=source_book.strip(),
     )
     db.add(job)
@@ -139,7 +142,9 @@ def generate_post_learning(db: Session, job_id: int, target_chapter_id: int) -> 
     chapter = db.get(models.Chapter, target_chapter_id)
     if not job or not chapter:
         raise ValueError("upload job or target chapter not found")
-
+    if not job.mmd_text:
+        raise ValueError("convert the uploaded document to MMD before generating")
+    progress.log(f"Post-learning generation into chapter '{chapter.chapter_title}'.")
     records = generation.concepts_from_mmd(job.mmd_text, subject=chapter.subject)
     created_ids, merged_ids = _deposit_concepts(
         db, chapter, records, "Post", job.source_book)
@@ -157,6 +162,10 @@ def generate_post_learning(db: Session, job_id: int, target_chapter_id: int) -> 
         f"merged sources into {len(merged_ids)} existing"
     )
     db.commit()
+    progress.set_progress(1.0, label="Done")
+    progress.log(
+        f"Created {len(created_ids)} post-learning concepts "
+        f"({len(merged_ids)} merged).", level="success")
     return {
         "job_id": job_id,
         "concepts_created": len(created_ids),
@@ -175,11 +184,12 @@ def generate_post_learning(db: Session, job_id: int, target_chapter_id: int) -> 
 def create_pre_learning_upload_job(
     db: Session, *, filename: str, raw_bytes: bytes, source_book: str = "",
 ) -> models.UploadJob:
-    dest = config.UPLOAD_DIR / filename
-    dest.write_bytes(raw_bytes)
+    """Stage the file only — conversion to MMD is a separate explicit step."""
+    from . import uploads
+    uploads.save_upload_file(filename, raw_bytes)
     job = models.UploadJob(
         module="build_concepts", upload_type="document", learning_kind="pre",
-        filename=filename, mmd_text=mmd.to_mmd(dest), status="converted",
+        filename=Path(filename).name, mmd_text="", status="uploaded",
         source_book=source_book.strip(),
     )
     db.add(job)
@@ -193,6 +203,9 @@ def generate_pre_learning_from_upload(db: Session, job_id: int, target_chapter_i
     chapter = db.get(models.Chapter, target_chapter_id)
     if not job or not chapter:
         raise ValueError("upload job or target chapter not found")
+    if not job.mmd_text:
+        raise ValueError("convert the uploaded document to MMD before generating")
+    progress.log(f"Pre-learning generation for chapter '{chapter.chapter_title}'.")
 
     # Extract the chapter's concept map first, then derive prerequisites from
     # it. Live mode runs the full dependency-architecture derivation (syllabus
@@ -219,6 +232,10 @@ def generate_pre_learning_from_upload(db: Session, job_id: int, target_chapter_i
         f"merged sources into {len(merged_ids)} existing"
     )
     db.commit()
+    progress.set_progress(1.0, label="Done")
+    progress.log(
+        f"Created {len(created_ids)} pre-learning concepts "
+        f"({len(merged_ids)} merged).", level="success")
     return {
         "job_id": job_id,
         "concepts_created": len(created_ids),

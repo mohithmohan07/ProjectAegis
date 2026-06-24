@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { api } from "../api/client";
 import { useAsync } from "../hooks";
+import { useRunConsole } from "../RunConsole";
 import DirectoryPicker from "../components/DirectoryPicker";
-import SourceBookInput from "../components/SourceBookInput";
+import DocumentUpload from "../components/DocumentUpload";
 import type { BlueprintBatch, Scope, Session, UploadJob, Vocab } from "../types";
 
 type Path = null | "concept_mapping" | "upload";
@@ -77,6 +78,7 @@ function MultiSelect({
 /* -------------------------- concept mapping flow ------------------------- */
 
 function ConceptMappingFlow({ vocab }: { vocab: Vocab }) {
+  const { run } = useRunConsole();
   const [scope, setScope] = useState<Scope | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [busy, setBusy] = useState(false);
@@ -132,7 +134,10 @@ function ConceptMappingFlow({ vocab }: { vocab: Vocab }) {
     setBusy(true);
     setError(null);
     try {
-      setResult(await api.generateSession(session.id));
+      const data = await run<Record<string, unknown>>(
+        "Build Assessments — generating questions",
+        api.paths.sessionGenerate(session.id));
+      setResult(data);
       setSession(await api.getSession(session.id));
     } catch (e) {
       setError(String(e));
@@ -225,26 +230,14 @@ function ConceptMappingFlow({ vocab }: { vocab: Vocab }) {
 /* ------------------------------ upload flow ------------------------------ */
 
 function UploadFlow({ vocab }: { vocab: Vocab }) {
+  const { run } = useRunConsole();
   const [uploadType, setUploadType] = useState("textbook");
   const [job, setJob] = useState<UploadJob | null>(null);
   const [scope, setScope] = useState<Scope | null>(null);
   const [qType, setQType] = useState("auto");
-  const [sourceBook, setSourceBook] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
-
-  async function upload(file: File) {
-    setBusy(true);
-    setError(null);
-    try {
-      setJob(await api.createAssessmentUpload(uploadType, file, sourceBook));
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
 
   async function chooseTextbookMode(mode: string) {
     if (!job) return;
@@ -276,7 +269,12 @@ function UploadFlow({ vocab }: { vocab: Vocab }) {
     setBusy(true);
     setError(null);
     try {
-      setResult(await api.generateFromUpload(job.id, qType));
+      const data = await run<Record<string, unknown>>(
+        "Build Assessments — generating from upload",
+        api.paths.assessmentGenerate(job.id),
+        { body: JSON.stringify({ question_type: qType }) },
+      );
+      setResult(data);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -284,36 +282,26 @@ function UploadFlow({ vocab }: { vocab: Vocab }) {
     }
   }
 
-  const needsTextbookMode = job?.upload_type === "textbook" && !job.textbook_mode;
+  // Steps below only appear once the document has actually been converted to MMD.
+  const converted = !!job && job.status !== "uploaded";
+  const needsTextbookMode = converted && job!.upload_type === "textbook" && !job!.textbook_mode;
 
   return (
     <>
       <div className="section-title">1 · Upload type & file</div>
-      <div className="card">
-        <div className="field">
-          <div className="field-label">Type of upload</div>
-          <div className="chips">
-            {vocab.upload_types.map((t) => (
-              <button key={t} type="button" className={`chip ${uploadType === t ? "chip-on" : ""}`}
-                disabled={!!job} onClick={() => setUploadType(t)}>
-                {t.replace(/_/g, " ")}
-              </button>
-            ))}
-          </div>
+      <div className="field">
+        <div className="field-label">Type of upload</div>
+        <div className="chips">
+          {vocab.upload_types.map((t) => (
+            <button key={t} type="button" className={`chip ${uploadType === t ? "chip-on" : ""}`}
+              disabled={!!job} onClick={() => setUploadType(t)}>
+              {t.replace(/_/g, " ")}
+            </button>
+          ))}
         </div>
-        <SourceBookInput value={sourceBook} onChange={setSourceBook}
-          options={vocab.book_sources} disabled={busy || !!job} />
-        <input type="file" disabled={busy || !!job}
-          onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
-        {job && (
-          <div style={{ marginTop: 10 }}>
-            <span className="badge green">converted to MMD</span>{" "}
-            <span className="muted mono">{job.filename}</span>
-            {job.source_book && <span className="badge accent">{job.source_book}</span>}
-            <pre className="mmd-preview">{job.mmd_text.slice(0, 600)}</pre>
-          </div>
-        )}
       </div>
+      <DocumentUpload module="assessments" uploadType={uploadType}
+        bookSources={vocab.book_sources} onJob={setJob} />
 
       {needsTextbookMode && (
         <>
@@ -329,15 +317,15 @@ function UploadFlow({ vocab }: { vocab: Vocab }) {
         </>
       )}
 
-      {job && !needsTextbookMode && (
+      {converted && !needsTextbookMode && (
         <>
-          <div className="section-title">{job.upload_type === "textbook" ? "3" : "2"} · Where to deposit</div>
+          <div className="section-title">{job!.upload_type === "textbook" ? "3" : "2"} · Where to deposit</div>
           <div className="card">
             <DirectoryPicker onScope={setScope} />
             <div className="row" style={{ marginTop: 12 }}>
               <span className="muted">{scope ? `${scope.type} — ${scope.label}` : "Select board → subject → chapter (mandatory)"}</span>
               <div className="spacer" />
-              <button disabled={!scope || busy || job.status === "deposited" || job.status === "generated"}
+              <button disabled={!scope || busy || job!.status === "deposited" || job!.status === "generated"}
                 onClick={deposit}>
                 Set deposit target
               </button>
