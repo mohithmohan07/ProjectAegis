@@ -78,7 +78,8 @@ def test_generated_questions_populate_question_text(client, first_concept, db):
             "cognitive_skills": ["Apply"], "difficulty_levels": ["Moderate"],
             "categories": [], "question_type": q_type, "num_questions": 1,
         })
-    gen = client.post(f"/build-assessments/sessions/{s['id']}/generate").json()
+    from tests.conftest import stream_result
+    gen = stream_result(client.post(f"/build-assessments/sessions/{s['id']}/generate"))
     assert gen["created"] == 3
     ids = client.get(f"/build-assessments/sessions/{s['id']}").json()[
         "generated_question_ids"]

@@ -8,11 +8,16 @@ exercised end to end.
 """
 from __future__ import annotations
 
+import os
 import re
 
 from .. import bulk_import as bi
 from .. import config, models
 from . import katex_rules as kr
+from . import prompts
+from . import progress
+# Imported for its prompt registrations (assessment.* keys used by _identify_system).
+from . import assessment_prompts as _assessment_prompts_registration  # noqa: F401
 
 _SLUG_RE = re.compile(r"[^A-Za-z0-9]")
 _MATH_SUBJECTS = {"Mathematics", "Physics", "Chemistry"}
@@ -520,11 +525,6 @@ def identify_questions_from_mmd(
     return records
 
 
-# Cap on questions identified from a single upload (keeps the JSON response and
-# the round-robin deposit bounded for very large documents).
-_IDENTIFY_MAX = 40
-
-
 def _identify_is_extract(upload_type: str, textbook_mode: str) -> bool:
     """Whether the upload should EXTRACT existing questions vs CREATE new ones.
 
@@ -564,6 +564,8 @@ def _coerce_answers(raw_answers: list, question_type: str) -> list[dict]:
     return answers
 
 
+_IDENTIFY_CAT = "Build Assessments · upload extraction"
+
 _TYPE_HINTS = {
     "objective": "OBJECTIVE — MCQ / fill-in-the-blank. For MCQs emit 3-4 "
                  "options with exactly one correct_answer = 'Yes'.",
@@ -572,48 +574,38 @@ _TYPE_HINTS = {
     "descriptive": "DESCRIPTIVE — long answer; emit mark-wise rubric points "
                    "(and sub_questions for multi-part questions) summing to marks.",
 }
+for _k, _v in _TYPE_HINTS.items():
+    prompts.register(f"identify.type_hint.{_k}", category=_IDENTIFY_CAT,
+                     label=f"Upload type hint · {_k}", default=_v)
 
+prompts.register(
+    "identify.intent.extract", category=_IDENTIFY_CAT,
+    label="Upload intent · extract existing questions",
+    default="EXTRACT every assessment question already present in the document. "
+            "Preserve each question's original wording and intent — do NOT invent "
+            "new questions. When a question's options, answer, solution or marking "
+            "scheme is present, capture it faithfully; otherwise leave answers empty.")
 
-def _identify_system(upload_type: str, question_type: str, *, extract: bool) -> str:
-    """System prompt for live question identification from an uploaded document."""
-    from . import assessment_prompts as ap
+prompts.register(
+    "identify.intent.create", category=_IDENTIFY_CAT,
+    label="Upload intent · create new questions",
+    default="CREATE fresh, exam-grade questions from the document's content. Cover "
+            "the key ideas across the material; never copy sentences verbatim as "
+            "questions, and never drift off the document's topic.")
 
-    intent = (
-        "EXTRACT every assessment question already present in the document. "
-        "Preserve each question's original wording and intent — do NOT invent "
-        "new questions. When a question's options, answer, solution or marking "
-        "scheme is present, capture it faithfully; otherwise leave answers empty."
-        if extract else
-        "CREATE fresh, exam-grade questions from the document's content. Cover "
-        "the key ideas across the material; never copy sentences verbatim as "
-        "questions, and never drift off the document's topic."
-    )
-    if question_type == "auto":
-        type_block = (
-            "QUESTION TYPES — the document may contain a MIX of types. For EACH "
-            "question, set \"sheet_kind\" to the type that best fits it and shape "
-            "it accordingly:\n"
-            f"- objective: {_TYPE_HINTS['objective']}\n"
-            f"- subjective: {_TYPE_HINTS['subjective']}\n"
-            f"- descriptive: {_TYPE_HINTS['descriptive']}\n"
-            "Preserve a question's natural type — do NOT force everything into one "
-            "type. A long/multi-part question with parts (a),(b),(c) is descriptive "
-            "and MUST keep its parts in the sub_questions slots, never split into "
-            "separate questions."
-        )
-    else:
-        type_block = (
-            f"TARGET QUESTION TYPE (every question is this type): "
-            f"{_TYPE_HINTS[question_type]}\n"
-            f"Set \"sheet_kind\" to \"{question_type}\" on every question."
-        )
-    return f"""\
+prompts.register(
+    "identify.system", category=_IDENTIFY_CAT,
+    label="Upload question-identification system prompt",
+    description="Variables: {{intent}}, {{type_block}}, {{content_format}}, "
+                "{{output}}.",
+    variables=("intent", "type_block", "content_format", "output"),
+    default="""\
 You are an assessment digitizer for Indian school boards (ICSE/CBSE). You read
 a document already converted to Markdown/MMD (mathematics in LaTeX) and return
 assessment questions in a STRICT JSON schema.
 
-TASK: {intent}
-{type_block}
+TASK: {{intent}}
+{{type_block}}
 Classify each question's question_category, cognitive_skills and
 level_of_difficulty. Add a "sheet_kind" field (objective|subjective|descriptive)
 to every question object.
@@ -623,66 +615,136 @@ STANDARD VALUES (use EXACTLY these):
 - level_of_difficulty: Less | Moderate | High
 - answer_type: Phrases | Equation | Image
 
-{ap.CONTENT_FORMAT_BLOCK}
+{{content_format}}
 
-{ap.OUTPUT_BLOCK}
+{{output}}
 
-Return ONLY the JSON object. Emit at most {_IDENTIFY_MAX} questions."""
+Return ONLY the JSON object.""")
+
+
+def _identify_system(upload_type: str, question_type: str, *, extract: bool) -> str:
+    """System prompt for live question identification from an uploaded document."""
+    intent = prompts.get_text(
+        "identify.intent.extract" if extract else "identify.intent.create")
+    if question_type == "auto":
+        type_block = (
+            "QUESTION TYPES — the document may contain a MIX of types. For EACH "
+            "question, set \"sheet_kind\" to the type that best fits it and shape "
+            "it accordingly:\n"
+            f"- objective: {prompts.get_text('identify.type_hint.objective')}\n"
+            f"- subjective: {prompts.get_text('identify.type_hint.subjective')}\n"
+            f"- descriptive: {prompts.get_text('identify.type_hint.descriptive')}\n"
+            "Preserve a question's natural type — do NOT force everything into one "
+            "type. A long/multi-part question with parts (a),(b),(c) is descriptive "
+            "and MUST keep its parts in the sub_questions slots, never split into "
+            "separate questions."
+        )
+    else:
+        type_block = (
+            f"TARGET QUESTION TYPE (every question is this type): "
+            f"{prompts.get_text('identify.type_hint.' + question_type)}\n"
+            f"Set \"sheet_kind\" to \"{question_type}\" on every question."
+        )
+    return prompts.render(
+        "identify.system",
+        intent=intent, type_block=type_block,
+        content_format=prompts.get_text("content.katex_rules"),
+        output=prompts.get_text("assessment.output"),
+    )
+
+
+# Safety bound on questions identified from one upload (prevents a runaway
+# response from exhausting memory); high enough never to truncate real banks.
+_IDENTIFY_SAFETY_CAP = 5000
+
+
+def _identify_row_to_record(row: dict, *, auto: bool, question_type: str) -> dict | None:
+    if not isinstance(row, dict):
+        return None
+    question = (row.get("question") or "").strip()
+    if not question:
+        return None
+    kind = (_normalize_sheet_kind(row.get("sheet_kind") or row.get("question_type"))
+            if auto else question_type)
+    try:
+        marks = float(row.get("marks") or _default_marks(kind))
+    except (TypeError, ValueError):
+        marks = _default_marks(kind)
+    return {
+        "sheet_kind": kind,
+        "question_category": row.get("question_category") or _default_category_for(kind),
+        "cognitive_skills": bi.normalize_cognitive_skills(
+            row.get("cognitive_skills") or "Understand") or "Understand",
+        "question_source": bi.QUESTION_SOURCE_DEFAULT,
+        "level_of_difficulty": bi.normalize_difficulty(
+            row.get("level_of_difficulty") or "Moderate") or "Moderate",
+        "marks": marks,
+        "question": question,
+        "question_appears_in": "",
+        "question_text": (str(row.get("question_text", "")).strip()
+                          or bi.to_plain_text(question)),
+        "display_answer": row.get("display_answer", ""),
+        "answer_explanation": row.get("answer_explanation", ""),
+        "answers": _coerce_answers(row.get("answers", []), kind),
+        "sub_questions": row.get("sub_questions") or [] if kind == "descriptive" else [],
+        "origin": "upload",
+    }
 
 
 def _live_identify_questions_from_mmd(
     mmd_text: str, *, upload_type: str, question_type: str, textbook_mode: str = "",
 ) -> list[dict]:
-    """Live (OpenAI) question identification from an uploaded document's MMD."""
+    """Live (OpenAI) question identification from an uploaded document's MMD.
+
+    The document is processed in ordered chunks (never trimmed) so every
+    question in a large bank is captured; results are merged and de-duplicated.
+    """
     extract = _identify_is_extract(upload_type, textbook_mode)
     system = _identify_system(upload_type, question_type, extract=extract)
     auto = question_type == "auto"
-    user = (
-        "DOCUMENT (MMD):\n" + _trim(mmd_text, 200_000) + "\n\n"
-        + (f"Return up to {_IDENTIFY_MAX} question(s), each tagged with its own "
-           "\"sheet_kind\" (objective|subjective|descriptive), as a JSON object "
-           "with a \"questions\" array."
-           if auto else
-           f"Return up to {_IDENTIFY_MAX} {question_type} question(s) as "
-           "specified above, as a JSON object with a \"questions\" array.")
+    tail = (
+        "Return EVERY question you find in this section, each tagged with its own "
+        "\"sheet_kind\" (objective|subjective|descriptive), as a JSON object with "
+        "a \"questions\" array."
+        if auto else
+        f"Return EVERY {question_type} question in this section as specified "
+        "above, as a JSON object with a \"questions\" array."
     )
-    data = _openai_json(system, user)
+    chunks = _split_mmd_into_chunks(mmd_text)
+    progress.log(
+        f"Identifying questions from {len(mmd_text):,} chars across "
+        f"{len(chunks)} chunk(s) (type: {question_type}, "
+        f"{'extract' if extract else 'create'}).")
+
     records: list[dict] = []
-    for row in (data.get("questions") or [])[:_IDENTIFY_MAX]:
-        if not isinstance(row, dict):
-            continue
-        question = (row.get("question") or "").strip()
-        if not question:
-            continue
-        # In auto mode each question carries its own type; otherwise force the
-        # requested type.
-        kind = (_normalize_sheet_kind(row.get("sheet_kind") or row.get("question_type"))
-                if auto else question_type)
-        try:
-            marks = float(row.get("marks") or _default_marks(kind))
-        except (TypeError, ValueError):
-            marks = _default_marks(kind)
-        records.append({
-            "sheet_kind": kind,
-            "question_category": row.get("question_category") or _default_category_for(kind),
-            "cognitive_skills": bi.normalize_cognitive_skills(
-                row.get("cognitive_skills") or "Understand") or "Understand",
-            "question_source": bi.QUESTION_SOURCE_DEFAULT,
-            "level_of_difficulty": bi.normalize_difficulty(
-                row.get("level_of_difficulty") or "Moderate") or "Moderate",
-            "marks": marks,
-            "question": question,
-            "question_appears_in": "",
-            "question_text": (str(row.get("question_text", "")).strip()
-                              or bi.to_plain_text(question)),
-            "display_answer": row.get("display_answer", ""),
-            "answer_explanation": row.get("answer_explanation", ""),
-            "answers": _coerce_answers(row.get("answers", []), kind),
-            "sub_questions": row.get("sub_questions") or [] if kind == "descriptive" else [],
-            "origin": "upload",
-        })
+    seen: set[str] = set()
+    for i, chunk in enumerate(chunks, start=1):
+        progress.step(f"Question identification — chunk {i}/{len(chunks)}",
+                      value=(i - 1) / max(len(chunks), 1))
+        user = f"DOCUMENT (MMD) — section {i} of {len(chunks)}:\n{chunk}\n\n{tail}"
+        data = _openai_json(system, user)
+        added = 0
+        for row in (data.get("questions") or []):
+            rec = _identify_row_to_record(row, auto=auto, question_type=question_type)
+            if rec is None:
+                continue
+            norm = bi.normalize_question_text(rec["question"])
+            if norm and norm in seen:
+                continue
+            if norm:
+                seen.add(norm)
+            records.append(rec)
+            added += 1
+            if len(records) >= _IDENTIFY_SAFETY_CAP:
+                break
+        progress.log(f"  chunk {i}/{len(chunks)}: {added} new questions")
+        if len(records) >= _IDENTIFY_SAFETY_CAP:
+            progress.log("Reached safety cap; stopping.", level="warn")
+            break
     if not records:
         raise RuntimeError("live question identification returned no questions")
+    progress.set_progress(1.0, label="Question identification complete")
+    progress.log(f"Identified {len(records)} unique questions.", level="success")
     return records
 
 
@@ -697,7 +759,12 @@ def _live_identify_questions_from_mmd(
 # no '&' chains in names, distinct concept-name stems, Types must carry
 # example prompts, syllabus-scoped length, no 'MMD' references.
 
-_MATH_NAME_TEMPLATES = """\
+_CONCEPTS_CAT = "Build Concepts · post-learning extraction"
+
+prompts.register(
+    "concepts.name_templates.math", category=_CONCEPTS_CAT,
+    label="Concept naming templates (math/physics)",
+    default="""\
    - Properties and Applications of <X>
    - Proof and Derivation of <rule/law>
    - Conditions for Applying <rule/law>
@@ -706,9 +773,12 @@ _MATH_NAME_TEMPLATES = """\
    - Methods of <procedure>
    - Laws and Applications of <X>
    - Converting Between <A> and <B>
-   - Simplifying Using <rule/law>"""
+   - Simplifying Using <rule/law>""")
 
-_DESCRIPTIVE_NAME_TEMPLATES = """\
+prompts.register(
+    "concepts.name_templates.descriptive", category=_CONCEPTS_CAT,
+    label="Concept naming templates (other subjects)",
+    default="""\
    - Structure and Function of <X>
    - Process of <X>
    - Types and Classification of <X>
@@ -716,32 +786,38 @@ _DESCRIPTIVE_NAME_TEMPLATES = """\
    - Relationship between <A> and <B>
    - Causes and Effects of <X>
    - Importance and Significance of <X>
-   - Comparison of <A> and <B>"""
+   - Comparison of <A> and <B>""")
 
+prompts.register(
+    "concepts.detail.math", category=_CONCEPTS_CAT,
+    label="Description guidance (math/physics)",
+    default="definition, explanation, key properties, when/how to use, with "
+            "worked examples and step-by-step reasoning INLINED in full")
 
-def _concepts_system(subject: str) -> str:
-    s = (subject or "the subject").strip() or "the subject"
-    math_like = s.lower() in {"mathematics", "math", "physics"}
-    templates = _MATH_NAME_TEMPLATES if math_like else _DESCRIPTIVE_NAME_TEMPLATES
-    detail_line = (
-        "definition, explanation, key properties, when/how to use, with worked "
-        "examples and step-by-step reasoning INLINED in full"
-        if math_like else
-        "complete definition and explanation, key characteristics, processes or "
-        "relationships, with concrete examples INLINED within the description"
-    )
-    return f"""\
-You are a STRICT concept mapping engine for school {s} (board-level rigor).
-Return ONLY a JSON object: {{"rows": [{{"topic": "", "concept": "", "concept_description": "", "keywords": ""}}, ...]}}.
+prompts.register(
+    "concepts.detail.descriptive", category=_CONCEPTS_CAT,
+    label="Description guidance (other subjects)",
+    default="complete definition and explanation, key characteristics, "
+            "processes or relationships, with concrete examples INLINED within "
+            "the description")
+
+prompts.register(
+    "concepts.system", category=_CONCEPTS_CAT,
+    label="Concept-mapping system prompt",
+    description="Variables: {{subject}}, {{detail_line}}, {{name_templates}}.",
+    variables=("subject", "detail_line", "name_templates"),
+    default="""\
+You are a STRICT concept mapping engine for school {{subject}} (board-level rigor).
+Return ONLY a JSON object: {"rows": [{"topic": "", "concept": "", "concept_description": "", "keywords": ""}, ...]}.
 
 OUTPUT CONTRACT (MUST FOLLOW EXACTLY):
 - concept_description is ONE string with sections separated by " // " in this order:
-  Description: <{detail_line}> // Types: <Type 01: Name Case 01: <concrete example prompt, e.g. 'Evaluate: ...', 'Prove: ...'> Case 02: ... Type 02: ...> // Misconception: <common student misconceptions> (omit section if none apply)
+  Description: <{{detail_line}}> // Types: <Type 01: Name Case 01: <concrete example prompt, e.g. 'Evaluate: ...', 'Prove: ...'> Case 02: ... Type 02: ...> // Misconception: <common student misconceptions> (omit section if none apply)
 - Use " // " as the separator. Do NOT use newlines inside concept_description.
 
 CONCEPT NAMING:
 1) Names must be academic, specific and content-based. Prefer these templates:
-{templates}
+{{name_templates}}
 2) Sibling concepts must NOT repeat the same leading phrase; vary the stems.
 3) NEVER chain names with '&'. Culmination rows are named
    "Culmination - <A>, <B> and <C>" (comma list with a final 'and').
@@ -771,7 +847,27 @@ QUALITY RULES:
 - Small, testable, taggable concepts; descriptions stay within syllabus scope
   (max ~90 words per section).
 - keywords: 3-6 comma-separated lowercase terms.
-"""
+""")
+
+prompts.register(
+    "concepts.user", category=_CONCEPTS_CAT,
+    label="Concept-mapping user instruction",
+    description="Prepended to the chapter text. No variables.",
+    default="Extract 40-60 high-quality concepts from this chapter. Group them "
+            "under topics (5-15+ concepts each, last row per topic is the "
+            "culmination), following the chapter's section flow:")
+
+
+def _concepts_system(subject: str) -> str:
+    s = (subject or "the subject").strip() or "the subject"
+    math_like = s.lower() in {"mathematics", "math", "physics"}
+    suffix = "math" if math_like else "descriptive"
+    return prompts.render(
+        "concepts.system",
+        subject=s,
+        detail_line=prompts.get_text(f"concepts.detail.{suffix}"),
+        name_templates=prompts.get_text(f"concepts.name_templates.{suffix}"),
+    )
 
 
 def _openai_json(system: str, user: str, max_tokens: int | None = None,
@@ -811,6 +907,79 @@ def _trim(text: str, max_chars: int = 220_000) -> str:
     if len(text) <= max_chars:
         return text
     return text[: int(max_chars * 0.7)] + "\n\n[...TRIMMED...]\n\n" + text[-int(max_chars * 0.3):]
+
+
+# How many characters of MMD to send per GPT call. We chunk (never trim) so no
+# chapter content is lost: each chunk is processed in full and the results are
+# merged. Sized so a chunk's worth of concepts/questions fits comfortably in one
+# response, avoiding output truncation on long chapters.
+_MMD_CHUNK_CHARS = int(os.environ.get("AEGIS_MMD_CHUNK_CHARS", "45000"))
+
+
+def _split_mmd_into_chunks(mmd_text: str, max_chars: int | None = None) -> list[str]:
+    """Split an MMD document into ordered chunks without dropping any content.
+
+    Splits on Markdown headings so each chunk is a run of whole sections; a
+    single section larger than ``max_chars`` is hard-split on paragraph
+    boundaries. The concatenation of all chunks equals the original text
+    (whitespace aside) — nothing is trimmed.
+    """
+    if max_chars is None:
+        max_chars = _MMD_CHUNK_CHARS
+    text = mmd_text or ""
+    if len(text) <= max_chars:
+        return [text] if text.strip() else []
+
+    # Break into sections that each start at a heading line.
+    lines = text.splitlines(keepends=True)
+    sections: list[str] = []
+    current: list[str] = []
+    for line in lines:
+        if line.lstrip().startswith("#") and current:
+            sections.append("".join(current))
+            current = [line]
+        else:
+            current.append(line)
+    if current:
+        sections.append("".join(current))
+
+    # Hard-split any oversized section on blank lines (paragraphs).
+    def _hard_split(block: str) -> list[str]:
+        if len(block) <= max_chars:
+            return [block]
+        paras = re.split(r"(\n\s*\n)", block)
+        out: list[str] = []
+        buf = ""
+        for piece in paras:
+            if len(buf) + len(piece) > max_chars and buf:
+                out.append(buf)
+                buf = piece
+            elif len(piece) > max_chars:
+                # A single paragraph longer than the budget: slice it.
+                if buf:
+                    out.append(buf)
+                    buf = ""
+                for i in range(0, len(piece), max_chars):
+                    out.append(piece[i:i + max_chars])
+            else:
+                buf += piece
+        if buf:
+            out.append(buf)
+        return out
+
+    # Pack sections into chunks up to max_chars.
+    chunks: list[str] = []
+    buf = ""
+    for section in sections:
+        for piece in _hard_split(section):
+            if len(buf) + len(piece) > max_chars and buf:
+                chunks.append(buf)
+                buf = piece
+            else:
+                buf += piece
+    if buf.strip():
+        chunks.append(buf)
+    return [c for c in chunks if c.strip()]
 
 
 def _is_culmination(title: str) -> bool:
@@ -854,33 +1023,66 @@ def _ensure_culmination_per_topic(records: list[dict]) -> list[dict]:
     return out
 
 
+def _concept_rows_to_records(data: dict) -> list[dict]:
+    out: list[dict] = []
+    for row in data.get("rows", []):
+        title = (row.get("concept") or "").strip()
+        if not title:
+            continue
+        out.append({
+            "topic": (row.get("topic") or "Topic 01").strip(),
+            "concept_title": title,
+            "concept_details": (row.get("concept_description") or "").strip(),
+            "keywords": (row.get("keywords") or "").strip(),
+        })
+    return out
+
+
+def _merge_concept_records(records: list[dict]) -> list[dict]:
+    """De-duplicate merged concept rows by (topic, normalized title)."""
+    seen: set[tuple[str, str]] = set()
+    out: list[dict] = []
+    for rec in records:
+        key = (rec["topic"].lower().strip(),
+               bi.normalize_question_text(rec["concept_title"]))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(rec)
+    return out
+
+
 def concepts_from_mmd(mmd_text: str, *, subject: str = "",
                       live: bool | None = None) -> list[dict]:
-    """Parse an MMD document into concept records (post-learning)."""
+    """Parse an MMD document into concept records (post-learning).
+
+    Large chapters are processed in ordered chunks (never trimmed) and the
+    per-chunk concepts are merged, so no chapter content is lost.
+    """
     use_live = config.use_live_generation() if live is None else live
     if use_live:
-        data = _openai_json(
-            _concepts_system(subject),
-            "Extract 40-60 high-quality concepts from this chapter. Group them "
-            "under topics (5-15+ concepts each, last row per topic is the "
-            "culmination), following the chapter's section flow:\n\n"
-            + _trim(mmd_text),
-        )
-        out = []
-        for row in data.get("rows", []):
-            title = (row.get("concept") or "").strip()
-            if not title:
-                continue
-            out.append({
-                "topic": (row.get("topic") or "Topic 01").strip(),
-                "concept_title": title,
-                "concept_details": (row.get("concept_description") or "").strip(),
-                "keywords": (row.get("keywords") or "").strip(),
-            })
+        system = _concepts_system(subject)
+        instruction = prompts.get_text("concepts.user")
+        chunks = _split_mmd_into_chunks(mmd_text)
+        progress.log(
+            f"Extracting concepts from {len(mmd_text):,} chars "
+            f"across {len(chunks)} chunk(s) (subject: {subject or 'general'}).")
+        all_records: list[dict] = []
+        for i, chunk in enumerate(chunks, start=1):
+            progress.step(f"Concept extraction — chunk {i}/{len(chunks)}",
+                          value=(i - 1) / max(len(chunks), 1))
+            data = _openai_json(system, f"{instruction}\n\n{chunk}")
+            chunk_records = _concept_rows_to_records(data)
+            progress.log(f"  chunk {i}/{len(chunks)}: {len(chunk_records)} concepts")
+            all_records.extend(chunk_records)
+        out = _merge_concept_records(all_records)
         if not out:
             raise RuntimeError("live concept extraction returned no rows")
+        progress.set_progress(1.0, label="Concept extraction complete")
+        progress.log(f"Merged to {len(out)} unique concepts.", level="success")
         return _ensure_culmination_per_topic(out)
     config.require_generation_live()
+    progress.log(f"Extracting concepts (dry) from {len(mmd_text):,} chars.")
     # Dry: treat markdown headings as topics and bullet/para lines as concepts.
     topic = "Topic 01: Overview"
     out: list[dict] = []
@@ -932,8 +1134,16 @@ def _board_guidance(board: str) -> str:
     return f"BOARD-SPECIFIC CURRICULUM: Board {board!r}; use its official progression."
 
 
-def _prelearning_system(subject: str, grade: str, board: str) -> str:
-    return f"""\
+_PRELEARN_CAT = "Build Concepts · pre-learning derivation"
+
+prompts.register(
+    "prelearning.system", category=_PRELEARN_CAT,
+    label="Pre-learning derivation system prompt",
+    description="Variables: {{subject}} {{grade}} {{board}} {{board_guidance}} "
+                "{{min_t}} {{max_t}} {{min_ct}} {{max_ct}}.",
+    variables=("subject", "grade", "board", "board_guidance",
+               "min_t", "max_t", "min_ct", "max_ct"),
+    default="""\
 You are an expert curriculum designer specializing in dependency-based learning
 architecture aligned with formal school syllabi (ICSE/CBSE and equivalents).
 Generate PRE-LEARNING concepts for the given chapter.
@@ -970,8 +1180,8 @@ COGNITIVE TAGGING (MANDATORY): one primary tag per concept:
 FL=Foundational Logic | NU=Numerical Handling | VC=Vocabulary Concept |
 RS=Real-world Sense | GR=Graphical Reasoning.
 
-COUNTS (STRICT): {_PRE_MIN_T}-{_PRE_MAX_T} topics; every topic has
-{_PRE_MIN_CT}-{_PRE_MAX_CT} concepts. Order by dependency. No duplicates.
+COUNTS (STRICT): {{min_t}}-{{max_t}} topics; every topic has
+{{min_ct}}-{{max_ct}} concepts. Order by dependency. No duplicates.
 
 CONCEPT DESCRIPTION FORMAT (MANDATORY): one string, exactly three sections,
 separated by " // ":
@@ -982,19 +1192,21 @@ cases: Type 01: <title> Case 01: <example prompt> Case 02: ... Type 02: ...>
 Zero-padded labels exactly (Type 01:, Case 01:). NEVER reference source
 artifacts ("Example 19", "Fig 2", "Table no. 1") and never the words "MMD".
 
-OUTPUT (STRICT JSON ONLY): {{"topics": [{{"topic_name": "", "concepts":
-[{{"parent_concept": "", "concept_name": "", "concept_description": "",
-"tag": ""}}]}}]}}.
+OUTPUT (STRICT JSON ONLY): {"topics": [{"topic_name": "", "concepts":
+[{"parent_concept": "", "concept_name": "", "concept_description": "",
+"tag": ""}]}]}.
 
 FINAL VALIDATION: for each concept ask "Was this already expected knowledge
 BEFORE this grade (or clearly foundational)?" — if unsure or borderline,
 REMOVE or REPLACE with a safer prior-grade prerequisite.
 
-RUN CONTEXT: Subject: {subject} | Grade: {grade} | Board: {board}
-{_board_guidance(board)}"""
+RUN CONTEXT: Subject: {{subject}} | Grade: {{grade}} | Board: {{board}}
+{{board_guidance}}""")
 
-
-_PRE_AUDITOR_SYSTEM = """\
+prompts.register(
+    "prelearning.auditor", category=_PRELEARN_CAT,
+    label="Pre-learning syllabus-boundary auditor prompt",
+    default="""\
 You are a strict curriculum auditor for ICSE/CBSE-aligned pre-learning.
 You receive draft pre-learning JSON ("topics" with nested "concepts") plus
 chapter context. REMOVE or REPLACE any concept that is taught as new in the
@@ -1005,7 +1217,17 @@ STRUCTURE: output exactly the same number of topics, and per topic exactly
 the same number of concepts — substitute rejected rows, never delete slots.
 Keep the same schema and the Description: // Types: // Misconception: format
 with Type 01/02 and Case 01/02 labels, plus the tag (FL|NU|VC|RS|GR).
-Return ONLY JSON with one key "topics". No markdown, no commentary."""
+Return ONLY JSON with one key "topics". No markdown, no commentary.""")
+
+
+def _prelearning_system(subject: str, grade: str, board: str) -> str:
+    return prompts.render(
+        "prelearning.system",
+        subject=subject, grade=grade, board=board,
+        board_guidance=_board_guidance(board),
+        min_t=_PRE_MIN_T, max_t=_PRE_MAX_T,
+        min_ct=_PRE_MIN_CT, max_ct=_PRE_MAX_CT,
+    )
 
 
 def _flatten_pre_topics(data: dict) -> list[dict]:
@@ -1064,7 +1286,9 @@ def pre_learning_from_rows(
         f"CHAPTER: {chapter_title or '(untitled)'}\n"
         f"Subject: {subject} | Grade: {grade} | Board: {board}\n\n"
         "CONCEPT MAPPING (current chapter content — exclude from pre-learning):\n"
-        + _trim(listing, 80_000)
+        # Pre-learning reasons over the whole concept map at once; keep a high
+        # bound so realistic chapters are never truncated.
+        + _trim(listing, 400_000)
     )
     system = _prelearning_system(subject, grade, board)
     draft = _openai_json(system, user)
@@ -1074,7 +1298,7 @@ def pre_learning_from_rows(
     # Stage 2: syllabus boundary auditor (replaces violating rows in place).
     import json as _json
     audited = _openai_json(
-        _PRE_AUDITOR_SYSTEM,
+        prompts.get_text("prelearning.auditor"),
         f"Chapter: {chapter_title} | Subject: {subject} | Grade: {grade} | "
         f"Board: {board}\n\nDRAFT:\n" + _json.dumps(draft)[:120_000],
     )

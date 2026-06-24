@@ -73,16 +73,18 @@ def test_concept_resused_across_books_merges_sources(client, db, first_chapter):
             b"Refraction of light through glass slabs\n"
             b"Total internal reflection in prisms")
 
+    from tests.conftest import convert_concept_upload, stream_result
+
     def upload_and_generate(book):
         files = {"file": (f"{book.replace(' ', '_')}.txt", io.BytesIO(body), "text/plain")}
         job = client.post(
             f"/build-concepts/post-learning/uploads?source_book={book}", files=files,
         ).json()
         assert job["source_book"] == book
-        return client.post(
+        convert_concept_upload(client, job["id"])
+        return stream_result(client.post(
             f"/build-concepts/post-learning/uploads/{job['id']}/generate",
-            json={"target_chapter_id": first_chapter["id"]},
-        ).json()
+            json={"target_chapter_id": first_chapter["id"]}))
 
     first = upload_and_generate("NCERT")
     assert first["concepts_created"] == 2
@@ -103,19 +105,21 @@ def test_duplicate_questions_across_books_merge_sources(client, db, first_chapte
             b"State the law of refraction with one worked example 4417.\n\n"
             b"Define critical angle for a glass-air interface 4417.")
 
+    from tests.conftest import convert_assessment_upload, stream_result
+
     def run(book):
         files = {"file": (f"q_{book.replace(' ', '_')}.txt", io.BytesIO(body), "text/plain")}
         job = client.post(
             f"/build-assessments/uploads?upload_type=questions&source_book={book}",
             files=files,
         ).json()
+        convert_assessment_upload(client, job["id"])
         client.post(f"/build-assessments/uploads/{job['id']}/deposit", json={
             "scope_type": "chapter", "scope_ids": [first_chapter["id"]],
         })
-        return client.post(
+        return stream_result(client.post(
             f"/build-assessments/uploads/{job['id']}/generate",
-            json={"question_type": "objective"},
-        ).json()
+            json={"question_type": "objective"}))
 
     first = run("S Chand")
     assert first["created"] == 2

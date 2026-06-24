@@ -52,7 +52,8 @@ def test_append_only_never_overwrites(client, first_concept, db):
         "categories": ["Long Answer"], "question_type": "descriptive",
         "num_questions": 1,
     })
-    gen = client.post(f"/build-assessments/sessions/{session['id']}/generate").json()
+    from tests.conftest import stream_result
+    gen = stream_result(client.post(f"/build-assessments/sessions/{session['id']}/generate"))
     ids = gen["pipeline"]
     # Append the same question ids again -> all skipped.
     again = writer.append_questions(
@@ -73,7 +74,8 @@ def test_export_questions_selection(client, first_concept):
         "categories": ["Multiple Choice Question"], "question_type": "objective",
         "num_questions": 2,
     })
-    gen = client.post(f"/build-assessments/sessions/{session['id']}/generate").json()
+    from tests.conftest import stream_result
+    gen = stream_result(client.post(f"/build-assessments/sessions/{session['id']}/generate"))
     ids = gen["question_ids"]
     assert len(ids) == 2
 

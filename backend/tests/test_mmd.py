@@ -87,17 +87,26 @@ def _force_live_image_failure(monkeypatch):
     monkeypatch.setattr(mmd, "_mathpix_image_to_mmd", boom)
 
 
-def test_build_assessments_image_upload_failure_returns_400(client, monkeypatch):
+def test_build_assessments_image_convert_failure_streams_error(client, monkeypatch):
+    from tests.conftest import stream_error_message
     _force_live_image_failure(monkeypatch)
     files = {"file": ("images.jpg", io.BytesIO(b"\xff\xd8\xff\xe0"), "image/jpeg")}
-    r = client.post("/build-assessments/uploads?upload_type=handwritten", files=files)
-    assert r.status_code == 400
-    assert "Mathpix" in r.json()["detail"]
+    # Upload only stages the file (no conversion, so no failure yet).
+    job = client.post(
+        "/build-assessments/uploads?upload_type=handwritten", files=files).json()
+    assert job["status"] == "uploaded"
+    # Conversion is the explicit step where Mathpix is hit; the error streams back.
+    msg = stream_error_message(
+        client.post(f"/build-assessments/uploads/{job['id']}/convert"))
+    assert msg and "Mathpix" in msg
 
 
-def test_build_concepts_image_upload_failure_returns_400(client, monkeypatch):
+def test_build_concepts_image_convert_failure_streams_error(client, monkeypatch):
+    from tests.conftest import stream_error_message
     _force_live_image_failure(monkeypatch)
     files = {"file": ("notes.png", io.BytesIO(b"\x89PNG"), "image/png")}
-    r = client.post("/build-concepts/post-learning/uploads", files=files)
-    assert r.status_code == 400
-    assert "Mathpix" in r.json()["detail"]
+    job = client.post("/build-concepts/post-learning/uploads", files=files).json()
+    assert job["status"] == "uploaded"
+    msg = stream_error_message(
+        client.post(f"/build-concepts/uploads/{job['id']}/convert"))
+    assert msg and "Mathpix" in msg

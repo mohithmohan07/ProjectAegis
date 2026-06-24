@@ -17,6 +17,30 @@ model to behave like that editor.
 """
 from __future__ import annotations
 
+import json
+import os
+from pathlib import Path
+
+
+def _ov(key: str, default: str) -> str:
+    """Return an Admin-tab override for ``key`` if present, else ``default``.
+
+    Reads ``$AEGIS_DATA_DIR/prompt_overrides.json`` directly so this vendored
+    module stays decoupled from the app package (works standalone too).
+    """
+    data_dir = os.environ.get("AEGIS_DATA_DIR")
+    if not data_dir:
+        return default
+    path = Path(data_dir) / "prompt_overrides.json"
+    if not path.exists():
+        return default
+    try:
+        overrides = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return default
+    value = overrides.get(key) if isinstance(overrides, dict) else None
+    return value if isinstance(value, str) and value.strip() else default
+
 
 # ----------------------------------------------------------------------------
 # Shared description of the visual toolbox (used by both passes)
@@ -500,21 +524,35 @@ GUIDES = {
 }
 
 
+# Admin-tab override keys for each guide.
+_GUIDE_KEYS = {
+    "Science": "workbook.guide.science",
+    "Mathematics": "workbook.guide.mathematics",
+    "Social Science": "workbook.guide.social",
+    "English": "workbook.guide.english",
+}
+
+
 def guide_for(subject: str, discipline: str = "") -> str:
-    base = GUIDES.get(subject, SCIENCE_GUIDE)
+    base = _ov(_GUIDE_KEYS.get(subject, "workbook.guide.science"),
+               GUIDES.get(subject, SCIENCE_GUIDE))
     if subject == "Science" and discipline == "Biology":
         return base + "\n\nThis chapter is BIOLOGY — apply the Biology-only rules above."
     return base
 
 
+def _builder_base() -> str:
+    return _ov("workbook.builder_base", BASE_BUILDER_SYSTEM)
+
+
 def builder_system(subject: str, discipline: str = "") -> str:
-    return BASE_BUILDER_SYSTEM + "\n\n" + guide_for(subject, discipline)
+    return _builder_base() + "\n\n" + guide_for(subject, discipline)
 
 
 def topic_builder_system(subject: str, discipline: str = "") -> str:
     """Build ONE topic at a time (used when the full chapter exceeds token limits)."""
     return (
-        BASE_BUILDER_SYSTEM
+        _builder_base()
         + "\n\n"
         + guide_for(subject, discipline)
         + """
@@ -572,4 +610,4 @@ JSON only, no fences."""
 
 
 def planner_system() -> str:
-    return PLANNER_SYSTEM
+    return _ov("workbook.planner", PLANNER_SYSTEM)
