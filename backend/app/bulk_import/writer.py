@@ -18,9 +18,10 @@ from sqlalchemy.orm import Session
 from . import (
     CHAPTER_FIELDS, TOPIC_FIELDS, CONCEPT_FIELDS, FIELDS_BY_KIND, SHEET_BY_KIND,
     SHEET_DOC_LINK, SECTION_BANDS, OBJECTIVE_GROUP_FIELDS, DESCRIPTIVE_GROUP_FIELDS,
-    LEGACY_CONCEPT_LEN, merge_sources,
+    LEGACY_CONCEPT_LEN, merge_sources, strip_title_tag, strip_topic_title,
 )
 from .. import models
+from ..services import directory
 
 _BAND_FILL = {
     "Chapter": "FCE4D6", "Topic": "FFF2CC", "Concept": "D9EAD3",
@@ -84,15 +85,21 @@ def _row_question_placement_key(row: tuple, kind: str, concept_len: int) -> tupl
     if not label:
         return None
     g_type = _IDX_CONCEPT_TITLE + concept_len + 5
-    return (label, _cell_str(row, _IDX_CHAPTER_TITLE), _cell_str(row, _IDX_TOPIC_TITLE),
-            _cell_str(row, _IDX_CONCEPT_TITLE), _cell_str(row, g_type))
+    # Strip the title-column tags so keys match the clean DB-derived keys.
+    return (label,
+            strip_title_tag(_cell_str(row, _IDX_CHAPTER_TITLE)),
+            strip_topic_title(_cell_str(row, _IDX_TOPIC_TITLE)),
+            strip_title_tag(_cell_str(row, _IDX_CONCEPT_TITLE)),
+            _cell_str(row, g_type))
 
 
 def _row_concept_placement_key(row: tuple) -> tuple | None:
-    title = _cell_str(row, _IDX_CONCEPT_TITLE)
+    title = strip_title_tag(_cell_str(row, _IDX_CONCEPT_TITLE))
     if not title:
         return None
-    return (title, _cell_str(row, _IDX_CHAPTER_TITLE), _cell_str(row, _IDX_TOPIC_TITLE))
+    return (title,
+            strip_title_tag(_cell_str(row, _IDX_CHAPTER_TITLE)),
+            strip_topic_title(_cell_str(row, _IDX_TOPIC_TITLE)))
 
 
 class WorkbookIndex:
@@ -182,6 +189,58 @@ def _concept_placements(c: models.Concept) -> list[models.Topic]:
     return out
 
 
+def _topic_number(topic: models.Topic) -> int:
+    """1-based position of the topic within its chapter (textbook order)."""
+    siblings = sorted(topic.chapter.topics, key=lambda t: t.id)
+    try:
+        return siblings.index(topic) + 1
+    except ValueError:
+        return 1
+
+
+def _groups_by_type(concept: models.Concept) -> dict[str, str]:
+    """All groups of each type, comma-separated (S/T/U columns)."""
+    buckets: dict[str, list[str]] = {"Basic": [], "Intermediate": [], "Advanced": []}
+    for g in sorted(concept.groups, key=lambda g: g.id):
+        if g.group_type in buckets:
+            buckets[g.group_type].append(g.group_display_name or g.group_name)
+    return {k: ", ".join(v) for k, v in buckets.items()}
+
+
+def _front_bands(concept: models.Concept, topic: models.Topic) -> list:
+    """Chapter + Topic + Concept bands (22 cells) with tags in the title columns.
+
+    The title columns carry a human-readable tag; the display columns stay
+    clean (the reader strips the tags back to the clean model values).
+    """
+    chapter = topic.chapter
+    c_tag = directory.chapter_tag(chapter.board, chapter.grade, chapter.subject)
+    t_tag = directory.topic_tag(
+        chapter.board, chapter.grade, chapter.subject, chapter.chapter_title)
+    cp_tag = directory.concept_tag(
+        chapter.board, chapter.grade, chapter.subject,
+        chapter.chapter_title, topic.topic_title)
+    concept_labels = ", ".join(
+        c.concept_title for c in sorted(topic.concepts, key=lambda c: c.id))
+    by_type = _groups_by_type(concept)
+    return [
+        # ---- Chapter band (tag in title, clean display) ----
+        f"{chapter.chapter_title} ({c_tag})", chapter.chapter_title,
+        chapter.chapter_duration, chapter.pre_topics, chapter.post_topics,
+        chapter.chapter_description,
+        # ---- Topic band ("Topic NN: <title> (<tag>)", clean display, concept labels) ----
+        f"Topic {_topic_number(topic):02d}: {topic.topic_title} ({t_tag})",
+        topic.topic_title, topic.pre_post_learning, concept_labels,
+        topic.related_topics, topic.topic_description,
+        # ---- Concept band (tag in title, clean display, comma-joined groups) ----
+        f"{concept.concept_title} ({cp_tag})", concept.concept_title,
+        concept.concept_details, concept.keywords, concept.digicards,
+        concept.related_concepts,
+        by_type["Basic"], by_type["Intermediate"], by_type["Advanced"],
+        concept.sources,
+    ]
+
+
 def _question_to_row(q: models.Question, kind: str,
                      group: "models.Group | None" = None) -> list:
     """Build one flat canonical row (positional) from a normalized Question.
@@ -194,41 +253,20 @@ def _question_to_row(q: models.Question, kind: str,
     group = group or q.group
     concept = group.concept
     topic = concept.topic
-    chapter = topic.chapter
 
-    row: list = []
-    # ---- Chapter band ----
-    row += [
-        chapter.chapter_title, chapter.chapter_display_name, chapter.chapter_duration,
-        chapter.pre_topics, chapter.post_topics, chapter.chapter_description,
-    ]
-    # ---- Topic band ----
-    row += [
-        topic.topic_title, topic.topic_display_name, topic.pre_post_learning,
-        concept.concept_title, topic.related_topics, topic.topic_description,
-    ]
-    # ---- Concept band ----
-    by_type = {"Basic": "", "Intermediate": "", "Advanced": ""}
-    for g in concept.groups:
-        by_type[g.group_type] = g.group_display_name or g.group_name
-    row += [
-        concept.concept_title, concept.concept_display_name, concept.concept_details,
-        concept.keywords, concept.digicards, concept.related_concepts,
-        by_type["Basic"], by_type["Intermediate"], by_type["Advanced"],
-        concept.sources,
-    ]
+    row: list = list(_front_bands(concept, topic))
     # ---- Group band ----
     if kind == "descriptive":
         row += [
             q.question_label, group.group_display_name, group.group_description,
             group.group_name, group.group_status, group.group_type,
-            q.question_label, group.related_digicards,
+            q.question_label, q.question_label, group.related_digicards,
         ]
     else:
         row += [
             q.question_label, group.group_name, group.group_display_name,
             group.group_description, group.group_status, group.group_type,
-            group.related_digicards,
+            q.question_label, group.related_digicards,
         ]
     # ---- Question band ----
     if kind == "objective":
@@ -299,25 +337,7 @@ def _concept_to_row(concept: models.Concept, kind: str = "objective",
     chapter) when emitting a many-to-many concept tag row.
     """
     topic = topic or concept.topic
-    chapter = topic.chapter
-    row: list = []
-    row += [
-        chapter.chapter_title, chapter.chapter_display_name, chapter.chapter_duration,
-        chapter.pre_topics, chapter.post_topics, chapter.chapter_description,
-    ]
-    row += [
-        topic.topic_title, topic.topic_display_name, topic.pre_post_learning,
-        concept.concept_title, topic.related_topics, topic.topic_description,
-    ]
-    by_type = {"Basic": "", "Intermediate": "", "Advanced": ""}
-    for g in concept.groups:
-        by_type[g.group_type] = g.group_display_name or g.group_name
-    row += [
-        concept.concept_title, concept.concept_display_name, concept.concept_details,
-        concept.keywords, concept.digicards, concept.related_concepts,
-        by_type["Basic"], by_type["Intermediate"], by_type["Advanced"],
-        concept.sources,
-    ]
+    row: list = list(_front_bands(concept, topic))
     expected = len(FIELDS_BY_KIND[kind])
     row += [""] * (expected - len(row))
     return row[:expected]

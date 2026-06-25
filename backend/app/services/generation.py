@@ -807,55 +807,73 @@ prompts.register(
     description="Variables: {{subject}}, {{detail_line}}, {{name_templates}}.",
     variables=("subject", "detail_line", "name_templates"),
     default="""\
-You are a STRICT concept mapping engine for school {{subject}} (board-level rigor).
+You are a concept mapping engine for school {{subject}} (board-level rigor) that
+mirrors how the chapter is actually TAUGHT in class.
 Return ONLY a JSON object: {"rows": [{"topic": "", "concept": "", "concept_description": "", "keywords": ""}, ...]}.
 
-OUTPUT CONTRACT (MUST FOLLOW EXACTLY):
-- concept_description is ONE string with sections separated by " // " in this order:
-  Description: <{{detail_line}}> // Types: <Type 01: Name Case 01: <concrete example prompt, e.g. 'Evaluate: ...', 'Prove: ...'> Case 02: ... Type 02: ...> // Misconception: <common student misconceptions> (omit section if none apply)
-- Use " // " as the separator. Do NOT use newlines inside concept_description.
+TOPICS MUST FOLLOW THE TEXTBOOK (coherence is non-negotiable):
+- Use the chapter's OWN section structure. Each topic = a real section of the
+  text, in the SAME reading order the chapter presents it.
+- Name each topic EXACTLY as the textbook section heading reads (do not invent
+  new thematic umbrella topics, and do not merge two textbook sections into one).
+- A concept belongs to the topic where the textbook teaches it. NEVER pull
+  concepts from different sections together under one synthesized topic.
+- Emit topics and their concepts in textbook progression (top to bottom).
+- NEVER create a topic for exercises (Exercise 1.1, Ex 2.1...). Fold exercise
+  problems into the content concept they practise, as Types/Cases.
+
+CONCEPT GRANULARITY (fine-grained, but no redundancy):
+- Break each section into small, isolated, testable concepts (mastery-friendly).
+- Each idea appears EXACTLY ONCE. Two concepts must never carry near-identical
+  descriptions; if two sections share an idea, teach it once and reference it.
+- No vague filler ("Introduction", "Misc", "Basics").
 
 CONCEPT NAMING:
-1) Names must be academic, specific and content-based. Prefer these templates:
+1) Names are academic, specific and content-based. Prefer these templates:
 {{name_templates}}
 2) Sibling concepts must NOT repeat the same leading phrase; vary the stems.
 3) NEVER chain names with '&'. Culmination rows are named
    "Culmination - <A>, <B> and <C>" (comma list with a final 'and').
 
-TOPIC SEGREGATION:
-- A topic groups 5-15 related concepts; follow the chapter's section flow.
-- The LAST concept of every topic is exactly one culmination row synthesizing it.
-- NEVER create a topic for exercises (Exercise 1.1, Ex 2.1...). Distribute
-  exercise problems into the content topics they test, as extra Types/Cases.
+OUTPUT CONTRACT for concept_description (ONE string, sections joined by " // "):
+- ALWAYS start with: Description: <{{detail_line}}>
+- ALWAYS end with: Misconception: <the specific wrong idea students hold here and
+  the correction>. Misconception is REQUIRED for every concept — never omit it,
+  never write "N/A".
+- Types are OPTIONAL and must be RESERVED for concepts that genuinely have
+  distinct solving/answering varieties (numerical methods, derivations,
+  application patterns, problem formats). For purely theoretical/definitional
+  concepts (a fact, a definition, a description), DO NOT include a Types section
+  at all — give Description + Misconception only.
+- When Types ARE warranted: Types: Type 01: <name> Case 01: <concrete worked
+  example prompt> Case 02: ... Type 02: ... — keep ONLY the critical varieties,
+  not every trivial restatement. Every Case MUST carry a concrete prompt.
+- Use " // " as the separator. Do NOT use newlines inside concept_description.
+  (Type/Case numbers are renumbered continuously across the chapter afterwards.)
 
-TYPES:
-- Classify EVERY question/numerical/problem variety found in the chapter
-  (including exercise sections) under its concept.
-- Zero-padded numbering (Type 01, Case 01). Every Case MUST carry a concrete
-  example question/prompt.
+TOPIC CULMINATION:
+- The LAST concept of every topic is exactly one culmination row that integrates
+  that section's ideas (named "Culmination - ...").
 
 SOURCE HYGIENE:
 - NEVER reference source artifacts: no "Example 19", "Examples Type III",
-  "Fig 2", "Table no. 1", "ex 1" - resolve each reference by inlining its
-  actual worked content instead.
-- NEVER use the words "MMD" or "MMDs"; say "chapter", "problem", "example".
+  "Fig 2", "Table no. 1", "ex 1" - inline the actual worked content instead.
+- NEVER use the words "MMD" or "MMDs"; say "chapter", "section", "problem".
 
 QUALITY RULES:
-- Produce 40-60 concepts (excluding culmination rows).
-- No duplicates or near-duplicates: theory + exercise overlap -> output ONCE.
-- No vague filler ("Introduction", "Misc", "Basics").
-- Small, testable, taggable concepts; descriptions stay within syllabus scope
-  (max ~90 words per section).
+- Cover the section exhaustively at concept level, but stay within syllabus scope
+  (max ~90 words per section of the description).
 - keywords: 3-6 comma-separated lowercase terms.
 """)
 
 prompts.register(
     "concepts.user", category=_CONCEPTS_CAT,
     label="Concept-mapping user instruction",
-    description="Prepended to the chapter text. No variables.",
-    default="Extract 40-60 high-quality concepts from this chapter. Group them "
-            "under topics (5-15+ concepts each, last row per topic is the "
-            "culmination), following the chapter's section flow:")
+    description="Prepended to each chapter section/chunk. No variables.",
+    default="Below is a section of the chapter in reading order. Map it into "
+            "concepts, keeping the textbook's own topic headings and progression "
+            "(one culmination per topic, misconceptions required, Types only for "
+            "concepts with real solving varieties):")
 
 
 def _concepts_system(subject: str) -> str:

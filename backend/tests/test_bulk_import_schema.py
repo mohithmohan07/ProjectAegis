@@ -2,11 +2,11 @@ from app import bulk_import as bi
 
 
 def test_canonical_field_counts():
-    # +2 vs the legacy layout: concept_source (end of Concept band) and
-    # question_text (last column of every sheet).
-    assert len(bi.OBJECTIVE_FIELDS) == 65
-    assert len(bi.SUBJECTIVE_FIELDS) == 92
-    assert len(bi.DESCRIPTIVE_FIELDS) == 374
+    # vs the legacy layout: + concept_source (end of Concept band),
+    # + question_text (last column), + group_question_labels (Group band).
+    assert len(bi.OBJECTIVE_FIELDS) == 66
+    assert len(bi.SUBJECTIVE_FIELDS) == 93
+    assert len(bi.DESCRIPTIVE_FIELDS) == 375
 
 
 def test_question_text_is_last_column_everywhere():
@@ -18,7 +18,8 @@ def test_concept_source_position():
     # concept_source closes the Concept band, right before the Group band.
     idx = bi.OBJECTIVE_FIELDS.index("concept_source")
     assert bi.OBJECTIVE_FIELDS[idx - 1] == "advanced_groups"
-    assert bi.OBJECTIVE_FIELDS[idx + 1] == "question_label"
+    # The Group band now opens with the renamed concept_question_labels column.
+    assert bi.OBJECTIVE_FIELDS[idx + 1] == "concept_question_labels"
 
 
 def test_section_bands_sum_to_field_counts():
@@ -26,11 +27,16 @@ def test_section_bands_sum_to_field_counts():
         assert sum(span for _, span in bi.SECTION_BANDS[kind]) == len(bi.FIELDS_BY_KIND[kind])
 
 
-def test_question_label_appears_in_group_and_question_bands():
-    # Objective: once in the Group band, once in the Question band.
-    assert bi.OBJECTIVE_FIELDS.count("question_label") == 2
-    # Descriptive's group band repeats it too.
-    assert bi.DESCRIPTIVE_FIELDS.count("question_label") >= 2
+def test_group_band_label_columns():
+    # The Concept band's trailing label was renamed; the Group band gained a
+    # group_question_labels column before related_digicards.
+    assert "concept_question_labels" in bi.OBJECTIVE_FIELDS
+    assert "group_question_labels" in bi.OBJECTIVE_FIELDS
+    gi = bi.OBJECTIVE_FIELDS.index("group_question_labels")
+    assert bi.OBJECTIVE_FIELDS[gi + 1] == "related_digicards"
+    # The Question band still carries its own question_label.
+    assert bi.OBJECTIVE_FIELDS.count("question_label") == 1
+    assert "topic_concept_labels" in bi.OBJECTIVE_FIELDS
 
 
 def test_subjective_has_math_keyboard_and_placeholders():

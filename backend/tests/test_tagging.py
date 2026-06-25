@@ -4,7 +4,7 @@ import io
 import openpyxl
 
 from app import models
-from app.bulk_import import SHEET_OBJECTIVE, writer
+from app.bulk_import import SHEET_OBJECTIVE, strip_title_tag, writer
 from app.services import tagging
 
 
@@ -37,7 +37,8 @@ def _labels_to_concepts(data: bytes) -> dict[str, set[str]]:
         label = writer._cell_str(row, qs)
         if not label:
             continue
-        out.setdefault(label, set()).add(writer._cell_str(row, writer._IDX_CONCEPT_TITLE))
+        out.setdefault(label, set()).add(
+            strip_title_tag(writer._cell_str(row, writer._IDX_CONCEPT_TITLE)))
     return out
 
 
@@ -101,7 +102,7 @@ def test_concept_tag_emits_repeated_concept_row(client, db, first_chapter, tmp_p
     ws = wb[SHEET_OBJECTIVE]
     topic_titles = set()
     for row in ws.iter_rows(min_row=3, values_only=True):
-        if writer._cell_str(row, writer._IDX_CONCEPT_TITLE) == concept["concept_title"]:
+        if strip_title_tag(writer._cell_str(row, writer._IDX_CONCEPT_TITLE)) == concept["concept_title"]:
             topic_titles.add(writer._cell_str(row, writer._IDX_TOPIC_TITLE))
     assert len(topic_titles) == 2
 

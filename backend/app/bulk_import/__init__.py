@@ -37,7 +37,8 @@ CHAPTER_FIELDS = [
 ]
 TOPIC_FIELDS = [
     "topic_title", "topic_display_name", "pre_post_learning",
-    "concept", "related_topics", "topic_description",
+    # Comma-separated list of the concept titles taught under this topic.
+    "topic_concept_labels", "related_topics", "topic_description",
 ]
 CONCEPT_FIELDS = [
     "concept_title", "concept_display_name", "concept_details",
@@ -57,9 +58,13 @@ LEGACY_CONCEPT_LEN = len(CONCEPT_FIELDS) - 1
 # --------------------------------------------------------------------------- #
 
 OBJECTIVE_GROUP_FIELDS = [
-    "question_label",  # group-band label: links group -> question
+    # Trailing label of the Concept band: the question labels tagged to the
+    # concept (comma-separated). Renamed from the old positional "question_label".
+    "concept_question_labels",
     "group_name", "group_display_name", "group_description",
-    "group_status", "group_type", "related_digicards",
+    "group_status", "group_type",
+    # The question labels tagged to THIS group (comma-separated).
+    "group_question_labels", "related_digicards",
 ]
 OBJECTIVE_QUESTION_FIELDS = (
     [
@@ -114,9 +119,9 @@ SUBJECTIVE_FIELDS = (
 # --------------------------------------------------------------------------- #
 
 DESCRIPTIVE_GROUP_FIELDS = [
-    "question_label", "group_display_name", "group_description",
+    "concept_question_labels", "group_display_name", "group_description",
     "group_name", "group_status", "group_type",
-    "question_label", "related_digicards",
+    "question_label", "group_question_labels", "related_digicards",
 ]
 DESCRIPTIVE_QUESTION_FIELDS = (
     [
@@ -204,6 +209,28 @@ def normalize_question_text(text: str) -> str:
     """Normalization used for duplicate-question detection across books."""
     import re as _re2
     return _re2.sub(r"\s+", " ", (text or "")).strip().lower()
+
+
+# Tags embedded in the title columns of the concept-mapping output, e.g.
+# "Understanding Social Science (09_SocialScience_CBSE)" or
+# "What is Social Science (09CBSS_..._PL_Meaning_of_Social_Science)". A tag is a
+# trailing "(...)" whose body has at least one underscore (so real parentheticals
+# like "(C3)" or "(i)" are never stripped). topic_title also carries a leading
+# "Topic NN: " number. The model keeps CLEAN titles; these strip on import.
+import re as _re_tags
+
+_TITLE_TAG_RE = _re_tags.compile(r"\s*\([A-Za-z0-9]+(?:_[A-Za-z0-9]+)+\)\s*$")
+_TOPIC_NUM_RE = _re_tags.compile(r"^\s*Topic\s+\d+\s*:\s*", _re_tags.IGNORECASE)
+
+
+def strip_title_tag(text: str) -> str:
+    """Remove a trailing ``(tag_with_underscores)`` from a title cell."""
+    return _TITLE_TAG_RE.sub("", text or "").strip()
+
+
+def strip_topic_title(text: str) -> str:
+    """Remove a leading ``Topic NN:`` and a trailing tag from a topic title."""
+    return strip_title_tag(_TOPIC_NUM_RE.sub("", text or "")).strip()
 
 
 def merge_sources(existing: str, new: str) -> str:
