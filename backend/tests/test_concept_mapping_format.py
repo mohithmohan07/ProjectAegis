@@ -34,10 +34,14 @@ def test_writer_composes_tags_labels_and_clean_display(db):
     assert "_" in row[0] and row[0].endswith(")")
     assert row[1] == chapter.chapter_title
 
-    # Topic: "Topic NN: <title> (<tag>)" (col 6), clean display (col 7).
+    # Topic title col (6): "Topic NN: <title> (<tag>)"; display col (7):
+    # "Topic NN: <title>" with NO code/tag.
+    clean_topic = bi.strip_topic_title(concept.topic.topic_title)
     assert row[6].startswith("Topic ") and row[6].endswith(")")
-    assert bi.strip_topic_title(row[6]) == concept.topic.topic_title
-    assert row[7] == concept.topic.topic_title
+    assert bi.strip_topic_title(row[6]) == clean_topic
+    assert row[7].startswith("Topic ")
+    assert bi.strip_topic_title(row[7]) == clean_topic
+    assert "_" not in row[7]  # display name carries no code/tag
 
     # topic_concept_labels (col 9) lists the topic's concept titles.
     assert bi.OBJECTIVE_FIELDS[9] == "topic_concept_labels"
@@ -46,6 +50,65 @@ def test_writer_composes_tags_labels_and_clean_display(db):
     # Concept: tag in title (col 12), clean display (col 13).
     assert bi.strip_title_tag(row[12]) == concept.concept_title
     assert row[13] == concept.concept_title
+
+
+def test_deposit_applies_numbering_recap_titlecase_and_topic_columns(db):
+    """End-to-end deposit: continuous Type NN, Miscellaneous for culmination,
+    Recap description, Title Case, and tagged pre/post topic columns."""
+    from app.services import build_concepts
+
+    chapter = models.Chapter(
+        chapter_code="07CBMA_FmtRules", board="CBSE", grade="07",
+        subject="Mathematics", unit="Mathematics Unit",
+        chapter_title="Format Rules Chapter",
+        chapter_display_name="Format Rules Chapter",
+    )
+    db.add(chapter)
+    db.commit()
+
+    records = [
+        {"topic": "operations on numbers", "concept_title": "addition of integers",
+         "concept_details": ("Description: a // Types: Type 01: Direct Case 01: 2+3 "
+                             "Case 02: 5+9 // Misconception: m"), "keywords": ""},
+        {"topic": "operations on numbers", "concept_title": "Culmination - Operations On Numbers",
+         "concept_details": ("Description: a long synthesis paragraph // "
+                             "Types: Type 01: Mixed Case 01: combine ops // "
+                             "Misconception: keep me"), "keywords": ""},
+        {"topic": "powers and roots", "concept_title": "squares of numbers",
+         "concept_details": ("Description: b // Types: Type 01: Compute Case 01: 4^2 "
+                             "// Misconception: m"), "keywords": ""},
+    ]
+    build_concepts._deposit_concepts(db, chapter, records, "Post", "")
+    build_concepts._sync_chapter_topic_summary(chapter)
+    db.commit()
+
+    by_title = {c.concept_title: c for t in chapter.topics for c in t.concepts}
+
+    # Title Case on topics and concepts.
+    topic_titles = {t.topic_title for t in chapter.topics}
+    assert {"Operations on Numbers", "Powers and Roots"} <= topic_titles
+    assert "Addition of Integers" in by_title
+
+    # Continuous Type numbering across the chapter (culmination excluded).
+    assert "Type 01: Direct" in by_title["Addition of Integers"].concept_details
+    assert "Type 02: Compute" in by_title["Squares of Numbers"].concept_details
+
+    # Culmination: Miscellaneous Type sequence + Description collapses to "Recap".
+    culm = by_title["Culmination - Operations on Numbers"].concept_details
+    assert "Miscellaneous Type 01: Mixed" in culm
+    assert "Description: Recap" in culm
+    assert "long synthesis" not in culm
+    assert "Misconception: keep me" in culm
+
+    # Column E (post_topics) lists tagged Topic Titles (with the code).
+    assert "Topic 01:" in chapter.post_topics
+    assert "07CBMA" in chapter.post_topics  # the code is present
+
+    # Topic display column shows "Topic NN: <Title>" without the code.
+    row = writer._concept_to_row(by_title["Addition of Integers"], "objective")
+    assert row[4] == chapter.post_topics  # chapter band col E
+    assert row[7].startswith("Topic 01: Operations on Numbers")
+    assert "_" not in row[7]
 
 
 def test_group_label_columns_present_and_ordered():

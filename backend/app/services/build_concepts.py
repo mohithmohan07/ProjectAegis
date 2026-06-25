@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from .. import config, models
 from .. import bulk_import as bi
 from ..bulk_import import writer
-from . import concept_cleanup, generation, mmd, progress
+from . import concept_cleanup, concept_refiner, generation, mmd, progress
 
 
 def _find_concept_in_chapter(chapter: models.Chapter, title: str) -> models.Concept | None:
@@ -93,10 +93,14 @@ def _deposit_concepts(
     Returns (created_ids, merged_ids): merged = concept already existed (any
     topic of this chapter, normalized-title match) and only its sources grew.
     """
-    # Clean each record before deposit (name hygiene, dangling ref removal).
-    # Chapter-wide intelligence (dedup, Types, culminations) is handled by the
-    # API consolidation pass in generation.concepts_from_mmd — not Python.
+    # Clean each record (name hygiene, Title Case, dangling-ref removal), then
+    # run the deterministic chapter pass: continuous "Type NN" numbering across
+    # the whole chapter, "Miscellaneous Type NN" for culmination rows, and a
+    # "Recap" description for culminations. Chapter-wide *intelligence* (dedup,
+    # Types enrichment, naming) is done by the API passes in concepts_from_mmd;
+    # this pass only enforces the numbering/format the team requires.
     records = [concept_cleanup.clean_concept_record(dict(r)) for r in records]
+    records = concept_refiner.refine_chapter(records)
 
     created_ids: list[int] = []
     merged_ids: list[int] = []
@@ -130,8 +134,10 @@ def _sync_chapter_topic_summary(chapter: models.Chapter) -> None:
     "NA" in a required column.
     """
     topics = sorted(chapter.topics, key=lambda t: t.id)
-    pre = [t.topic_title for t in topics if t.pre_post_learning == "Pre"]
-    post = [t.topic_title for t in topics if t.pre_post_learning == "Post"]
+    # pre/post topic columns list each topic by its tagged Topic Title (with the
+    # code), matching the topic_title column exactly, so the importer links them.
+    pre = [writer.composed_topic_title(t) for t in topics if t.pre_post_learning == "Pre"]
+    post = [writer.composed_topic_title(t) for t in topics if t.pre_post_learning == "Post"]
     chapter.pre_topics = ", ".join(pre)
     chapter.post_topics = ", ".join(post)
 

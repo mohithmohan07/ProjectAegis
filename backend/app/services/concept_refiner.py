@@ -1,9 +1,22 @@
-"""Legacy deterministic chapter-level refinement of concept-mapping output.
+"""Deterministic chapter-level refinement of concept-mapping output.
 
-No longer invoked during concept deposit — chapter-wide refinement (Types
-discipline, culminations, dedup, naming variety) is handled by the API
-consolidation pass in ``generation._consolidate_concepts_via_api``. Kept for
-unit-test coverage of the old renumbering helpers.
+Runs on the full, ordered list of concept records for a chapter right before
+they are deposited, so the stored Bulk Import rows carry the exact format the
+team requires regardless of which extractor produced them:
+
+1. **Continuous Type numbering.** Extractors restart ``Type 01`` inside every
+   concept. We renumber ``Type NN`` continuously across the whole chapter (in
+   textbook/topic order); ``Case NN`` restarts within each Type.
+2. **Culmination concepts use a separate "Miscellaneous Type NN" sequence**
+   that is ALSO continuous across the whole chapter, and never advances (or is
+   advanced by) the regular Type counter.
+3. **Type reduction for theory.** Purely theoretical concepts should not carry
+   a Types section; we drop any ``Types:`` block that has no concrete ``Case``.
+4. **Culmination description = "Recap".** Culmination rows keep their Types and
+   Misconception, but their Description section is replaced with just "Recap".
+
+``concept_details`` is the canonical ``Description: ... // Types: ... //
+Misconception: ...`` string (sections joined by " // ").
 """
 from __future__ import annotations
 
@@ -108,9 +121,32 @@ def renumber_types_continuously(records: list[dict]) -> list[dict]:
     return records
 
 
+def set_culmination_recap(records: list[dict]) -> list[dict]:
+    """Replace the Description of every culmination row with just "Recap".
+
+    Types and Misconception are left untouched. A culmination with no Description
+    section gets one prepended.
+    """
+    for rec in records:
+        if not is_culmination(rec.get("concept_title", "")):
+            continue
+        sections = split_sections(rec.get("concept_details") or "")
+        found = False
+        for i, (label, _content) in enumerate(sections):
+            if label.strip().lower().startswith("description"):
+                sections[i] = ("Description", "Recap")
+                found = True
+                break
+        if not found:
+            sections.insert(0, ("Description", "Recap"))
+        rec["concept_details"] = join_sections(sections)
+    return records
+
+
 def refine_chapter(records: list[dict]) -> list[dict]:
     """Full deterministic refinement pass over a chapter's ordered records."""
     for rec in records:
         if rec.get("concept_details"):
             rec["concept_details"] = reduce_type_sections(rec["concept_details"])
-    return renumber_types_continuously(records)
+    records = renumber_types_continuously(records)
+    return set_culmination_recap(records)
