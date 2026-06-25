@@ -778,6 +778,49 @@ prompts.register(
    Good names read like precise textbook sub-headings, not formulaic labels.""")
 
 prompts.register(
+    "concepts.types_guidance.math", category=_CONCEPTS_CAT,
+    label="Types classification guidance (math/physics)",
+    default="""\
+   Types classify EVERY distinct question/numerical variety under the concept —
+   this is how teachers later pick which varieties to assess. Extract ALL
+   varieties from the section AND from related exercise problems (fold exercises
+   into the concept they test, never as separate topics).
+   Each variety = one solving/answering pattern (e.g. direct evaluation, word
+   problem, proof, diagram-based, unit conversion). Under each variety list
+   concrete Case prompts (specific "Evaluate…", "Find…", "Prove…", "Draw…"
+   stems drawn from the chapter).
+   Generate generously — many varieties with multiple cases each; the team
+   manually keeps what they need. Only skip Types when the concept is purely
+   definitional with zero assessable question formats.""")
+
+prompts.register(
+    "concepts.types_guidance.descriptive", category=_CONCEPTS_CAT,
+    label="Types classification guidance (other subjects)",
+    default="""\
+   Types classify EVERY distinct question/problem variety under the concept —
+   numerical drills, diagram tasks, short-answer formats, application scenarios,
+   comparison prompts, map/data exercises, etc. Extract ALL varieties from the
+   section AND from related exercise problems (fold exercises into the concept
+   they test).
+   Each variety = one assessable format. Under each variety list concrete Case
+   prompts tied to the chapter content.
+   Generate generously — many varieties with multiple cases; the team manually
+   keeps what they need. Only skip Types when the concept is purely
+   definitional/recall with zero assessable formats.""")
+
+prompts.register(
+    "concepts.types_example", category=_CONCEPTS_CAT,
+    label="Types section format example",
+    default=(
+        "Types: Evaluating numerical exponential expressions — "
+        "Case: Evaluate 2^3 × 2^2; Case: Evaluate (3^2)^4; Case: Simplify and find the value | "
+        "Simplifying using laws of indices — Case: Simplify a^m × a^n; "
+        "Case: Express as a single power | Word problems involving exponents — "
+        "Case: Given population growth rate find final count; "
+        "Case: Compare two exponential models"
+    ))
+
+prompts.register(
     "concepts.detail.math", category=_CONCEPTS_CAT,
     label="Description guidance (math/physics)",
     default="definition, explanation, key properties, when/how to use, with "
@@ -793,8 +836,10 @@ prompts.register(
 prompts.register(
     "concepts.system", category=_CONCEPTS_CAT,
     label="Concept-mapping system prompt",
-    description="Variables: {{subject}}, {{detail_line}}, {{name_templates}}.",
-    variables=("subject", "detail_line", "name_templates"),
+    description="Variables: {{subject}}, {{detail_line}}, {{name_templates}}, "
+                "{{types_guidance}}, {{types_example}}.",
+    variables=("subject", "detail_line", "name_templates",
+               "types_guidance", "types_example"),
     default="""\
 You are a concept mapping engine for school {{subject}} (board-level rigor) that
 mirrors how the chapter is actually TAUGHT in class.
@@ -833,23 +878,22 @@ OUTPUT CONTRACT for concept_description (ONE string, sections joined by " // "):
 - ALWAYS end with: Misconception: <the specific wrong idea students hold here and
   the correction>. Misconception is REQUIRED for every concept — never omit it,
   never write "N/A".
-- Types are OPTIONAL and must be RESERVED for concepts that genuinely have
-  distinct solving/answering varieties (numerical methods, derivations,
-  application patterns, problem formats). For purely theoretical/definitional
-  concepts (a fact, a definition, a description), DO NOT include a Types section
-  at all — give Description + Misconception only.
-- When Types ARE warranted, use DESCRIPTIVE labels only — NEVER numeric prefixes
-  like "Type 01", "Case 01", "1.", "1.2", etc. Format:
+- Types are REQUIRED for most concepts — they are the primary deliverable for
+  segregating assessable question varieties. {{types_guidance}}
+  Format (no numeric prefixes — descriptive labels only):
   Types: <variety title> — Case: <concrete worked example prompt>; Case: <...>
-  | <next variety title> — Case: <...>
-  Keep ONLY the critical varieties, not every trivial restatement. Every Case
-  MUST carry a concrete prompt.
+  | <next variety title> — Case: <...>; Case: <...> | ...
+  Omit Types ONLY when the concept is purely definitional with absolutely no
+  question, numerical, diagram, or exercise format to classify.
+- Example Types block:
+  {{types_example}}
 - Use " // " as the separator. Do NOT use newlines inside concept_description.
 - Do NOT mention groups, group columns, or assessment labels — not required here.
 
 TOPIC CULMINATION:
 - The LAST concept of every topic is exactly one culmination row that integrates
-  that section's ideas (named "Culmination - ...").
+  that section's ideas (named "Culmination - ..."). Culmination rows SHOULD
+  include Types covering mixed multi-concept application problems from the topic.
 
 SOURCE HYGIENE:
 - NEVER reference source artifacts: no "Example 19", "Examples Type III",
@@ -869,9 +913,10 @@ prompts.register(
     default="Below is a section of the chapter in reading order. Map it into "
             "discrete, non-redundant concepts using the textbook's own topic "
             "headings (strip section numbers like 1.2 from names). One "
-            "culmination per topic, misconceptions required, Types only where "
-            "genuine solving varieties exist — descriptive labels, no numeric "
-            "Type/Case prefixes:")
+            "culmination per topic, misconceptions required. For EVERY concept "
+            "with problems, numericals, exercises, or assessable formats, "
+            "include a rich Types section classifying ALL question varieties "
+            "(descriptive labels, no numeric Type/Case prefixes):")
 
 
 prompts.register(
@@ -896,11 +941,16 @@ Your job (apply ALL of these intelligently — do not rely on downstream code):
 3. **Strip section numbers.** Remove decimal/section prefixes (1., 1.1, 1.2,
    2.3, Exercise 1.1, Ex 2.1, etc.) from topic and concept names — words only.
 
-4. **Types discipline.** Keep Types ONLY on concepts with genuine solving
-   varieties. Use descriptive variety titles and Case prompts — NEVER numeric
-   prefixes like "Type 01", "Case 01", "1.", "1.2". Format:
-   Types: <variety> — Case: <prompt>; Case: <prompt> | <variety> — Case: <...>
-   Drop empty or theory-only Types blocks entirely.
+4. **Types (critical — preserve and enrich, never strip).** Types are how
+   teachers segregate question varieties under each concept — generate them
+   generously like a standalone types list, then the team picks what to keep.
+   NEVER remove a Types block from the draft. If a concept involves calculation,
+   problem-solving, application, diagrams, or exercises, it MUST have a rich
+   Types section classifying ALL distinct question/numerical varieties (including
+   exercise-section problems folded into the concept they test). Use descriptive
+   variety titles — Case: <prompt>; Case: <prompt> | <variety> — Case: <...>
+   Only omit Types for concepts that are purely definitional with zero assessable
+   formats. If the draft omitted Types where they belong, ADD them.
 
 5. **Culmination.** Every topic ends with exactly one "Culmination - ..." row
    that integrates that topic's ideas. Place it last within its topic.
@@ -909,8 +959,11 @@ Your job (apply ALL of these intelligently — do not rely on downstream code):
 
 7. **No groups.** Do not mention groups, group columns, or assessment labels.
 
-8. **Hygiene.** Keep Description // Misconception structure; no source-artifact
+8. **Hygiene.** Keep Description // Types // Misconception structure; no source-artifact
    references ("Example 19", "Fig 2", "MMD"); misconceptions required.
+
+9. **Chapter source.** When CHAPTER SOURCE text is provided, mine it for exercise
+   problems and numerical varieties to populate Types under the concepts they test.
 
 Return the full refined chapter map — same schema, improved quality.""")
 
@@ -924,6 +977,8 @@ def _concepts_system(subject: str) -> str:
         subject=s,
         detail_line=prompts.get_text(f"concepts.detail.{suffix}"),
         name_templates=prompts.get_text(f"concepts.name_templates.{suffix}"),
+        types_guidance=prompts.get_text(f"concepts.types_guidance.{suffix}"),
+        types_example=prompts.get_text("concepts.types_example"),
     )
 
 
@@ -1052,8 +1107,10 @@ def _records_to_api_rows(records: list[dict]) -> list[dict]:
     ]
 
 
-def _consolidate_concepts_via_api(records: list[dict], *, subject: str) -> list[dict]:
-    """Chapter-wide LLM refinement: dedup, naming, culminations, Types hygiene."""
+def _consolidate_concepts_via_api(
+    records: list[dict], *, subject: str, mmd_text: str = "",
+) -> list[dict]:
+    """Chapter-wide LLM refinement: dedup, naming, culminations, Types enrichment."""
     import json as _json
 
     if not records:
@@ -1063,8 +1120,14 @@ def _consolidate_concepts_via_api(records: list[dict], *, subject: str) -> list[
     user = (
         f"Subject: {subject or 'general'}\n"
         f"Draft concept map ({len(records)} rows):\n"
-        + _trim(payload, 400_000)
+        + _trim(payload, 200_000)
     )
+    if (mmd_text or "").strip():
+        user += (
+            "\n\nCHAPTER SOURCE (use this to extract exercise/numerical varieties "
+            "into Types under the concepts they test):\n"
+            + _trim(mmd_text, 200_000)
+        )
     progress.log(f"Consolidating {len(records)} concepts via API refinement pass.")
     data = _openai_json(system, user)
     out = _concept_rows_to_records(data)
@@ -1130,7 +1193,7 @@ def concepts_from_mmd(mmd_text: str, *, subject: str = "",
         if not out:
             raise RuntimeError("live concept extraction returned no rows")
         progress.log(f"Merged to {len(out)} unique concepts.")
-        out = _consolidate_concepts_via_api(out, subject=subject)
+        out = _consolidate_concepts_via_api(out, subject=subject, mmd_text=mmd_text)
         progress.set_progress(1.0, label="Concept extraction complete")
         return out
     config.require_generation_live()
@@ -1235,12 +1298,13 @@ COUNTS (STRICT): {{min_t}}-{{max_t}} topics; every topic has
 CONCEPT DESCRIPTION FORMAT (MANDATORY): one string, exactly three sections,
 separated by " // ":
 Description: <what the student should already know; 2-4 short lines; must not
-teach the chapter> // Types: <only when the prerequisite has distinct check
-varieties — use descriptive labels, NEVER "Type 01"/"Case 01"/"1.2" numbering:
-<variety title> — Case: <example prompt>; Case: <...> | <variety> — Case: <...>>
-// Misconception: <typical prior-knowledge gaps, or N/A>.
-For purely vocabulary/recall prerequisites, Description + Misconception only
-(omit Types). NEVER reference source artifacts and never the words "MMD".
+teach the chapter> // Types: <classify ALL distinct prerequisite-check
+varieties for this skill — use descriptive labels, NEVER "Type 01"/"Case 01"/
+"1.2" numbering: <variety title> — Case: <example prompt>; Case: <...>
+| <variety> — Case: <...>> // Misconception: <typical prior-knowledge gaps>.
+Include Types on every concept except pure vocabulary recall (VC tag with no
+check format). Generate generously; the team manually keeps what they need.
+NEVER reference source artifacts and never the words "MMD".
 Do NOT mention groups or group columns.
 
 OUTPUT (STRICT JSON ONLY): {"topics": [{"topic_name": "", "concepts":
