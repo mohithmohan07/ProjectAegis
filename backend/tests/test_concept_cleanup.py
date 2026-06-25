@@ -2,10 +2,49 @@
 from app.services import build_concepts, concept_cleanup, directory
 from app.services.concept_cleanup import (
     clean_concept_name,
+    clean_concept_record,
     description_length_report,
     detect_repeated_leading_phrase,
     strip_dangling_references,
+    to_title_case,
 )
+
+
+# ------------------------------ Title Case ------------------------------------ #
+
+def test_to_title_case_basics():
+    assert to_title_case("the structure of human heart") == "The Structure of Human Heart"
+    assert to_title_case("causes and effects of pollution") == "Causes and Effects of Pollution"
+
+
+def test_to_title_case_preserves_acronyms_units_and_numbers():
+    # Internal capitals / digits are left untouched.
+    assert to_title_case("pH of common solutions") == "pH of Common Solutions"
+    assert to_title_case("NaCl and H2O reactions") == "NaCl and H2O Reactions"
+    assert to_title_case("solving 2x equations") == "Solving 2x Equations"
+
+
+def test_clean_record_titlecases_topic_and_concept():
+    rec = clean_concept_record({
+        "topic": "operations on rational numbers",
+        "concept_title": "addition of rational numbers",
+        "concept_details": "Description: d // Misconception: m",
+    })
+    assert rec["topic"] == "Operations on Rational Numbers"
+    assert rec["concept_title"] == "Addition of Rational Numbers"
+
+
+def test_clean_record_preserves_numeric_types_section():
+    rec = clean_concept_record({
+        "concept_title": "evaluating exponents",
+        "concept_details": (
+            "Description: see Example 19 // Types: Type 01: Eval Case 01: 2^3 "
+            "// Misconception: m"
+        ),
+    })
+    # Dangling ref removed from Description, but Types/Case labels preserved.
+    assert "Example 19" not in rec["concept_details"]
+    assert "Type 01: Eval Case 01: 2^3" in rec["concept_details"]
 
 
 # --------------------------- & collapse (Input 02a) --------------------------- #

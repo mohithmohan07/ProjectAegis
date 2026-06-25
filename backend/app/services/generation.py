@@ -813,12 +813,14 @@ prompts.register(
     "concepts.types_example", category=_CONCEPTS_CAT,
     label="Types section format example",
     default=(
-        "Types: Evaluating numerical exponential expressions — "
-        "Case: Evaluate 2^3 × 2^2; Case: Evaluate (3^2)^4; Case: Simplify and find the value | "
-        "Simplifying using laws of indices — Case: Simplify a^m × a^n; "
-        "Case: Express as a single power | Word problems involving exponents — "
-        "Case: Given population growth rate find final count; "
-        "Case: Compare two exponential models"
+        "Types: Type 01: Evaluating numerical exponential expressions "
+        "Case 01: Evaluate 2^3 × 2^2 Case 02: Evaluate (3^2)^4 "
+        "Case 03: Simplify and find the value "
+        "Type 02: Simplifying using laws of indices "
+        "Case 01: Simplify a^m × a^n Case 02: Express as a single power "
+        "Type 03: Word problems involving exponents "
+        "Case 01: Given population growth rate find final count "
+        "Case 02: Compare two exponential models"
     ))
 
 prompts.register(
@@ -881,9 +883,11 @@ OUTPUT CONTRACT for concept_description (ONE string, sections joined by " // "):
   never write "N/A".
 - Types are REQUIRED for most concepts — they are the primary deliverable for
   segregating assessable question varieties. {{types_guidance}}
-  Format (no numeric prefixes — descriptive labels only):
-  Types: <variety title> — Case: <concrete worked example prompt>; Case: <...>
-  | <next variety title> — Case: <...>; Case: <...> | ...
+  Format — use zero-padded numeric labels exactly "Type 01:", "Case 01:":
+  Types: Type 01: <variety title> Case 01: <concrete worked example prompt>
+  Case 02: <...> Type 02: <next variety title> Case 01: <...> ...
+  Restart at Type 01 within each concept — they are renumbered continuously
+  across the whole chapter afterwards, so do NOT try to continue numbers yourself.
   Omit Types ONLY when the concept is purely definitional with absolutely no
   question, numerical, diagram, or exercise format to classify.
 - Example Types block:
@@ -893,8 +897,9 @@ OUTPUT CONTRACT for concept_description (ONE string, sections joined by " // "):
 
 TOPIC CULMINATION:
 - The LAST concept of every topic is exactly one culmination row that integrates
-  that section's ideas (named "Culmination - ..."). Culmination rows SHOULD
-  include Types covering mixed multi-concept application problems from the topic.
+  that section's ideas (named "Culmination - ..."). Its Description will be set to
+  "Recap"; still provide its Types (mixed multi-concept application problems) and
+  Misconception.
 
 SOURCE HYGIENE:
 - NEVER reference source artifacts: no "Example 19", "Examples Type III",
@@ -917,7 +922,7 @@ prompts.register(
             "culmination per topic, misconceptions required. For EVERY concept "
             "with problems, numericals, exercises, or assessable formats, "
             "include a rich Types section classifying ALL question varieties "
-            "(descriptive labels, no numeric Type/Case prefixes):")
+            "with zero-padded 'Type 01:'/'Case 01:' labels:")
 
 
 prompts.register(
@@ -948,8 +953,9 @@ Your job (apply ALL of these intelligently — do not rely on downstream code):
    NEVER remove a Types block from the draft. If a concept involves calculation,
    problem-solving, application, diagrams, or exercises, it MUST have a rich
    Types section classifying ALL distinct question/numerical varieties (including
-   exercise-section problems folded into the concept they test). Use descriptive
-   variety titles — Case: <prompt>; Case: <prompt> | <variety> — Case: <...>
+   exercise-section problems folded into the concept they test). Use zero-padded
+   numeric labels: Type 01: <name> Case 01: <prompt> Case 02: ... Type 02: ...
+   (restart at Type 01 per concept; continuous renumbering happens downstream).
    Only omit Types for concepts that are purely definitional with zero assessable
    formats. If the draft omitted Types where they belong, ADD them.
 
@@ -995,8 +1001,10 @@ RULES:
 2. Insert or replace ONLY the Types section between Description and Misconception:
    Description: ... // Types: ... // Misconception: ...
 3. {{types_guidance}}
-4. Format (no numeric Type 01 / Case 01 / 1.2 prefixes):
-   Types: <variety title> — Case: <concrete prompt>; Case: <...> | <variety> — ...
+4. Format — zero-padded numeric labels exactly "Type 01:", "Case 01:":
+   Types: Type 01: <variety title> Case 01: <concrete prompt> Case 02: ...
+   Type 02: <next variety> Case 01: ... (restart at Type 01 per concept;
+   continuous renumbering across the chapter happens downstream).
 5. Example:
    {{types_example}}
 6. Mine CHAPTER SOURCE for ALL exercise problems and numerical varieties; fold
@@ -1151,7 +1159,7 @@ def _types_body(details: str) -> str:
 
 def _has_meaningful_types(details: str) -> bool:
     body = _types_body(details)
-    return len(body) > 12 and "Case:" in body
+    return len(body) > 12 and re.search(r"\bCase\b", body, re.IGNORECASE) is not None
 
 
 def _inject_types(details: str, types_body: str) -> str:
@@ -1480,11 +1488,12 @@ CONCEPT DESCRIPTION FORMAT (MANDATORY): one string, exactly three sections,
 separated by " // ":
 Description: <what the student should already know; 2-4 short lines; must not
 teach the chapter> // Types: <classify ALL distinct prerequisite-check
-varieties for this skill — use descriptive labels, NEVER "Type 01"/"Case 01"/
-"1.2" numbering: <variety title> — Case: <example prompt>; Case: <...>
-| <variety> — Case: <...>> // Misconception: <typical prior-knowledge gaps>.
+varieties for this skill using zero-padded numeric labels exactly "Type 01:",
+"Case 01:": Type 01: <variety title> Case 01: <example prompt> Case 02: ...
+Type 02: <variety> Case 01: ...> // Misconception: <typical prior-knowledge gaps>.
 Include Types on every concept except pure vocabulary recall (VC tag with no
 check format). Generate generously; the team manually keeps what they need.
+Restart at Type 01 per concept; continuous renumbering happens downstream.
 NEVER reference source artifacts and never the words "MMD".
 Do NOT mention groups or group columns.
 
@@ -1512,7 +1521,7 @@ borderline -> REPLACE). Allow previous-grade ideas and foundational skills.
 STRUCTURE: output exactly the same number of topics, and per topic exactly
 the same number of concepts — substitute rejected rows, never delete slots.
 Keep the same schema and the Description: // Types: // Misconception: format
-with descriptive variety labels (no Type 01/Case 01 numbering), plus the tag
+with zero-padded numeric labels (Type 01:, Case 01:), plus the tag
 (FL|NU|VC|RS|GR). Rewrite repetitive sibling names to be distinct.
 Return ONLY JSON with one key "topics". No markdown, no commentary.""")
 

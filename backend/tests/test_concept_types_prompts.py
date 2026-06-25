@@ -2,18 +2,20 @@
 from app.services import generation as g
 
 
-def test_concepts_system_requires_types_guidance():
+def test_concepts_system_requires_numeric_types_guidance():
     system = g._concepts_system("Mathematics")
     assert "Types are REQUIRED" in system
     assert "Types classify EVERY distinct question" in system
-    assert "Evaluating numerical exponential expressions" in system
+    # Numeric zero-padded labels (Type 01:/Case 01:), not descriptive labels.
+    assert "Type 01:" in system and "Case 01:" in system
+    assert "Type 01: Evaluating numerical exponential expressions" in system
     assert "preserve and enrich, never strip" in g.prompts.get_text("concepts.consolidate")
     assert "Types-only classifier" in g.prompts.get_text("concepts.types_assign")
 
 
 def test_has_meaningful_types():
     assert g._has_meaningful_types(
-        "Description: d // Types: Direct — Case: Find x; Case: Solve y "
+        "Description: d // Types: Type 01: Direct Case 01: Find x Case 02: Solve y "
         "// Misconception: m"
     )
     assert not g._has_meaningful_types("Description: d // Misconception: m")
@@ -22,8 +24,8 @@ def test_has_meaningful_types():
 
 def test_inject_types():
     base = "Description: def // Misconception: err"
-    out = g._inject_types(base, "Direct — Case: Find x; Case: Solve y")
-    assert "Types: Direct — Case: Find x" in out
+    out = g._inject_types(base, "Type 01: Direct Case 01: Find x Case 02: Solve y")
+    assert "Types: Type 01: Direct Case 01: Find x" in out
     assert "Misconception: err" in out
 
 
@@ -31,7 +33,7 @@ def test_merge_types_from_fallback():
     before = [{
         "topic": "T", "concept_title": "C",
         "concept_details": (
-            "Description: d // Types: Old — Case: a; Case: b // Misconception: m"
+            "Description: d // Types: Type 01: Old Case 01: a Case 02: b // Misconception: m"
         ),
         "keywords": "",
     }]
@@ -73,8 +75,8 @@ def test_assign_types_via_api(monkeypatch):
         return {"rows": [{
             "topic": "T", "concept": "C",
             "concept_description": (
-                "Description: d // Types: Evaluation — Case: Find 2+3; Case: Find 5×2 "
-                "// Misconception: m"
+                "Description: d // Types: Type 01: Evaluation Case 01: Find 2+3 "
+                "Case 02: Find 5×2 // Misconception: m"
             ),
             "keywords": "k",
         }]}
@@ -98,8 +100,8 @@ def test_concepts_pipeline_runs_types_assign(monkeypatch):
                 "topic": "Algebra", "concept": "Linear equations",
                 "concept_description": (
                     "Description: solve ax+b=c // "
-                    "Types: One-step — Case: Solve x+2=5; Case: Solve x-3=1 | "
-                    "Two-step — Case: Solve 2x+1=7; Case: Solve 3x-2=4 "
+                    "Types: Type 01: One-step Case 01: Solve x+2=5 Case 02: Solve x-3=1 "
+                    "Type 02: Two-step Case 01: Solve 2x+1=7 Case 02: Solve 3x-2=4 "
                     "// Misconception: wrong inverse op"
                 ),
                 "keywords": "linear",

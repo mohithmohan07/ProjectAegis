@@ -20,6 +20,52 @@ prompt-side (so callers can flag rather than silently rewrite):
 from __future__ import annotations
 
 import re
+import string
+
+# Connector words kept lowercase in Title Case (unless first/last word).
+_TITLE_SMALL_WORDS = {
+    "a", "an", "and", "as", "at", "but", "by", "for", "from", "in", "into",
+    "nor", "of", "on", "onto", "or", "over", "per", "the", "to", "up", "via",
+    "vs", "with",
+}
+
+
+def _capitalize_first_letter(word: str) -> str:
+    """Upper-case the first alphabetic char, lower-case the rest (keeps punctuation)."""
+    for i, ch in enumerate(word):
+        if ch.isalpha():
+            return word[:i] + ch.upper() + word[i + 1:].lower()
+    return word
+
+
+def to_title_case(text: str) -> str:
+    """Convert a title to Title Case, preserving acronyms/units and connectors.
+
+    - First and last words are always capitalized.
+    - Small connector words (of, and, the, ...) stay lowercase in the middle.
+    - Tokens with internal capitals (e.g. ``ICSE``, ``pH``, ``NaCl``) or digits
+      (``H2O``, ``2x``) are left untouched.
+    """
+    if not text or not text.strip():
+        return text
+    words = text.split(" ")
+    last = len(words) - 1
+    out: list[str] = []
+    for i, w in enumerate(words):
+        if not w:
+            out.append(w)
+            continue
+        letters = [c for c in w if c.isalpha()]
+        # Preserve acronyms / camel-case / anything with digits.
+        if any(c.isdigit() for c in w) or (letters and any(c.isupper() for c in letters[1:])):
+            out.append(w)
+            continue
+        bare = w.strip(string.punctuation).lower()
+        if 0 < i < last and bare in _TITLE_SMALL_WORDS:
+            out.append(w.lower())
+            continue
+        out.append(_capitalize_first_letter(w))
+    return " ".join(out)
 
 # A reference token: Example(s) / Ex / Figure(s) / Fig / Table, optionally
 # "no.", optionally "Type", followed by a number, number list, or roman numeral.
@@ -104,32 +150,38 @@ def replace_mmd_references(text: str) -> str:
     return text
 
 
-def _split_details_sections(details: str) -> tuple[str, str, str]:
-    """Return (before_types, types_block, after_types) for safe section cleaning."""
-    if "Types:" not in details:
-        return details, "", ""
-    pre, rest = details.split("Types:", 1)
-    if "Misconception:" in rest:
-        types_part, post = rest.split("Misconception:", 1)
-        return pre, "Types:" + types_part, "Misconception:" + post
-    return pre, "Types:" + rest, ""
+# Canonical separator between Description / Types / Misconception sections.
+_SECTION_SEP = " // "
+
+
+def _clean_details(details: str) -> str:
+    """Sanitize a concept_details string section-by-section.
+
+    The Types section is preserved verbatim (only MMD wording is rewritten) so
+    ``Type NN:`` / ``Case NN:`` labels and example prompts are never damaged by
+    reference-stripping. Other sections get full dangling-reference removal. The
+    ``" // "`` separators are kept intact so downstream section parsing works.
+    """
+    parts = details.split(_SECTION_SEP)
+    out: list[str] = []
+    for part in parts:
+        label = part.split(":", 1)[0].strip().lower() if ":" in part else ""
+        if label.startswith("type"):
+            out.append(replace_mmd_references(part))
+        else:
+            out.append(replace_mmd_references(strip_dangling_references(part)))
+    return _SECTION_SEP.join(out)
 
 
 def clean_concept_record(rec: dict) -> dict:
     """Return ``rec`` with its name + description normalized (mutates in place)."""
+    if rec.get("topic"):
+        rec["topic"] = to_title_case(rec["topic"].strip())
     if rec.get("concept_title"):
-        rec["concept_title"] = replace_mmd_references(
-            clean_concept_name(rec["concept_title"]))
+        rec["concept_title"] = to_title_case(replace_mmd_references(
+            clean_concept_name(rec["concept_title"])))
     if rec.get("concept_details"):
-        details = rec["concept_details"]
-        pre, types_block, post = _split_details_sections(details)
-        cleaned = replace_mmd_references(strip_dangling_references(pre))
-        if types_block:
-            # Preserve Types content — only rewrite MMD artifacts, do not strip Cases.
-            types_block = replace_mmd_references(types_block)
-        if post:
-            post = replace_mmd_references(strip_dangling_references(post))
-        rec["concept_details"] = cleaned + types_block + post
+        rec["concept_details"] = _clean_details(rec["concept_details"])
     return rec
 
 

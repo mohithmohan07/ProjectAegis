@@ -198,6 +198,25 @@ def _topic_number(topic: models.Topic) -> int:
         return 1
 
 
+def composed_topic_title(topic: models.Topic) -> str:
+    """Tagged topic title cell, e.g. 'Topic 01: <Title> (<tag>)'.
+
+    ``strip_topic_title`` normalizes the stored title first so an already-tagged
+    value never gets a second 'Topic NN:'/code prefix.
+    """
+    chapter = topic.chapter
+    clean = strip_topic_title(topic.topic_title) or topic.topic_title
+    t_tag = directory.topic_tag(
+        chapter.board, chapter.grade, chapter.subject, chapter.chapter_title)
+    return f"Topic {_topic_number(topic):02d}: {clean} ({t_tag})"
+
+
+def composed_topic_display(topic: models.Topic) -> str:
+    """Clean topic display name, e.g. 'Topic 01: <Title>' (no tag/code)."""
+    clean = strip_topic_title(topic.topic_title) or topic.topic_title
+    return f"Topic {_topic_number(topic):02d}: {clean}"
+
+
 def _groups_by_type(concept: models.Concept) -> dict[str, str]:
     """All groups of each type, comma-separated (S/T/U columns)."""
     buckets: dict[str, list[str]] = {"Basic": [], "Intermediate": [], "Advanced": []}
@@ -219,8 +238,6 @@ def _front_bands(concept: models.Concept, topic: models.Topic, *,
     """
     chapter = topic.chapter
     c_tag = directory.chapter_tag(chapter.board, chapter.grade, chapter.subject)
-    t_tag = directory.topic_tag(
-        chapter.board, chapter.grade, chapter.subject, chapter.chapter_title)
     cp_tag = directory.concept_tag(
         chapter.board, chapter.grade, chapter.subject,
         chapter.chapter_title, topic.topic_title)
@@ -236,9 +253,9 @@ def _front_bands(concept: models.Concept, topic: models.Topic, *,
         f"{chapter.chapter_title} ({c_tag})", chapter.chapter_title,
         chapter.chapter_duration, chapter.pre_topics, chapter.post_topics,
         chapter.chapter_description,
-        # ---- Topic band ("Topic NN: <title> (<tag>)", clean display, concept labels) ----
-        f"Topic {_topic_number(topic):02d}: {topic.topic_title} ({t_tag})",
-        topic.topic_title, topic.pre_post_learning, concept_labels,
+        # ---- Topic band ("Topic NN: <title> (<tag>)", display "Topic NN: <title>") ----
+        composed_topic_title(topic),
+        composed_topic_display(topic), topic.pre_post_learning, concept_labels,
         topic.related_topics, topic.topic_description,
         # ---- Concept band (tag in title, clean display; group cols optional) ----
         f"{concept.concept_title} ({cp_tag})", concept.concept_title,
