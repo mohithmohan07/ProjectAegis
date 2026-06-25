@@ -22,18 +22,32 @@ def test_continuous_type_numbering_across_concepts():
     assert "Type 03: Z Case 01: q4" in out[1]["concept_details"]
 
 
-def test_culmination_excluded_from_continuous_sequence():
+def test_culmination_uses_separate_miscellaneous_sequence():
     records = [
         _rec("A", "Description: a // Types: Type 01: X Case 01: q1 // Misconception: m"),
         _rec("Culmination - Topic 01", "Description: c // Types: Type 01: Mix Case 01: q // Misconception: m"),
         _rec("B", "Description: b // Types: Type 01: Y Case 01: q2 // Misconception: m"),
+        _rec("Culmination - Topic 02", "Description: c // Types: Type 01: Mix2 Case 01: q // Misconception: m"),
     ]
     out = cr.renumber_types_continuously(records)
     assert "Type 01: X" in out[0]["concept_details"]
-    # Culmination restarts at Type 01 and does NOT advance the chapter counter.
-    assert "Type 01: Mix" in out[1]["concept_details"]
-    # B continues from A (Type 02), not from the culmination.
+    # Culmination uses the Miscellaneous sequence (does not touch the chapter counter).
+    assert "Miscellaneous Type 01: Mix" in out[1]["concept_details"]
+    # B continues the regular sequence from A (Type 02), ignoring the culmination.
     assert "Type 02: Y" in out[2]["concept_details"]
+    # The 2nd culmination continues the Miscellaneous sequence (02), chapter-wide.
+    assert "Miscellaneous Type 02: Mix2" in out[3]["concept_details"]
+
+
+def test_miscellaneous_numbering_is_idempotent():
+    records = [
+        _rec("Culmination - T", "Description: c // Types: Type 01: M Case 01: q // Misconception: m"),
+    ]
+    once = cr.renumber_types_continuously(records)
+    twice = cr.renumber_types_continuously(once)
+    # Re-running must not stack the prefix.
+    assert "Miscellaneous Type 01: M" in twice[0]["concept_details"]
+    assert "Miscellaneous Miscellaneous" not in twice[0]["concept_details"]
 
 
 def test_reduce_types_drops_caseless_theory_block():
