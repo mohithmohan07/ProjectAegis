@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from .. import config, models
 from .. import bulk_import as bi
 from ..bulk_import import writer
-from . import concept_cleanup, generation, mmd, progress
+from . import concept_cleanup, concept_refiner, generation, mmd, progress
 
 
 def _find_concept_in_chapter(chapter: models.Chapter, title: str) -> models.Concept | None:
@@ -65,7 +65,8 @@ def _add_concept(db: Session, topic: models.Topic, rec: dict,
     concept = models.Concept(
         topic_id=topic.id,
         concept_title=rec["concept_title"],
-        concept_display_name=f"{rec['concept_title']} ({chapter.chapter_code}_{topic.pre_post_learning})",
+        # Display name stays CLEAN; the writer composes the tagged title column.
+        concept_display_name=rec["concept_title"],
         concept_details=rec.get("concept_details", ""),
         keywords=rec.get("keywords", ""),
         sources=source_book.strip(),
@@ -92,10 +93,15 @@ def _deposit_concepts(
     Returns (created_ids, merged_ids): merged = concept already existed (any
     topic of this chapter, normalized-title match) and only its sources grew.
     """
+    # Clean each record, then refine the WHOLE chapter at once: continuous Type
+    # numbering (culmination excluded) + drop Types from purely theoretical
+    # concepts. This applies to every subject, dry or live.
+    records = [concept_cleanup.clean_concept_record(dict(r)) for r in records]
+    records = concept_refiner.refine_chapter(records)
+
     created_ids: list[int] = []
     merged_ids: list[int] = []
     for rec in records:
-        rec = concept_cleanup.clean_concept_record(dict(rec))
         existing = _find_concept_in_chapter(chapter, rec["concept_title"])
         if existing is not None:
             if source_book.strip():
@@ -109,11 +115,43 @@ def _deposit_concepts(
     return created_ids, merged_ids
 
 
+_BLANK_VALUES = {"", "na", "n/a", "none", "-", "tbd"}
+
+
+def _is_blank(value: str) -> bool:
+    return (value or "").strip().lower() in _BLANK_VALUES
+
+
 def _sync_chapter_topic_summary(chapter: models.Chapter) -> None:
-    pre = [t.topic_title for t in chapter.topics if t.pre_post_learning == "Pre"]
-    post = [t.topic_title for t in chapter.topics if t.pre_post_learning == "Post"]
-    chapter.pre_topics = "; ".join(pre)
-    chapter.post_topics = "; ".join(post)
+    """Refresh topic lists and fill the required summary/duration fields.
+
+    pre_topics / post_topics are comma-separated topic titles. chapter and topic
+    descriptions and the chapter duration (in minutes) are filled with a brief
+    synthesized summary whenever they are blank/NA, so the output never ships
+    "NA" in a required column.
+    """
+    topics = sorted(chapter.topics, key=lambda t: t.id)
+    pre = [t.topic_title for t in topics if t.pre_post_learning == "Pre"]
+    post = [t.topic_title for t in topics if t.pre_post_learning == "Post"]
+    chapter.pre_topics = ", ".join(pre)
+    chapter.post_topics = ", ".join(post)
+
+    # Per-topic summary: the concepts it teaches.
+    for t in topics:
+        if _is_blank(t.topic_description):
+            names = [c.concept_title for c in sorted(t.concepts, key=lambda c: c.id)]
+            if names:
+                t.topic_description = "Covers " + ", ".join(names) + "."
+
+    n_concepts = sum(len(t.concepts) for t in topics)
+    if _is_blank(chapter.chapter_description) and topics:
+        chapter.chapter_description = (
+            f"This chapter develops {n_concepts} concept(s) across "
+            f"{len(topics)} topic(s): " + ", ".join(t.topic_title for t in topics) + "."
+        )
+    if _is_blank(chapter.chapter_duration) and n_concepts:
+        # Rough classroom estimate: ~12 minutes of instruction per concept.
+        chapter.chapter_duration = f"{max(40, n_concepts * 12)} minutes"
 
 
 # --------------------------------------------------------------------------- #

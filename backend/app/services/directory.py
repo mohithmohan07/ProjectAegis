@@ -132,6 +132,59 @@ def make_chapter_code(board: str, grade: str, subject: str, chapter_title: str) 
 
 
 # --------------------------------------------------------------------------- #
+# Tag helpers for the Bulk Import title columns
+# --------------------------------------------------------------------------- #
+# The concept-mapping output embeds a human-readable tag in each title cell so
+# every chapter / topic / concept is uniquely addressable:
+#   chapter_title  -> "Understanding Social Science (09_SocialScience_CBSE)"
+#   topic_title    -> "Topic 01: Meaning of Social Science (09CBSS_Understanding_Social_Science_PL)"
+#   concept_title  -> "What is Social Science (09CBSS_Understanding_Social_Science_PL_Meaning_of_Social_Science)"
+# Internal model fields stay CLEAN (no tags); the writer composes these on
+# export and the reader strips them on import, so dedupe/round-trip is stable.
+
+_PL = "PL"  # post/pre-learning marker used in the team's label convention
+
+
+def _underscore_slug(text: str) -> str:
+    """Underscore-joined slug preserving the title's original word casing
+    (e.g. 'Meaning of Social Science' -> 'Meaning_of_Social_Science')."""
+    return "_".join(re.findall(r"[A-Za-z0-9]+", text or "")) or "X"
+
+
+def _camel_subject(subject: str) -> str:
+    """'Social Science' -> 'SocialScience'."""
+    return "".join(re.findall(r"[A-Za-z0-9]+", subject or "")) or "Subject"
+
+
+def chapter_tag(board: str, grade: str, subject: str) -> str:
+    """e.g. ('CBSE','09','Social Science') -> '09_SocialScience_CBSE'."""
+    return f"{grade or '00'}_{_camel_subject(subject)}_{board or 'XX'}"
+
+
+def code_prefix(board: str, grade: str, subject: str) -> str:
+    """ID prefix like '09CBSS' (grade + board code + subject code)."""
+    b = bi.BOARD_CODE_INV.get(board, (board[:2] or "XX").upper())
+    s = bi.SUBJECT_CODE_INV.get(subject, (subject[:2] or "XX").upper())
+    return f"{grade or '00'}{b}{s}"
+
+
+def chapter_code_full(board: str, grade: str, subject: str, chapter_title: str) -> str:
+    """Full (non-truncated) chapter code, e.g. '09CBSS_Understanding_Social_Science'."""
+    return f"{code_prefix(board, grade, subject)}_{_underscore_slug(chapter_title)}"
+
+
+def topic_tag(board: str, grade: str, subject: str, chapter_title: str) -> str:
+    """e.g. '09CBSS_Understanding_Social_Science_PL'."""
+    return f"{chapter_code_full(board, grade, subject, chapter_title)}_{_PL}"
+
+
+def concept_tag(board: str, grade: str, subject: str, chapter_title: str,
+                topic_title: str) -> str:
+    """e.g. '09CBSS_Understanding_Social_Science_PL_Meaning_of_Social_Science'."""
+    return f"{topic_tag(board, grade, subject, chapter_title)}_{_underscore_slug(topic_title)}"
+
+
+# --------------------------------------------------------------------------- #
 # Browsing
 # --------------------------------------------------------------------------- #
 

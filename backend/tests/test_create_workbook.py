@@ -44,7 +44,8 @@ def test_content_workbook_contains_only_that_subject(client, db):
     for kind, sheet in bi.SHEET_BY_KIND.items():
         for row in wb[sheet].iter_rows(min_row=3, values_only=True):
             if row and row[0]:
-                chapter_titles.add(str(row[0]))
+                # The title column now carries a tag; compare the clean title.
+                chapter_titles.add(bi.strip_title_tag(str(row[0])))
     assert chapter_titles, "expected content rows for the seeded subject"
 
     in_scope = {
@@ -73,7 +74,7 @@ def test_content_workbook_includes_conceptless_question_concepts(client, db):
     ws = wb[bi.SHEET_OBJECTIVE]
     concept_col = writer._IDX_CONCEPT_TITLE
     titles = {
-        writer._cell_str(row, concept_col)
+        bi.strip_title_tag(writer._cell_str(row, concept_col))
         for row in ws.iter_rows(min_row=3, values_only=True)
     }
     assert "Bare Concept Without Questions" in titles

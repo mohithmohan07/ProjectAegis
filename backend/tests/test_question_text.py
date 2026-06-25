@@ -123,12 +123,14 @@ def test_legacy_import_backfills_question_text(client, db, tmp_path):
     row[0] = "Legacy QT Chapter (09CBPH_LegacyQT)"
     row[6] = "Legacy QT Topic"
     row[12] = "Legacy QT Concept"
-    row[21] = "09CBPH_LgQT_PL_T01_X Q01"
-    row[26] = "Basic"
-    row[28] = "09CBPH_LgQT_PL_T01_X Q01"
-    row[30] = "Remembering"           # old value -> must normalize
-    row[36] = "State [katex] v = u + at [/katex] in words."
-    row[37] = 1
+    # Group band now has 8 fields (added group_question_labels) -> question
+    # band starts one column later than the old layout.
+    row[21] = "09CBPH_LgQT_PL_T01_X Q01"   # concept_question_labels (group label)
+    row[26] = "Basic"                       # group_type
+    row[29] = "09CBPH_LgQT_PL_T01_X Q01"   # question_label
+    row[31] = "Remembering"                 # cognitive — old value, must normalize
+    row[37] = "State [katex] v = u + at [/katex] in words."  # question
+    row[38] = 1                             # marks
     ws.append(row)
     path = tmp_path / "legacy_qt.xlsx"
     wb.save(path)

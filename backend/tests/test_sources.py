@@ -40,17 +40,19 @@ def test_legacy_workbook_without_concept_source_still_imports(client, db, tmp_pa
 
     ws = wb[bi.SHEET_OBJECTIVE]
     row = [""] * len(legacy_fields)
+    # Group band now has 8 fields (added group_question_labels) -> question
+    # band starts one column later than the old layout.
     row[0] = "Legacy Chapter (10CBMA_Legacy)"
     row[6] = "Legacy Topic"
     row[12] = "Legacy Concept Unique XYZ"
-    row[21] = "10CBMA_Lgcy_PL_T01_X Q99"   # group-band label
+    row[21] = "10CBMA_Lgcy_PL_T01_X Q99"   # concept_question_labels (group label)
     row[26] = "Basic"                       # group_type
-    row[28] = "10CBMA_Lgcy_PL_T01_X Q99"   # question-band label
-    row[29] = "Multiple Choice Question"
-    row[30] = "Remembering"
-    row[31] = "NCERT"
-    row[36] = "Legacy unique question text 9871?"
-    row[37] = 1
+    row[29] = "10CBMA_Lgcy_PL_T01_X Q99"   # question-band label
+    row[30] = "Multiple Choice Question"
+    row[31] = "Remembering"
+    row[32] = "NCERT"
+    row[37] = "Legacy unique question text 9871?"
+    row[38] = 1
     ws.append(row)
     path = tmp_path / "legacy.xlsx"
     wb.save(path)
@@ -160,6 +162,6 @@ def test_output_workbook_source_cells_update_in_place(db, tmp_path, client, firs
     values = {
         writer._cell_str(row, src_col)
         for row in ws.iter_rows(min_row=3, values_only=True)
-        if writer._cell_str(row, 12) == concept.concept_title
+        if bi.strip_title_tag(writer._cell_str(row, 12)) == concept.concept_title
     }
     assert "NCERT, RS Aggarwal" in values

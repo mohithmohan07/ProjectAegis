@@ -18,7 +18,7 @@ from . import (
     LEGACY_CONCEPT_LEN, OBJECTIVE_GROUP_FIELDS, SHEET_BY_KIND, TOPIC_FIELDS,
     merge_sources, normalize_answer_type, normalize_appears_in,
     normalize_cognitive_skills, normalize_difficulty, normalize_question_text,
-    split_multi, to_plain_text,
+    split_multi, strip_title_tag, strip_topic_title, to_plain_text,
 )
 from .. import models
 from ..services import directory
@@ -215,14 +215,20 @@ def import_workbook(db: Session, path: Path) -> dict:
                 continue
 
             # ---- Chapter ----
+            # Derive board/grade/subject/code from the RAW (tag-bearing) cells
+            # first; the topic/concept tags carry the ID code prefix.
             meta = directory.derive_chapter_meta(
                 chap["chapter_title"], chap.get("chapter_display_name", ""),
                 top.get("topic_title", ""), top.get("topic_display_name", ""),
-                top.get("concept", ""), top.get("related_topics", ""),
+                top.get("topic_concept_labels", ""), top.get("related_topics", ""),
                 con.get("concept_title", ""), con.get("concept_display_name", ""),
                 chap.get("post_topics", ""), chap.get("pre_topics", ""),
             )
             ch_key = meta["chapter_code"]
+            # Recover CLEAN titles (strip embedded tags / "Topic NN:" prefix).
+            chap_title = strip_title_tag(chap["chapter_title"])
+            t_title_clean = strip_topic_title(top.get("topic_title", ""))
+            c_title_clean = strip_title_tag(con.get("concept_title", ""))
             chapter = chapters.get(ch_key)
             if chapter is None:
                 chapter = db.query(models.Chapter).filter_by(chapter_code=ch_key).first()
@@ -230,7 +236,7 @@ def import_workbook(db: Session, path: Path) -> dict:
                 chapter = models.Chapter(
                     chapter_code=ch_key, board=meta["board"], grade=meta["grade"],
                     subject=meta["subject"], unit=meta["unit"],
-                    chapter_title=chap["chapter_title"],
+                    chapter_title=chap_title or chap["chapter_title"],
                     chapter_display_name=chap.get("chapter_display_name", ""),
                     chapter_duration=chap.get("chapter_duration", ""),
                     pre_topics=chap.get("pre_topics", ""),
@@ -243,7 +249,7 @@ def import_workbook(db: Session, path: Path) -> dict:
             chapters[ch_key] = chapter
 
             # ---- Topic ----
-            t_title = top.get("topic_title") or "Topic 01"
+            t_title = t_title_clean or "Topic 01"
             t_key = (chapter.id, t_title)
             topic = topics.get(t_key)
             if topic is None:
@@ -263,7 +269,7 @@ def import_workbook(db: Session, path: Path) -> dict:
             topics[t_key] = topic
 
             # ---- Concept ----
-            c_title = con.get("concept_title") or "Concept"
+            c_title = c_title_clean or "Concept"
             c_source = con.get("concept_source", "")
             c_key = (topic.id, c_title)
             concept = concepts.get(c_key)
