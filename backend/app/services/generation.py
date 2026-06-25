@@ -14,6 +14,7 @@ import re
 from .. import bulk_import as bi
 from .. import config, models
 from . import katex_rules as kr
+from . import concept_refiner as cr
 from . import prompts
 from . import progress
 # Imported for its prompt registrations (assessment.* keys used by _identify_system).
@@ -965,7 +966,46 @@ Your job (apply ALL of these intelligently — do not rely on downstream code):
 9. **Chapter source.** When CHAPTER SOURCE text is provided, mine it for exercise
    problems and numerical varieties to populate Types under the concepts they test.
 
-Return the full refined chapter map — same schema, improved quality.""")
+Return the full refined chapter map — same schema, improved quality. Do NOT
+remove Types sections — a dedicated Types pass follows; preserve any Types already
+present.""")
+
+
+prompts.register(
+    "concepts.types_assign", category=_CONCEPTS_CAT,
+    label="Types-only assignment pass",
+    description="Variables: {{subject}}, {{types_guidance}}, {{types_example}}.",
+    variables=("subject", "types_guidance", "types_example"),
+    default="""\
+You are a Types-only classifier for school {{subject}} concept maps.
+
+Your ONLY job: populate a rich Types section in every concept_description that
+has assessable question, numerical, diagram, or exercise formats. This mirrors
+how curriculum teams first generate a comprehensive types list, then manually
+keep what they need.
+
+INPUT: a draft concept map (Description + Misconception may already exist) plus
+CHAPTER SOURCE text.
+
+OUTPUT: Return ONLY JSON {"rows": [{"topic","concept","concept_description","keywords"}, ...]}
+with the SAME rows (same topics and concept names) but Types sections filled in.
+
+RULES:
+1. Keep each Description and Misconception text UNCHANGED (do not rewrite them).
+2. Insert or replace ONLY the Types section between Description and Misconception:
+   Description: ... // Types: ... // Misconception: ...
+3. {{types_guidance}}
+4. Format (no numeric Type 01 / Case 01 / 1.2 prefixes):
+   Types: <variety title> — Case: <concrete prompt>; Case: <...> | <variety> — ...
+5. Example:
+   {{types_example}}
+6. Mine CHAPTER SOURCE for ALL exercise problems and numerical varieties; fold
+   each into the concept it tests as Types/Cases.
+7. Omit Types ONLY for purely definitional concepts with zero assessable formats.
+   Every problem-solving, calculation, application, or exercise-backed concept
+   MUST have Types with at least two varieties and multiple Cases.
+8. Culmination rows MUST include Types for mixed multi-concept application problems.
+9. NEVER mention groups or group columns.""")
 
 
 def _concepts_system(subject: str) -> str:
@@ -1094,6 +1134,133 @@ def _split_mmd_into_chunks(mmd_text: str, max_chars: int | None = None) -> list[
     return [c for c in chunks if c.strip()]
 
 
+def _record_key(rec: dict) -> tuple[str, str]:
+    return (
+        (rec.get("topic") or "").lower().strip(),
+        bi.normalize_question_text(rec.get("concept_title", "")),
+    )
+
+
+def _types_body(details: str) -> str:
+    """Return the content of the Types section, or '' if absent."""
+    for label, content in cr.split_sections(details):
+        if label.strip().lower().startswith("type"):
+            return content.strip()
+    return ""
+
+
+def _has_meaningful_types(details: str) -> bool:
+    body = _types_body(details)
+    return len(body) > 12 and "Case:" in body
+
+
+def _inject_types(details: str, types_body: str) -> str:
+    """Insert or replace the Types section in a concept_description string."""
+    if not types_body.strip():
+        return details
+    sections = cr.split_sections(details)
+    out: list[tuple[str, str]] = []
+    replaced = False
+    for label, content in sections:
+        if label.strip().lower().startswith("type"):
+            out.append(("Types", types_body.strip()))
+            replaced = True
+        else:
+            out.append((label, content))
+    if not replaced:
+        inserted = False
+        out = []
+        for label, content in sections:
+            if not inserted and label.strip().lower().startswith("misconception"):
+                out.append(("Types", types_body.strip()))
+                inserted = True
+            out.append((label, content))
+        if not inserted:
+            out.append(("Types", types_body.strip()))
+    return cr.join_sections(out)
+
+
+def _types_assign_system(subject: str) -> str:
+    s = (subject or "the subject").strip() or "the subject"
+    math_like = s.lower() in {"mathematics", "math", "physics"}
+    suffix = "math" if math_like else "descriptive"
+    return prompts.render(
+        "concepts.types_assign",
+        subject=s,
+        types_guidance=prompts.get_text(f"concepts.types_guidance.{suffix}"),
+        types_example=prompts.get_text("concepts.types_example"),
+    )
+
+
+def _merge_types_from_fallback(
+    records: list[dict], fallback: list[dict],
+) -> list[dict]:
+    """Restore Types from an earlier snapshot when a later pass dropped them."""
+    fb_types = {
+        _record_key(r): _types_body(r.get("concept_details", ""))
+        for r in fallback
+        if _has_meaningful_types(r.get("concept_details", ""))
+    }
+    if not fb_types:
+        return records
+    restored = 0
+    for rec in records:
+        if _has_meaningful_types(rec.get("concept_details", "")):
+            continue
+        body = fb_types.get(_record_key(rec))
+        if body:
+            rec["concept_details"] = _inject_types(rec["concept_details"], body)
+            restored += 1
+    if restored:
+        progress.log(f"Restored Types on {restored} concept(s) from pre-pass snapshot.")
+    return records
+
+
+def _assign_types_via_api(
+    records: list[dict], *, subject: str, mmd_text: str = "",
+) -> list[dict]:
+    """Dedicated Types-only API pass — mirrors manual types-first workflow."""
+    import json as _json
+
+    if not records:
+        return records
+    if not (mmd_text or "").strip():
+        progress.log("Types assignment skipped — no chapter source text.", level="warning")
+        return records
+    system = _types_assign_system(subject)
+    payload = _json.dumps({"rows": _records_to_api_rows(records)}, ensure_ascii=False)
+    user = (
+        f"Subject: {subject or 'general'}\n"
+        f"Concept map ({len(records)} rows) — add Types to each assessable concept:\n"
+        + _trim(payload, 200_000)
+        + "\n\nCHAPTER SOURCE (mine ALL exercise/numerical varieties from here):\n"
+        + _trim(mmd_text, 200_000)
+    )
+    progress.log(f"Assigning Types to {len(records)} concepts (dedicated API pass).")
+    data = _openai_json(system, user)
+    out = _concept_rows_to_records(data)
+    if not out:
+        raise RuntimeError("Types assignment returned no rows")
+    # Match by key; keep original row if API omitted it.
+    by_key = {_record_key(r): r for r in out}
+    merged: list[dict] = []
+    for rec in records:
+        updated = by_key.get(_record_key(rec))
+        merged.append(updated if updated else rec)
+    with_types = sum(1 for r in merged if _has_meaningful_types(r.get("concept_details", "")))
+    progress.log(
+        f"Types assignment complete: {with_types}/{len(merged)} concepts have Types.",
+        level="success" if with_types else "warning",
+    )
+    if with_types < len(merged) // 2:
+        progress.log(
+            "Fewer than half the concepts have Types — check chapter source or "
+            "raise AEGIS_OPENAI_MAX_OUTPUT_TOKENS.",
+            level="warning",
+        )
+    return merged
+
+
 def _records_to_api_rows(records: list[dict]) -> list[dict]:
     """Serialize concept records for a consolidation API call."""
     return [
@@ -1193,7 +1360,21 @@ def concepts_from_mmd(mmd_text: str, *, subject: str = "",
         if not out:
             raise RuntimeError("live concept extraction returned no rows")
         progress.log(f"Merged to {len(out)} unique concepts.")
+        pre_consolidate = [dict(r) for r in out]
         out = _consolidate_concepts_via_api(out, subject=subject, mmd_text=mmd_text)
+        out = _merge_types_from_fallback(out, pre_consolidate)
+        out = _assign_types_via_api(out, subject=subject, mmd_text=mmd_text)
+        out = _merge_types_from_fallback(out, pre_consolidate)
+        missing = sum(
+            1 for r in out
+            if not _has_meaningful_types(r.get("concept_details", ""))
+            and not cr.is_culmination(r.get("concept_title", ""))
+        )
+        if missing:
+            progress.log(
+                f"{missing} non-culmination concept(s) still lack Types after all passes.",
+                level="warning",
+            )
         progress.set_progress(1.0, label="Concept extraction complete")
         return out
     config.require_generation_live()

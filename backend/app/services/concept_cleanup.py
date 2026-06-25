@@ -104,14 +104,32 @@ def replace_mmd_references(text: str) -> str:
     return text
 
 
+def _split_details_sections(details: str) -> tuple[str, str, str]:
+    """Return (before_types, types_block, after_types) for safe section cleaning."""
+    if "Types:" not in details:
+        return details, "", ""
+    pre, rest = details.split("Types:", 1)
+    if "Misconception:" in rest:
+        types_part, post = rest.split("Misconception:", 1)
+        return pre, "Types:" + types_part, "Misconception:" + post
+    return pre, "Types:" + rest, ""
+
+
 def clean_concept_record(rec: dict) -> dict:
     """Return ``rec`` with its name + description normalized (mutates in place)."""
     if rec.get("concept_title"):
         rec["concept_title"] = replace_mmd_references(
             clean_concept_name(rec["concept_title"]))
     if rec.get("concept_details"):
-        rec["concept_details"] = replace_mmd_references(
-            strip_dangling_references(rec["concept_details"]))
+        details = rec["concept_details"]
+        pre, types_block, post = _split_details_sections(details)
+        cleaned = replace_mmd_references(strip_dangling_references(pre))
+        if types_block:
+            # Preserve Types content — only rewrite MMD artifacts, do not strip Cases.
+            types_block = replace_mmd_references(types_block)
+        if post:
+            post = replace_mmd_references(strip_dangling_references(post))
+        rec["concept_details"] = cleaned + types_block + post
     return rec
 
 
