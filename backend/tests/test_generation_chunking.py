@@ -47,6 +47,10 @@ def test_concepts_live_processes_every_chunk(monkeypatch):
         ]}
 
     monkeypatch.setattr(g, "_openai_json", fake_openai_json)
+    # Consolidation is a separate API pass — pass records through in tests.
+    monkeypatch.setattr(
+        g, "_consolidate_concepts_via_api",
+        lambda records, **kw: records)
     doc = _big_doc(20)  # forces several chunks at 4000 chars
     records = g.concepts_from_mmd(doc, subject="Mathematics")
     assert calls["n"] >= 3, "expected multiple chunks to be processed"

@@ -55,6 +55,21 @@ def test_group_label_columns_present_and_ordered():
     assert f[gi + 1] == "related_digicards"
 
 
+def test_writer_leaves_group_columns_empty_for_concept_rows(db):
+    """Concept-catalog rows must not pre-fill group columns at generation time."""
+    concept = (
+        db.query(models.Concept)
+        .join(models.Topic).join(models.Chapter)
+        .filter(models.Chapter.board != "").first()
+    )
+    assert concept is not None
+    row = writer._concept_to_row(concept, "objective")
+    basic_idx = bi.OBJECTIVE_FIELDS.index("basic_groups")
+    assert row[basic_idx] == ""
+    assert row[basic_idx + 1] == ""
+    assert row[basic_idx + 2] == ""
+
+
 def test_roundtrip_recovers_clean_titles(db):
     """Export concepts (tagged cells) then re-import: clean titles are recovered."""
     concept = db.query(models.Concept).join(models.Topic).join(models.Chapter).first()

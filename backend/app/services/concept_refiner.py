@@ -1,22 +1,9 @@
-"""Deterministic chapter-level refinement of concept-mapping output.
+"""Legacy deterministic chapter-level refinement of concept-mapping output.
 
-Runs on the full, ordered list of concept records for a chapter (dry OR live,
-every subject) right before they are deposited, so the stored Bulk Import rows
-are consistent regardless of which extractor produced them. It addresses three
-reviewed defects that are safe to fix without an LLM:
-
-1. **Continuous Type numbering.** The extractor restarts ``Type 01`` inside
-   every concept. We renumber ``Type NN`` continuously across the whole
-   chapter (in textbook/topic order); ``Case NN`` restarts within each Type.
-2. **Culmination concepts use a separate "Miscellaneous Type NN" sequence**
-   that is ALSO continuous across the whole chapter, and never advances (or is
-   advanced by) the regular Type counter.
-3. **Type reduction for theory.** Purely theoretical concepts should not carry
-   a Types section at all; we drop any ``Types:`` block that has no concrete
-   ``Case`` (the prompt already omits them — this is the safety net).
-
-``concept_details`` is the canonical ``Description: ... // Types: ... //
-Misconception: ...`` string (sections joined by " // ").
+No longer invoked during concept deposit — chapter-wide refinement (Types
+discipline, culminations, dedup, naming variety) is handled by the API
+consolidation pass in ``generation._consolidate_concepts_via_api``. Kept for
+unit-test coverage of the old renumbering helpers.
 """
 from __future__ import annotations
 
