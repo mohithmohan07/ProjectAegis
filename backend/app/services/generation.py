@@ -752,41 +752,30 @@ def _live_identify_questions_from_mmd(
 # Concepts from MMD (Build Concepts - post learning)
 # --------------------------------------------------------------------------- #
 
-# Live concept-extraction prompts: ported from the vendored
-# mmd_to_concepts_excel engine (subject-specific variants, 40-60 concept
-# quota, quality rules) PLUS the team's review fixes, which the vendored
-# prompt predates: inline worked examples (never bare "Example 19" refs),
-# no '&' chains in names, distinct concept-name stems, Types must carry
-# example prompts, syllabus-scoped length, no 'MMD' references.
+# Live concept-extraction prompts: API-driven extraction with a second-pass
+# consolidation call for chapter-wide intelligence (dedup, naming variety,
+# culminations, Types discipline). Minimal Python cleanup only (& names,
+# dangling refs) — no Type renumbering or group-column output at this stage.
 
 _CONCEPTS_CAT = "Build Concepts · post-learning extraction"
 
 prompts.register(
     "concepts.name_templates.math", category=_CONCEPTS_CAT,
-    label="Concept naming templates (math/physics)",
+    label="Concept naming guidance (math/physics)",
     default="""\
-   - Properties and Applications of <X>
-   - Proof and Derivation of <rule/law>
-   - Conditions for Applying <rule/law>
-   - Representation of <X>
-   - Conceptual Meaning of <X>
-   - Methods of <procedure>
-   - Laws and Applications of <X>
-   - Converting Between <A> and <B>
-   - Simplifying Using <rule/law>""")
+   Name each concept after the specific idea it teaches — use the chapter's own
+   vocabulary. Vary sentence structure across siblings (do NOT repeat a shared
+   opener like "Properties of…" or "Applications of…" on multiple rows). Good
+   names read like precise textbook sub-headings, not formulaic labels.""")
 
 prompts.register(
     "concepts.name_templates.descriptive", category=_CONCEPTS_CAT,
-    label="Concept naming templates (other subjects)",
+    label="Concept naming guidance (other subjects)",
     default="""\
-   - Structure and Function of <X>
-   - Process of <X>
-   - Types and Classification of <X>
-   - Characteristics of <X>
-   - Relationship between <A> and <B>
-   - Causes and Effects of <X>
-   - Importance and Significance of <X>
-   - Comparison of <A> and <B>""")
+   Name each concept after the specific idea it teaches — use the chapter's own
+   vocabulary. Vary sentence structure across siblings (do NOT repeat a shared
+   opener like "Structure and Function of…" or "Importance of…" on multiple rows).
+   Good names read like precise textbook sub-headings, not formulaic labels.""")
 
 prompts.register(
     "concepts.detail.math", category=_CONCEPTS_CAT,
@@ -814,26 +803,30 @@ Return ONLY a JSON object: {"rows": [{"topic": "", "concept": "", "concept_descr
 TOPICS MUST FOLLOW THE TEXTBOOK (coherence is non-negotiable):
 - Use the chapter's OWN section structure. Each topic = a real section of the
   text, in the SAME reading order the chapter presents it.
-- Name each topic EXACTLY as the textbook section heading reads (do not invent
-  new thematic umbrella topics, and do not merge two textbook sections into one).
+- Name each topic EXACTLY as the textbook section heading reads — strip any
+  leading decimal/section numbers (1., 1.1, 1.2, 2.3, etc.) and use the words
+  only. Do not invent new thematic umbrella topics, and do not merge two
+  textbook sections into one.
 - A concept belongs to the topic where the textbook teaches it. NEVER pull
   concepts from different sections together under one synthesized topic.
 - Emit topics and their concepts in textbook progression (top to bottom).
-- NEVER create a topic for exercises (Exercise 1.1, Ex 2.1...). Fold exercise
-  problems into the content concept they practise, as Types/Cases.
+- NEVER create a topic for exercises. Fold exercise problems into the content
+  concept they practise, as solving varieties under Types.
 
-CONCEPT GRANULARITY (fine-grained, but no redundancy):
+CONCEPT GRANULARITY (fine-grained, discrete, non-redundant):
 - Break each section into small, isolated, testable concepts (mastery-friendly).
-- Each idea appears EXACTLY ONCE. Two concepts must never carry near-identical
-  descriptions; if two sections share an idea, teach it once and reference it.
+- Each idea appears EXACTLY ONCE across the chapter. Merge or drop near-duplicates;
+  if two sections share an idea, teach it once and reference it elsewhere.
 - No vague filler ("Introduction", "Misc", "Basics").
 
-CONCEPT NAMING:
-1) Names are academic, specific and content-based. Prefer these templates:
+CONCEPT NAMING (no repetition, no section numbers):
 {{name_templates}}
-2) Sibling concepts must NOT repeat the same leading phrase; vary the stems.
-3) NEVER chain names with '&'. Culmination rows are named
-   "Culmination - <A>, <B> and <C>" (comma list with a final 'and').
+- NEVER prefix or embed decimal section numbers (1., 1.1, 1.2, 2.3, Exercise 1.1,
+  Ex 2.1, etc.) in topic or concept names — use descriptive words only.
+- Sibling concepts under the same topic must use DISTINCT stems; never repeat the
+  same opening phrase on multiple rows.
+- NEVER chain names with '&'. Culmination rows are named
+  "Culmination - <A>, <B> and <C>" (comma list with a final 'and').
 
 OUTPUT CONTRACT for concept_description (ONE string, sections joined by " // "):
 - ALWAYS start with: Description: <{{detail_line}}>
@@ -845,11 +838,14 @@ OUTPUT CONTRACT for concept_description (ONE string, sections joined by " // "):
   application patterns, problem formats). For purely theoretical/definitional
   concepts (a fact, a definition, a description), DO NOT include a Types section
   at all — give Description + Misconception only.
-- When Types ARE warranted: Types: Type 01: <name> Case 01: <concrete worked
-  example prompt> Case 02: ... Type 02: ... — keep ONLY the critical varieties,
-  not every trivial restatement. Every Case MUST carry a concrete prompt.
+- When Types ARE warranted, use DESCRIPTIVE labels only — NEVER numeric prefixes
+  like "Type 01", "Case 01", "1.", "1.2", etc. Format:
+  Types: <variety title> — Case: <concrete worked example prompt>; Case: <...>
+  | <next variety title> — Case: <...>
+  Keep ONLY the critical varieties, not every trivial restatement. Every Case
+  MUST carry a concrete prompt.
 - Use " // " as the separator. Do NOT use newlines inside concept_description.
-  (Type/Case numbers are renumbered continuously across the chapter afterwards.)
+- Do NOT mention groups, group columns, or assessment labels — not required here.
 
 TOPIC CULMINATION:
 - The LAST concept of every topic is exactly one culmination row that integrates
@@ -871,9 +867,52 @@ prompts.register(
     label="Concept-mapping user instruction",
     description="Prepended to each chapter section/chunk. No variables.",
     default="Below is a section of the chapter in reading order. Map it into "
-            "concepts, keeping the textbook's own topic headings and progression "
-            "(one culmination per topic, misconceptions required, Types only for "
-            "concepts with real solving varieties):")
+            "discrete, non-redundant concepts using the textbook's own topic "
+            "headings (strip section numbers like 1.2 from names). One "
+            "culmination per topic, misconceptions required, Types only where "
+            "genuine solving varieties exist — descriptive labels, no numeric "
+            "Type/Case prefixes:")
+
+
+prompts.register(
+    "concepts.consolidate", category=_CONCEPTS_CAT,
+    label="Concept-map consolidation prompt",
+    description="Variables: {{subject}}. Second-pass chapter-wide refinement.",
+    variables=("subject",),
+    default="""\
+You are a senior curriculum editor reviewing a draft concept map for school
+{{subject}}. You receive the merged output from chunked extraction. Return ONLY
+a JSON object: {"rows": [{"topic": "", "concept": "", "concept_description": "",
+"keywords": ""}, ...]}.
+
+Your job (apply ALL of these intelligently — do not rely on downstream code):
+
+1. **De-duplicate & de-redundancy.** Merge or drop concepts whose descriptions
+   overlap heavily. Each distinct idea appears exactly once in the chapter.
+
+2. **Distinct naming.** Rewrite sibling concept names so no two share the same
+   leading phrase or formulaic opener. Names must be specific, not templated.
+
+3. **Strip section numbers.** Remove decimal/section prefixes (1., 1.1, 1.2,
+   2.3, Exercise 1.1, Ex 2.1, etc.) from topic and concept names — words only.
+
+4. **Types discipline.** Keep Types ONLY on concepts with genuine solving
+   varieties. Use descriptive variety titles and Case prompts — NEVER numeric
+   prefixes like "Type 01", "Case 01", "1.", "1.2". Format:
+   Types: <variety> — Case: <prompt>; Case: <prompt> | <variety> — Case: <...>
+   Drop empty or theory-only Types blocks entirely.
+
+5. **Culmination.** Every topic ends with exactly one "Culmination - ..." row
+   that integrates that topic's ideas. Place it last within its topic.
+
+6. **Preserve order.** Keep textbook reading order for topics and concepts.
+
+7. **No groups.** Do not mention groups, group columns, or assessment labels.
+
+8. **Hygiene.** Keep Description // Misconception structure; no source-artifact
+   references ("Example 19", "Fig 2", "MMD"); misconceptions required.
+
+Return the full refined chapter map — same schema, improved quality.""")
 
 
 def _concepts_system(subject: str) -> str:
@@ -1000,44 +1039,38 @@ def _split_mmd_into_chunks(mmd_text: str, max_chars: int | None = None) -> list[
     return [c for c in chunks if c.strip()]
 
 
-def _is_culmination(title: str) -> bool:
-    return (title or "").strip().lower().startswith("culmination")
+def _records_to_api_rows(records: list[dict]) -> list[dict]:
+    """Serialize concept records for a consolidation API call."""
+    return [
+        {
+            "topic": rec.get("topic", ""),
+            "concept": rec.get("concept_title", ""),
+            "concept_description": rec.get("concept_details", ""),
+            "keywords": rec.get("keywords", ""),
+        }
+        for rec in records
+    ]
 
 
-def _ensure_culmination_per_topic(records: list[dict]) -> list[dict]:
-    """Guarantee exactly one culmination row, last, for every topic.
+def _consolidate_concepts_via_api(records: list[dict], *, subject: str) -> list[dict]:
+    """Chapter-wide LLM refinement: dedup, naming, culminations, Types hygiene."""
+    import json as _json
 
-    Mirrors the vendored engine's deterministic post-pass: keep the first
-    culmination if several exist, synthesize one if the model omitted it.
-    """
-    topic_order: list[str] = []
-    by_topic: dict[str, list[dict]] = {}
-    for rec in records:
-        topic = (rec.get("topic") or "General").strip() or "General"
-        if topic not in by_topic:
-            by_topic[topic] = []
-            topic_order.append(topic)
-        by_topic[topic].append(rec)
-
-    out: list[dict] = []
-    for topic in topic_order:
-        rows = by_topic[topic]
-        regular = [r for r in rows if not _is_culmination(r.get("concept_title", ""))]
-        culms = [r for r in rows if _is_culmination(r.get("concept_title", ""))]
-        out.extend(regular)
-        if culms:
-            out.append(culms[0])
-        else:
-            out.append({
-                "topic": topic,
-                "concept_title": f"Culmination - {topic}",
-                "concept_details": (
-                    f"Description: Consolidates the key ideas of '{topic}' into one "
-                    "integrated understanding. // Types: Type 01: Mixed application "
-                    "Case 01: Solve questions combining multiple concepts from this topic."
-                ),
-                "keywords": "",
-            })
+    if not records:
+        return records
+    system = prompts.render("concepts.consolidate", subject=subject or "the subject")
+    payload = _json.dumps({"rows": _records_to_api_rows(records)}, ensure_ascii=False)
+    user = (
+        f"Subject: {subject or 'general'}\n"
+        f"Draft concept map ({len(records)} rows):\n"
+        + _trim(payload, 400_000)
+    )
+    progress.log(f"Consolidating {len(records)} concepts via API refinement pass.")
+    data = _openai_json(system, user)
+    out = _concept_rows_to_records(data)
+    if not out:
+        raise RuntimeError("concept consolidation returned no rows")
+    progress.log(f"Consolidated to {len(out)} concepts.", level="success")
     return out
 
 
@@ -1048,7 +1081,7 @@ def _concept_rows_to_records(data: dict) -> list[dict]:
         if not title:
             continue
         out.append({
-            "topic": (row.get("topic") or "Topic 01").strip(),
+            "topic": (row.get("topic") or "General").strip(),
             "concept_title": title,
             "concept_details": (row.get("concept_description") or "").strip(),
             "keywords": (row.get("keywords") or "").strip(),
@@ -1096,9 +1129,10 @@ def concepts_from_mmd(mmd_text: str, *, subject: str = "",
         out = _merge_concept_records(all_records)
         if not out:
             raise RuntimeError("live concept extraction returned no rows")
+        progress.log(f"Merged to {len(out)} unique concepts.")
+        out = _consolidate_concepts_via_api(out, subject=subject)
         progress.set_progress(1.0, label="Concept extraction complete")
-        progress.log(f"Merged to {len(out)} unique concepts.", level="success")
-        return _ensure_culmination_per_topic(out)
+        return out
     config.require_generation_live()
     progress.log(f"Extracting concepts (dry) from {len(mmd_text):,} chars.")
     # Dry: treat markdown headings as topics and bullet/para lines as concepts.
@@ -1119,14 +1153,13 @@ def concepts_from_mmd(mmd_text: str, *, subject: str = "",
                 "concept_title": title,
                 "concept_details": (
                     f"Description: {line[:200]} "
-                    "// Types: Type 01: Standard "
                     "// Misconception: commonly confused with related ideas."
                 ),
                 "keywords": ", ".join(title.lower().split()[:5]),
             })
     return out or [{
-        "topic": topic, "concept_title": "Concept 01",
-        "concept_details": "Description: (empty document) // Types: // Misconception:",
+        "topic": topic, "concept_title": "Overview",
+        "concept_details": "Description: (empty document) // Misconception: none",
         "keywords": "",
     }]
 
@@ -1186,13 +1219,11 @@ struggle to understand the chapter even after teaching?" Include only if YES.
 CONCEPT DESIGN: atomic but meaningful; each concept is a skill, relationship,
 or reasoning structure; do not fragment definition/formula/example apart.
 
-NAMING RULES: prefer patterns like "Relationship Between _ and _",
-"Application of _ in _ Contexts", "Interpretation of _ in
-Mathematical/Scientific Situations", "Quantitative Handling of _",
-"Structural Understanding of _", "Transformation and Manipulation of _".
-NEVER "Types of _", "Definition of _", "Basics of _". NEVER chain names
-with '&' (use commas with a final 'and'). Sibling concepts must not repeat
-the same leading phrase.
+NAMING RULES: each name must be specific to the prerequisite skill — vary
+structure across siblings. Do NOT repeat a shared opener on multiple rows.
+NEVER "Types of _", "Definition of _", "Basics of _", "Introduction to _".
+NEVER prefix names with decimal section numbers (1., 1.1, 1.2, etc.).
+NEVER chain names with '&' (use commas with a final 'and').
 
 COGNITIVE TAGGING (MANDATORY): one primary tag per concept:
 FL=Foundational Logic | NU=Numerical Handling | VC=Vocabulary Concept |
@@ -1204,11 +1235,13 @@ COUNTS (STRICT): {{min_t}}-{{max_t}} topics; every topic has
 CONCEPT DESCRIPTION FORMAT (MANDATORY): one string, exactly three sections,
 separated by " // ":
 Description: <what the student should already know; 2-4 short lines; must not
-teach the chapter> // Types: <at least two numbered types, each with concrete
-cases: Type 01: <title> Case 01: <example prompt> Case 02: ... Type 02: ...>
+teach the chapter> // Types: <only when the prerequisite has distinct check
+varieties — use descriptive labels, NEVER "Type 01"/"Case 01"/"1.2" numbering:
+<variety title> — Case: <example prompt>; Case: <...> | <variety> — Case: <...>>
 // Misconception: <typical prior-knowledge gaps, or N/A>.
-Zero-padded labels exactly (Type 01:, Case 01:). NEVER reference source
-artifacts ("Example 19", "Fig 2", "Table no. 1") and never the words "MMD".
+For purely vocabulary/recall prerequisites, Description + Misconception only
+(omit Types). NEVER reference source artifacts and never the words "MMD".
+Do NOT mention groups or group columns.
 
 OUTPUT (STRICT JSON ONLY): {"topics": [{"topic_name": "", "concepts":
 [{"parent_concept": "", "concept_name": "", "concept_description": "",
@@ -1234,7 +1267,8 @@ borderline -> REPLACE). Allow previous-grade ideas and foundational skills.
 STRUCTURE: output exactly the same number of topics, and per topic exactly
 the same number of concepts — substitute rejected rows, never delete slots.
 Keep the same schema and the Description: // Types: // Misconception: format
-with Type 01/02 and Case 01/02 labels, plus the tag (FL|NU|VC|RS|GR).
+with descriptive variety labels (no Type 01/Case 01 numbering), plus the tag
+(FL|NU|VC|RS|GR). Rewrite repetitive sibling names to be distinct.
 Return ONLY JSON with one key "topics". No markdown, no commentary.""")
 
 
@@ -1289,7 +1323,7 @@ def pre_learning_from_rows(
             "concept_title": f"Pre: {r['concept_title']}",
             "concept_details": (
                 f"Description: foundational idea required before learning "
-                f"'{r['concept_title']}'. // Types: Type 01: Prerequisite recall "
+                f"'{r['concept_title']}'. "
                 "// Misconception: assuming the prerequisite is already mastered."
             ),
             "keywords": r.get("keywords", ""),
@@ -1355,7 +1389,7 @@ def pre_learning_from_concepts(concepts: list[models.Concept], *, live: bool | N
             "concept_title": f"Pre: {c.concept_title}",
             "concept_details": (
                 f"Description: foundational idea required before learning "
-                f"'{c.concept_title}'. // Types: Type 01: Prerequisite recall "
+                f"'{c.concept_title}'. "
                 "// Misconception: assuming the prerequisite is already mastered."
             ),
             "keywords": c.keywords,

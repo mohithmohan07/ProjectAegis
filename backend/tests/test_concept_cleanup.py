@@ -114,27 +114,6 @@ def test_length_report_flags_long_section():
     assert any(s["section"].startswith("Description") for s in rep["over_budget"])
 
 
-# ------------------ culmination post-pass (vendored parity) ------------------- #
-
-def test_ensure_culmination_per_topic():
-    from app.services.generation import _ensure_culmination_per_topic
-
-    records = [
-        {"topic": "T1", "concept_title": "A", "concept_details": "", "keywords": ""},
-        {"topic": "T1", "concept_title": "B", "concept_details": "", "keywords": ""},
-        # T1 has no culmination -> synthesized; T2's culmination not last -> moved.
-        {"topic": "T2", "concept_title": "Culmination - T2 wrap", "concept_details": "", "keywords": ""},
-        {"topic": "T2", "concept_title": "C", "concept_details": "", "keywords": ""},
-    ]
-    out = _ensure_culmination_per_topic(records)
-    t1 = [r for r in out if r["topic"] == "T1"]
-    t2 = [r for r in out if r["topic"] == "T2"]
-    assert t1[-1]["concept_title"].startswith("Culmination")
-    assert len(t1) == 3  # A, B + synthesized culmination
-    assert t2[-1]["concept_title"] == "Culmination - T2 wrap"
-    assert [r["concept_title"] for r in t2] == ["C", "Culmination - T2 wrap"]
-
-
 # ----------------------- end-to-end wiring (build_concepts) ------------------- #
 
 def test_add_concept_cleans_name_and_description(db, first_chapter):

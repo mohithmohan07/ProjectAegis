@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from .. import config, models
 from .. import bulk_import as bi
 from ..bulk_import import writer
-from . import concept_cleanup, concept_refiner, generation, mmd, progress
+from . import concept_cleanup, generation, mmd, progress
 
 
 def _find_concept_in_chapter(chapter: models.Chapter, title: str) -> models.Concept | None:
@@ -93,11 +93,10 @@ def _deposit_concepts(
     Returns (created_ids, merged_ids): merged = concept already existed (any
     topic of this chapter, normalized-title match) and only its sources grew.
     """
-    # Clean each record, then refine the WHOLE chapter at once: continuous Type
-    # numbering (culmination excluded) + drop Types from purely theoretical
-    # concepts. This applies to every subject, dry or live.
+    # Clean each record before deposit (name hygiene, dangling ref removal).
+    # Chapter-wide intelligence (dedup, Types, culminations) is handled by the
+    # API consolidation pass in generation.concepts_from_mmd — not Python.
     records = [concept_cleanup.clean_concept_record(dict(r)) for r in records]
-    records = concept_refiner.refine_chapter(records)
 
     created_ids: list[int] = []
     merged_ids: list[int] = []

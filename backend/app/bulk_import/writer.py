@@ -207,11 +207,15 @@ def _groups_by_type(concept: models.Concept) -> dict[str, str]:
     return {k: ", ".join(v) for k, v in buckets.items()}
 
 
-def _front_bands(concept: models.Concept, topic: models.Topic) -> list:
+def _front_bands(concept: models.Concept, topic: models.Topic, *,
+                 include_group_columns: bool = True) -> list:
     """Chapter + Topic + Concept bands (22 cells) with tags in the title columns.
 
     The title columns carry a human-readable tag; the display columns stay
     clean (the reader strips the tags back to the clean model values).
+
+    ``include_group_columns`` is False for concept-catalog rows — group columns
+    are filled later when assessments are built, not at concept generation.
     """
     chapter = topic.chapter
     c_tag = directory.chapter_tag(chapter.board, chapter.grade, chapter.subject)
@@ -222,7 +226,11 @@ def _front_bands(concept: models.Concept, topic: models.Topic) -> list:
         chapter.chapter_title, topic.topic_title)
     concept_labels = ", ".join(
         c.concept_title for c in sorted(topic.concepts, key=lambda c: c.id))
-    by_type = _groups_by_type(concept)
+    if include_group_columns:
+        by_type = _groups_by_type(concept)
+        group_cols = [by_type["Basic"], by_type["Intermediate"], by_type["Advanced"]]
+    else:
+        group_cols = ["", "", ""]
     return [
         # ---- Chapter band (tag in title, clean display) ----
         f"{chapter.chapter_title} ({c_tag})", chapter.chapter_title,
@@ -232,11 +240,11 @@ def _front_bands(concept: models.Concept, topic: models.Topic) -> list:
         f"Topic {_topic_number(topic):02d}: {topic.topic_title} ({t_tag})",
         topic.topic_title, topic.pre_post_learning, concept_labels,
         topic.related_topics, topic.topic_description,
-        # ---- Concept band (tag in title, clean display, comma-joined groups) ----
+        # ---- Concept band (tag in title, clean display; group cols optional) ----
         f"{concept.concept_title} ({cp_tag})", concept.concept_title,
         concept.concept_details, concept.keywords, concept.digicards,
         concept.related_concepts,
-        by_type["Basic"], by_type["Intermediate"], by_type["Advanced"],
+        *group_cols,
         concept.sources,
     ]
 
@@ -337,7 +345,7 @@ def _concept_to_row(concept: models.Concept, kind: str = "objective",
     chapter) when emitting a many-to-many concept tag row.
     """
     topic = topic or concept.topic
-    row: list = list(_front_bands(concept, topic))
+    row: list = list(_front_bands(concept, topic, include_group_columns=False))
     expected = len(FIELDS_BY_KIND[kind])
     row += [""] * (expected - len(row))
     return row[:expected]
