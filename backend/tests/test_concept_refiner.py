@@ -83,3 +83,29 @@ def test_records_without_types_are_untouched():
     records = [_rec("X", "Description: only // Misconception: none")]
     out = cr.refine_chapter(records)
     assert out[0]["concept_details"] == "Description: only // Misconception: none"
+
+
+def test_culmination_description_becomes_recap():
+    records = [
+        _rec("Solve A", "Description: a // Types: Type 01: P Case 01: c1 // Misconception: m"),
+        _rec("Culmination - Topic 01",
+             "Description: long synthesis of everything // "
+             "Types: Type 01: Mixed Case 01: combine // Misconception: keep me"),
+    ]
+    out = cr.refine_chapter(records)
+    culm = out[1]["concept_details"]
+    # Description collapses to exactly "Recap".
+    assert "Description: Recap" in culm
+    assert "long synthesis" not in culm
+    # Types (Miscellaneous sequence) and Misconception are preserved.
+    assert "Miscellaneous Type 01: Mixed" in culm
+    assert "Misconception: keep me" in culm
+    # Regular concept keeps its continuous Type numbering.
+    assert "Type 01: P" in out[0]["concept_details"]
+
+
+def test_culmination_recap_when_no_description_section():
+    records = [_rec("Culmination - T",
+                    "Types: Type 01: Mix Case 01: q // Misconception: m")]
+    out = cr.set_culmination_recap([dict(r) for r in records])
+    assert out[0]["concept_details"].startswith("Description: Recap")

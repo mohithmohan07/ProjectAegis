@@ -14,6 +14,7 @@ import re
 from .. import bulk_import as bi
 from .. import config, models
 from . import katex_rules as kr
+from . import concept_refiner as cr
 from . import prompts
 from . import progress
 # Imported for its prompt registrations (assessment.* keys used by _identify_system).
@@ -812,26 +813,29 @@ prompts.register(
     "concepts.types_example", category=_CONCEPTS_CAT,
     label="Types section format example",
     default=(
-        "Types: Evaluating numerical exponential expressions — "
-        "Case: Evaluate 2^3 × 2^2; Case: Evaluate (3^2)^4; Case: Simplify and find the value | "
-        "Simplifying using laws of indices — Case: Simplify a^m × a^n; "
-        "Case: Express as a single power | Word problems involving exponents — "
-        "Case: Given population growth rate find final count; "
-        "Case: Compare two exponential models"
+        "Types: Type 01: Evaluating numerical exponential expressions "
+        "Case 01: Evaluate 2^3 × 2^2 Case 02: Evaluate (3^2)^4 "
+        "Case 03: Simplify and find the value "
+        "Type 02: Simplifying using laws of indices "
+        "Case 01: Simplify a^m × a^n Case 02: Express as a single power "
+        "Type 03: Word problems involving exponents "
+        "Case 01: Given population growth rate find final count "
+        "Case 02: Compare two exponential models"
     ))
 
 prompts.register(
     "concepts.detail.math", category=_CONCEPTS_CAT,
     label="Description guidance (math/physics)",
-    default="definition, explanation, key properties, when/how to use, with "
-            "worked examples and step-by-step reasoning INLINED in full")
+    default="45-90 words, source-grounded: define the idea, state the key "
+            "rule/property or method, include conditions/when to use it, and "
+            "add one compact worked cue only when it clarifies the concept")
 
 prompts.register(
     "concepts.detail.descriptive", category=_CONCEPTS_CAT,
     label="Description guidance (other subjects)",
-    default="complete definition and explanation, key characteristics, "
-            "processes or relationships, with concrete examples INLINED within "
-            "the description")
+    default="45-90 words, source-grounded: explain the idea clearly for lesson "
+            "planning, include the key characteristics/process/relationship, "
+            "and add one compact example only when it clarifies the concept")
 
 prompts.register(
     "concepts.system", category=_CONCEPTS_CAT,
@@ -875,25 +879,34 @@ CONCEPT NAMING (no repetition, no section numbers):
 
 OUTPUT CONTRACT for concept_description (ONE string, sections joined by " // "):
 - ALWAYS start with: Description: <{{detail_line}}>
-- ALWAYS end with: Misconception: <the specific wrong idea students hold here and
-  the correction>. Misconception is REQUIRED for every concept — never omit it,
-  never write "N/A".
-- Types are REQUIRED for most concepts — they are the primary deliverable for
-  segregating assessable question varieties. {{types_guidance}}
-  Format (no numeric prefixes — descriptive labels only):
-  Types: <variety title> — Case: <concrete worked example prompt>; Case: <...>
-  | <next variety title> — Case: <...>; Case: <...> | ...
-  Omit Types ONLY when the concept is purely definitional with absolutely no
-  question, numerical, diagram, or exercise format to classify.
+  The Description is used for lesson planning, assessments, and downstream
+  content. It must be clear, text-material aligned, and complete enough to teach
+  from, but not a long chapter dump. Prefer 2-4 compact sentences.
+- Then include Types ONLY IF the concept has assessable question/problem
+  varieties. {{types_guidance}}
+  Format — use zero-padded numeric labels exactly "Type 01:", "Case 01:":
+  Types: Type 01: <variety title> Case 01: <concrete worked example prompt>
+  Case 02: <...> Type 02: <next variety title> Case 01: <...> ...
+  Restart at Type 01 within each concept — they are renumbered continuously
+  across the whole chapter afterwards, so do NOT try to continue numbers yourself.
 - Example Types block:
   {{types_example}}
+- End with Misconception ONLY IF there is a real likely learner error from the
+  material. Do not invent filler misconceptions, and never write "N/A", "None",
+  "Not applicable", or placeholder text.
+- Valid structures:
+  Description: ...
+  Description: ... // Types: ...
+  Description: ... // Misconception: ...
+  Description: ... // Types: ... // Misconception: ...
 - Use " // " as the separator. Do NOT use newlines inside concept_description.
 - Do NOT mention groups, group columns, or assessment labels — not required here.
 
 TOPIC CULMINATION:
 - The LAST concept of every topic is exactly one culmination row that integrates
-  that section's ideas (named "Culmination - ..."). Culmination rows SHOULD
-  include Types covering mixed multi-concept application problems from the topic.
+  that section's ideas (named "Culmination - ..."). Its Description will be set to
+  "Recap"; still provide its Types (mixed multi-concept application problems) and
+  Misconception.
 
 SOURCE HYGIENE:
 - NEVER reference source artifacts: no "Example 19", "Examples Type III",
@@ -913,10 +926,10 @@ prompts.register(
     default="Below is a section of the chapter in reading order. Map it into "
             "discrete, non-redundant concepts using the textbook's own topic "
             "headings (strip section numbers like 1.2 from names). One "
-            "culmination per topic, misconceptions required. For EVERY concept "
-            "with problems, numericals, exercises, or assessable formats, "
-            "include a rich Types section classifying ALL question varieties "
-            "(descriptive labels, no numeric Type/Case prefixes):")
+            "culmination per topic. Write clear source-grounded Descriptions; "
+            "add Types only when there are problems/numericals/exercises/"
+            "assessable formats; add Misconception only when there is a real "
+            "likely learner error. Types use zero-padded 'Type 01:'/'Case 01:' labels:")
 
 
 prompts.register(
@@ -947,8 +960,9 @@ Your job (apply ALL of these intelligently — do not rely on downstream code):
    NEVER remove a Types block from the draft. If a concept involves calculation,
    problem-solving, application, diagrams, or exercises, it MUST have a rich
    Types section classifying ALL distinct question/numerical varieties (including
-   exercise-section problems folded into the concept they test). Use descriptive
-   variety titles — Case: <prompt>; Case: <prompt> | <variety> — Case: <...>
+   exercise-section problems folded into the concept they test). Use zero-padded
+   numeric labels: Type 01: <name> Case 01: <prompt> Case 02: ... Type 02: ...
+   (restart at Type 01 per concept; continuous renumbering happens downstream).
    Only omit Types for concepts that are purely definitional with zero assessable
    formats. If the draft omitted Types where they belong, ADD them.
 
@@ -960,12 +974,96 @@ Your job (apply ALL of these intelligently — do not rely on downstream code):
 7. **No groups.** Do not mention groups, group columns, or assessment labels.
 
 8. **Hygiene.** Keep Description // Types // Misconception structure; no source-artifact
-   references ("Example 19", "Fig 2", "MMD"); misconceptions required.
+   references ("Example 19", "Fig 2", "MMD"). Misconception is optional: keep it
+   only when it is specific and useful; never write N/A/None/filler.
 
 9. **Chapter source.** When CHAPTER SOURCE text is provided, mine it for exercise
    problems and numerical varieties to populate Types under the concepts they test.
 
-Return the full refined chapter map — same schema, improved quality.""")
+10. **Description quality.** Descriptions are used for lesson planning,
+    assessments, and downstream content. Keep them source-grounded, 2-4 compact
+    sentences, clear enough to teach from, and not overloaded with every detail.
+
+Return the full refined chapter map — same schema, improved quality. Do NOT
+remove Types sections — a dedicated Types pass follows; preserve any Types already
+present.""")
+
+
+prompts.register(
+    "concepts.description_refine", category=_CONCEPTS_CAT,
+    label="Description-only refinement pass",
+    description="Variables: {{subject}}. Uses chapter source to polish descriptions.",
+    variables=("subject",),
+    default="""\
+You are a description-only editor for school {{subject}} concept maps.
+
+INPUT: a concept map plus CHAPTER SOURCE text.
+OUTPUT: Return ONLY JSON {"rows": [{"topic": "", "concept": "",
+"concept_description": "", "keywords": ""}, ...]} with the SAME rows.
+
+Your ONLY job is to make the Description section useful for lesson planning,
+assessment building, and downstream content.
+
+Rules:
+1. Keep topic names, concept names, keywords, and row order the same.
+2. Rewrite ONLY the Description section using the CHAPTER SOURCE.
+3. Preserve any Types section exactly if it already exists.
+4. Preserve Misconception only if it is specific and useful; otherwise omit it.
+   Do not write "N/A", "None", "Not applicable", or generic filler.
+5. Description must be source-grounded, clear, and complete enough to teach from:
+   include what the concept means, the key rule/process/relationship, important
+   conditions, and one compact example only when it helps.
+6. Do NOT dump the full textbook. Target 2-4 compact sentences, roughly 45-90
+   words. Avoid repetitive wording across sibling concepts.
+7. Valid concept_description forms:
+   Description: ...
+   Description: ... // Types: ...
+   Description: ... // Misconception: ...
+   Description: ... // Types: ... // Misconception: ...
+8. Do not mention groups, group columns, assessment labels, source artifacts, or
+   the words "MMD"/"MMDs".""" )
+
+
+prompts.register(
+    "concepts.types_assign", category=_CONCEPTS_CAT,
+    label="Types-only assignment pass",
+    description="Variables: {{subject}}, {{types_guidance}}, {{types_example}}.",
+    variables=("subject", "types_guidance", "types_example"),
+    default="""\
+You are a Types-only classifier for school {{subject}} concept maps.
+
+Your ONLY job: populate a rich Types section in every concept_description that
+has assessable question, numerical, diagram, or exercise formats. This mirrors
+how curriculum teams first generate a comprehensive types list, then manually
+keep what they need.
+
+INPUT: a draft concept map (Description is already refined; Types and
+Misconception may or may not exist) plus CHAPTER SOURCE text.
+
+OUTPUT: Return ONLY JSON {"rows": [{"topic","concept","concept_description","keywords"}, ...]}
+with the SAME rows (same topics and concept names) but Types sections filled in.
+
+RULES:
+1. Keep each Description and any existing useful Misconception text UNCHANGED
+   (do not rewrite them).
+2. Insert or replace ONLY the Types section. Place it after Description and
+   before Misconception if Misconception exists:
+   Description: ... // Types: ... // Misconception: ...
+   Description: ... // Types: ...
+3. {{types_guidance}}
+4. Format — zero-padded numeric labels exactly "Type 01:", "Case 01:":
+   Types: Type 01: <variety title> Case 01: <concrete prompt> Case 02: ...
+   Type 02: <next variety> Case 01: ... (restart at Type 01 per concept;
+   continuous renumbering across the chapter happens downstream).
+5. Example:
+   {{types_example}}
+6. Mine CHAPTER SOURCE for ALL exercise problems and numerical varieties; fold
+   each into the concept it tests as Types/Cases.
+7. Omit Types for purely definitional concepts with zero assessable formats.
+   Every problem-solving, calculation, application, or exercise-backed concept
+   MUST have Types with at least two varieties and multiple Cases.
+8. Culmination rows MUST include Types for mixed multi-concept application problems.
+9. NEVER mention groups or group columns.""")
 
 
 def _concepts_system(subject: str) -> str:
@@ -1094,6 +1192,196 @@ def _split_mmd_into_chunks(mmd_text: str, max_chars: int | None = None) -> list[
     return [c for c in chunks if c.strip()]
 
 
+def _record_key(rec: dict) -> tuple[str, str]:
+    return (
+        (rec.get("topic") or "").lower().strip(),
+        bi.normalize_question_text(rec.get("concept_title", "")),
+    )
+
+
+def _types_body(details: str) -> str:
+    """Return the content of the Types section, or '' if absent."""
+    for label, content in cr.split_sections(details):
+        if label.strip().lower().startswith("type"):
+            return content.strip()
+    return ""
+
+
+def _has_meaningful_types(details: str) -> bool:
+    body = _types_body(details)
+    return len(body) > 12 and re.search(r"\bCase\b", body, re.IGNORECASE) is not None
+
+
+def _inject_types(details: str, types_body: str) -> str:
+    """Insert or replace the Types section in a concept_description string."""
+    if not types_body.strip():
+        return details
+    sections = cr.split_sections(details)
+    out: list[tuple[str, str]] = []
+    replaced = False
+    for label, content in sections:
+        if label.strip().lower().startswith("type"):
+            out.append(("Types", types_body.strip()))
+            replaced = True
+        else:
+            out.append((label, content))
+    if not replaced:
+        inserted = False
+        out = []
+        for label, content in sections:
+            if not inserted and label.strip().lower().startswith("misconception"):
+                out.append(("Types", types_body.strip()))
+                inserted = True
+            out.append((label, content))
+        if not inserted:
+            out.append(("Types", types_body.strip()))
+    return cr.join_sections(out)
+
+
+def _types_assign_system(subject: str) -> str:
+    s = (subject or "the subject").strip() or "the subject"
+    math_like = s.lower() in {"mathematics", "math", "physics"}
+    suffix = "math" if math_like else "descriptive"
+    return prompts.render(
+        "concepts.types_assign",
+        subject=s,
+        types_guidance=prompts.get_text(f"concepts.types_guidance.{suffix}"),
+        types_example=prompts.get_text("concepts.types_example"),
+    )
+
+
+def _description_refine_system(subject: str) -> str:
+    s = (subject or "the subject").strip() or "the subject"
+    return prompts.render("concepts.description_refine", subject=s)
+
+
+def _merge_types_from_fallback(
+    records: list[dict], fallback: list[dict],
+) -> list[dict]:
+    """Restore Types from an earlier snapshot when a later pass dropped them."""
+    fb_types = {
+        _record_key(r): _types_body(r.get("concept_details", ""))
+        for r in fallback
+        if _has_meaningful_types(r.get("concept_details", ""))
+    }
+    if not fb_types:
+        return records
+    restored = 0
+    for rec in records:
+        if _has_meaningful_types(rec.get("concept_details", "")):
+            continue
+        body = fb_types.get(_record_key(rec))
+        if body:
+            rec["concept_details"] = _inject_types(rec["concept_details"], body)
+            restored += 1
+    if restored:
+        progress.log(f"Restored Types on {restored} concept(s) from pre-pass snapshot.")
+    return records
+
+
+def _refine_descriptions_via_api(
+    records: list[dict], *, subject: str, mmd_text: str = "",
+) -> list[dict]:
+    """Dedicated Description-only API pass for source-grounded concept details."""
+    import json as _json
+
+    if not records:
+        return records
+    if not (mmd_text or "").strip():
+        progress.log("Description refinement skipped — no chapter source text.", level="warning")
+        return records
+
+    system = _description_refine_system(subject)
+    payload = _json.dumps({"rows": _records_to_api_rows(records)}, ensure_ascii=False)
+    user = (
+        f"Subject: {subject or 'general'}\n"
+        f"Concept map ({len(records)} rows) — refine Description only:\n"
+        + _trim(payload, 200_000)
+        + "\n\nCHAPTER SOURCE (ground each Description in this material):\n"
+        + _trim(mmd_text, 200_000)
+    )
+    progress.log(f"Refining descriptions for {len(records)} concepts (dedicated API pass).")
+    data = _openai_json(system, user)
+    out = _concept_rows_to_records(data)
+    if not out:
+        raise RuntimeError("description refinement returned no rows")
+
+    by_key = {_record_key(r): r for r in out}
+    merged: list[dict] = []
+    for rec in records:
+        updated = by_key.get(_record_key(rec))
+        if not updated:
+            merged.append(rec)
+            continue
+        # This pass is not allowed to lose existing Types.
+        if _has_meaningful_types(rec.get("concept_details", "")) and not _has_meaningful_types(
+            updated.get("concept_details", "")
+        ):
+            updated["concept_details"] = _inject_types(
+                updated.get("concept_details", ""),
+                _types_body(rec.get("concept_details", "")),
+            )
+        merged.append(updated)
+
+    progress.log("Description refinement complete.", level="success")
+    return merged
+
+
+def _assign_types_via_api(
+    records: list[dict], *, subject: str, mmd_text: str = "",
+) -> list[dict]:
+    """Dedicated Types-only API pass — mirrors manual types-first workflow."""
+    import json as _json
+
+    if not records:
+        return records
+    if not (mmd_text or "").strip():
+        progress.log("Types assignment skipped — no chapter source text.", level="warning")
+        return records
+    system = _types_assign_system(subject)
+    payload = _json.dumps({"rows": _records_to_api_rows(records)}, ensure_ascii=False)
+    user = (
+        f"Subject: {subject or 'general'}\n"
+        f"Concept map ({len(records)} rows) — add Types to each assessable concept:\n"
+        + _trim(payload, 200_000)
+        + "\n\nCHAPTER SOURCE (mine ALL exercise/numerical varieties from here):\n"
+        + _trim(mmd_text, 200_000)
+    )
+    progress.log(f"Assigning Types to {len(records)} concepts (dedicated API pass).")
+    data = _openai_json(system, user)
+    out = _concept_rows_to_records(data)
+    if not out:
+        raise RuntimeError("Types assignment returned no rows")
+    # Match by key; keep original row if API omitted it.
+    by_key = {_record_key(r): r for r in out}
+    merged: list[dict] = []
+    for rec in records:
+        updated = by_key.get(_record_key(rec))
+        if not updated:
+            merged.append(rec)
+            continue
+        # This pass is Types-only: keep the refined Description and any existing
+        # useful Misconception from the incoming record, and take only the Types
+        # body returned by the API.
+        types_body = _types_body(updated.get("concept_details", ""))
+        if types_body:
+            rec = dict(rec)
+            rec["concept_details"] = _inject_types(rec.get("concept_details", ""), types_body)
+        merged.append(rec)
+    with_types = sum(1 for r in merged if _has_meaningful_types(r.get("concept_details", "")))
+    progress.log(
+        f"Types assignment complete: {with_types}/{len(merged)} concepts have Types.",
+        level="success" if with_types else "warning",
+    )
+    if with_types < len(merged) // 2:
+        progress.log(
+            "Fewer than half the concepts have Types — check chapter source or "
+            "raise AEGIS_OPENAI_MAX_OUTPUT_TOKENS.",
+            level="warning",
+        )
+    return merged
+
+
 def _records_to_api_rows(records: list[dict]) -> list[dict]:
     """Serialize concept records for a consolidation API call."""
     return [
@@ -1193,7 +1481,23 @@ def concepts_from_mmd(mmd_text: str, *, subject: str = "",
         if not out:
             raise RuntimeError("live concept extraction returned no rows")
         progress.log(f"Merged to {len(out)} unique concepts.")
+        pre_consolidate = [dict(r) for r in out]
         out = _consolidate_concepts_via_api(out, subject=subject, mmd_text=mmd_text)
+        out = _merge_types_from_fallback(out, pre_consolidate)
+        out = _refine_descriptions_via_api(out, subject=subject, mmd_text=mmd_text)
+        out = _merge_types_from_fallback(out, pre_consolidate)
+        out = _assign_types_via_api(out, subject=subject, mmd_text=mmd_text)
+        out = _merge_types_from_fallback(out, pre_consolidate)
+        missing = sum(
+            1 for r in out
+            if not _has_meaningful_types(r.get("concept_details", ""))
+            and not cr.is_culmination(r.get("concept_title", ""))
+        )
+        if missing:
+            progress.log(
+                f"{missing} non-culmination concept(s) still lack Types after all passes.",
+                level="warning",
+            )
         progress.set_progress(1.0, label="Concept extraction complete")
         return out
     config.require_generation_live()
@@ -1214,15 +1518,12 @@ def concepts_from_mmd(mmd_text: str, *, subject: str = "",
             out.append({
                 "topic": topic,
                 "concept_title": title,
-                "concept_details": (
-                    f"Description: {line[:200]} "
-                    "// Misconception: commonly confused with related ideas."
-                ),
+                "concept_details": f"Description: {line[:200]}",
                 "keywords": ", ".join(title.lower().split()[:5]),
             })
     return out or [{
         "topic": topic, "concept_title": "Overview",
-        "concept_details": "Description: (empty document) // Misconception: none",
+        "concept_details": "Description: (empty document)",
         "keywords": "",
     }]
 
@@ -1295,15 +1596,18 @@ RS=Real-world Sense | GR=Graphical Reasoning.
 COUNTS (STRICT): {{min_t}}-{{max_t}} topics; every topic has
 {{min_ct}}-{{max_ct}} concepts. Order by dependency. No duplicates.
 
-CONCEPT DESCRIPTION FORMAT (MANDATORY): one string, exactly three sections,
-separated by " // ":
+CONCEPT DESCRIPTION FORMAT (MANDATORY): one string, sections separated by " // ":
 Description: <what the student should already know; 2-4 short lines; must not
 teach the chapter> // Types: <classify ALL distinct prerequisite-check
-varieties for this skill — use descriptive labels, NEVER "Type 01"/"Case 01"/
-"1.2" numbering: <variety title> — Case: <example prompt>; Case: <...>
-| <variety> — Case: <...>> // Misconception: <typical prior-knowledge gaps>.
-Include Types on every concept except pure vocabulary recall (VC tag with no
-check format). Generate generously; the team manually keeps what they need.
+varieties for this skill using zero-padded numeric labels exactly "Type 01:",
+"Case 01:": Type 01: <variety title> Case 01: <example prompt> Case 02: ...
+Type 02: <variety> Case 01: ...> // Misconception: <typical prior-knowledge gaps>.
+Description is the important lesson-planning input: source/syllabus-grounded,
+clear, and concise (2-4 compact sentences, not a chapter dump). Include Types
+only when the prerequisite has assessable check formats; pure vocabulary recall
+may omit Types. Include Misconception only when there is a real likely
+prior-knowledge error; never write N/A/None/filler. Restart at Type 01 per
+concept; continuous renumbering happens downstream.
 NEVER reference source artifacts and never the words "MMD".
 Do NOT mention groups or group columns.
 
@@ -1330,9 +1634,10 @@ fails "was this already expected knowledge before this grade?" (unsure or
 borderline -> REPLACE). Allow previous-grade ideas and foundational skills.
 STRUCTURE: output exactly the same number of topics, and per topic exactly
 the same number of concepts — substitute rejected rows, never delete slots.
-Keep the same schema and the Description: // Types: // Misconception: format
-with descriptive variety labels (no Type 01/Case 01 numbering), plus the tag
-(FL|NU|VC|RS|GR). Rewrite repetitive sibling names to be distinct.
+Keep the same schema and the Description: // Types: // Misconception format
+(Types and Misconception are optional when not useful), with zero-padded numeric
+labels (Type 01:, Case 01:) where Types exist, plus the tag (FL|NU|VC|RS|GR).
+Rewrite repetitive sibling names to be distinct.
 Return ONLY JSON with one key "topics". No markdown, no commentary.""")
 
 
