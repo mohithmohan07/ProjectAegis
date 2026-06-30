@@ -51,6 +51,9 @@ def test_concepts_live_processes_every_chunk(monkeypatch):
         g, "_consolidate_concepts_via_api",
         lambda records, **kw: records)
     monkeypatch.setattr(
+        g, "_refine_descriptions_via_api",
+        lambda records, **kw: records)
+    monkeypatch.setattr(
         g, "_assign_types_via_api",
         lambda records, **kw: records)
     doc = _big_doc(20)  # forces several chunks at 4000 chars

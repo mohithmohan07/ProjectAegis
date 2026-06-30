@@ -4,11 +4,14 @@ from app.services import generation as g
 
 def test_concepts_system_requires_numeric_types_guidance():
     system = g._concepts_system("Mathematics")
-    assert "Types are REQUIRED" in system
+    assert "Then include Types ONLY IF" in system
     assert "Types classify EVERY distinct question" in system
     # Numeric zero-padded labels (Type 01:/Case 01:), not descriptive labels.
     assert "Type 01:" in system and "Case 01:" in system
     assert "Type 01: Evaluating numerical exponential expressions" in system
+    assert "Misconception ONLY IF" in system
+    assert "Misconception is REQUIRED" not in system
+    assert "description-only editor" in g.prompts.get_text("concepts.description_refine")
     assert "preserve and enrich, never strip" in g.prompts.get_text("concepts.consolidate")
     assert "Types-only classifier" in g.prompts.get_text("concepts.types_assign")
 
@@ -67,6 +70,39 @@ def test_consolidate_accepts_mmd_for_types(monkeypatch):
     assert "Exercise problems here" in captured["user"]
 
 
+def test_refine_descriptions_via_api_preserves_existing_types(monkeypatch):
+    captured = {}
+
+    def fake_openai(system, user, **kw):
+        captured["system"] = system
+        captured["user"] = user
+        return {"rows": [{
+            "topic": "T", "concept": "C",
+            "concept_description": (
+                "Description: A clear source-grounded description for lesson planning. "
+                "It states what the concept means and when it is used. // "
+                "Misconception: Students may reverse the operation."
+            ),
+            "keywords": "k",
+        }]}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    records = [{
+        "topic": "T", "concept_title": "C",
+        "concept_details": (
+            "Description: weak // Types: Type 01: Evaluation Case 01: Find x Case 02: Find y "
+            "// Misconception: Students may reverse the operation."
+        ),
+        "keywords": "k",
+    }]
+    out = g._refine_descriptions_via_api(records, subject="Math", mmd_text="# Chapter\nConcept source.")
+    assert "description-only editor" in captured["system"]
+    assert "CHAPTER SOURCE" in captured["user"]
+    assert "clear source-grounded description" in out[0]["concept_details"]
+    # The description pass may not drop a pre-existing Types section.
+    assert "Types: Type 01: Evaluation Case 01: Find x" in out[0]["concept_details"]
+
+
 def test_assign_types_via_api(monkeypatch):
     captured = {}
 
@@ -95,6 +131,16 @@ def test_concepts_pipeline_runs_types_assign(monkeypatch):
 
     def fake_openai(system, user, **kw):
         calls.append(system[:40])
+        if "description-only" in system.lower():
+            return {"rows": [{
+                "topic": "Algebra", "concept": "Linear equations",
+                "concept_description": (
+                    "Description: Linear equations use inverse operations to isolate the variable "
+                    "while preserving equality. This supports solving one-step and two-step forms "
+                    "from the source material."
+                ),
+                "keywords": "linear",
+            }]}
         if "Types-only" in system:
             return {"rows": [{
                 "topic": "Algebra", "concept": "Linear equations",
@@ -114,5 +160,7 @@ def test_concepts_pipeline_runs_types_assign(monkeypatch):
 
     monkeypatch.setattr(g, "_openai_json", fake_openai)
     records = g.concepts_from_mmd("## Algebra\nSolve linear equations.", subject="Mathematics")
+    assert any("description-only" in c.lower() for c in calls)
     assert any("Types-only" in c for c in calls)
+    assert "preserving equality" in records[0]["concept_details"]
     assert g._has_meaningful_types(records[0]["concept_details"])
