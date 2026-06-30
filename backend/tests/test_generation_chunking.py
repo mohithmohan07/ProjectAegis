@@ -26,16 +26,65 @@ def test_split_small_doc_single_chunk():
     assert g._split_mmd_into_chunks("   ", max_chars=10) == []
 
 
+def test_dry_concepts_include_parent_and_culmination():
+    records = g.concepts_from_mmd(
+        "## Ratios\nEquivalent ratios\nRatio word problems",
+        subject="Mathematics",
+        board="CBSE",
+        grade="07",
+        unit="Numbers",
+        chapter_title="Ratios",
+    )
+    assert all("parent_concept" in r for r in records)
+    topics = {r["topic"] for r in records}
+    for topic in topics:
+        assert sum(
+            1 for r in records
+            if r["topic"] == topic and r["concept_title"].startswith("Culmination -")
+        ) == 1
+
+
+def test_skeleton_pass_strips_types_and_culminations(monkeypatch):
+    def fake_openai(system, user, **kw):
+        return {"rows": [
+            {"topic": "T", "parent_concept": "P", "concept": "C",
+             "concept_description": "Description: d // Types: Type 01: X Case 01: y",
+             "keywords": "k"},
+            {"topic": "T", "parent_concept": "P", "concept": "Culmination - T",
+             "concept_description": "Description: Recap", "keywords": "k"},
+        ]}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    records = g._extract_skeleton_via_api(
+        [{"text": "HEADING PATH: T\nSECTION TEXT:\nBody", "sections": []}],
+        meta=g._metadata(subject="Math"),
+    )
+    assert [r["concept_title"] for r in records] == ["C"]
+    assert "Types:" not in records[0]["concept_details"]
+
+
+def test_duplicate_concepts_are_merged_by_topic_and_title():
+    records = [
+        {"topic": "T", "parent_concept": "P", "concept_title": "Same",
+         "concept_details": "Description: first", "keywords": ""},
+        {"topic": "T", "parent_concept": "P", "concept_title": "Same",
+         "concept_details": "Description: second", "keywords": ""},
+    ]
+    assert len(g._merge_concept_records(records)) == 1
+
+
 def test_concepts_live_processes_every_chunk(monkeypatch):
     """Live concept extraction must call GPT for each chunk and merge results."""
     monkeypatch.setattr(g.config, "use_live_generation", lambda: True)
     monkeypatch.setattr(g, "_MMD_CHUNK_CHARS", 4000)
 
-    calls = {"n": 0}
+    calls = {"n": 0, "skeleton": 0}
 
     def fake_openai_json(system, user, **kw):
         calls["n"] += 1
-        n = calls["n"]
+        if "clean teachable concept skeleton" in system:
+            calls["skeleton"] += 1
+        n = calls["skeleton"] or calls["n"]
         # Each chunk yields two unique concepts.
         return {"rows": [
             {"topic": "Topic A", "concept": f"Concept {n}a",
@@ -56,12 +105,21 @@ def test_concepts_live_processes_every_chunk(monkeypatch):
     monkeypatch.setattr(
         g, "_assign_types_via_api",
         lambda records, **kw: records)
+    monkeypatch.setattr(
+        g, "_build_culminations_via_api",
+        lambda records, **kw: records)
+    monkeypatch.setattr(
+        g, "_repair_records_via_api",
+        lambda records, **kw: records)
+    monkeypatch.setattr(
+        g, "_validate_final_or_raise",
+        lambda records, **kw: {"ok": True, "errors": [], "summary": {}})
     doc = _big_doc(20)  # forces several chunks at 4000 chars
     records = g.concepts_from_mmd(doc, subject="Mathematics")
-    assert calls["n"] >= 3, "expected multiple chunks to be processed"
+    assert calls["skeleton"] >= 3, "expected multiple chunks to be processed"
     # Every chunk's concepts survive the merge (2 per chunk, all unique).
     titles = {r["concept_title"] for r in records}
-    assert len(titles) >= calls["n"] * 2
+    assert len(titles) >= calls["skeleton"] * 2
 
 
 def test_identify_questions_live_merges_and_dedupes(monkeypatch):

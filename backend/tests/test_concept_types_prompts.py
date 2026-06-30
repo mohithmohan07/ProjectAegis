@@ -4,16 +4,32 @@ from app.services import generation as g
 
 def test_concepts_system_requires_numeric_types_guidance():
     system = g._concepts_system("Mathematics")
-    assert "Then include Types ONLY IF" in system
-    assert "Types classify EVERY distinct question" in system
+    assert "Extract ONLY a clean teachable concept skeleton" in system
+    assert "No Types" in system
+    assert "no culmination rows" in system
+    assert "parent_concept" in system
     # Numeric zero-padded labels (Type 01:/Case 01:), not descriptive labels.
-    assert "Type 01:" in system and "Case 01:" in system
-    assert "Type 01: Evaluating numerical exponential expressions" in system
-    assert "Misconception ONLY IF" in system
+    types_system = g.prompts.get_text("concepts.types_assign.system")
+    assert "Type 01:" in types_system and "Case 01:" in types_system
+    assert "One Type = one distinct question/problem pattern" in types_system
     assert "Misconception is REQUIRED" not in system
-    assert "description-only editor" in g.prompts.get_text("concepts.description_refine")
-    assert "preserve and enrich, never strip" in g.prompts.get_text("concepts.consolidate")
-    assert "Types-only classifier" in g.prompts.get_text("concepts.types_assign")
+    assert "description-only editor" in g.prompts.get_text("concepts.description_refine.system")
+    assert "Merge duplicates" in g.prompts.get_text("concepts.canonicalize.system")
+    assert "Types-only classifier" in g.prompts.get_text("concepts.types_assign.system")
+    assert "source_evidence" in system
+    assert "must not be written to workbook" in system
+
+
+def test_split_prompt_contracts_are_separated():
+    skeleton = g.prompts.get_text("concepts.skeleton.system")
+    description = g.prompts.get_text("concepts.description_refine.system")
+    types = g.prompts.get_text("concepts.types_assign.system")
+    repair = g.prompts.get_text("concepts.repair.system")
+    assert "No Types" in skeleton and "no culmination rows" in skeleton
+    assert "Do not include Types" in description
+    assert "Preserve Description exactly" in types
+    assert "Culmination rows are not handled here" in types
+    assert "Preserve valid fields, including parent_concept, Types" in repair
 
 
 def test_has_meaningful_types():
@@ -49,7 +65,7 @@ def test_merge_types_from_fallback():
     assert g._has_meaningful_types(out[0]["concept_details"])
 
 
-def test_consolidate_accepts_mmd_for_types(monkeypatch):
+def test_canonicalize_uses_compact_skeleton_not_mmd(monkeypatch):
     captured = {}
 
     def fake_openai(system, user, **kw):
@@ -57,8 +73,7 @@ def test_consolidate_accepts_mmd_for_types(monkeypatch):
         return {"rows": [{
             "topic": "T", "concept": "C",
             "concept_description": (
-                "Description: d // Types: Direct evaluation — Case: Find x "
-                "// Misconception: m"
+                "Description: d // Misconception: m"
             ),
             "keywords": "k",
         }]}
@@ -66,11 +81,11 @@ def test_consolidate_accepts_mmd_for_types(monkeypatch):
     monkeypatch.setattr(g, "_openai_json", fake_openai)
     records = [{"topic": "T", "concept_title": "C", "concept_details": "Description: d // Misconception: m", "keywords": ""}]
     g._consolidate_concepts_via_api(records, subject="Math", mmd_text="# Chapter\nExercise problems here.")
-    assert "CHAPTER SOURCE" in captured["user"]
-    assert "Exercise problems here" in captured["user"]
+    assert "Draft skeleton map" in captured["user"]
+    assert "Exercise problems here" not in captured["user"]
 
 
-def test_refine_descriptions_via_api_preserves_existing_types(monkeypatch):
+def test_refine_descriptions_via_api_strips_existing_types(monkeypatch):
     captured = {}
 
     def fake_openai(system, user, **kw):
@@ -97,10 +112,10 @@ def test_refine_descriptions_via_api_preserves_existing_types(monkeypatch):
     }]
     out = g._refine_descriptions_via_api(records, subject="Math", mmd_text="# Chapter\nConcept source.")
     assert "description-only editor" in captured["system"]
-    assert "CHAPTER SOURCE" in captured["user"]
+    assert "RELEVANT SOURCE TEXT" in captured["user"]
     assert "clear source-grounded description" in out[0]["concept_details"]
-    # The description pass may not drop a pre-existing Types section.
-    assert "Types: Type 01: Evaluation Case 01: Find x" in out[0]["concept_details"]
+    # The description pass is not allowed to carry Types in the staged architecture.
+    assert "Types:" not in out[0]["concept_details"]
 
 
 def test_assign_types_via_api(monkeypatch):
@@ -145,13 +160,15 @@ def test_concepts_pipeline_runs_types_assign(monkeypatch):
             return {"rows": [{
                 "topic": "Algebra", "concept": "Linear equations",
                 "concept_description": (
-                    "Description: solve ax+b=c // "
+                    "Description: altered by model // "
                     "Types: Type 01: One-step Case 01: Solve x+2=5 Case 02: Solve x-3=1 "
                     "Type 02: Two-step Case 01: Solve 2x+1=7 Case 02: Solve 3x-2=4 "
                     "// Misconception: wrong inverse op"
                 ),
                 "keywords": "linear",
             }]}
+        if "Build culmination" in system:
+            return {"rows": []}
         return {"rows": [{
             "topic": "Algebra", "concept": "Linear equations",
             "concept_description": "Description: solve ax+b=c // Misconception: wrong inverse op",
@@ -163,4 +180,22 @@ def test_concepts_pipeline_runs_types_assign(monkeypatch):
     assert any("description-only" in c.lower() for c in calls)
     assert any("Types-only" in c for c in calls)
     assert "preserving equality" in records[0]["concept_details"]
+    assert "altered by model" not in records[0]["concept_details"]
     assert g._has_meaningful_types(records[0]["concept_details"])
+    assert sum(r["concept_title"].startswith("Culmination -") for r in records) == 1
+
+
+def test_pre_learning_excludes_exact_current_concepts():
+    current = [{
+        "topic": "Algebra",
+        "parent_concept": "Linear Equations",
+        "concept_title": "Solving One-Step Equations",
+        "concept_details": "Description: current chapter content",
+        "keywords": "",
+    }]
+    pre = g.pre_learning_from_rows(
+        current, subject="Mathematics", grade="07", board="CBSE",
+        chapter_title="Linear Equations", live=False)
+    titles = {r["concept_title"] for r in pre}
+    assert "Solving One-Step Equations" not in titles
+    assert all(r.get("parent_concept") for r in pre)

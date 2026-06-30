@@ -89,12 +89,12 @@ def test_concept_resused_across_books_merges_sources(client, db, first_chapter):
             json={"target_chapter_id": first_chapter["id"]}))
 
     first = upload_and_generate("NCERT")
-    assert first["concepts_created"] == 2
+    assert first["concepts_created"] == 3
     assert first["concepts_merged"] == 0
 
     second = upload_and_generate("RD Sharma")
     assert second["concepts_created"] == 0
-    assert second["concepts_merged"] == 2
+    assert second["concepts_merged"] == 3
 
     c = (db.query(models.Concept)
          .filter(models.Concept.concept_title.like("Refraction of light%")).one())

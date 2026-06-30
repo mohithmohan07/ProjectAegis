@@ -29,11 +29,28 @@ _TOPIC_SLICE = slice(len(CHAPTER_FIELDS), len(CHAPTER_FIELDS) + len(TOPIC_FIELDS
 _CONCEPT_START = len(CHAPTER_FIELDS) + len(TOPIC_FIELDS)
 
 
+def _concept_fields(header_row: tuple) -> list[str]:
+    """Concept-band fields in this workbook, including optional additions.
+
+    The canonical template may not yet contain ``parent_concept``. If a workbook
+    does include it in the Concept band, read it without shifting legacy columns.
+    """
+    group_markers = set(OBJECTIVE_GROUP_FIELDS + DESCRIPTIVE_GROUP_FIELDS)
+    fields: list[str] = []
+    for idx in range(_CONCEPT_START, len(header_row)):
+        name = str(header_row[idx] or "").strip()
+        if not name:
+            continue
+        if name in group_markers:
+            break
+        fields.append(name)
+    if not fields:
+        return CONCEPT_FIELDS
+    return fields
+
+
 def _concept_len(header_row: tuple) -> int:
-    """Concept-band length: current layout (with concept_source) or legacy."""
-    idx = _CONCEPT_START + LEGACY_CONCEPT_LEN
-    val = header_row[idx] if idx < len(header_row) else None
-    return LEGACY_CONCEPT_LEN + 1 if str(val or "").strip() == "concept_source" else LEGACY_CONCEPT_LEN
+    return len(_concept_fields(header_row))
 
 
 def _group_slice(kind: str, concept_len: int) -> slice:
@@ -194,7 +211,8 @@ def import_workbook(db: Session, path: Path) -> dict:
         ws = wb[sheet_name]
         fields = FIELDS_BY_KIND[kind]
         header = next(ws.iter_rows(min_row=2, max_row=2, values_only=True), ())
-        concept_len = _concept_len(header)
+        concept_fields = _concept_fields(header)
+        concept_len = len(concept_fields)
         concept_slice = slice(_CONCEPT_START, _CONCEPT_START + concept_len)
         gf = DESCRIPTIVE_GROUP_FIELDS if kind == "descriptive" else OBJECTIVE_GROUP_FIELDS
         gslice = _group_slice(kind, concept_len)
@@ -207,7 +225,7 @@ def import_workbook(db: Session, path: Path) -> dict:
                 continue
             chap = _band(row, CHAPTER_FIELDS, _CHAPTER_SLICE)
             top = _band(row, TOPIC_FIELDS, _TOPIC_SLICE)
-            con = _band(row, CONCEPT_FIELDS[:concept_len], concept_slice)
+            con = _band(row, concept_fields, concept_slice)
             grp = _band(row, gf, gslice)
 
             if not chap.get("chapter_title"):
@@ -280,6 +298,7 @@ def import_workbook(db: Session, path: Path) -> dict:
                 concept = models.Concept(
                     topic_id=topic.id, concept_title=c_title,
                     concept_display_name=con.get("concept_display_name", ""),
+                    parent_concept=con.get("parent_concept", ""),
                     concept_details=con.get("concept_details", ""),
                     keywords=con.get("keywords", ""),
                     digicards=con.get("digicards", ""),
@@ -292,6 +311,8 @@ def import_workbook(db: Session, path: Path) -> dict:
             elif c_source:
                 # Same concept arriving from another book: accumulate sources.
                 concept.sources = merge_sources(concept.sources, c_source)
+            if con.get("parent_concept") and not concept.parent_concept:
+                concept.parent_concept = con.get("parent_concept", "")
             concepts[c_key] = concept
 
             # ---- Group ----

@@ -68,15 +68,22 @@ def test_deposit_applies_numbering_recap_titlecase_and_topic_columns(db):
 
     records = [
         {"topic": "operations on numbers", "concept_title": "addition of integers",
+         "parent_concept": "integer operations",
          "concept_details": ("Description: a // Types: Type 01: Direct Case 01: 2+3 "
                              "Case 02: 5+9 // Misconception: m"), "keywords": ""},
         {"topic": "operations on numbers", "concept_title": "Culmination - Operations On Numbers",
+         "parent_concept": "Culmination",
          "concept_details": ("Description: a long synthesis paragraph // "
                              "Types: Type 01: Mixed Case 01: combine ops // "
                              "Misconception: keep me"), "keywords": ""},
         {"topic": "powers and roots", "concept_title": "squares of numbers",
+         "parent_concept": "powers",
          "concept_details": ("Description: b // Types: Type 01: Compute Case 01: 4^2 "
                              "// Misconception: m"), "keywords": ""},
+        {"topic": "powers and roots", "concept_title": "Culmination - Powers and Roots",
+         "parent_concept": "Culmination",
+         "concept_details": ("Description: recap // Types: Type 01: Mixed Case 01: combine powers "
+                             "// Misconception: keep me"), "keywords": ""},
     ]
     build_concepts._deposit_concepts(db, chapter, records, "Post", "")
     build_concepts._sync_chapter_topic_summary(chapter)
@@ -131,6 +138,36 @@ def test_writer_leaves_group_columns_empty_for_concept_rows(db):
     assert row[basic_idx] == ""
     assert row[basic_idx + 1] == ""
     assert row[basic_idx + 2] == ""
+
+
+def test_writer_falls_back_parent_concept_without_optional_column(db):
+    concept = db.query(models.Concept).join(models.Topic).join(models.Chapter).first()
+    concept.parent_concept = "Cell Organisation"
+    row = writer._concept_to_row(concept, "objective")
+    related_idx = bi.OBJECTIVE_FIELDS.index("related_concepts")
+    assert "parent: Cell Organisation" in row[related_idx]
+
+
+def test_append_concepts_uses_optional_parent_concept_column(db, tmp_path):
+    import openpyxl
+
+    concept = db.query(models.Concept).join(models.Topic).join(models.Chapter).first()
+    concept.parent_concept = "Cell Organisation"
+    db.flush()
+
+    path = tmp_path / "parent_template.xlsx"
+    wb = writer._new_workbook()
+    ws = wb[bi.SHEET_OBJECTIVE]
+    insert_at = bi.OBJECTIVE_FIELDS.index("concept_display_name") + 2
+    ws.insert_cols(insert_at)
+    ws.cell(row=2, column=insert_at, value="parent_concept")
+    wb.save(path)
+
+    writer.append_concepts(db, path, [concept.id])
+    out = openpyxl.load_workbook(path)[bi.SHEET_OBJECTIVE]
+    headers = [c.value for c in out[2]]
+    parent_idx = headers.index("parent_concept") + 1
+    assert out.cell(row=3, column=parent_idx).value == "Cell Organisation"
 
 
 def test_roundtrip_recovers_clean_titles(db):

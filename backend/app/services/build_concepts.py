@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from .. import config, models
 from .. import bulk_import as bi
 from ..bulk_import import writer
-from . import concept_cleanup, concept_refiner, generation, mmd, progress
+from . import concept_cleanup, concept_refiner, concept_validator, generation, mmd, progress
 
 
 def _find_concept_in_chapter(chapter: models.Chapter, title: str) -> models.Concept | None:
@@ -67,6 +67,7 @@ def _add_concept(db: Session, topic: models.Topic, rec: dict,
         concept_title=rec["concept_title"],
         # Display name stays CLEAN; the writer composes the tagged title column.
         concept_display_name=rec["concept_title"],
+        parent_concept=rec.get("parent_concept", ""),
         concept_details=rec.get("concept_details", ""),
         keywords=rec.get("keywords", ""),
         sources=source_book.strip(),
@@ -101,6 +102,28 @@ def _deposit_concepts(
     # this pass only enforces the numbering/format the team requires.
     records = [concept_cleanup.clean_concept_record(dict(r)) for r in records]
     records = concept_refiner.refine_chapter(records)
+    report = concept_validator.validate_concept_rows(
+        records,
+        allow_types=True,
+        require_culmination=pre_post == "Post",
+        allow_culmination=True,
+    )
+    fatal = [
+        e for e in report["errors"]
+        if e["severity"] == "error"
+        and e["code"] in {
+            "required", "required_parent", "description_prefix", "source_artifact",
+            "types_format", "case_without_type", "type_without_case",
+            "culmination_description", "culmination_count", "culmination_order",
+            "section_number", "empty_types",
+        }
+    ]
+    progress.log(
+        f"Deposit validation: {len(fatal)} fatal error(s), "
+        f"{report['summary'].get('warnings', 0)} warning(s).")
+    if fatal:
+        codes = ", ".join(sorted({e["code"] for e in fatal}))
+        raise ValueError(f"concept validation failed before deposit: {codes}")
 
     created_ids: list[int] = []
     merged_ids: list[int] = []
@@ -188,7 +211,17 @@ def generate_post_learning(db: Session, job_id: int, target_chapter_id: int) -> 
     if not job.mmd_text:
         raise ValueError("convert the uploaded document to MMD before generating")
     progress.log(f"Post-learning generation into chapter '{chapter.chapter_title}'.")
-    records = generation.concepts_from_mmd(job.mmd_text, subject=chapter.subject)
+    records = generation.concepts_from_mmd(
+        job.mmd_text,
+        subject=chapter.subject,
+        board=chapter.board,
+        grade=chapter.grade,
+        unit=chapter.unit,
+        chapter_title=chapter.chapter_title,
+        chapter_id=chapter.id,
+        chapter_code=chapter.chapter_code,
+        learning_kind="Post",
+    )
     created_ids, merged_ids = _deposit_concepts(
         db, chapter, records, "Post", job.source_book)
     _sync_chapter_topic_summary(chapter)
@@ -209,6 +242,11 @@ def generate_post_learning(db: Session, job_id: int, target_chapter_id: int) -> 
     progress.log(
         f"Created {len(created_ids)} post-learning concepts "
         f"({len(merged_ids)} merged).", level="success")
+    progress.log(f"Output workbook path: {config.BULK_IMPORT_OUTPUT}")
+    progress.log(
+        "Parent concept export: "
+        + ("parent_concept column" if written.get("parent_column") else "related_concepts fallback")
+    )
     return {
         "job_id": job_id,
         "concepts_created": len(created_ids),
@@ -253,11 +291,21 @@ def generate_pre_learning_from_upload(db: Session, job_id: int, target_chapter_i
     # Extract the chapter's concept map first, then derive prerequisites from
     # it. Live mode runs the full dependency-architecture derivation (syllabus
     # filter + auditor pass); dry mode keeps the deterministic framing.
-    base = generation.concepts_from_mmd(job.mmd_text, subject=chapter.subject)
+    base = generation.concepts_from_mmd(
+        job.mmd_text,
+        subject=chapter.subject,
+        board=chapter.board,
+        grade=chapter.grade,
+        unit=chapter.unit,
+        chapter_title=chapter.chapter_title,
+        chapter_id=chapter.id,
+        chapter_code=chapter.chapter_code,
+        learning_kind="Post",
+    )
     pre_records = generation.pre_learning_from_rows(
         base,
         subject=chapter.subject, grade=chapter.grade, board=chapter.board,
-        chapter_title=chapter.chapter_title,
+        chapter_title=chapter.chapter_title, unit=chapter.unit,
     )
     created_ids, merged_ids = _deposit_concepts(
         db, chapter, pre_records, "Pre", job.source_book)
@@ -279,6 +327,11 @@ def generate_pre_learning_from_upload(db: Session, job_id: int, target_chapter_i
     progress.log(
         f"Created {len(created_ids)} pre-learning concepts "
         f"({len(merged_ids)} merged).", level="success")
+    progress.log(f"Output workbook path: {config.BULK_IMPORT_OUTPUT}")
+    progress.log(
+        "Parent concept export: "
+        + ("parent_concept column" if written.get("parent_column") else "related_concepts fallback")
+    )
     return {
         "job_id": job_id,
         "concepts_created": len(created_ids),
@@ -313,6 +366,7 @@ def generate_pre_learning_from_existing(
             {
                 "topic": rec["topic"],
                 "concept_title": rec["concept_title"],
+                "parent_concept": rec.get("parent_concept", ""),
                 "concept_details": rec["concept_details"],
                 "keywords": rec.get("keywords", ""),
             }

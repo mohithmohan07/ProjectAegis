@@ -13,6 +13,8 @@ import re
 
 from .. import bulk_import as bi
 from .. import config, models
+from . import concept_cleanup
+from . import concept_validator as cv
 from . import katex_rules as kr
 from . import concept_refiner as cr
 from . import prompts
@@ -1066,17 +1068,161 @@ RULES:
 9. NEVER mention groups or group columns.""")
 
 
+prompts.register(
+    "concepts.skeleton.system", category=_CONCEPTS_CAT,
+    label="Concept skeleton extraction system prompt",
+    default="""\
+Extract ONLY a clean teachable concept skeleton from a textbook section.
+Return ONLY strict JSON:
+{"rows":[{"topic":"","parent_concept":"","concept":"","concept_description":"","keywords":"","source_evidence":""}]}.
+
+Rules:
+- Use the textbook section heading as topic when available; strip section numbers.
+- Do not invent textbook topics; preserve the section order from the source.
+- Do not create exercise, example, review, or practice topics.
+- Parent Concept is a meaningful cluster heading within a topic.
+- Concept is one small teachable mastery unit.
+- Concept names must be specific and non-repetitive.
+- No Types, no culmination rows, no groups, no assessment labels.
+- No vague names: Introduction, Overview, Basics, Basic Concepts, Misc,
+  Miscellaneous, Examples, Practice, Definition of, Types of.
+- Avoid repeated sibling openers.
+- concept_description starts with "Description:" and is 2-4 compact sentences.
+- Keep source_evidence short: the phrase/heading/problem source that justifies the concept.
+- source_evidence is for validation/debug only and must not be written to workbook.
+""")
+
+prompts.register(
+    "concepts.canonicalize.system", category=_CONCEPTS_CAT,
+    label="Chapter-wide concept canonicalization system prompt",
+    default="""\
+Clean a full chapter concept skeleton after all chunks have been merged.
+Return ONLY strict JSON with the same schema:
+{"rows":[{"topic":"","parent_concept":"","concept":"","concept_description":"","keywords":"","source_evidence":""}]}.
+
+Rules:
+- Merge duplicates and ensure each concept appears once.
+- Remove weak filler concepts.
+- Preserve textbook/topic order.
+- Rewrite repetitive names.
+- Parent concepts should group 3-8 related concepts where possible.
+- Do not create culmination rows.
+- Do not generate Types.
+- Do not rewrite good concepts unnecessarily.
+- Do not invent exercise/example/review/practice topics.
+- Never add filler concepts.
+""")
+
+prompts.register(
+    "concepts.description_refine.system", category=_CONCEPTS_CAT,
+    label="Description-only concept refinement system prompt",
+    default="""\
+You are a description-only editor. Rewrite only Description sections for a refined concept map.
+Return ONLY strict JSON:
+{"rows":[{"topic":"","parent_concept":"","concept":"","concept_description":"","keywords":""}]}.
+
+Rules:
+- Keep topic, parent_concept, concept name, keywords, and row order unchanged.
+- Rewrite only the Description section.
+- Description answers: what the concept is; what rule/process/relationship/method matters;
+  when/why it is used; what indicates mastery.
+- Use 45-90 words unless the concept is very simple.
+- Do not include Types.
+- Misconception may be included only if specific and useful.
+- No N/A, None, Not applicable, or placeholder text.
+- No source artifacts such as MMD, Example 3, Fig 2, Table 1, Exercise 1.1, or page references.
+""")
+
+prompts.register(
+    "concepts.types_assign.system", category=_CONCEPTS_CAT,
+    label="Types-only concept assignment system prompt",
+    default="""\
+You are a Types-only classifier. Assign Types only for assessable concepts.
+Return ONLY strict JSON:
+{"rows":[{"topic":"","parent_concept":"","concept":"","concept_description":"","keywords":""}]}.
+
+Rules:
+- Preserve Description exactly.
+- Preserve topic, parent_concept, concept title, keywords, and row order exactly.
+- Insert or replace only Types.
+- One Type = one distinct question/problem pattern.
+- One Case = one concrete question prompt/stem.
+- For math/physics/chemistry, mine examples and exercises deeply.
+- For theory subjects, include explain, compare, reason, diagram, data/source-based,
+  application, and misconception-correction formats where relevant.
+- Omit Types only for pure vocabulary/recall concepts with zero meaningful assessable varieties.
+- Culmination rows are not handled here.
+- Use zero-padded labels exactly "Type 01:" and "Case 01:".
+- Do not rewrite Misconception except to keep an existing useful one in place.
+""")
+
+prompts.register(
+    "concepts.culmination.system", category=_CONCEPTS_CAT,
+    label="Topic culmination builder system prompt",
+    default="""\
+Build culmination rows after normal concepts and Types are finalized.
+Return ONLY strict JSON:
+{"rows":[{"topic":"","parent_concept":"","concept":"","concept_description":"","keywords":""}]}.
+
+Rules:
+- Exactly one culmination row per topic.
+- Name: "Culmination - <A>, <B> and <C>".
+- Use the main ideas in that topic.
+- Description must be exactly: "Description: Recap".
+- Types must contain mixed multi-concept application/problem formats.
+- Place culmination last within the topic.
+- Do not change normal rows except to position the culmination correctly.
+- Do not create culmination during chunk extraction; this pass runs only after the full topic map exists.
+""")
+
+prompts.register(
+    "concepts.repair.system", category=_CONCEPTS_CAT,
+    label="Concept validation repair system prompt",
+    default="""\
+Repair only concept rows that failed validation.
+Return ONLY strict JSON:
+{"rows":[{"topic":"","parent_concept":"","concept":"","concept_description":"","keywords":""}]}.
+
+Rules:
+- Fix only the listed issues.
+- Preserve valid rows.
+- Preserve valid fields, including parent_concept, Types, and useful Misconception.
+- Do not rewrite the full chapter unnecessarily.
+- Never add filler.
+- Keep strict JSON.
+""")
+
+
 def _concepts_system(subject: str) -> str:
-    s = (subject or "the subject").strip() or "the subject"
-    math_like = s.lower() in {"mathematics", "math", "physics"}
-    suffix = "math" if math_like else "descriptive"
-    return prompts.render(
-        "concepts.system",
-        subject=s,
-        detail_line=prompts.get_text(f"concepts.detail.{suffix}"),
-        name_templates=prompts.get_text(f"concepts.name_templates.{suffix}"),
-        types_guidance=prompts.get_text(f"concepts.types_guidance.{suffix}"),
-        types_example=prompts.get_text("concepts.types_example"),
+    return prompts.get_text("concepts.skeleton.system")
+
+
+def _metadata(
+    *, subject: str = "", board: str = "", grade: str = "", unit: str = "",
+    chapter_title: str = "", chapter_id: int | str | None = None,
+    chapter_code: str = "", learning_kind: str = "Post",
+) -> dict:
+    return {
+        "subject": subject or "",
+        "board": board or "",
+        "grade": grade or "",
+        "unit": unit or "",
+        "chapter_title": chapter_title or "",
+        "chapter_id": "" if chapter_id is None else str(chapter_id),
+        "chapter_code": chapter_code or "",
+        "learning_kind": learning_kind or "Post",
+    }
+
+
+def _metadata_block(meta: dict) -> str:
+    return (
+        f"Subject: {meta.get('subject', '')}\n"
+        f"Board: {meta.get('board', '')}\n"
+        f"Grade: {meta.get('grade', '')}\n"
+        f"Unit: {meta.get('unit', '')}\n"
+        f"Chapter: {meta.get('chapter_title', '')}\n"
+        f"Chapter ID/Code: {meta.get('chapter_id', '')} / {meta.get('chapter_code', '')}\n"
+        f"Learning kind: {meta.get('learning_kind', 'Post')}"
     )
 
 
@@ -1192,6 +1338,117 @@ def _split_mmd_into_chunks(mmd_text: str, max_chars: int | None = None) -> list[
     return [c for c in chunks if c.strip()]
 
 
+_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
+_EXERCISE_RE = re.compile(
+    r"\b(exercise|ex\.|review|practice|problems?|questions?)\b", re.IGNORECASE)
+_SECTION_NUM_PREFIX_RE = re.compile(
+    r"^\s*(?:chapter\s+)?(?:\d+(?:\.\d+)*|[A-Z])[\).\s:-]+", re.IGNORECASE)
+
+
+def _strip_section_number(title: str) -> str:
+    title = re.sub(r"\s+", " ", (title or "").strip())
+    return _SECTION_NUM_PREFIX_RE.sub("", title).strip() or title
+
+
+def parse_mmd_sections(mmd_text: str) -> list[dict]:
+    """Parse MMD into ordered heading-aware sections with exercise tagging."""
+    text = mmd_text or ""
+    lines = text.splitlines()
+    sections: list[dict] = []
+    stack: list[tuple[int, str]] = []
+    current: dict | None = None
+
+    def finish() -> None:
+        if current and (current["body"].strip() or current["heading_path"]):
+            body = current["body"]
+            exercise_blocks = []
+            paras = [p.strip() for p in re.split(r"\n\s*\n", body) if p.strip()]
+            for para in paras:
+                if _EXERCISE_RE.search(para):
+                    exercise_blocks.append(para)
+            current["exercise_blocks"] = exercise_blocks
+            sections.append(current)
+
+    for line in lines:
+        m = _HEADING_RE.match(line)
+        if m:
+            finish()
+            level = len(m.group(1))
+            heading = _strip_section_number(m.group(2))
+            stack = [(lv, h) for lv, h in stack if lv < level]
+            stack.append((level, heading))
+            current = {"heading": heading, "heading_path": [h for _, h in stack],
+                       "body": line + "\n"}
+            continue
+        if current is None:
+            current = {"heading": "", "heading_path": [], "body": ""}
+        current["body"] += line + "\n"
+    finish()
+    if not sections and text.strip():
+        sections = [{
+            "heading": "General",
+            "heading_path": ["General"],
+            "body": text,
+            "exercise_blocks": [
+                p.strip() for p in re.split(r"\n\s*\n", text) if _EXERCISE_RE.search(p)
+            ],
+        }]
+    for i, section in enumerate(sections):
+        section["previous_heading"] = sections[i - 1]["heading"] if i else ""
+        section["next_heading"] = sections[i + 1]["heading"] if i + 1 < len(sections) else ""
+    return sections
+
+
+def _format_section_chunk(sections: list[dict]) -> str:
+    blocks = []
+    for section in sections:
+        exercises = "\n".join(section.get("exercise_blocks") or [])
+        block = (
+            "HEADING PATH: " + " > ".join(section.get("heading_path") or []) + "\n"
+            f"PREVIOUS HEADING: {section.get('previous_heading', '')}\n"
+            f"NEXT HEADING: {section.get('next_heading', '')}\n"
+            "SECTION TEXT:\n" + section.get("body", "")
+        )
+        if exercises:
+            block += "\nEXERCISE BLOCKS FOR TYPES PASS:\n" + exercises
+        blocks.append(block.strip())
+    return "\n\n--- SECTION ---\n\n".join(blocks)
+
+
+def _section_aware_chunks(mmd_text: str, max_chars: int | None = None) -> list[dict]:
+    """Pack parsed sections into chunks while preserving heading context."""
+    if max_chars is None:
+        max_chars = _MMD_CHUNK_CHARS
+    sections = parse_mmd_sections(mmd_text)
+    chunks: list[dict] = []
+    buf: list[dict] = []
+    for section in sections:
+        candidate = buf + [section]
+        if buf and len(_format_section_chunk(candidate)) > max_chars:
+            chunks.append({"sections": buf, "text": _format_section_chunk(buf)})
+            buf = [section]
+        else:
+            buf = candidate
+    if buf:
+        chunks.append({"sections": buf, "text": _format_section_chunk(buf)})
+    return chunks
+
+
+def _source_for_topic(topic: str, sections: list[dict]) -> str:
+    """Return source/exercise context most relevant to a topic."""
+    topic_n = _strip_section_number(topic).lower()
+    selected = [
+        s for s in sections
+        if topic_n and (
+            topic_n == (s.get("heading") or "").lower()
+            or topic_n in " > ".join(s.get("heading_path") or []).lower()
+        )
+    ]
+    if not selected:
+        selected = sections
+    return _format_section_chunk(selected)
+
+
 def _record_key(rec: dict) -> tuple[str, str]:
     return (
         (rec.get("topic") or "").lower().strip(),
@@ -1239,20 +1496,11 @@ def _inject_types(details: str, types_body: str) -> str:
 
 
 def _types_assign_system(subject: str) -> str:
-    s = (subject or "the subject").strip() or "the subject"
-    math_like = s.lower() in {"mathematics", "math", "physics"}
-    suffix = "math" if math_like else "descriptive"
-    return prompts.render(
-        "concepts.types_assign",
-        subject=s,
-        types_guidance=prompts.get_text(f"concepts.types_guidance.{suffix}"),
-        types_example=prompts.get_text("concepts.types_example"),
-    )
+    return prompts.get_text("concepts.types_assign.system")
 
 
 def _description_refine_system(subject: str) -> str:
-    s = (subject or "the subject").strip() or "the subject"
-    return prompts.render("concepts.description_refine", subject=s)
+    return prompts.get_text("concepts.description_refine.system")
 
 
 def _merge_types_from_fallback(
@@ -1279,8 +1527,144 @@ def _merge_types_from_fallback(
     return records
 
 
+def _ensure_parent_concepts(records: list[dict]) -> list[dict]:
+    """Fill a conservative parent cluster when the model omitted one."""
+    for rec in records:
+        if cr.is_culmination(rec.get("concept_title", "")):
+            rec.setdefault("parent_concept", "Culmination")
+        elif not (rec.get("parent_concept") or "").strip():
+            rec["parent_concept"] = rec.get("topic", "") or "Core Concepts"
+    return records
+
+
+def _strip_types_from_records(records: list[dict]) -> list[dict]:
+    for rec in records:
+        sections = [
+            (label, content)
+            for label, content in cr.split_sections(rec.get("concept_details", ""))
+            if not label.lower().startswith("type")
+        ]
+        if sections:
+            rec["concept_details"] = cr.join_sections(sections)
+    return records
+
+
+def _validation_options(stage: str) -> dict:
+    return {
+        "skeleton": {"allow_types": False, "require_culmination": False, "allow_culmination": False},
+        "canonicalize": {"allow_types": False, "require_culmination": False, "allow_culmination": False},
+        "description": {"allow_types": False, "require_culmination": False, "allow_culmination": False},
+        "types": {"allow_types": True, "require_culmination": False, "allow_culmination": False},
+        "culmination": {"allow_types": True, "require_culmination": True, "allow_culmination": True},
+        "final": {"allow_types": True, "require_culmination": True, "allow_culmination": True},
+    }.get(stage, {"allow_types": True, "require_culmination": False, "allow_culmination": True})
+
+
+def _merge_repaired_rows(records: list[dict], repaired: list[dict]) -> list[dict]:
+    if len(repaired) == len(records):
+        return repaired
+    by_key = {_record_key(r): r for r in repaired}
+    by_title = {bi.normalize_question_text(r.get("concept_title", "")): r for r in repaired}
+    out: list[dict] = []
+    for rec in records:
+        replacement = by_key.get(_record_key(rec)) or by_title.get(
+            bi.normalize_question_text(rec.get("concept_title", "")))
+        out.append(replacement or rec)
+    return out
+
+
+_FATAL_CODES = {
+    "required", "required_parent", "description_prefix", "duplicate_title",
+    "duplicate_topic_concept", "source_artifact", "types_too_early",
+    "culmination_too_early", "types_format", "case_without_type",
+    "type_without_case", "culmination_description", "culmination_count",
+    "culmination_order", "section_number", "empty_types",
+}
+
+
+def _fatal_errors(report: dict) -> list[dict]:
+    return [
+        e for e in report.get("errors", [])
+        if e.get("severity") == "error" and e.get("code") in _FATAL_CODES
+    ]
+
+
+def _repair_records_via_api(
+    records: list[dict], *, meta: dict, stage: str, source_context: str = "",
+    max_attempts: int = 2, strict: bool = False,
+) -> list[dict]:
+    """Validate rows and ask the repair prompt to fix hard failures."""
+    records = _ensure_parent_concepts(records)
+    opts = _validation_options(stage)
+    for attempt in range(max_attempts + 1):
+        report = cv.validate_concept_rows(records, **opts)
+        hard = [e for e in report["errors"] if e["severity"] == "error"]
+        progress.log(
+            f"{stage}: validation found {len(hard)} error(s), "
+            f"{report['summary'].get('warnings', 0)} warning(s).")
+        if not hard:
+            if report["errors"]:
+                progress.log(
+                    f"{stage}: validation passed with {len(report['errors'])} warning(s).")
+            return records
+        if attempt >= max_attempts:
+            fatal = _fatal_errors(report)
+            progress.log(
+                f"{stage}: keeping best output with {len(hard)} validation error(s).",
+                level="warning",
+            )
+            if strict and fatal:
+                codes = ", ".join(sorted({e["code"] for e in fatal}))
+                raise RuntimeError(
+                    f"{stage} validation failed after repair attempts: {codes}"
+                )
+            return records
+        import json as _json
+        failed_indexes = sorted({e["row_index"] for e in hard if e["row_index"] >= 0})
+        failed_rows = [records[i] for i in failed_indexes if i < len(records)]
+        user = (
+            _metadata_block(meta)
+            + f"\nStage: {stage}\nValidation errors:\n"
+            + _json.dumps(hard, ensure_ascii=False)
+            + "\nFailed rows:\n"
+            + _json.dumps({"rows": _records_to_api_rows(failed_rows)}, ensure_ascii=False)
+        )
+        if source_context:
+            user += "\nRelevant source context:\n" + _trim(source_context, 120_000)
+        data = _openai_json(prompts.get_text("concepts.repair.system"), user)
+        repaired = _concept_rows_to_records(data)
+        if not repaired:
+            progress.log(f"{stage}: repair attempt returned no rows.", level="warning")
+            return records
+        if len(repaired) == len(failed_indexes):
+            next_records = list(records)
+            for idx, repaired_row in zip(failed_indexes, repaired):
+                if idx < len(next_records):
+                    next_records[idx] = repaired_row
+            records = next_records
+        else:
+            records = _merge_repaired_rows(records, repaired)
+        records = _ensure_parent_concepts(records)
+        progress.log(f"{stage}: repaired {len(repaired)} row(s) on attempt {attempt + 1}.")
+    return records
+
+
+def _validate_final_or_raise(records: list[dict], *, stage: str = "final") -> dict:
+    report = cv.validate_concept_rows(
+        records, allow_types=True, require_culmination=True, allow_culmination=True)
+    fatal = _fatal_errors(report)
+    progress.log(
+        f"{stage}: final validation found {len(fatal)} fatal error(s), "
+        f"{report['summary'].get('warnings', 0)} warning(s).")
+    if fatal:
+        codes = ", ".join(sorted({e["code"] for e in fatal}))
+        raise RuntimeError(f"{stage} validation failed: {codes}")
+    return report
+
+
 def _refine_descriptions_via_api(
     records: list[dict], *, subject: str, mmd_text: str = "",
+    meta: dict | None = None, sections: list[dict] | None = None,
 ) -> list[dict]:
     """Dedicated Description-only API pass for source-grounded concept details."""
     import json as _json
@@ -1291,44 +1675,50 @@ def _refine_descriptions_via_api(
         progress.log("Description refinement skipped — no chapter source text.", level="warning")
         return records
 
+    meta = meta or _metadata(subject=subject)
+    sections = sections or parse_mmd_sections(mmd_text)
     system = _description_refine_system(subject)
-    payload = _json.dumps({"rows": _records_to_api_rows(records)}, ensure_ascii=False)
-    user = (
-        f"Subject: {subject or 'general'}\n"
-        f"Concept map ({len(records)} rows) — refine Description only:\n"
-        + _trim(payload, 200_000)
-        + "\n\nCHAPTER SOURCE (ground each Description in this material):\n"
-        + _trim(mmd_text, 200_000)
-    )
     progress.log(f"Refining descriptions for {len(records)} concepts (dedicated API pass).")
-    data = _openai_json(system, user)
-    out = _concept_rows_to_records(data)
-    if not out:
+    topics: dict[str, list[dict]] = {}
+    for rec in records:
+        topics.setdefault(rec.get("topic", ""), []).append(rec)
+    refined_rows: list[dict] = []
+    for topic, topic_records in topics.items():
+        payload = _json.dumps({"rows": _records_to_api_rows(topic_records)}, ensure_ascii=False)
+        source = _source_for_topic(topic, sections)
+        user = (
+            _metadata_block(meta)
+            + f"\nTopic: {topic}\nConcept map — refine Description only:\n"
+            + payload
+            + "\n\nRELEVANT SOURCE TEXT:\n"
+            + _trim(source, 220_000)
+        )
+        data = _openai_json(system, user)
+        refined_rows.extend(_concept_rows_to_records(data))
+    if not refined_rows:
         raise RuntimeError("description refinement returned no rows")
 
-    by_key = {_record_key(r): r for r in out}
+    by_key = {_record_key(r): r for r in refined_rows}
     merged: list[dict] = []
     for rec in records:
         updated = by_key.get(_record_key(rec))
         if not updated:
             merged.append(rec)
             continue
-        # This pass is not allowed to lose existing Types.
-        if _has_meaningful_types(rec.get("concept_details", "")) and not _has_meaningful_types(
-            updated.get("concept_details", "")
-        ):
-            updated["concept_details"] = _inject_types(
-                updated.get("concept_details", ""),
-                _types_body(rec.get("concept_details", "")),
-            )
+        # Description pass must not preserve or introduce Types in the new architecture.
+        updated = _strip_types_from_records([updated])[0]
+        updated["parent_concept"] = updated.get("parent_concept") or rec.get("parent_concept", "")
         merged.append(updated)
 
-    progress.log("Description refinement complete.", level="success")
+    merged = _repair_records_via_api(
+        merged, meta=meta, stage="description", source_context=mmd_text)
+    progress.log(f"Descriptions refined: {len(merged)}.", level="success")
     return merged
 
 
 def _assign_types_via_api(
     records: list[dict], *, subject: str, mmd_text: str = "",
+    meta: dict | None = None, sections: list[dict] | None = None,
 ) -> list[dict]:
     """Dedicated Types-only API pass — mirrors manual types-first workflow."""
     import json as _json
@@ -1338,18 +1728,26 @@ def _assign_types_via_api(
     if not (mmd_text or "").strip():
         progress.log("Types assignment skipped — no chapter source text.", level="warning")
         return records
+    meta = meta or _metadata(subject=subject)
+    sections = sections or parse_mmd_sections(mmd_text)
     system = _types_assign_system(subject)
-    payload = _json.dumps({"rows": _records_to_api_rows(records)}, ensure_ascii=False)
-    user = (
-        f"Subject: {subject or 'general'}\n"
-        f"Concept map ({len(records)} rows) — add Types to each assessable concept:\n"
-        + _trim(payload, 200_000)
-        + "\n\nCHAPTER SOURCE (mine ALL exercise/numerical varieties from here):\n"
-        + _trim(mmd_text, 200_000)
-    )
     progress.log(f"Assigning Types to {len(records)} concepts (dedicated API pass).")
-    data = _openai_json(system, user)
-    out = _concept_rows_to_records(data)
+    topics: dict[str, list[dict]] = {}
+    for rec in records:
+        topics.setdefault(rec.get("topic", ""), []).append(rec)
+    out: list[dict] = []
+    for topic, topic_records in topics.items():
+        payload = _json.dumps({"rows": _records_to_api_rows(topic_records)}, ensure_ascii=False)
+        source = _source_for_topic(topic, sections)
+        user = (
+            _metadata_block(meta)
+            + f"\nTopic: {topic}\nConcept map — add Types to assessable concepts:\n"
+            + payload
+            + "\n\nRELEVANT TOPIC SOURCE + EXERCISE BLOCKS:\n"
+            + _trim(source, 220_000)
+        )
+        data = _openai_json(system, user)
+        out.extend(_concept_rows_to_records(data))
     if not out:
         raise RuntimeError("Types assignment returned no rows")
     # Match by key; keep original row if API omitted it.
@@ -1368,6 +1766,7 @@ def _assign_types_via_api(
             rec = dict(rec)
             rec["concept_details"] = _inject_types(rec.get("concept_details", ""), types_body)
         merged.append(rec)
+    merged = _repair_records_via_api(merged, meta=meta, stage="types", source_context=mmd_text)
     with_types = sum(1 for r in merged if _has_meaningful_types(r.get("concept_details", "")))
     progress.log(
         f"Types assignment complete: {with_types}/{len(merged)} concepts have Types.",
@@ -1387,9 +1786,12 @@ def _records_to_api_rows(records: list[dict]) -> list[dict]:
     return [
         {
             "topic": rec.get("topic", ""),
+            "parent_concept": rec.get("parent_concept", ""),
             "concept": rec.get("concept_title", ""),
             "concept_description": rec.get("concept_details", ""),
             "keywords": rec.get("keywords", ""),
+            **({"source_evidence": rec.get("source_evidence", "")}
+               if rec.get("source_evidence") else {}),
         }
         for rec in records
     ]
@@ -1397,31 +1799,29 @@ def _records_to_api_rows(records: list[dict]) -> list[dict]:
 
 def _consolidate_concepts_via_api(
     records: list[dict], *, subject: str, mmd_text: str = "",
+    meta: dict | None = None,
 ) -> list[dict]:
-    """Chapter-wide LLM refinement: dedup, naming, culminations, Types enrichment."""
+    """Chapter-wide skeleton refinement: dedup, naming, parent grouping."""
     import json as _json
 
     if not records:
         return records
-    system = prompts.render("concepts.consolidate", subject=subject or "the subject")
+    meta = meta or _metadata(subject=subject)
+    system = prompts.get_text("concepts.canonicalize.system")
     payload = _json.dumps({"rows": _records_to_api_rows(records)}, ensure_ascii=False)
     user = (
-        f"Subject: {subject or 'general'}\n"
-        f"Draft concept map ({len(records)} rows):\n"
-        + _trim(payload, 200_000)
+        _metadata_block(meta)
+        + f"\nDraft skeleton map ({len(records)} rows):\n"
+        + payload
     )
-    if (mmd_text or "").strip():
-        user += (
-            "\n\nCHAPTER SOURCE (use this to extract exercise/numerical varieties "
-            "into Types under the concepts they test):\n"
-            + _trim(mmd_text, 200_000)
-        )
-    progress.log(f"Consolidating {len(records)} concepts via API refinement pass.")
+    progress.log(f"Canonicalizing {len(records)} skeleton concepts via API pass.")
     data = _openai_json(system, user)
     out = _concept_rows_to_records(data)
     if not out:
         raise RuntimeError("concept consolidation returned no rows")
-    progress.log(f"Consolidated to {len(out)} concepts.", level="success")
+    out = _strip_types_from_records(_ensure_parent_concepts(out))
+    out = _repair_records_via_api(out, meta=meta, stage="canonicalize")
+    progress.log(f"Rows after canonicalization: {len(out)}.", level="success")
     return out
 
 
@@ -1433,9 +1833,11 @@ def _concept_rows_to_records(data: dict) -> list[dict]:
             continue
         out.append({
             "topic": (row.get("topic") or "General").strip(),
+            "parent_concept": (row.get("parent_concept") or "").strip(),
             "concept_title": title,
             "concept_details": (row.get("concept_description") or "").strip(),
             "keywords": (row.get("keywords") or "").strip(),
+            "source_evidence": (row.get("source_evidence") or "").strip(),
         })
     return out
 
@@ -1454,40 +1856,146 @@ def _merge_concept_records(records: list[dict]) -> list[dict]:
     return out
 
 
-def concepts_from_mmd(mmd_text: str, *, subject: str = "",
-                      live: bool | None = None) -> list[dict]:
+def _extract_skeleton_via_api(chunks: list[dict], *, meta: dict) -> list[dict]:
+    system = prompts.get_text("concepts.skeleton.system")
+    all_records: list[dict] = []
+    progress.log(
+        f"Section-aware skeleton extraction across {len(chunks)} chunk(s).")
+    for i, chunk in enumerate(chunks, start=1):
+        progress.step(f"Concept skeleton — chunk {i}/{len(chunks)}",
+                      value=(i - 1) / max(len(chunks), 1))
+        user = (
+            _metadata_block(meta)
+            + f"\nChunk {i} of {len(chunks)}:\n"
+            + chunk["text"]
+        )
+        data = _openai_json(system, user)
+        chunk_records = _strip_types_from_records(_concept_rows_to_records(data))
+        chunk_records = [
+            r for r in chunk_records
+            if not cr.is_culmination(r.get("concept_title", ""))
+        ]
+        chunk_records = _ensure_parent_concepts(chunk_records)
+        progress.log(f"  chunk {i}/{len(chunks)} skeleton rows: {len(chunk_records)}")
+        all_records.extend(chunk_records)
+    out = _merge_concept_records(all_records)
+    progress.log(f"Rows after skeleton merge: {len(out)}.")
+    return _repair_records_via_api(out, meta=meta, stage="skeleton")
+
+
+def _culmination_title(topic_records: list[dict]) -> str:
+    names = [
+        r.get("concept_title", "") for r in topic_records
+        if not cr.is_culmination(r.get("concept_title", ""))
+    ][:3]
+    if not names:
+        return "Culmination - Topic Recap"
+    if len(names) == 1:
+        body = names[0]
+    elif len(names) == 2:
+        body = f"{names[0]} and {names[1]}"
+    else:
+        body = f"{names[0]}, {names[1]} and {names[2]}"
+    return f"Culmination - {body}"
+
+
+def _ensure_culmination_rows(records: list[dict]) -> list[dict]:
+    """Deterministic safety net: exactly one culmination row at each topic end."""
+    out: list[dict] = []
+    topics: dict[str, list[dict]] = {}
+    order: list[str] = []
+    for rec in records:
+        topic = rec.get("topic", "")
+        if topic not in topics:
+            topics[topic] = []
+            order.append(topic)
+        if not cr.is_culmination(rec.get("concept_title", "")):
+            topics[topic].append(rec)
+    for topic in order:
+        topic_records = topics[topic]
+        out.extend(topic_records)
+        out.append({
+            "topic": topic,
+            "parent_concept": "Culmination",
+            "concept_title": _culmination_title(topic_records),
+            "concept_details": (
+                "Description: Recap // Types: Type 01: Mixed topic application "
+                "Case 01: Solve or explain a problem that combines the topic's main ideas"
+            ),
+            "keywords": "culmination, recap, mixed application",
+        })
+    return out
+
+
+def _build_culminations_via_api(records: list[dict], *, meta: dict) -> list[dict]:
+    import json as _json
+
+    if not records:
+        return records
+    system = prompts.get_text("concepts.culmination.system")
+    payload = _json.dumps({"rows": _records_to_api_rows(records)}, ensure_ascii=False)
+    user = (
+        _metadata_block(meta)
+        + "\nFinal normal concept map — add exactly one culmination row per topic:\n"
+        + payload
+    )
+    progress.log("Building topic culmination rows.")
+    data = _openai_json(system, user)
+    out = _concept_rows_to_records(data)
+    if not out:
+        out = _ensure_culmination_rows(records)
+    else:
+        out = _ensure_parent_concepts(out)
+        report = cv.validate_concept_rows(
+            out, allow_types=True, require_culmination=True)
+        if not report["ok"]:
+            out = _ensure_culmination_rows(records)
+    out = cr.set_culmination_recap(out)
+    out = _repair_records_via_api(out, meta=meta, stage="culmination")
+    culms = sum(1 for r in out if cr.is_culmination(r.get("concept_title", "")))
+    progress.log(f"Culminations added: {culms}.", level="success")
+    return out
+
+
+def concepts_from_mmd(
+    mmd_text: str, *, subject: str = "", board: str = "", grade: str = "",
+    unit: str = "", chapter_title: str = "", chapter_id: int | str | None = None,
+    chapter_code: str = "", learning_kind: str = "Post",
+    live: bool | None = None,
+) -> list[dict]:
     """Parse an MMD document into concept records (post-learning).
 
     Large chapters are processed in ordered chunks (never trimmed) and the
     per-chunk concepts are merged, so no chapter content is lost.
     """
     use_live = config.use_live_generation() if live is None else live
+    meta = _metadata(
+        subject=subject, board=board, grade=grade, unit=unit,
+        chapter_title=chapter_title, chapter_id=chapter_id,
+        chapter_code=chapter_code, learning_kind=learning_kind,
+    )
     if use_live:
-        system = _concepts_system(subject)
-        instruction = prompts.get_text("concepts.user")
-        chunks = _split_mmd_into_chunks(mmd_text)
+        chunks = _section_aware_chunks(mmd_text)
+        sections = [s for c in chunks for s in c["sections"]]
+        progress.log("Concept generation metadata received:\n" + _metadata_block(meta))
         progress.log(
             f"Extracting concepts from {len(mmd_text):,} chars "
-            f"across {len(chunks)} chunk(s) (subject: {subject or 'general'}).")
-        all_records: list[dict] = []
-        for i, chunk in enumerate(chunks, start=1):
-            progress.step(f"Concept extraction — chunk {i}/{len(chunks)}",
-                          value=(i - 1) / max(len(chunks), 1))
-            data = _openai_json(system, f"{instruction}\n\n{chunk}")
-            chunk_records = _concept_rows_to_records(data)
-            progress.log(f"  chunk {i}/{len(chunks)}: {len(chunk_records)} concepts")
-            all_records.extend(chunk_records)
-        out = _merge_concept_records(all_records)
+            f"across {len(chunks)} section-aware chunk(s) "
+            f"(subject: {subject or 'general'}).")
+        out = _extract_skeleton_via_api(chunks, meta=meta)
         if not out:
             raise RuntimeError("live concept extraction returned no rows")
-        progress.log(f"Merged to {len(out)} unique concepts.")
-        pre_consolidate = [dict(r) for r in out]
-        out = _consolidate_concepts_via_api(out, subject=subject, mmd_text=mmd_text)
-        out = _merge_types_from_fallback(out, pre_consolidate)
-        out = _refine_descriptions_via_api(out, subject=subject, mmd_text=mmd_text)
-        out = _merge_types_from_fallback(out, pre_consolidate)
-        out = _assign_types_via_api(out, subject=subject, mmd_text=mmd_text)
-        out = _merge_types_from_fallback(out, pre_consolidate)
+        out = _consolidate_concepts_via_api(out, subject=subject, mmd_text=mmd_text, meta=meta)
+        out = _refine_descriptions_via_api(
+            out, subject=subject, mmd_text=mmd_text, meta=meta, sections=sections)
+        out = _assign_types_via_api(
+            out, subject=subject, mmd_text=mmd_text, meta=meta, sections=sections)
+        out = _build_culminations_via_api(out, meta=meta)
+        out = _repair_records_via_api(
+            out, meta=meta, stage="final", source_context=mmd_text, strict=True)
+        out = [concept_cleanup.clean_concept_record(dict(r)) for r in out]
+        out = cr.refine_chapter(out)
+        _validate_final_or_raise(out, stage="final")
         missing = sum(
             1 for r in out
             if not _has_meaningful_types(r.get("concept_details", ""))
@@ -1499,6 +2007,7 @@ def concepts_from_mmd(mmd_text: str, *, subject: str = "",
                 level="warning",
             )
         progress.set_progress(1.0, label="Concept extraction complete")
+        progress.log(f"Final concept count: {len(out)}.", level="success")
         return out
     config.require_generation_live()
     progress.log(f"Extracting concepts (dry) from {len(mmd_text):,} chars.")
@@ -1517,15 +2026,18 @@ def concepts_from_mmd(mmd_text: str, *, subject: str = "",
             title = line.split(":")[0].split(".")[0].strip()[:80] or "Concept"
             out.append({
                 "topic": topic,
+                "parent_concept": topic,
                 "concept_title": title,
                 "concept_details": f"Description: {line[:200]}",
                 "keywords": ", ".join(title.lower().split()[:5]),
             })
-    return out or [{
+    out = out or [{
         "topic": topic, "concept_title": "Overview",
+        "parent_concept": topic,
         "concept_details": "Description: (empty document)",
         "keywords": "",
     }]
+    return cr.refine_chapter(_ensure_culmination_rows(_ensure_parent_concepts(out)))
 
 
 # Pre-learning derivation: ported from the vendored
@@ -1664,9 +2176,10 @@ def _flatten_pre_topics(data: dict) -> list[dict]:
             tag = (c.get("tag") or "").strip().upper()
             parent = (c.get("parent_concept") or "").strip()
             keyword_bits = [b for b in (f"tag {tag}" if tag else "",
-                                        f"parent: {parent}" if parent else "") if b]
+                                        ) if b]
             out.append({
                 "topic": t_name,
+                "parent_concept": parent or t_name.replace(" (Pre-Learning)", ""),
                 "concept_title": title,
                 "concept_details": (c.get("concept_description") or "").strip(),
                 "keywords": "; ".join(keyword_bits),
@@ -1674,9 +2187,22 @@ def _flatten_pre_topics(data: dict) -> list[dict]:
     return out
 
 
+def _exclude_current_chapter_concepts(pre_rows: list[dict], current_rows: list[dict]) -> list[dict]:
+    current = {
+        bi.normalize_question_text(r.get("concept_title", ""))
+        for r in current_rows
+        if r.get("concept_title") and not cr.is_culmination(r.get("concept_title", ""))
+    }
+    out = [
+        r for r in pre_rows
+        if bi.normalize_question_text(r.get("concept_title", "")) not in current
+    ]
+    return out
+
+
 def pre_learning_from_rows(
     rows: list[dict], *, subject: str = "", grade: str = "", board: str = "",
-    chapter_title: str = "", live: bool | None = None,
+    chapter_title: str = "", unit: str = "", live: bool | None = None,
 ) -> list[dict]:
     """Derive pre-learning records from concept-mapping rows (dicts).
 
@@ -1687,25 +2213,28 @@ def pre_learning_from_rows(
     if not use_live:
         config.require_generation_live()
     if not use_live:
-        return [{
+        pre = [{
             "topic": f"{(r.get('topic') or 'Topic 01')} (Pre-Learning)",
-            "concept_title": f"Pre: {r['concept_title']}",
+            "parent_concept": f"Foundations for {r.get('parent_concept') or r.get('topic') or 'Chapter'}",
+            "concept_title": f"Prerequisite for {r['concept_title']}",
             "concept_details": (
                 f"Description: foundational idea required before learning "
                 f"'{r['concept_title']}'. "
                 "// Misconception: assuming the prerequisite is already mastered."
             ),
             "keywords": r.get("keywords", ""),
-        } for r in rows]
+        } for r in rows if not cr.is_culmination(r.get("concept_title", ""))]
+        return _ensure_parent_concepts(_exclude_current_chapter_concepts(pre, rows))
 
     listing = "\n".join(
-        f"- [{(r.get('topic') or '')[:60]}] {r['concept_title']}: "
+        f"- [{(r.get('topic') or '')[:60]} / {(r.get('parent_concept') or '')[:60]}] {r['concept_title']}: "
         f"{(r.get('concept_details') or '')[:260]}"
         for r in rows
+        if not cr.is_culmination(r.get("concept_title", ""))
     )
     user = (
         f"CHAPTER: {chapter_title or '(untitled)'}\n"
-        f"Subject: {subject} | Grade: {grade} | Board: {board}\n\n"
+        f"Subject: {subject} | Grade: {grade} | Board: {board} | Unit: {unit}\n\n"
         "CONCEPT MAPPING (current chapter content — exclude from pre-learning):\n"
         # Pre-learning reasons over the whole concept map at once; keep a high
         # bound so realistic chapters are never truncated.
@@ -1721,11 +2250,11 @@ def pre_learning_from_rows(
     audited = _openai_json(
         prompts.get_text("prelearning.auditor"),
         f"Chapter: {chapter_title} | Subject: {subject} | Grade: {grade} | "
-        f"Board: {board}\n\nDRAFT:\n" + _json.dumps(draft)[:120_000],
+        f"Board: {board} | Unit: {unit}\n\nDRAFT:\n" + _json.dumps(draft)[:120_000],
     )
     final = audited if audited.get("topics") else draft
 
-    out = _flatten_pre_topics(final)
+    out = _exclude_current_chapter_concepts(_flatten_pre_topics(final), rows)
     if not out:
         raise RuntimeError("live pre-learning derivation returned no concepts")
     return out
@@ -1739,6 +2268,7 @@ def pre_learning_from_concepts(concepts: list[models.Concept], *, live: bool | N
         return pre_learning_from_rows(
             [{
                 "topic": c.topic.topic_title,
+                "parent_concept": c.parent_concept,
                 "concept_title": c.concept_title,
                 "concept_details": c.concept_details,
                 "keywords": c.keywords,
@@ -1747,6 +2277,7 @@ def pre_learning_from_concepts(concepts: list[models.Concept], *, live: bool | N
             grade=chapter.grade if chapter else "",
             board=chapter.board if chapter else "",
             chapter_title=chapter.chapter_title if chapter else "",
+            unit=chapter.unit if chapter else "",
             live=True,
         )
     config.require_generation_live()
@@ -1755,6 +2286,7 @@ def pre_learning_from_concepts(concepts: list[models.Concept], *, live: bool | N
         out.append({
             "source_concept_id": c.id,
             "topic": f"{c.topic.topic_title} (Pre-Learning)",
+            "parent_concept": f"Foundations for {c.parent_concept or c.topic.topic_title}",
             "concept_title": f"Pre: {c.concept_title}",
             "concept_details": (
                 f"Description: foundational idea required before learning "

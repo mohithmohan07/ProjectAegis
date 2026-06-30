@@ -20,6 +20,7 @@ class ConceptOut(BaseModel):
     id: int
     concept_title: str
     concept_display_name: str
+    parent_concept: str = ""
     concept_details: str
     keywords: str
     sources: str = ""

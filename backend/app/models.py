@@ -62,6 +62,7 @@ class Concept(Base):
     topic_id: Mapped[int] = mapped_column(ForeignKey("topics.id"))
     concept_title: Mapped[str] = mapped_column(String(255), default="")
     concept_display_name: Mapped[str] = mapped_column(String(512), default="")
+    parent_concept: Mapped[str] = mapped_column(String(255), default="")
     concept_details: Mapped[str] = mapped_column(Text, default="")
     keywords: Mapped[str] = mapped_column(Text, default="")
     digicards: Mapped[str] = mapped_column(Text, default="")
