@@ -177,6 +177,9 @@ def clean_concept_record(rec: dict) -> dict:
     """Return ``rec`` with its name + description normalized (mutates in place)."""
     if rec.get("topic"):
         rec["topic"] = to_title_case(rec["topic"].strip())
+    if rec.get("parent_concept"):
+        rec["parent_concept"] = to_title_case(replace_mmd_references(
+            clean_concept_name(rec["parent_concept"].strip())))
     if rec.get("concept_title"):
         rec["concept_title"] = to_title_case(replace_mmd_references(
             clean_concept_name(rec["concept_title"])))

@@ -32,6 +32,7 @@ def _ensure_columns() -> None:
     if not DB_URL.startswith("sqlite"):
         return
     additions = [
+        ("concepts", "parent_concept", "VARCHAR(255) DEFAULT ''"),
         ("concepts", "sources", "TEXT DEFAULT ''"),
         ("upload_jobs", "source_book", "VARCHAR(128) DEFAULT ''"),
         ("questions", "question_text", "TEXT DEFAULT ''"),

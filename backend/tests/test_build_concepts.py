@@ -31,7 +31,7 @@ def test_post_learning_groups_concepts_under_one_topic(client, db, first_chapter
     result = stream_result(client.post(
         f"/build-concepts/post-learning/uploads/{job['id']}/generate",
         json={"target_chapter_id": first_chapter["id"]}))
-    assert result["concepts_created"] == 3
+    assert result["concepts_created"] == 4
 
     import app.models as models
     topics = (
@@ -40,7 +40,8 @@ def test_post_learning_groups_concepts_under_one_topic(client, db, first_chapter
         .all()
     )
     assert len(topics) == 1
-    assert len(topics[0].concepts) == 3
+    assert len(topics[0].concepts) == 4
+    assert sum(c.concept_title.startswith("Culmination -") for c in topics[0].concepts) == 1
 
 
 def test_pre_learning_from_upload(client, first_chapter):

@@ -47,10 +47,25 @@ def _q_start(kind: str) -> int:
 
 
 def _sheet_concept_len(header_row: tuple) -> int:
-    """Concept-band length for a sheet: current (with concept_source) or legacy."""
-    idx = _IDX_CONCEPT_TITLE + LEGACY_CONCEPT_LEN
-    val = header_row[idx] if idx < len(header_row) else None
-    return LEGACY_CONCEPT_LEN + 1 if str(val or "").strip() == "concept_source" else LEGACY_CONCEPT_LEN
+    return len(_sheet_concept_fields(header_row))
+
+
+def _sheet_concept_fields(header_row: tuple) -> list[str]:
+    """Concept-band fields present in a workbook.
+
+    ``parent_concept`` is optional and only used when a template already has
+    that column. Existing templates keep their current column positions.
+    """
+    group_markers = set(OBJECTIVE_GROUP_FIELDS + DESCRIPTIVE_GROUP_FIELDS)
+    fields: list[str] = []
+    for idx in range(_IDX_CONCEPT_TITLE, len(header_row)):
+        name = str(header_row[idx] or "").strip()
+        if not name:
+            continue
+        if name in group_markers:
+            break
+        fields.append(name)
+    return fields or CONCEPT_FIELDS
 
 
 def _cell_str(row: tuple, idx: int) -> str:
@@ -137,16 +152,24 @@ def scan_workbook(path: Path) -> WorkbookIndex:
             continue
         ws = wb[sheet_name]
         header = next(ws.iter_rows(min_row=2, max_row=2, values_only=True), ())
-        concept_len = _sheet_concept_len(header)
+        concept_fields = _sheet_concept_fields(header)
+        concept_len = len(concept_fields)
         q_start = _IDX_CONCEPT_TITLE + concept_len + len(_group_fields(kind))
         idx.sheet_meta[sheet_name] = {
             "concept_len": concept_len,
+            "concept_fields": concept_fields,
             "q_start": q_start,
             # question_source is the 4th question-band field on every sheet.
             "q_src_col": q_start + 3,
             # concept_source only exists in the current layout.
-            "c_src_col": (_IDX_CONCEPT_TITLE + concept_len - 1
-                          if concept_len > LEGACY_CONCEPT_LEN else None),
+            "c_src_col": (
+                _IDX_CONCEPT_TITLE + concept_fields.index("concept_source")
+                if "concept_source" in concept_fields else None
+            ),
+            "parent_col": (
+                _IDX_CONCEPT_TITLE + concept_fields.index("parent_concept")
+                if "parent_concept" in concept_fields else None
+            ),
         }
         for row_i, row in enumerate(ws.iter_rows(min_row=3, values_only=True), start=3):
             if not row or not any(row):
@@ -226,8 +249,53 @@ def _groups_by_type(concept: models.Concept) -> dict[str, str]:
     return {k: ", ".join(v) for k, v in buckets.items()}
 
 
+def _concept_field_value(
+    concept: models.Concept, topic: models.Topic, field: str, *,
+    include_group_columns: bool, parent_column_present: bool,
+) -> str:
+    chapter = topic.chapter
+    cp_tag = directory.concept_tag(
+        chapter.board, chapter.grade, chapter.subject,
+        chapter.chapter_title, topic.topic_title)
+    parent = (getattr(concept, "parent_concept", "") or "").strip()
+    if field == "concept_title":
+        return f"{concept.concept_title} ({cp_tag})"
+    if field == "concept_display_name":
+        return concept.concept_title
+    if field == "parent_concept":
+        return parent
+    if field == "concept_details":
+        return concept.concept_details
+    if field == "keywords":
+        return concept.keywords
+    if field == "digicards":
+        return concept.digicards
+    if field == "related_concepts":
+        related = concept.related_concepts or ""
+        if parent and not parent_column_present:
+            marker = f"parent: {parent}"
+            existing = [p.strip() for p in related.split(",") if p.strip()]
+            if marker.lower() not in {p.lower() for p in existing}:
+                existing.insert(0, marker)
+            return ", ".join(existing)
+        return related
+    if field in {"basic_groups", "intermediate_groups", "advanced_groups"}:
+        if not include_group_columns:
+            return ""
+        by_type = _groups_by_type(concept)
+        return {
+            "basic_groups": by_type["Basic"],
+            "intermediate_groups": by_type["Intermediate"],
+            "advanced_groups": by_type["Advanced"],
+        }[field]
+    if field == "concept_source":
+        return concept.sources
+    return ""
+
+
 def _front_bands(concept: models.Concept, topic: models.Topic, *,
-                 include_group_columns: bool = True) -> list:
+                 include_group_columns: bool = True,
+                 concept_fields: list[str] | None = None) -> list:
     """Chapter + Topic + Concept bands (22 cells) with tags in the title columns.
 
     The title columns carry a human-readable tag; the display columns stay
@@ -238,16 +306,10 @@ def _front_bands(concept: models.Concept, topic: models.Topic, *,
     """
     chapter = topic.chapter
     c_tag = directory.chapter_tag(chapter.board, chapter.grade, chapter.subject)
-    cp_tag = directory.concept_tag(
-        chapter.board, chapter.grade, chapter.subject,
-        chapter.chapter_title, topic.topic_title)
+    concept_fields = concept_fields or CONCEPT_FIELDS
+    parent_column_present = "parent_concept" in concept_fields
     concept_labels = ", ".join(
         c.concept_title for c in sorted(topic.concepts, key=lambda c: c.id))
-    if include_group_columns:
-        by_type = _groups_by_type(concept)
-        group_cols = [by_type["Basic"], by_type["Intermediate"], by_type["Advanced"]]
-    else:
-        group_cols = ["", "", ""]
     return [
         # ---- Chapter band (tag in title, clean display) ----
         f"{chapter.chapter_title} ({c_tag})", chapter.chapter_title,
@@ -257,17 +319,19 @@ def _front_bands(concept: models.Concept, topic: models.Topic, *,
         composed_topic_title(topic),
         composed_topic_display(topic), topic.pre_post_learning, concept_labels,
         topic.related_topics, topic.topic_description,
-        # ---- Concept band (tag in title, clean display; group cols optional) ----
-        f"{concept.concept_title} ({cp_tag})", concept.concept_title,
-        concept.concept_details, concept.keywords, concept.digicards,
-        concept.related_concepts,
-        *group_cols,
-        concept.sources,
+    ] + [
+        _concept_field_value(
+            concept, topic, field,
+            include_group_columns=include_group_columns,
+            parent_column_present=parent_column_present,
+        )
+        for field in concept_fields
     ]
 
 
 def _question_to_row(q: models.Question, kind: str,
-                     group: "models.Group | None" = None) -> list:
+                     group: "models.Group | None" = None,
+                     concept_fields: list[str] | None = None) -> list:
     """Build one flat canonical row (positional) from a normalized Question.
 
     ``group`` selects the *placement*: the question's authoring home
@@ -279,7 +343,8 @@ def _question_to_row(q: models.Question, kind: str,
     concept = group.concept
     topic = concept.topic
 
-    row: list = list(_front_bands(concept, topic))
+    concept_fields = concept_fields or CONCEPT_FIELDS
+    row: list = list(_front_bands(concept, topic, concept_fields=concept_fields))
     # ---- Group band ----
     if kind == "descriptive":
         row += [
@@ -347,14 +412,15 @@ def _question_to_row(q: models.Question, kind: str,
                 row += [kw.get("answer_type", ""), kw.get("weightage", ""), kw.get("keyword", "")]
         row.append(q.question_text)
 
-    expected = len(FIELDS_BY_KIND[kind])
+    expected = len(FIELDS_BY_KIND[kind]) + (len(concept_fields) - len(CONCEPT_FIELDS))
     if len(row) < expected:
         row += [""] * (expected - len(row))
     return row[:expected]
 
 
 def _concept_to_row(concept: models.Concept, kind: str = "objective",
-                    topic: "models.Topic | None" = None) -> list:
+                    topic: "models.Topic | None" = None,
+                    concept_fields: list[str] | None = None) -> list:
     """Build a concept-catalog row (chapter/topic/concept/group filled, no question).
 
     ``topic`` selects the placement: the concept's authoring home
@@ -362,8 +428,10 @@ def _concept_to_row(concept: models.Concept, kind: str = "objective",
     chapter) when emitting a many-to-many concept tag row.
     """
     topic = topic or concept.topic
-    row: list = list(_front_bands(concept, topic, include_group_columns=False))
-    expected = len(FIELDS_BY_KIND[kind])
+    concept_fields = concept_fields or CONCEPT_FIELDS
+    row: list = list(_front_bands(
+        concept, topic, include_group_columns=False, concept_fields=concept_fields))
+    expected = len(FIELDS_BY_KIND[kind]) + (len(concept_fields) - len(CONCEPT_FIELDS))
     row += [""] * (expected - len(row))
     return row[:expected]
 
@@ -398,6 +466,8 @@ def append_concepts(db: Session, path: Path, concept_ids: list[int]) -> dict[str
     index = scan_workbook(path)
     wb = openpyxl.load_workbook(path) if path.exists() else _new_workbook()
     ws = wb[SHEET_BY_KIND["objective"]]
+    header = next(ws.iter_rows(min_row=2, max_row=2, values_only=True), ())
+    concept_fields = _sheet_concept_fields(header)
     concepts = (
         db.query(models.Concept).filter(models.Concept.id.in_(concept_ids))
         .order_by(models.Concept.id).all()
@@ -412,7 +482,10 @@ def append_concepts(db: Session, path: Path, concept_ids: list[int]) -> dict[str
                 continue
             index.c_placements.add(key)
             target = ws.max_row + 1 if ws.max_row >= 2 else 3
-            for i, value in enumerate(_concept_to_row(c, "objective", topic), start=1):
+            for i, value in enumerate(
+                _concept_to_row(c, "objective", topic, concept_fields=concept_fields),
+                start=1,
+            ):
                 ws.cell(row=target, column=i, value=value)
             result["written"] += 1
     wb.save(path)
@@ -609,8 +682,16 @@ def append_questions(db: Session, path: Path, question_ids: list[int]) -> dict[s
             index.q_placements.add(key)
             index.labels.add(q.question_label)
             ws = wb[SHEET_BY_KIND[q.sheet_kind]]
+            meta = index.sheet_meta.get(SHEET_BY_KIND[q.sheet_kind]) or {}
+            concept_fields = meta.get("concept_fields")
+            if concept_fields is None:
+                header = next(ws.iter_rows(min_row=2, max_row=2, values_only=True), ())
+                concept_fields = _sheet_concept_fields(header)
             target = ws.max_row + 1 if ws.max_row >= 2 else 3
-            for i, value in enumerate(_question_to_row(q, q.sheet_kind, group), start=1):
+            for i, value in enumerate(
+                _question_to_row(q, q.sheet_kind, group, concept_fields=concept_fields),
+                start=1,
+            ):
                 ws.cell(row=target, column=i, value=value)
             appended[q.sheet_kind] += 1
             if is_tag:
