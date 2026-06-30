@@ -108,6 +108,12 @@ def test_concepts_live_processes_every_chunk(monkeypatch):
     monkeypatch.setattr(
         g, "_build_culminations_via_api",
         lambda records, **kw: records)
+    monkeypatch.setattr(
+        g, "_repair_records_via_api",
+        lambda records, **kw: records)
+    monkeypatch.setattr(
+        g, "_validate_final_or_raise",
+        lambda records, **kw: {"ok": True, "errors": [], "summary": {}})
     doc = _big_doc(20)  # forces several chunks at 4000 chars
     records = g.concepts_from_mmd(doc, subject="Mathematics")
     assert calls["skeleton"] >= 3, "expected multiple chunks to be processed"

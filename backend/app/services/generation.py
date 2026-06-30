@@ -1078,14 +1078,18 @@ Return ONLY strict JSON:
 
 Rules:
 - Use the textbook section heading as topic when available; strip section numbers.
-- Do not create exercise/example/review topics.
-- Parent Concept is a cluster heading within a topic.
+- Do not invent textbook topics; preserve the section order from the source.
+- Do not create exercise, example, review, or practice topics.
+- Parent Concept is a meaningful cluster heading within a topic.
 - Concept is one small teachable mastery unit.
+- Concept names must be specific and non-repetitive.
 - No Types, no culmination rows, no groups, no assessment labels.
-- No vague names: Introduction, Overview, Basics, Misc, Examples, Practice.
+- No vague names: Introduction, Overview, Basics, Basic Concepts, Misc,
+  Miscellaneous, Examples, Practice, Definition of, Types of.
 - Avoid repeated sibling openers.
 - concept_description starts with "Description:" and is 2-4 compact sentences.
 - Keep source_evidence short: the phrase/heading/problem source that justifies the concept.
+- source_evidence is for validation/debug only and must not be written to workbook.
 """)
 
 prompts.register(
@@ -1104,6 +1108,9 @@ Rules:
 - Parent concepts should group 3-8 related concepts where possible.
 - Do not create culmination rows.
 - Do not generate Types.
+- Do not rewrite good concepts unnecessarily.
+- Do not invent exercise/example/review/practice topics.
+- Never add filler concepts.
 """)
 
 prompts.register(
@@ -1111,7 +1118,8 @@ prompts.register(
     label="Description-only concept refinement system prompt",
     default="""\
 You are a description-only editor. Rewrite only Description sections for a refined concept map.
-Return ONLY strict JSON with the same rows and order.
+Return ONLY strict JSON:
+{"rows":[{"topic":"","parent_concept":"","concept":"","concept_description":"","keywords":""}]}.
 
 Rules:
 - Keep topic, parent_concept, concept name, keywords, and row order unchanged.
@@ -1122,6 +1130,7 @@ Rules:
 - Do not include Types.
 - Misconception may be included only if specific and useful.
 - No N/A, None, Not applicable, or placeholder text.
+- No source artifacts such as MMD, Example 3, Fig 2, Table 1, Exercise 1.1, or page references.
 """)
 
 prompts.register(
@@ -1129,10 +1138,12 @@ prompts.register(
     label="Types-only concept assignment system prompt",
     default="""\
 You are a Types-only classifier. Assign Types only for assessable concepts.
-Return ONLY strict JSON with the same rows and order.
+Return ONLY strict JSON:
+{"rows":[{"topic":"","parent_concept":"","concept":"","concept_description":"","keywords":""}]}.
 
 Rules:
 - Preserve Description exactly.
+- Preserve topic, parent_concept, concept title, keywords, and row order exactly.
 - Insert or replace only Types.
 - One Type = one distinct question/problem pattern.
 - One Case = one concrete question prompt/stem.
@@ -1142,6 +1153,7 @@ Rules:
 - Omit Types only for pure vocabulary/recall concepts with zero meaningful assessable varieties.
 - Culmination rows are not handled here.
 - Use zero-padded labels exactly "Type 01:" and "Case 01:".
+- Do not rewrite Misconception except to keep an existing useful one in place.
 """)
 
 prompts.register(
@@ -1149,7 +1161,8 @@ prompts.register(
     label="Topic culmination builder system prompt",
     default="""\
 Build culmination rows after normal concepts and Types are finalized.
-Return ONLY strict JSON with the full concept map.
+Return ONLY strict JSON:
+{"rows":[{"topic":"","parent_concept":"","concept":"","concept_description":"","keywords":""}]}.
 
 Rules:
 - Exactly one culmination row per topic.
@@ -1159,6 +1172,7 @@ Rules:
 - Types must contain mixed multi-concept application/problem formats.
 - Place culmination last within the topic.
 - Do not change normal rows except to position the culmination correctly.
+- Do not create culmination during chunk extraction; this pass runs only after the full topic map exists.
 """)
 
 prompts.register(
@@ -1166,11 +1180,14 @@ prompts.register(
     label="Concept validation repair system prompt",
     default="""\
 Repair only concept rows that failed validation.
-Return ONLY strict JSON with corrected rows.
+Return ONLY strict JSON:
+{"rows":[{"topic":"","parent_concept":"","concept":"","concept_description":"","keywords":""}]}.
 
 Rules:
 - Fix only the listed issues.
 - Preserve valid rows.
+- Preserve valid fields, including parent_concept, Types, and useful Misconception.
+- Do not rewrite the full chapter unnecessarily.
 - Never add filler.
 - Keep strict JSON.
 """)
@@ -1534,13 +1551,13 @@ def _strip_types_from_records(records: list[dict]) -> list[dict]:
 
 def _validation_options(stage: str) -> dict:
     return {
-        "skeleton": {"allow_types": False, "require_culmination": False},
-        "canonicalize": {"allow_types": False, "require_culmination": False},
-        "description": {"allow_types": False, "require_culmination": False},
-        "types": {"allow_types": True, "require_culmination": False},
-        "culmination": {"allow_types": True, "require_culmination": True},
-        "final": {"allow_types": True, "require_culmination": True},
-    }.get(stage, {"allow_types": True, "require_culmination": False})
+        "skeleton": {"allow_types": False, "require_culmination": False, "allow_culmination": False},
+        "canonicalize": {"allow_types": False, "require_culmination": False, "allow_culmination": False},
+        "description": {"allow_types": False, "require_culmination": False, "allow_culmination": False},
+        "types": {"allow_types": True, "require_culmination": False, "allow_culmination": False},
+        "culmination": {"allow_types": True, "require_culmination": True, "allow_culmination": True},
+        "final": {"allow_types": True, "require_culmination": True, "allow_culmination": True},
+    }.get(stage, {"allow_types": True, "require_culmination": False, "allow_culmination": True})
 
 
 def _merge_repaired_rows(records: list[dict], repaired: list[dict]) -> list[dict]:
@@ -1556,9 +1573,25 @@ def _merge_repaired_rows(records: list[dict], repaired: list[dict]) -> list[dict
     return out
 
 
+_FATAL_CODES = {
+    "required", "required_parent", "description_prefix", "duplicate_title",
+    "duplicate_topic_concept", "source_artifact", "types_too_early",
+    "culmination_too_early", "types_format", "case_without_type",
+    "type_without_case", "culmination_description", "culmination_count",
+    "culmination_order", "section_number", "empty_types",
+}
+
+
+def _fatal_errors(report: dict) -> list[dict]:
+    return [
+        e for e in report.get("errors", [])
+        if e.get("severity") == "error" and e.get("code") in _FATAL_CODES
+    ]
+
+
 def _repair_records_via_api(
     records: list[dict], *, meta: dict, stage: str, source_context: str = "",
-    max_attempts: int = 2,
+    max_attempts: int = 2, strict: bool = False,
 ) -> list[dict]:
     """Validate rows and ask the repair prompt to fix hard failures."""
     records = _ensure_parent_concepts(records)
@@ -1566,16 +1599,25 @@ def _repair_records_via_api(
     for attempt in range(max_attempts + 1):
         report = cv.validate_concept_rows(records, **opts)
         hard = [e for e in report["errors"] if e["severity"] == "error"]
+        progress.log(
+            f"{stage}: validation found {len(hard)} error(s), "
+            f"{report['summary'].get('warnings', 0)} warning(s).")
         if not hard:
             if report["errors"]:
                 progress.log(
                     f"{stage}: validation passed with {len(report['errors'])} warning(s).")
             return records
         if attempt >= max_attempts:
+            fatal = _fatal_errors(report)
             progress.log(
                 f"{stage}: keeping best output with {len(hard)} validation error(s).",
                 level="warning",
             )
+            if strict and fatal:
+                codes = ", ".join(sorted({e["code"] for e in fatal}))
+                raise RuntimeError(
+                    f"{stage} validation failed after repair attempts: {codes}"
+                )
             return records
         import json as _json
         failed_indexes = sorted({e["row_index"] for e in hard if e["row_index"] >= 0})
@@ -1605,6 +1647,19 @@ def _repair_records_via_api(
         records = _ensure_parent_concepts(records)
         progress.log(f"{stage}: repaired {len(repaired)} row(s) on attempt {attempt + 1}.")
     return records
+
+
+def _validate_final_or_raise(records: list[dict], *, stage: str = "final") -> dict:
+    report = cv.validate_concept_rows(
+        records, allow_types=True, require_culmination=True, allow_culmination=True)
+    fatal = _fatal_errors(report)
+    progress.log(
+        f"{stage}: final validation found {len(fatal)} fatal error(s), "
+        f"{report['summary'].get('warnings', 0)} warning(s).")
+    if fatal:
+        codes = ", ".join(sorted({e["code"] for e in fatal}))
+        raise RuntimeError(f"{stage} validation failed: {codes}")
+    return report
 
 
 def _refine_descriptions_via_api(
@@ -1922,6 +1977,7 @@ def concepts_from_mmd(
     if use_live:
         chunks = _section_aware_chunks(mmd_text)
         sections = [s for c in chunks for s in c["sections"]]
+        progress.log("Concept generation metadata received:\n" + _metadata_block(meta))
         progress.log(
             f"Extracting concepts from {len(mmd_text):,} chars "
             f"across {len(chunks)} section-aware chunk(s) "
@@ -1935,9 +1991,11 @@ def concepts_from_mmd(
         out = _assign_types_via_api(
             out, subject=subject, mmd_text=mmd_text, meta=meta, sections=sections)
         out = _build_culminations_via_api(out, meta=meta)
+        out = _repair_records_via_api(
+            out, meta=meta, stage="final", source_context=mmd_text, strict=True)
         out = [concept_cleanup.clean_concept_record(dict(r)) for r in out]
         out = cr.refine_chapter(out)
-        out = _repair_records_via_api(out, meta=meta, stage="final", source_context=mmd_text)
+        _validate_final_or_raise(out, stage="final")
         missing = sum(
             1 for r in out
             if not _has_meaningful_types(r.get("concept_details", ""))
@@ -2139,12 +2197,12 @@ def _exclude_current_chapter_concepts(pre_rows: list[dict], current_rows: list[d
         r for r in pre_rows
         if bi.normalize_question_text(r.get("concept_title", "")) not in current
     ]
-    return out or pre_rows
+    return out
 
 
 def pre_learning_from_rows(
     rows: list[dict], *, subject: str = "", grade: str = "", board: str = "",
-    chapter_title: str = "", live: bool | None = None,
+    chapter_title: str = "", unit: str = "", live: bool | None = None,
 ) -> list[dict]:
     """Derive pre-learning records from concept-mapping rows (dicts).
 
@@ -2176,7 +2234,7 @@ def pre_learning_from_rows(
     )
     user = (
         f"CHAPTER: {chapter_title or '(untitled)'}\n"
-        f"Subject: {subject} | Grade: {grade} | Board: {board}\n\n"
+        f"Subject: {subject} | Grade: {grade} | Board: {board} | Unit: {unit}\n\n"
         "CONCEPT MAPPING (current chapter content — exclude from pre-learning):\n"
         # Pre-learning reasons over the whole concept map at once; keep a high
         # bound so realistic chapters are never truncated.
@@ -2192,7 +2250,7 @@ def pre_learning_from_rows(
     audited = _openai_json(
         prompts.get_text("prelearning.auditor"),
         f"Chapter: {chapter_title} | Subject: {subject} | Grade: {grade} | "
-        f"Board: {board}\n\nDRAFT:\n" + _json.dumps(draft)[:120_000],
+        f"Board: {board} | Unit: {unit}\n\nDRAFT:\n" + _json.dumps(draft)[:120_000],
     )
     final = audited if audited.get("topics") else draft
 
@@ -2219,6 +2277,7 @@ def pre_learning_from_concepts(concepts: list[models.Concept], *, live: bool | N
             grade=chapter.grade if chapter else "",
             board=chapter.board if chapter else "",
             chapter_title=chapter.chapter_title if chapter else "",
+            unit=chapter.unit if chapter else "",
             live=True,
         )
     config.require_generation_live()

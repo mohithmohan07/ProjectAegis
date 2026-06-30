@@ -68,15 +68,22 @@ def test_deposit_applies_numbering_recap_titlecase_and_topic_columns(db):
 
     records = [
         {"topic": "operations on numbers", "concept_title": "addition of integers",
+         "parent_concept": "integer operations",
          "concept_details": ("Description: a // Types: Type 01: Direct Case 01: 2+3 "
                              "Case 02: 5+9 // Misconception: m"), "keywords": ""},
         {"topic": "operations on numbers", "concept_title": "Culmination - Operations On Numbers",
+         "parent_concept": "Culmination",
          "concept_details": ("Description: a long synthesis paragraph // "
                              "Types: Type 01: Mixed Case 01: combine ops // "
                              "Misconception: keep me"), "keywords": ""},
         {"topic": "powers and roots", "concept_title": "squares of numbers",
+         "parent_concept": "powers",
          "concept_details": ("Description: b // Types: Type 01: Compute Case 01: 4^2 "
                              "// Misconception: m"), "keywords": ""},
+        {"topic": "powers and roots", "concept_title": "Culmination - Powers and Roots",
+         "parent_concept": "Culmination",
+         "concept_details": ("Description: recap // Types: Type 01: Mixed Case 01: combine powers "
+                             "// Misconception: keep me"), "keywords": ""},
     ]
     build_concepts._deposit_concepts(db, chapter, records, "Post", "")
     build_concepts._sync_chapter_topic_summary(chapter)

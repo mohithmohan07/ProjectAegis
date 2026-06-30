@@ -16,6 +16,20 @@ def test_concepts_system_requires_numeric_types_guidance():
     assert "description-only editor" in g.prompts.get_text("concepts.description_refine.system")
     assert "Merge duplicates" in g.prompts.get_text("concepts.canonicalize.system")
     assert "Types-only classifier" in g.prompts.get_text("concepts.types_assign.system")
+    assert "source_evidence" in system
+    assert "must not be written to workbook" in system
+
+
+def test_split_prompt_contracts_are_separated():
+    skeleton = g.prompts.get_text("concepts.skeleton.system")
+    description = g.prompts.get_text("concepts.description_refine.system")
+    types = g.prompts.get_text("concepts.types_assign.system")
+    repair = g.prompts.get_text("concepts.repair.system")
+    assert "No Types" in skeleton and "no culmination rows" in skeleton
+    assert "Do not include Types" in description
+    assert "Preserve Description exactly" in types
+    assert "Culmination rows are not handled here" in types
+    assert "Preserve valid fields, including parent_concept, Types" in repair
 
 
 def test_has_meaningful_types():

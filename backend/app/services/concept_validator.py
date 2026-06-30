@@ -13,17 +13,21 @@ from . import concept_cleanup, concept_refiner
 
 FORBIDDEN_NAMES = {
     "introduction", "overview", "basics", "misc", "miscellaneous",
-    "examples", "practice",
+    "examples", "practice", "basic concepts",
 }
-PLACEHOLDERS = {"n/a", "na", "none", "not applicable", "placeholder", "tbd"}
+PLACEHOLDERS = {"n/a", "na", "none", "not applicable", "placeholder", "tbd", "lorem ipsum"}
 _SECTION_NUMBER_RE = re.compile(r"\b(?:exercise|ex)?\s*\d+(?:\.\d+)+\b", re.IGNORECASE)
 _SOURCE_ARTIFACT_RE = re.compile(
     r"\b(?:MMD|Example\s+\d+|Fig(?:ure)?\s+\d+|Table\s+\d+|"
-    r"Exercise\s+\d+(?:\.\d+)?|page\s+(?:no\.?\s*)?\d+)\b",
+    r"Exercise\s+\d+(?:\.\d+)?|Ex\s+\d+(?:\.\d+)?|"
+    r"page\s+(?:no\.?\s*)?\d+|p(?:age)?\.?\s*\d+)\b",
     re.IGNORECASE,
 )
 _TYPE_RE = re.compile(r"\bType\s+\d{2}:", re.IGNORECASE)
 _CASE_RE = re.compile(r"\bCase\s+\d{2}:", re.IGNORECASE)
+_CASE_ANY_RE = re.compile(r"\bCase\s+\d{1,2}:", re.IGNORECASE)
+_TYPE_ANY_RE = re.compile(r"\bType\s+\d{1,2}:", re.IGNORECASE)
+_GENERIC_OPENER_RE = re.compile(r"^(applications|properties)\s+of\b", re.IGNORECASE)
 
 
 def _norm(text: str) -> str:
@@ -55,6 +59,20 @@ def _has_types(details: str) -> bool:
     )
 
 
+def _empty_label(details: str, label_name: str) -> bool:
+    for label, content in concept_refiner.split_sections(details):
+        if label.lower().startswith(label_name) and not content.strip():
+            return True
+    return False
+
+
+def _description_text(details: str) -> str:
+    for label, content in concept_refiner.split_sections(details):
+        if label.lower().startswith("description"):
+            return content.strip()
+    return ""
+
+
 def _add(errors: list[dict], row_index: int, field: str, code: str,
          message: str, severity: str = "error") -> None:
     errors.append({
@@ -71,6 +89,7 @@ def validate_concept_rows(
     require_parent: bool = True,
     allow_types: bool = True,
     require_culmination: bool = False,
+    allow_culmination: bool = True,
 ) -> dict:
     """Return a structured validation report for concept-map records."""
     errors: list[dict] = []
@@ -102,6 +121,9 @@ def validate_concept_rows(
         if title and _is_forbidden_name(title):
             _add(errors, i, "concept_title", "forbidden_name",
                  f"forbidden filler concept name: {title}")
+        if title and _GENERIC_OPENER_RE.search(title):
+            _add(errors, i, "concept_title", "generic_opener",
+                 "generic Applications/Properties opener is too broad", "warning")
         if _SECTION_NUMBER_RE.search(title):
             _add(errors, i, "concept_title", "section_number",
                  "concept title contains section/exercise numbering")
@@ -119,20 +141,39 @@ def validate_concept_rows(
         ):
             _add(errors, i, "concept_details", "placeholder",
                  "placeholder description text is not allowed")
+        if _empty_label(details, "type"):
+            _add(errors, i, "concept_details", "empty_types",
+                 "empty Types section is not allowed")
+        if _empty_label(details, "misconception"):
+            _add(errors, i, "concept_details", "empty_misconception",
+                 "empty Misconception section is not allowed")
         if details:
             words = _description_words(details)
             if not is_culm and (words < 4 or words > 120):
                 _add(errors, i, "concept_details", "description_length",
                      "description length is outside reasonable bounds", "warning")
+            desc = _description_text(details)
+            if len(desc) > 450 and len(set(re.findall(r"\w+", desc.lower()))) < 35:
+                _add(errors, i, "concept_details", "textbook_dump",
+                     "description appears broad or dump-like", "warning")
         if not allow_types and _has_types(details):
             _add(errors, i, "concept_details", "types_too_early",
                  "Types are not allowed before the Types pass")
+        if is_culm and not allow_culmination:
+            _add(errors, i, "concept_title", "culmination_too_early",
+                 "Culmination rows are not allowed before the culmination pass")
         if allow_types and _has_types(details):
             type_body = ""
             for label, content in concept_refiner.split_sections(details):
                 if label.lower().startswith("type"):
                     type_body = content
                     break
+            if type_body and _CASE_ANY_RE.search(type_body) and not _TYPE_ANY_RE.search(type_body):
+                _add(errors, i, "concept_details", "case_without_type",
+                     "Case labels require a Type label")
+            if type_body and _TYPE_ANY_RE.search(type_body) and not _CASE_ANY_RE.search(type_body):
+                _add(errors, i, "concept_details", "type_without_case",
+                     "Type labels require at least one Case")
             if type_body and (not _TYPE_RE.search(type_body) or not _CASE_RE.search(type_body)):
                 _add(errors, i, "concept_details", "types_format",
                      "Types must use zero-padded Type NN and Case NN labels")

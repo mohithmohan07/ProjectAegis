@@ -43,12 +43,30 @@ def test_repair_loop_merges_repaired_rows(monkeypatch):
 
 def test_validator_rejects_source_artifacts_and_bad_names():
     report = cv.validate_concept_rows([
-        _rec("Overview"),
-        _rec("Useful Concept", "Description: See Example 19 and Fig 2 for details"),
+        _rec("Basic Concepts"),
+        _rec("Useful Concept", "Description: See Example 19, Fig 2, Ex 1.1 and page 9 for details"),
     ])
     codes = {e["code"] for e in report["errors"]}
     assert "forbidden_name" in codes
     assert "source_artifact" in codes
+
+
+def test_validator_rejects_empty_sections_and_bad_types():
+    report = cv.validate_concept_rows([
+        _rec("Empty Types", "Description: useful enough description // Types:"),
+        _rec("Empty Misconception", "Description: useful enough description // Misconception:"),
+        _rec("Case Without Type", "Description: useful enough description // Types: Case 01: Solve x"),
+        _rec("Type Without Case", "Description: useful enough description // Types: Type 01: Solve"),
+    ])
+    codes = {e["code"] for e in report["errors"]}
+    assert {"empty_types", "empty_misconception", "case_without_type", "type_without_case"} <= codes
+
+
+def test_validator_rejects_culmination_before_culmination_pass():
+    report = cv.validate_concept_rows([
+        _rec("Culmination - Early", "Description: Recap // Types: Type 01: Mix Case 01: combine", parent="Culmination"),
+    ], require_culmination=False, allow_culmination=False)
+    assert any(e["code"] == "culmination_too_early" for e in report["errors"])
 
 
 def test_validator_requires_one_culmination_last_per_topic():

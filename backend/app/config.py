@@ -105,7 +105,8 @@ def require_workbooks_live() -> None:
 # Quality-first live generation defaults to GPT-5.5 when the environment exposes
 # it; tests run in dry mode and never require this model to be available.
 OPENAI_MODEL = os.environ.get("AEGIS_OPENAI_MODEL", "gpt-5.5")
-# Large concept-map passes prefer complete JSON over speed or token economy.
+# Large concept-map passes prefer complete JSON over speed or token economy;
+# keep the default within current model completion limits and allow env override.
 OPENAI_MAX_OUTPUT_TOKENS = int(
-    os.environ.get("AEGIS_OPENAI_MAX_OUTPUT_TOKENS", "196000")
+    os.environ.get("AEGIS_OPENAI_MAX_OUTPUT_TOKENS", "128000")
 )

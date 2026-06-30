@@ -472,7 +472,12 @@ def append_concepts(db: Session, path: Path, concept_ids: list[int]) -> dict[str
         db.query(models.Concept).filter(models.Concept.id.in_(concept_ids))
         .order_by(models.Concept.id).all()
     )
-    result = {"written": 0, "sources_updated": 0}
+    result = {
+        "written": 0,
+        "sources_updated": 0,
+        "parent_column": "parent_concept" in concept_fields,
+        "parent_fallback": "parent_concept" not in concept_fields,
+    }
     for c in concepts:
         for topic in _concept_placements(c):
             key = concept_placement_key(c, topic)
