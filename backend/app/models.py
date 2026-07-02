@@ -245,4 +245,8 @@ class UploadJob(Base):
     # uploaded|converted|deposited|generated
     result_ids: Mapped[list] = mapped_column(JSON, default=list)
     detail: Mapped[str] = mapped_column(Text, default="")
+    # Question / Task Inventory captured during concept generation, kept for
+    # extraction-completeness auditing: {"items": [...], "stats": {...},
+    # "mined_types": [...]}. Downloadable as CSV.
+    question_inventory: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

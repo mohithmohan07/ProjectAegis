@@ -1152,7 +1152,12 @@ Rules:
 - For Computer Science, Types may be code tracing, debugging, output prediction,
   algorithm writing, logic correction, or concept explanation.
 - Omit Types only for concepts with zero meaningful assessable question/task varieties.
-- Culmination rows are not handled here.
+- Each Type must be properly defined: name the action, object, and
+  condition/method (e.g. "Finding the Unknown Exponent Using the Product Law"),
+  never vague labels like "Direct Questions" or "Word Problems".
+- Culmination rows may receive Types when a pattern mixes/combines several
+  concepts of the topic (synthesis, mixed application, multi-step); keep their
+  Description ("Description: Recap") unchanged.
 - Use zero-padded labels exactly "Type 01:" and "Case 01:".
 - Do not rewrite Misconception except to keep an existing useful one in place.
 - Do not include source labels such as "Example 3" or "Exercise 1.2" in public concept_details.
@@ -1193,15 +1198,34 @@ in the source. A Case is a concrete source-derived instance of that pattern.
 Return ONLY strict JSON:
 {"types":[{"type_id":"TYPE-0001","type_title":"","type_description":"","task_pattern":"","source_question_ids":["QINV-0001"],"case_prompts":[{"case_id":"CASE-0001","source_question_id":"QINV-0001","case_prompt":"","case_signature":""}],"concept_match_hint":"","parent_concept_match_hint":"","topic_match_hint":"","difficulty_hint":"Basic|Intermediate|Advanced","cognitive_skill_hint":"","subject_skill_hint":""}]}.
 
+COVERAGE IS MANDATORY (most important rule):
+- EVERY inventory item MUST appear in at least one Type's source_question_ids.
+- NEVER skip an item because it looks trivial, routine, descriptive, or hard to
+  classify. If an item fits no existing Type, CREATE a new Type for it.
+- Classification should be inclusive, not strict: when unsure between dropping
+  an item and creating an extra Type, always create the extra Type.
+- A missed question is a defect; an extra Type is not.
+
 Rules:
-- Every inventory item must map to at least one Type.
 - One inventory item may map to multiple Types if it combines multiple skills.
-- Do not create one Type per item unless the pattern is genuinely unique.
+- Group items that share the same pattern under one Type, but do not force
+  dissimilar items together just to keep the Type count low.
 - Do not merge different academic, solving, answering, writing, interpretation,
   coding, experimental, or practical patterns.
-- Type titles must be specific, reusable, and subject-appropriate; never generic.
 - Preserve source_question_ids and source traceability in debug JSON.
 - Do not include source labels in public concept_details.
+
+TYPE WORDING (each Type must be properly defined):
+- type_title must be a precise, self-explanatory pattern name that states the
+  action, the object, and the condition/method, e.g. "Finding the Unknown
+  Exponent Using the Product Law" or "Identifying the Tense of an Underlined
+  Verb in a Sentence" — never vague labels like "Exponent Problems",
+  "Word Problems", "Direct Questions", or "Miscellaneous".
+- type_description must DEFINE the pattern in 1-2 sentences: what is given to
+  the student, what the student must do, and what form the answer takes.
+- task_pattern must be a reusable template of the task, with the changing
+  quantities/objects generalized (e.g. "Given a^m x a^n, simplify to a single
+  power of a").
 - For Mathematics, Types may be numerical/formula/problem-solving patterns.
 - For Science, Types may be numerical, diagram, experiment, observation,
   reasoning, comparison, process, or application patterns.
@@ -1237,6 +1261,10 @@ Rules:
 - Never invent concept_id or type_id values; use only the ones provided.
 - A concept may receive multiple type_ids; a Type belongs to one concept.
 - Choose the concept that the Type most directly assesses (subject-appropriate).
+- Concepts flagged "is_culmination": true are topic recap rows. Assign a Type
+  there when the Type combines/mixes several concepts of that topic (synthesis,
+  mixed application, multi-step, cross-concept comparison). Single-concept
+  Types go to the specific concept, not the culmination.
 - Do not drop any type_id. If unsure, pick the closest concept_id.
 - Return no prose, only the JSON object.
 """)
@@ -1245,7 +1273,9 @@ prompts.register(
     "concepts.culmination.system", category=_CONCEPTS_CAT,
     label="Topic culmination builder system prompt",
     default="""\
-Build culmination rows after normal concepts and Types are finalized.
+Build culmination rows after the normal concept map is finalized. The Types
+assignment pass runs AFTER this one and may place mixed/synthesis Types mined
+from the source onto these culmination rows.
 Return ONLY strict JSON:
 {"rows":[{"topic":"","parent_concept":"","concept":"","concept_description":"","keywords":""}]}.
 
@@ -1254,7 +1284,8 @@ Rules:
 - Name: "Culmination - <A>, <B> and <C>".
 - Use the main ideas in that topic.
 - Description must be exactly: "Description: Recap".
-- Types must contain mixed multi-concept application/problem formats.
+- Give each culmination a starter Types section with mixed multi-concept
+  application/problem formats (the later Types pass may refine it).
 - Place culmination last within the topic.
 - Do not change normal rows except to position the culmination correctly.
 - Do not create culmination during chunk extraction; this pass runs only after the full topic map exists.
@@ -1649,7 +1680,30 @@ def _extract_question_task_inventory_via_api(*, meta: dict, sections: list[dict]
     return inventory
 
 
-def _mine_types_from_inventory_via_api(*, meta: dict, inventory: dict) -> dict:
+def _uncovered_inventory_items(inventory: dict, types: list[dict]) -> list[dict]:
+    """Inventory items whose qid appears in no mined Type's source_question_ids."""
+    covered: set[str] = set()
+    for t in types:
+        for qid in t.get("source_question_ids") or []:
+            covered.add((qid or "").strip())
+        for case in t.get("case_prompts") or []:
+            if isinstance(case, dict):
+                covered.add((case.get("source_question_id") or "").strip())
+    return [
+        item for item in inventory.get("items", [])
+        if (item.get("qid") or "").strip() not in covered
+    ]
+
+
+def _mine_types_from_inventory_via_api(
+    *, meta: dict, inventory: dict, max_coverage_attempts: int = 2,
+) -> dict:
+    """Mine reusable Types with mandatory inventory coverage.
+
+    After the first mining pass, any inventory items that no Type claims are
+    re-sent to the model (with the already-mined Types for context) so every
+    stored question/task ends up classified — inclusively, never strictly.
+    """
     import json as _json
 
     if not inventory.get("items"):
@@ -1664,20 +1718,83 @@ def _mine_types_from_inventory_via_api(*, meta: dict, inventory: dict) -> dict:
     progress.log(
         f"Mining reusable Types from {len(inventory.get('items', []))} inventory item(s).")
     data = _openai_json(system, user)
-    types = data.get("types") or []
+    types = list(data.get("types") or [])
     progress.log(f"Type Mining produced {len(types)} reusable Type(s).")
+
+    for attempt in range(1, max_coverage_attempts + 1):
+        missed = _uncovered_inventory_items(inventory, types)
+        if not missed:
+            break
+        progress.log(
+            f"Type Mining coverage attempt {attempt}: {len(missed)} inventory "
+            "item(s) unclassified — re-mining the missed items.",
+            level="warning",
+        )
+        follow_up = (
+            _metadata_block(meta)
+            + "\nALREADY MINED TYPES (for context; extend or add, never delete):\n"
+            + _json.dumps({"types": types}, ensure_ascii=False)
+            + "\n\nUNCLASSIFIED INVENTORY ITEMS — every one of these MUST be "
+            "classified. Assign each to an existing Type (repeat that Type with "
+            "the extra source_question_ids and case_prompts) or create a new "
+            "Type. Do not skip any item:\n"
+            + _json.dumps({"items": missed}, ensure_ascii=False)
+        )
+        extra = _openai_json(system, follow_up)
+        extra_types = extra.get("types") or []
+        by_id = {t.get("type_id"): t for t in types if t.get("type_id")}
+        for et in extra_types:
+            existing = by_id.get(et.get("type_id"))
+            if existing is None:
+                types.append(et)
+                if et.get("type_id"):
+                    by_id[et["type_id"]] = et
+                continue
+            known_q = set(existing.get("source_question_ids") or [])
+            for qid in et.get("source_question_ids") or []:
+                if qid not in known_q:
+                    existing.setdefault("source_question_ids", []).append(qid)
+                    known_q.add(qid)
+            known_cases = {
+                (c.get("case_prompt") or "").strip()
+                for c in existing.get("case_prompts") or []
+                if isinstance(c, dict)
+            }
+            for case in et.get("case_prompts") or []:
+                prompt_text = (
+                    case.get("case_prompt", "") if isinstance(case, dict) else str(case)
+                ).strip()
+                if prompt_text and prompt_text not in known_cases:
+                    existing.setdefault("case_prompts", []).append(
+                        case if isinstance(case, dict) else {"case_prompt": prompt_text})
+                    known_cases.add(prompt_text)
+
+    still_missed = _uncovered_inventory_items(inventory, types)
+    total = len(inventory.get("items", []))
+    progress.log(
+        f"Type Mining coverage: {total - len(still_missed)}/{total} inventory "
+        f"item(s) classified into {len(types)} Type(s).",
+        level="warning" if still_missed else "success",
+    )
     return {"types": types}
 
 
 def _mined_type_to_body(mtype: dict, start_type: int) -> tuple[str, int]:
     """Render one mined Type into a ``Type NN: ... Case NN: ...`` fragment.
 
-    This is deterministic formatting only — the Type's title/cases are authored
-    by the API mining step. Source labels are stripped so injected Types never
-    carry artifacts (e.g. "Exercise 1.2") that final validation would reject.
+    This is deterministic formatting only — the Type's title/definition/cases
+    are authored by the API mining step. The Type line carries the precise
+    pattern name plus its 1-2 sentence definition so every Type reads as a
+    properly defined assessment pattern. Source labels are stripped so injected
+    Types never carry artifacts (e.g. "Exercise 1.2") that final validation
+    would reject.
     """
     title = concept_cleanup.strip_dangling_references(
         (mtype.get("type_title") or mtype.get("task_pattern") or "").strip())
+    definition = concept_cleanup.strip_dangling_references(
+        (mtype.get("type_description") or "").strip())
+    if definition and _norm_for_compare(definition) != _norm_for_compare(title):
+        title = f"{title} — {definition.rstrip('.')}"
     cases: list[str] = []
     for case in (mtype.get("case_prompts") or []):
         prompt = ""
@@ -1695,6 +1812,10 @@ def _mined_type_to_body(mtype: dict, start_type: int) -> tuple[str, int]:
     for c_i, prompt in enumerate(cases[:6], start=1):
         parts.append(f"Case {c_i:02d}: {prompt}")
     return " ".join(parts), n
+
+
+def _norm_for_compare(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
 
 
 def _concept_description_only(details: str) -> str:
@@ -1720,13 +1841,14 @@ def _assign_mined_types_via_api(
     types = (mined_types or {}).get("types") or []
     if not types:
         return records
-    normal = [r for r in records if not cr.is_culmination(r.get("concept_title", ""))]
-    if not normal:
+    if not records:
         return records
 
+    # Culmination rows are included so mixed/synthesis Types mined from the
+    # source can be placed on them (this pass runs after the culmination pass).
     cid_map: dict[str, dict] = {}
     concept_payload: list[dict] = []
-    for i, rec in enumerate(normal, start=1):
+    for i, rec in enumerate(records, start=1):
         cid = f"CONCEPT-{i:04d}"
         cid_map[cid] = rec
         concept_payload.append({
@@ -1735,6 +1857,7 @@ def _assign_mined_types_via_api(
             "parent_concept": rec.get("parent_concept", ""),
             "concept": rec.get("concept_title", ""),
             "concept_description": _concept_description_only(rec.get("concept_details", "")),
+            "is_culmination": cr.is_culmination(rec.get("concept_title", "")),
         })
 
     types_by_id: dict[str, dict] = {}
@@ -1846,7 +1969,9 @@ def _validation_options(stage: str) -> dict:
         "skeleton": {"allow_types": False, "require_culmination": False, "allow_culmination": False},
         "canonicalize": {"allow_types": False, "require_culmination": False, "allow_culmination": False},
         "description": {"allow_types": False, "require_culmination": False, "allow_culmination": False},
-        "types": {"allow_types": True, "require_culmination": False, "allow_culmination": False},
+        # Types run AFTER the culmination pass, so culmination rows are present
+        # (and may themselves receive mixed/synthesis Types).
+        "types": {"allow_types": True, "require_culmination": True, "allow_culmination": True},
         "culmination": {"allow_types": True, "require_culmination": True, "allow_culmination": True},
         "final": {"allow_types": True, "require_culmination": True, "allow_culmination": True},
     }.get(stage, {"allow_types": True, "require_culmination": False, "allow_culmination": True})
@@ -2280,12 +2405,16 @@ def concepts_from_mmd(
     mmd_text: str, *, subject: str = "", board: str = "", grade: str = "",
     unit: str = "", chapter_title: str = "", chapter_id: int | str | None = None,
     chapter_code: str = "", learning_kind: str = "Post",
-    live: bool | None = None,
+    live: bool | None = None, artifacts: dict | None = None,
 ) -> list[dict]:
     """Parse an MMD document into concept records (post-learning).
 
     Large chapters are processed in ordered chunks (never trimmed) and the
     per-chunk concepts are merged, so no chapter content is lost.
+
+    When ``artifacts`` is provided it is filled with the intermediate
+    ``question_task_inventory`` and ``mined_types`` so callers can persist
+    them (e.g. for the extraction-completeness CSV download).
     """
     use_live = config.use_live_generation() if live is None else live
     meta = _metadata(
@@ -2311,6 +2440,12 @@ def concepts_from_mmd(
             meta=meta, sections=sections)
         mined_types = _mine_types_from_inventory_via_api(
             meta=meta, inventory=question_task_inventory)
+        if artifacts is not None:
+            artifacts["question_task_inventory"] = question_task_inventory
+            artifacts["mined_types"] = mined_types
+        # Culminations are built BEFORE Types assignment so mixed/synthesis
+        # Types mined from the source can be placed on culmination rows too.
+        out = _build_culminations_via_api(out, meta=meta)
         out = _assign_types_via_api(
             out,
             subject=subject,
@@ -2320,7 +2455,6 @@ def concepts_from_mmd(
             question_task_inventory=question_task_inventory,
             mined_types=mined_types,
         )
-        out = _build_culminations_via_api(out, meta=meta)
         out = _repair_records_via_api(
             out, meta=meta, stage="final", source_context=mmd_text, strict=True)
         out = [concept_cleanup.clean_concept_record(dict(r)) for r in out]

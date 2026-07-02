@@ -124,6 +124,8 @@ export const api = {
     `${BASE}/data/export/questions?ids=${ids.join(",")}`,
   exportConceptsUrl: (ids: number[]) =>
     `${BASE}/data/export/concepts?ids=${ids.join(",")}`,
+  inventoryCsvUrl: (jobId: number) =>
+    `${BASE}/build-concepts/uploads/${jobId}/inventory.csv`,
   createWorkbookUrl: (subject: string, board: string, grade: string, mode: "blank" | "content") =>
     `${BASE}/data/workbook/new?${new URLSearchParams({ subject, board, grade, mode })}`,
   importWorkbook: (file: File) => {
