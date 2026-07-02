@@ -782,47 +782,39 @@ prompts.register(
 
 prompts.register(
     "concepts.types_guidance.math", category=_CONCEPTS_CAT,
-    label="Types classification guidance (math/physics)",
+    label="Types classification guidance (math-heavy subjects)",
     default="""\
-   Types classify EVERY distinct question/numerical variety under the concept —
-   this is how teachers later pick which varieties to assess. Extract ALL
-   varieties from the section AND from related exercise problems (fold exercises
-   into the concept they test, never as separate topics).
-   Each variety = one solving/answering pattern (e.g. direct evaluation, word
-   problem, proof, diagram-based, unit conversion). Under each variety list
-   concrete Case prompts (specific "Evaluate…", "Find…", "Prove…", "Draw…"
-   stems drawn from the chapter).
-   Generate generously — many varieties with multiple cases each; the team
-   manually keeps what they need. Only skip Types when the concept is purely
-   definitional with zero assessable question formats.""")
+   Types classify EVERY distinct question/task pattern under the concept —
+   numerical, formula, proof, construction, graph, diagram, reasoning, or word
+   problem patterns as the source demands. Mine the Question / Task Inventory
+   first, then fold each reusable pattern into the concept it assesses. Each
+   variety = one solving/answering/task pattern; each Case is a concrete
+   source-derived prompt. Only skip Types when a concept has zero meaningful
+   assessable task varieties.""")
 
 prompts.register(
     "concepts.types_guidance.descriptive", category=_CONCEPTS_CAT,
-    label="Types classification guidance (other subjects)",
+    label="Types classification guidance (all subjects)",
     default="""\
-   Types classify EVERY distinct question/problem variety under the concept —
-   numerical drills, diagram tasks, short-answer formats, application scenarios,
-   comparison prompts, map/data exercises, etc. Extract ALL varieties from the
-   section AND from related exercise problems (fold exercises into the concept
-   they test).
-   Each variety = one assessable format. Under each variety list concrete Case
-   prompts tied to the chapter content.
-   Generate generously — many varieties with multiple cases; the team manually
-   keeps what they need. Only skip Types when the concept is purely
-   definitional/recall with zero assessable formats.""")
+   Types classify EVERY distinct question/task variety under the concept:
+   explanation, comparison, reasoning, diagram, data/table/graph, map, source,
+   passage, case, experiment, observation/inference, grammar transformation,
+   writing, literature extract, coding/debugging, short-answer, long-answer, or
+   numerical patterns as appropriate to the subject. Mine the Question / Task
+   Inventory first; never force non-math material into numerical templates.
+   Each variety = one reusable assessable format with concrete Case prompts.
+   Only skip Types when the concept has zero meaningful assessable varieties.""")
 
 prompts.register(
     "concepts.types_example", category=_CONCEPTS_CAT,
     label="Types section format example",
     default=(
-        "Types: Type 01: Evaluating numerical exponential expressions "
-        "Case 01: Evaluate 2^3 × 2^2 Case 02: Evaluate (3^2)^4 "
-        "Case 03: Simplify and find the value "
-        "Type 02: Simplifying using laws of indices "
-        "Case 01: Simplify a^m × a^n Case 02: Express as a single power "
-        "Type 03: Word problems involving exponents "
-        "Case 01: Given population growth rate find final count "
-        "Case 02: Compare two exponential models"
+        "Types: Type 01: Applying a reusable source-derived task pattern "
+        "Case 01: Solve, explain, label, interpret, transform, trace, compare, "
+        "or write using a concrete source prompt "
+        "Type 02: Interpreting subject-specific evidence or representation "
+        "Case 01: Use a diagram, graph, table, map, passage, source, experiment, "
+        "code snippet, quotation, or data set from the chapter"
     ))
 
 prompts.register(
@@ -929,7 +921,7 @@ prompts.register(
             "discrete, non-redundant concepts using the textbook's own topic "
             "headings (strip section numbers like 1.2 from names). One "
             "culmination per topic. Write clear source-grounded Descriptions; "
-            "add Types only when there are problems/numericals/exercises/"
+            "add Types only when there are source question/task/"
             "assessable formats; add Misconception only when there is a real "
             "likely learner error. Types use zero-padded 'Type 01:'/'Case 01:' labels:")
 
@@ -961,8 +953,9 @@ Your job (apply ALL of these intelligently — do not rely on downstream code):
    generously like a standalone types list, then the team picks what to keep.
    NEVER remove a Types block from the draft. If a concept involves calculation,
    problem-solving, application, diagrams, or exercises, it MUST have a rich
-   Types section classifying ALL distinct question/numerical varieties (including
-   exercise-section problems folded into the concept they test). Use zero-padded
+   Types section classifying ALL distinct question/task patterns (including
+   exercise, source, diagram, data, language, coding, practical, or numerical
+   items folded into the concept they test). Use zero-padded
    numeric labels: Type 01: <name> Case 01: <prompt> Case 02: ... Type 02: ...
    (restart at Type 01 per concept; continuous renumbering happens downstream).
    Only omit Types for concepts that are purely definitional with zero assessable
@@ -979,8 +972,8 @@ Your job (apply ALL of these intelligently — do not rely on downstream code):
    references ("Example 19", "Fig 2", "MMD"). Misconception is optional: keep it
    only when it is specific and useful; never write N/A/None/filler.
 
-9. **Chapter source.** When CHAPTER SOURCE text is provided, mine it for exercise
-   problems and numerical varieties to populate Types under the concepts they test.
+9. **Chapter source.** When CHAPTER SOURCE text is provided, mine it for all
+   assessable question/task patterns to populate Types under the concepts they test.
 
 10. **Description quality.** Descriptions are used for lesson planning,
     assessments, and downstream content. Keep them source-grounded, 2-4 compact
@@ -1059,8 +1052,8 @@ RULES:
    continuous renumbering across the chapter happens downstream).
 5. Example:
    {{types_example}}
-6. Mine CHAPTER SOURCE for ALL exercise problems and numerical varieties; fold
-   each into the concept it tests as Types/Cases.
+6. Mine CHAPTER SOURCE for ALL assessable question/task patterns; fold each into
+   the concept it tests as Types/Cases.
 7. Omit Types for purely definitional concepts with zero assessable formats.
    Every problem-solving, calculation, application, or exercise-backed concept
    MUST have Types with at least two varieties and multiple Cases.
@@ -1145,15 +1138,86 @@ Rules:
 - Preserve Description exactly.
 - Preserve topic, parent_concept, concept title, keywords, and row order exactly.
 - Insert or replace only Types.
-- One Type = one distinct question/problem pattern.
+- Use the provided Question / Task Inventory and mined Types as the primary evidence.
+- One Type = one distinct reusable subject-appropriate assessment/task pattern.
 - One Case = one concrete question prompt/stem.
-- For math/physics/chemistry, mine examples and exercises deeply.
-- For theory subjects, include explain, compare, reason, diagram, data/source-based,
-  application, and misconception-correction formats where relevant.
-- Omit Types only for pure vocabulary/recall concepts with zero meaningful assessable varieties.
+- For Mathematics, Types may be numerical/formula/problem-solving/proof/graph/diagram patterns.
+- For Science, Types may be numerical, diagram, experiment, observation, reasoning,
+  comparison, process, or application patterns.
+- For Social Science, Types may be definition, cause-effect, comparison, source,
+  map, chronology, case, data, or long-answer patterns.
+- For Languages and Literature, Types may be grammar transformation, comprehension,
+  extract analysis, vocabulary-in-context, writing format, literary interpretation,
+  theme, character, or reference-to-context patterns.
+- For Computer Science, Types may be code tracing, debugging, output prediction,
+  algorithm writing, logic correction, or concept explanation.
+- Omit Types only for concepts with zero meaningful assessable question/task varieties.
 - Culmination rows are not handled here.
 - Use zero-padded labels exactly "Type 01:" and "Case 01:".
 - Do not rewrite Misconception except to keep an existing useful one in place.
+- Do not include source labels such as "Example 3" or "Exercise 1.2" in public concept_details.
+""")
+
+prompts.register(
+    "concepts.question_task_inventory.system", category=_CONCEPTS_CAT,
+    label="Universal Question / Task Inventory extraction prompt",
+    default="""\
+Extract a universal Question / Task Inventory from an uploaded school-subject chapter.
+This is subject-agnostic and board-agnostic: Mathematics, Science, Social Science,
+languages, literature, Computer Science, practical work, and any school subject.
+
+Return ONLY strict JSON:
+{"items":[{"qid":"QINV-0001","source_kind":"worked_example|solved_example|exercise|intext_question|mcq|fill_blank|true_false|match|assertion_reason|diagram_task|map_task|table_task|graph_task|source_task|case_task|passage_task|grammar_task|writing_task|experiment_task|coding_task|long_answer|short_answer|other","source_label":"","parent_source_label":"","topic_hint":"","page_hint":"","block_ids":[],"raw_task":"","raw_solution_or_answer":"","normalized_task":"","shared_context":"","subpart_label":"","content_objects":{"numbers":[],"variables":[],"equations":[],"coordinates":[],"ratios":[],"diagrams":[],"graphs":[],"tables":[],"maps":[],"passages":[],"sources":[],"experiments":[],"observations":[],"characters":[],"events":[],"dates":[],"places":[],"terms":[],"definitions":[],"processes":[],"comparisons":[],"causes":[],"effects":[],"code_snippets":[],"grammar_items":[],"unknowns":[],"given_values":[],"conditions":[]},"requires_visual":false,"requires_context":false,"order_index":1}],"stats":{"worked_examples":0,"solved_examples":0,"exercise_questions":0,"objective_items":0,"subjective_items":0,"descriptive_items":0,"subparts":0,"visual_tasks":0,"table_or_graph_tasks":0,"source_or_passage_tasks":0,"total_inventory_items":0}}.
+
+Rules:
+- Extract all assessable questions/tasks from first to last: examples, intext
+  questions, exercises, objective items, diagrams, graphs, maps, data/tables,
+  sources/passages/cases, experiments, observations, grammar, writing, literature
+  extracts, vocabulary, coding, proof/reasoning, numerical, application, project
+  or activity prompts if assessable.
+- Use content_objects for all extracted subject matter and representations.
+- A task may be non-numerical; do not reject it as generic because it is descriptive.
+- Preserve source traceability in this debug JSON only; source labels must not be
+  copied into public concept_details.
+- Preserve shared context for passage/source/case/table/graph/map items.
+""")
+
+prompts.register(
+    "concepts.type_mining.system", category=_CONCEPTS_CAT,
+    label="Universal Type Mining prompt",
+    default="""\
+Classify the Question / Task Inventory into reusable academic Types appropriate
+to the subject and chapter. A Type is a reusable assessment/task pattern found
+in the source. A Case is a concrete source-derived instance of that pattern.
+
+Return ONLY strict JSON:
+{"types":[{"type_id":"TYPE-0001","type_title":"","type_description":"","task_pattern":"","source_question_ids":["QINV-0001"],"case_prompts":[{"case_id":"CASE-0001","source_question_id":"QINV-0001","case_prompt":"","case_signature":""}],"concept_match_hint":"","parent_concept_match_hint":"","topic_match_hint":"","difficulty_hint":"Basic|Intermediate|Advanced","cognitive_skill_hint":"","subject_skill_hint":""}]}.
+
+Rules:
+- Every inventory item must map to at least one Type.
+- One inventory item may map to multiple Types if it combines multiple skills.
+- Do not create one Type per item unless the pattern is genuinely unique.
+- Do not merge different academic, solving, answering, writing, interpretation,
+  coding, experimental, or practical patterns.
+- Type titles must be specific, reusable, and subject-appropriate; never generic.
+- Preserve source_question_ids and source traceability in debug JSON.
+- Do not include source labels in public concept_details.
+- For Mathematics, Types may be numerical/formula/problem-solving patterns.
+- For Science, Types may be numerical, diagram, experiment, observation,
+  reasoning, comparison, process, or application patterns.
+- For Social Science, Types may be definition, cause-effect, comparison,
+  source-based, map-based, chronology, case-based, data, or long-answer patterns.
+- For Languages, Types may be grammar transformation, comprehension, extract
+  analysis, vocabulary-in-context, writing format, literary interpretation, or
+  theme/character analysis.
+- For Computer Science, Types may be code tracing, debugging, output prediction,
+  algorithm writing, logic correction, or concept explanation.
+- Use subject_skill_hint values such as Mathematical Calculation, Algebraic
+  Reasoning, Diagram Interpretation, Experimental Inference, Conceptual
+  Explanation, Definition Recall, Comparative Analysis, Source Interpretation,
+  Map Skill, Data Interpretation, Grammar Transformation, Literary
+  Interpretation, Code Tracing, Algorithm Design, Case Application, or
+  Long-Answer Structuring.
 """)
 
 prompts.register(
@@ -1503,6 +1567,87 @@ def _description_refine_system(subject: str) -> str:
     return prompts.get_text("concepts.description_refine.system")
 
 
+def _empty_inventory() -> dict:
+    return {
+        "items": [],
+        "stats": {
+            "worked_examples": 0,
+            "solved_examples": 0,
+            "exercise_questions": 0,
+            "objective_items": 0,
+            "subjective_items": 0,
+            "descriptive_items": 0,
+            "subparts": 0,
+            "visual_tasks": 0,
+            "table_or_graph_tasks": 0,
+            "source_or_passage_tasks": 0,
+            "total_inventory_items": 0,
+        },
+    }
+
+
+def _extract_question_task_inventory_via_api(*, meta: dict, sections: list[dict]) -> dict:
+    import json as _json
+
+    system = prompts.get_text("concepts.question_task_inventory.system")
+    inventory = _empty_inventory()
+    q_counter = 1
+    chunks = _section_aware_chunks("\n\n".join(s.get("body", "") for s in sections))
+    if not chunks and sections:
+        chunks = [{"sections": sections, "text": _format_section_chunk(sections)}]
+    progress.log(f"Building Question / Task Inventory from {len(chunks)} chunk(s).")
+    for i, chunk in enumerate(chunks, start=1):
+        user = (
+            _metadata_block(meta)
+            + f"\nQuestion / Task Inventory chunk {i} of {len(chunks)}:\n"
+            + chunk["text"]
+        )
+        data = _openai_json(system, user)
+        for item in data.get("items", []) or []:
+            if not isinstance(item, dict):
+                continue
+            item = dict(item)
+            item["qid"] = f"QINV-{q_counter:04d}"
+            item.setdefault("order_index", q_counter)
+            item.setdefault("content_objects", {})
+            inventory["items"].append(item)
+            q_counter += 1
+    stats = dict(inventory["stats"])
+    stats["total_inventory_items"] = len(inventory["items"])
+    stats["visual_tasks"] = sum(1 for item in inventory["items"] if item.get("requires_visual"))
+    stats["source_or_passage_tasks"] = sum(
+        1 for item in inventory["items"]
+        if item.get("source_kind") in {"source_task", "case_task", "passage_task"}
+    )
+    stats["table_or_graph_tasks"] = sum(
+        1 for item in inventory["items"]
+        if item.get("source_kind") in {"table_task", "graph_task"}
+    )
+    inventory["stats"] = stats
+    progress.log(f"Question / Task Inventory items: {len(inventory['items'])}.")
+    return inventory
+
+
+def _mine_types_from_inventory_via_api(*, meta: dict, inventory: dict) -> dict:
+    import json as _json
+
+    if not inventory.get("items"):
+        progress.log("Type Mining skipped — no Question / Task Inventory items.", level="warning")
+        return {"types": []}
+    system = prompts.get_text("concepts.type_mining.system")
+    user = (
+        _metadata_block(meta)
+        + "\nQuestion / Task Inventory:\n"
+        + _json.dumps(inventory, ensure_ascii=False)
+    )
+    progress.log(
+        f"Mining reusable Types from {len(inventory.get('items', []))} inventory item(s).")
+    data = _openai_json(system, user)
+    types = data.get("types") or []
+    progress.log(f"Type Mining produced {len(types)} reusable Type(s).")
+    return {"types": types}
+
+
 def _merge_types_from_fallback(
     records: list[dict], fallback: list[dict],
 ) -> list[dict]:
@@ -1719,6 +1864,8 @@ def _refine_descriptions_via_api(
 def _assign_types_via_api(
     records: list[dict], *, subject: str, mmd_text: str = "",
     meta: dict | None = None, sections: list[dict] | None = None,
+    question_task_inventory: dict | None = None,
+    mined_types: dict | None = None,
 ) -> list[dict]:
     """Dedicated Types-only API pass — mirrors manual types-first workflow."""
     import json as _json
@@ -1730,6 +1877,8 @@ def _assign_types_via_api(
         return records
     meta = meta or _metadata(subject=subject)
     sections = sections or parse_mmd_sections(mmd_text)
+    question_task_inventory = question_task_inventory or _empty_inventory()
+    mined_types = mined_types or {"types": []}
     system = _types_assign_system(subject)
     progress.log(f"Assigning Types to {len(records)} concepts (dedicated API pass).")
     topics: dict[str, list[dict]] = {}
@@ -1743,6 +1892,10 @@ def _assign_types_via_api(
             _metadata_block(meta)
             + f"\nTopic: {topic}\nConcept map — add Types to assessable concepts:\n"
             + payload
+            + "\n\nQUESTION / TASK INVENTORY (debug trace, do not copy source labels into concept_details):\n"
+            + _json.dumps(question_task_inventory, ensure_ascii=False)
+            + "\n\nMINED REUSABLE TYPES TO EMBED:\n"
+            + _json.dumps(mined_types, ensure_ascii=False)
             + "\n\nRELEVANT TOPIC SOURCE + EXERCISE BLOCKS:\n"
             + _trim(source, 220_000)
         )
@@ -1988,8 +2141,19 @@ def concepts_from_mmd(
         out = _consolidate_concepts_via_api(out, subject=subject, mmd_text=mmd_text, meta=meta)
         out = _refine_descriptions_via_api(
             out, subject=subject, mmd_text=mmd_text, meta=meta, sections=sections)
+        question_task_inventory = _extract_question_task_inventory_via_api(
+            meta=meta, sections=sections)
+        mined_types = _mine_types_from_inventory_via_api(
+            meta=meta, inventory=question_task_inventory)
         out = _assign_types_via_api(
-            out, subject=subject, mmd_text=mmd_text, meta=meta, sections=sections)
+            out,
+            subject=subject,
+            mmd_text=mmd_text,
+            meta=meta,
+            sections=sections,
+            question_task_inventory=question_task_inventory,
+            mined_types=mined_types,
+        )
         out = _build_culminations_via_api(out, meta=meta)
         out = _repair_records_via_api(
             out, meta=meta, stage="final", source_context=mmd_text, strict=True)

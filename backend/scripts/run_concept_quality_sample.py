@@ -78,6 +78,18 @@ METADATA = {
     "learning_kind": "Post",
 }
 
+CONTENT_OBJECT_KEYS = [
+    "numbers", "variables", "equations", "coordinates", "ratios", "diagrams",
+    "graphs", "tables", "maps", "passages", "sources", "experiments",
+    "observations", "characters", "events", "dates", "places", "terms",
+    "definitions", "processes", "comparisons", "causes", "effects",
+    "code_snippets", "grammar_items", "unknowns", "given_values", "conditions",
+]
+
+
+def _content_objects(**values: list[str]) -> dict:
+    return {key: list(values.get(key, [])) for key in CONTENT_OBJECT_KEYS}
+
 
 def _row(topic: str, parent: str, concept: str, details: str, keywords: str) -> dict:
     return {
@@ -90,6 +102,92 @@ def _row(topic: str, parent: str, concept: str, details: str, keywords: str) -> 
 
 
 def _mock_stages() -> dict:
+    inventory = {
+        "items": [
+            {
+                "qid": "QINV-0001",
+                "source_kind": "exercise",
+                "source_label": "Exercise 1.1 Q1",
+                "parent_source_label": "Exercise 1.1",
+                "topic_hint": "Meaning of Exponents",
+                "page_hint": "",
+                "block_ids": [],
+                "raw_task": "Write 3 × 3 × 3 × 3 in exponential form.",
+                "raw_solution_or_answer": "",
+                "normalized_task": "Convert repeated multiplication to exponential form.",
+                "shared_context": "",
+                "subpart_label": "",
+                "content_objects": _content_objects(numbers=["3"], terms=["exponential form"]),
+                "requires_visual": False,
+                "requires_context": False,
+                "order_index": 1,
+            },
+            {
+                "qid": "QINV-0002",
+                "source_kind": "exercise",
+                "source_label": "Exercise 1.2 Q2",
+                "parent_source_label": "Exercise 1.2",
+                "topic_hint": "Laws of Exponents",
+                "page_hint": "",
+                "block_ids": [],
+                "raw_task": "Simplify p^9 ÷ p^3.",
+                "raw_solution_or_answer": "",
+                "normalized_task": "Divide powers with the same base.",
+                "shared_context": "",
+                "subpart_label": "",
+                "content_objects": _content_objects(
+                    variables=["p"], equations=["p^9 ÷ p^3"], conditions=["a ≠ 0", "m > n"]),
+                "requires_visual": False,
+                "requires_context": False,
+                "order_index": 2,
+            },
+        ],
+        "stats": {
+            "worked_examples": 0,
+            "solved_examples": 0,
+            "exercise_questions": 2,
+            "objective_items": 0,
+            "subjective_items": 2,
+            "descriptive_items": 0,
+            "subparts": 0,
+            "visual_tasks": 0,
+            "table_or_graph_tasks": 0,
+            "source_or_passage_tasks": 0,
+            "total_inventory_items": 2,
+        },
+    }
+    mined_types = {
+        "types": [
+            {
+                "type_id": "TYPE-0001",
+                "type_title": "Converting Repeated Multiplication to Exponential Form",
+                "type_description": "Reusable exponent notation task pattern.",
+                "task_pattern": "Rewrite repeated factors as a power.",
+                "source_question_ids": ["QINV-0001"],
+                "case_prompts": [{"case_id": "CASE-0001", "source_question_id": "QINV-0001", "case_prompt": "Write 3 × 3 × 3 × 3 in exponential form.", "case_signature": "repeated multiplication -> power"}],
+                "concept_match_hint": "Writing Repeated Multiplication as Powers",
+                "parent_concept_match_hint": "Exponent Notation",
+                "topic_match_hint": "Meaning of Exponents",
+                "difficulty_hint": "Basic",
+                "cognitive_skill_hint": "Apply",
+                "subject_skill_hint": "Mathematical Calculation",
+            },
+            {
+                "type_id": "TYPE-0002",
+                "type_title": "Dividing Powers with the Same Base",
+                "type_description": "Reusable quotient law task pattern.",
+                "task_pattern": "Subtract exponents when dividing powers with the same non-zero base.",
+                "source_question_ids": ["QINV-0002"],
+                "case_prompts": [{"case_id": "CASE-0002", "source_question_id": "QINV-0002", "case_prompt": "Simplify p^9 ÷ p^3.", "case_signature": "same-base division"}],
+                "concept_match_hint": "Dividing Powers with the Same Base",
+                "parent_concept_match_hint": "Operations on Powers with the Same Base",
+                "topic_match_hint": "Laws of Exponents",
+                "difficulty_hint": "Basic",
+                "cognitive_skill_hint": "Apply",
+                "subject_skill_hint": "Algebraic Reasoning",
+            },
+        ]
+    }
     raw = [
         _row("Meaning of Exponents", "Exponent Notation", "Writing Repeated Multiplication as Powers", "Description: Repeated factors can be written as a base raised to an exponent.", "exponents, repeated multiplication, powers"),
         _row("Meaning of Exponents", "Parts of a Power", "Identifying Base and Exponent", "Description: A power has a base and an exponent.", "base, exponent, power"),
@@ -140,6 +238,8 @@ def _mock_stages() -> dict:
         "culmination_added_rows": culminated,
         "final_rows": final,
         "validator_report": report,
+        "question_task_inventory": inventory,
+        "mined_types": mined_types,
     }
 
 
@@ -150,7 +250,17 @@ def _live_stages() -> dict:
     raw = generation._extract_skeleton_via_api(chunks, meta=meta)
     canonical = generation._consolidate_concepts_via_api(raw, subject=METADATA["subject"], mmd_text=SAMPLE_MMD, meta=meta)
     desc = generation._refine_descriptions_via_api(canonical, subject=METADATA["subject"], mmd_text=SAMPLE_MMD, meta=meta, sections=sections)
-    typed = generation._assign_types_via_api(desc, subject=METADATA["subject"], mmd_text=SAMPLE_MMD, meta=meta, sections=sections)
+    inventory = generation._extract_question_task_inventory_via_api(meta=meta, sections=sections)
+    mined_types = generation._mine_types_from_inventory_via_api(meta=meta, inventory=inventory)
+    typed = generation._assign_types_via_api(
+        desc,
+        subject=METADATA["subject"],
+        mmd_text=SAMPLE_MMD,
+        meta=meta,
+        sections=sections,
+        question_task_inventory=inventory,
+        mined_types=mined_types,
+    )
     culminated = generation._build_culminations_via_api(typed, meta=meta)
     final = generation._repair_records_via_api(culminated, meta=meta, stage="final", source_context=SAMPLE_MMD, strict=True)
     final = [concept_cleanup.clean_concept_record(dict(r)) for r in final]
@@ -164,6 +274,8 @@ def _live_stages() -> dict:
         "culmination_added_rows": culminated,
         "final_rows": final,
         "validator_report": report,
+        "question_task_inventory": inventory,
+        "mined_types": mined_types,
     }
 
 
@@ -184,6 +296,8 @@ def _print_report(payload: dict) -> None:
     print("=== Concept Quality Sample ===")
     print(json.dumps(payload["metadata"], indent=2, ensure_ascii=False))
     print(f"Mode: {'live' if payload['live'] else 'mock'} | Write: {payload['write']}")
+    print(f"Question / Task Inventory items: {len(payload.get('question_task_inventory', {}).get('items', []))}")
+    print(f"Mined Types: {len(payload.get('mined_types', {}).get('types', []))}")
     by_topic: dict[str, list[dict]] = {}
     for row in payload["final_rows"]:
         by_topic.setdefault(row["topic"], []).append(row)

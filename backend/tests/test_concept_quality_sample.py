@@ -17,6 +17,10 @@ def test_laws_of_exponents_mock_quality_sample_structure():
     assert all(r.get("parent_concept") for r in final)
     assert all(r["concept_details"].startswith("Description:") for r in final)
     assert not any(e["severity"] == "error" for e in payload["validator_report"]["errors"])
+    assert payload["question_task_inventory"]["items"]
+    assert payload["mined_types"]["types"]
+    keys = set(payload["question_task_inventory"]["items"][0]["content_objects"])
+    assert {"passages", "maps", "experiments", "code_snippets", "grammar_items", "conditions"} <= keys
 
 
 def test_laws_of_exponents_skeleton_has_no_later_pass_content():
