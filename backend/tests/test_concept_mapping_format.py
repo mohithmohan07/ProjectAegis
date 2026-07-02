@@ -9,7 +9,9 @@ from tests.conftest import convert_concept_upload, stream_result
 
 
 def test_strip_helpers():
-    assert bi.strip_title_tag("Understanding Social Science (09_SocialScience_CBSE)") \
+    assert bi.strip_title_tag("Number System (09_Mathematics_CBSE_RS)") \
+        == "Number System"
+    assert bi.strip_title_tag("Understanding Social Science (09_SocialScience_CBSE_NCERT)") \
         == "Understanding Social Science"
     assert bi.strip_title_tag("What is Social Science (09CBSS_Ch_PL_Topic)") \
         == "What is Social Science"

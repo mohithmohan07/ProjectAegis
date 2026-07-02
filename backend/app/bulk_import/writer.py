@@ -305,7 +305,9 @@ def _front_bands(concept: models.Concept, topic: models.Topic, *,
     are filled later when assessments are built, not at concept generation.
     """
     chapter = topic.chapter
-    c_tag = directory.chapter_tag(chapter.board, chapter.grade, chapter.subject)
+    book = directory.primary_book_source(concept.sources)
+    c_tag = directory.chapter_tag(
+        chapter.board, chapter.grade, chapter.subject, book=book)
     concept_fields = concept_fields or CONCEPT_FIELDS
     parent_column_present = "parent_concept" in concept_fields
     concept_labels = ", ".join(

@@ -24,6 +24,9 @@ from .. import models
 _CODE_PREFIX = re.compile(r"\b(\d{2})([A-Z]{2})([A-Z]{2})(?=[_A-Z0-9 ]|$)")
 # Fuller chapter code incl. the chapter slug, e.g. "10CBMA_Circles".
 _CHAPTER_CODE = re.compile(r"\b\d{2}[A-Z]{2}[A-Z]{2}_[A-Za-z0-9]+")
+# Human chapter title tag, e.g. "Number System (09_Mathematics_CBSE_RS)".
+_CHAPTER_HUMAN_TAG = re.compile(
+    r"\((\d{2})_([^_()]+)_([^_()]+)(?:_([^_()]+))?\)")
 
 # NCERT source-file convention, e.g.
 #   CBSE_NCERT_G08_CH04_QUADRILATERALS.pdf
@@ -86,8 +89,101 @@ def parse_code_prefix(text: str) -> tuple[str, str, str] | None:
     return grade, board, subject
 
 
+_BOARD_FROM_TAG = {
+    "CBSE": "CBSE",
+    "ICSE": "ICSE",
+    "KSTATE": "Karnataka",
+    "MSBSHSE": "Maharashtra",
+}
+_BOARD_TO_TAG = {
+    "CBSE": "CBSE",
+    "ICSE": "ICSE",
+    "Karnataka": "KSTATE",
+    "KSTATE": "KSTATE",
+    "Maharashtra": "MSBSHSE",
+    "MSBSHSE": "MSBSHSE",
+}
+_BOOK_TAG_HINTS = [
+    ("rs aggarwal", "RS"),
+    ("rd sharma", "RD"),
+    ("ncert", "NCERT"),
+    ("selina", "SELINA"),
+    ("oswaal", "OSWAAL"),
+    ("kts", "KTS"),
+    ("karnataka textbook", "KTS"),
+    ("msbt", "MSBT"),
+    ("m-state", "MSBT"),
+    ("symbiosis", "MSBT"),
+    ("s chand", "SCHAND"),
+    ("arihant", "ARIHANT"),
+    ("frank", "FRANK"),
+    ("together with", "TW"),
+    ("xam idea", "XAMIDEA"),
+]
+
+
+def parse_chapter_human_tag(text: str) -> dict | None:
+    """Parse ``Chapter Name (09_Mathematics_CBSE_RS)`` style tags."""
+    m = _CHAPTER_HUMAN_TAG.search(text or "")
+    if not m:
+        return None
+    grade, subject_slug, board_tag, book_tag = m.groups()
+    board = _BOARD_FROM_TAG.get(board_tag.upper(), board_tag)
+    subject = infer_subject(subject_slug) or subject_slug.replace("_", " ")
+    return {
+        "grade": grade,
+        "board": board,
+        "subject": subject,
+        "book": (book_tag or "").upper(),
+    }
+
+
+def board_tag_name(board: str) -> str:
+    """Board token for chapter title tags, e.g. CBSE, KSTATE, MSBSHSE."""
+    key = (board or "").strip()
+    if not key:
+        return "XX"
+    return _BOARD_TO_TAG.get(key, _BOARD_TO_TAG.get(key.upper(), key.upper()))
+
+
+def book_tag(source: str) -> str:
+    """Book/publisher token for chapter title tags, e.g. RS, RD, NCERT."""
+    text = (source or "").strip()
+    if not text:
+        return ""
+    lower = text.lower()
+    for hint, tag in _BOOK_TAG_HINTS:
+        if hint in lower:
+            return tag
+    slug = re.sub(r"[^A-Za-z0-9]", "", text).upper()
+    return slug[:12] or ""
+
+
+def primary_book_source(sources: str) -> str:
+    """First book source from a comma/semicolon-separated concept source list."""
+    for part in (sources or "").replace(";", ",").split(","):
+        p = part.strip()
+        if p:
+            return p
+    return ""
+
+
 def derive_chapter_meta(chapter_title: str, chapter_display_name: str, *probes: str) -> dict:
     """Best-effort board/grade/subject/code/unit for a chapter from its text fields."""
+    for candidate in (chapter_display_name, chapter_title, *probes):
+        human = parse_chapter_human_tag(candidate or "")
+        if human:
+            subject = human["subject"]
+            return {
+                "grade": human["grade"],
+                "board": human["board"],
+                "subject": subject,
+                "chapter_code": make_chapter_code(
+                    human["board"], human["grade"], subject,
+                    bi.strip_title_tag(chapter_title) or chapter_title,
+                ),
+                "unit": f"{subject} Unit",
+            }
     for candidate in (chapter_display_name, chapter_title, *probes):
         parsed = parse_code_prefix(candidate or "")
         if parsed:
@@ -136,7 +232,7 @@ def make_chapter_code(board: str, grade: str, subject: str, chapter_title: str) 
 # --------------------------------------------------------------------------- #
 # The concept-mapping output embeds a human-readable tag in each title cell so
 # every chapter / topic / concept is uniquely addressable:
-#   chapter_title  -> "Understanding Social Science (09_SocialScience_CBSE)"
+#   chapter_title  -> "Number System (09_Mathematics_CBSE_RS)"
 #   topic_title    -> "Topic 01: Meaning of Social Science (09CBSS_Understanding_Social_Science_PL)"
 #   concept_title  -> "What is Social Science (09CBSS_Understanding_Social_Science_PL_Meaning_of_Social_Science)"
 # Internal model fields stay CLEAN (no tags); the writer composes these on
@@ -156,9 +252,23 @@ def _camel_subject(subject: str) -> str:
     return "".join(re.findall(r"[A-Za-z0-9]+", subject or "")) or "Subject"
 
 
-def chapter_tag(board: str, grade: str, subject: str) -> str:
-    """e.g. ('CBSE','09','Social Science') -> '09_SocialScience_CBSE'."""
-    return f"{grade or '00'}_{_camel_subject(subject)}_{board or 'XX'}"
+def chapter_tag(board: str, grade: str, subject: str, *, book: str = "") -> str:
+    """e.g. ('CBSE','09','Mathematics','RS Aggarwal') -> '09_Mathematics_CBSE_RS'."""
+    tag = (
+        f"{grade or '00'}_{_camel_subject(subject)}_{board_tag_name(board)}"
+    )
+    book_token = book_tag(book)
+    if book_token:
+        tag = f"{tag}_{book_token}"
+    return tag
+
+
+def chapter_titled_cell(
+    chapter_title: str, board: str, grade: str, subject: str, *, book: str = "",
+) -> str:
+    """Full chapter title cell value, e.g. 'Number System (09_Mathematics_CBSE_RS)'."""
+    clean = bi.strip_title_tag(chapter_title) or chapter_title
+    return f"{clean} ({chapter_tag(board, grade, subject, book=book)})"
 
 
 def code_prefix(board: str, grade: str, subject: str) -> str:
