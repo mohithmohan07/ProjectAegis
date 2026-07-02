@@ -11,7 +11,7 @@ def test_concepts_system_requires_numeric_types_guidance():
     # Numeric zero-padded labels (Type 01:/Case 01:), not descriptive labels.
     types_system = g.prompts.get_text("concepts.types_assign.system")
     assert "Type 01:" in types_system and "Case 01:" in types_system
-    assert "One Type = one distinct question/problem pattern" in types_system
+    assert "One Type = one distinct reusable subject-appropriate assessment/task pattern" in types_system
     assert "Misconception is REQUIRED" not in system
     assert "description-only editor" in g.prompts.get_text("concepts.description_refine.system")
     assert "Merge duplicates" in g.prompts.get_text("concepts.canonicalize.system")
@@ -30,6 +30,21 @@ def test_split_prompt_contracts_are_separated():
     assert "Preserve Description exactly" in types
     assert "Culmination rows are not handled here" in types
     assert "Preserve valid fields, including parent_concept, Types" in repair
+
+
+def test_universal_question_task_inventory_and_type_mining_prompts():
+    inventory = g.prompts.get_text("concepts.question_task_inventory.system")
+    mining = g.prompts.get_text("concepts.type_mining.system")
+    assert "Question / Task Inventory" in inventory
+    assert "content_objects" in inventory
+    assert "math_objects" not in inventory
+    assert "grammar_task" in inventory and "map_task" in inventory
+    assert "coding_task" in inventory and "experiment_task" in inventory
+    assert "type_title" in mining and "subject_skill_hint" in mining
+    assert "Grammar Transformation" in mining
+    assert "Code Tracing" in mining
+    assert "Map Skill" in mining
+    assert "Type is a reusable assessment/task pattern" in mining
 
 
 def test_has_meaningful_types():
@@ -123,6 +138,7 @@ def test_assign_types_via_api(monkeypatch):
 
     def fake_openai(system, user, **kw):
         captured["system"] = system
+        captured["user"] = user
         return {"rows": [{
             "topic": "T", "concept": "C",
             "concept_description": (
@@ -135,8 +151,19 @@ def test_assign_types_via_api(monkeypatch):
     monkeypatch.setattr(g, "_openai_json", fake_openai)
     records = [{"topic": "T", "concept_title": "C",
                 "concept_details": "Description: d // Misconception: m", "keywords": ""}]
-    out = g._assign_types_via_api(records, subject="Math", mmd_text="# Chapter\nEx 1.1")
+    inventory = {"items": [{"qid": "QINV-0001", "normalized_task": "Find 2+3", "content_objects": {"numbers": ["2", "3"]}}]}
+    mined = {"types": [{"type_id": "TYPE-0001", "type_title": "Adding Given Numbers", "source_question_ids": ["QINV-0001"]}]}
+    out = g._assign_types_via_api(
+        records,
+        subject="Math",
+        mmd_text="# Chapter\nEx 1.1",
+        question_task_inventory=inventory,
+        mined_types=mined,
+    )
     assert "Types-only classifier" in captured["system"]
+    assert "QUESTION / TASK INVENTORY" in captured["user"]
+    assert "MINED REUSABLE TYPES" in captured["user"]
+    assert "QINV-0001" in captured["user"]
     assert g._has_meaningful_types(out[0]["concept_details"])
 
 
