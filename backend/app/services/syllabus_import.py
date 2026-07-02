@@ -358,16 +358,17 @@ def upsert_chapters(db: Session, rows: list[SyllabusRow]) -> dict[str, int]:
             skipped += 1
             continue
 
-        ch = models.Chapter(
+        chapter = models.Chapter(
             chapter_code=code,
             board=row.board,
             grade=row.grade,
             subject=row.subject,
             unit=row.unit,
             chapter_title=row.chapter,
-            chapter_display_name=f"{row.chapter} ({code})",
+            chapter_display_name=directory.chapter_titled_cell(
+                row.chapter, row.board, row.grade, row.subject, book="NCERT"),
         )
-        db.add(ch)
+        db.add(chapter)
         existing_codes.add(code)
         created += 1
 

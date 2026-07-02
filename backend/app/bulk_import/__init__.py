@@ -212,7 +212,7 @@ def normalize_question_text(text: str) -> str:
 
 
 # Tags embedded in the title columns of the concept-mapping output, e.g.
-# "Understanding Social Science (09_SocialScience_CBSE)" or
+# "Number System (09_Mathematics_CBSE_RS)" or
 # "What is Social Science (09CBSS_..._PL_Meaning_of_Social_Science)". A tag is a
 # trailing "(...)" whose body has at least one underscore (so real parentheticals
 # like "(C3)" or "(i)" are never stripped). topic_title also carries a leading

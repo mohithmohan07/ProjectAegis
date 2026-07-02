@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app import config, models
 from app.db import SessionLocal, init_db
 from app.bulk_import import writer
-from app.services import build_concepts, concept_cleanup, concept_refiner, concept_validator, generation
+from app.services import build_concepts, concept_cleanup, concept_refiner, concept_validator, directory, generation
 
 
 SAMPLE_MMD = """# Laws of Exponents
@@ -342,7 +342,13 @@ def _write_to_workbook(final_rows: list[dict]) -> dict:
                 subject=METADATA["subject"],
                 unit=METADATA["unit"],
                 chapter_title=METADATA["chapter_title"],
-                chapter_display_name=METADATA["chapter_title"],
+                chapter_display_name=directory.chapter_titled_cell(
+                    METADATA["chapter_title"],
+                    METADATA["board"],
+                    METADATA["grade"],
+                    METADATA["subject"],
+                    book="NCERT",
+                ),
             )
             db.add(chapter)
             db.flush()

@@ -381,7 +381,8 @@ def _seed(db) -> None:
             chapter_code=chapter_code, board=board, grade=grade, subject=subject,
             unit=f"{subject} Unit",
             chapter_title=ch_title,
-            chapter_display_name=f"{ch_title} ({chapter_code})",
+            chapter_display_name=directory.chapter_titled_cell(
+                ch_title, board, grade, subject, book="NCERT"),
             chapter_duration="3",
             chapter_description=f"{board} Grade {grade} {subject}: {ch_title}.",
         )
