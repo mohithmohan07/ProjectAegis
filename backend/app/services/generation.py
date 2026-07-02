@@ -1069,6 +1069,16 @@ Extract ONLY a clean teachable concept skeleton from a textbook section.
 Return ONLY strict JSON:
 {"rows":[{"topic":"","parent_concept":"","concept":"","concept_description":"","keywords":"","source_evidence":""}]}.
 
+COVERAGE IS MANDATORY (most important rule):
+- Extract EVERY distinct teachable concept from the first line to the last.
+- A typical textbook section yields 3-8 concepts; a full chapter yields 15-40.
+- NEVER compress a section into one or two broad concepts. Each definition,
+  rule, law, method, procedure, property, distinction, relationship, or skill
+  the section teaches is its own concept.
+- When unsure whether something is one concept or two, split it: smaller
+  mastery units are always preferred over broad summaries.
+- A missed concept is a defect; an extra specific concept is not.
+
 Rules:
 - Use the textbook section heading as topic when available; strip section numbers.
 - Do not invent textbook topics; preserve the section order from the source.
@@ -1094,8 +1104,12 @@ Return ONLY strict JSON with the same schema:
 {"rows":[{"topic":"","parent_concept":"","concept":"","concept_description":"","keywords":"","source_evidence":""}]}.
 
 Rules:
-- Merge duplicates and ensure each concept appears once.
-- Remove weak filler concepts.
+- Merge ONLY true duplicates (same concept stated twice); each concept appears once.
+- DO NOT summarize, generalize, or combine distinct concepts into broader ones.
+  Canonicalization must roughly preserve the row count: removing more than a
+  few rows from a chapter map is over-merging and is a defect.
+- Remove a concept only when it is an exact duplicate or pure filler with no
+  teachable content of its own.
 - Preserve textbook/topic order.
 - Rewrite repetitive names.
 - Parent concepts should group 3-8 related concepts where possible.
@@ -1277,17 +1291,18 @@ Build culmination rows after the normal concept map is finalized. The Types
 assignment pass runs AFTER this one and may place mixed/synthesis Types mined
 from the source onto these culmination rows.
 Return ONLY strict JSON:
-{"rows":[{"topic":"","parent_concept":"","concept":"","concept_description":"","keywords":""}]}.
+{"rows":[{"topic":"","parent_concept":"Culmination","concept":"","concept_description":"","keywords":""}]}.
 
 Rules:
-- Exactly one culmination row per topic.
+- Return ONLY the culmination rows — exactly one per topic, nothing else.
+  The normal concept rows are merged back programmatically; NEVER restate,
+  rewrite, drop, or return them.
 - Name: "Culmination - <A>, <B> and <C>".
 - Use the main ideas in that topic.
 - Description must be exactly: "Description: Recap".
 - Give each culmination a starter Types section with mixed multi-concept
   application/problem formats (the later Types pass may refine it).
-- Place culmination last within the topic.
-- Do not change normal rows except to position the culmination correctly.
+- parent_concept must be "Culmination".
 - Do not create culmination during chunk extraction; this pass runs only after the full topic map exists.
 """)
 
@@ -1383,9 +1398,11 @@ def _trim(text: str, max_chars: int = 220_000) -> str:
 
 # How many characters of MMD to send per GPT call. We chunk (never trim) so no
 # chapter content is lost: each chunk is processed in full and the results are
-# merged. Sized so a chunk's worth of concepts/questions fits comfortably in one
-# response, avoiding output truncation on long chapters.
-_MMD_CHUNK_CHARS = int(os.environ.get("AEGIS_MMD_CHUNK_CHARS", "45000"))
+# merged. Kept deliberately small: when a whole chapter fits into one giant
+# chunk, models under-extract (a handful of broad concepts instead of every
+# teachable unit). Smaller chunks force section-level attention and denser,
+# more complete extraction; quality is preferred over call count.
+_MMD_CHUNK_CHARS = int(os.environ.get("AEGIS_MMD_CHUNK_CHARS", "24000"))
 
 
 def _split_mmd_into_chunks(mmd_text: str, max_chars: int | None = None) -> list[str]:
@@ -2241,11 +2258,23 @@ def _records_to_api_rows(records: list[dict]) -> list[dict]:
     ]
 
 
+# Canonicalization may only merge true duplicates — if the model returns fewer
+# than this fraction of the (already de-duplicated) input rows, it over-merged.
+_CANONICALIZE_MIN_KEEP = 0.7
+
+
 def _consolidate_concepts_via_api(
     records: list[dict], *, subject: str, mmd_text: str = "",
     meta: dict | None = None,
 ) -> list[dict]:
-    """Chapter-wide skeleton refinement: dedup, naming, parent grouping."""
+    """Chapter-wide skeleton refinement: dedup, naming, parent grouping.
+
+    Guarded against over-merging: the input is already de-duplicated by
+    ``_merge_concept_records``, so a large row-count drop means the model
+    summarized distinct concepts away. In that case we retry once with an
+    explicit instruction, and if it still collapses we keep the input rows
+    (losing chapter content is worse than skipping cosmetic cleanup).
+    """
     import json as _json
 
     if not records:
@@ -2261,8 +2290,34 @@ def _consolidate_concepts_via_api(
     progress.log(f"Canonicalizing {len(records)} skeleton concepts via API pass.")
     data = _openai_json(system, user)
     out = _concept_rows_to_records(data)
+    min_keep = max(1, int(len(records) * _CANONICALIZE_MIN_KEEP))
+    if out and len(out) < min_keep:
+        progress.log(
+            f"Canonicalization returned {len(out)} rows for {len(records)} "
+            f"de-duplicated input rows — over-merging detected, retrying.",
+            level="warning",
+        )
+        retry_user = (
+            user
+            + f"\n\nYOUR PREVIOUS ANSWER KEPT ONLY {len(out)} OF {len(records)} ROWS — "
+            "that is over-merging. The input rows are already de-duplicated. "
+            "Merge ONLY rows that state the exact same concept twice; keep every "
+            "distinct teachable concept as its own row. Return close to "
+            f"{len(records)} rows."
+        )
+        retry_data = _openai_json(system, retry_user)
+        retry_out = _concept_rows_to_records(retry_data)
+        if len(retry_out) > len(out):
+            out = retry_out
     if not out:
         raise RuntimeError("concept consolidation returned no rows")
+    if len(out) < min_keep:
+        progress.log(
+            f"Canonicalization still over-merged ({len(out)}/{len(records)} rows) — "
+            "keeping the full de-duplicated skeleton instead.",
+            level="warning",
+        )
+        out = [dict(r) for r in records]
     out = _strip_types_from_records(_ensure_parent_concepts(out))
     out = _repair_records_via_api(out, meta=meta, stage="canonicalize")
     progress.log(f"Rows after canonicalization: {len(out)}.", level="success")
@@ -2300,6 +2355,19 @@ def _merge_concept_records(records: list[dict]) -> list[dict]:
     return out
 
 
+def _expected_min_skeleton_rows(chunk_text: str) -> int:
+    """Minimum plausible concept count for a chunk, from its content size.
+
+    Roughly one teachable concept per ~3,000 chars of source, floored at 2 for
+    any substantial chunk. Deliberately conservative — this only flags clear
+    under-extraction (e.g. a whole chapter collapsed into a handful of rows).
+    """
+    content = len((chunk_text or "").strip())
+    if content < 2_000:
+        return 1
+    return max(2, min(25, content // 3_000))
+
+
 def _extract_skeleton_via_api(chunks: list[dict], *, meta: dict) -> list[dict]:
     system = prompts.get_text("concepts.skeleton.system")
     all_records: list[dict] = []
@@ -2319,6 +2387,31 @@ def _extract_skeleton_via_api(chunks: list[dict], *, meta: dict) -> list[dict]:
             r for r in chunk_records
             if not cr.is_culmination(r.get("concept_title", ""))
         ]
+        expected_min = _expected_min_skeleton_rows(chunk["text"])
+        if len(chunk_records) < expected_min:
+            progress.log(
+                f"  chunk {i}/{len(chunks)} returned only {len(chunk_records)} "
+                f"concept(s) for {len(chunk['text']):,} chars (expected >= "
+                f"{expected_min}) — retrying with a density instruction.",
+                level="warning",
+            )
+            retry_user = (
+                user
+                + f"\n\nYOUR PREVIOUS ANSWER HAD ONLY {len(chunk_records)} CONCEPTS — "
+                "that is under-extraction. Re-read the section text and extract "
+                "EVERY distinct teachable concept (each definition, rule, law, "
+                "method, procedure, property, distinction, relationship, or "
+                "skill). Do not summarize; split broad concepts into smaller "
+                "mastery units."
+            )
+            retry_data = _openai_json(system, retry_user)
+            retry_records = _strip_types_from_records(_concept_rows_to_records(retry_data))
+            retry_records = [
+                r for r in retry_records
+                if not cr.is_culmination(r.get("concept_title", ""))
+            ]
+            if len(retry_records) > len(chunk_records):
+                chunk_records = retry_records
         chunk_records = _ensure_parent_concepts(chunk_records)
         progress.log(f"  chunk {i}/{len(chunks)} skeleton rows: {len(chunk_records)}")
         all_records.extend(chunk_records)
@@ -2371,6 +2464,44 @@ def _ensure_culmination_rows(records: list[dict]) -> list[dict]:
     return out
 
 
+def _merge_culmination_rows(records: list[dict], culms: list[dict]) -> list[dict]:
+    """Insert one authored culmination row at the end of each topic.
+
+    The normal rows are NEVER touched — the model only authors the culmination
+    rows, so no chapter content can be lost in this pass. Topics the model
+    missed get the deterministic fallback culmination.
+    """
+    normal = [r for r in records if not cr.is_culmination(r.get("concept_title", ""))]
+    culm_by_topic: dict[str, dict] = {}
+    for c in culms:
+        topic = (c.get("topic") or "").strip().lower()
+        if topic and cr.is_culmination(c.get("concept_title", "")):
+            culm_by_topic.setdefault(topic, c)
+
+    out: list[dict] = []
+    topics: dict[str, list[dict]] = {}
+    order: list[str] = []
+    for rec in normal:
+        topic = rec.get("topic", "")
+        if topic not in topics:
+            topics[topic] = []
+            order.append(topic)
+        topics[topic].append(rec)
+    for topic in order:
+        topic_records = topics[topic]
+        out.extend(topic_records)
+        authored = culm_by_topic.get(topic.strip().lower())
+        if authored:
+            authored = dict(authored)
+            authored["topic"] = topic
+            authored["parent_concept"] = "Culmination"
+            out.append(authored)
+        else:
+            out.extend(
+                _ensure_culmination_rows(topic_records)[len(topic_records):])
+    return out
+
+
 def _build_culminations_via_api(records: list[dict], *, meta: dict) -> list[dict]:
     import json as _json
 
@@ -2380,20 +2511,15 @@ def _build_culminations_via_api(records: list[dict], *, meta: dict) -> list[dict
     payload = _json.dumps({"rows": _records_to_api_rows(records)}, ensure_ascii=False)
     user = (
         _metadata_block(meta)
-        + "\nFinal normal concept map — add exactly one culmination row per topic:\n"
+        + "\nFinal normal concept map — return ONLY one culmination row per topic:\n"
         + payload
     )
     progress.log("Building topic culmination rows.")
     data = _openai_json(system, user)
-    out = _concept_rows_to_records(data)
-    if not out:
-        out = _ensure_culmination_rows(records)
-    else:
-        out = _ensure_parent_concepts(out)
-        report = cv.validate_concept_rows(
-            out, allow_types=True, require_culmination=True)
-        if not report["ok"]:
-            out = _ensure_culmination_rows(records)
+    authored = _concept_rows_to_records(data)
+    # The model authors ONLY the culmination rows; the normal rows are merged
+    # back programmatically so this pass can never drop chapter content.
+    out = _merge_culmination_rows(records, authored)
     out = cr.set_culmination_recap(out)
     out = _repair_records_via_api(out, meta=meta, stage="culmination")
     culms = sum(1 for r in out if cr.is_culmination(r.get("concept_title", "")))
@@ -2468,6 +2594,17 @@ def concepts_from_mmd(
         if missing:
             progress.log(
                 f"{missing} non-culmination concept(s) still lack Types after all passes.",
+                level="warning",
+            )
+        normal_count = sum(
+            1 for r in out if not cr.is_culmination(r.get("concept_title", "")))
+        expected_min = _expected_min_skeleton_rows(mmd_text)
+        if normal_count < expected_min:
+            progress.log(
+                f"Only {normal_count} concept(s) extracted from "
+                f"{len(mmd_text):,} chars of source (expected >= {expected_min}). "
+                "The chapter was likely under-extracted — check the per-stage "
+                "row counts above to see which pass lost rows.",
                 level="warning",
             )
         progress.set_progress(1.0, label="Concept extraction complete")

@@ -63,6 +63,122 @@ def test_skeleton_pass_strips_types_and_culminations(monkeypatch):
     assert "Types:" not in records[0]["concept_details"]
 
 
+def _rows(n: int, topic: str = "T") -> list[dict]:
+    return [
+        {"topic": topic, "parent_concept": "P", "concept_title": f"Concept {i:02d}",
+         "concept_details": f"Description: about concept {i}", "keywords": ""}
+        for i in range(1, n + 1)
+    ]
+
+
+def _to_api_rows(records: list[dict]) -> list[dict]:
+    return [
+        {"topic": r["topic"], "parent_concept": r["parent_concept"],
+         "concept": r["concept_title"], "concept_description": r["concept_details"],
+         "keywords": r["keywords"]}
+        for r in records
+    ]
+
+
+def test_canonicalize_falls_back_when_model_over_merges(monkeypatch):
+    """A canonicalize response that collapses the chapter must not be accepted."""
+    calls = {"n": 0}
+
+    def fake_openai(system, user, **kw):
+        calls["n"] += 1
+        # Model keeps over-merging on both the first pass and the retry.
+        return {"rows": _to_api_rows(_rows(3))}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    monkeypatch.setattr(g, "_repair_records_via_api", lambda records, **kw: records)
+    records = _rows(20)
+    out = g._consolidate_concepts_via_api(records, subject="Math")
+    assert calls["n"] == 2  # first pass + over-merge retry
+    # The full de-duplicated skeleton is kept instead of the collapsed map.
+    assert len(out) == 20
+
+
+def test_canonicalize_retry_recovers_row_count(monkeypatch):
+    calls = {"n": 0}
+
+    def fake_openai(system, user, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {"rows": _to_api_rows(_rows(3))}
+        assert "over-merging" in user
+        return {"rows": _to_api_rows(_rows(18))}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    monkeypatch.setattr(g, "_repair_records_via_api", lambda records, **kw: records)
+    out = g._consolidate_concepts_via_api(_rows(20), subject="Math")
+    assert calls["n"] == 2
+    assert len(out) == 18
+
+
+def test_canonicalize_accepts_reasonable_dedup(monkeypatch):
+    calls = {"n": 0}
+
+    def fake_openai(system, user, **kw):
+        calls["n"] += 1
+        return {"rows": _to_api_rows(_rows(18))}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    monkeypatch.setattr(g, "_repair_records_via_api", lambda records, **kw: records)
+    out = g._consolidate_concepts_via_api(_rows(20), subject="Math")
+    assert calls["n"] == 1  # no retry needed
+    assert len(out) == 18
+
+
+def test_skeleton_retries_sparse_chunks(monkeypatch):
+    """A big chunk yielding a couple of concepts triggers a density retry."""
+    calls = {"n": 0}
+
+    def fake_openai(system, user, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {"rows": _to_api_rows(_rows(1))}
+        assert "under-extraction" in user
+        return {"rows": _to_api_rows(_rows(8))}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    monkeypatch.setattr(g, "_repair_records_via_api", lambda records, **kw: records)
+    chunk_text = "SECTION TEXT:\n" + ("alpha beta gamma " * 2000)  # ~34k chars
+    records = g._extract_skeleton_via_api(
+        [{"text": chunk_text, "sections": []}], meta=g._metadata(subject="Math"))
+    assert calls["n"] == 2
+    assert len(records) == 8
+
+
+def test_culmination_pass_cannot_drop_normal_rows(monkeypatch):
+    """The culmination model authors ONLY culmination rows; normal rows are
+    merged back programmatically, so a bad response can't lose chapter content."""
+
+    def fake_openai(system, user, **kw):
+        # Model misbehaves: returns one culmination for topic A only, plus a
+        # rewritten fragment of the map (which must be ignored).
+        return {"rows": [
+            {"topic": "Topic A", "parent_concept": "Culmination",
+             "concept": "Culmination - Topic A Ideas",
+             "concept_description": "Description: Recap", "keywords": ""},
+            {"topic": "Topic A", "parent_concept": "P", "concept": "Concept 01",
+             "concept_description": "Description: rewritten fragment", "keywords": ""},
+        ]}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    monkeypatch.setattr(g, "_repair_records_via_api", lambda records, **kw: records)
+    records = _rows(4, topic="Topic A") + _rows(3, topic="Topic B")
+    out = g._build_culminations_via_api(records, meta=g._metadata(subject="Math"))
+    normal = [r for r in out if not r["concept_title"].startswith("Culmination -")]
+    culms = [r for r in out if r["concept_title"].startswith("Culmination -")]
+    assert len(normal) == 7  # every normal row survives
+    assert {r["concept_details"] for r in normal if r["topic"] == "Topic A"} == {
+        f"Description: about concept {i}" for i in range(1, 5)
+    }  # the rewritten fragment was ignored
+    assert len(culms) == 2  # authored one for A, deterministic fallback for B
+    assert culms[0]["topic"] == "Topic A" and culms[0]["concept_title"] == "Culmination - Topic A Ideas"
+    assert culms[1]["topic"] == "Topic B"
+
+
 def test_duplicate_concepts_are_merged_by_topic_and_title():
     records = [
         {"topic": "T", "parent_concept": "P", "concept_title": "Same",
