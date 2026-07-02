@@ -179,6 +179,27 @@ def test_culmination_pass_cannot_drop_normal_rows(monkeypatch):
     assert culms[1]["topic"] == "Topic B"
 
 
+def test_inventory_extraction_retries_sparse_chunks(monkeypatch):
+    """A chapter-scale chunk yielding a couple of inventory items is retried."""
+    calls = {"n": 0}
+
+    def fake_openai(system, user, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {"items": [{"raw_task": "Q1"}, {"raw_task": "Q2"}]}
+        assert "under-extraction" in user
+        return {"items": [{"raw_task": f"Q{i}"} for i in range(1, 13)]}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    body = "1. Solve for x in the equation shown below. " * 400  # ~18k chars
+    sections = g.parse_mmd_sections("# Exercises\n\n" + body)
+    inventory = g._extract_question_task_inventory_via_api(
+        meta=g._metadata(subject="Math"), sections=sections)
+    assert calls["n"] == 2
+    assert len(inventory["items"]) == 12
+    assert inventory["items"][0]["qid"] == "QINV-0001"
+
+
 def test_duplicate_concepts_are_merged_by_topic_and_title():
     records = [
         {"topic": "T", "parent_concept": "P", "concept_title": "Same",

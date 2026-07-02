@@ -1188,6 +1188,13 @@ languages, literature, Computer Science, practical work, and any school subject.
 Return ONLY strict JSON:
 {"items":[{"qid":"QINV-0001","source_kind":"worked_example|solved_example|exercise|intext_question|mcq|fill_blank|true_false|match|assertion_reason|diagram_task|map_task|table_task|graph_task|source_task|case_task|passage_task|grammar_task|writing_task|experiment_task|coding_task|long_answer|short_answer|other","source_label":"","parent_source_label":"","topic_hint":"","page_hint":"","block_ids":[],"raw_task":"","raw_solution_or_answer":"","normalized_task":"","shared_context":"","subpart_label":"","content_objects":{"numbers":[],"variables":[],"equations":[],"coordinates":[],"ratios":[],"diagrams":[],"graphs":[],"tables":[],"maps":[],"passages":[],"sources":[],"experiments":[],"observations":[],"characters":[],"events":[],"dates":[],"places":[],"terms":[],"definitions":[],"processes":[],"comparisons":[],"causes":[],"effects":[],"code_snippets":[],"grammar_items":[],"unknowns":[],"given_values":[],"conditions":[]},"requires_visual":false,"requires_context":false,"order_index":1}],"stats":{"worked_examples":0,"solved_examples":0,"exercise_questions":0,"objective_items":0,"subjective_items":0,"descriptive_items":0,"subparts":0,"visual_tasks":0,"table_or_graph_tasks":0,"source_or_passage_tasks":0,"total_inventory_items":0}}.
 
+COVERAGE IS MANDATORY (most important rule):
+- Extract EVERY assessable question/task from the first line to the last.
+- Each numbered problem, sub-part, intext question, think-and-reflect prompt,
+  and worked example is its OWN item — never summarize an exercise set or
+  question list into one item.
+- A missed question is a defect; an extra item is not.
+
 Rules:
 - Extract all assessable questions/tasks from first to last: examples, intext
   questions, exercises, objective items, diagrams, graphs, maps, data/tables,
@@ -1672,9 +1679,31 @@ def _extract_question_task_inventory_via_api(*, meta: dict, sections: list[dict]
             + chunk["text"]
         )
         data = _openai_json(system, user)
-        for item in data.get("items", []) or []:
-            if not isinstance(item, dict):
-                continue
+        items = [x for x in (data.get("items") or []) if isinstance(x, dict)]
+        # A chapter-scale chunk yielding a handful of items means the model
+        # summarized question lists instead of itemizing them — retry once.
+        expected_min = max(2, min(40, len(chunk["text"]) // 2_000))
+        if len(items) < expected_min:
+            progress.log(
+                f"  inventory chunk {i}/{len(chunks)} returned only {len(items)} "
+                f"item(s) for {len(chunk['text']):,} chars (expected >= "
+                f"{expected_min}) — retrying with a density instruction.",
+                level="warning",
+            )
+            retry_user = (
+                user
+                + f"\n\nYOUR PREVIOUS ANSWER HAD ONLY {len(items)} ITEMS — that is "
+                "under-extraction. Re-read the chunk and itemize EVERY assessable "
+                "question/task: every numbered problem, every sub-part, every "
+                "intext/think-and-reflect prompt, and every worked example is its "
+                "own item. Never merge a question list into one item."
+            )
+            retry_data = _openai_json(system, retry_user)
+            retry_items = [
+                x for x in (retry_data.get("items") or []) if isinstance(x, dict)]
+            if len(retry_items) > len(items):
+                items = retry_items
+        for item in items:
             item = dict(item)
             item["qid"] = f"QINV-{q_counter:04d}"
             item.setdefault("order_index", q_counter)
