@@ -183,6 +183,82 @@ def _sync_chapter_topic_summary(chapter: models.Chapter) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Question / Task Inventory (extraction-completeness audit)
+# --------------------------------------------------------------------------- #
+
+def _store_inventory(job: models.UploadJob, artifacts: dict) -> None:
+    """Persist the generation-time inventory + mined Types on the upload job."""
+    inventory = artifacts.get("question_task_inventory") or {}
+    mined = artifacts.get("mined_types") or {}
+    if not inventory.get("items") and not mined.get("types"):
+        return
+    job.question_inventory = {
+        "items": inventory.get("items", []),
+        "stats": inventory.get("stats", {}),
+        "mined_types": mined.get("types", []),
+    }
+
+
+_INVENTORY_CSV_COLUMNS = [
+    "qid", "order_index", "source_kind", "source_label", "parent_source_label",
+    "topic_hint", "page_hint", "subpart_label", "requires_visual",
+    "requires_context", "normalized_task", "raw_task",
+    "raw_solution_or_answer", "shared_context", "content_objects",
+    "classified", "mined_type_ids", "mined_type_titles",
+]
+
+
+def inventory_csv(db: Session, job_id: int) -> str:
+    """Render the stored Question / Task Inventory as CSV.
+
+    One row per extracted question/task, with the mined Type(s) each item was
+    classified into — so completeness of both extraction and classification
+    can be audited at a glance.
+    """
+    import csv
+    import io
+    import json
+
+    job = db.get(models.UploadJob, job_id)
+    if not job:
+        raise ValueError("upload job not found")
+    data = job.question_inventory or {}
+    items = data.get("items", [])
+    if not items:
+        raise ValueError(
+            "no question/task inventory stored for this job — run a live "
+            "concept generation first")
+
+    types_by_qid: dict[str, list[tuple[str, str]]] = {}
+    for t in data.get("mined_types", []):
+        tid = (t.get("type_id") or "").strip()
+        title = (t.get("type_title") or "").strip()
+        qids = set(t.get("source_question_ids") or [])
+        for case in t.get("case_prompts") or []:
+            if isinstance(case, dict) and case.get("source_question_id"):
+                qids.add(case["source_question_id"])
+        for qid in qids:
+            types_by_qid.setdefault((qid or "").strip(), []).append((tid, title))
+
+    buf = io.StringIO()
+    writer_ = csv.DictWriter(buf, fieldnames=_INVENTORY_CSV_COLUMNS, extrasaction="ignore")
+    writer_.writeheader()
+    for item in items:
+        qid = (item.get("qid") or "").strip()
+        assigned = types_by_qid.get(qid, [])
+        row = {col: item.get(col, "") for col in _INVENTORY_CSV_COLUMNS}
+        row["content_objects"] = json.dumps(
+            item.get("content_objects") or {}, ensure_ascii=False)
+        row["requires_visual"] = "yes" if item.get("requires_visual") else "no"
+        row["requires_context"] = "yes" if item.get("requires_context") else "no"
+        row["classified"] = "yes" if assigned else "no"
+        row["mined_type_ids"] = ", ".join(tid for tid, _ in assigned if tid)
+        row["mined_type_titles"] = "; ".join(title for _, title in assigned if title)
+        writer_.writerow(row)
+    return buf.getvalue()
+
+
+# --------------------------------------------------------------------------- #
 # Post Learning
 # --------------------------------------------------------------------------- #
 
@@ -211,6 +287,7 @@ def generate_post_learning(db: Session, job_id: int, target_chapter_id: int) -> 
     if not job.mmd_text:
         raise ValueError("convert the uploaded document to MMD before generating")
     progress.log(f"Post-learning generation into chapter '{chapter.chapter_title}'.")
+    artifacts: dict = {}
     records = generation.concepts_from_mmd(
         job.mmd_text,
         subject=chapter.subject,
@@ -221,7 +298,9 @@ def generate_post_learning(db: Session, job_id: int, target_chapter_id: int) -> 
         chapter_id=chapter.id,
         chapter_code=chapter.chapter_code,
         learning_kind="Post",
+        artifacts=artifacts,
     )
+    _store_inventory(job, artifacts)
     created_ids, merged_ids = _deposit_concepts(
         db, chapter, records, "Post", job.source_book)
     _sync_chapter_topic_summary(chapter)
@@ -255,6 +334,7 @@ def generate_post_learning(db: Session, job_id: int, target_chapter_id: int) -> 
         "rows_appended": written["written"],
         "sources_updated": written["sources_updated"],
         "output_workbook": str(config.BULK_IMPORT_OUTPUT),
+        "inventory_items": len((job.question_inventory or {}).get("items", [])),
     }
 
 
@@ -291,6 +371,7 @@ def generate_pre_learning_from_upload(db: Session, job_id: int, target_chapter_i
     # Extract the chapter's concept map first, then derive prerequisites from
     # it. Live mode runs the full dependency-architecture derivation (syllabus
     # filter + auditor pass); dry mode keeps the deterministic framing.
+    artifacts: dict = {}
     base = generation.concepts_from_mmd(
         job.mmd_text,
         subject=chapter.subject,
@@ -301,7 +382,9 @@ def generate_pre_learning_from_upload(db: Session, job_id: int, target_chapter_i
         chapter_id=chapter.id,
         chapter_code=chapter.chapter_code,
         learning_kind="Post",
+        artifacts=artifacts,
     )
+    _store_inventory(job, artifacts)
     pre_records = generation.pre_learning_from_rows(
         base,
         subject=chapter.subject, grade=chapter.grade, board=chapter.board,
@@ -340,6 +423,7 @@ def generate_pre_learning_from_upload(db: Session, job_id: int, target_chapter_i
         "rows_appended": written["written"],
         "sources_updated": written["sources_updated"],
         "output_workbook": str(config.BULK_IMPORT_OUTPUT),
+        "inventory_items": len((job.question_inventory or {}).get("items", [])),
     }
 
 

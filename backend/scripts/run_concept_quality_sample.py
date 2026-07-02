@@ -212,7 +212,10 @@ def _mock_stages() -> dict:
         _row("Negative and Zero Exponents", "Negative Exponent Rule", "Converting Negative Exponents to Reciprocal Form", "Description: A negative exponent shows reciprocal form: a^(-m) = 1/a^m where a ≠ 0. This is used to rewrite powers with positive exponents in fractions. Mastery means moving correctly from negative exponent notation to reciprocal notation without changing the base incorrectly.", "negative exponent, reciprocal, non-zero base"),
         _row("Negative and Zero Exponents", "Negative Exponent Comparison", "Comparing Negative Exponent Values", "Description: Negative exponent values are compared by first converting each expression to reciprocal form and then comparing the resulting fractions. Students use this when deciding which of two negative powers is larger. Mastery means converting accurately and comparing the fractional values, not just the visible exponents.", "negative exponent, compare, reciprocal"),
     ]
-    typed = [dict(r) for r in desc]
+    # Culminations are added BEFORE the Types pass (mirrors the live pipeline),
+    # so mined mixed/synthesis Types could also land on culmination rows.
+    culminated = generation._ensure_culmination_rows([dict(r) for r in desc])
+    typed = [dict(r) for r in culminated]
     type_bodies = [
         "Type 01: Converting repeated multiplication to exponential form Case 01: Write 3 × 3 × 3 × 3 in exponential form Case 02: Write 5 × 5 × 5 using exponent notation",
         "Type 01: Identifying base and exponent Case 01: Identify the base and exponent in 9^5 Case 02: Identify the base and exponent in 7^3",
@@ -224,18 +227,21 @@ def _mock_stages() -> dict:
         "Type 01: Converting negative exponents to reciprocal form Case 01: Write 3^-2 in reciprocal form Case 02: Express 2^-3 as a fraction",
         "Type 01: Comparing negative exponent values Case 01: Compare 2^-3 and 3^-2 Case 02: Order two reciprocal-form powers after conversion",
     ]
-    for row, body in zip(typed, type_bodies):
+    normal_rows = [
+        row for row in typed
+        if not concept_refiner.is_culmination(row["concept_title"])
+    ]
+    for row, body in zip(normal_rows, type_bodies):
         row["concept_details"] = generation._inject_types(row["concept_details"], body)
-    culminated = generation._ensure_culmination_rows(typed)
-    final = [concept_cleanup.clean_concept_record(dict(r)) for r in culminated]
+    final = [concept_cleanup.clean_concept_record(dict(r)) for r in typed]
     final = concept_refiner.refine_chapter(final)
     report = concept_validator.validate_concept_rows(final, require_culmination=True)
     return {
         "raw_skeleton_rows": raw,
         "canonicalized_rows": canonical,
         "description_refined_rows": desc,
-        "types_assigned_rows": typed,
         "culmination_added_rows": culminated,
+        "types_assigned_rows": typed,
         "final_rows": final,
         "validator_report": report,
         "question_task_inventory": inventory,
@@ -252,8 +258,11 @@ def _live_stages() -> dict:
     desc = generation._refine_descriptions_via_api(canonical, subject=METADATA["subject"], mmd_text=SAMPLE_MMD, meta=meta, sections=sections)
     inventory = generation._extract_question_task_inventory_via_api(meta=meta, sections=sections)
     mined_types = generation._mine_types_from_inventory_via_api(meta=meta, inventory=inventory)
+    # Culminations are built BEFORE the Types pass so mixed/synthesis Types can
+    # be placed on culmination rows too.
+    culminated = generation._build_culminations_via_api(desc, meta=meta)
     typed = generation._assign_types_via_api(
-        desc,
+        culminated,
         subject=METADATA["subject"],
         mmd_text=SAMPLE_MMD,
         meta=meta,
@@ -261,8 +270,7 @@ def _live_stages() -> dict:
         question_task_inventory=inventory,
         mined_types=mined_types,
     )
-    culminated = generation._build_culminations_via_api(typed, meta=meta)
-    final = generation._repair_records_via_api(culminated, meta=meta, stage="final", source_context=SAMPLE_MMD, strict=True)
+    final = generation._repair_records_via_api(typed, meta=meta, stage="final", source_context=SAMPLE_MMD, strict=True)
     final = [concept_cleanup.clean_concept_record(dict(r)) for r in final]
     final = concept_refiner.refine_chapter(final)
     report = generation._validate_final_or_raise(final, stage="quality-sample")
@@ -270,8 +278,8 @@ def _live_stages() -> dict:
         "raw_skeleton_rows": raw,
         "canonicalized_rows": canonical,
         "description_refined_rows": desc,
-        "types_assigned_rows": typed,
         "culmination_added_rows": culminated,
+        "types_assigned_rows": typed,
         "final_rows": final,
         "validator_report": report,
         "question_task_inventory": inventory,

@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from .. import schemas
@@ -31,6 +32,25 @@ async def replace_upload_file(
             raw_bytes=await file.read())
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+@router.get("/uploads/{job_id}/inventory.csv")
+def download_inventory_csv(job_id: int, db: Session = Depends(get_db)):
+    """Question / Task Inventory CSV — one row per extracted question/task,
+    with the mined Type(s) each item was classified into, so extraction
+    completeness can be audited."""
+    try:
+        csv_text = svc.inventory_csv(db, job_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return Response(
+        content=csv_text,
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition":
+                f'attachment; filename="question_task_inventory_job_{job_id}.csv"',
+        },
+    )
 
 
 @router.post("/uploads/{job_id}/convert")
