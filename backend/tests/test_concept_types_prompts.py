@@ -167,6 +167,72 @@ def test_assign_types_via_api(monkeypatch):
     assert g._has_meaningful_types(out[0]["concept_details"])
 
 
+def test_assign_types_deterministic_fallback_when_model_omits(monkeypatch):
+    # The Types-only pass returns rows WITHOUT any Types section.
+    def fake_openai(system, user, **kw):
+        return {"rows": [{
+            "topic": "Laws of Exponents", "parent_concept": "Operations on Powers",
+            "concept": "Dividing Powers with the Same Base",
+            "concept_description": "Description: d // Misconception: m",
+            "keywords": "k",
+        }]}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    records = [{
+        "topic": "Laws of Exponents", "parent_concept": "Operations on Powers",
+        "concept_title": "Dividing Powers with the Same Base",
+        "concept_details": "Description: d // Misconception: m", "keywords": "",
+    }]
+    inventory = {"items": [{"qid": "QINV-0001", "normalized_task": "Simplify p^9 ÷ p^3"}]}
+    mined = {"types": [{
+        "type_id": "TYPE-0001",
+        "type_title": "Dividing Powers with the Same Base",
+        "task_pattern": "Subtract exponents when dividing same-base powers.",
+        "source_question_ids": ["QINV-0001"],
+        "case_prompts": [{"case_id": "CASE-0001", "source_question_id": "QINV-0001",
+                          "case_prompt": "Simplify p^9 ÷ p^3"}],
+        "concept_match_hint": "Dividing Powers with the Same Base",
+        "parent_concept_match_hint": "Operations on Powers",
+        "topic_match_hint": "Laws of Exponents",
+        "difficulty_hint": "Basic",
+        "subject_skill_hint": "Algebraic Reasoning",
+    }]}
+    out = g._assign_types_via_api(
+        records, subject="Mathematics", mmd_text="# Chapter\nSome source.",
+        question_task_inventory=inventory, mined_types=mined)
+    # The mined Type was plugged in deterministically even though the model omitted it.
+    assert g._has_meaningful_types(out[0]["concept_details"])
+    assert "Dividing Powers with the Same Base" in out[0]["concept_details"]
+    assert "Simplify p^9" in out[0]["concept_details"]
+
+
+def test_embed_mined_types_respects_existing_and_skips_unmatched():
+    records = [
+        {"topic": "T", "parent_concept": "P", "concept_title": "Has Types Already",
+         "concept_details": "Description: d // Types: Type 01: Keep Case 01: keep me",
+         "keywords": ""},
+        {"topic": "T", "parent_concept": "P", "concept_title": "Needs Types",
+         "concept_details": "Description: d", "keywords": ""},
+    ]
+    mined = {"types": [
+        {"type_title": "Existing Override", "concept_match_hint": "Has Types Already",
+         "case_prompts": [{"case_prompt": "should not override"}]},
+        {"type_title": "Fresh Pattern", "concept_match_hint": "Needs Types",
+         "case_prompts": [{"case_prompt": "do this task"}]},
+        {"type_title": "Orphan Pattern", "concept_match_hint": "Nonexistent Concept",
+         "case_prompts": [{"case_prompt": "unmatched"}]},
+    ]}
+    out = g._embed_mined_types_deterministically(records, mined)
+    # Existing Types are preserved (not overridden).
+    assert "Type 01: Keep Case 01: keep me" in out[0]["concept_details"]
+    assert "Existing Override" not in out[0]["concept_details"]
+    # The concept without Types gets the matched mined Type.
+    assert g._has_meaningful_types(out[1]["concept_details"])
+    assert "Fresh Pattern" in out[1]["concept_details"]
+    # The orphan Type with no matching concept is not force-attached anywhere.
+    assert not any("Orphan Pattern" in r["concept_details"] for r in out)
+
+
 def test_concepts_pipeline_runs_types_assign(monkeypatch):
     monkeypatch.setattr(g.config, "use_live_generation", lambda: True)
     calls = []
