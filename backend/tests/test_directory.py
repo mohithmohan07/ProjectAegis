@@ -13,6 +13,48 @@ def test_make_chapter_code_roundtrips_board_and_subject():
     assert directory.parse_code_prefix(code) == ("10", "CBSE", "Mathematics")
 
 
+def test_chapter_tag_includes_book_and_board_tokens():
+    assert directory.chapter_tag("CBSE", "09", "Mathematics", book="RS Aggarwal") \
+        == "09_Mathematics_CBSE_RS"
+    assert directory.chapter_tag("CBSE", "09", "Mathematics", book="RD Sharma") \
+        == "09_Mathematics_CBSE_RD"
+    assert directory.chapter_tag("CBSE", "09", "Mathematics", book="NCERT") \
+        == "09_Mathematics_CBSE_NCERT"
+    assert directory.chapter_tag("Karnataka", "09", "Mathematics", book="KTS") \
+        == "09_Mathematics_KSTATE_KTS"
+    assert directory.chapter_tag("MSBSHSE", "09", "Mathematics", book="MSBT") \
+        == "09_Mathematics_MSBSHSE_MSBT"
+    assert directory.chapter_tag("ICSE", "09", "Mathematics", book="Selina") \
+        == "09_Mathematics_ICSE_SELINA"
+    assert directory.chapter_tag("ICSE", "09", "Mathematics", book="Oswaal") \
+        == "09_Mathematics_ICSE_OSWAAL"
+
+
+def test_chapter_titled_cell_matches_required_format():
+    title = directory.chapter_titled_cell(
+        "Number System", "CBSE", "09", "Mathematics", book="RS Aggarwal")
+    assert title == "Number System (09_Mathematics_CBSE_RS)"
+
+
+def test_parse_chapter_human_tag():
+    parsed = directory.parse_chapter_human_tag("Number System (09_Mathematics_CBSE_RS)")
+    assert parsed["grade"] == "09"
+    assert parsed["board"] == "CBSE"
+    assert parsed["subject"] == "Mathematics"
+    assert parsed["book"] == "RS"
+
+
+def test_derive_chapter_meta_from_human_tag():
+    meta = directory.derive_chapter_meta(
+        "Number System",
+        "Number System (09_Mathematics_CBSE_RD)",
+    )
+    assert meta["grade"] == "09"
+    assert meta["board"] == "CBSE"
+    assert meta["subject"] == "Mathematics"
+    assert meta["chapter_code"].startswith("09CBMA_")
+
+
 def test_parse_ncert_source_filenames():
     """The team's actual Class 08 NCERT source-file names parse correctly."""
     cases = {
