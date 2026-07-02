@@ -1221,6 +1221,27 @@ Rules:
 """)
 
 prompts.register(
+    "concepts.type_embedding.system", category=_CONCEPTS_CAT,
+    label="Universal Type-to-concept assignment prompt",
+    default="""\
+Assign every mined Type to the concept it best belongs to. You are given a list
+of concepts (each with a stable concept_id) and a list of mined Types (each with
+a stable type_id). Decide the mapping using academic judgement about which
+concept each Type assesses.
+
+Return ONLY strict JSON:
+{"assignments":[{"concept_id":"CONCEPT-0001","type_ids":["TYPE-0001","TYPE-0002"]}]}.
+
+Rules:
+- Every provided type_id MUST be assigned to exactly one concept_id.
+- Never invent concept_id or type_id values; use only the ones provided.
+- A concept may receive multiple type_ids; a Type belongs to one concept.
+- Choose the concept that the Type most directly assesses (subject-appropriate).
+- Do not drop any type_id. If unsure, pick the closest concept_id.
+- Return no prose, only the JSON object.
+""")
+
+prompts.register(
     "concepts.culmination.system", category=_CONCEPTS_CAT,
     label="Topic culmination builder system prompt",
     default="""\
@@ -1648,44 +1669,12 @@ def _mine_types_from_inventory_via_api(*, meta: dict, inventory: dict) -> dict:
     return {"types": types}
 
 
-def _norm_tokens(text: str) -> set[str]:
-    return set(re.findall(r"\w+", (text or "").lower()))
-
-
-def _mined_type_match_score(rec: dict, mtype: dict) -> float:
-    """Score how well a mined Type belongs to a concept record.
-
-    Concept identity dominates via ``concept_match_hint``; topic/parent hints
-    only break ties so a Type is never attached to an unrelated concept.
-    """
-    concept_title = rec.get("concept_title", "")
-    title_norm = bi.normalize_question_text(concept_title)
-    hint = mtype.get("concept_match_hint", "")
-    hint_norm = bi.normalize_question_text(hint)
-    hint_tokens = _norm_tokens(hint)
-    title_tokens = _norm_tokens(concept_title)
-
-    score = 0.0
-    if hint_norm and hint_norm == title_norm:
-        score = 100.0
-    elif hint_tokens and title_tokens:
-        jaccard = len(hint_tokens & title_tokens) / len(hint_tokens | title_tokens)
-        score = jaccard * 50.0
-
-    topic_hint = mtype.get("topic_match_hint", "")
-    if topic_hint and bi.normalize_question_text(rec.get("topic", "")) == bi.normalize_question_text(topic_hint):
-        score += 5.0
-    parent_hint = mtype.get("parent_concept_match_hint", "")
-    if parent_hint and bi.normalize_question_text(rec.get("parent_concept", "")) == bi.normalize_question_text(parent_hint):
-        score += 3.0
-    return score
-
-
 def _mined_type_to_body(mtype: dict, start_type: int) -> tuple[str, int]:
-    """Render a single mined Type into a ``Type NN: ... Case NN: ...`` fragment.
+    """Render one mined Type into a ``Type NN: ... Case NN: ...`` fragment.
 
-    Source labels are stripped so the deterministic fallback never injects
-    artifacts (e.g. "Exercise 1.2") that final validation would reject.
+    This is deterministic formatting only — the Type's title/cases are authored
+    by the API mining step. Source labels are stripped so injected Types never
+    carry artifacts (e.g. "Exercise 1.2") that final validation would reject.
     """
     title = concept_cleanup.strip_dangling_references(
         (mtype.get("type_title") or mtype.get("task_pattern") or "").strip())
@@ -1708,15 +1697,26 @@ def _mined_type_to_body(mtype: dict, start_type: int) -> tuple[str, int]:
     return " ".join(parts), n
 
 
-def _embed_mined_types_deterministically(
-    records: list[dict], mined_types: dict | None,
-) -> list[dict]:
-    """Plug mined Types into concepts by hint matching when the model omits them.
+def _concept_description_only(details: str) -> str:
+    for label, content in cr.split_sections(details or ""):
+        if label.lower().startswith("description"):
+            return content
+    return ""
 
-    This guarantees the mined Type inventory is not lost if the Types-only API
-    pass returns rows without a ``Types:`` section. Concepts that already carry
-    meaningful Types (from the API pass) are left untouched.
+
+def _assign_mined_types_via_api(
+    records: list[dict], *, meta: dict, mined_types: dict, max_attempts: int = 3,
+) -> list[dict]:
+    """Embed every mined Type into a concept using a pure-API ID assignment.
+
+    The model receives concepts (each with a stable ``concept_id``) and mined
+    Types (each with a stable ``type_id``) and returns a ``concept_id ->
+    type_ids`` mapping. Placement is joined by exact IDs only — no regex, token,
+    or word matching. Any type_ids the model omits are re-sent (up to
+    ``max_attempts``) so all refined Types end up embedded as Types.
     """
+    import json as _json
+
     types = (mined_types or {}).get("types") or []
     if not types:
         return records
@@ -1724,41 +1724,72 @@ def _embed_mined_types_deterministically(
     if not normal:
         return records
 
-    per_concept: dict[int, list[dict]] = {}
-    unplaced = 0
-    for mtype in types:
-        best: dict | None = None
-        best_score = 0.0
-        for rec in normal:
-            score = _mined_type_match_score(rec, mtype)
-            if score > best_score:
-                best_score, best = score, rec
-        if best is not None and best_score >= 10.0:
-            per_concept.setdefault(id(best), []).append(mtype)
-        else:
-            unplaced += 1
+    cid_map: dict[str, dict] = {}
+    concept_payload: list[dict] = []
+    for i, rec in enumerate(normal, start=1):
+        cid = f"CONCEPT-{i:04d}"
+        cid_map[cid] = rec
+        concept_payload.append({
+            "concept_id": cid,
+            "topic": rec.get("topic", ""),
+            "parent_concept": rec.get("parent_concept", ""),
+            "concept": rec.get("concept_title", ""),
+            "concept_description": _concept_description_only(rec.get("concept_details", "")),
+        })
 
-    filled = 0
-    for rec in normal:
-        assigned = per_concept.get(id(rec))
-        if not assigned or _has_meaningful_types(rec.get("concept_details", "")):
-            continue
+    types_by_id: dict[str, dict] = {}
+    for i, t in enumerate(types, start=1):
+        tid = (t.get("type_id") or f"TYPE-{i:04d}").strip() or f"TYPE-{i:04d}"
+        t = dict(t)
+        t["type_id"] = tid
+        types_by_id[tid] = t
+
+    system = prompts.get_text("concepts.type_embedding.system")
+    remaining: set[str] = set(types_by_id)
+    per_concept: dict[str, list[dict]] = {}
+    for attempt in range(1, max_attempts + 1):
+        if not remaining:
+            break
+        pending = [types_by_id[tid] for tid in types_by_id if tid in remaining]
+        user = (
+            _metadata_block(meta)
+            + "\nCONCEPTS (assign every mined Type to exactly one concept_id):\n"
+            + _json.dumps({"concepts": concept_payload}, ensure_ascii=False)
+            + "\n\nMINED TYPES TO ASSIGN (every type_id MUST be assigned):\n"
+            + _json.dumps({"types": pending}, ensure_ascii=False)
+        )
+        data = _openai_json(system, user)
+        for assignment in data.get("assignments") or []:
+            if not isinstance(assignment, dict):
+                continue
+            cid = (assignment.get("concept_id") or "").strip()
+            rec = cid_map.get(cid)
+            if rec is None:
+                continue
+            for tid in assignment.get("type_ids") or []:
+                tid = (tid or "").strip()
+                if tid in remaining:
+                    per_concept.setdefault(cid, []).append(types_by_id[tid])
+                    remaining.discard(tid)
+        placed = len(types_by_id) - len(remaining)
+        progress.log(
+            f"Type embedding attempt {attempt}: {placed}/{len(types_by_id)} mined Types assigned.")
+
+    for cid, tlist in per_concept.items():
+        rec = cid_map[cid]
         fragments: list[str] = []
         counter = 0
-        for mtype in assigned:
+        for mtype in tlist:
             body, counter = _mined_type_to_body(mtype, counter)
             if body:
                 fragments.append(body)
         if fragments:
             rec["concept_details"] = _inject_types(
                 rec.get("concept_details", ""), " ".join(fragments))
-            filled += 1
-    if filled:
+    if remaining:
         progress.log(
-            f"Embedded mined Types into {filled} concept(s) via deterministic hint matching.")
-    if unplaced:
-        progress.log(
-            f"{unplaced} mined Type(s) could not be confidently matched to a concept.",
+            f"{len(remaining)} mined Type(s) still unassigned after {max_attempts} "
+            "attempt(s); re-run or raise attempts if this persists.",
             level="warning",
         )
     return records
@@ -1983,18 +2014,37 @@ def _assign_types_via_api(
     question_task_inventory: dict | None = None,
     mined_types: dict | None = None,
 ) -> list[dict]:
-    """Dedicated Types-only API pass — mirrors manual types-first workflow."""
+    """Dedicated Types-only API pass — mirrors manual types-first workflow.
+
+    When mined Types are available they are embedded via a pure-API ID
+    assignment (``_assign_mined_types_via_api``): the model maps each mined
+    ``type_id`` to a concept and we join by exact IDs, guaranteeing every
+    refined Type is embedded without any regex/word matching. When no mined
+    Types exist (e.g. no source/inventory), the model authors Types per topic.
+    """
     import json as _json
 
     if not records:
         return records
+    meta = meta or _metadata(subject=subject)
+    mined_types = mined_types or {"types": []}
+    if mined_types.get("types"):
+        progress.log(
+            f"Embedding {len(mined_types['types'])} mined Types into concepts "
+            "via API ID assignment.")
+        merged = _assign_mined_types_via_api(records, meta=meta, mined_types=mined_types)
+        merged = _repair_records_via_api(merged, meta=meta, stage="types", source_context=mmd_text)
+        with_types = sum(1 for r in merged if _has_meaningful_types(r.get("concept_details", "")))
+        progress.log(
+            f"Types assignment complete: {with_types}/{len(merged)} concepts have Types.",
+            level="success" if with_types else "warning",
+        )
+        return merged
     if not (mmd_text or "").strip():
         progress.log("Types assignment skipped — no chapter source text.", level="warning")
         return records
-    meta = meta or _metadata(subject=subject)
     sections = sections or parse_mmd_sections(mmd_text)
     question_task_inventory = question_task_inventory or _empty_inventory()
-    mined_types = mined_types or {"types": []}
     system = _types_assign_system(subject)
     progress.log(f"Assigning Types to {len(records)} concepts (dedicated API pass).")
     topics: dict[str, list[dict]] = {}
@@ -2036,15 +2086,7 @@ def _assign_types_via_api(
             rec["concept_details"] = _inject_types(rec.get("concept_details", ""), types_body)
         merged.append(rec)
     merged = _repair_records_via_api(merged, meta=meta, stage="types", source_context=mmd_text)
-    # Deterministic safety net: if the model returned rows without Types, plug the
-    # mined reusable Types into their matching concepts using the match hints.
-    before_fallback = sum(1 for r in merged if _has_meaningful_types(r.get("concept_details", "")))
-    merged = _embed_mined_types_deterministically(merged, mined_types)
     with_types = sum(1 for r in merged if _has_meaningful_types(r.get("concept_details", "")))
-    if with_types > before_fallback:
-        progress.log(
-            f"Deterministic fallback added Types to {with_types - before_fallback} concept(s) "
-            "the model left without Types.")
     progress.log(
         f"Types assignment complete: {with_types}/{len(merged)} concepts have Types.",
         level="success" if with_types else "warning",

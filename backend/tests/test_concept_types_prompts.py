@@ -45,6 +45,9 @@ def test_universal_question_task_inventory_and_type_mining_prompts():
     assert "Code Tracing" in mining
     assert "Map Skill" in mining
     assert "Type is a reusable assessment/task pattern" in mining
+    embedding = g.prompts.get_text("concepts.type_embedding.system")
+    assert "concept_id" in embedding and "type_ids" in embedding
+    assert "every provided type_id MUST be assigned".lower() in embedding.lower()
 
 
 def test_has_meaningful_types():
@@ -133,104 +136,73 @@ def test_refine_descriptions_via_api_strips_existing_types(monkeypatch):
     assert "Types:" not in out[0]["concept_details"]
 
 
-def test_assign_types_via_api(monkeypatch):
+def test_assign_types_uses_pure_api_id_assignment(monkeypatch):
     captured = {}
 
     def fake_openai(system, user, **kw):
         captured["system"] = system
         captured["user"] = user
-        return {"rows": [{
-            "topic": "T", "concept": "C",
-            "concept_description": (
-                "Description: d // Types: Type 01: Evaluation Case 01: Find 2+3 "
-                "Case 02: Find 5×2 // Misconception: m"
-            ),
-            "keywords": "k",
-        }]}
+        # Pure-API assignment: map every type_id to a concept_id (exact IDs only).
+        return {"assignments": [
+            {"concept_id": "CONCEPT-0001", "type_ids": ["TYPE-0001"]},
+            {"concept_id": "CONCEPT-0002", "type_ids": ["TYPE-0002"]},
+        ]}
 
     monkeypatch.setattr(g, "_openai_json", fake_openai)
-    records = [{"topic": "T", "concept_title": "C",
-                "concept_details": "Description: d // Misconception: m", "keywords": ""}]
-    inventory = {"items": [{"qid": "QINV-0001", "normalized_task": "Find 2+3", "content_objects": {"numbers": ["2", "3"]}}]}
-    mined = {"types": [{"type_id": "TYPE-0001", "type_title": "Adding Given Numbers", "source_question_ids": ["QINV-0001"]}]}
-    out = g._assign_types_via_api(
-        records,
-        subject="Math",
-        mmd_text="# Chapter\nEx 1.1",
-        question_task_inventory=inventory,
-        mined_types=mined,
-    )
-    assert "Types-only classifier" in captured["system"]
-    assert "QUESTION / TASK INVENTORY" in captured["user"]
-    assert "MINED REUSABLE TYPES" in captured["user"]
-    assert "QINV-0001" in captured["user"]
-    assert g._has_meaningful_types(out[0]["concept_details"])
-
-
-def test_assign_types_deterministic_fallback_when_model_omits(monkeypatch):
-    # The Types-only pass returns rows WITHOUT any Types section.
-    def fake_openai(system, user, **kw):
-        return {"rows": [{
-            "topic": "Laws of Exponents", "parent_concept": "Operations on Powers",
-            "concept": "Dividing Powers with the Same Base",
-            "concept_description": "Description: d // Misconception: m",
-            "keywords": "k",
-        }]}
-
-    monkeypatch.setattr(g, "_openai_json", fake_openai)
-    records = [{
-        "topic": "Laws of Exponents", "parent_concept": "Operations on Powers",
-        "concept_title": "Dividing Powers with the Same Base",
-        "concept_details": "Description: d // Misconception: m", "keywords": "",
-    }]
-    inventory = {"items": [{"qid": "QINV-0001", "normalized_task": "Simplify p^9 ÷ p^3"}]}
-    mined = {"types": [{
-        "type_id": "TYPE-0001",
-        "type_title": "Dividing Powers with the Same Base",
-        "task_pattern": "Subtract exponents when dividing same-base powers.",
-        "source_question_ids": ["QINV-0001"],
-        "case_prompts": [{"case_id": "CASE-0001", "source_question_id": "QINV-0001",
-                          "case_prompt": "Simplify p^9 ÷ p^3"}],
-        "concept_match_hint": "Dividing Powers with the Same Base",
-        "parent_concept_match_hint": "Operations on Powers",
-        "topic_match_hint": "Laws of Exponents",
-        "difficulty_hint": "Basic",
-        "subject_skill_hint": "Algebraic Reasoning",
-    }]}
-    out = g._assign_types_via_api(
-        records, subject="Mathematics", mmd_text="# Chapter\nSome source.",
-        question_task_inventory=inventory, mined_types=mined)
-    # The mined Type was plugged in deterministically even though the model omitted it.
-    assert g._has_meaningful_types(out[0]["concept_details"])
-    assert "Dividing Powers with the Same Base" in out[0]["concept_details"]
-    assert "Simplify p^9" in out[0]["concept_details"]
-
-
-def test_embed_mined_types_respects_existing_and_skips_unmatched():
     records = [
-        {"topic": "T", "parent_concept": "P", "concept_title": "Has Types Already",
-         "concept_details": "Description: d // Types: Type 01: Keep Case 01: keep me",
-         "keywords": ""},
-        {"topic": "T", "parent_concept": "P", "concept_title": "Needs Types",
-         "concept_details": "Description: d", "keywords": ""},
+        {"topic": "T", "parent_concept": "P", "concept_title": "Adding Numbers",
+         "concept_details": "Description: add // Misconception: m", "keywords": ""},
+        {"topic": "T", "parent_concept": "P", "concept_title": "Dividing Powers",
+         "concept_details": "Description: divide", "keywords": ""},
     ]
     mined = {"types": [
-        {"type_title": "Existing Override", "concept_match_hint": "Has Types Already",
-         "case_prompts": [{"case_prompt": "should not override"}]},
-        {"type_title": "Fresh Pattern", "concept_match_hint": "Needs Types",
-         "case_prompts": [{"case_prompt": "do this task"}]},
-        {"type_title": "Orphan Pattern", "concept_match_hint": "Nonexistent Concept",
-         "case_prompts": [{"case_prompt": "unmatched"}]},
+        {"type_id": "TYPE-0001", "type_title": "Adding Given Numbers",
+         "case_prompts": [{"case_prompt": "Find 2+3"}]},
+        {"type_id": "TYPE-0002", "type_title": "Dividing Powers with the Same Base",
+         "case_prompts": [{"case_prompt": "Simplify p^9 ÷ p^3"}]},
     ]}
-    out = g._embed_mined_types_deterministically(records, mined)
-    # Existing Types are preserved (not overridden).
-    assert "Type 01: Keep Case 01: keep me" in out[0]["concept_details"]
-    assert "Existing Override" not in out[0]["concept_details"]
-    # The concept without Types gets the matched mined Type.
+    out = g._assign_types_via_api(
+        records, subject="Math", mmd_text="# Chapter\nsrc",
+        question_task_inventory={"items": []}, mined_types=mined)
+    assert "Assign every mined Type" in captured["system"]
+    assert "CONCEPT-0001" in captured["user"] and "TYPE-0002" in captured["user"]
+    # Every mined Type landed on its assigned concept (joined by exact IDs).
+    assert g._has_meaningful_types(out[0]["concept_details"])
+    assert "Adding Given Numbers" in out[0]["concept_details"]
     assert g._has_meaningful_types(out[1]["concept_details"])
-    assert "Fresh Pattern" in out[1]["concept_details"]
-    # The orphan Type with no matching concept is not force-attached anywhere.
-    assert not any("Orphan Pattern" in r["concept_details"] for r in out)
+    assert "Dividing Powers with the Same Base" in out[1]["concept_details"]
+
+
+def test_assign_mined_types_retries_until_all_covered(monkeypatch):
+    calls = {"n": 0}
+
+    def fake_openai(system, user, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # First attempt only assigns one of the two Types.
+            return {"assignments": [{"concept_id": "CONCEPT-0001", "type_ids": ["TYPE-0001"]}]}
+        # Retry with the missing type_id assigns the rest.
+        return {"assignments": [{"concept_id": "CONCEPT-0002", "type_ids": ["TYPE-0002"]}]}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    records = [
+        {"topic": "T", "parent_concept": "P", "concept_title": "Concept One",
+         "concept_details": "Description: one", "keywords": ""},
+        {"topic": "T", "parent_concept": "P", "concept_title": "Concept Two",
+         "concept_details": "Description: two", "keywords": ""},
+    ]
+    mined = {"types": [
+        {"type_id": "TYPE-0001", "type_title": "Pattern One",
+         "case_prompts": [{"case_prompt": "do one"}]},
+        {"type_id": "TYPE-0002", "type_title": "Pattern Two",
+         "case_prompts": [{"case_prompt": "do two"}]},
+    ]}
+    out = g._assign_mined_types_via_api(records, meta=g._metadata(subject="Math"), mined_types=mined)
+    assert calls["n"] >= 2  # retried because the first attempt missed a type_id
+    assert g._has_meaningful_types(out[0]["concept_details"])
+    assert g._has_meaningful_types(out[1]["concept_details"])
+    assert "Pattern One" in out[0]["concept_details"]
+    assert "Pattern Two" in out[1]["concept_details"]
 
 
 def test_concepts_pipeline_runs_types_assign(monkeypatch):
