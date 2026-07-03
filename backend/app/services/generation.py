@@ -2647,6 +2647,89 @@ def _culmination_title(topic_records: list[dict]) -> str:
     return f"Culmination - {body}"
 
 
+# Deterministic final normalization: these two failure modes kept surviving
+# LLM repair attempts in live runs, so they are fixed mechanically instead of
+# failing the whole job (multi-user rule: output quality is never compromised,
+# and a job must not die on formatting the code can fix itself).
+_SECTION_NUMBER_SCRUB_RE = re.compile(
+    r"\b(?:exercise|ex)?\s*\d+(?:\.\d+)+\b", re.IGNORECASE)
+_EXERCISE_ONLY_RE = re.compile(
+    r"^\s*(?:exercise|exercises|ex|intext(?:\s+questions?)?|review|practice|"
+    r"problems?|questions?)\b[\s\d.:()\-]*$",
+    re.IGNORECASE,
+)
+
+
+def _scrub_section_numbers(records: list[dict]) -> list[dict]:
+    """Remove section/exercise numbering from topics and titles.
+
+    Rows whose topic is a bare exercise heading (e.g. "EXERCISE 1.2" — these
+    slip through when OCR'd chapters use exercise sections as headings) are
+    merged into the preceding real topic so no content is dropped.
+    """
+
+    def _scrub(text: str) -> str:
+        return re.sub(r"\s+", " ", _SECTION_NUMBER_SCRUB_RE.sub(" ", text or "")
+                      ).strip(" -:.,")
+
+    prev_topic = ""
+    for rec in records:
+        topic = rec.get("topic", "")
+        scrubbed = _scrub(topic)
+        if _EXERCISE_ONLY_RE.match(topic) or not scrubbed or _EXERCISE_ONLY_RE.match(scrubbed):
+            rec["topic"] = prev_topic or "General"
+        elif scrubbed != topic:
+            rec["topic"] = scrubbed
+        prev_topic = rec.get("topic", "") or prev_topic
+        title = rec.get("concept_title", "")
+        scrubbed_title = _scrub(title)
+        if scrubbed_title and scrubbed_title != title:
+            rec["concept_title"] = scrubbed_title
+    return records
+
+
+def _enforce_culminations(records: list[dict]) -> list[dict]:
+    """Guarantee exactly one culmination row at the end of every topic.
+
+    Keeps the authored culmination (first one when the model produced
+    duplicates), appends the deterministic fallback when a topic has none,
+    and always positions it last. Normal rows are never touched.
+    """
+    normal: dict[str, list[dict]] = {}
+    culms: dict[str, list[dict]] = {}
+    order: list[str] = []
+    for rec in records:
+        topic = rec.get("topic", "")
+        if topic not in normal:
+            normal[topic] = []
+            culms[topic] = []
+            order.append(topic)
+        target = culms if cr.is_culmination(rec.get("concept_title", "")) else normal
+        target[topic].append(rec)
+    out: list[dict] = []
+    for topic in order:
+        out.extend(normal[topic])
+        topic_culms = culms[topic]
+        if topic_culms:
+            keep = dict(topic_culms[0])
+            keep["parent_concept"] = "Culmination"
+            out.append(keep)
+            if len(topic_culms) > 1:
+                progress.log(
+                    f"Dropped {len(topic_culms) - 1} extra culmination row(s) "
+                    f"in topic '{topic}'.",
+                    level="warning",
+                )
+        else:
+            fallback = _ensure_culmination_rows(normal[topic])
+            out.extend(fallback[len(normal[topic]):])
+            progress.log(
+                f"Added deterministic culmination for topic '{topic}'.",
+                level="warning",
+            )
+    return cr.set_culmination_recap(out)
+
+
 def _ensure_culmination_rows(records: list[dict]) -> list[dict]:
     """Deterministic safety net: exactly one culmination row at each topic end."""
     out: list[dict] = []
@@ -2792,10 +2875,20 @@ def concepts_from_mmd(
             question_task_inventory=question_task_inventory,
             mined_types=mined_types,
         )
+        # Deterministic normalization BEFORE the strict repair: formatting
+        # failures the code can fix itself (section numbering in topics/titles,
+        # missing/duplicate culminations) must never fail a job or burn repair
+        # attempts that are needed for real semantic issues.
+        out = _scrub_section_numbers(out)
+        out = _merge_concept_records(out)
+        out = _enforce_culminations(out)
         out = _repair_records_via_api(
             out, meta=meta, stage="final", source_context=mmd_text, strict=True)
         out = [concept_cleanup.clean_concept_record(dict(r)) for r in out]
         out = cr.refine_chapter(out)
+        # The repair/cleanup passes may reorder or rename rows; re-assert the
+        # culmination invariant mechanically before the final gate.
+        out = _enforce_culminations(out)
         _validate_final_or_raise(out, stage="final")
         missing = sum(
             1 for r in out

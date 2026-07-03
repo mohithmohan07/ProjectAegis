@@ -129,6 +129,57 @@ def test_bad_json_still_uses_bounded_retries(fake_openai, monkeypatch):
         g._openai_json("s", "u")
 
 
+def test_section_numbers_are_scrubbed_deterministically():
+    records = [
+        {"topic": "EXERCISE 1.2", "parent_concept": "P",
+         "concept_title": "Locating rationals 1.3 on the line",
+         "concept_details": "Description: x", "keywords": ""},
+        {"topic": "Irrational Numbers", "parent_concept": "P",
+         "concept_title": "Definition of irrationals",
+         "concept_details": "Description: y", "keywords": ""},
+    ]
+    # Exercise-only topic merges into the nearest real topic; numbering is
+    # stripped from titles. First row has no preceding topic, so it falls
+    # back to "General".
+    out = g._scrub_section_numbers(records)
+    assert out[0]["concept_title"] == "Locating rationals on the line"
+    assert out[0]["topic"] == "General"
+    records2 = [
+        {"topic": "Real Numbers", "parent_concept": "P", "concept_title": "A",
+         "concept_details": "Description: x", "keywords": ""},
+        {"topic": "EXERCISE 1.4", "parent_concept": "P", "concept_title": "B",
+         "concept_details": "Description: y", "keywords": ""},
+    ]
+    out2 = g._scrub_section_numbers(records2)
+    assert out2[1]["topic"] == "Real Numbers"
+
+
+def test_culminations_are_enforced_mechanically():
+    def row(topic, title):
+        return {"topic": topic, "parent_concept": "P", "concept_title": title,
+                "concept_details": "Description: x", "keywords": ""}
+
+    records = [
+        # Topic A: two culminations (model duplicated) and one out of order.
+        row("A", "Culmination - First"),
+        row("A", "Concept A1"),
+        row("A", "Culmination - Second"),
+        # Topic B: no culmination at all.
+        row("B", "Concept B1"),
+    ]
+    out = g._enforce_culminations(records)
+    a_rows = [r for r in out if r["topic"] == "A"]
+    b_rows = [r for r in out if r["topic"] == "B"]
+    a_culms = [r for r in a_rows if r["concept_title"].startswith("Culmination")]
+    b_culms = [r for r in b_rows if r["concept_title"].startswith("Culmination")]
+    assert len(a_culms) == 1 and a_rows[-1] is a_culms[0]
+    assert a_culms[0]["concept_title"] == "Culmination - First"
+    assert len(b_culms) == 1 and b_rows[-1] is b_culms[0]
+    # Normal rows all survive.
+    assert [r["concept_title"] for r in a_rows[:-1]] == ["Concept A1"]
+    assert [r["concept_title"] for r in b_rows[:-1]] == ["Concept B1"]
+
+
 def test_sqlite_uses_wal_and_busy_timeout():
     from app.db import engine
 
