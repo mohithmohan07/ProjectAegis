@@ -207,6 +207,41 @@ def test_source_artifacts_are_neutralized_even_in_types():
     assert not [e for e in report["errors"] if e["code"] == "source_artifact"]
 
 
+def test_pre_repair_cleanup_keeps_references_for_content_inlining():
+    """Before the final repair, references stay intact so the LLM can replace
+    them with the actual condensed problem content from the source."""
+    from app.services import concept_cleanup as cc
+
+    rec = {
+        "topic": "Real Numbers", "parent_concept": "P",
+        "concept_title": "Rationalising denominators",
+        "concept_details": (
+            "Description: Convert recurring decimals as in Example 8. // "
+            "Types: Type 01: Rationalise a surd denominator "
+            "Case 01: Rationalise the expressions given in Exercise 1.5"
+        ),
+        "keywords": "",
+    }
+    kept = cc.clean_concept_record(dict(rec), neutralize_artifacts=False)
+    assert "Example 8" in kept["concept_details"]
+    assert "Exercise 1.5" in kept["concept_details"]
+    # The default (post-repair last resort) still removes them.
+    scrubbed = cc.clean_concept_record(dict(rec))
+    assert "Example 8" not in scrubbed["concept_details"]
+    assert "Exercise 1.5" not in scrubbed["concept_details"]
+
+
+def test_prompts_require_actual_condensed_content():
+    mining = g.prompts.get_text("concepts.type_mining.system")
+    assert "CASE PROMPTS CARRY THE ACTUAL CONTENT" in mining
+    assert "CONDENSED" in mining
+    assert "Rationalise the denominator of 1/(7 + 3*sqrt(2))" in mining
+    repair = g.prompts.get_text("concepts.repair.system")
+    assert "substitute the CONDENSED actual" in repair
+    refine = g.prompts.get_text("concepts.description_refine.system")
+    assert "substitute the actual" in refine
+
+
 def test_source_artifacts_in_titles_and_topics_are_removed():
     from app.services import concept_cleanup as cc
     from app.services import concept_validator as cv

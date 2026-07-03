@@ -185,25 +185,30 @@ def neutralize_source_artifacts(text: str) -> str:
 _SECTION_SEP = " // "
 
 
-def _clean_details(details: str) -> str:
+def _clean_details(details: str, *, neutralize: bool = True) -> str:
     """Sanitize a concept_details string section-by-section.
 
     The Types section is preserved verbatim (only MMD wording is rewritten) so
     ``Type NN:`` / ``Case NN:`` labels and example prompts are never damaged by
     reference-stripping. Other sections get full dangling-reference removal. The
     ``" // "`` separators are kept intact so downstream section parsing works.
+
+    ``neutralize=False`` keeps source references ("Exercise 1.2", "Example 5")
+    intact so the LLM repair pass can substitute the actual condensed problem
+    content from the source; the preferred outcome is real numericals in the
+    text, with neutral wording only as the post-repair last resort.
     """
     parts = details.split(_SECTION_SEP)
     out: list[str] = []
     for part in parts:
         label = part.split(":", 1)[0].strip().lower() if ":" in part else ""
-        if label.startswith("type"):
-            # Keep Type/Case structure verbatim but neutralize source labels
-            # ("Exercise 1.2", "Example 5") that mined prompts carry over.
-            out.append(neutralize_source_artifacts(replace_mmd_references(part)))
+        if label.startswith("type") or not neutralize:
+            # Types keep their structure verbatim; and when the caller wants
+            # references preserved for content inlining, prose keeps them too.
+            cleaned = replace_mmd_references(part)
         else:
-            out.append(neutralize_source_artifacts(
-                replace_mmd_references(strip_dangling_references(part))))
+            cleaned = replace_mmd_references(strip_dangling_references(part))
+        out.append(neutralize_source_artifacts(cleaned) if neutralize else cleaned)
     return _SECTION_SEP.join(out)
 
 
@@ -224,19 +229,31 @@ def _neutralize_name_artifacts(name: str) -> str:
     return re.sub(r"\s{2,}", " ", out).strip(" -:.,") or name
 
 
-def clean_concept_record(rec: dict) -> dict:
-    """Return ``rec`` with its name + description normalized (mutates in place)."""
+def clean_concept_record(rec: dict, *, neutralize_artifacts: bool = True) -> dict:
+    """Return ``rec`` with its name + description normalized (mutates in place).
+
+    ``neutralize_artifacts=False`` leaves source references ("Exercise 1.2",
+    "Example 5") in place so the LLM repair pass can replace them with the
+    actual condensed problem content; pass ``True`` (default) as the final
+    deterministic guarantee that no reference survives to strict validation.
+    """
     if rec.get("topic"):
+        topic = rec["topic"].strip()
         rec["topic"] = to_title_case(
-            _neutralize_name_artifacts(rec["topic"].strip()))
+            _neutralize_name_artifacts(topic) if neutralize_artifacts else topic)
     if rec.get("parent_concept"):
-        rec["parent_concept"] = to_title_case(replace_mmd_references(
-            _neutralize_name_artifacts(clean_concept_name(rec["parent_concept"].strip()))))
+        parent = clean_concept_name(rec["parent_concept"].strip())
+        if neutralize_artifacts:
+            parent = _neutralize_name_artifacts(parent)
+        rec["parent_concept"] = to_title_case(replace_mmd_references(parent))
     if rec.get("concept_title"):
-        rec["concept_title"] = to_title_case(replace_mmd_references(
-            _neutralize_name_artifacts(clean_concept_name(rec["concept_title"]))))
+        title = clean_concept_name(rec["concept_title"])
+        if neutralize_artifacts:
+            title = _neutralize_name_artifacts(title)
+        rec["concept_title"] = to_title_case(replace_mmd_references(title))
     if rec.get("concept_details"):
-        rec["concept_details"] = _clean_details(rec["concept_details"])
+        rec["concept_details"] = _clean_details(
+            rec["concept_details"], neutralize=neutralize_artifacts)
     return rec
 
 
