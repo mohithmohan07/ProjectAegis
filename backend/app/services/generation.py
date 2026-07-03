@@ -1422,7 +1422,7 @@ def _split_mmd_into_chunks(mmd_text: str, max_chars: int | None = None) -> list[
     """
     if max_chars is None:
         max_chars = _MMD_CHUNK_CHARS
-    text = mmd_text or ""
+    text = normalize_mmd_headings(mmd_text or "")
     if len(text) <= max_chars:
         return [text] if text.strip() else []
 
@@ -1484,15 +1484,50 @@ _EXERCISE_RE = re.compile(
 _SECTION_NUM_PREFIX_RE = re.compile(
     r"^\s*(?:chapter\s+)?(?:\d+(?:\.\d+)*|[A-Z])[\).\s:-]+", re.IGNORECASE)
 
+# Mathpix PDF->MMD output marks headings with LaTeX commands, not Markdown '#'.
+_LATEX_HEADING_RE = re.compile(
+    r"^[ \t]*\\(title|chapter|section|subsection|subsubsection|paragraph)\*?"
+    r"\{(.+?)\}[ \t]*$",
+    re.MULTILINE,
+)
+_LATEX_HEADING_LEVELS = {
+    "title": 1, "chapter": 1, "section": 2, "subsection": 3,
+    "subsubsection": 4, "paragraph": 5,
+}
+# Mathpix OCR sometimes emits fullwidth punctuation/digits (e.g. "1．1"),
+# which breaks section-number stripping and heading comparison.
+_FULLWIDTH_TRANS = str.maketrans(
+    "０１２３４５６７８９．：；，（）　", "0123456789.:;,() ")
+
+
+def normalize_mmd_headings(mmd_text: str) -> str:
+    """Convert LaTeX-style headings in Mathpix MMD to Markdown headings.
+
+    Real Mathpix PDF conversions mark headings as ``\\section*{1.1 Intro}`` /
+    ``\\subsection*{...}`` rather than Markdown ``#``. Without this pass a
+    whole OCR'd chapter parses as ONE headingless section, which collapses
+    section-aware chunking to a single giant chunk and starves extraction of
+    heading/topic context. Idempotent: already-Markdown text is unchanged.
+    """
+
+    def _sub(m: "re.Match[str]") -> str:
+        title = re.sub(r"\\[a-zA-Z]+\*?", " ", m.group(2))
+        title = title.replace("{", " ").replace("}", " ")
+        title = re.sub(r"\s+", " ", title).strip()
+        return "#" * _LATEX_HEADING_LEVELS[m.group(1)] + " " + title
+
+    return _LATEX_HEADING_RE.sub(_sub, mmd_text or "")
+
 
 def _strip_section_number(title: str) -> str:
     title = re.sub(r"\s+", " ", (title or "").strip())
+    title = title.translate(_FULLWIDTH_TRANS)
     return _SECTION_NUM_PREFIX_RE.sub("", title).strip() or title
 
 
 def parse_mmd_sections(mmd_text: str) -> list[dict]:
     """Parse MMD into ordered heading-aware sections with exercise tagging."""
-    text = mmd_text or ""
+    text = normalize_mmd_headings(mmd_text or "")
     lines = text.splitlines()
     sections: list[dict] = []
     stack: list[tuple[int, str]] = []
@@ -1555,11 +1590,53 @@ def _format_section_chunk(sections: list[dict]) -> str:
     return "\n\n--- SECTION ---\n\n".join(blocks)
 
 
+def _split_oversized_section(section: dict, max_chars: int) -> list[dict]:
+    """Hard-split a section bigger than the chunk budget on paragraph bounds.
+
+    Documents whose headings Mathpix/OCR failed to mark parse as one giant
+    section; without this split the whole chapter would travel as a single
+    chunk, which reliably under-extracts. Each part keeps the heading context.
+    """
+    body = section.get("body", "")
+    if len(body) <= max_chars:
+        return [section]
+    paras = re.split(r"(\n\s*\n)", body)
+    parts: list[str] = []
+    buf = ""
+    for piece in paras:
+        if len(buf) + len(piece) > max_chars and buf:
+            parts.append(buf)
+            buf = piece
+        elif len(piece) > max_chars:
+            if buf:
+                parts.append(buf)
+                buf = ""
+            for i in range(0, len(piece), max_chars):
+                parts.append(piece[i:i + max_chars])
+        else:
+            buf += piece
+    if buf.strip():
+        parts.append(buf)
+    out = []
+    for i, part in enumerate(parts, start=1):
+        sub = dict(section)
+        sub["body"] = part
+        sub["exercise_blocks"] = [
+            p.strip() for p in re.split(r"\n\s*\n", part) if _EXERCISE_RE.search(p)]
+        if section.get("heading"):
+            sub["heading"] = f"{section['heading']} (part {i}/{len(parts)})"
+        out.append(sub)
+    return out
+
+
 def _section_aware_chunks(mmd_text: str, max_chars: int | None = None) -> list[dict]:
     """Pack parsed sections into chunks while preserving heading context."""
     if max_chars is None:
         max_chars = _MMD_CHUNK_CHARS
-    sections = parse_mmd_sections(mmd_text)
+    sections = [
+        sub for s in parse_mmd_sections(mmd_text)
+        for sub in _split_oversized_section(s, max_chars)
+    ]
     chunks: list[dict] = []
     buf: list[dict] = []
     for section in sections:
