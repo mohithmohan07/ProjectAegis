@@ -9,7 +9,9 @@ exercised end to end.
 from __future__ import annotations
 
 import os
+import random
 import re
+import threading
 
 from .. import bulk_import as bi
 from .. import config, models
@@ -1364,25 +1366,80 @@ def _metadata_block(meta: dict) -> str:
     )
 
 
+# Process-wide gate on in-flight OpenAI calls. All users of this instance
+# share one API key, so concurrent generation runs must interleave their
+# calls instead of stampeding the API into rate limits. Created lazily so
+# tests can adjust config.OPENAI_MAX_CONCURRENCY and reset the gate.
+_openai_gate: "threading.BoundedSemaphore | None" = None
+_openai_gate_lock = threading.Lock()
+
+
+def _get_openai_gate() -> "threading.BoundedSemaphore":
+    global _openai_gate
+    with _openai_gate_lock:
+        if _openai_gate is None:
+            _openai_gate = threading.BoundedSemaphore(config.OPENAI_MAX_CONCURRENCY)
+        return _openai_gate
+
+
+def _retry_after_seconds(exc: Exception) -> float | None:
+    """Server-suggested wait from a rate-limit response, when present."""
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None)
+    if not headers:
+        return None
+    raw = headers.get("retry-after") or headers.get("Retry-After")
+    try:
+        return max(0.0, float(raw)) if raw is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _transient_backoff(exc: Exception, attempt: int) -> float:
+    suggested = _retry_after_seconds(exc)
+    backoff = min(2.0 * (2 ** (attempt - 1)), config.OPENAI_BACKOFF_MAX_SECONDS)
+    backoff *= 0.8 + 0.4 * random.random()  # jitter to de-synchronize users
+    return max(suggested or 0.0, backoff)
+
+
 def _openai_json(system: str, user: str, max_tokens: int | None = None,
                  retries: int = 3) -> dict:
-    """One JSON-mode chat call with retries; returns the parsed object."""
+    """One JSON-mode chat call; returns the parsed object.
+
+    Concurrency-safe for multiple simultaneous users on one shared API key:
+    calls queue on a process-wide gate (never stampede the API), and
+    transient failures — rate limits, timeouts, connection errors, 5xx —
+    are retried patiently with exponential backoff + Retry-After, so heavy
+    load makes jobs slower but never changes their output quality.
+    """
     import json
     import time
-    from openai import OpenAI
+    from openai import (
+        APIConnectionError,
+        APITimeoutError,
+        InternalServerError,
+        OpenAI,
+        RateLimitError,
+    )
 
+    transient_errors = (
+        RateLimitError, APIConnectionError, APITimeoutError, InternalServerError)
     limit = config.OPENAI_MAX_OUTPUT_TOKENS if max_tokens is None else max_tokens
     client = OpenAI()
+    gate = _get_openai_gate()
     last_err: Exception | None = None
-    for attempt in range(1, retries + 1):
+    attempt = 0  # hard failures (bad JSON, truncation, 4xx)
+    transient = 0  # rate limits / timeouts / 5xx — retried patiently
+    while True:
         try:
-            resp = client.chat.completions.create(
-                model=config.OPENAI_MODEL,
-                messages=[{"role": "system", "content": system},
-                          {"role": "user", "content": user}],
-                response_format={"type": "json_object"},
-                max_completion_tokens=limit,
-            )
+            with gate:
+                resp = client.chat.completions.create(
+                    model=config.OPENAI_MODEL,
+                    messages=[{"role": "system", "content": system},
+                              {"role": "user", "content": user}],
+                    response_format={"type": "json_object"},
+                    max_completion_tokens=limit,
+                )
             choice = resp.choices[0]
             if getattr(choice, "finish_reason", None) == "length":
                 raise RuntimeError(
@@ -1390,10 +1447,27 @@ def _openai_json(system: str, user: str, max_tokens: int | None = None,
                     "Set AEGIS_OPENAI_MAX_OUTPUT_TOKENS higher or reduce input size."
                 )
             return json.loads(choice.message.content or "{}")
+        except transient_errors as e:
+            transient += 1
+            last_err = e
+            if transient > config.OPENAI_TRANSIENT_RETRIES:
+                raise RuntimeError(
+                    f"OpenAI unavailable after {transient - 1} transient retries "
+                    f"(rate limit/timeout): {e!r}"
+                ) from e
+            delay = _transient_backoff(e, transient)
+            progress.log(
+                f"OpenAI busy ({type(e).__name__}) — waiting {delay:.0f}s before "
+                f"retry {transient}/{config.OPENAI_TRANSIENT_RETRIES}.",
+                level="warning",
+            )
+            time.sleep(delay)
         except Exception as e:  # noqa: BLE001 — retry then surface
             last_err = e
-            if attempt < retries:
-                time.sleep(2)
+            attempt += 1
+            if attempt >= retries:
+                break
+            time.sleep(2)
     raise RuntimeError(f"OpenAI extraction failed after {retries} retries: {last_err!r}")
 
 
