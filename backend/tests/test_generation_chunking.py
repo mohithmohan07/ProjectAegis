@@ -200,6 +200,65 @@ def test_inventory_extraction_retries_sparse_chunks(monkeypatch):
     assert inventory["items"][0]["qid"] == "QINV-0001"
 
 
+def test_latex_headings_are_normalized_to_markdown():
+    """Real Mathpix PDF output uses \\section*{...}, not Markdown '#'."""
+    mmd = (
+        "\\section*{NUMBER SYSTEMS}\n\nintro text\n\n"
+        "\\section*{1．1 Introduction}\n\nbody one\n\n"
+        "\\subsection*{1.2 Irrational Numbers}\n\nbody two\n\n"
+        "\\section*{EXERCISE 1.1}\n\n1. Is zero rational?\n"
+    )
+    out = g.normalize_mmd_headings(mmd)
+    assert "## NUMBER SYSTEMS" in out
+    assert "## 1．1 Introduction" in out
+    assert "### 1.2 Irrational Numbers" in out
+    assert "\\section" not in out
+    # Idempotent for already-Markdown documents.
+    md = "# Title\n\n## Section\n\nbody\n"
+    assert g.normalize_mmd_headings(md) == md
+
+
+def test_parse_mmd_sections_handles_latex_headings():
+    mmd = (
+        "\\section*{NUMBER SYSTEMS}\n\n"
+        "\\section*{1．1 Introduction}\n\nbody one\n\n"
+        "\\subsection*{1.2 Irrational Numbers}\n\nbody two\n"
+    )
+    sections = g.parse_mmd_sections(mmd)
+    headings = [s["heading"] for s in sections]
+    # Fullwidth "1．1" section number is stripped like a normal one.
+    assert "Introduction" in headings
+    assert "Irrational Numbers" in headings
+    assert len(sections) >= 3
+
+
+def test_section_aware_chunks_split_headingless_documents():
+    """A document with no (parseable) headings must still be chunked, not sent
+    as one giant chunk that causes chapter-scale under-extraction."""
+    body = ("A paragraph about numbers and operations. " * 40 + "\n\n") * 60
+    chunks = g._section_aware_chunks(body, max_chars=20_000)
+    assert len(chunks) > 1
+    assert all(len(c["text"]) <= 26_000 for c in chunks)
+    # No content is lost across the split.
+    joined = "".join(s["body"] for c in chunks for s in c["sections"])
+    assert joined.replace("\n", "").replace(" ", "") == \
+        body.replace("\n", "").replace(" ", "")
+
+
+def test_description_prefix_is_normalized_deterministically():
+    f = g._normalize_description_prefix
+    assert f("Description: fine as is") == "Description: fine as is"
+    assert f("description: lowercase") == "Description: lowercase"
+    assert f("Description： fullwidth colon") == "Description: fullwidth colon"
+    assert f("  Description :  spaced colon") == "Description: spaced colon"
+    assert f("Plain text with no prefix") == "Description: Plain text with no prefix"
+    assert f("") == ""
+    rows = g._concept_rows_to_records({"rows": [{
+        "topic": "T", "concept": "C", "concept_description": "no prefix here",
+    }]})
+    assert rows[0]["concept_details"] == "Description: no prefix here"
+
+
 def test_duplicate_concepts_are_merged_by_topic_and_title():
     records = [
         {"topic": "T", "parent_concept": "P", "concept_title": "Same",
