@@ -207,6 +207,32 @@ def test_source_artifacts_are_neutralized_even_in_types():
     assert not [e for e in report["errors"] if e["code"] == "source_artifact"]
 
 
+def test_source_artifacts_in_titles_and_topics_are_removed():
+    from app.services import concept_cleanup as cc
+    from app.services import concept_validator as cv
+
+    rec = {
+        "topic": "Triangles Exercise 6.2",
+        "parent_concept": "Similarity from Fig 6.4",
+        "concept_title": "Applying the midpoint theorem as in Example 5 on page 14",
+        "concept_details": "Description: Valid content.",
+        "keywords": "",
+    }
+    out = cc.clean_concept_record(dict(rec))
+    combined = " ".join(
+        [out["topic"], out["parent_concept"], out["concept_title"], out["concept_details"]])
+    assert "Example 5" not in combined
+    assert "Fig" not in combined
+    assert "page 14" not in combined.lower()
+    assert "6.2" not in combined
+    # The real wording survives.
+    assert "Midpoint Theorem" in out["concept_title"]
+    assert out["topic"].startswith("Triangles")
+    report = cv.validate_concept_rows(
+        [out], allow_types=True, require_culmination=False, allow_culmination=True)
+    assert not [e for e in report["errors"] if e["code"] == "source_artifact"]
+
+
 def test_sqlite_uses_wal_and_busy_timeout():
     from app.db import engine
 

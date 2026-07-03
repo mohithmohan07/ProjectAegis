@@ -207,16 +207,34 @@ def _clean_details(details: str) -> str:
     return _SECTION_SEP.join(out)
 
 
+def _neutralize_name_artifacts(name: str) -> str:
+    """Drop source references from a name; keep the wording around them.
+
+    Unlike prose, a name reading "... in a worked example" is worse than one
+    with the reference simply removed, so names strip rather than reword.
+    """
+    if not name:
+        return name
+    out = strip_dangling_references(name)
+    out = re.sub(
+        r"\b(?:on\s+)?(?:page\s+(?:no\.?\s*)?|p(?:age)?\.\s*)\d+\b", " ",
+        out, flags=re.IGNORECASE)
+    out = re.sub(
+        r"\b(?:exercises?|ex)\.?\s+\d+(?:\.\d+)*\b", " ", out, flags=re.IGNORECASE)
+    return re.sub(r"\s{2,}", " ", out).strip(" -:.,") or name
+
+
 def clean_concept_record(rec: dict) -> dict:
     """Return ``rec`` with its name + description normalized (mutates in place)."""
     if rec.get("topic"):
-        rec["topic"] = to_title_case(rec["topic"].strip())
+        rec["topic"] = to_title_case(
+            _neutralize_name_artifacts(rec["topic"].strip()))
     if rec.get("parent_concept"):
         rec["parent_concept"] = to_title_case(replace_mmd_references(
-            clean_concept_name(rec["parent_concept"].strip())))
+            _neutralize_name_artifacts(clean_concept_name(rec["parent_concept"].strip()))))
     if rec.get("concept_title"):
         rec["concept_title"] = to_title_case(replace_mmd_references(
-            clean_concept_name(rec["concept_title"])))
+            _neutralize_name_artifacts(clean_concept_name(rec["concept_title"]))))
     if rec.get("concept_details"):
         rec["concept_details"] = _clean_details(rec["concept_details"])
     return rec
