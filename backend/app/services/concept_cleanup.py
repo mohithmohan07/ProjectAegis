@@ -150,41 +150,110 @@ def replace_mmd_references(text: str) -> str:
     return text
 
 
+# Validator-aligned neutralization of source references. The concept validator
+# hard-fails rows containing "Exercise 1.2" / "Example 5" / "Fig 3" / "page 12"
+# style artifacts anywhere (including Types/Case prompts, which are mined from
+# real source questions and often carry their labels). LLM repair passes keep
+# recreating these, so they are rewritten deterministically into neutral
+# academic wording that preserves the task content.
+_ARTIFACT_NEUTRALIZATIONS = [
+    (re.compile(r"\b(?:exercises?|ex)\.?\s+\d+(?:\.\d+)*\b", re.IGNORECASE),
+     "the exercises"),
+    (re.compile(r"\bexamples?\s+\d+(?:\.\d+)*\b", re.IGNORECASE),
+     "a worked example"),
+    (re.compile(r"\bfig(?:ure)?s?\.?\s+\d+(?:\.\d+)*\b", re.IGNORECASE),
+     "the figure"),
+    (re.compile(r"\btables?\s+\d+(?:\.\d+)*\b", re.IGNORECASE),
+     "the given table"),
+    (re.compile(r"\b(?:on\s+)?page\s+(?:no\.?\s*)?\d+\b", re.IGNORECASE),
+     "in the chapter"),
+    (re.compile(r"\bp(?:age)?\.\s*\d+\b", re.IGNORECASE),
+     "in the chapter"),
+]
+
+
+def neutralize_source_artifacts(text: str) -> str:
+    """Rewrite bare source references into neutral wording (content kept)."""
+    if not text:
+        return text
+    for pat, repl in _ARTIFACT_NEUTRALIZATIONS:
+        text = pat.sub(repl, text)
+    return _tidy(text)
+
+
 # Canonical separator between Description / Types / Misconception sections.
 _SECTION_SEP = " // "
 
 
-def _clean_details(details: str) -> str:
+def _clean_details(details: str, *, neutralize: bool = True) -> str:
     """Sanitize a concept_details string section-by-section.
 
     The Types section is preserved verbatim (only MMD wording is rewritten) so
     ``Type NN:`` / ``Case NN:`` labels and example prompts are never damaged by
     reference-stripping. Other sections get full dangling-reference removal. The
     ``" // "`` separators are kept intact so downstream section parsing works.
+
+    ``neutralize=False`` keeps source references ("Exercise 1.2", "Example 5")
+    intact so the LLM repair pass can substitute the actual condensed problem
+    content from the source; the preferred outcome is real numericals in the
+    text, with neutral wording only as the post-repair last resort.
     """
     parts = details.split(_SECTION_SEP)
     out: list[str] = []
     for part in parts:
         label = part.split(":", 1)[0].strip().lower() if ":" in part else ""
-        if label.startswith("type"):
-            out.append(replace_mmd_references(part))
+        if label.startswith("type") or not neutralize:
+            # Types keep their structure verbatim; and when the caller wants
+            # references preserved for content inlining, prose keeps them too.
+            cleaned = replace_mmd_references(part)
         else:
-            out.append(replace_mmd_references(strip_dangling_references(part)))
+            cleaned = replace_mmd_references(strip_dangling_references(part))
+        out.append(neutralize_source_artifacts(cleaned) if neutralize else cleaned)
     return _SECTION_SEP.join(out)
 
 
-def clean_concept_record(rec: dict) -> dict:
-    """Return ``rec`` with its name + description normalized (mutates in place)."""
+def _neutralize_name_artifacts(name: str) -> str:
+    """Drop source references from a name; keep the wording around them.
+
+    Unlike prose, a name reading "... in a worked example" is worse than one
+    with the reference simply removed, so names strip rather than reword.
+    """
+    if not name:
+        return name
+    out = strip_dangling_references(name)
+    out = re.sub(
+        r"\b(?:on\s+)?(?:page\s+(?:no\.?\s*)?|p(?:age)?\.\s*)\d+\b", " ",
+        out, flags=re.IGNORECASE)
+    out = re.sub(
+        r"\b(?:exercises?|ex)\.?\s+\d+(?:\.\d+)*\b", " ", out, flags=re.IGNORECASE)
+    return re.sub(r"\s{2,}", " ", out).strip(" -:.,") or name
+
+
+def clean_concept_record(rec: dict, *, neutralize_artifacts: bool = True) -> dict:
+    """Return ``rec`` with its name + description normalized (mutates in place).
+
+    ``neutralize_artifacts=False`` leaves source references ("Exercise 1.2",
+    "Example 5") in place so the LLM repair pass can replace them with the
+    actual condensed problem content; pass ``True`` (default) as the final
+    deterministic guarantee that no reference survives to strict validation.
+    """
     if rec.get("topic"):
-        rec["topic"] = to_title_case(rec["topic"].strip())
+        topic = rec["topic"].strip()
+        rec["topic"] = to_title_case(
+            _neutralize_name_artifacts(topic) if neutralize_artifacts else topic)
     if rec.get("parent_concept"):
-        rec["parent_concept"] = to_title_case(replace_mmd_references(
-            clean_concept_name(rec["parent_concept"].strip())))
+        parent = clean_concept_name(rec["parent_concept"].strip())
+        if neutralize_artifacts:
+            parent = _neutralize_name_artifacts(parent)
+        rec["parent_concept"] = to_title_case(replace_mmd_references(parent))
     if rec.get("concept_title"):
-        rec["concept_title"] = to_title_case(replace_mmd_references(
-            clean_concept_name(rec["concept_title"])))
+        title = clean_concept_name(rec["concept_title"])
+        if neutralize_artifacts:
+            title = _neutralize_name_artifacts(title)
+        rec["concept_title"] = to_title_case(replace_mmd_references(title))
     if rec.get("concept_details"):
-        rec["concept_details"] = _clean_details(rec["concept_details"])
+        rec["concept_details"] = _clean_details(
+            rec["concept_details"], neutralize=neutralize_artifacts)
     return rec
 
 

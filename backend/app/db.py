@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from .config import DB_URL
@@ -10,6 +10,18 @@ class Base(DeclarativeBase):
 
 engine = create_engine(DB_URL, connect_args={"check_same_thread": False} if DB_URL.startswith("sqlite") else {})
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+if DB_URL.startswith("sqlite"):
+    # Multi-user safety: WAL lets readers proceed during a write, and the busy
+    # timeout makes a second writer WAIT for the lock instead of failing with
+    # "database is locked" when several generation jobs commit concurrently.
+    @event.listens_for(engine, "connect")
+    def _sqlite_concurrency_pragmas(dbapi_conn, _record):  # noqa: ANN001
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA busy_timeout=30000")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.close()
 
 
 def get_db():

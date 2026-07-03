@@ -9,7 +9,9 @@ exercised end to end.
 from __future__ import annotations
 
 import os
+import random
 import re
+import threading
 
 from .. import bulk_import as bi
 from .. import config, models
@@ -1137,7 +1139,10 @@ Rules:
 - Do not include Types.
 - Misconception may be included only if specific and useful.
 - No N/A, None, Not applicable, or placeholder text.
-- No source artifacts such as MMD, Example 3, Fig 2, Table 1, Exercise 1.1, or page references.
+- No source artifacts such as MMD, Example 3, Fig 2, Table 1, Exercise 1.1, or
+  page references. When the source text cites one, substitute the actual
+  condensed content it points to (the real numbers, expression, or task) —
+  e.g. write "such as expressing 1.272727... as 14/11", never "as in Example 8".
 """)
 
 prompts.register(
@@ -1236,6 +1241,19 @@ Rules:
 - Preserve source_question_ids and source traceability in debug JSON.
 - Do not include source labels in public concept_details.
 
+CASE PROMPTS CARRY THE ACTUAL CONTENT (mandatory):
+- case_prompt must be fully self-contained: copy the ACTUAL numbers,
+  expressions, equations, data, quotations, or task text from the source
+  question (its raw_task / normalized_task) into the prompt.
+- Keep each case_prompt CONDENSED: one sentence with the essential given
+  values and the ask — not the full verbatim question.
+- Correct: "Rationalise the denominator of 1/(7 + 3*sqrt(2))".
+- WRONG: "Rationalise the expressions given in Exercise 1.5",
+  "Solve the problem from Example 11", "As shown in Fig 6.4".
+- NEVER write Exercise/Example/Figure/Table/page references in case_prompt,
+  type_title, type_description, or task_pattern — always substitute the real
+  content those labels point to.
+
 TYPE WORDING (each Type must be properly defined):
 - type_title must be a precise, self-explanatory pattern name that states the
   action, the object, and the condition/method, e.g. "Finding the Unknown
@@ -1328,6 +1346,12 @@ Rules:
 - Do not rewrite the full chapter unnecessarily.
 - Never add filler.
 - Keep strict JSON.
+- For source_artifact issues (references like "Example 5", "Exercise 1.2",
+  "Fig 6.4", "page 14"): NEVER just delete or reword the reference. Look the
+  label up in the provided source context and substitute the CONDENSED actual
+  content — the real numbers, expressions, equations, data, or task — e.g.
+  "solve the problem in Exercise 1.5" becomes
+  "rationalise the denominator of 1/(7 + 3*sqrt(2))".
 """)
 
 
@@ -1364,25 +1388,80 @@ def _metadata_block(meta: dict) -> str:
     )
 
 
+# Process-wide gate on in-flight OpenAI calls. All users of this instance
+# share one API key, so concurrent generation runs must interleave their
+# calls instead of stampeding the API into rate limits. Created lazily so
+# tests can adjust config.OPENAI_MAX_CONCURRENCY and reset the gate.
+_openai_gate: "threading.BoundedSemaphore | None" = None
+_openai_gate_lock = threading.Lock()
+
+
+def _get_openai_gate() -> "threading.BoundedSemaphore":
+    global _openai_gate
+    with _openai_gate_lock:
+        if _openai_gate is None:
+            _openai_gate = threading.BoundedSemaphore(config.OPENAI_MAX_CONCURRENCY)
+        return _openai_gate
+
+
+def _retry_after_seconds(exc: Exception) -> float | None:
+    """Server-suggested wait from a rate-limit response, when present."""
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None)
+    if not headers:
+        return None
+    raw = headers.get("retry-after") or headers.get("Retry-After")
+    try:
+        return max(0.0, float(raw)) if raw is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _transient_backoff(exc: Exception, attempt: int) -> float:
+    suggested = _retry_after_seconds(exc)
+    backoff = min(2.0 * (2 ** (attempt - 1)), config.OPENAI_BACKOFF_MAX_SECONDS)
+    backoff *= 0.8 + 0.4 * random.random()  # jitter to de-synchronize users
+    return max(suggested or 0.0, backoff)
+
+
 def _openai_json(system: str, user: str, max_tokens: int | None = None,
                  retries: int = 3) -> dict:
-    """One JSON-mode chat call with retries; returns the parsed object."""
+    """One JSON-mode chat call; returns the parsed object.
+
+    Concurrency-safe for multiple simultaneous users on one shared API key:
+    calls queue on a process-wide gate (never stampede the API), and
+    transient failures — rate limits, timeouts, connection errors, 5xx —
+    are retried patiently with exponential backoff + Retry-After, so heavy
+    load makes jobs slower but never changes their output quality.
+    """
     import json
     import time
-    from openai import OpenAI
+    from openai import (
+        APIConnectionError,
+        APITimeoutError,
+        InternalServerError,
+        OpenAI,
+        RateLimitError,
+    )
 
+    transient_errors = (
+        RateLimitError, APIConnectionError, APITimeoutError, InternalServerError)
     limit = config.OPENAI_MAX_OUTPUT_TOKENS if max_tokens is None else max_tokens
     client = OpenAI()
+    gate = _get_openai_gate()
     last_err: Exception | None = None
-    for attempt in range(1, retries + 1):
+    attempt = 0  # hard failures (bad JSON, truncation, 4xx)
+    transient = 0  # rate limits / timeouts / 5xx — retried patiently
+    while True:
         try:
-            resp = client.chat.completions.create(
-                model=config.OPENAI_MODEL,
-                messages=[{"role": "system", "content": system},
-                          {"role": "user", "content": user}],
-                response_format={"type": "json_object"},
-                max_completion_tokens=limit,
-            )
+            with gate:
+                resp = client.chat.completions.create(
+                    model=config.OPENAI_MODEL,
+                    messages=[{"role": "system", "content": system},
+                              {"role": "user", "content": user}],
+                    response_format={"type": "json_object"},
+                    max_completion_tokens=limit,
+                )
             choice = resp.choices[0]
             if getattr(choice, "finish_reason", None) == "length":
                 raise RuntimeError(
@@ -1390,10 +1469,27 @@ def _openai_json(system: str, user: str, max_tokens: int | None = None,
                     "Set AEGIS_OPENAI_MAX_OUTPUT_TOKENS higher or reduce input size."
                 )
             return json.loads(choice.message.content or "{}")
+        except transient_errors as e:
+            transient += 1
+            last_err = e
+            if transient > config.OPENAI_TRANSIENT_RETRIES:
+                raise RuntimeError(
+                    f"OpenAI unavailable after {transient - 1} transient retries "
+                    f"(rate limit/timeout): {e!r}"
+                ) from e
+            delay = _transient_backoff(e, transient)
+            progress.log(
+                f"OpenAI busy ({type(e).__name__}) — waiting {delay:.0f}s before "
+                f"retry {transient}/{config.OPENAI_TRANSIENT_RETRIES}.",
+                level="warning",
+            )
+            time.sleep(delay)
         except Exception as e:  # noqa: BLE001 — retry then surface
             last_err = e
-            if attempt < retries:
-                time.sleep(2)
+            attempt += 1
+            if attempt >= retries:
+                break
+            time.sleep(2)
     raise RuntimeError(f"OpenAI extraction failed after {retries} retries: {last_err!r}")
 
 
@@ -1908,9 +2004,11 @@ def _mined_type_to_body(mtype: dict, start_type: int) -> tuple[str, int]:
     This is deterministic formatting only — the Type's title/definition/cases
     are authored by the API mining step. The Type line carries the precise
     pattern name plus its 1-2 sentence definition so every Type reads as a
-    properly defined assessment pattern. Source labels are stripped so injected
-    Types never carry artifacts (e.g. "Exercise 1.2") that final validation
-    would reject.
+    properly defined assessment pattern. Source labels (e.g. "Exercise 1.2")
+    are intentionally NOT stripped here: if mining disobeyed the prompt and
+    left one, final validation flags the row and the repair pass substitutes
+    the actual condensed problem content from the source (preferred), with
+    deterministic neutralization as the post-repair last resort.
     """
     title = concept_cleanup.strip_dangling_references(
         (mtype.get("type_title") or mtype.get("task_pattern") or "").strip())
@@ -1925,7 +2023,7 @@ def _mined_type_to_body(mtype: dict, start_type: int) -> tuple[str, int]:
             prompt = case.get("case_prompt", "")
         elif isinstance(case, str):
             prompt = case
-        prompt = concept_cleanup.strip_dangling_references((prompt or "").strip())
+        prompt = (prompt or "").strip()
         if prompt:
             cases.append(prompt)
     if not title or not cases:
@@ -2573,6 +2671,89 @@ def _culmination_title(topic_records: list[dict]) -> str:
     return f"Culmination - {body}"
 
 
+# Deterministic final normalization: these two failure modes kept surviving
+# LLM repair attempts in live runs, so they are fixed mechanically instead of
+# failing the whole job (multi-user rule: output quality is never compromised,
+# and a job must not die on formatting the code can fix itself).
+_SECTION_NUMBER_SCRUB_RE = re.compile(
+    r"\b(?:exercise|ex)?\s*\d+(?:\.\d+)+\b", re.IGNORECASE)
+_EXERCISE_ONLY_RE = re.compile(
+    r"^\s*(?:exercise|exercises|ex|intext(?:\s+questions?)?|review|practice|"
+    r"problems?|questions?)\b[\s\d.:()\-]*$",
+    re.IGNORECASE,
+)
+
+
+def _scrub_section_numbers(records: list[dict]) -> list[dict]:
+    """Remove section/exercise numbering from topics and titles.
+
+    Rows whose topic is a bare exercise heading (e.g. "EXERCISE 1.2" — these
+    slip through when OCR'd chapters use exercise sections as headings) are
+    merged into the preceding real topic so no content is dropped.
+    """
+
+    def _scrub(text: str) -> str:
+        return re.sub(r"\s+", " ", _SECTION_NUMBER_SCRUB_RE.sub(" ", text or "")
+                      ).strip(" -:.,")
+
+    prev_topic = ""
+    for rec in records:
+        topic = rec.get("topic", "")
+        scrubbed = _scrub(topic)
+        if _EXERCISE_ONLY_RE.match(topic) or not scrubbed or _EXERCISE_ONLY_RE.match(scrubbed):
+            rec["topic"] = prev_topic or "General"
+        elif scrubbed != topic:
+            rec["topic"] = scrubbed
+        prev_topic = rec.get("topic", "") or prev_topic
+        title = rec.get("concept_title", "")
+        scrubbed_title = _scrub(title)
+        if scrubbed_title and scrubbed_title != title:
+            rec["concept_title"] = scrubbed_title
+    return records
+
+
+def _enforce_culminations(records: list[dict]) -> list[dict]:
+    """Guarantee exactly one culmination row at the end of every topic.
+
+    Keeps the authored culmination (first one when the model produced
+    duplicates), appends the deterministic fallback when a topic has none,
+    and always positions it last. Normal rows are never touched.
+    """
+    normal: dict[str, list[dict]] = {}
+    culms: dict[str, list[dict]] = {}
+    order: list[str] = []
+    for rec in records:
+        topic = rec.get("topic", "")
+        if topic not in normal:
+            normal[topic] = []
+            culms[topic] = []
+            order.append(topic)
+        target = culms if cr.is_culmination(rec.get("concept_title", "")) else normal
+        target[topic].append(rec)
+    out: list[dict] = []
+    for topic in order:
+        out.extend(normal[topic])
+        topic_culms = culms[topic]
+        if topic_culms:
+            keep = dict(topic_culms[0])
+            keep["parent_concept"] = "Culmination"
+            out.append(keep)
+            if len(topic_culms) > 1:
+                progress.log(
+                    f"Dropped {len(topic_culms) - 1} extra culmination row(s) "
+                    f"in topic '{topic}'.",
+                    level="warning",
+                )
+        else:
+            fallback = _ensure_culmination_rows(normal[topic])
+            out.extend(fallback[len(normal[topic]):])
+            progress.log(
+                f"Added deterministic culmination for topic '{topic}'.",
+                level="warning",
+            )
+    return cr.set_culmination_recap(out)
+
+
 def _ensure_culmination_rows(records: list[dict]) -> list[dict]:
     """Deterministic safety net: exactly one culmination row at each topic end."""
     out: list[dict] = []
@@ -2718,10 +2899,30 @@ def concepts_from_mmd(
             question_task_inventory=question_task_inventory,
             mined_types=mined_types,
         )
+        # Deterministic normalization BEFORE the strict repair: formatting
+        # failures the code can fix itself (section numbering in topics/titles,
+        # missing/duplicate culminations) must never fail a job or burn repair
+        # attempts needed for semantic issues. Source references ("Example 5",
+        # "Exercise 1.2") are deliberately KEPT here: the repair pass has the
+        # chapter source and substitutes the actual condensed problem content,
+        # which is preferred over neutral rewording.
+        out = _scrub_section_numbers(out)
+        out = _merge_concept_records(out)
+        out = [
+            concept_cleanup.clean_concept_record(dict(r), neutralize_artifacts=False)
+            for r in out
+        ]
+        out = _enforce_culminations(out)
         out = _repair_records_via_api(
-            out, meta=meta, stage="final", source_context=mmd_text, strict=True)
+            out, meta=meta, stage="final", source_context=mmd_text, strict=False)
+        # Post-repair: neutralization is the deterministic last resort for any
+        # reference the repair pass failed to inline — a job must never fail
+        # on a reference the code can still remove.
         out = [concept_cleanup.clean_concept_record(dict(r)) for r in out]
         out = cr.refine_chapter(out)
+        # The repair/cleanup passes may reorder or rename rows; re-assert the
+        # culmination invariant mechanically before the final gate.
+        out = _enforce_culminations(out)
         _validate_final_or_raise(out, stage="final")
         missing = sum(
             1 for r in out

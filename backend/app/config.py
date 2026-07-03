@@ -110,3 +110,20 @@ OPENAI_MODEL = os.environ.get("AEGIS_OPENAI_MODEL", "gpt-5.4-mini-2026-03-17")
 OPENAI_MAX_OUTPUT_TOKENS = int(
     os.environ.get("AEGIS_OPENAI_MAX_OUTPUT_TOKENS", "128000")
 )
+
+# ---- Multi-user safety ------------------------------------------------------
+# All users share one OPENAI_API_KEY, so concurrent generation runs compete for
+# the same rate/token budget. Two protections keep output quality unaffected:
+#
+#  1. A process-wide cap on in-flight OpenAI calls. Extra calls WAIT for a free
+#     slot instead of stampeding the API into 429s. Under load jobs get slower,
+#     never lower-quality.
+#  2. Patient retries for transient API errors (rate limits, timeouts, 5xx)
+#     with exponential backoff, honouring the server's Retry-After when given.
+#     A job only fails after the API has been unavailable for several minutes.
+OPENAI_MAX_CONCURRENCY = max(
+    1, int(os.environ.get("AEGIS_OPENAI_MAX_CONCURRENCY", "3")))
+OPENAI_TRANSIENT_RETRIES = max(
+    0, int(os.environ.get("AEGIS_OPENAI_TRANSIENT_RETRIES", "10")))
+OPENAI_BACKOFF_MAX_SECONDS = max(
+    1.0, float(os.environ.get("AEGIS_OPENAI_BACKOFF_MAX_SECONDS", "90")))
