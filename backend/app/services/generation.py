@@ -2877,10 +2877,11 @@ def concepts_from_mmd(
         )
         # Deterministic normalization BEFORE the strict repair: formatting
         # failures the code can fix itself (section numbering in topics/titles,
-        # missing/duplicate culminations) must never fail a job or burn repair
-        # attempts that are needed for real semantic issues.
+        # source-artifact references, missing/duplicate culminations) must
+        # never fail a job or burn repair attempts needed for semantic issues.
         out = _scrub_section_numbers(out)
         out = _merge_concept_records(out)
+        out = [concept_cleanup.clean_concept_record(dict(r)) for r in out]
         out = _enforce_culminations(out)
         out = _repair_records_via_api(
             out, meta=meta, stage="final", source_context=mmd_text, strict=True)

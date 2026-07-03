@@ -180,6 +180,33 @@ def test_culminations_are_enforced_mechanically():
     assert [r["concept_title"] for r in b_rows[:-1]] == ["Concept B1"]
 
 
+def test_source_artifacts_are_neutralized_even_in_types():
+    from app.services import concept_cleanup as cc
+    from app.services import concept_validator as cv
+
+    rec = {
+        "topic": "Real Numbers", "parent_concept": "P",
+        "concept_title": "Rationalising denominators",
+        "concept_details": (
+            "Description: Convert as shown in Example 11 on page 14. // "
+            "Types: Type 01: Rationalise a surd denominator "
+            "Case 01: Rationalise the expressions given in Exercise 1.5"
+        ),
+        "keywords": "",
+    }
+    out = cc.clean_concept_record(dict(rec))
+    details = out["concept_details"]
+    assert "Example 11" not in details
+    assert "page 14" not in details
+    assert "Exercise 1.5" not in details
+    # Structure and task content survive.
+    assert "Type 01:" in details and "Case 01:" in details
+    assert "Rationalise the expressions" in details
+    report = cv.validate_concept_rows(
+        [out], allow_types=True, require_culmination=False, allow_culmination=True)
+    assert not [e for e in report["errors"] if e["code"] == "source_artifact"]
+
+
 def test_sqlite_uses_wal_and_busy_timeout():
     from app.db import engine
 

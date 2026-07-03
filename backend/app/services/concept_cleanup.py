@@ -150,6 +150,37 @@ def replace_mmd_references(text: str) -> str:
     return text
 
 
+# Validator-aligned neutralization of source references. The concept validator
+# hard-fails rows containing "Exercise 1.2" / "Example 5" / "Fig 3" / "page 12"
+# style artifacts anywhere (including Types/Case prompts, which are mined from
+# real source questions and often carry their labels). LLM repair passes keep
+# recreating these, so they are rewritten deterministically into neutral
+# academic wording that preserves the task content.
+_ARTIFACT_NEUTRALIZATIONS = [
+    (re.compile(r"\b(?:exercises?|ex)\.?\s+\d+(?:\.\d+)*\b", re.IGNORECASE),
+     "the exercises"),
+    (re.compile(r"\bexamples?\s+\d+(?:\.\d+)*\b", re.IGNORECASE),
+     "a worked example"),
+    (re.compile(r"\bfig(?:ure)?s?\.?\s+\d+(?:\.\d+)*\b", re.IGNORECASE),
+     "the figure"),
+    (re.compile(r"\btables?\s+\d+(?:\.\d+)*\b", re.IGNORECASE),
+     "the given table"),
+    (re.compile(r"\b(?:on\s+)?page\s+(?:no\.?\s*)?\d+\b", re.IGNORECASE),
+     "in the chapter"),
+    (re.compile(r"\bp(?:age)?\.\s*\d+\b", re.IGNORECASE),
+     "in the chapter"),
+]
+
+
+def neutralize_source_artifacts(text: str) -> str:
+    """Rewrite bare source references into neutral wording (content kept)."""
+    if not text:
+        return text
+    for pat, repl in _ARTIFACT_NEUTRALIZATIONS:
+        text = pat.sub(repl, text)
+    return _tidy(text)
+
+
 # Canonical separator between Description / Types / Misconception sections.
 _SECTION_SEP = " // "
 
@@ -167,9 +198,12 @@ def _clean_details(details: str) -> str:
     for part in parts:
         label = part.split(":", 1)[0].strip().lower() if ":" in part else ""
         if label.startswith("type"):
-            out.append(replace_mmd_references(part))
+            # Keep Type/Case structure verbatim but neutralize source labels
+            # ("Exercise 1.2", "Example 5") that mined prompts carry over.
+            out.append(neutralize_source_artifacts(replace_mmd_references(part)))
         else:
-            out.append(replace_mmd_references(strip_dangling_references(part)))
+            out.append(neutralize_source_artifacts(
+                replace_mmd_references(strip_dangling_references(part))))
     return _SECTION_SEP.join(out)
 
 
