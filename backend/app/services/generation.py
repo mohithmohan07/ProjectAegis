@@ -2153,6 +2153,15 @@ def _repair_records_via_api(
                 f"{stage}: keeping best output with {len(hard)} validation error(s).",
                 level="warning",
             )
+            for e in hard[:10]:
+                idx = e.get("row_index", -1)
+                row = records[idx] if 0 <= idx < len(records) else {}
+                progress.log(
+                    f"  unrepaired [{e.get('code')}] row {idx} "
+                    f"'{(row.get('concept_title') or '')[:60]}': "
+                    f"{(row.get(e.get('field', '')) or '')[:120]!r}",
+                    level="warning",
+                )
             if strict and fatal:
                 codes = ", ".join(sorted({e["code"] for e in fatal}))
                 raise RuntimeError(
@@ -2430,6 +2439,27 @@ def _consolidate_concepts_via_api(
     return out
 
 
+_DESCRIPTION_PREFIX_RE = re.compile(r"^\s*description\s*[:：]\s*", re.IGNORECASE)
+
+
+def _normalize_description_prefix(details: str) -> str:
+    """Deterministically enforce the required "Description:" prefix.
+
+    Models routinely drift on this exact formatting (lowercase, fullwidth
+    colon, missing prefix), and repeated API repair attempts often recreate
+    the same drift — normalizing here fixes it once for every stage.
+    """
+    details = (details or "").strip()
+    if not details or details.startswith("Description:"):
+        return details
+    m = _DESCRIPTION_PREFIX_RE.match(details)
+    if m:
+        return "Description: " + details[m.end():].strip()
+    if details.startswith(("Type ", "Types:", "Case ")):
+        return details  # Types-only content is handled by Types validation.
+    return "Description: " + details
+
+
 def _concept_rows_to_records(data: dict) -> list[dict]:
     out: list[dict] = []
     for row in data.get("rows", []):
@@ -2440,7 +2470,8 @@ def _concept_rows_to_records(data: dict) -> list[dict]:
             "topic": (row.get("topic") or "General").strip(),
             "parent_concept": (row.get("parent_concept") or "").strip(),
             "concept_title": title,
-            "concept_details": (row.get("concept_description") or "").strip(),
+            "concept_details": _normalize_description_prefix(
+                row.get("concept_description") or ""),
             "keywords": (row.get("keywords") or "").strip(),
             "source_evidence": (row.get("source_evidence") or "").strip(),
         })

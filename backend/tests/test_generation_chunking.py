@@ -245,6 +245,20 @@ def test_section_aware_chunks_split_headingless_documents():
         body.replace("\n", "").replace(" ", "")
 
 
+def test_description_prefix_is_normalized_deterministically():
+    f = g._normalize_description_prefix
+    assert f("Description: fine as is") == "Description: fine as is"
+    assert f("description: lowercase") == "Description: lowercase"
+    assert f("Description： fullwidth colon") == "Description: fullwidth colon"
+    assert f("  Description :  spaced colon") == "Description: spaced colon"
+    assert f("Plain text with no prefix") == "Description: Plain text with no prefix"
+    assert f("") == ""
+    rows = g._concept_rows_to_records({"rows": [{
+        "topic": "T", "concept": "C", "concept_description": "no prefix here",
+    }]})
+    assert rows[0]["concept_details"] == "Description: no prefix here"
+
+
 def test_duplicate_concepts_are_merged_by_topic_and_title():
     records = [
         {"topic": "T", "parent_concept": "P", "concept_title": "Same",
