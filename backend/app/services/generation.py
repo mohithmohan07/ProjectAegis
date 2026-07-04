@@ -2881,14 +2881,35 @@ _EXERCISE_ONLY_RE = re.compile(
     r"problems?|questions?)\b[\s\d.:()\-]*$",
     re.IGNORECASE,
 )
+# OCR'd textbooks mark structural blocks as headings too ("Solution",
+# "Example", "Summary", "Note to the Reader", activity prompts...). These are
+# NEVER topics — their content belongs to the preceding real section.
+_NON_TOPIC_RE = re.compile(
+    r"^\s*(?:solutions?|examples?|summary|answers?|"
+    r"(?:a\s+)?notes?\s+to\s+the\s+reader|"
+    r"tick\s+the\s+correct\s+answer(?:\s+and\s+justify)?|"
+    r"what\s+have\s+we\s+(?:learnt|learned|discussed)|"
+    r"try\s+these|think\s+and\s+discuss|think,?\s+discuss\s+and\s+write|"
+    r"do\s+this|activity|activities|project\s+work|things\s+to\s+remember|"
+    r"points\s+to\s+remember|key\s+points|glossary)\b[\s\d.:()\-]*$",
+    re.IGNORECASE,
+)
+
+
+def _is_non_topic_heading(heading: str) -> bool:
+    return bool(
+        _EXERCISE_ONLY_RE.match(heading or "")
+        or _NON_TOPIC_RE.match(heading or "")
+    )
 
 
 def _scrub_section_numbers(records: list[dict]) -> list[dict]:
     """Remove section/exercise numbering from topics and titles.
 
-    Rows whose topic is a bare exercise heading (e.g. "EXERCISE 1.2" — these
-    slip through when OCR'd chapters use exercise sections as headings) are
-    merged into the preceding real topic so no content is dropped.
+    Rows whose topic is a bare exercise or structural heading (e.g.
+    "EXERCISE 1.2", "Solution", "Summary", "Tick the Correct Answer" — these
+    slip through when OCR'd chapters mark such blocks as headings) are merged
+    into the preceding real topic so no content is dropped.
     """
 
     def _scrub(text: str) -> str:
@@ -2899,7 +2920,7 @@ def _scrub_section_numbers(records: list[dict]) -> list[dict]:
     for rec in records:
         topic = rec.get("topic", "")
         scrubbed = _scrub(topic)
-        if _EXERCISE_ONLY_RE.match(topic) or not scrubbed or _EXERCISE_ONLY_RE.match(scrubbed):
+        if _is_non_topic_heading(topic) or not scrubbed or _is_non_topic_heading(scrubbed):
             rec["topic"] = prev_topic or "General"
         elif scrubbed != topic:
             rec["topic"] = scrubbed
@@ -2911,12 +2932,31 @@ def _scrub_section_numbers(records: list[dict]) -> list[dict]:
     return records
 
 
+def _culmination_starter_types(topic_records: list[dict]) -> str:
+    """Deterministic mixed-application Types body for a culmination row.
+
+    Renumbered downstream into the culmination-only continuous
+    "Miscellaneous Type NN" sequence.
+    """
+    names = [
+        r.get("concept_title", "") for r in topic_records
+        if not cr.is_culmination(r.get("concept_title", ""))
+    ][:3]
+    combo = ", ".join(n for n in names if n) or "the topic's main ideas"
+    return (
+        "Type 01: Mixed application combining the topic's concepts "
+        f"Case 01: Solve or explain a problem that combines {combo}"
+    )
+
+
 def _enforce_culminations(records: list[dict]) -> list[dict]:
     """Guarantee exactly one culmination row at the end of every topic.
 
     Keeps the authored culmination (first one when the model produced
     duplicates), appends the deterministic fallback when a topic has none,
-    and always positions it last. Normal rows are never touched.
+    and always positions it last. A kept culmination that lost its Types gets
+    the deterministic mixed-application starter (Miscellaneous sequence).
+    Normal rows are never touched.
     """
     normal: dict[str, list[dict]] = {}
     culms: dict[str, list[dict]] = {}
@@ -2936,6 +2976,10 @@ def _enforce_culminations(records: list[dict]) -> list[dict]:
         if topic_culms:
             keep = dict(topic_culms[0])
             keep["parent_concept"] = "Culmination"
+            if not _has_meaningful_types(keep.get("concept_details", "")):
+                keep["concept_details"] = _inject_types(
+                    keep.get("concept_details", ""),
+                    _culmination_starter_types(normal[topic]))
             out.append(keep)
             if len(topic_culms) > 1:
                 progress.log(
@@ -3055,7 +3099,7 @@ def _topic_headings(sections: list[dict]) -> list[str]:
         heading = _PART_SUFFIX_RE.sub("", (section.get("heading") or "").strip())
         if not heading or heading.lower() == "general":
             continue
-        if _EXERCISE_ONLY_RE.match(heading):
+        if _is_non_topic_heading(heading):
             continue
         key = heading.lower()
         if key not in seen:
@@ -3200,6 +3244,10 @@ def concepts_from_mmd(
         out = _extract_skeleton_via_api(chunks, meta=meta)
         if not out:
             raise RuntimeError("live concept extraction returned no rows")
+        # Structural OCR headings ("Solution", "Summary", "EXERCISE 6.1") must
+        # never become topics: merge their rows into the preceding real topic
+        # BEFORE any chapter-wide pass builds on the topic structure.
+        out = _scrub_section_numbers(out)
         out = _consolidate_concepts_via_api(out, subject=subject, mmd_text=mmd_text, meta=meta)
         headings = _topic_headings(sections)
         if _topics_look_collapsed(out, headings):

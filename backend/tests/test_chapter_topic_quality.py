@@ -156,6 +156,52 @@ def test_topic_headings_skip_exercises_parts_and_general():
         "Similar Triangles", "Areas of Similar Triangles"]
 
 
+def test_topic_headings_skip_structural_ocr_headings():
+    sections = [
+        {"heading": "Similarity of Triangles"},
+        {"heading": "Solution"},
+        {"heading": "Example 3"},
+        {"heading": "Summary"},
+        {"heading": "Tick the Correct Answer and Justify"},
+        {"heading": "Note to the Reader"},
+        {"heading": "Pythagoras Theorem"},
+    ]
+    assert g._topic_headings(sections) == [
+        "Similarity of Triangles", "Pythagoras Theorem"]
+
+
+def test_scrub_merges_structural_topics_into_previous():
+    records = [
+        _rec("Meaning of Similarity", "Description: a", topic="Similar Figures"),
+        _rec("Worked ratio problem", "Description: b", topic="Solution"),
+        _rec("Chapter recap idea", "Description: c", topic="Summary"),
+        _rec("Pythagoras statement", "Description: d", topic="Pythagoras Theorem"),
+    ]
+    out = g._scrub_section_numbers(records)
+    assert [r["topic"] for r in out] == [
+        "Similar Figures", "Similar Figures", "Similar Figures",
+        "Pythagoras Theorem"]
+
+
+def test_enforce_culminations_injects_starter_types():
+    records = [
+        _rec("AA Criterion", "Description: a", topic="T1"),
+        _rec("SSS Criterion", "Description: b", topic="T1"),
+        _rec("Culmination - T1", "Description: Recap", topic="T1",
+             parent="Culmination"),
+    ]
+    out = g._enforce_culminations(records)
+    culm = out[-1]["concept_details"]
+    assert "Types: Type 01: Mixed application combining the topic's concepts" in culm
+    assert "AA Criterion, SSS Criterion" in culm
+    # A culmination that already has meaningful Types is left alone.
+    records[2]["concept_details"] = (
+        "Description: Recap // Types: Type 01: Real mined mix Case 01: combine x and y")
+    out = g._enforce_culminations(records)
+    assert "Real mined mix" in out[-1]["concept_details"]
+    assert "Mixed application combining" not in out[-1]["concept_details"]
+
+
 def test_restructure_topics_reassigns_only_topics(monkeypatch):
     records = [
         _rec("Meaning of Similarity", "Description: a", topic="Triangles"),
