@@ -299,6 +299,39 @@ def test_sync_chapter_topic_summary_falls_back_without_meta(db):
     assert topic.topic_description == "Covers A."
 
 
+def test_mastery_line_pass_completes_missing_rows(monkeypatch):
+    records = [
+        _rec("Has One", "Description: body.\nAchieving Mastery: doing it right."),
+        _rec("Missing One", "Description: body only. // Types: Type 01: X Case 01: q"),
+        _rec("Culmination - T", "Description: Recap", parent="Culmination"),
+    ]
+
+    def fake_openai(system, user, **kw):
+        assert "Missing One" in user and "Has One" not in user
+        return {"rows": [{
+            "topic": "Topic A", "parent_concept": "P", "concept": "Missing One",
+            "concept_description": ("Description: body only.\nAchieving Mastery: "
+                                    "applying the rule to fresh problems."),
+            "keywords": "",
+        }]}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    out = g._ensure_mastery_lines_via_api(records, meta=g._metadata(subject="Math"))
+    assert ("\nAchieving Mastery: applying the rule to fresh problems."
+            in out[1]["concept_details"])
+    # Types are untouched; culminations are never targeted.
+    assert "Types: Type 01: X Case 01: q" in out[1]["concept_details"]
+    assert out[2]["concept_details"] == "Description: Recap"
+
+
+def test_mastery_line_deterministic_fallback():
+    records = [_rec("AA Similarity Criterion", "Description: body only.")]
+    out = g._ensure_mastery_lines_via_api(
+        records, meta=g._metadata(subject="Math"), use_api=False)
+    assert ("\nAchieving Mastery: Applying AA Similarity Criterion correctly "
+            "in new problems.") in out[0]["concept_details"]
+
+
 def test_duplicate_titles_are_dropped_chapter_wide():
     records = [
         _rec("Similarity vs Congruence", "Description: a", topic="T1"),

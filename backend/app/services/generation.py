@@ -1367,6 +1367,27 @@ Rules:
 """)
 
 prompts.register(
+    "concepts.mastery_line.system", category=_CONCEPTS_CAT,
+    label="Missing mastery-line writer system prompt",
+    default="""\
+Add the missing mastery statement to concept Descriptions.
+Return ONLY strict JSON:
+{"rows":[{"topic":"","parent_concept":"","concept":"","concept_description":"","keywords":""}]}.
+
+Rules:
+- Each provided row's Description is missing its final mastery statement.
+- Return the SAME rows: identical topic, parent_concept, concept, keywords,
+  and Description text — the ONLY change is appending a line break (\\n)
+  followed by exactly:
+  Achieving Mastery: <one short sentence stating what the learner can do when this concept is mastered>
+- The sentence must be specific to the concept, e.g.
+  "Achieving Mastery: Using the midpoint property to set up the smaller triangles correctly."
+- Do not add Types or Misconception sections. No source artifacts
+  (Example 3, Exercise 1.2, Fig 4, page numbers) and never the words
+  "MMD"/"MMDs".
+""")
+
+prompts.register(
     "concepts.topic_structure.system", category=_CONCEPTS_CAT,
     label="Topic re-segregation system prompt",
     default="""\
@@ -2104,6 +2125,89 @@ def _concept_description_only(details: str) -> str:
         if label.lower().startswith("description"):
             return content
     return ""
+
+
+def _set_description(details: str, new_description: str) -> str:
+    """Replace (or prepend) the Description section content."""
+    sections = cr.split_sections(details or "")
+    for i, (label, _content) in enumerate(sections):
+        if label.lower().startswith("description"):
+            sections[i] = (label, new_description)
+            return cr.join_sections(sections)
+    sections.insert(0, ("Description", new_description))
+    return cr.join_sections(sections)
+
+
+def _has_mastery_line(details: str) -> bool:
+    return bool(cr._MASTERY_LABEL_RE.search(_concept_description_only(details)))
+
+
+def _ensure_mastery_lines_via_api(
+    records: list[dict], *, meta: dict, use_api: bool = True,
+) -> list[dict]:
+    """Guarantee every normal concept Description ends with the line-broken
+    "Achieving Mastery: ..." statement.
+
+    The description-refine prompt asks for it, but models skip it on a
+    fraction of rows; this pass sends ONLY the missing Descriptions back for
+    completion, and falls back to a deterministic statement so the required
+    format is always present.
+    """
+    import json as _json
+
+    targets = [
+        i for i, rec in enumerate(records)
+        if not cr.is_culmination(rec.get("concept_title", ""))
+        and not _has_mastery_line(rec.get("concept_details", ""))
+    ]
+    if not targets:
+        return records
+    progress.log(
+        f"Adding the missing 'Achieving Mastery' line to {len(targets)} concept(s).")
+    system = prompts.get_text("concepts.mastery_line.system")
+    rows = [
+        {
+            "topic": records[i].get("topic", ""),
+            "parent_concept": records[i].get("parent_concept", ""),
+            "concept": records[i].get("concept_title", ""),
+            "concept_description": "Description: "
+            + _concept_description_only(records[i].get("concept_details", "")),
+            "keywords": records[i].get("keywords", ""),
+        }
+        for i in targets
+    ]
+    user = (
+        _metadata_block(meta)
+        + "\nDescriptions missing their final mastery statement:\n"
+        + _json.dumps({"rows": rows}, ensure_ascii=False)
+    )
+    by_title: dict[str, str] = {}
+    if use_api:
+        try:
+            data = _openai_json(system, user)
+            for row in _concept_rows_to_records(data):
+                desc = _concept_description_only(row.get("concept_details", ""))
+                if cr._MASTERY_LABEL_RE.search(desc):
+                    by_title[bi.normalize_question_text(row["concept_title"])] = desc
+        except Exception as exc:  # noqa: BLE001 — fall back deterministically
+            progress.log(f"Mastery-line pass failed ({exc}) — using fallback lines.",
+                         level="warning")
+    completed = 0
+    for i in targets:
+        rec = records[i]
+        desc = by_title.get(bi.normalize_question_text(rec.get("concept_title", "")))
+        if not desc:
+            title = (rec.get("concept_title") or "this concept").strip().rstrip(".")
+            desc = (
+                _concept_description_only(rec.get("concept_details", "")).rstrip()
+                + f"\nAchieving Mastery: Applying {title} correctly in new problems."
+            )
+        rec["concept_details"] = cr.format_mastery_statement(
+            _set_description(rec.get("concept_details", ""), desc))
+        completed += 1
+    progress.log(f"Mastery lines completed for {completed} concept(s).",
+                 level="success")
+    return records
 
 
 def _assign_mined_types_via_api(
@@ -3108,6 +3212,7 @@ def concepts_from_mmd(
             out = _restructure_topics_via_api(out, meta=meta, headings=headings)
         out = _refine_descriptions_via_api(
             out, subject=subject, mmd_text=mmd_text, meta=meta, sections=sections)
+        out = _ensure_mastery_lines_via_api(out, meta=meta)
         question_task_inventory = _extract_question_task_inventory_via_api(
             meta=meta, sections=sections)
         mined_types = _mine_types_from_inventory_via_api(
@@ -3150,9 +3255,12 @@ def concepts_from_mmd(
         out = [concept_cleanup.clean_concept_record(dict(r)) for r in out]
         out = cr.refine_chapter(out)
         # The repair/cleanup passes may reorder, rename, or re-collide rows;
-        # re-assert the duplicate-title and culmination invariants mechanically
-        # before the final gate (a missing culmination is restored afterwards).
+        # re-assert the duplicate-title, culmination, and mastery-line
+        # invariants mechanically before the final gate (rows the repair pass
+        # rewrote may have lost their "Achieving Mastery" line — restore it
+        # deterministically, without another API round-trip).
         out = _dedupe_titles_chapter_wide(out)
+        out = _ensure_mastery_lines_via_api(out, meta=meta, use_api=False)
         out = _enforce_culminations(out)
         _validate_final_or_raise(out, stage="final")
         missing = sum(
