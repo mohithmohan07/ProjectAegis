@@ -12,8 +12,12 @@ team requires regardless of which extractor produced them:
    advanced by) the regular Type counter.
 3. **Type reduction for theory.** Purely theoretical concepts should not carry
    a Types section; we drop any ``Types:`` block that has no concrete ``Case``.
-4. **Culmination description = "Recap".** Culmination rows keep their Types and
-   Misconception, but their Description section is replaced with just "Recap".
+4. **Culmination description = detailed "Recap of ...".** Culmination rows keep
+   their Types and Misconception, but their Description section is replaced
+   with "Recap of <A>, <B> and <C>" listing the topic's merged concepts.
+5. **"Achieving Mastery" statement on its own line.** A mastery statement at
+   the end of a Description is normalized to a line-broken
+   ``\\nAchieving Mastery: <statement>`` format.
 
 ``concept_details`` is the canonical ``Description: ... // Types: ... //
 Misconception: ...`` string (sections joined by " // ").
@@ -121,32 +125,84 @@ def renumber_types_continuously(records: list[dict]) -> list[dict]:
     return records
 
 
-def set_culmination_recap(records: list[dict]) -> list[dict]:
-    """Replace the Description of every culmination row with just "Recap".
+def recap_text(concept_titles: list[str]) -> str:
+    """Detailed culmination Description listing the merged concepts."""
+    names = [n.strip() for n in concept_titles if n and n.strip()]
+    if not names:
+        return "Recap"
+    if len(names) == 1:
+        joined = names[0]
+    else:
+        joined = ", ".join(names[:-1]) + " and " + names[-1]
+    return f"Recap of {joined}."
 
-    Types and Misconception are left untouched. A culmination with no Description
-    section gets one prepended.
+
+def set_culmination_recap(records: list[dict]) -> list[dict]:
+    """Give every culmination row a detailed "Recap of <A>, <B> and <C>."
+    Description naming the topic's merged (non-culmination) concepts.
+
+    Types and Misconception are left untouched. A culmination with no
+    Description section gets one prepended.
     """
+    titles_by_topic: dict[str, list[str]] = {}
+    for rec in records:
+        title = rec.get("concept_title", "")
+        if not is_culmination(title):
+            titles_by_topic.setdefault(rec.get("topic", ""), []).append(title)
     for rec in records:
         if not is_culmination(rec.get("concept_title", "")):
             continue
+        recap = recap_text(titles_by_topic.get(rec.get("topic", ""), []))
         sections = split_sections(rec.get("concept_details") or "")
         found = False
         for i, (label, _content) in enumerate(sections):
             if label.strip().lower().startswith("description"):
-                sections[i] = ("Description", "Recap")
+                sections[i] = ("Description", recap)
                 found = True
                 break
         if not found:
-            sections.insert(0, ("Description", "Recap"))
+            sections.insert(0, ("Description", recap))
         rec["concept_details"] = join_sections(sections)
     return records
+
+
+# A mastery statement at the tail of a Description. Accepts the label variants
+# models produce ("Achieving Mastery:", "Mastery:", "Mastery indicator:") and
+# normalizes all of them to a line-broken "Achieving Mastery: ..." format.
+_MASTERY_LABEL_RE = re.compile(
+    r"\s*(?:achieving\s+mastery|mastery(?:\s+indicators?)?)\s*[:\-]\s*",
+    re.IGNORECASE,
+)
+
+
+def format_mastery_statement(details: str) -> str:
+    """Put the Description's mastery statement on its own line.
+
+    ``... Achieving Mastery: <statement>`` (any label variant, any spacing)
+    becomes ``...\\nAchieving Mastery: <statement>``. Only the Description
+    section is touched; nothing is invented when no mastery label exists.
+    """
+    sections = split_sections(details)
+    for i, (label, content) in enumerate(sections):
+        if not label.strip().lower().startswith("description"):
+            continue
+        m = _MASTERY_LABEL_RE.search(content)
+        if not m or not content[m.end():].strip():
+            break
+        body = content[:m.start()].rstrip()
+        statement = content[m.end():].strip()
+        sections[i] = (label, f"{body}\nAchieving Mastery: {statement}")
+        return join_sections(sections)
+    return details
 
 
 def refine_chapter(records: list[dict]) -> list[dict]:
     """Full deterministic refinement pass over a chapter's ordered records."""
     for rec in records:
         if rec.get("concept_details"):
-            rec["concept_details"] = reduce_type_sections(rec["concept_details"])
+            details = reduce_type_sections(rec["concept_details"])
+            if not is_culmination(rec.get("concept_title", "")):
+                details = format_mastery_statement(details)
+            rec["concept_details"] = details
     records = renumber_types_continuously(records)
     return set_culmination_recap(records)

@@ -1081,8 +1081,15 @@ COVERAGE IS MANDATORY (most important rule):
   mastery units are always preferred over broad summaries.
 - A missed concept is a defect; an extra specific concept is not.
 
+TOPIC SEGREGATION IS MANDATORY (second most important rule):
+- topic MUST be the textbook SECTION heading the content sits under (use the
+  HEADING PATH / SECTION HEADINGS given with the text); strip section numbers.
+- The chapter title or book title is NEVER a topic. Filing every concept under
+  one umbrella topic is a defect.
+- When the text spans several section headings it MUST produce several topics,
+  in the same reading order.
+
 Rules:
-- Use the textbook section heading as topic when available; strip section numbers.
 - Do not invent textbook topics; preserve the section order from the source.
 - Do not create exercise, example, review, or practice topics.
 - Parent Concept is a meaningful cluster heading within a topic.
@@ -1134,7 +1141,11 @@ Rules:
 - Keep topic, parent_concept, concept name, keywords, and row order unchanged.
 - Rewrite only the Description section.
 - Description answers: what the concept is; what rule/process/relationship/method matters;
-  when/why it is used; what indicates mastery.
+  when/why it is used.
+- END every Description with a mastery statement on its OWN line — a literal
+  line break (\\n) followed by exactly this format:
+  Achieving Mastery: <one short sentence stating what the learner can do when this concept is mastered>
+  Example ending: "...\\nAchieving Mastery: Using the midpoint property to set up the smaller triangles correctly."
 - Use 45-90 words unless the concept is very simple.
 - Do not include Types.
 - Misconception may be included only if specific and useful.
@@ -1324,7 +1335,8 @@ Rules:
   rewrite, drop, or return them.
 - Name: "Culmination - <A>, <B> and <C>".
 - Use the main ideas in that topic.
-- Description must be exactly: "Description: Recap".
+- Description must be exactly: "Description: Recap" (the final output expands
+  it automatically to "Recap of <every merged concept in the topic>").
 - Give each culmination a starter Types section with mixed multi-concept
   application/problem formats (the later Types pass may refine it).
 - parent_concept must be "Culmination".
@@ -1352,6 +1364,54 @@ Rules:
   content — the real numbers, expressions, equations, data, or task — e.g.
   "solve the problem in Exercise 1.5" becomes
   "rationalise the denominator of 1/(7 + 3*sqrt(2))".
+""")
+
+prompts.register(
+    "concepts.topic_structure.system", category=_CONCEPTS_CAT,
+    label="Topic re-segregation system prompt",
+    default="""\
+Re-segregate a chapter concept map into its real textbook topics. The draft
+filed too many concepts under one umbrella topic; your ONLY job is to assign
+each concept to the textbook section that actually teaches it.
+Return ONLY strict JSON:
+{"rows":[{"topic":"","parent_concept":"","concept":"","concept_description":"","keywords":""}]}.
+
+Rules:
+- You are given the concept rows and the chapter's SECTION HEADINGS in reading
+  order. Reassign ONLY the topic of each row.
+- Keep EVERY row: same concept names, descriptions, keywords, and
+  parent_concept, in the same relative order. Never add, drop, merge, split,
+  or rename concepts.
+- Use several topics — a chapter is never one topic. Prefer the given section
+  headings verbatim (without section numbers) as the topic names.
+- Assign each concept to the section whose content teaches it; consecutive
+  concepts usually stay in the same section until the source moves on.
+- Do not create exercise, example, review, or practice topics.
+- Do not use the chapter title or book title as a topic.
+""")
+
+prompts.register(
+    "concepts.chapter_meta.system", category=_CONCEPTS_CAT,
+    label="Chapter/topic metadata writer system prompt",
+    default="""\
+Write chapter-level and topic-level metadata for a finished school concept map.
+Return ONLY strict JSON:
+{"chapter_description":"","chapter_duration_minutes":0,"topics":[{"topic":"","topic_description":""}]}.
+
+Rules:
+- chapter_description: 3-5 sentences a teacher can plan from — what the chapter
+  covers, the storyline across its topics, the key skills built, and what
+  learners can do at the end. It must be specific to THIS chapter's content;
+  never generic filler like "This chapter develops N concepts across M topics".
+- chapter_duration_minutes: a realistic INTEGER estimate of total classroom
+  minutes needed to teach the full chapter (typical school periods are
+  35-45 minutes; a standard chapter runs roughly 4-14 periods).
+- topics: one entry per provided topic, using the EXACT same topic strings.
+- topic_description: 2-3 sentences specific to that topic — what it teaches,
+  the key ideas/skills among its concepts, and how it connects to the
+  neighbouring topics. NEVER just list the concept names.
+- No source artifacts (Example 3, Exercise 1.2, Fig 4, page numbers) and never
+  the words "MMD"/"MMDs".
 """)
 
 
@@ -2611,8 +2671,14 @@ def _extract_skeleton_via_api(chunks: list[dict], *, meta: dict) -> list[dict]:
     for i, chunk in enumerate(chunks, start=1):
         progress.step(f"Concept skeleton — chunk {i}/{len(chunks)}",
                       value=(i - 1) / max(len(chunks), 1))
+        chunk_headings = _topic_headings(chunk.get("sections") or [])
+        heading_block = (
+            "\nSECTION HEADINGS IN THIS CHUNK (use these as topics):\n- "
+            + "\n- ".join(chunk_headings) + "\n"
+        ) if chunk_headings else ""
         user = (
             _metadata_block(meta)
+            + heading_block
             + f"\nChunk {i} of {len(chunks)}:\n"
             + chunk["text"]
         )
@@ -2845,6 +2911,130 @@ def _build_culminations_via_api(records: list[dict], *, meta: dict) -> list[dict
     return out
 
 
+_PART_SUFFIX_RE = re.compile(r"\s*\(part \d+/\d+\)$", re.IGNORECASE)
+
+
+def _topic_headings(sections: list[dict]) -> list[str]:
+    """Ordered, de-duplicated candidate topic headings from parsed sections."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for section in sections or []:
+        heading = _PART_SUFFIX_RE.sub("", (section.get("heading") or "").strip())
+        if not heading or heading.lower() == "general":
+            continue
+        if _EXERCISE_ONLY_RE.match(heading):
+            continue
+        key = heading.lower()
+        if key not in seen:
+            seen.add(key)
+            out.append(heading)
+    return out
+
+
+def _topics_look_collapsed(records: list[dict], headings: list[str]) -> bool:
+    """True when the map filed (nearly) everything under one umbrella topic
+    although the source clearly has several section headings."""
+    if not records or len(headings) < 2:
+        return False
+    topics = {(r.get("topic") or "").strip().lower() for r in records}
+    topics.discard("")
+    if len(topics) <= 1:
+        return True
+    return len(records) >= 12 and len(topics) <= 2 and len(headings) >= 4
+
+
+def _restructure_topics_via_api(
+    records: list[dict], *, meta: dict, headings: list[str],
+) -> list[dict]:
+    """Re-segregate collapsed topics using the source's section headings.
+
+    Only the ``topic`` field is taken from the model, matched back to the
+    original rows by concept title — no concept can be added, dropped, or
+    rewritten by this pass.
+    """
+    import json as _json
+
+    system = prompts.get_text("concepts.topic_structure.system")
+    payload = _json.dumps({"rows": _records_to_api_rows(records)}, ensure_ascii=False)
+    user = (
+        _metadata_block(meta)
+        + "\nSECTION HEADINGS (reading order):\n- "
+        + "\n- ".join(headings)
+        + f"\n\nConcept map with collapsed topics ({len(records)} rows):\n"
+        + payload
+    )
+    data = _openai_json(system, user)
+    topic_by_title = {
+        bi.normalize_question_text(r["concept_title"]): r["topic"].strip()
+        for r in _concept_rows_to_records(data)
+        if (r.get("topic") or "").strip()
+    }
+    updated = 0
+    for rec in records:
+        new_topic = topic_by_title.get(
+            bi.normalize_question_text(rec.get("concept_title", "")))
+        if new_topic and new_topic != rec.get("topic"):
+            rec["topic"] = new_topic
+            updated += 1
+    distinct = {(r.get("topic") or "").strip().lower() for r in records}
+    distinct.discard("")
+    progress.log(
+        f"Topic re-segregation: {updated} row(s) reassigned; "
+        f"{len(distinct)} distinct topic(s).",
+        level="success" if len(distinct) > 1 else "warning",
+    )
+    return records
+
+
+def chapter_meta_via_api(
+    *, meta: dict, topics: list[dict], live: bool | None = None,
+) -> dict:
+    """Chapter description/duration + per-topic descriptions in one API pass.
+
+    ``topics`` is ``[{"topic": ..., "concepts": [titles...]}, ...]``. Returns a
+    (possibly empty) dict with ``chapter_description``,
+    ``chapter_duration_minutes`` and ``topic_descriptions`` (keyed by
+    normalized topic title); callers fall back to deterministic summaries for
+    anything missing.
+    """
+    import json as _json
+
+    use_live = config.use_live_generation() if live is None else live
+    if not use_live or not topics:
+        return {}
+    system = prompts.get_text("concepts.chapter_meta.system")
+    user = (
+        _metadata_block(meta)
+        + "\nTopics and their concepts:\n"
+        + _json.dumps({"topics": topics}, ensure_ascii=False)
+    )
+    progress.log(
+        "Writing chapter/topic metadata (chapter description, duration, "
+        "topic descriptions) via API pass.")
+    data = _openai_json(system, user)
+    out: dict = {}
+    description = (data.get("chapter_description") or "").strip()
+    if description:
+        out["chapter_description"] = description
+    try:
+        minutes = int(float(data.get("chapter_duration_minutes") or 0))
+    except (TypeError, ValueError):
+        minutes = 0
+    if minutes > 0:
+        out["chapter_duration_minutes"] = minutes
+    topic_descriptions: dict[str, str] = {}
+    for row in data.get("topics", []) or []:
+        if not isinstance(row, dict):
+            continue
+        topic = (row.get("topic") or "").strip()
+        topic_description = (row.get("topic_description") or "").strip()
+        if topic and topic_description:
+            topic_descriptions[bi.normalize_question_text(topic)] = topic_description
+    if topic_descriptions:
+        out["topic_descriptions"] = topic_descriptions
+    return out
+
+
 def concepts_from_mmd(
     mmd_text: str, *, subject: str = "", board: str = "", grade: str = "",
     unit: str = "", chapter_title: str = "", chapter_id: int | str | None = None,
@@ -2878,6 +3068,15 @@ def concepts_from_mmd(
         if not out:
             raise RuntimeError("live concept extraction returned no rows")
         out = _consolidate_concepts_via_api(out, subject=subject, mmd_text=mmd_text, meta=meta)
+        headings = _topic_headings(sections)
+        if _topics_look_collapsed(out, headings):
+            progress.log(
+                f"Topic segregation collapsed: {len(out)} concepts share almost "
+                f"one topic while the source has {len(headings)} section "
+                "headings — re-segregating topics via API.",
+                level="warning",
+            )
+            out = _restructure_topics_via_api(out, meta=meta, headings=headings)
         out = _refine_descriptions_via_api(
             out, subject=subject, mmd_text=mmd_text, meta=meta, sections=sections)
         question_task_inventory = _extract_question_task_inventory_via_api(

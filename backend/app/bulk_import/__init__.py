@@ -41,8 +41,13 @@ TOPIC_FIELDS = [
     "topic_concept_labels", "related_topics", "topic_description",
 ]
 CONCEPT_FIELDS = [
-    "concept_title", "concept_display_name", "concept_details",
-    "keywords", "digicards", "related_concepts",
+    # parent_concept is a first-class column (team request): it used to ride
+    # inside related_concepts as a "parent: X" fallback marker. The keywords and
+    # related_concepts columns were dropped from the canonical layout (also a
+    # team request); legacy workbooks that still carry them are auto-detected
+    # from the header row and read/appended without shifting any band.
+    "concept_title", "concept_display_name", "parent_concept",
+    "concept_details", "digicards",
     "basic_groups", "intermediate_groups", "advanced_groups",
     # Multi-source tag (e.g. "NCERT; RD Sharma") — concepts overlap between the
     # books different schools prefer; one concept carries every book it appears
@@ -50,8 +55,15 @@ CONCEPT_FIELDS = [
     # their positions; the reader auto-detects workbooks without this column.
     "concept_source",
 ]
-# Concept band length of the legacy layout (pre concept_source).
-LEGACY_CONCEPT_LEN = len(CONCEPT_FIELDS) - 1
+# Concept band of the OLD layout (pre parent_concept column, with keywords /
+# related_concepts, pre concept_source). Kept so legacy workbooks are still
+# read and appended correctly (fields are detected from the header row).
+LEGACY_CONCEPT_FIELDS = [
+    "concept_title", "concept_display_name", "concept_details",
+    "keywords", "digicards", "related_concepts",
+    "basic_groups", "intermediate_groups", "advanced_groups",
+]
+LEGACY_CONCEPT_LEN = len(LEGACY_CONCEPT_FIELDS)
 
 # --------------------------------------------------------------------------- #
 # Objective sheet

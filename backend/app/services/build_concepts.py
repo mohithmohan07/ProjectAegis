@@ -148,14 +148,52 @@ def _is_blank(value: str) -> bool:
     return (value or "").strip().lower() in _BLANK_VALUES
 
 
-def _sync_chapter_topic_summary(chapter: models.Chapter) -> None:
-    """Refresh topic lists and fill the required summary/duration fields.
+def _chapter_meta_summary(chapter: models.Chapter) -> dict:
+    """API-written chapter/topic metadata (empty dict in dry mode / on failure).
 
-    pre_topics / post_topics are comma-separated topic titles. chapter and topic
-    descriptions and the chapter duration (in minutes) are filled with a brief
-    synthesized summary whenever they are blank/NA, so the output never ships
-    "NA" in a required column.
+    The deterministic summaries in ``_sync_chapter_topic_summary`` are the
+    fallback; a metadata failure must never fail a generation job that has
+    already produced a valid concept map.
     """
+    topics_payload = [
+        {
+            "topic": t.topic_title,
+            "pre_post_learning": t.pre_post_learning,
+            "concepts": [
+                c.concept_title for c in sorted(t.concepts, key=lambda c: c.id)
+            ],
+        }
+        for t in sorted(chapter.topics, key=lambda t: t.id)
+    ]
+    meta = generation._metadata(
+        subject=chapter.subject, board=chapter.board, grade=chapter.grade,
+        unit=chapter.unit, chapter_title=chapter.chapter_title,
+        chapter_id=chapter.id, chapter_code=chapter.chapter_code,
+    )
+    try:
+        return generation.chapter_meta_via_api(meta=meta, topics=topics_payload)
+    except Exception as exc:  # noqa: BLE001 — metadata must never kill the job
+        progress.log(
+            f"Chapter/topic metadata pass failed ({exc}) — using deterministic "
+            "summaries instead.",
+            level="warning",
+        )
+        return {}
+
+
+def _sync_chapter_topic_summary(
+    chapter: models.Chapter, meta_summary: dict | None = None,
+) -> None:
+    """Refresh topic lists and fill the summary/duration fields.
+
+    pre_topics / post_topics are comma-separated topic titles. When
+    ``meta_summary`` (the API-written chapter/topic metadata) is available it
+    OVERWRITES the chapter description, chapter duration, and per-topic
+    descriptions — these fields were previously synthesized and read weak.
+    Deterministic summaries remain the fallback for anything missing, so the
+    output never ships "NA" in a required column.
+    """
+    meta_summary = meta_summary or {}
     topics = sorted(chapter.topics, key=lambda t: t.id)
     # pre/post topic columns list each topic by its tagged Topic Title (with the
     # code), matching the topic_title column exactly, so the importer links them.
@@ -164,20 +202,28 @@ def _sync_chapter_topic_summary(chapter: models.Chapter) -> None:
     chapter.pre_topics = ", ".join(pre)
     chapter.post_topics = ", ".join(post)
 
-    # Per-topic summary: the concepts it teaches.
+    # Per-topic description: API-written when available, else the concept list.
+    topic_descriptions = meta_summary.get("topic_descriptions") or {}
     for t in topics:
-        if _is_blank(t.topic_description):
+        written = topic_descriptions.get(bi.normalize_question_text(t.topic_title))
+        if written:
+            t.topic_description = written
+        elif _is_blank(t.topic_description):
             names = [c.concept_title for c in sorted(t.concepts, key=lambda c: c.id)]
             if names:
                 t.topic_description = "Covers " + ", ".join(names) + "."
 
     n_concepts = sum(len(t.concepts) for t in topics)
-    if _is_blank(chapter.chapter_description) and topics:
+    if meta_summary.get("chapter_description"):
+        chapter.chapter_description = meta_summary["chapter_description"]
+    elif _is_blank(chapter.chapter_description) and topics:
         chapter.chapter_description = (
             f"This chapter develops {n_concepts} concept(s) across "
             f"{len(topics)} topic(s): " + ", ".join(t.topic_title for t in topics) + "."
         )
-    if _is_blank(chapter.chapter_duration) and n_concepts:
+    if meta_summary.get("chapter_duration_minutes"):
+        chapter.chapter_duration = f"{meta_summary['chapter_duration_minutes']} minutes"
+    elif _is_blank(chapter.chapter_duration) and n_concepts:
         # Rough classroom estimate: ~12 minutes of instruction per concept.
         chapter.chapter_duration = f"{max(40, n_concepts * 12)} minutes"
 
@@ -303,7 +349,7 @@ def generate_post_learning(db: Session, job_id: int, target_chapter_id: int) -> 
     _store_inventory(job, artifacts)
     created_ids, merged_ids = _deposit_concepts(
         db, chapter, records, "Post", job.source_book)
-    _sync_chapter_topic_summary(chapter)
+    _sync_chapter_topic_summary(chapter, _chapter_meta_summary(chapter))
     db.commit()
 
     written = writer.append_concepts(
@@ -392,7 +438,7 @@ def generate_pre_learning_from_upload(db: Session, job_id: int, target_chapter_i
     )
     created_ids, merged_ids = _deposit_concepts(
         db, chapter, pre_records, "Pre", job.source_book)
-    _sync_chapter_topic_summary(chapter)
+    _sync_chapter_topic_summary(chapter, _chapter_meta_summary(chapter))
     db.commit()
 
     written = writer.append_concepts(
@@ -458,7 +504,7 @@ def generate_pre_learning_from_existing(
         ], "Pre", source_book)
         created_ids += created
         merged_ids += merged
-        _sync_chapter_topic_summary(chapter)
+        _sync_chapter_topic_summary(chapter, _chapter_meta_summary(chapter))
         per_chapter[chapter.id] = len(created)
     db.commit()
 

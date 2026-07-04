@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from . import (
     ANSWER_TYPES, CHAPTER_FIELDS, COGNITIVE_SKILLS, CONCEPT_FIELDS,
     DESCRIPTIVE_GROUP_FIELDS, DIFFICULTY_LEVELS, FIELDS_BY_KIND,
-    LEGACY_CONCEPT_LEN, OBJECTIVE_GROUP_FIELDS, SHEET_BY_KIND, TOPIC_FIELDS,
+    OBJECTIVE_GROUP_FIELDS, SHEET_BY_KIND, TOPIC_FIELDS,
     merge_sources, normalize_answer_type, normalize_appears_in,
     normalize_cognitive_skills, normalize_difficulty, normalize_question_text,
     split_multi, strip_title_tag, strip_topic_title, to_plain_text,

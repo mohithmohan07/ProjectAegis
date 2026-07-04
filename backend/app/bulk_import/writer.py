@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from . import (
     CHAPTER_FIELDS, TOPIC_FIELDS, CONCEPT_FIELDS, FIELDS_BY_KIND, SHEET_BY_KIND,
     SHEET_DOC_LINK, SECTION_BANDS, OBJECTIVE_GROUP_FIELDS, DESCRIPTIVE_GROUP_FIELDS,
-    LEGACY_CONCEPT_LEN, merge_sources, strip_title_tag, strip_topic_title,
+    merge_sources, strip_title_tag, strip_topic_title,
 )
 from .. import models
 from ..services import directory
@@ -37,8 +37,6 @@ def _group_fields(kind: str) -> list[str]:
 _IDX_CHAPTER_TITLE = 0
 _IDX_TOPIC_TITLE = len(CHAPTER_FIELDS)
 _IDX_CONCEPT_TITLE = len(CHAPTER_FIELDS) + len(TOPIC_FIELDS)
-# group_type is the 6th field (index 5) in both the objective & descriptive group bands.
-_IDX_GROUP_TYPE = _IDX_CONCEPT_TITLE + len(CONCEPT_FIELDS) + 5
 
 
 def _q_start(kind: str) -> int:
@@ -51,10 +49,11 @@ def _sheet_concept_len(header_row: tuple) -> int:
 
 
 def _sheet_concept_fields(header_row: tuple) -> list[str]:
-    """Concept-band fields present in a workbook.
+    """Concept-band fields present in a workbook (detected from the header).
 
-    ``parent_concept`` is optional and only used when a template already has
-    that column. Existing templates keep their current column positions.
+    New workbooks use the canonical band (with ``parent_concept``, without the
+    dropped ``keywords``/``related_concepts`` columns); legacy workbooks keep
+    their own column positions and are appended to without shifting bands.
     """
     group_markers = set(OBJECTIVE_GROUP_FIELDS + DESCRIPTIVE_GROUP_FIELDS)
     fields: list[str] = []
@@ -266,11 +265,11 @@ def _concept_field_value(
         return parent
     if field == "concept_details":
         return concept.concept_details
-    if field == "keywords":
+    if field == "keywords":  # legacy-workbook column only
         return concept.keywords
     if field == "digicards":
         return concept.digicards
-    if field == "related_concepts":
+    if field == "related_concepts":  # legacy-workbook column only
         related = concept.related_concepts or ""
         if parent and not parent_column_present:
             marker = f"parent: {parent}"

@@ -3,10 +3,22 @@ from app import bulk_import as bi
 
 def test_canonical_field_counts():
     # vs the legacy layout: + concept_source (end of Concept band),
+    # + parent_concept, - keywords, - related_concepts (Concept band),
     # + question_text (last column), + group_question_labels (Group band).
-    assert len(bi.OBJECTIVE_FIELDS) == 66
-    assert len(bi.SUBJECTIVE_FIELDS) == 93
-    assert len(bi.DESCRIPTIVE_FIELDS) == 375
+    assert len(bi.OBJECTIVE_FIELDS) == 65
+    assert len(bi.SUBJECTIVE_FIELDS) == 92
+    assert len(bi.DESCRIPTIVE_FIELDS) == 374
+
+
+def test_dropped_and_added_concept_columns():
+    # Team request: keywords / related_concepts columns are gone from the
+    # canonical layout; parent_concept is a first-class column instead.
+    assert "keywords" not in bi.CONCEPT_FIELDS
+    assert "related_concepts" not in bi.CONCEPT_FIELDS
+    assert bi.CONCEPT_FIELDS[2] == "parent_concept"
+    # Legacy band definition is kept for auto-detected old workbooks.
+    assert "keywords" in bi.LEGACY_CONCEPT_FIELDS
+    assert "related_concepts" in bi.LEGACY_CONCEPT_FIELDS
 
 
 def test_question_text_is_last_column_everywhere():
