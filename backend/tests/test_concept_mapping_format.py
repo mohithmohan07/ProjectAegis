@@ -122,7 +122,7 @@ def test_deposit_applies_numbering_recap_titlecase_and_topic_columns(db):
 
 def test_group_label_columns_present_and_ordered():
     f = bi.OBJECTIVE_FIELDS
-    assert f[22] == "concept_question_labels"
+    assert f[21] == "concept_question_labels"
     gi = f.index("group_question_labels")
     assert f[gi + 1] == "related_digicards"
 
@@ -142,15 +142,33 @@ def test_writer_leaves_group_columns_empty_for_concept_rows(db):
     assert row[basic_idx + 2] == ""
 
 
-def test_writer_falls_back_parent_concept_without_optional_column(db):
+def test_writer_uses_canonical_parent_concept_column(db):
+    """parent_concept is now a first-class canonical column (no fallback)."""
     concept = db.query(models.Concept).join(models.Topic).join(models.Chapter).first()
     concept.parent_concept = "Cell Organisation"
     row = writer._concept_to_row(concept, "objective")
-    related_idx = bi.OBJECTIVE_FIELDS.index("related_concepts")
+    parent_idx = bi.OBJECTIVE_FIELDS.index("parent_concept")
+    assert row[parent_idx] == "Cell Organisation"
+    # keywords / related_concepts columns are gone from new workbooks.
+    assert "keywords" not in bi.OBJECTIVE_FIELDS
+    assert "related_concepts" not in bi.OBJECTIVE_FIELDS
+
+
+def test_writer_falls_back_to_related_concepts_on_legacy_workbook(db):
+    """Legacy workbooks (no parent_concept column) still get the parent marker
+    in their related_concepts column."""
+    concept = db.query(models.Concept).join(models.Topic).join(models.Chapter).first()
+    concept.parent_concept = "Cell Organisation"
+    row = writer._concept_to_row(
+        concept, "objective", concept_fields=bi.LEGACY_CONCEPT_FIELDS)
+    related_idx = (
+        len(bi.CHAPTER_FIELDS) + len(bi.TOPIC_FIELDS)
+        + bi.LEGACY_CONCEPT_FIELDS.index("related_concepts")
+    )
     assert "parent: Cell Organisation" in row[related_idx]
 
 
-def test_append_concepts_uses_optional_parent_concept_column(db, tmp_path):
+def test_append_concepts_writes_parent_concept_column(db, tmp_path):
     import openpyxl
 
     concept = db.query(models.Concept).join(models.Topic).join(models.Chapter).first()
@@ -158,14 +176,10 @@ def test_append_concepts_uses_optional_parent_concept_column(db, tmp_path):
     db.flush()
 
     path = tmp_path / "parent_template.xlsx"
-    wb = writer._new_workbook()
-    ws = wb[bi.SHEET_OBJECTIVE]
-    insert_at = bi.OBJECTIVE_FIELDS.index("concept_display_name") + 2
-    ws.insert_cols(insert_at)
-    ws.cell(row=2, column=insert_at, value="parent_concept")
-    wb.save(path)
+    writer._new_workbook().save(path)
 
-    writer.append_concepts(db, path, [concept.id])
+    result = writer.append_concepts(db, path, [concept.id])
+    assert result["parent_column"] is True
     out = openpyxl.load_workbook(path)[bi.SHEET_OBJECTIVE]
     headers = [c.value for c in out[2]]
     parent_idx = headers.index("parent_concept") + 1

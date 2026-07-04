@@ -177,9 +177,10 @@ def validate_concept_rows(
             if type_body and (not _TYPE_RE.search(type_body) or not _CASE_RE.search(type_body)):
                 _add(errors, i, "concept_details", "types_format",
                      "Types must use zero-padded Type NN and Case NN labels")
-        if is_culm and details and details.split(" // ", 1)[0] != "Description: Recap":
+        if is_culm and details and not details.split(" // ", 1)[0].startswith(
+                "Description: Recap"):
             _add(errors, i, "concept_details", "culmination_description",
-                 "culmination description must be exactly 'Description: Recap'")
+                 "culmination description must start with 'Description: Recap'")
 
     for norm_title, count in title_counts.items():
         if norm_title and count > 1:
