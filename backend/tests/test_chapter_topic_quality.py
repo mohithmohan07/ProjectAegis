@@ -170,6 +170,43 @@ def test_topic_headings_skip_structural_ocr_headings():
         "Similarity of Triangles", "Pythagoras Theorem"]
 
 
+def test_topic_headings_skip_optional_exercises_and_math_fragments():
+    sections = [
+        {"heading": "Criteria for Similarity of Triangles"},
+        {"heading": "$ AMC PNR $"},
+        {"heading": "EXERCISE 6.6 (Optional)*"},
+        {"heading": "Pythagoras Theorem"},
+    ]
+    assert g._topic_headings(sections) == [
+        "Criteria for Similarity of Triangles", "Pythagoras Theorem"]
+
+
+def test_snap_topics_to_headings_merges_micro_topics():
+    headings = ["Triangles", "Introduction", "Similar Figures",
+                "Similarity of Triangles", "Pythagoras Theorem"]
+    records = [
+        _rec("Chapter Scope", "Description: a", topic="Triangles"),  # = chapter title
+        _rec("Meaning of Similarity", "Description: b", topic="Similar Figures"),
+        _rec("Scale Factor", "Description: c", topic="Similarity From Side Ratios"),
+        _rec("BPT", "Description: d", topic="Similarity of Triangles"),
+        _rec("Shadow Problems", "Description: e", topic="Shadow Problems Using Triangles"),
+    ]
+    out = g._snap_topics_to_headings(records, headings, chapter_title="Triangles")
+    assert [r["topic"] for r in out] == [
+        "Introduction",           # chapter title is not a topic -> first section
+        "Similar Figures",
+        "Similar Figures",        # invented micro-topic -> preceding real section
+        "Similarity of Triangles",
+        "Similarity of Triangles",
+    ]
+
+
+def test_snap_topics_skipped_with_too_few_headings():
+    records = [_rec("C", "Description: d", topic="Invented Topic")]
+    out = g._snap_topics_to_headings(records, ["Only", "Two"], chapter_title="X")
+    assert out[0]["topic"] == "Invented Topic"
+
+
 def test_scrub_merges_structural_topics_into_previous():
     records = [
         _rec("Meaning of Similarity", "Description: a", topic="Similar Figures"),

@@ -2806,7 +2806,8 @@ def _extract_skeleton_via_api(chunks: list[dict], *, meta: dict) -> list[dict]:
                       value=(i - 1) / max(len(chunks), 1))
         chunk_headings = _topic_headings(chunk.get("sections") or [])
         heading_block = (
-            "\nSECTION HEADINGS IN THIS CHUNK (use these as topics):\n- "
+            "\nSECTION HEADINGS IN THIS CHUNK (use ONLY these as topics; never "
+            "invent your own topic names):\n- "
             + "\n- ".join(chunk_headings) + "\n"
         ) if chunk_headings else ""
         user = (
@@ -2897,10 +2898,10 @@ _NON_TOPIC_RE = re.compile(
 
 
 def _is_non_topic_heading(heading: str) -> bool:
-    return bool(
-        _EXERCISE_ONLY_RE.match(heading or "")
-        or _NON_TOPIC_RE.match(heading or "")
-    )
+    # "(Optional)" suffixes and asterisks ("EXERCISE 6.6 (Optional)*") must not
+    # hide an exercise heading from the match.
+    h = re.sub(r"\(\s*optional\s*\)|\*", " ", heading or "", flags=re.IGNORECASE)
+    return bool(_EXERCISE_ONLY_RE.match(h) or _NON_TOPIC_RE.match(h))
 
 
 def _scrub_section_numbers(records: list[dict]) -> list[dict]:
@@ -3099,6 +3100,10 @@ def _topic_headings(sections: list[dict]) -> list[str]:
         heading = _PART_SUFFIX_RE.sub("", (section.get("heading") or "").strip())
         if not heading or heading.lower() == "general":
             continue
+        # OCR sometimes promotes a displayed equation to a heading
+        # (e.g. "$ AMC PNR $") — math fragments are never topics.
+        if "$" in heading or "\\(" in heading:
+            continue
         if _is_non_topic_heading(heading):
             continue
         key = heading.lower()
@@ -3106,6 +3111,46 @@ def _topic_headings(sections: list[dict]) -> list[str]:
             seen.add(key)
             out.append(heading)
     return out
+
+
+def _snap_topics_to_headings(
+    records: list[dict], headings: list[str], *, chapter_title: str = "",
+) -> list[dict]:
+    """Deterministically constrain topics to the textbook's section headings.
+
+    Models drift in both directions — collapsing a chapter into one umbrella
+    topic, or inventing dozens of micro-topics. The textbook's own section
+    headings are the ground truth: rows whose topic is not a real section
+    heading are filed under the nearest preceding real section (reading
+    order). Skipped when the source exposes fewer than 3 usable headings
+    (unreliable OCR) — the API re-segregation pass covers that case.
+    """
+    if len(headings) < 3:
+        return records
+    chapter_key = bi.normalize_question_text(chapter_title)
+    valid: dict[str, str] = {}
+    for h in headings:
+        key = bi.normalize_question_text(_strip_section_number(h))
+        if key and key != chapter_key:
+            valid.setdefault(key, _strip_section_number(h))
+    if len(valid) < 3:
+        return records
+    canonical = list(valid.values())
+    prev: str | None = None
+    snapped = 0
+    for rec in records:
+        key = bi.normalize_question_text(rec.get("topic", ""))
+        if key in valid:
+            rec["topic"] = valid[key]
+            prev = valid[key]
+            continue
+        rec["topic"] = prev or canonical[0]
+        snapped += 1
+    if snapped:
+        progress.log(
+            f"Snapped {snapped} row(s) onto the textbook's "
+            f"{len(canonical)} section topics.")
+    return records
 
 
 def _topics_look_collapsed(records: list[dict], headings: list[str]) -> bool:
@@ -3258,6 +3303,7 @@ def concepts_from_mmd(
                 level="warning",
             )
             out = _restructure_topics_via_api(out, meta=meta, headings=headings)
+        out = _snap_topics_to_headings(out, headings, chapter_title=chapter_title)
         out = _refine_descriptions_via_api(
             out, subject=subject, mmd_text=mmd_text, meta=meta, sections=sections)
         out = _ensure_mastery_lines_via_api(out, meta=meta)
