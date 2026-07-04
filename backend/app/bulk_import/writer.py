@@ -556,16 +556,33 @@ def write_workbook(db: Session, dest: Path | None = None,
     """Write a fresh canonical workbook with the selected questions.
 
     Emits one row per (question, placement): the authoring home plus every tag,
-    so many-to-many associations survive a full export.
+    so many-to-many associations survive a full export. Concepts that have no
+    question rows still get concept-catalog rows on the Objective sheet —
+    otherwise a database holding only generated concepts (no assessments yet)
+    would export as an empty workbook.
     """
     wb = _new_workbook()
     next_row = {k: 3 for k in SHEET_BY_KIND}
+    concepts_with_rows: set[int] = set()
     for q in _questions(db, question_ids):
         ws = wb[SHEET_BY_KIND[q.sheet_kind]]
         for group in _question_placements(q):
             for i, value in enumerate(_question_to_row(q, q.sheet_kind, group), start=1):
                 ws.cell(row=next_row[q.sheet_kind], column=i, value=_safe_cell(value))
             next_row[q.sheet_kind] += 1
+            concepts_with_rows.add(group.concept_id)
+    if question_ids is None:
+        ws_obj = wb[SHEET_BY_KIND["objective"]]
+        for concept in db.query(models.Concept).order_by(models.Concept.id):
+            if concept.id in concepts_with_rows:
+                continue
+            for topic in _concept_placements(concept):
+                for i, value in enumerate(
+                    _concept_to_row(concept, "objective", topic), start=1
+                ):
+                    ws_obj.cell(row=next_row["objective"], column=i,
+                                value=_safe_cell(value))
+                next_row["objective"] += 1
     buf = io.BytesIO()
     wb.save(buf)
     data = buf.getvalue()
