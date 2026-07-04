@@ -299,6 +299,20 @@ def test_sync_chapter_topic_summary_falls_back_without_meta(db):
     assert topic.topic_description == "Covers A."
 
 
+def test_duplicate_titles_are_dropped_chapter_wide():
+    records = [
+        _rec("Similarity vs Congruence", "Description: a", topic="T1"),
+        _rec("AAA Criterion", "Description: b", topic="T1"),
+        # Same concept restated under another topic (chunked extraction echo).
+        _rec("Similarity vs Congruence", "Description: a again", topic="T2"),
+    ]
+    out = g._dedupe_titles_chapter_wide(records)
+    assert [r["concept_title"] for r in out] == [
+        "Similarity vs Congruence", "AAA Criterion"]
+    # First statement (the teaching home) is the one kept.
+    assert out[0]["topic"] == "T1"
+
+
 def test_chapter_meta_prompt_contract():
     text = prompts.get_text("concepts.chapter_meta.system")
     assert "chapter_duration_minutes" in text

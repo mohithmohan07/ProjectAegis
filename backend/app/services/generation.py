@@ -2650,6 +2650,35 @@ def _merge_concept_records(records: list[dict]) -> list[dict]:
     return out
 
 
+def _dedupe_titles_chapter_wide(records: list[dict]) -> list[dict]:
+    """Keep the FIRST row for each normalized concept title, chapter-wide.
+
+    The validator requires every concept to appear exactly once per chapter,
+    but chunked extraction occasionally restates the same concept under two
+    different topics, and the LLM repair pass cannot merge rows — it can only
+    rewrite them. The duplicate is therefore dropped mechanically (the first
+    statement of a concept is its teaching home) so a whole finished chapter
+    never fails final validation on a duplicate title.
+    """
+    seen: set[str] = set()
+    out: list[dict] = []
+    dropped = 0
+    for rec in records:
+        key = bi.normalize_question_text(rec.get("concept_title", ""))
+        if key and key in seen:
+            dropped += 1
+            continue
+        if key:
+            seen.add(key)
+        out.append(rec)
+    if dropped:
+        progress.log(
+            f"Dropped {dropped} duplicate concept-title row(s) chapter-wide.",
+            level="warning",
+        )
+    return out
+
+
 def _expected_min_skeleton_rows(chunk_text: str) -> int:
     """Minimum plausible concept count for a chunk, from its content size.
 
@@ -3107,6 +3136,7 @@ def concepts_from_mmd(
         # which is preferred over neutral rewording.
         out = _scrub_section_numbers(out)
         out = _merge_concept_records(out)
+        out = _dedupe_titles_chapter_wide(out)
         out = [
             concept_cleanup.clean_concept_record(dict(r), neutralize_artifacts=False)
             for r in out
@@ -3119,8 +3149,10 @@ def concepts_from_mmd(
         # on a reference the code can still remove.
         out = [concept_cleanup.clean_concept_record(dict(r)) for r in out]
         out = cr.refine_chapter(out)
-        # The repair/cleanup passes may reorder or rename rows; re-assert the
-        # culmination invariant mechanically before the final gate.
+        # The repair/cleanup passes may reorder, rename, or re-collide rows;
+        # re-assert the duplicate-title and culmination invariants mechanically
+        # before the final gate (a missing culmination is restored afterwards).
+        out = _dedupe_titles_chapter_wide(out)
         out = _enforce_culminations(out)
         _validate_final_or_raise(out, stage="final")
         missing = sum(
