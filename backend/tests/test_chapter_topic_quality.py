@@ -392,6 +392,23 @@ def test_duplicate_titles_are_dropped_chapter_wide():
     assert out[0]["topic"] == "T1"
 
 
+def test_control_chars_are_stripped_from_records_and_cells():
+    from app.services import concept_cleanup
+    from app.bulk_import import writer as bw
+
+    rec = {"topic": "T", "parent_concept": "P",
+           "concept_title": "Angles Sum to 180\x04",
+           "concept_details": "Description: angles sum to 180\x04 in a triangle.",
+           "keywords": ""}
+    out = concept_cleanup.clean_concept_record(dict(rec))
+    assert "\x04" not in out["concept_title"]
+    assert "\x04" not in out["concept_details"]
+    # Writer-level guard for values that bypass record cleanup.
+    assert bw._safe_cell("sum is 180\x04.") == "sum is 180."
+    assert bw._safe_cell("line1\nline2\tok") == "line1\nline2\tok"  # kept
+    assert bw._safe_cell(42) == 42
+
+
 def test_chapter_meta_prompt_contract():
     text = prompts.get_text("concepts.chapter_meta.system")
     assert "chapter_duration_minutes" in text

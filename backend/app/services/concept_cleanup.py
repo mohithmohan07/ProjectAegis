@@ -99,6 +99,16 @@ def clean_concept_name(name: str) -> str:
     return ", ".join(parts[:-1]) + " and " + parts[-1]
 
 
+# Control characters (except \t, \n, \r) are illegal in Excel worksheets and
+# meaningless in concept text; models occasionally emit one (e.g. a degree
+# sign mangled into \x04 by OCR round-trips). Strip them at the source.
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def strip_control_chars(text: str) -> str:
+    return _CONTROL_CHARS_RE.sub("", text) if text else text
+
+
 def _tidy(text: str) -> str:
     """Repair whitespace/punctuation artifacts left after deletions."""
     text = re.sub(r"\(\s*\)", "", text)            # empty parens
@@ -237,6 +247,9 @@ def clean_concept_record(rec: dict, *, neutralize_artifacts: bool = True) -> dic
     actual condensed problem content; pass ``True`` (default) as the final
     deterministic guarantee that no reference survives to strict validation.
     """
+    for field in ("topic", "parent_concept", "concept_title", "concept_details"):
+        if rec.get(field):
+            rec[field] = strip_control_chars(rec[field])
     if rec.get("topic"):
         topic = rec["topic"].strip()
         rec["topic"] = to_title_case(

@@ -8,6 +8,7 @@ so re-running a generation never overwrites or deletes prior rows.
 from __future__ import annotations
 
 import io
+import re
 from pathlib import Path
 
 import openpyxl
@@ -72,6 +73,18 @@ def _cell_str(row: tuple, idx: int) -> str:
         return ""
     v = row[idx]
     return "" if v is None else str(v).strip()
+
+
+# Control characters (except tab/newline) are illegal in xlsx cells; OCR'd
+# content occasionally smuggles one in (e.g. a mangled degree sign). openpyxl
+# raises IllegalCharacterError on write, so every outgoing value is sanitized.
+_ILLEGAL_XLSX_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def _safe_cell(value):
+    if isinstance(value, str):
+        return _ILLEGAL_XLSX_RE.sub("", value)
+    return value
 
 
 def question_placement_key(label: str, group: models.Group) -> tuple:
@@ -492,7 +505,7 @@ def append_concepts(db: Session, path: Path, concept_ids: list[int]) -> dict[str
                 _concept_to_row(c, "objective", topic, concept_fields=concept_fields),
                 start=1,
             ):
-                ws.cell(row=target, column=i, value=value)
+                ws.cell(row=target, column=i, value=_safe_cell(value))
             result["written"] += 1
     wb.save(path)
     return result
@@ -551,7 +564,7 @@ def write_workbook(db: Session, dest: Path | None = None,
         ws = wb[SHEET_BY_KIND[q.sheet_kind]]
         for group in _question_placements(q):
             for i, value in enumerate(_question_to_row(q, q.sheet_kind, group), start=1):
-                ws.cell(row=next_row[q.sheet_kind], column=i, value=value)
+                ws.cell(row=next_row[q.sheet_kind], column=i, value=_safe_cell(value))
             next_row[q.sheet_kind] += 1
     buf = io.BytesIO()
     wb.save(buf)
@@ -581,7 +594,7 @@ def write_concepts_workbook(db: Session, concept_ids: list[int]) -> bytes:
     for c in concepts:
         for topic in _concept_placements(c):
             for i, value in enumerate(_concept_to_row(c, "objective", topic), start=1):
-                ws.cell(row=next_row, column=i, value=value)
+                ws.cell(row=next_row, column=i, value=_safe_cell(value))
             next_row += 1
     buf = io.BytesIO()
     wb.save(buf)
@@ -619,7 +632,7 @@ def write_subject_workbook(
                 for i, value in enumerate(
                     _question_to_row(question, question.sheet_kind, group), start=1
                 ):
-                    ws.cell(row=next_row[question.sheet_kind], column=i, value=value)
+                    ws.cell(row=next_row[question.sheet_kind], column=i, value=_safe_cell(value))
                 next_row[question.sheet_kind] += 1
                 concepts_with_rows.add(group.concept_id)
 
@@ -643,7 +656,7 @@ def write_subject_workbook(
                 if topic.chapter_id not in chapter_ids:
                     continue
                 for i, value in enumerate(_concept_to_row(concept, "objective", topic), start=1):
-                    ws_obj.cell(row=next_row["objective"], column=i, value=value)
+                    ws_obj.cell(row=next_row["objective"], column=i, value=_safe_cell(value))
                 next_row["objective"] += 1
 
     buf = io.BytesIO()
@@ -698,7 +711,7 @@ def append_questions(db: Session, path: Path, question_ids: list[int]) -> dict[s
                 _question_to_row(q, q.sheet_kind, group, concept_fields=concept_fields),
                 start=1,
             ):
-                ws.cell(row=target, column=i, value=value)
+                ws.cell(row=target, column=i, value=_safe_cell(value))
             appended[q.sheet_kind] += 1
             if is_tag:
                 appended["tagged"] += 1
