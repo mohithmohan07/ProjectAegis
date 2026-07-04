@@ -23,6 +23,26 @@ def test_export_all_is_canonical_workbook(client):
     assert field_row[: len(bi.OBJECTIVE_FIELDS)] == bi.OBJECTIVE_FIELDS
 
 
+def test_export_all_includes_questionless_concepts(client, first_chapter, db):
+    """A DB holding only generated concepts (no assessments yet) must not
+    export as an empty workbook — concept-catalog rows are emitted."""
+    from app import models
+
+    concept_titles = {
+        c.concept_title for t in db.get(models.Chapter, first_chapter["id"]).topics
+        for c in t.concepts
+    }
+    assert concept_titles
+
+    r = client.get("/data/export?scope=all")
+    wb = openpyxl.load_workbook(io.BytesIO(r.content))
+    ws = wb[bi.SHEET_OBJECTIVE]
+    exported = {
+        str(row[13] or "") for row in ws.iter_rows(min_row=3, values_only=True)
+    }  # concept_display_name column carries the clean title
+    assert concept_titles <= exported
+
+
 def test_generation_appends_to_output_workbook(client, first_concept):
     session = client.post("/build-assessments/sessions", json={
         "scope_type": "concept", "scope_ids": [first_concept["id"]],
