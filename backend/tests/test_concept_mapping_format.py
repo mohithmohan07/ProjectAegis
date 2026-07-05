@@ -13,6 +13,8 @@ def test_strip_helpers():
         == "Number System"
     assert bi.strip_title_tag("Understanding Social Science (09_SocialScience_CBSE_NCERT)") \
         == "Understanding Social Science"
+    assert bi.strip_title_tag("Understanding Social Science (09_Social_Science_CBSE_NCERT)") \
+        == "Understanding Social Science"
     assert bi.strip_title_tag("What is Social Science (09CBSS_Ch_PL_Topic)") \
         == "What is Social Science"
     # A real parenthetical without underscores is preserved.
@@ -37,12 +39,11 @@ def test_writer_composes_tags_labels_and_clean_display(db):
     assert row[1] == chapter.chapter_title
 
     # Topic title col (6): "Topic NN: <title> (<tag>)"; display col (7):
-    # "Topic NN: <title>" with NO code/tag.
+    # clean topic title only, with no number/code/tag.
     clean_topic = bi.strip_topic_title(concept.topic.topic_title)
     assert row[6].startswith("Topic ") and row[6].endswith(")")
     assert bi.strip_topic_title(row[6]) == clean_topic
-    assert row[7].startswith("Topic ")
-    assert bi.strip_topic_title(row[7]) == clean_topic
+    assert row[7] == clean_topic
     assert "_" not in row[7]  # display name carries no code/tag
 
     # topic_concept_labels (col 9) lists the topic's concept titles.
@@ -113,10 +114,10 @@ def test_deposit_applies_numbering_recap_titlecase_and_topic_columns(db):
     assert "Topic 01:" in chapter.post_topics
     assert "07CBMA" in chapter.post_topics  # the code is present
 
-    # Topic display column shows "Topic NN: <Title>" without the code.
+    # Topic display column shows only the title, without "Topic NN:" or code.
     row = writer._concept_to_row(by_title["Addition of Integers"], "objective")
     assert row[4] == chapter.post_topics  # chapter band col E
-    assert row[7].startswith("Topic 01: Operations on Numbers")
+    assert row[7] == "Operations on Numbers"
     assert "_" not in row[7]
 
 

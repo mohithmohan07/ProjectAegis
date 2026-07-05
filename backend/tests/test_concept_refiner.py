@@ -85,6 +85,17 @@ def test_records_without_types_are_untouched():
     assert out[0]["concept_details"] == "Description: only // Misconception: none"
 
 
+def test_refine_chapter_adds_missing_misconceptions_to_normal_concepts():
+    records = [
+        _rec("Basic Proportionality Theorem", "Description: relates side ratios."),
+        _rec("Culmination - Topic 01", "Description: Recap"),
+    ]
+    out = cr.refine_chapter(records)
+    assert "Misconceptions:" in out[0]["concept_details"]
+    assert "Basic Proportionality Theorem" in out[0]["concept_details"]
+    assert "Misconceptions:" not in out[1]["concept_details"]
+
+
 def test_culmination_description_becomes_recap():
     records = [
         _rec("Solve A", "Description: a // Types: Type 01: P Case 01: c1 // Misconception: m"),

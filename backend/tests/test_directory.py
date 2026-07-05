@@ -28,6 +28,13 @@ def test_chapter_tag_includes_book_and_board_tokens():
         == "09_Mathematics_ICSE_SELINA"
     assert directory.chapter_tag("ICSE", "09", "Mathematics", book="Oswaal") \
         == "09_Mathematics_ICSE_OSWAAL"
+    assert directory.chapter_tag(
+        "CBSE", "09", "Geography", book="Gateway to Social Science") \
+        == "09_Social_Science_CBSE_Gateway_to_Social_Science"
+    assert directory.chapter_tag("CBSE", "10", "History", book="NCERT") \
+        == "10_Social_Science_CBSE_NCERT"
+    assert directory.chapter_tag("ICSE", "10", "History", book="Morningstar") \
+        == "10_History_ICSE_MorningStar"
 
 
 def test_chapter_titled_cell_matches_required_format():
@@ -123,6 +130,15 @@ def test_new_subject_codes_roundtrip():
         chapter_code = directory.make_chapter_code("CBSE", "08", subject, "Sample")
         assert chapter_code.startswith(f"08CB{code}_")
         assert directory.parse_code_prefix(chapter_code) == ("08", "CBSE", subject)
+
+
+def test_cbse_social_science_component_subjects_use_ss_code():
+    assert directory.code_prefix("CBSE", "09", "Geography") == "09CBSS"
+    assert directory.code_prefix("CBSE", "10", "History") == "10CBSS"
+    assert directory.code_prefix("ICSE", "10", "History") == "10ICHS"
+    assert directory.make_chapter_code(
+        "CBSE", "09", "Geography", "Landforms Earth's Living Canvas"
+    ).startswith("09CBSS_")
 
 
 def test_tree_has_boards_grades_subjects(client):
