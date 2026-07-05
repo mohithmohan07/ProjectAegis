@@ -194,6 +194,46 @@ def test_topic_headings_skip_exercise_question_type_headings():
         "Shaping of the Earth's Surface", "Forces of Gradation"]
 
 
+def test_topic_headings_prefer_main_heading_level_over_micro_subheadings():
+    sections = [{"heading": "Landforms: Earth's Living Canvas", "heading_level": 1}]
+    sections.extend([
+        {"heading": "Shaping of the Earth's Surface", "heading_level": 2},
+        {"heading": "Forces of Gradation", "heading_level": 2},
+        {"heading": "Weathering and Erosion", "heading_level": 2},
+        {"heading": "Depositional Landforms", "heading_level": 2},
+    ])
+    sections.extend(
+        {"heading": f"Micro Heading {i}", "heading_level": 3}
+        for i in range(1, 18)
+    )
+    sections.extend([
+        {"heading": "Short Answer Questions", "heading_level": 2},
+        {"heading": "Multiple Choice Questions", "heading_level": 2},
+    ])
+    assert g._topic_headings(sections) == [
+        "Shaping of the Earth's Surface",
+        "Forces of Gradation",
+        "Weathering and Erosion",
+        "Depositional Landforms",
+    ]
+
+
+def test_topic_headings_do_not_return_single_chapter_title_as_topic():
+    sections = [
+        {"heading": "Landforms: Earth's Living Canvas", "heading_level": 1},
+        {"heading": "Shaping of the Earth's Surface", "heading_level": 2},
+        {"heading": "Forces of Gradation", "heading_level": 2},
+        {"heading": "Weathering and Erosion", "heading_level": 2},
+        {"heading": "Depositional Landforms", "heading_level": 2},
+    ]
+    assert g._topic_headings(sections) == [
+        "Shaping of the Earth's Surface",
+        "Forces of Gradation",
+        "Weathering and Erosion",
+        "Depositional Landforms",
+    ]
+
+
 def test_snap_topics_to_headings_merges_micro_topics():
     headings = ["Triangles", "Introduction", "Similar Figures",
                 "Similarity of Triangles", "Pythagoras Theorem"]

@@ -15,8 +15,8 @@ def test_concepts_system_requires_numeric_types_guidance():
     assert "Misconception is REQUIRED" not in system
     assert "description-only editor" in g.prompts.get_text("concepts.description_refine.system")
     canonicalize = g.prompts.get_text("concepts.canonicalize.system")
-    assert "Merge ONLY true duplicates" in canonicalize
-    assert "over-merging" in canonicalize
+    assert "compact teacher-facing chapter map" in canonicalize
+    assert "Do not over-merge" in canonicalize
     assert "Types-only classifier" in g.prompts.get_text("concepts.types_assign.system")
     assert "source_evidence" in system
     assert "must not be written to workbook" in system
