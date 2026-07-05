@@ -234,6 +234,62 @@ def test_topic_headings_do_not_return_single_chapter_title_as_topic():
     ]
 
 
+def test_topic_headings_prefer_numbered_sections_over_ocr_quote_noise():
+    sections = g.parse_mmd_sections(
+        "\\section*{Introduction to Trigonometry}\n"
+        "\\section*{There is perhaps nothing which so occupies the middle position.}\n"
+        "\\section*{- J.F. Herbart (1890)}\n"
+        "\\subsection*{8.1 Introduction}\n"
+        "\\subsection*{8.2 Trigonometric Ratios}\n"
+        "\\section*{EXERCISE 8.1}\n"
+        "\\subsection*{8.3 Trigonometric Ratios of Some Specific Angles}\n"
+        "\\subsection*{8.4 Trigonometric Identities}\n"
+        "\\subsection*{8.5 Summary}\n"
+    )
+    assert g._topic_headings(sections) == [
+        "Introduction",
+        "Trigonometric Ratios",
+        "Trigonometric Ratios of Some Specific Angles",
+        "Trigonometric Identities",
+    ]
+
+
+def test_topic_headings_keep_numbered_mixed_math_heading():
+    sections = g.parse_mmd_sections(
+        "\\section*{Arithmetic Progressions}\n"
+        "\\section*{5.1 Introduction}\n"
+        "\\subsection*{5.2 Arithmetic Progressions}\n"
+        "\\section*{5.3 nth Term of an AP}\n"
+        "\\subsection*{5.4 Sum of First \\(\\boldsymbol{n}\\) Terms of an AP}\n"
+        "\\subsection*{5.5 Summary}\n"
+    )
+    assert g._topic_headings(sections) == [
+        "Introduction",
+        "Arithmetic Progressions",
+        "nth Term of an AP",
+        "Sum of First n Terms of an AP",
+    ]
+
+
+def test_topic_headings_ignore_lettered_exercise_items_when_decimal_sections_exist():
+    sections = g.parse_mmd_sections(
+        "\\section*{Shaping of the Earth's Surface}\n"
+        "\\subsection*{2.1 Interior of the Earth}\n"
+        "\\subsection*{2.2 Theory of Plate Tectonics}\n"
+        "\\subsection*{2.3 Weathering and Erosion}\n"
+        "\\section*{V. Very short answer type questions}\n"
+        "\\section*{I. Source-based Questions}\n"
+        "\\section*{1. Layers of the Earth}\n"
+        "\\section*{2. Types of Plate Movements}\n"
+        "\\section*{1. Real Life Connect Activity + Life Skills and Values}\n"
+    )
+    assert g._topic_headings(sections) == [
+        "Interior of the Earth",
+        "Theory of Plate Tectonics",
+        "Weathering and Erosion",
+    ]
+
+
 def test_snap_topics_to_headings_merges_micro_topics():
     headings = ["Triangles", "Introduction", "Similar Figures",
                 "Similarity of Triangles", "Pythagoras Theorem"]

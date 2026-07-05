@@ -1678,7 +1678,9 @@ _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 _EXERCISE_RE = re.compile(
     r"\b(exercise|ex\.|review|practice|problems?|questions?)\b", re.IGNORECASE)
 _SECTION_NUM_PREFIX_RE = re.compile(
-    r"^\s*(?:chapter\s+)?(?:\d+(?:\.\d+)*|[A-Z])[\).\s:-]+", re.IGNORECASE)
+    r"^\s*(?:chapter\s+)?(?:\d+(?:\.\d+)*[\).\s:-]+|[A-Z][\).:-]+\s*)",
+    re.IGNORECASE,
+)
 
 # Mathpix PDF->MMD output marks headings with LaTeX commands, not Markdown '#'.
 _LATEX_HEADING_RE = re.compile(
@@ -1715,10 +1717,29 @@ def normalize_mmd_headings(mmd_text: str) -> str:
     return _LATEX_HEADING_RE.sub(_sub, mmd_text or "")
 
 
-def _strip_section_number(title: str) -> str:
+def _clean_heading_text(title: str) -> str:
     title = re.sub(r"\s+", " ", (title or "").strip())
     title = title.translate(_FULLWIDTH_TRANS)
+    for _ in range(3):
+        title = re.sub(
+            r"\\(?:mathbf|boldsymbol|mathrm|text)\s*\{([^{}]*)\}", r"\1", title)
+    title = title.replace("\\(", " ").replace("\\)", " ")
+    title = re.sub(r"\\[a-zA-Z]+\*?", " ", title)
+    title = title.replace("{", " ").replace("}", " ")
+    title = re.sub(r"\s+", " ", title).strip()
+    return title
+
+
+def _strip_section_number(title: str) -> str:
+    title = _clean_heading_text(title)
     return _SECTION_NUM_PREFIX_RE.sub("", title).strip() or title
+
+
+def _heading_number_prefix(title: str) -> str:
+    title = _clean_heading_text(title)
+    m = re.match(r"^\s*(?:chapter\s+)?(\d+(?:\.\d+)*)[\).\s:-]+", title,
+                 re.IGNORECASE)
+    return m.group(1) if m else ""
 
 
 def parse_mmd_sections(mmd_text: str) -> list[dict]:
@@ -1745,25 +1766,44 @@ def parse_mmd_sections(mmd_text: str) -> list[dict]:
         if m:
             finish()
             level = len(m.group(1))
-            heading = _strip_section_number(m.group(2))
+            raw_heading = _clean_heading_text(m.group(2))
+            heading = _strip_section_number(raw_heading)
             stack = [(lv, h) for lv, h in stack if lv < level]
             stack.append((level, heading))
             current = {
                 "heading": heading,
+                "heading_raw": raw_heading,
                 "heading_level": level,
                 "heading_path": [h for _, h in stack],
+                "heading_numbered": bool(_SECTION_NUM_PREFIX_RE.match(raw_heading)),
+                "heading_number_prefix": _heading_number_prefix(raw_heading),
+                "heading_chapter": bool(
+                    re.match(r"^\s*chapter\b", raw_heading, re.IGNORECASE)),
                 "body": line + "\n",
             }
             continue
         if current is None:
-            current = {"heading": "", "heading_level": 1, "heading_path": [], "body": ""}
+            current = {
+                "heading": "",
+                "heading_raw": "",
+                "heading_level": 1,
+                "heading_path": [],
+                "heading_numbered": False,
+                "heading_number_prefix": "",
+                "heading_chapter": False,
+                "body": "",
+            }
         current["body"] += line + "\n"
     finish()
     if not sections and text.strip():
         sections = [{
             "heading": "General",
+            "heading_raw": "General",
             "heading_level": 1,
             "heading_path": ["General"],
+            "heading_numbered": False,
+            "heading_number_prefix": "",
+            "heading_chapter": False,
             "body": text,
             "exercise_blocks": [
                 p.strip() for p in re.split(r"\n\s*\n", text) if _EXERCISE_RE.search(p)
@@ -3089,27 +3129,42 @@ _EXERCISE_ONLY_RE = re.compile(
 # NEVER topics — their content belongs to the preceding real section.
 _NON_TOPIC_RE = re.compile(
     r"^\s*(?:solutions?|examples?|summary|answers?|"
+    r"alternative\s+solutions?|remarks?|"
     r"(?:a\s+)?notes?\s+to\s+the\s+reader|"
+    r"learning\s+outcomes?|questions?\s+to\s+ponder|"
+    r"check\s+your\s+understanding|quick\s+camp|"
     r"tick\s+the\s+correct\s+answer(?:\s+and\s+justify)?|"
     r"what\s+have\s+we\s+(?:learnt|learned|discussed)|"
     r"try\s+these|think\s+and\s+discuss|think,?\s+discuss\s+and\s+write|"
-    r"(?:very\s+)?short\s+answer(?:\s+questions?)?|long\s+answer(?:\s+questions?)?|"
+    r"(?:very\s+)?short\s+answer(?:\s+type)?(?:\s+questions?)?|"
+    r"long\s+answer(?:\s+type)?(?:\s+questions?)?|"
     r"multiple\s+choice(?:\s+questions?)?|objective(?:\s+type)?(?:\s+questions?)?|"
     r"subjective(?:\s+questions?)?|descriptive(?:\s+questions?)?|"
     r"fill\s+in\s+the\s+blanks?|true\s*/?\s*false|match(?:ing)?(?:\s+the\s+following)?|"
     r"assertion\s*(?:and|&)?\s*reason(?:s)?|case\s+based(?:\s+questions?)?|"
-    r"passage\s+based(?:\s+questions?)?|source\s+based(?:\s+questions?)?|"
+    r"passage[-\s]+based(?:\s+questions?)?|source[-\s]+based(?:\s+questions?)?|"
     r"map\s+(?:work|skills?|questions?)|"
-    r"do\s+this|activity|activities|project\s+work|things\s+to\s+remember|"
+    r"do\s+this|.*\bactivity\b.*|activities|project\s+work|things\s+to\s+remember|"
     r"points\s+to\s+remember|key\s+points|glossary)\b[\s\d.:()\-]*$",
     re.IGNORECASE,
 )
+
+
+def _collapse_spaced_heading_word(heading: str) -> str:
+    text = re.sub(r"\s+", " ", (heading or "").strip())
+    if re.fullmatch(r"(?:[A-Za-z]\s+){2,}[A-Za-z]s?", text):
+        return re.sub(r"\s+", "", text).lower()
+    return text.lower()
 
 
 def _is_non_topic_heading(heading: str) -> bool:
     # "(Optional)" suffixes and asterisks ("EXERCISE 6.6 (Optional)*") must not
     # hide an exercise heading from the match.
     h = re.sub(r"\(\s*optional\s*\)|\*", " ", heading or "", flags=re.IGNORECASE)
+    if re.fullmatch(r"\s*(?:\d+|[ivxlcdm]+)\s*", h, re.IGNORECASE):
+        return True
+    if _collapse_spaced_heading_word(h) in {"questions", "exercises"}:
+        return True
     return bool(_EXERCISE_ONLY_RE.match(h) or _NON_TOPIC_RE.match(h))
 
 
@@ -3300,37 +3355,77 @@ def _build_culminations_via_api(records: list[dict], *, meta: dict) -> list[dict
 
 _PART_SUFFIX_RE = re.compile(r"\s*\(part \d+/\d+\)$", re.IGNORECASE)
 _MIN_MAIN_TOPIC_HEADINGS = 3
-_MAX_MAIN_TOPIC_HEADINGS = 8
+_MAX_MAIN_TOPIC_HEADINGS = 12
+
+
+def _looks_like_math_fragment_heading(heading: str) -> bool:
+    if "$" not in heading and "\\(" not in heading and "\\[" not in heading:
+        return False
+    plain = re.sub(r"\$.*?\$", " ", heading)
+    plain = re.sub(r"\\[\(\[].*?\\[\)\]]", " ", plain)
+    return len(re.findall(r"[A-Za-z]", plain)) < 3
+
+
+def _dedupe_topic_candidates(candidates: list[dict]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = candidate["key"]
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(candidate["heading"])
+    return out
 
 
 def _topic_headings(sections: list[dict]) -> list[str]:
     """Ordered, de-duplicated main topic headings from parsed sections."""
     candidates: list[dict] = []
-    seen: set[str] = set()
     for section in sections or []:
         heading = _PART_SUFFIX_RE.sub("", (section.get("heading") or "").strip())
         if not heading or heading.lower() == "general":
             continue
         # OCR sometimes promotes a displayed equation to a heading
         # (e.g. "$ AMC PNR $") — math fragments are never topics.
-        if "$" in heading or "\\(" in heading:
+        if _looks_like_math_fragment_heading(heading):
             continue
         if _is_non_topic_heading(heading):
             continue
         key = bi.normalize_question_text(_strip_section_number(heading))
-        if key not in seen:
-            seen.add(key)
-            try:
-                level = int(section.get("heading_level") or 1)
-            except (TypeError, ValueError):
-                level = 1
-            candidates.append({"heading": heading, "level": max(1, level)})
+        if not key:
+            continue
+        try:
+            level = int(section.get("heading_level") or 1)
+        except (TypeError, ValueError):
+            level = 1
+        candidates.append({
+            "heading": heading,
+            "key": key,
+            "level": max(1, level),
+            "numbered": bool(section.get("heading_numbered")),
+            "number_prefix": section.get("heading_number_prefix") or "",
+            "chapter": bool(section.get("heading_chapter")),
+        })
+    numbered = [c for c in candidates if c["numbered"] and not c["chapter"]]
+    decimal_numbered = [c for c in numbered if "." in c["number_prefix"]]
+    if len(decimal_numbered) >= _MIN_MAIN_TOPIC_HEADINGS:
+        numbered = decimal_numbered
+    if len(numbered) >= _MIN_MAIN_TOPIC_HEADINGS:
+        if len(numbered) > _MAX_MAIN_TOPIC_HEADINGS:
+            progress.log(
+                f"Collapsed {len(numbered)} numbered headings to "
+                f"{_MAX_MAIN_TOPIC_HEADINGS} main topic headings.",
+                level="warning",
+            )
+            numbered = numbered[:_MAX_MAIN_TOPIC_HEADINGS]
+        return _dedupe_topic_candidates(numbered)
+
     levels = sorted({c["level"] for c in candidates})
     if len(levels) > 1 and sum(1 for c in candidates if c["level"] == levels[0]) == 1:
         candidates = [c for c in candidates if c["level"] != levels[0]]
         levels = sorted({c["level"] for c in candidates})
     if len(candidates) <= _MAX_MAIN_TOPIC_HEADINGS:
-        return [c["heading"] for c in candidates]
+        return _dedupe_topic_candidates(candidates)
 
     start = 0
 
@@ -3349,7 +3444,7 @@ def _topic_headings(sections: list[dict]) -> list[str]:
             level="warning",
         )
         selected = selected[:_MAX_MAIN_TOPIC_HEADINGS]
-    return [c["heading"] for c in selected]
+    return _dedupe_topic_candidates(selected)
 
 
 def _snap_topics_to_headings(
