@@ -1075,14 +1075,17 @@ Return ONLY strict JSON:
 {"rows":[{"topic":"","parent_concept":"","concept":"","concept_description":"","keywords":"","source_evidence":""}]}.
 
 COVERAGE IS MANDATORY (most important rule):
-- Extract EVERY distinct teachable concept from the first line to the last.
-- A typical textbook section yields 3-8 concepts; a full chapter yields 15-40.
-- NEVER compress a section into one or two broad concepts. Each definition,
-  rule, law, method, procedure, property, distinction, relationship, or skill
-  the section teaches is its own concept.
-- When unsure whether something is one concept or two, split it: smaller
-  mastery units are always preferred over broad summaries.
-- A missed concept is a defect; an extra specific concept is not.
+- Build a compact teacher-facing concept map from the first line to the last.
+- A normal textbook section yields 1-4 concepts; a full chapter usually yields
+  12-35 concepts, depending on chapter size.
+- A concept is a durable teaching/mastery objective, not every term, example,
+  subheading, exercise prompt, case, or factual detail.
+- When several definitions, examples, sub-types, or procedures serve one
+  reusable objective, merge them under the same concept.
+- Do not create separate concept rows for cases/examples/questions. These are
+  captured later as Types/Cases with full source questions.
+- A missed main teaching objective is a defect; a micro-concept row that should
+  be a case/example is also a defect.
 
 TOPIC SEGREGATION IS MANDATORY (second most important rule):
 - topic MUST be the textbook SECTION heading the content sits under (use the
@@ -1096,11 +1099,12 @@ Rules:
 - Do not invent textbook topics; preserve the section order from the source.
 - Do not create exercise, example, review, or practice topics.
 - Parent Concept is a meaningful cluster heading within a topic.
-- Concept is one small teachable mastery unit.
+- Concept is one compact teachable mastery unit.
 - Concept names must be specific and non-repetitive.
 - No Types, no culmination rows, no groups, no assessment labels.
-- No vague names: Introduction, Overview, Basics, Basic Concepts, Misc,
-  Miscellaneous, Examples, Practice, Definition of, Types of.
+- No vague or structural names: Introduction, Overview, Basics, Basic Concepts,
+  Misc, Miscellaneous, Examples, Practice, Definition of, Types of.
+- Do not use exercise/question-type headings as concepts.
 - Avoid repeated sibling openers.
 - concept_description starts with "Description:" and is 2-4 compact sentences.
 - Keep source_evidence short: the phrase/heading/problem source that justifies the concept.
@@ -1116,12 +1120,15 @@ Return ONLY strict JSON with the same schema:
 {"rows":[{"topic":"","parent_concept":"","concept":"","concept_description":"","keywords":"","source_evidence":""}]}.
 
 Rules:
-- Merge ONLY true duplicates (same concept stated twice); each concept appears once.
-- DO NOT summarize, generalize, or combine distinct concepts into broader ones.
-  Canonicalization must roughly preserve the row count: removing more than a
-  few rows from a chapter map is over-merging and is a defect.
-- Remove a concept only when it is an exact duplicate or pure filler with no
-  teachable content of its own.
+- Produce a compact teacher-facing chapter map, not a micro-index.
+- Merge duplicate, overlapping, repeated, or too-narrow rows into their nearest
+  durable teaching concept. Terms, cases, examples, and exercise-question types
+  belong inside concept descriptions/Types later, not as separate rows.
+- Do not over-merge unrelated major objectives; each main topic should retain
+  enough concepts for lesson planning.
+- Remove a concept when it is a duplicate, pure filler, a structural heading,
+  a question/example label, or only a sub-type/case of another concept.
+- Ensure concept titles are unique across the chapter.
 - Preserve textbook/topic order.
 - Rewrite repetitive names.
 - Parent concepts should group 3-8 related concepts where possible.
@@ -1741,16 +1748,21 @@ def parse_mmd_sections(mmd_text: str) -> list[dict]:
             heading = _strip_section_number(m.group(2))
             stack = [(lv, h) for lv, h in stack if lv < level]
             stack.append((level, heading))
-            current = {"heading": heading, "heading_path": [h for _, h in stack],
-                       "body": line + "\n"}
+            current = {
+                "heading": heading,
+                "heading_level": level,
+                "heading_path": [h for _, h in stack],
+                "body": line + "\n",
+            }
             continue
         if current is None:
-            current = {"heading": "", "heading_path": [], "body": ""}
+            current = {"heading": "", "heading_level": 1, "heading_path": [], "body": ""}
         current["body"] += line + "\n"
     finish()
     if not sections and text.strip():
         sections = [{
             "heading": "General",
+            "heading_level": 1,
             "heading_path": ["General"],
             "body": text,
             "exercise_blocks": [
@@ -2736,22 +2748,49 @@ def _records_to_api_rows(records: list[dict]) -> list[dict]:
     ]
 
 
-# Canonicalization may only merge true duplicates — if the model returns fewer
-# than this fraction of the (already de-duplicated) input rows, it over-merged.
-_CANONICALIZE_MIN_KEEP = 0.7
+_CANONICALIZE_MIN_CHAPTER_ROWS = 4
+_CANONICALIZE_MIN_PER_TOPIC = 2
+_CANONICALIZE_MAX_PER_TOPIC = 6
+_CANONICALIZE_MAX_CHAPTER_ROWS = 50
+
+
+def _canonicalize_target_bounds(records: list[dict]) -> tuple[int, int]:
+    """Return compact-but-not-collapsed row-count bounds for a chapter map."""
+    if not records:
+        return 0, 0
+    topics = {
+        bi.normalize_question_text(r.get("topic", ""))
+        for r in records
+        if (r.get("topic") or "").strip()
+    }
+    topic_count = max(1, len(topics))
+    min_keep = max(
+        _CANONICALIZE_MIN_CHAPTER_ROWS,
+        topic_count * _CANONICALIZE_MIN_PER_TOPIC,
+    )
+    max_keep = max(
+        12,
+        min(
+            _CANONICALIZE_MAX_CHAPTER_ROWS,
+            topic_count * _CANONICALIZE_MAX_PER_TOPIC,
+        ),
+    )
+    max_keep = min(len(records), max_keep)
+    min_keep = min(len(records), min_keep)
+    if min_keep > max_keep:
+        min_keep = max(1, max_keep)
+    return min_keep, max_keep
 
 
 def _consolidate_concepts_via_api(
     records: list[dict], *, subject: str, mmd_text: str = "",
     meta: dict | None = None,
 ) -> list[dict]:
-    """Chapter-wide skeleton refinement: dedup, naming, parent grouping.
+    """Chapter-wide skeleton refinement: compact, dedup, name, parent-group.
 
-    Guarded against over-merging: the input is already de-duplicated by
-    ``_merge_concept_records``, so a large row-count drop means the model
-    summarized distinct concepts away. In that case we retry once with an
-    explicit instruction, and if it still collapses we keep the input rows
-    (losing chapter content is worse than skipping cosmetic cleanup).
+    The input comes from section chunks and can contain many term/example/case
+    fragments. Canonicalization is expected to merge those into durable
+    teaching concepts while staying above a minimum count per main topic.
     """
     import json as _json
 
@@ -2768,24 +2807,44 @@ def _consolidate_concepts_via_api(
     progress.log(f"Canonicalizing {len(records)} skeleton concepts via API pass.")
     data = _openai_json(system, user)
     out = _concept_rows_to_records(data)
-    min_keep = max(1, int(len(records) * _CANONICALIZE_MIN_KEEP))
+    min_keep, max_keep = _canonicalize_target_bounds(records)
     if out and len(out) < min_keep:
         progress.log(
             f"Canonicalization returned {len(out)} rows for {len(records)} "
-            f"de-duplicated input rows — over-merging detected, retrying.",
+            f"input rows (target {min_keep}-{max_keep}) — over-merging "
+            "detected, retrying.",
             level="warning",
         )
         retry_user = (
             user
             + f"\n\nYOUR PREVIOUS ANSWER KEPT ONLY {len(out)} OF {len(records)} ROWS — "
-            "that is over-merging. The input rows are already de-duplicated. "
-            "Merge ONLY rows that state the exact same concept twice; keep every "
-            "distinct teachable concept as its own row. Return close to "
-            f"{len(records)} rows."
+            "that is over-merging. Keep the main teaching objectives for every "
+            "topic, but still merge duplicates, examples, cases, and narrow "
+            f"fragments. Return roughly {min_keep}-{max_keep} rows."
         )
         retry_data = _openai_json(system, retry_user)
         retry_out = _concept_rows_to_records(retry_data)
         if len(retry_out) > len(out):
+            out = retry_out
+    elif out and len(out) > max_keep:
+        progress.log(
+            f"Canonicalization kept {len(out)} rows for {len(records)} input "
+            f"rows (target {min_keep}-{max_keep}) — still too granular, "
+            "retrying with a compaction instruction.",
+            level="warning",
+        )
+        retry_user = (
+            user
+            + f"\n\nYOUR PREVIOUS ANSWER KEPT {len(out)} ROWS, WHICH IS TOO "
+            "GRANULAR FOR A TEACHER-FACING CHAPTER MAP. Merge repeated terms, "
+            "sub-types, examples, cases, and exercise-question headings into "
+            "their parent teaching concepts. Preserve all main objectives and "
+            f"topic order. Return at most {max_keep} rows and at least "
+            f"{min_keep} rows."
+        )
+        retry_data = _openai_json(system, retry_user)
+        retry_out = _concept_rows_to_records(retry_data)
+        if retry_out and min_keep <= len(retry_out) < len(out):
             out = retry_out
     if not out:
         raise RuntimeError("concept consolidation returned no rows")
@@ -2796,8 +2855,16 @@ def _consolidate_concepts_via_api(
             level="warning",
         )
         out = [dict(r) for r in records]
+    elif len(out) > max_keep:
+        progress.log(
+            f"Canonicalization remained above target ({len(out)}/{max_keep} rows); "
+            "keeping the most compact API output for downstream refinement.",
+            level="warning",
+        )
     out = _strip_types_from_records(_ensure_parent_concepts(out))
+    out = _dedupe_titles_chapter_wide(out)
     out = _repair_records_via_api(out, meta=meta, stage="canonicalize")
+    out = _dedupe_titles_chapter_wide(out)
     progress.log(f"Rows after canonicalization: {len(out)}.", level="success")
     return out
 
@@ -2897,6 +2964,15 @@ def _expected_min_skeleton_rows(chunk_text: str) -> int:
     return max(2, min(25, content // 3_000))
 
 
+def _expected_max_skeleton_rows(chunk_text: str, headings: list[str]) -> int:
+    """Maximum useful skeleton density before a chunk is clearly micro-split."""
+    content = len((chunk_text or "").strip())
+    heading_count = max(1, len(headings or []))
+    by_headings = heading_count * 4
+    by_size = max(8, content // 900) if content >= 2_000 else 8
+    return max(8, min(45, max(by_headings, by_size)))
+
+
 def _extract_skeleton_via_api(chunks: list[dict], *, meta: dict) -> list[dict]:
     system = prompts.get_text("concepts.skeleton.system")
     all_records: list[dict] = []
@@ -2947,6 +3023,31 @@ def _extract_skeleton_via_api(chunks: list[dict], *, meta: dict) -> list[dict]:
                 if not cr.is_culmination(r.get("concept_title", ""))
             ]
             if len(retry_records) > len(chunk_records):
+                chunk_records = retry_records
+        expected_max = _expected_max_skeleton_rows(chunk["text"], chunk_headings)
+        if len(chunk_records) > expected_max:
+            progress.log(
+                f"  chunk {i}/{len(chunks)} returned {len(chunk_records)} "
+                f"concept(s) (target <= {expected_max}) — retrying as a "
+                "compact teaching skeleton.",
+                level="warning",
+            )
+            retry_user = (
+                user
+                + f"\n\nYOUR PREVIOUS ANSWER HAD {len(chunk_records)} CONCEPTS — "
+                "that is too granular. Merge terms, cases, examples, sub-types, "
+                "and question headings into their parent teaching concepts. "
+                "Keep only durable teacher-facing mastery objectives. Do not "
+                "lose main coverage. Return no more than "
+                f"{expected_max} concepts for this chunk."
+            )
+            retry_data = _openai_json(system, retry_user)
+            retry_records = _strip_types_from_records(_concept_rows_to_records(retry_data))
+            retry_records = [
+                r for r in retry_records
+                if not cr.is_culmination(r.get("concept_title", ""))
+            ]
+            if expected_min <= len(retry_records) < len(chunk_records):
                 chunk_records = retry_records
         chunk_records = _ensure_parent_concepts(chunk_records)
         progress.log(f"  chunk {i}/{len(chunks)} skeleton rows: {len(chunk_records)}")
@@ -3198,11 +3299,13 @@ def _build_culminations_via_api(records: list[dict], *, meta: dict) -> list[dict
 
 
 _PART_SUFFIX_RE = re.compile(r"\s*\(part \d+/\d+\)$", re.IGNORECASE)
+_MIN_MAIN_TOPIC_HEADINGS = 3
+_MAX_MAIN_TOPIC_HEADINGS = 8
 
 
 def _topic_headings(sections: list[dict]) -> list[str]:
-    """Ordered, de-duplicated candidate topic headings from parsed sections."""
-    out: list[str] = []
+    """Ordered, de-duplicated main topic headings from parsed sections."""
+    candidates: list[dict] = []
     seen: set[str] = set()
     for section in sections or []:
         heading = _PART_SUFFIX_RE.sub("", (section.get("heading") or "").strip())
@@ -3214,11 +3317,39 @@ def _topic_headings(sections: list[dict]) -> list[str]:
             continue
         if _is_non_topic_heading(heading):
             continue
-        key = heading.lower()
+        key = bi.normalize_question_text(_strip_section_number(heading))
         if key not in seen:
             seen.add(key)
-            out.append(heading)
-    return out
+            try:
+                level = int(section.get("heading_level") or 1)
+            except (TypeError, ValueError):
+                level = 1
+            candidates.append({"heading": heading, "level": max(1, level)})
+    levels = sorted({c["level"] for c in candidates})
+    if len(levels) > 1 and sum(1 for c in candidates if c["level"] == levels[0]) == 1:
+        candidates = [c for c in candidates if c["level"] != levels[0]]
+        levels = sorted({c["level"] for c in candidates})
+    if len(candidates) <= _MAX_MAIN_TOPIC_HEADINGS:
+        return [c["heading"] for c in candidates]
+
+    start = 0
+
+    selected: list[dict] = []
+    for level in levels[start:]:
+        selected.extend(c for c in candidates if c["level"] == level)
+        if len(selected) >= _MIN_MAIN_TOPIC_HEADINGS:
+            break
+    if len(selected) < _MIN_MAIN_TOPIC_HEADINGS:
+        selected = candidates
+
+    if len(selected) > _MAX_MAIN_TOPIC_HEADINGS:
+        progress.log(
+            f"Collapsed {len(candidates)} candidate headings to "
+            f"{_MAX_MAIN_TOPIC_HEADINGS} main topic headings.",
+            level="warning",
+        )
+        selected = selected[:_MAX_MAIN_TOPIC_HEADINGS]
+    return [c["heading"] for c in selected]
 
 
 def _snap_topics_to_headings(
@@ -3401,8 +3532,9 @@ def concepts_from_mmd(
         # never become topics: merge their rows into the preceding real topic
         # BEFORE any chapter-wide pass builds on the topic structure.
         out = _scrub_section_numbers(out)
-        out = _consolidate_concepts_via_api(out, subject=subject, mmd_text=mmd_text, meta=meta)
         headings = _topic_headings(sections)
+        out = _snap_topics_to_headings(out, headings, chapter_title=chapter_title)
+        out = _consolidate_concepts_via_api(out, subject=subject, mmd_text=mmd_text, meta=meta)
         if _topics_look_collapsed(out, headings):
             progress.log(
                 f"Topic segregation collapsed: {len(out)} concepts share almost "

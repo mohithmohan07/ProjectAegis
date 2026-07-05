@@ -87,7 +87,7 @@ def test_canonicalize_falls_back_when_model_over_merges(monkeypatch):
     def fake_openai(system, user, **kw):
         calls["n"] += 1
         # Model keeps over-merging on both the first pass and the retry.
-        return {"rows": _to_api_rows(_rows(3))}
+        return {"rows": _to_api_rows(_rows(1))}
 
     monkeypatch.setattr(g, "_openai_json", fake_openai)
     monkeypatch.setattr(g, "_repair_records_via_api", lambda records, **kw: records)
@@ -104,29 +104,46 @@ def test_canonicalize_retry_recovers_row_count(monkeypatch):
     def fake_openai(system, user, **kw):
         calls["n"] += 1
         if calls["n"] == 1:
-            return {"rows": _to_api_rows(_rows(3))}
+            return {"rows": _to_api_rows(_rows(1))}
         assert "over-merging" in user
-        return {"rows": _to_api_rows(_rows(18))}
+        return {"rows": _to_api_rows(_rows(6))}
 
     monkeypatch.setattr(g, "_openai_json", fake_openai)
     monkeypatch.setattr(g, "_repair_records_via_api", lambda records, **kw: records)
     out = g._consolidate_concepts_via_api(_rows(20), subject="Math")
     assert calls["n"] == 2
-    assert len(out) == 18
+    assert len(out) == 6
 
 
-def test_canonicalize_accepts_reasonable_dedup(monkeypatch):
+def test_canonicalize_accepts_reasonable_compaction(monkeypatch):
     calls = {"n": 0}
 
     def fake_openai(system, user, **kw):
         calls["n"] += 1
-        return {"rows": _to_api_rows(_rows(18))}
+        return {"rows": _to_api_rows(_rows(10))}
 
     monkeypatch.setattr(g, "_openai_json", fake_openai)
     monkeypatch.setattr(g, "_repair_records_via_api", lambda records, **kw: records)
     out = g._consolidate_concepts_via_api(_rows(20), subject="Math")
     assert calls["n"] == 1  # no retry needed
-    assert len(out) == 18
+    assert len(out) == 10
+
+
+def test_canonicalize_retries_when_model_stays_too_granular(monkeypatch):
+    calls = {"n": 0}
+
+    def fake_openai(system, user, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {"rows": _to_api_rows(_rows(80))}
+        assert "TOO GRANULAR" in user
+        return {"rows": _to_api_rows(_rows(12))}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    monkeypatch.setattr(g, "_repair_records_via_api", lambda records, **kw: records)
+    out = g._consolidate_concepts_via_api(_rows(80), subject="Math")
+    assert calls["n"] == 2
+    assert len(out) == 12
 
 
 def test_skeleton_retries_sparse_chunks(monkeypatch):
@@ -147,6 +164,36 @@ def test_skeleton_retries_sparse_chunks(monkeypatch):
         [{"text": chunk_text, "sections": []}], meta=g._metadata(subject="Math"))
     assert calls["n"] == 2
     assert len(records) == 8
+
+
+def test_skeleton_retries_overdense_chunks(monkeypatch):
+    """A chunk yielding dozens of micro-concepts is compacted before merging."""
+    calls = {"n": 0}
+
+    def fake_openai(system, user, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {"rows": _to_api_rows(_rows(50))}
+        assert "too granular" in user
+        return {"rows": _to_api_rows(_rows(12))}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    monkeypatch.setattr(g, "_repair_records_via_api", lambda records, **kw: records)
+    chunk_text = "SECTION TEXT:\n" + ("alpha beta gamma " * 1500)
+    records = g._extract_skeleton_via_api(
+        [{
+            "text": chunk_text,
+            "sections": [
+                {"heading": "Main Topic A", "heading_level": 2},
+                {"heading": "Main Topic B", "heading_level": 2},
+                {"heading": "Main Topic C", "heading_level": 2},
+                {"heading": "Main Topic D", "heading_level": 2},
+            ],
+        }],
+        meta=g._metadata(subject="Math"),
+    )
+    assert calls["n"] == 2
+    assert len(records) == 12
 
 
 def test_culmination_pass_cannot_drop_normal_rows(monkeypatch):
