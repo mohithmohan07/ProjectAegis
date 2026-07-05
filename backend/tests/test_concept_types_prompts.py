@@ -15,8 +15,8 @@ def test_concepts_system_requires_numeric_types_guidance():
     assert "Misconception is REQUIRED" not in system
     assert "description-only editor" in g.prompts.get_text("concepts.description_refine.system")
     canonicalize = g.prompts.get_text("concepts.canonicalize.system")
-    assert "Merge ONLY true duplicates" in canonicalize
-    assert "over-merging" in canonicalize
+    assert "compact teacher-facing chapter map" in canonicalize
+    assert "Do not over-merge" in canonicalize
     assert "Types-only classifier" in g.prompts.get_text("concepts.types_assign.system")
     assert "source_evidence" in system
     assert "must not be written to workbook" in system
@@ -390,6 +390,7 @@ def test_pipeline_builds_culminations_before_types(monkeypatch):
     ])
     monkeypatch.setattr(g, "_consolidate_concepts_via_api", lambda records, **kw: records)
     monkeypatch.setattr(g, "_refine_descriptions_via_api", lambda records, **kw: records)
+    monkeypatch.setattr(g, "_ensure_mastery_lines_via_api", lambda records, **kw: records)
     monkeypatch.setattr(
         g, "_extract_question_task_inventory_via_api", lambda **kw: g._empty_inventory())
     monkeypatch.setattr(
