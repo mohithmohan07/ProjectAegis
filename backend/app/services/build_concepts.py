@@ -221,7 +221,7 @@ def _sync_chapter_topic_summary(
             f"This chapter develops {n_concepts} concept(s) across "
             f"{len(topics)} topic(s): " + ", ".join(t.topic_title for t in topics) + "."
         )
-    if meta_summary.get("chapter_duration_minutes"):
+    if meta_summary.get("chapter_duration_minutes") and _is_blank(chapter.chapter_duration):
         chapter.chapter_duration = f"{meta_summary['chapter_duration_minutes']} minutes"
     elif _is_blank(chapter.chapter_duration) and n_concepts:
         # Rough classroom estimate: ~12 minutes of instruction per concept.

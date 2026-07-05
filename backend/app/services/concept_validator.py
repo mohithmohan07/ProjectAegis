@@ -66,6 +66,13 @@ def _empty_label(details: str, label_name: str) -> bool:
     return False
 
 
+def _has_label(details: str, label_name: str) -> bool:
+    return any(
+        label.lower().startswith(label_name)
+        for label, _ in concept_refiner.split_sections(details)
+    )
+
+
 def _description_text(details: str) -> str:
     for label, content in concept_refiner.split_sections(details):
         if label.lower().startswith("description"):
@@ -147,6 +154,9 @@ def validate_concept_rows(
         if _empty_label(details, "misconception"):
             _add(errors, i, "concept_details", "empty_misconception",
                  "empty Misconception section is not allowed")
+        if details and not is_culm and not _has_label(details, "misconception"):
+            _add(errors, i, "concept_details", "missing_misconception",
+                 "Misconceptions section is missing", "warning")
         if details:
             words = _description_words(details)
             if not is_culm and (words < 4 or words > 120):

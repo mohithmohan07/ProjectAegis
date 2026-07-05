@@ -181,6 +181,19 @@ def test_topic_headings_skip_optional_exercises_and_math_fragments():
         "Criteria for Similarity of Triangles", "Pythagoras Theorem"]
 
 
+def test_topic_headings_skip_exercise_question_type_headings():
+    sections = [
+        {"heading": "Shaping of the Earth's Surface"},
+        {"heading": "Short Answer Questions"},
+        {"heading": "Long Answer Questions"},
+        {"heading": "Multiple Choice Questions"},
+        {"heading": "Fill in the Blanks"},
+        {"heading": "Forces of Gradation"},
+    ]
+    assert g._topic_headings(sections) == [
+        "Shaping of the Earth's Surface", "Forces of Gradation"]
+
+
 def test_snap_topics_to_headings_merges_micro_topics():
     headings = ["Triangles", "Introduction", "Similar Figures",
                 "Similarity of Triangles", "Pythagoras Theorem"]
@@ -332,7 +345,7 @@ def test_sync_chapter_topic_summary_uses_api_meta(db):
         chapter_title="Meta Quality Chapter",
         chapter_display_name="Meta Quality Chapter",
         chapter_description="This chapter develops 5 concept(s) across 1 topic(s): T.",
-        chapter_duration="60 minutes",
+        chapter_duration="",
     )
     db.add(chapter)
     db.flush()
@@ -354,6 +367,30 @@ def test_sync_chapter_topic_summary_uses_api_meta(db):
     assert chapter.chapter_description == "A strong teacher-facing chapter description."
     assert chapter.chapter_duration == "315 minutes"
     assert topic.topic_description == "Develops the criteria for triangle similarity."
+
+
+def test_sync_chapter_topic_summary_preserves_finalized_duration(db):
+    chapter = models.Chapter(
+        chapter_code="10CBMA_MetaDuration", board="CBSE", grade="10",
+        subject="Mathematics", unit="Mathematics Unit",
+        chapter_title="Final Duration Chapter",
+        chapter_display_name="Final Duration Chapter",
+        chapter_duration="160 minutes",
+    )
+    db.add(chapter)
+    db.flush()
+    topic = models.Topic(
+        chapter_id=chapter.id, topic_title="Similar Triangles",
+        topic_display_name="Similar Triangles", pre_post_learning="Post",
+    )
+    db.add(topic)
+    db.commit()
+
+    build_concepts._sync_chapter_topic_summary(chapter, {
+        "chapter_duration_minutes": 315,
+        "topic_descriptions": {"similar triangles": "Topic description."},
+    })
+    assert chapter.chapter_duration == "160 minutes"
 
 
 def test_sync_chapter_topic_summary_falls_back_without_meta(db):

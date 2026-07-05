@@ -52,6 +52,8 @@ def test_universal_question_task_inventory_and_type_mining_prompts():
     assert "COVERAGE IS MANDATORY" in mining
     assert "NEVER skip an item" in mining
     assert "A missed question is a defect" in mining
+    assert "CASE PROMPTS CARRY THE FULL SOURCE QUESTION" in mining
+    assert "Do not shorten source questions" in mining
     # Types must be properly defined (precise wording + definition).
     assert "TYPE WORDING" in mining
     assert "precise, self-explanatory pattern name" in mining
@@ -243,6 +245,42 @@ def test_mined_type_body_includes_definition():
     assert body2 == "Type 01: Adding Numbers Case 01: Find 2+3"
 
 
+def test_mined_type_body_includes_all_cases():
+    body, n = g._mined_type_to_body({
+        "type_title": "Solving Linear Equations",
+        "case_prompts": [
+            {"case_prompt": f"Solve equation {i}"} for i in range(1, 9)
+        ],
+    }, 0)
+    assert n == 1
+    assert "Case 01: Solve equation 1" in body
+    assert "Case 08: Solve equation 8" in body
+
+
+def test_type_cases_backfill_full_source_questions_from_inventory():
+    inventory = {"items": [{
+        "qid": "QINV-0001",
+        "normalized_task": (
+            "In triangle ABC, DE is parallel to BC and AD = 3 cm, DB = 2 cm, "
+            "AE = 4.5 cm. Find EC with full reasoning."
+        ),
+        "requires_context": False,
+    }]}
+    types = [{
+        "type_id": "TYPE-0001",
+        "type_title": "Using BPT to Find an Unknown Segment",
+        "source_question_ids": ["QINV-0001"],
+        "case_prompts": [{
+            "source_question_id": "QINV-0001",
+            "case_prompt": "Find EC",
+        }],
+    }]
+    out = g._backfill_type_cases_from_inventory(types, inventory)
+    prompt = out[0]["case_prompts"][0]["case_prompt"]
+    assert "AD = 3 cm" in prompt
+    assert "Find EC with full reasoning" in prompt
+
+
 def test_mine_types_retries_uncovered_inventory_items(monkeypatch):
     calls = {"n": 0}
 
@@ -305,6 +343,7 @@ def test_mine_types_coverage_merges_into_existing_type(monkeypatch):
     merged = mined["types"][0]
     assert set(merged["source_question_ids"]) == {"QINV-0001", "QINV-0002"}
     assert len(merged["case_prompts"]) == 2
+    assert {c["case_prompt"] for c in merged["case_prompts"]} == {"one", "two"}
     assert not g._uncovered_inventory_items(inventory, mined["types"])
 
 

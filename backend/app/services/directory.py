@@ -107,6 +107,9 @@ _BOOK_TAG_HINTS = [
     ("rs aggarwal", "RS"),
     ("rd sharma", "RD"),
     ("ncert", "NCERT"),
+    ("gateway to social science", "Gateway_to_Social_Science"),
+    ("morningstar", "MorningStar"),
+    ("morning star", "MorningStar"),
     ("selina", "SELINA"),
     ("oswaal", "OSWAAL"),
     ("kts", "KTS"),
@@ -120,6 +123,11 @@ _BOOK_TAG_HINTS = [
     ("together with", "TW"),
     ("xam idea", "XAMIDEA"),
 ]
+
+_CBSE_SOCIAL_SCIENCE_COMPONENTS = {
+    "history", "geography", "civics", "economics", "political science",
+    "social studies", "social science",
+}
 
 
 def parse_chapter_human_tag(text: str) -> dict | None:
@@ -155,8 +163,8 @@ def book_tag(source: str) -> str:
     for hint, tag in _BOOK_TAG_HINTS:
         if hint in lower:
             return tag
-    slug = re.sub(r"[^A-Za-z0-9]", "", text).upper()
-    return slug[:12] or ""
+    words = re.findall(r"[A-Za-z0-9]+", text)
+    return "_".join(words) or ""
 
 
 def primary_book_source(sources: str) -> str:
@@ -166,6 +174,18 @@ def primary_book_source(sources: str) -> str:
         if p:
             return p
     return ""
+
+
+def effective_subject_for_tags(board: str, subject: str) -> str:
+    """Subject used in export tags/codes.
+
+    CBSE stores History/Geography/Civics/Economics under Social Science for
+    import IDs, while ICSE keeps History/Geography as standalone subjects.
+    """
+    subj = (subject or "").strip()
+    if (board or "").strip().upper() == "CBSE" and subj.lower() in _CBSE_SOCIAL_SCIENCE_COMPONENTS:
+        return "Social Science"
+    return subj
 
 
 def derive_chapter_meta(chapter_title: str, chapter_display_name: str, *probes: str) -> dict:
@@ -221,6 +241,7 @@ def derive_chapter_meta(chapter_title: str, chapter_display_name: str, *probes: 
 
 def make_chapter_code(board: str, grade: str, subject: str, chapter_title: str) -> str:
     """Construct an ID prefix-style chapter code for newly created chapters."""
+    subject = effective_subject_for_tags(board, subject)
     b = bi.BOARD_CODE_INV.get(board, (board[:2] or "XX").upper())
     s = bi.SUBJECT_CODE_INV.get(subject, (subject[:2] or "XX").upper())
     slug = re.sub(r"[^A-Za-z0-9]", "", (chapter_title or "CH").title())[:12] or "CH"
@@ -247,15 +268,16 @@ def _underscore_slug(text: str) -> str:
     return "_".join(re.findall(r"[A-Za-z0-9]+", text or "")) or "X"
 
 
-def _camel_subject(subject: str) -> str:
-    """'Social Science' -> 'SocialScience'."""
-    return "".join(re.findall(r"[A-Za-z0-9]+", subject or "")) or "Subject"
+def _subject_slug(subject: str) -> str:
+    """'Social Science' -> 'Social_Science'."""
+    return _underscore_slug(subject or "Subject")
 
 
 def chapter_tag(board: str, grade: str, subject: str, *, book: str = "") -> str:
     """e.g. ('CBSE','09','Mathematics','RS Aggarwal') -> '09_Mathematics_CBSE_RS'."""
+    subject = effective_subject_for_tags(board, subject)
     tag = (
-        f"{grade or '00'}_{_camel_subject(subject)}_{board_tag_name(board)}"
+        f"{grade or '00'}_{_subject_slug(subject)}_{board_tag_name(board)}"
     )
     book_token = book_tag(book)
     if book_token:
@@ -273,6 +295,7 @@ def chapter_titled_cell(
 
 def code_prefix(board: str, grade: str, subject: str) -> str:
     """ID prefix like '09CBSS' (grade + board code + subject code)."""
+    subject = effective_subject_for_tags(board, subject)
     b = bi.BOARD_CODE_INV.get(board, (board[:2] or "XX").upper())
     s = bi.SUBJECT_CODE_INV.get(subject, (subject[:2] or "XX").upper())
     return f"{grade or '00'}{b}{s}"

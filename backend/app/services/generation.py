@@ -790,9 +790,10 @@ prompts.register(
    numerical, formula, proof, construction, graph, diagram, reasoning, or word
    problem patterns as the source demands. Mine the Question / Task Inventory
    first, then fold each reusable pattern into the concept it assesses. Each
-   variety = one solving/answering/task pattern; each Case is a concrete
-   source-derived prompt. Only skip Types when a concept has zero meaningful
-   assessable task varieties.""")
+   variety = one solving/answering/task pattern; each Case is a sub-type /
+   concrete source-derived example question. Include as many source examples
+   as are available for that Type; only skip Types when a concept has zero
+   meaningful assessable task varieties.""")
 
 prompts.register(
     "concepts.types_guidance.descriptive", category=_CONCEPTS_CAT,
@@ -804,8 +805,10 @@ prompts.register(
    writing, literature extract, coding/debugging, short-answer, long-answer, or
    numerical patterns as appropriate to the subject. Mine the Question / Task
    Inventory first; never force non-math material into numerical templates.
-   Each variety = one reusable assessable format with concrete Case prompts.
-   Only skip Types when the concept has zero meaningful assessable varieties.""")
+   Each variety = one reusable assessable format with concrete Case sub-types
+   and source example questions. Include as many source examples as are
+   available for that Type; only skip Types when the concept has zero meaningful
+   assessable varieties.""")
 
 prompts.register(
     "concepts.types_example", category=_CONCEPTS_CAT,
@@ -887,9 +890,9 @@ OUTPUT CONTRACT for concept_description (ONE string, sections joined by " // "):
   across the whole chapter afterwards, so do NOT try to continue numbers yourself.
 - Example Types block:
   {{types_example}}
-- End with Misconception ONLY IF there is a real likely learner error from the
-  material. Do not invent filler misconceptions, and never write "N/A", "None",
-  "Not applicable", or placeholder text.
+- End with Misconceptions for normal concepts: name the real likely learner
+  error from the material. Do not invent filler misconceptions, and never write
+  "N/A", "None", "Not applicable", or placeholder text.
 - Valid structures:
   Description: ...
   Description: ... // Types: ...
@@ -924,8 +927,8 @@ prompts.register(
             "headings (strip section numbers like 1.2 from names). One "
             "culmination per topic. Write clear source-grounded Descriptions; "
             "add Types only when there are source question/task/"
-            "assessable formats; add Misconception only when there is a real "
-            "likely learner error. Types use zero-padded 'Type 01:'/'Case 01:' labels:")
+            "assessable formats; add Misconceptions for likely learner errors. "
+            "Types use zero-padded 'Type 01:'/'Case 01:' labels:")
 
 
 prompts.register(
@@ -971,8 +974,8 @@ Your job (apply ALL of these intelligently — do not rely on downstream code):
 7. **No groups.** Do not mention groups, group columns, or assessment labels.
 
 8. **Hygiene.** Keep Description // Types // Misconception structure; no source-artifact
-   references ("Example 19", "Fig 2", "MMD"). Misconception is optional: keep it
-   only when it is specific and useful; never write N/A/None/filler.
+   references ("Example 19", "Fig 2", "MMD"). Misconceptions should be present
+   for normal concepts and must be specific and useful; never write N/A/None/filler.
 
 9. **Chapter source.** When CHAPTER SOURCE text is provided, mine it for all
    assessable question/task patterns to populate Types under the concepts they test.
@@ -1034,8 +1037,8 @@ has assessable question, numerical, diagram, or exercise formats. This mirrors
 how curriculum teams first generate a comprehensive types list, then manually
 keep what they need.
 
-INPUT: a draft concept map (Description is already refined; Types and
-Misconception may or may not exist) plus CHAPTER SOURCE text.
+INPUT: a draft concept map (Description is already refined; Types may or may
+not exist, and Misconceptions should already be present) plus CHAPTER SOURCE text.
 
 OUTPUT: Return ONLY JSON {"rows": [{"topic","concept","concept_description","keywords"}, ...]}
 with the SAME rows (same topics and concept names) but Types sections filled in.
@@ -1148,11 +1151,12 @@ Rules:
   Example ending: "...\\nAchieving Mastery: Using the midpoint property to set up the smaller triangles correctly."
 - Use 45-90 words unless the concept is very simple.
 - Do not include Types.
-- Misconception may be included only if specific and useful.
+- Include a Misconceptions section for every non-culmination concept. Make it
+  specific to the learner error this concept usually triggers; never use filler.
 - No N/A, None, Not applicable, or placeholder text.
 - No source artifacts such as MMD, Example 3, Fig 2, Table 1, Exercise 1.1, or
-  page references. When the source text cites one, substitute the actual
-  condensed content it points to (the real numbers, expression, or task) —
+  page references. When the source text cites one, substitute the full actual
+  content it points to (the real numbers, expression, conditions, or task) —
   e.g. write "such as expressing 1.272727... as 14/11", never "as in Example 8".
 """)
 
@@ -1170,7 +1174,7 @@ Rules:
 - Insert or replace only Types.
 - Use the provided Question / Task Inventory and mined Types as the primary evidence.
 - One Type = one distinct reusable subject-appropriate assessment/task pattern.
-- One Case = one concrete question prompt/stem.
+- One Case = one sub-type carrying one concrete source question prompt/stem.
 - For Mathematics, Types may be numerical/formula/problem-solving/proof/graph/diagram patterns.
 - For Science, Types may be numerical, diagram, experiment, observation, reasoning,
   comparison, process, or application patterns.
@@ -1182,6 +1186,12 @@ Rules:
 - For Computer Science, Types may be code tracing, debugging, output prediction,
   algorithm writing, logic correction, or concept explanation.
 - Omit Types only for concepts with zero meaningful assessable question/task varieties.
+- If a Type is present, every Case must include a full self-contained example
+  question from the source. Do not shorten source questions; preserve all
+  given values, conditions, data, quotations, and the exact ask needed for a
+  teacher to execute the example.
+- Include as many source examples as are available for each Type. Skip only
+  purely introductory or rhetorical prompts with no expected student response.
 - Each Type must be properly defined: name the action, object, and
   condition/method (e.g. "Finding the Unknown Exponent Using the Product Law"),
   never vague labels like "Direct Questions" or "Word Problems".
@@ -1210,6 +1220,8 @@ COVERAGE IS MANDATORY (most important rule):
   and worked example is its OWN item — never summarize an exercise set or
   question list into one item.
 - A missed question is a defect; an extra item is not.
+- Skip only purely introductory or rhetorical prompts that do not expect a
+  student answer or action.
 
 Rules:
 - Extract all assessable questions/tasks from first to last: examples, intext
@@ -1252,12 +1264,12 @@ Rules:
 - Preserve source_question_ids and source traceability in debug JSON.
 - Do not include source labels in public concept_details.
 
-CASE PROMPTS CARRY THE ACTUAL CONTENT (mandatory):
+CASE PROMPTS CARRY THE FULL SOURCE QUESTION (mandatory):
 - case_prompt must be fully self-contained: copy the ACTUAL numbers,
-  expressions, equations, data, quotations, or task text from the source
+  expressions, equations, data, quotations, conditions, and task text from the source
   question (its raw_task / normalized_task) into the prompt.
-- Keep each case_prompt CONDENSED: one sentence with the essential given
-  values and the ask — not the full verbatim question.
+- Do not shorten source questions. Keep the full teacher-executable wording,
+  including all givens and the exact ask; omit only source labels and page refs.
 - Correct: "Rationalise the denominator of 1/(7 + 3*sqrt(2))".
 - WRONG: "Rationalise the expressions given in Exercise 1.5",
   "Solve the problem from Example 11", "As shown in Fig 6.4".
@@ -1360,8 +1372,8 @@ Rules:
 - Keep strict JSON.
 - For source_artifact issues (references like "Example 5", "Exercise 1.2",
   "Fig 6.4", "page 14"): NEVER just delete or reword the reference. Look the
-  label up in the provided source context and substitute the CONDENSED actual
-  content — the real numbers, expressions, equations, data, or task — e.g.
+  label up in the provided source context and substitute the FULL actual
+  content: the real numbers, expressions, equations, data, conditions, and task, e.g.
   "solve the problem in Exercise 1.5" becomes
   "rationalise the denominator of 1/(7 + 3*sqrt(2))".
 """)
@@ -1995,6 +2007,92 @@ def _uncovered_inventory_items(inventory: dict, types: list[dict]) -> list[dict]
     ]
 
 
+_CASE_SOURCE_ARTIFACT_RE = re.compile(
+    r"\b(?:examples?|exercise|ex|fig(?:ure)?|table|page|p\.)\s*\d",
+    re.IGNORECASE,
+)
+
+
+def _inventory_task_text(item: dict) -> str:
+    """Full source task text used for public case prompts."""
+    task = (
+        item.get("normalized_task")
+        or item.get("raw_task")
+        or item.get("question")
+        or ""
+    )
+    task = bi.to_plain_text(str(task)).strip()
+    context = bi.to_plain_text(str(item.get("shared_context") or "")).strip()
+    if context and item.get("requires_context") and context not in task:
+        task = f"{context} {task}".strip()
+    return re.sub(r"\s+", " ", task)
+
+
+def _case_prompt_needs_source(prompt: str, source_text: str) -> bool:
+    prompt = re.sub(r"\s+", " ", (prompt or "").strip())
+    if not source_text:
+        return False
+    if not prompt:
+        return True
+    if _CASE_SOURCE_ARTIFACT_RE.search(prompt):
+        return True
+    # When the source task is substantially richer, keep the teacher-facing
+    # example faithful instead of a shortened paraphrase.
+    return len(prompt) < max(25, int(len(source_text) * 0.7))
+
+
+def _backfill_type_cases_from_inventory(types: list[dict], inventory: dict) -> list[dict]:
+    """Ensure every source question attached to a Type has a full case prompt."""
+    by_qid = {
+        (item.get("qid") or "").strip(): item
+        for item in inventory.get("items", [])
+        if (item.get("qid") or "").strip()
+    }
+    for mtype in types:
+        if not isinstance(mtype, dict):
+            continue
+        source_ids = [
+            (qid or "").strip()
+            for qid in (mtype.get("source_question_ids") or [])
+            if (qid or "").strip()
+        ]
+        cases = [
+            dict(case) if isinstance(case, dict) else {"case_prompt": str(case)}
+            for case in (mtype.get("case_prompts") or [])
+        ]
+        case_by_qid = {
+            (case.get("source_question_id") or "").strip(): case
+            for case in cases
+            if (case.get("source_question_id") or "").strip()
+        }
+        seen_prompts = {
+            bi.normalize_question_text(case.get("case_prompt", ""))
+            for case in cases
+            if case.get("case_prompt")
+        }
+        for qid in source_ids:
+            source_text = _inventory_task_text(by_qid.get(qid, {}))
+            if not source_text:
+                continue
+            existing = case_by_qid.get(qid)
+            if existing:
+                if _case_prompt_needs_source(existing.get("case_prompt", ""), source_text):
+                    existing["case_prompt"] = source_text
+                continue
+            key = bi.normalize_question_text(source_text)
+            if key in seen_prompts:
+                continue
+            cases.append({
+                "case_id": f"CASE-{len(cases) + 1:04d}",
+                "source_question_id": qid,
+                "case_prompt": source_text,
+                "case_signature": "",
+            })
+            seen_prompts.add(key)
+        mtype["case_prompts"] = cases
+    return types
+
+
 def _mine_types_from_inventory_via_api(
     *, meta: dict, inventory: dict, max_coverage_attempts: int = 2,
 ) -> dict:
@@ -2019,6 +2117,7 @@ def _mine_types_from_inventory_via_api(
         f"Mining reusable Types from {len(inventory.get('items', []))} inventory item(s).")
     data = _openai_json(system, user)
     types = list(data.get("types") or [])
+    types = _backfill_type_cases_from_inventory(types, inventory)
     progress.log(f"Type Mining produced {len(types)} reusable Type(s).")
 
     for attempt in range(1, max_coverage_attempts + 1):
@@ -2042,6 +2141,7 @@ def _mine_types_from_inventory_via_api(
         )
         extra = _openai_json(system, follow_up)
         extra_types = extra.get("types") or []
+        extra_types = _backfill_type_cases_from_inventory(extra_types, {"items": missed})
         by_id = {t.get("type_id"): t for t in types if t.get("type_id")}
         for et in extra_types:
             existing = by_id.get(et.get("type_id"))
@@ -2068,6 +2168,7 @@ def _mine_types_from_inventory_via_api(
                     existing.setdefault("case_prompts", []).append(
                         case if isinstance(case, dict) else {"case_prompt": prompt_text})
                     known_cases.add(prompt_text)
+        types = _backfill_type_cases_from_inventory(types, inventory)
 
     still_missed = _uncovered_inventory_items(inventory, types)
     total = len(inventory.get("items", []))
@@ -2088,7 +2189,7 @@ def _mined_type_to_body(mtype: dict, start_type: int) -> tuple[str, int]:
     properly defined assessment pattern. Source labels (e.g. "Exercise 1.2")
     are intentionally NOT stripped here: if mining disobeyed the prompt and
     left one, final validation flags the row and the repair pass substitutes
-    the actual condensed problem content from the source (preferred), with
+    the full actual problem content from the source (preferred), with
     deterministic neutralization as the post-repair last resort.
     """
     title = concept_cleanup.strip_dangling_references(
@@ -2111,7 +2212,7 @@ def _mined_type_to_body(mtype: dict, start_type: int) -> tuple[str, int]:
         return "", start_type
     n = start_type + 1
     parts = [f"Type {n:02d}: {title}"]
-    for c_i, prompt in enumerate(cases[:6], start=1):
+    for c_i, prompt in enumerate(cases, start=1):
         parts.append(f"Case {c_i:02d}: {prompt}")
     return " ".join(parts), n
 
@@ -2891,6 +2992,13 @@ _NON_TOPIC_RE = re.compile(
     r"tick\s+the\s+correct\s+answer(?:\s+and\s+justify)?|"
     r"what\s+have\s+we\s+(?:learnt|learned|discussed)|"
     r"try\s+these|think\s+and\s+discuss|think,?\s+discuss\s+and\s+write|"
+    r"(?:very\s+)?short\s+answer(?:\s+questions?)?|long\s+answer(?:\s+questions?)?|"
+    r"multiple\s+choice(?:\s+questions?)?|objective(?:\s+type)?(?:\s+questions?)?|"
+    r"subjective(?:\s+questions?)?|descriptive(?:\s+questions?)?|"
+    r"fill\s+in\s+the\s+blanks?|true\s*/?\s*false|match(?:ing)?(?:\s+the\s+following)?|"
+    r"assertion\s*(?:and|&)?\s*reason(?:s)?|case\s+based(?:\s+questions?)?|"
+    r"passage\s+based(?:\s+questions?)?|source\s+based(?:\s+questions?)?|"
+    r"map\s+(?:work|skills?|questions?)|"
     r"do\s+this|activity|activities|project\s+work|things\s+to\s+remember|"
     r"points\s+to\s+remember|key\s+points|glossary)\b[\s\d.:()\-]*$",
     re.IGNORECASE,
@@ -3331,7 +3439,7 @@ def concepts_from_mmd(
         # missing/duplicate culminations) must never fail a job or burn repair
         # attempts needed for semantic issues. Source references ("Example 5",
         # "Exercise 1.2") are deliberately KEPT here: the repair pass has the
-        # chapter source and substitutes the actual condensed problem content,
+        # chapter source and substitutes the full actual problem content,
         # which is preferred over neutral rewording.
         out = _scrub_section_numbers(out)
         out = _merge_concept_records(out)

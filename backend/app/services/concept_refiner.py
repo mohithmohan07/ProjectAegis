@@ -18,6 +18,8 @@ team requires regardless of which extractor produced them:
 5. **"Achieving Mastery" statement on its own line.** A mastery statement at
    the end of a Description is normalized to a line-broken
    ``\\nAchieving Mastery: <statement>`` format.
+6. **Misconceptions are always present on normal concepts.** If the model omits
+   the section, a deterministic concept-specific fallback is appended.
 
 ``concept_details`` is the canonical ``Description: ... // Types: ... //
 Misconception: ...`` string (sections joined by " // ").
@@ -196,6 +198,42 @@ def format_mastery_statement(details: str) -> str:
     return details
 
 
+def _misconception_index(sections: list[tuple[str, str]]) -> int:
+    for i, (label, _) in enumerate(sections):
+        if label.strip().lower().startswith("misconception"):
+            return i
+    return -1
+
+
+def _fallback_misconception(title: str) -> str:
+    concept = (title or "this concept").strip().rstrip(".")
+    return (
+        f"Students may apply {concept} as a memorized rule without checking "
+        "the conditions, context, or representation given in the problem."
+    )
+
+
+def ensure_misconceptions(records: list[dict]) -> list[dict]:
+    """Append a Misconceptions section to every normal concept when missing."""
+    for rec in records:
+        if is_culmination(rec.get("concept_title", "")):
+            continue
+        details = rec.get("concept_details") or ""
+        if not details.strip():
+            continue
+        sections = split_sections(details)
+        idx = _misconception_index(sections)
+        fallback = _fallback_misconception(rec.get("concept_title", ""))
+        if idx < 0:
+            sections.append(("Misconceptions", fallback))
+        elif not sections[idx][1].strip():
+            sections[idx] = (sections[idx][0] or "Misconceptions", fallback)
+        else:
+            continue
+        rec["concept_details"] = join_sections(sections)
+    return records
+
+
 def refine_chapter(records: list[dict]) -> list[dict]:
     """Full deterministic refinement pass over a chapter's ordered records."""
     for rec in records:
@@ -204,5 +242,6 @@ def refine_chapter(records: list[dict]) -> list[dict]:
             if not is_culmination(rec.get("concept_title", "")):
                 details = format_mastery_statement(details)
             rec["concept_details"] = details
+    records = ensure_misconceptions(records)
     records = renumber_types_continuously(records)
     return set_culmination_recap(records)

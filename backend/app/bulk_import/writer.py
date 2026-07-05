@@ -247,9 +247,9 @@ def composed_topic_title(topic: models.Topic) -> str:
 
 
 def composed_topic_display(topic: models.Topic) -> str:
-    """Clean topic display name, e.g. 'Topic 01: <Title>' (no tag/code)."""
+    """Clean topic display name, e.g. '<Title>' (no topic number or tag/code)."""
     clean = strip_topic_title(topic.topic_title) or topic.topic_title
-    return f"Topic {_topic_number(topic):02d}: {clean}"
+    return clean
 
 
 def _groups_by_type(concept: models.Concept) -> dict[str, str]:

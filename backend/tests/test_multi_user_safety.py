@@ -209,7 +209,7 @@ def test_source_artifacts_are_neutralized_even_in_types():
 
 def test_pre_repair_cleanup_keeps_references_for_content_inlining():
     """Before the final repair, references stay intact so the LLM can replace
-    them with the actual condensed problem content from the source."""
+    them with the full actual problem content from the source."""
     from app.services import concept_cleanup as cc
 
     rec = {
@@ -231,15 +231,15 @@ def test_pre_repair_cleanup_keeps_references_for_content_inlining():
     assert "Exercise 1.5" not in scrubbed["concept_details"]
 
 
-def test_prompts_require_actual_condensed_content():
+def test_prompts_require_full_source_content():
     mining = g.prompts.get_text("concepts.type_mining.system")
-    assert "CASE PROMPTS CARRY THE ACTUAL CONTENT" in mining
-    assert "CONDENSED" in mining
+    assert "CASE PROMPTS CARRY THE FULL SOURCE QUESTION" in mining
+    assert "Do not shorten source questions" in mining
     assert "Rationalise the denominator of 1/(7 + 3*sqrt(2))" in mining
     repair = g.prompts.get_text("concepts.repair.system")
-    assert "substitute the CONDENSED actual" in repair
+    assert "substitute the FULL actual" in repair
     refine = g.prompts.get_text("concepts.description_refine.system")
-    assert "substitute the actual" in refine
+    assert "substitute the full actual" in refine
 
 
 def test_source_artifacts_in_titles_and_topics_are_removed():
