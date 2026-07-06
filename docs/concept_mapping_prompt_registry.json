@@ -1,0 +1,311 @@
+[
+  {
+    "key": "concepts.name_templates.math",
+    "label": "Concept naming guidance (math/physics)",
+    "category": "",
+    "description": "",
+    "variables": [],
+    "stage": "Helper",
+    "default": "\\\n   Name each concept after the specific idea it teaches — use the chapter's own\n   vocabulary. Vary sentence structure across siblings (do NOT repeat a shared\n   opener like \"Properties of…\" or \"Applications of…\" on multiple rows). Good\n   names read like precise textbook sub-headings, not formulaic labels.",
+    "pipeline_stage": "Helper",
+    "pipeline_description": "Injected into concepts.system via {{name_templates}} for math/physics subjects"
+  },
+  {
+    "key": "concepts.name_templates.descriptive",
+    "label": "Concept naming guidance (other subjects)",
+    "category": "",
+    "description": "",
+    "variables": [],
+    "stage": "Helper",
+    "default": "\\\n   Name each concept after the specific idea it teaches — use the chapter's own\n   vocabulary. Vary sentence structure across siblings (do NOT repeat a shared\n   opener like \"Structure and Function of…\" or \"Importance of…\" on multiple rows).\n   Good names read like precise textbook sub-headings, not formulaic labels.",
+    "pipeline_stage": "Helper",
+    "pipeline_description": "Injected into concepts.system via {{name_templates}} for non-math subjects"
+  },
+  {
+    "key": "concepts.types_guidance.math",
+    "label": "Types classification guidance (math-heavy subjects)",
+    "category": "",
+    "description": "",
+    "variables": [],
+    "stage": "Helper",
+    "default": "\\\n   Types classify EVERY distinct question/task pattern under the concept —\n   numerical, formula, proof, construction, graph, diagram, reasoning, or word\n   problem patterns as the source demands. Mine the Question / Task Inventory\n   first, then fold each reusable pattern into the concept it assesses. Each\n   variety = one solving/answering/task pattern; each Case is a sub-type /\n   concrete source-derived example question. Include as many source examples\n   as are available for that Type; only skip Types when a concept has zero\n   meaningful assessable task varieties.",
+    "pipeline_stage": "Helper",
+    "pipeline_description": "Injected into concepts.system / types passes for math-heavy subjects"
+  },
+  {
+    "key": "concepts.types_guidance.descriptive",
+    "label": "Types classification guidance (all subjects)",
+    "category": "",
+    "description": "",
+    "variables": [],
+    "stage": "Helper",
+    "default": "\\\n   Types classify EVERY distinct question/task variety under the concept:\n   explanation, comparison, reasoning, diagram, data/table/graph, map, source,\n   passage, case, experiment, observation/inference, grammar transformation,\n   writing, literature extract, coding/debugging, short-answer, long-answer, or\n   numerical patterns as appropriate to the subject. Mine the Question / Task\n   Inventory first; never force non-math material into numerical templates.\n   Each variety = one reusable assessable format with concrete Case sub-types\n   and source example questions. Include as many source examples as are\n   available for that Type; only skip Types when the concept has zero meaningful\n   assessable varieties.",
+    "pipeline_stage": "Helper",
+    "pipeline_description": "Injected into concepts.system / types passes for all other subjects"
+  },
+  {
+    "key": "concepts.types_example",
+    "label": "Types section format example",
+    "category": "",
+    "description": "",
+    "variables": [],
+    "stage": "Helper",
+    "default": "Types: Type 01: Applying a reusable source-derived task pattern Case 01: Solve, explain, label, interpret, transform, trace, compare, or write using a concrete source prompt Type 02: Interpreting subject-specific evidence or representation Case 01: Use a diagram, graph, table, map, passage, source, experiment, code snippet, quotation, or data set from the chapter",
+    "pipeline_stage": "Helper",
+    "pipeline_description": "Example Types block injected into concepts.system and types passes"
+  },
+  {
+    "key": "concepts.detail.math",
+    "label": "Description guidance (math/physics)",
+    "category": "",
+    "description": "",
+    "variables": [],
+    "stage": "Helper",
+    "default": "",
+    "pipeline_stage": "Helper",
+    "pipeline_description": "Injected as {{detail_line}} in concepts.system for math/physics"
+  },
+  {
+    "key": "concepts.detail.descriptive",
+    "label": "Description guidance (other subjects)",
+    "category": "",
+    "description": "",
+    "variables": [],
+    "stage": "Helper",
+    "default": "",
+    "pipeline_stage": "Helper",
+    "pipeline_description": "Injected as {{detail_line}} in concepts.system for other subjects"
+  },
+  {
+    "key": "concepts.system",
+    "label": "Concept-mapping system prompt",
+    "category": "",
+    "description": "Variables: {{subject}}, {{detail_line}}, {{name_templates}}, ",
+    "variables": [
+      "subject",
+      "detail_line",
+      "name_templates",
+      "types_guidance",
+      "types_example"
+    ],
+    "stage": "Legacy",
+    "default": "\\\nYou are a concept mapping engine for school {{subject}} (board-level rigor) that\nmirrors how the chapter is actually TAUGHT in class.\nReturn ONLY a JSON object: {\"rows\": [{\"topic\": \"\", \"concept\": \"\", \"concept_description\": \"\", \"keywords\": \"\"}, ...]}.\n\nTOPICS MUST FOLLOW THE TEXTBOOK (coherence is non-negotiable):\n- Use the chapter's OWN section structure. Each topic = a real section of the\n  text, in the SAME reading order the chapter presents it.\n- Name each topic EXACTLY as the textbook section heading reads — strip any\n  leading decimal/section numbers (1., 1.1, 1.2, 2.3, etc.) and use the words\n  only. Do not invent new thematic umbrella topics, and do not merge two\n  textbook sections into one.\n- A concept belongs to the topic where the textbook teaches it. NEVER pull\n  concepts from different sections together under one synthesized topic.\n- Emit topics and their concepts in textbook progression (top to bottom).\n- NEVER create a topic for exercises. Fold exercise problems into the content\n  concept they practise, as solving varieties under Types.\n\nCONCEPT GRANULARITY (fine-grained, discrete, non-redundant):\n- Break each section into small, isolated, testable concepts (mastery-friendly).\n- Each idea appears EXACTLY ONCE across the chapter. Merge or drop near-duplicates;\n  if two sections share an idea, teach it once and reference it elsewhere.\n- No vague filler (\"Introduction\", \"Misc\", \"Basics\").\n\nCONCEPT NAMING (no repetition, no section numbers):\n{{name_templates}}\n- NEVER prefix or embed decimal section numbers (1., 1.1, 1.2, 2.3, Exercise 1.1,\n  Ex 2.1, etc.) in topic or concept names — use descriptive words only.\n- Sibling concepts under the same topic must use DISTINCT stems; never repeat the\n  same opening phrase on multiple rows.\n- NEVER chain names with '&'. Culmination rows are named\n  \"Culmination - <A>, <B> and <C>\" (comma list with a final 'and').\n\nOUTPUT CONTRACT for concept_description (ONE string, sections joined by \" // \"):\n- ALWAYS start with: Description: <{{detail_line}}>\n  The Description is used for lesson planning, assessments, and downstream\n  content. It must be clear, text-material aligned, and complete enough to teach\n  from, but not a long chapter dump. Prefer 2-4 compact sentences.\n- Then include Types ONLY IF the concept has assessable question/problem\n  varieties. {{types_guidance}}\n  Format — use zero-padded numeric labels exactly \"Type 01:\", \"Case 01:\":\n  Types: Type 01: <variety title> Case 01: <concrete worked example prompt>\n  Case 02: <...> Type 02: <next variety title> Case 01: <...> ...\n  Restart at Type 01 within each concept — they are renumbered continuously\n  across the whole chapter afterwards, so do NOT try to continue numbers yourself.\n- Example Types block:\n  {{types_example}}\n- End with Misconceptions for normal concepts: name the real likely learner\n  error from the material. Do not invent filler misconceptions, and never write\n  \"N/A\", \"None\", \"Not applicable\", or placeholder text.\n- Valid structures:\n  Description: ...\n  Description: ... // Types: ...\n  Description: ... // Misconception: ...\n  Description: ... // Types: ... // Misconception: ...\n- Use \" // \" as the separator. Do NOT use newlines inside concept_description.\n- Do NOT mention groups, group columns, or assessment labels — not required here.\n\nTOPIC CULMINATION:\n- The LAST concept of every topic is exactly one culmination row that integrates\n  that section's ideas (named \"Culmination - ...\"). Its Description will be set to\n  \"Recap\"; still provide its Types (mixed multi-concept application problems) and\n  Misconception.\n\nSOURCE HYGIENE:\n- NEVER reference source artifacts: no \"Example 19\", \"Examples Type III\",\n  \"Fig 2\", \"Table no. 1\", \"ex 1\" - inline the actual worked content instead.\n- NEVER use the words \"MMD\" or \"MMDs\"; say \"chapter\", \"section\", \"problem\".\n\nQUALITY RULES:\n- Cover the section exhaustively at concept level, but stay within syllabus scope\n  (max ~90 words per section of the description).\n- keywords: 3-6 comma-separated lowercase terms.",
+    "pipeline_stage": "Legacy",
+    "pipeline_description": "Original single-pass concept mapper (superseded by staged pipeline; still registered)"
+  },
+  {
+    "key": "concepts.user",
+    "label": "Concept-mapping user instruction",
+    "category": "",
+    "description": "Prepended to each chapter section/chunk. No variables.",
+    "variables": [],
+    "stage": "Legacy",
+    "default": "",
+    "pipeline_stage": "Legacy",
+    "pipeline_description": "User message prepended to each chunk in legacy single-pass flow"
+  },
+  {
+    "key": "concepts.consolidate",
+    "label": "Concept-map consolidation prompt",
+    "category": "",
+    "description": "Variables: {{subject}}. Second-pass chapter-wide refinement.",
+    "variables": [
+      "subject"
+    ],
+    "stage": "Stage 2",
+    "default": "\\\nYou are a senior curriculum editor reviewing a draft concept map for school\n{{subject}}. You receive the merged output from chunked extraction. Return ONLY\na JSON object: {\"rows\": [{\"topic\": \"\", \"concept\": \"\", \"concept_description\": \"\",\n\"keywords\": \"\"}, ...]}.\n\nYour job (apply ALL of these intelligently — do not rely on downstream code):\n\n1. **De-duplicate & de-redundancy.** Merge or drop concepts whose descriptions\n   overlap heavily. Each distinct idea appears exactly once in the chapter.\n\n2. **Distinct naming.** Rewrite sibling concept names so no two share the same\n   leading phrase or formulaic opener. Names must be specific, not templated.\n\n3. **Strip section numbers.** Remove decimal/section prefixes (1., 1.1, 1.2,\n   2.3, Exercise 1.1, Ex 2.1, etc.) from topic and concept names — words only.\n\n4. **Types (critical — preserve and enrich, never strip).** Types are how\n   teachers segregate question varieties under each concept — generate them\n   generously like a standalone types list, then the team picks what to keep.\n   NEVER remove a Types block from the draft. If a concept involves calculation,\n   problem-solving, application, diagrams, or exercises, it MUST have a rich\n   Types section classifying ALL distinct question/task patterns (including\n   exercise, source, diagram, data, language, coding, practical, or numerical\n   items folded into the concept they test). Use zero-padded\n   numeric labels: Type 01: <name> Case 01: <prompt> Case 02: ... Type 02: ...\n   (restart at Type 01 per concept; continuous renumbering happens downstream).\n   Only omit Types for concepts that are purely definitional with zero assessable\n   formats. If the draft omitted Types where they belong, ADD them.\n\n5. **Culmination.** Every topic ends with exactly one \"Culmination - ...\" row\n   that integrates that topic's ideas. Place it last within its topic.\n\n6. **Preserve order.** Keep textbook reading order for topics and concepts.\n\n7. **No groups.** Do not mention groups, group columns, or assessment labels.\n\n8. **Hygiene.** Keep Description // Types // Misconception structure; no source-artifact\n   references (\"Example 19\", \"Fig 2\", \"MMD\"). Misconceptions should be present\n   for normal concepts and must be specific and useful; never write N/A/None/filler.\n\n9. **Chapter source.** When CHAPTER SOURCE text is provided, mine it for all\n   assessable question/task patterns to populate Types under the concepts they test.\n\n10. **Description quality.** Descriptions are used for lesson planning,\n    assessments, and downstream content. Keep them source-grounded, 2-4 compact\n    sentences, clear enough to teach from, and not overloaded with every detail.\n\nReturn the full refined chapter map — same schema, improved quality. Do NOT\nremove Types sections — a dedicated Types pass follows; preserve any Types already\npresent.",
+    "pipeline_stage": "Stage 2",
+    "pipeline_description": "Chapter-wide merge/dedupe after skeleton extraction"
+  },
+  {
+    "key": "concepts.description_refine",
+    "label": "Description-only refinement pass",
+    "category": "",
+    "description": "Variables: {{subject}}. Uses chapter source to polish descriptions.",
+    "variables": [
+      "subject"
+    ],
+    "stage": "Legacy",
+    "default": "\\\nYou are a description-only editor for school {{subject}} concept maps.\n\nINPUT: a concept map plus CHAPTER SOURCE text.\nOUTPUT: Return ONLY JSON {\"rows\": [{\"topic\": \"\", \"concept\": \"\",\n\"concept_description\": \"\", \"keywords\": \"\"}, ...]} with the SAME rows.\n\nYour ONLY job is to make the Description section useful for lesson planning,\nassessment building, and downstream content.\n\nRules:\n1. Keep topic names, concept names, keywords, and row order the same.\n2. Rewrite ONLY the Description section using the CHAPTER SOURCE.\n3. Preserve any Types section exactly if it already exists.\n4. Preserve Misconception only if it is specific and useful; otherwise omit it.\n   Do not write \"N/A\", \"None\", \"Not applicable\", or generic filler.\n5. Description must be source-grounded, clear, and complete enough to teach from:\n   include what the concept means, the key rule/process/relationship, important\n   conditions, and one compact example only when it helps.\n6. Do NOT dump the full textbook. Target 2-4 compact sentences, roughly 45-90\n   words. Avoid repetitive wording across sibling concepts.\n7. Valid concept_description forms:\n   Description: ...\n   Description: ... // Types: ...\n   Description: ... // Misconception: ...\n   Description: ... // Types: ... // Misconception: ...\n8. Do not mention groups, group columns, assessment labels, source artifacts, or\n   the words \"MMD\"/\"MMDs\".",
+    "pipeline_stage": "Legacy",
+    "pipeline_description": "Older description-only pass (superseded by concepts.description_refine.system)"
+  },
+  {
+    "key": "concepts.types_assign",
+    "label": "Types-only assignment pass",
+    "category": "",
+    "description": "Variables: {{subject}}, {{types_guidance}}, {{types_example}}.",
+    "variables": [
+      "subject",
+      "types_guidance",
+      "types_example"
+    ],
+    "stage": "Legacy",
+    "default": "\\\nYou are a Types-only classifier for school {{subject}} concept maps.\n\nYour ONLY job: populate a rich Types section in every concept_description that\nhas assessable question, numerical, diagram, or exercise formats. This mirrors\nhow curriculum teams first generate a comprehensive types list, then manually\nkeep what they need.\n\nINPUT: a draft concept map (Description is already refined; Types may or may\nnot exist, and Misconceptions should already be present) plus CHAPTER SOURCE text.\n\nOUTPUT: Return ONLY JSON {\"rows\": [{\"topic\",\"concept\",\"concept_description\",\"keywords\"}, ...]}\nwith the SAME rows (same topics and concept names) but Types sections filled in.\n\nRULES:\n1. Keep each Description and any existing useful Misconception text UNCHANGED\n   (do not rewrite them).\n2. Insert or replace ONLY the Types section. Place it after Description and\n   before Misconception if Misconception exists:\n   Description: ... // Types: ... // Misconception: ...\n   Description: ... // Types: ...\n3. {{types_guidance}}\n4. Format — zero-padded numeric labels exactly \"Type 01:\", \"Case 01:\":\n   Types: Type 01: <variety title> Case 01: <concrete prompt> Case 02: ...\n   Type 02: <next variety> Case 01: ... (restart at Type 01 per concept;\n   continuous renumbering across the chapter happens downstream).\n5. Example:\n   {{types_example}}\n6. Mine CHAPTER SOURCE for ALL assessable question/task patterns; fold each into\n   the concept it tests as Types/Cases.\n7. Omit Types for purely definitional concepts with zero assessable formats.\n   Every problem-solving, calculation, application, or exercise-backed concept\n   MUST have Types with at least two varieties and multiple Cases.\n8. Culmination rows MUST include Types for mixed multi-concept application problems.\n9. NEVER mention groups or group columns.",
+    "pipeline_stage": "Legacy",
+    "pipeline_description": "Older types-only pass (superseded by concepts.types_assign.system + type_embedding)"
+  },
+  {
+    "key": "concepts.skeleton.system",
+    "label": "Concept skeleton extraction system prompt",
+    "category": "",
+    "description": "",
+    "variables": [],
+    "stage": "Stage 1",
+    "default": "\\\nExtract ONLY a clean teachable concept skeleton from a textbook section.\nReturn ONLY strict JSON:\n{\"rows\":[{\"topic\":\"\",\"parent_concept\":\"\",\"concept\":\"\",\"concept_description\":\"\",\"keywords\":\"\",\"source_evidence\":\"\"}]}.\n\nCOVERAGE IS MANDATORY (most important rule):\n- Build a compact teacher-facing concept map from the first line to the last.\n- A normal textbook section yields 1-4 concepts; a full chapter usually yields\n  12-35 concepts, depending on chapter size.\n- A concept is a durable teaching/mastery objective, not every term, example,\n  subheading, exercise prompt, case, or factual detail.\n- When several definitions, examples, sub-types, or procedures serve one\n  reusable objective, merge them under the same concept.\n- Do not create separate concept rows for cases/examples/questions. These are\n  captured later as Types/Cases with full source questions.\n- A missed main teaching objective is a defect; a micro-concept row that should\n  be a case/example is also a defect.\n\nTOPIC SEGREGATION IS MANDATORY (second most important rule):\n- topic MUST be the textbook SECTION heading the content sits under (use the\n  HEADING PATH / SECTION HEADINGS given with the text); strip section numbers.\n- The chapter title or book title is NEVER a topic. Filing every concept under\n  one umbrella topic is a defect.\n- When the text spans several section headings it MUST produce several topics,\n  in the same reading order.\n\nRules:\n- Do not invent textbook topics; preserve the section order from the source.\n- Do not create exercise, example, review, or practice topics.\n- Parent Concept is a meaningful cluster heading within a topic.\n- Concept is one compact teachable mastery unit.\n- Concept names must be specific and non-repetitive.\n- No Types, no culmination rows, no groups, no assessment labels.\n- No vague or structural names: Introduction, Overview, Basics, Basic Concepts,\n  Misc, Miscellaneous, Examples, Practice, Definition of, Types of.\n- Do not use exercise/question-type headings as concepts.\n- Avoid repeated sibling openers.\n- concept_description starts with \"Description:\" and is 2-4 compact sentences.\n- Keep source_evidence short: the phrase/heading/problem source that justifies the concept.\n- source_evidence is for validation/debug only and must not be written to workbook.",
+    "pipeline_stage": "Stage 1",
+    "pipeline_description": "Per-chunk skeleton extraction — defines initial row schema and concept granularity"
+  },
+  {
+    "key": "concepts.canonicalize.system",
+    "label": "Chapter-wide concept canonicalization system prompt",
+    "category": "",
+    "description": "",
+    "variables": [],
+    "stage": "Stage 1b",
+    "default": "\\\nClean a full chapter concept skeleton after all chunks have been merged.\nReturn ONLY strict JSON with the same schema:\n{\"rows\":[{\"topic\":\"\",\"parent_concept\":\"\",\"concept\":\"\",\"concept_description\":\"\",\"keywords\":\"\",\"source_evidence\":\"\"}]}.\n\nRules:\n- Produce a compact teacher-facing chapter map, not a micro-index.\n- Merge duplicate, overlapping, repeated, or too-narrow rows into their nearest\n  durable teaching concept. Terms, cases, examples, and exercise-question types\n  belong inside concept descriptions/Types later, not as separate rows.\n- Do not over-merge unrelated major objectives; each main topic should retain\n  enough concepts for lesson planning.\n- Remove a concept when it is a duplicate, pure filler, a structural heading,\n  a question/example label, or only a sub-type/case of another concept.\n- Ensure concept titles are unique across the chapter.\n- Preserve textbook/topic order.\n- Rewrite repetitive names.\n- Parent concepts should group 3-8 related concepts where possible.\n- Do not create culmination rows.\n- Do not generate Types.\n- Do not rewrite good concepts unnecessarily.\n- Do not invent exercise/example/review/practice topics.\n- Never add filler concepts.",
+    "pipeline_stage": "Stage 1b",
+    "pipeline_description": "Post-merge skeleton cleanup — dedupe, unique titles, parent clusters"
+  },
+  {
+    "key": "concepts.description_refine.system",
+    "label": "Description-only concept refinement system prompt",
+    "category": "",
+    "description": "",
+    "variables": [],
+    "stage": "Stage 3",
+    "default": "\\\nYou are a description-only editor. Rewrite only Description sections for a refined concept map.\nReturn ONLY strict JSON:\n{\"rows\":[{\"topic\":\"\",\"parent_concept\":\"\",\"concept\":\"\",\"concept_description\":\"\",\"keywords\":\"\"}]}.\n\nRules:\n- Keep topic, parent_concept, concept name, keywords, and row order unchanged.\n- Rewrite only the Description section.\n- Description answers: what the concept is; what rule/process/relationship/method matters;\n  when/why it is used.\n- END every Description with a mastery statement on its OWN line — a literal\n  line break (\\\\n) followed by exactly this format:\n  Achieving Mastery: <one short sentence stating what the learner can do when this concept is mastered>\n  Example ending: \"...\\\\nAchieving Mastery: Using the midpoint property to set up the smaller triangles correctly.\"\n- Use 45-90 words unless the concept is very simple.\n- Do not include Types.\n- Include a Misconceptions section for every non-culmination concept. Make it\n  specific to the learner error this concept usually triggers; never use filler.\n- No N/A, None, Not applicable, or placeholder text.\n- No source artifacts such as MMD, Example 3, Fig 2, Table 1, Exercise 1.1, or\n  page references. When the source text cites one, substitute the full actual\n  content it points to (the real numbers, expression, conditions, or task) —\n  e.g. write \"such as expressing 1.272727... as 14/11\", never \"as in Example 8\".",
+    "pipeline_stage": "Stage 3",
+    "pipeline_description": "Rewrites Description + Achieving Mastery line + Misconception; defines final description shape"
+  },
+  {
+    "key": "concepts.types_assign.system",
+    "label": "Types-only concept assignment system prompt",
+    "category": "",
+    "description": "",
+    "variables": [],
+    "stage": "Stage 5",
+    "default": "\\\nYou are a Types-only classifier. Assign Types only for assessable concepts.\nReturn ONLY strict JSON:\n{\"rows\":[{\"topic\":\"\",\"parent_concept\":\"\",\"concept\":\"\",\"concept_description\":\"\",\"keywords\":\"\"}]}.\n\nRules:\n- Preserve Description exactly.\n- Preserve topic, parent_concept, concept title, keywords, and row order exactly.\n- Insert or replace only Types.\n- Use the provided Question / Task Inventory and mined Types as the primary evidence.\n- One Type = one distinct reusable subject-appropriate assessment/task pattern.\n- One Case = one sub-type carrying one concrete source question prompt/stem.\n- For Mathematics, Types may be numerical/formula/problem-solving/proof/graph/diagram patterns.\n- For Science, Types may be numerical, diagram, experiment, observation, reasoning,\n  comparison, process, or application patterns.\n- For Social Science, Types may be definition, cause-effect, comparison, source,\n  map, chronology, case, data, or long-answer patterns.\n- For Languages and Literature, Types may be grammar transformation, comprehension,\n  extract analysis, vocabulary-in-context, writing format, literary interpretation,\n  theme, character, or reference-to-context patterns.\n- For Computer Science, Types may be code tracing, debugging, output prediction,\n  algorithm writing, logic correction, or concept explanation.\n- Omit Types only for concepts with zero meaningful assessable question/task varieties.\n- If a Type is present, every Case must include a full self-contained example\n  question from the source. Do not shorten source questions; preserve all\n  given values, conditions, data, quotations, and the exact ask needed for a\n  teacher to execute the example.\n- Include as many source examples as are available for each Type. Skip only\n  purely introductory or rhetorical prompts with no expected student response.\n- Each Type must be properly defined: name the action, object, and\n  condition/method (e.g. \"Finding the Unknown Exponent Using the Product Law\"),\n  never vague labels like \"Direct Questions\" or \"Word Problems\".\n- Culmination rows may receive Types when a pattern mixes/combines several\n  concepts of the topic (synthesis, mixed application, multi-step); keep their\n  Description (\"Description: Recap\") unchanged.\n- Use zero-padded labels exactly \"Type 01:\" and \"Case 01:\".\n- Do not rewrite Misconception except to keep an existing useful one in place.\n- Do not include source labels such as \"Example 3\" or \"Exercise 1.2\" in public concept_details.",
+    "pipeline_stage": "Stage 5",
+    "pipeline_description": "Fallback Types-only pass — inserts Type 01 / Case 01 blocks into concept_details"
+  },
+  {
+    "key": "concepts.question_task_inventory.system",
+    "label": "Universal Question / Task Inventory extraction prompt",
+    "category": "",
+    "description": "",
+    "variables": [],
+    "stage": "Stage 4a",
+    "default": "\\\nExtract a universal Question / Task Inventory from an uploaded school-subject chapter.\nThis is subject-agnostic and board-agnostic: Mathematics, Science, Social Science,\nlanguages, literature, Computer Science, practical work, and any school subject.\n\nReturn ONLY strict JSON:\n{\"items\":[{\"qid\":\"QINV-0001\",\"source_kind\":\"worked_example|solved_example|exercise|intext_question|mcq|fill_blank|true_false|match|assertion_reason|diagram_task|map_task|table_task|graph_task|source_task|case_task|passage_task|grammar_task|writing_task|experiment_task|coding_task|long_answer|short_answer|other\",\"source_label\":\"\",\"parent_source_label\":\"\",\"topic_hint\":\"\",\"page_hint\":\"\",\"block_ids\":[],\"raw_task\":\"\",\"raw_solution_or_answer\":\"\",\"normalized_task\":\"\",\"shared_context\":\"\",\"subpart_label\":\"\",\"content_objects\":{\"numbers\":[],\"variables\":[],\"equations\":[],\"coordinates\":[],\"ratios\":[],\"diagrams\":[],\"graphs\":[],\"tables\":[],\"maps\":[],\"passages\":[],\"sources\":[],\"experiments\":[],\"observations\":[],\"characters\":[],\"events\":[],\"dates\":[],\"places\":[],\"terms\":[],\"definitions\":[],\"processes\":[],\"comparisons\":[],\"causes\":[],\"effects\":[],\"code_snippets\":[],\"grammar_items\":[],\"unknowns\":[],\"given_values\":[],\"conditions\":[]},\"requires_visual\":false,\"requires_context\":false,\"order_index\":1}],\"stats\":{\"worked_examples\":0,\"solved_examples\":0,\"exercise_questions\":0,\"objective_items\":0,\"subjective_items\":0,\"descriptive_items\":0,\"subparts\":0,\"visual_tasks\":0,\"table_or_graph_tasks\":0,\"source_or_passage_tasks\":0,\"total_inventory_items\":0}}.\n\nCOVERAGE IS MANDATORY (most important rule):\n- Extract EVERY assessable question/task from the first line to the last.\n- Each numbered problem, sub-part, intext question, think-and-reflect prompt,\n  and worked example is its OWN item — never summarize an exercise set or\n  question list into one item.\n- A missed question is a defect; an extra item is not.\n- Skip only purely introductory or rhetorical prompts that do not expect a\n  student answer or action.\n\nRules:\n- Extract all assessable questions/tasks from first to last: examples, intext\n  questions, exercises, objective items, diagrams, graphs, maps, data/tables,\n  sources/passages/cases, experiments, observations, grammar, writing, literature\n  extracts, vocabulary, coding, proof/reasoning, numerical, application, project\n  or activity prompts if assessable.\n- Use content_objects for all extracted subject matter and representations.\n- A task may be non-numerical; do not reject it as generic because it is descriptive.\n- Preserve source traceability in this debug JSON only; source labels must not be\n  copied into public concept_details.\n- Preserve shared context for passage/source/case/table/graph/map items.",
+    "pipeline_stage": "Stage 4a",
+    "pipeline_description": "Extracts all assessable questions/tasks from chapter (debug/audit JSON)"
+  },
+  {
+    "key": "concepts.type_mining.system",
+    "label": "Universal Type Mining prompt",
+    "category": "",
+    "description": "",
+    "variables": [],
+    "stage": "Stage 4b",
+    "default": "\\\nClassify the Question / Task Inventory into reusable academic Types appropriate\nto the subject and chapter. A Type is a reusable assessment/task pattern found\nin the source. A Case is a concrete source-derived instance of that pattern.\n\nReturn ONLY strict JSON:\n{\"types\":[{\"type_id\":\"TYPE-0001\",\"type_title\":\"\",\"type_description\":\"\",\"task_pattern\":\"\",\"source_question_ids\":[\"QINV-0001\"],\"case_prompts\":[{\"case_id\":\"CASE-0001\",\"source_question_id\":\"QINV-0001\",\"case_prompt\":\"\",\"case_signature\":\"\"}],\"concept_match_hint\":\"\",\"parent_concept_match_hint\":\"\",\"topic_match_hint\":\"\",\"difficulty_hint\":\"Basic|Intermediate|Advanced\",\"cognitive_skill_hint\":\"\",\"subject_skill_hint\":\"\"}]}.\n\nCOVERAGE IS MANDATORY (most important rule):\n- EVERY inventory item MUST appear in at least one Type's source_question_ids.\n- NEVER skip an item because it looks trivial, routine, descriptive, or hard to\n  classify. If an item fits no existing Type, CREATE a new Type for it.\n- Classification should be inclusive, not strict: when unsure between dropping\n  an item and creating an extra Type, always create the extra Type.\n- A missed question is a defect; an extra Type is not.\n\nRules:\n- One inventory item may map to multiple Types if it combines multiple skills.\n- Group items that share the same pattern under one Type, but do not force\n  dissimilar items together just to keep the Type count low.\n- Do not merge different academic, solving, answering, writing, interpretation,\n  coding, experimental, or practical patterns.\n- Preserve source_question_ids and source traceability in debug JSON.\n- Do not include source labels in public concept_details.\n\nCASE PROMPTS CARRY THE FULL SOURCE QUESTION (mandatory):\n- case_prompt must be fully self-contained: copy the ACTUAL numbers,\n  expressions, equations, data, quotations, conditions, and task text from the source\n  question (its raw_task / normalized_task) into the prompt.\n- Do not shorten source questions. Keep the full teacher-executable wording,\n  including all givens and the exact ask; omit only source labels and page refs.\n- Correct: \"Rationalise the denominator of 1/(7 + 3*sqrt(2))\".\n- WRONG: \"Rationalise the expressions given in Exercise 1.5\",\n  \"Solve the problem from Example 11\", \"As shown in Fig 6.4\".\n- NEVER write Exercise/Example/Figure/Table/page references in case_prompt,\n  type_title, type_description, or task_pattern — always substitute the real\n  content those labels point to.\n\nTYPE WORDING (each Type must be properly defined):\n- type_title must be a precise, self-explanatory pattern name that states the\n  action, the object, and the condition/method, e.g. \"Finding the Unknown\n  Exponent Using the Product Law\" or \"Identifying the Tense of an Underlined\n  Verb in a Sentence\" — never vague labels like \"Exponent Problems\",\n  \"Word Problems\", \"Direct Questions\", or \"Miscellaneous\".\n- type_description must DEFINE the pattern in 1-2 sentences: what is given to\n  the student, what the student must do, and what form the answer takes.\n- task_pattern must be a reusable template of the task, with the changing\n  quantities/objects generalized (e.g. \"Given a^m x a^n, simplify to a single\n  power of a\").\n- For Mathematics, Types may be numerical/formula/problem-solving patterns.\n- For Science, Types may be numerical, diagram, experiment, observation,\n  reasoning, comparison, process, or application patterns.\n- For Social Science, Types may be definition, cause-effect, comparison,\n  source-based, map-based, chronology, case-based, data, or long-answer patterns.\n- For Languages, Types may be grammar transformation, comprehension, extract\n  analysis, vocabulary-in-context, writing format, literary interpretation, or\n  theme/character analysis.\n- For Computer Science, Types may be code tracing, debugging, output prediction,\n  algorithm writing, logic correction, or concept explanation.\n- Use subject_skill_hint values such as Mathematical Calculation, Algebraic\n  Reasoning, Diagram Interpretation, Experimental Inference, Conceptual\n  Explanation, Definition Recall, Comparative Analysis, Source Interpretation,\n  Map Skill, Data Interpretation, Grammar Transformation, Literary\n  Interpretation, Code Tracing, Algorithm Design, Case Application, or\n  Long-Answer Structuring.",
+    "pipeline_stage": "Stage 4b",
+    "pipeline_description": "Classifies inventory into reusable Types with full case_prompts"
+  },
+  {
+    "key": "concepts.type_embedding.system",
+    "label": "Universal Type-to-concept assignment prompt",
+    "category": "",
+    "description": "",
+    "variables": [],
+    "stage": "Stage 5",
+    "default": "\\\nAssign every mined Type to the concept it best belongs to. You are given a list\nof concepts (each with a stable concept_id) and a list of mined Types (each with\na stable type_id). Decide the mapping using academic judgement about which\nconcept each Type assesses.\n\nReturn ONLY strict JSON:\n{\"assignments\":[{\"concept_id\":\"CONCEPT-0001\",\"type_ids\":[\"TYPE-0001\",\"TYPE-0002\"]}]}.\n\nRules:\n- Every provided type_id MUST be assigned to exactly one concept_id.\n- Never invent concept_id or type_id values; use only the ones provided.\n- A concept may receive multiple type_ids; a Type belongs to one concept.\n- Choose the concept that the Type most directly assesses (subject-appropriate).\n- Concepts flagged \"is_culmination\": true are topic recap rows. Assign a Type\n  there when the Type combines/mixes several concepts of that topic (synthesis,\n  mixed application, multi-step, cross-concept comparison). Single-concept\n  Types go to the specific concept, not the culmination.\n- Do not drop any type_id. If unsure, pick the closest concept_id.\n- Return no prose, only the JSON object.",
+    "pipeline_stage": "Stage 5",
+    "pipeline_description": "Pure ID-based assignment of mined Types → concepts (primary Types path)"
+  },
+  {
+    "key": "concepts.culmination.system",
+    "label": "Topic culmination builder system prompt",
+    "category": "",
+    "description": "",
+    "variables": [],
+    "stage": "Stage 4c",
+    "default": "\\\nBuild culmination rows after the normal concept map is finalized. The Types\nassignment pass runs AFTER this one and may place mixed/synthesis Types mined\nfrom the source onto these culmination rows.\nReturn ONLY strict JSON:\n{\"rows\":[{\"topic\":\"\",\"parent_concept\":\"Culmination\",\"concept\":\"\",\"concept_description\":\"\",\"keywords\":\"\"}]}.\n\nRules:\n- Return ONLY the culmination rows — exactly one per topic, nothing else.\n  The normal concept rows are merged back programmatically; NEVER restate,\n  rewrite, drop, or return them.\n- Name: \"Culmination - <A>, <B> and <C>\".\n- Use the main ideas in that topic.\n- Description must be exactly: \"Description: Recap\" (the final output expands\n  it automatically to \"Recap of <every merged concept in the topic>\").\n- Give each culmination a starter Types section with mixed multi-concept\n  application/problem formats (the later Types pass may refine it).\n- parent_concept must be \"Culmination\".\n- Do not create culmination during chunk extraction; this pass runs only after the full topic map exists.",
+    "pipeline_stage": "Stage 4c",
+    "pipeline_description": "Builds one Culmination row per topic — Recap + starter Miscellaneous Types"
+  },
+  {
+    "key": "concepts.repair.system",
+    "label": "Concept validation repair system prompt",
+    "category": "",
+    "description": "",
+    "variables": [],
+    "stage": "Stage 6",
+    "default": "\\\nRepair only concept rows that failed validation.\nReturn ONLY strict JSON:\n{\"rows\":[{\"topic\":\"\",\"parent_concept\":\"\",\"concept\":\"\",\"concept_description\":\"\",\"keywords\":\"\"}]}.\n\nRules:\n- Fix only the listed issues.\n- Preserve valid rows.\n- Preserve valid fields, including parent_concept, Types, and useful Misconception.\n- Do not rewrite the full chapter unnecessarily.\n- Never add filler.\n- Keep strict JSON.\n- For source_artifact issues (references like \"Example 5\", \"Exercise 1.2\",\n  \"Fig 6.4\", \"page 14\"): NEVER just delete or reword the reference. Look the\n  label up in the provided source context and substitute the FULL actual\n  content: the real numbers, expressions, equations, data, conditions, and task, e.g.\n  \"solve the problem in Exercise 1.5\" becomes\n  \"rationalise the denominator of 1/(7 + 3*sqrt(2))\".",
+    "pipeline_stage": "Stage 6",
+    "pipeline_description": "Fixes validation failures; inlines actual problem content for source artifacts"
+  },
+  {
+    "key": "concepts.mastery_line.system",
+    "label": "Missing mastery-line writer system prompt",
+    "category": "",
+    "description": "",
+    "variables": [],
+    "stage": "Stage 3b",
+    "default": "\\\nAdd the missing mastery statement to concept Descriptions.\nReturn ONLY strict JSON:\n{\"rows\":[{\"topic\":\"\",\"parent_concept\":\"\",\"concept\":\"\",\"concept_description\":\"\",\"keywords\":\"\"}]}.\n\nRules:\n- Each provided row's Description is missing its final mastery statement.\n- Return the SAME rows: identical topic, parent_concept, concept, keywords,\n  and Description text — the ONLY change is appending a line break (\\\\n)\n  followed by exactly:\n  Achieving Mastery: <one short sentence stating what the learner can do when this concept is mastered>\n- The sentence must be specific to the concept, e.g.\n  \"Achieving Mastery: Using the midpoint property to set up the smaller triangles correctly.\"\n- Do not add Types or Misconception sections. No source artifacts\n  (Example 3, Exercise 1.2, Fig 4, page numbers) and never the words\n  \"MMD\"/\"MMDs\".",
+    "pipeline_stage": "Stage 3b",
+    "pipeline_description": "Appends missing Achieving Mastery: line on its own line"
+  },
+  {
+    "key": "concepts.topic_structure.system",
+    "label": "Topic re-segregation system prompt",
+    "category": "",
+    "description": "",
+    "variables": [],
+    "stage": "Stage 2b",
+    "default": "\\\nRe-segregate a chapter concept map into its real textbook topics. The draft\nfiled too many concepts under one umbrella topic; your ONLY job is to assign\neach concept to the textbook section that actually teaches it.\nReturn ONLY strict JSON:\n{\"rows\":[{\"topic\":\"\",\"parent_concept\":\"\",\"concept\":\"\",\"concept_description\":\"\",\"keywords\":\"\"}]}.\n\nRules:\n- You are given the concept rows and the chapter's SECTION HEADINGS in reading\n  order. Reassign ONLY the topic of each row.\n- Keep EVERY row: same concept names, descriptions, keywords, and\n  parent_concept, in the same relative order. Never add, drop, merge, split,\n  or rename concepts.\n- Use several topics — a chapter is never one topic. Prefer the given section\n  headings verbatim (without section numbers) as the topic names.\n- Assign each concept to the section whose content teaches it; consecutive\n  concepts usually stay in the same section until the source moves on.\n- Do not create exercise, example, review, or practice topics.\n- Do not use the chapter title or book title as a topic.",
+    "pipeline_stage": "Stage 2b",
+    "pipeline_description": "Re-assigns topics when extraction collapsed to one umbrella topic"
+  },
+  {
+    "key": "concepts.chapter_meta.system",
+    "label": "Chapter/topic metadata writer system prompt",
+    "category": "",
+    "description": "",
+    "variables": [],
+    "stage": "Post-deposit",
+    "default": "\\\nWrite chapter-level and topic-level metadata for a finished school concept map.\nReturn ONLY strict JSON:\n{\"chapter_description\":\"\",\"chapter_duration_minutes\":0,\"topics\":[{\"topic\":\"\",\"topic_description\":\"\"}]}.\n\nRules:\n- chapter_description: 3-5 sentences a teacher can plan from — what the chapter\n  covers, the storyline across its topics, the key skills built, and what\n  learners can do at the end. It must be specific to THIS chapter's content;\n  never generic filler like \"This chapter develops N concepts across M topics\".\n- chapter_duration_minutes: a realistic INTEGER estimate of total classroom\n  minutes needed to teach the full chapter (typical school periods are\n  35-45 minutes; a standard chapter runs roughly 4-14 periods).\n- topics: one entry per provided topic, using the EXACT same topic strings.\n- topic_description: 2-3 sentences specific to that topic — what it teaches,\n  the key ideas/skills among its concepts, and how it connects to the\n  neighbouring topics. NEVER just list the concept names.\n- No source artifacts (Example 3, Exercise 1.2, Fig 4, page numbers) and never\n  the words \"MMD\"/\"MMDs\".",
+    "pipeline_stage": "Post-deposit",
+    "pipeline_description": "Writes chapter_description, duration, and per-topic descriptions"
+  },
+  {
+    "key": "prelearning.system",
+    "label": "Pre-learning derivation system prompt",
+    "category": "",
+    "description": "Variables: {{subject}} {{grade}} {{board}} {{board_guidance}} ",
+    "variables": [
+      "subject",
+      "grade",
+      "board",
+      "board_guidance",
+      "min_t",
+      "max_t",
+      "min_ct",
+      "max_ct"
+    ],
+    "stage": "Pre-learning",
+    "default": "\\\nYou are an expert curriculum designer specializing in dependency-based learning\narchitecture aligned with formal school syllabi (ICSE/CBSE and equivalents).\nGenerate PRE-LEARNING concepts for the given chapter.\n\nOBJECTIVE — output ONLY concepts that are strict prerequisites for the chapter,\nbelong to previous grade levels OR foundational knowledge expected before this\ngrade, and were reasonably taught/encountered before this chapter. They are NOT\nchapter content, simplified re-teaching, or topic introductions.\n\nCRITICAL SYLLABUS FILTER (MANDATORY): reject any concept explicitly taught as\nnew in the CURRENT grade for this subject, and any concept typically introduced\nin this chapter or later chapters of the same course. Only include\nprevious-grade or clearly foundational concepts (basic arithmetic, basic\nalgebra, general science literacy, earlier-level graph reading...).\n\nSTRICT EXCLUSIONS: no \"Introduction to...\", \"Definition of...\", \"Overview\nof...\", \"Examples of...\"; nothing taught inside the chapter itself.\n\nINCLUSION TEST per concept: \"If a student does NOT know this, will they\nstruggle to understand the chapter even after teaching?\" Include only if YES.\n\nCONCEPT DESIGN: atomic but meaningful; each concept is a skill, relationship,\nor reasoning structure; do not fragment definition/formula/example apart.\n\nNAMING RULES: each name must be specific to the prerequisite skill — vary\nstructure across siblings. Do NOT repeat a shared opener on multiple rows.\nNEVER \"Types of _\", \"Definition of _\", \"Basics of _\", \"Introduction to _\".\nNEVER prefix names with decimal section numbers (1., 1.1, 1.2, etc.).\nNEVER chain names with '&' (use commas with a final 'and').\n\nCOGNITIVE TAGGING (MANDATORY): one primary tag per concept:\nFL=Foundational Logic | NU=Numerical Handling | VC=Vocabulary Concept |\nRS=Real-world Sense | GR=Graphical Reasoning.\n\nCOUNTS (STRICT): {{min_t}}-{{max_t}} topics; every topic has\n{{min_ct}}-{{max_ct}} concepts. Order by dependency. No duplicates.\n\nCONCEPT DESCRIPTION FORMAT (MANDATORY): one string, sections separated by \" // \":\nDescription: <what the student should already know; 2-4 short lines; must not\nteach the chapter> // Types: <classify ALL distinct prerequisite-check\nvarieties for this skill using zero-padded numeric labels exactly \"Type 01:\",\n\"Case 01:\": Type 01: <variety title> Case 01: <example prompt> Case 02: ...\nType 02: <variety> Case 01: ...> // Misconception: <typical prior-knowledge gaps>.\nDescription is the important lesson-planning input: source/syllabus-grounded,\nclear, and concise (2-4 compact sentences, not a chapter dump). Include Types\nonly when the prerequisite has assessable check formats; pure vocabulary recall\nmay omit Types. Include Misconception only when there is a real likely\nprior-knowledge error; never write N/A/None/filler. Restart at Type 01 per\nconcept; continuous renumbering happens downstream.\nNEVER reference source artifacts and never the words \"MMD\".\nDo NOT mention groups or group columns.\n\nOUTPUT (STRICT JSON ONLY): {\"topics\": [{\"topic_name\": \"\", \"concepts\":\n[{\"parent_concept\": \"\", \"concept_name\": \"\", \"concept_description\": \"\",\n\"tag\": \"\"}]}]}.\n\nFINAL VALIDATION: for each concept ask \"Was this already expected knowledge\nBEFORE this grade (or clearly foundational)?\" — if unsure or borderline,\nREMOVE or REPLACE with a safer prior-grade prerequisite.\n\nRUN CONTEXT: Subject: {{subject}} | Grade: {{grade}} | Board: {{board}}\n{{board_guidance}}",
+    "pipeline_stage": "Pre-learning",
+    "pipeline_description": "Derives prerequisite concepts from chapter content with syllabus filter"
+  },
+  {
+    "key": "prelearning.auditor",
+    "label": "Pre-learning syllabus-boundary auditor prompt",
+    "category": "",
+    "description": "",
+    "variables": [],
+    "stage": "Pre-learning",
+    "default": "\\\nYou are a strict curriculum auditor for ICSE/CBSE-aligned pre-learning.\nYou receive draft pre-learning JSON (\"topics\" with nested \"concepts\") plus\nchapter context. REMOVE or REPLACE any concept that is taught as new in the\ncurrent grade, introduced in this chapter or later in the same course, or\nfails \"was this already expected knowledge before this grade?\" (unsure or\nborderline -> REPLACE). Allow previous-grade ideas and foundational skills.\nSTRUCTURE: output exactly the same number of topics, and per topic exactly\nthe same number of concepts — substitute rejected rows, never delete slots.\nKeep the same schema and the Description: // Types: // Misconception format\n(Types and Misconception are optional when not useful), with zero-padded numeric\nlabels (Type 01:, Case 01:) where Types exist, plus the tag (FL|NU|VC|RS|GR).\nRewrite repetitive sibling names to be distinct.\nReturn ONLY JSON with one key \"topics\". No markdown, no commentary.",
+    "pipeline_stage": "Pre-learning",
+    "pipeline_description": "Second-pass auditor — removes current-grade content from pre-learning draft"
+  }
+]
