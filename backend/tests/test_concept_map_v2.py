@@ -160,3 +160,160 @@ def test_assert_finalized_config_requires_topics():
     cfg = _cfg(expected_topics=[])
     with pytest.raises(ValueError, match="expected_topics"):
         v2.assert_finalized_config(cfg)
+
+
+def test_is_culmination_row_detects_flags_and_titles():
+    assert v2.is_culmination_row(_concept(is_culmination=True))
+    assert v2.is_culmination_row(_concept(
+        parent_concept="Culmination", concept_title="Topic Recap"))
+    assert v2.is_culmination_row(_concept(
+        concept_title="Culmination - Ohm's Law"))
+    assert not v2.is_culmination_row(_concept(concept_title="Ohm's Law"))
+
+
+def test_validate_locked_topic_coverage_requires_one_normal_per_topic():
+    locked = ["Electric Current", "Ohm's Law"]
+    rows = [_concept(topic="Electric Current")]
+    errors = v2.validate_locked_topic_coverage(
+        locked_topics=locked, rows=rows)
+    assert any("Ohm's Law" in e for e in errors)
+    assert not any("Electric Current" in e for e in errors)
+
+
+def test_validate_locked_topic_coverage_rejects_illegal_topic():
+    locked = ["Electric Current"]
+    rows = [_concept(topic="Invented Topic")]
+    errors = v2.validate_locked_topic_coverage(
+        locked_topics=locked, rows=rows)
+    assert any("illegal_topic" in e for e in errors)
+
+
+def test_ensure_exactly_one_culmination_per_locked_topic():
+    locked = ["Topic A", "Topic B"]
+    rows = [
+        _concept(topic="Topic A", concept_title="Concept A1"),
+        _concept(concept_id="C2", topic="Topic B", concept_title="Concept B1"),
+    ]
+    out = v2.ensure_exactly_one_culmination_per_locked_topic(
+        locked_topics=locked, rows=rows)
+    assert len(out) == 4
+    assert sum(v2.is_culmination_row(r) for r in out) == 2
+    assert out[1].concept_title.startswith("Culmination -")
+    assert out[-1].concept_title.startswith("Culmination -")
+
+
+def test_validate_pre_deposit_requires_one_culmination_per_topic():
+    locked = ["Topic A"]
+    rows = v2.ensure_exactly_one_culmination_per_locked_topic(
+        locked_topics=locked,
+        rows=[_concept(topic="Topic A")],
+    )
+    assert v2.validate_pre_deposit(locked_topics=locked, rows=rows) == []
+
+
+def test_build_culmination_title_joins_concept_names():
+    concepts = [
+        _concept(concept_title="Alpha"),
+        _concept(concept_id="C2", concept_title="Beta"),
+        _concept(concept_id="C3", concept_title="Gamma"),
+    ]
+    title = v2.build_culmination_title(concepts)
+    assert title == "Culmination - Alpha, Beta and Gamma"
+
+
+def test_strip_model_culmination_rows():
+    rows = [
+        _concept(concept_title="Normal"),
+        _concept(concept_id="C2", concept_title="Culmination - Normal",
+                 parent_concept="Culmination"),
+    ]
+    assert len(v2.strip_model_culmination_rows(rows)) == 1
+
+
+def test_generate_post_learning_concepts_safe_rebuilds_culminations():
+    locked = ["Topic A", "Topic B"]
+    calls: list[str] = []
+
+    def fake_llm(system, prompt):
+        calls.append(prompt)
+        if len(calls) == 1:
+            return {"concepts": [
+                {"concept_id": "C1", "topic": "Topic A",
+                 "parent_concept": "P", "concept_title": "Concept A",
+                 "description_body": "Body A", "mastery": "Mastery A.",
+                 "keywords": ["a"], "types": []},
+                {"concept_id": "C2", "topic": "Topic B",
+                 "parent_concept": "P", "concept_title": "Concept B",
+                 "description_body": "Body B", "mastery": "Mastery B.",
+                 "keywords": ["b"], "types": []},
+                {"concept_id": "CUL", "topic": "Topic A",
+                 "parent_concept": "Culmination",
+                 "concept_title": "Culmination - LLM row",
+                 "description_body": "Recap", "mastery": "M.", "keywords": [],
+                 "types": [], "is_culmination": True},
+            ]}
+        raise AssertionError("repair should not run")
+
+    rows = v2.generate_post_learning_concepts_safe(
+        locked_topics=locked,
+        chapter_text="chapter",
+        question_inventory=[],
+        call_llm_json=fake_llm,
+        build_master_prompt=lambda: "master",
+        validate_structural=lambda _: [],
+    )
+    assert len(calls) == 1
+    assert len(rows) == 4
+    assert sum(v2.is_culmination_row(r) for r in rows) == 2
+    assert not any(
+        r.concept_title == "Culmination - LLM row" for r in rows
+    )
+
+
+def test_generate_post_learning_concepts_safe_runs_strict_repair():
+    locked = ["Topic A", "Topic B"]
+    calls = 0
+    repair_prompts: list[str] = []
+
+    def fake_llm(system, prompt):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {"concepts": [
+                {"concept_id": "C1", "topic": "Topic A",
+                 "parent_concept": "P", "concept_title": "Only A",
+                 "description_body": "Body", "mastery": "Mastery.",
+                 "keywords": ["a"], "types": []},
+            ]}
+        repair_prompts.append(prompt)
+        return {"concepts": [
+            {"concept_id": "C1", "topic": "Topic A",
+             "parent_concept": "P", "concept_title": "Only A",
+             "description_body": "Body", "mastery": "Mastery.",
+             "keywords": ["a"], "types": []},
+            {"concept_id": "C2", "topic": "Topic B",
+             "parent_concept": "P", "concept_title": "Concept B",
+             "description_body": "Body B", "mastery": "Mastery B.",
+             "keywords": ["b"], "types": []},
+        ]}
+
+    rows = v2.generate_post_learning_concepts_safe(
+        locked_topics=locked,
+        chapter_text="chapter",
+        question_inventory=[],
+        call_llm_json=fake_llm,
+        build_master_prompt=lambda: "master",
+        validate_structural=lambda _: [],
+    )
+    assert calls == 2
+    assert len(rows) == 4
+    assert repair_prompts
+    assert "Do not shrink the map" in repair_prompts[0]
+
+
+def test_master_prompt_includes_topic_coverage_rules():
+    cfg = _cfg()
+    prompt = v2.build_concept_map_prompt(cfg, "chapter text", [])
+    assert "TOPIC COVERAGE:" in prompt
+    assert "Do not create culmination rows" in prompt
+    assert "Do not target a fixed number of concepts" in prompt
