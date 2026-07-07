@@ -174,7 +174,25 @@ def download_mmd(pdf_id: str, out_path: Path) -> None:
     mmd_url = f"{MATHPIX_PDF_URL}/{pdf_id}.mmd"
     r = SESSION.get(mmd_url, timeout=60)
     r.raise_for_status()
-    out_path.write_bytes(r.content)
+    mmd_text = r.content.decode("utf-8", errors="replace")
+
+    # Inline Fig./Figure references using lines.json figure_label links.
+    lines_url = f"{MATHPIX_PDF_URL}/{pdf_id}.lines.json"
+    try:
+        lr = SESSION.get(lines_url, timeout=60)
+        if lr.ok:
+            import sys
+            _src = Path(__file__).resolve().parent / "create_workbooks" / "src"
+            if str(_src) not in sys.path:
+                sys.path.insert(0, str(_src))
+            from figure_inline import enrich_mmd_with_figures
+            mmd_text = enrich_mmd_with_figures(mmd_text, lr.json())
+            lines_path = out_path.with_suffix(".lines.json")
+            lines_path.write_text(lr.text, encoding="utf-8")
+    except Exception:
+        pass  # Non-fatal: keep raw MMD if lines.json unavailable.
+
+    out_path.write_text(mmd_text, encoding="utf-8")
 
 
 def main():
