@@ -317,3 +317,72 @@ def test_master_prompt_includes_topic_coverage_rules():
     assert "TOPIC COVERAGE:" in prompt
     assert "Do not create culmination rows" in prompt
     assert "Do not target a fixed number of concepts" in prompt
+
+
+def test_topic_match_score_fuzzy_series_parallel():
+    assert v2.topic_match_score("Resistors in Series", "Series Resistors") >= 0.5
+    assert v2.topic_match_score(
+        "Equivalent Resistance in Series", "Resistors in Series") >= 0.5
+
+
+def test_inject_fallback_concepts_for_missing_topics():
+    locked = ["Topic A", "Resistors in Series", "Resistors in Parallel"]
+    rows = [_concept(topic="Topic A", concept_title="Concept A")]
+    chapter = (
+        "## Resistors in Series\n"
+        "When resistors are connected in series, the same current flows through each.\n\n"
+        "## Resistors in Parallel\n"
+        "In a parallel combination, the potential difference is the same across branches."
+    )
+    out, injected = v2.inject_fallback_concepts_for_missing_topics(
+        rows,
+        locked_topics=locked,
+        chapter_text=chapter,
+        question_inventory=[],
+    )
+    assert injected == 2
+    assert not v2.topics_missing_coverage(locked, out)
+
+
+def test_generate_post_learning_falls_back_when_repair_leaves_gaps():
+    locked = ["Topic A", "Resistors in Series", "Resistors in Parallel"]
+    calls = 0
+
+    def fake_llm(system, prompt):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {"concepts": [
+                {"concept_id": "C1", "topic": "Topic A",
+                 "parent_concept": "P", "concept_title": "Concept A",
+                 "description_body": "Body A", "mastery": "Mastery A.",
+                 "keywords": ["a"], "types": []},
+            ]}
+        if "MISSING LOCKED TOPICS" in prompt:
+            return {"concepts": []}
+        return {"concepts": [
+            {"concept_id": "C1", "topic": "Topic A",
+             "parent_concept": "P", "concept_title": "Concept A",
+             "description_body": "Body A", "mastery": "Mastery A.",
+             "keywords": ["a"], "types": []},
+        ]}
+
+    chapter = (
+        "## Resistors in Series\n"
+        "When resistors are connected in series, the same current flows through each.\n\n"
+        "## Resistors in Parallel\n"
+        "In a parallel combination, the potential difference is the same across branches."
+    )
+    rows = v2.generate_post_learning_concepts_safe(
+        locked_topics=locked,
+        chapter_text=chapter,
+        question_inventory=[],
+        call_llm_json=fake_llm,
+        build_master_prompt=lambda: "master",
+        validate_structural=lambda _: [],
+    )
+    normal = [r for r in rows if not v2.is_culmination_row(r)]
+    culm = [r for r in rows if v2.is_culmination_row(r)]
+    assert len(normal) == 3
+    assert len(culm) == 3
+    assert not v2.topics_missing_coverage(locked, rows)

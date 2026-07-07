@@ -496,6 +496,351 @@ def validate_locked_topic_coverage(
     return errors
 
 
+_TOPIC_STOPWORDS = frozenset({
+    "a", "an", "the", "and", "or", "of", "in", "on", "to", "for", "with",
+    "by", "from", "at", "is", "are", "as", "its", "their", "this", "that",
+})
+
+
+def topic_tokens(topic: str) -> set[str]:
+    return {
+        t for t in re.split(r"[^a-z0-9]+", topic_key(topic))
+        if t and t not in _TOPIC_STOPWORDS
+    }
+
+
+def topic_match_score(a: str, b: str) -> float:
+    """Token overlap score in [0, 1] for fuzzy topic/title matching."""
+    ta, tb = topic_tokens(a), topic_tokens(b)
+    if not ta or not tb:
+        return 0.0
+    if topic_key(a) == topic_key(b):
+        return 1.0
+    if topic_key(a) in topic_key(b) or topic_key(b) in topic_key(a):
+        return 0.9
+    overlap = ta & tb
+    if not overlap:
+        return 0.0
+    score = len(overlap) / max(len(ta), len(tb))
+    if overlap & {"series", "parallel", "resistance", "current", "ohm", "circuit"}:
+        score = max(score, len(overlap) / min(len(ta), len(tb)))
+    return min(score, 1.0)
+
+
+def resolve_locked_topic(candidate: str, locked_topics: list[str]) -> str | None:
+    """Map a free-text topic to the best matching locked topic, if any."""
+    if not candidate or not locked_topics:
+        return None
+    best: tuple[float, str] | None = None
+    for locked in locked_topics:
+        score = topic_match_score(candidate, locked)
+        if score >= 0.5 and (best is None or score > best[0]):
+            best = (score, locked)
+    return best[1] if best else None
+
+
+def topics_missing_coverage(
+    locked_topics: list[str],
+    rows: list[ConceptRow],
+    *,
+    min_normal_concepts_per_topic: int = 1,
+) -> list[str]:
+    missing: list[str] = []
+    for locked_topic in locked_topics:
+        count = sum(
+            1 for r in rows
+            if not is_culmination_row(r)
+            and topic_key(r.topic) == topic_key(locked_topic)
+        )
+        if count < min_normal_concepts_per_topic:
+            missing.append(locked_topic)
+    return missing
+
+
+def snap_rows_to_locked_topics(
+    rows: list[ConceptRow], locked_topics: list[str],
+) -> tuple[list[ConceptRow], int]:
+    """Normalize row.topic to canonical locked topic names when clearly matching."""
+    snapped = 0
+    locked_by_key = {topic_key(t): normalize_topic_name(t) for t in locked_topics}
+    for row in rows:
+        if is_culmination_row(row):
+            continue
+        key = topic_key(row.topic)
+        if key in locked_by_key:
+            canonical = locked_by_key[key]
+            if row.topic != canonical:
+                row.topic = canonical
+                snapped += 1
+            continue
+        resolved = resolve_locked_topic(row.topic, locked_topics)
+        if resolved:
+            canonical = locked_by_key[topic_key(resolved)]
+            if row.topic != canonical:
+                row.topic = canonical
+                snapped += 1
+    return rows, snapped
+
+
+def reassign_misplaced_concepts(
+    rows: list[ConceptRow], locked_topics: list[str],
+) -> tuple[list[ConceptRow], int]:
+    """Move concepts whose titles clearly belong to uncovered locked topics."""
+    reassigned = 0
+    used: set[int] = set()
+    for missing_topic in topics_missing_coverage(locked_topics, rows):
+        best_row: ConceptRow | None = None
+        best_score = 0.0
+        for row in rows:
+            if is_culmination_row(row) or id(row) in used:
+                continue
+            if topic_key(row.topic) == topic_key(missing_topic):
+                continue
+            score = max(
+                topic_match_score(row.concept_title, missing_topic),
+                topic_match_score(row.topic, missing_topic),
+            )
+            if score > best_score:
+                best_score = score
+                best_row = row
+        if best_row and best_score >= 0.5:
+            best_row.topic = normalize_topic_name(missing_topic)
+            used.add(id(best_row))
+            reassigned += 1
+    return rows, reassigned
+
+
+def extract_topic_section(
+    chapter_text: str, topic: str, locked_topics: list[str],
+) -> str:
+    """Pull source text for one locked topic from markdown headings."""
+    topic_norm = topic_key(topic)
+    lines = (chapter_text or "").splitlines()
+    collecting = False
+    parts: list[str] = []
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            heading = normalize_topic_name(stripped.lstrip("#").strip())
+            if collecting:
+                break
+            if (
+                topic_key(heading) == topic_norm
+                or topic_match_score(heading, topic) >= 0.6
+            ):
+                collecting = True
+            continue
+        if collecting and stripped:
+            parts.append(stripped)
+
+    if parts:
+        return "\n".join(parts)[:2500]
+
+    # Fallback: window around a case-insensitive topic mention in the full text.
+    pattern = re.compile(re.escape(normalize_topic_name(topic)), re.IGNORECASE)
+    match = pattern.search(chapter_text or "")
+    if match:
+        start = max(0, match.start() - 200)
+        end = min(len(chapter_text), match.end() + 1800)
+        return (chapter_text or "")[start:end].strip()
+
+    return ""
+
+
+def inventory_for_topic(inventory: list[dict], topic: str) -> list[dict]:
+    matched: list[tuple[float, dict]] = []
+    for item in inventory:
+        if not isinstance(item, dict):
+            continue
+        hint = str(item.get("topic_hint") or "")
+        score = max(
+            topic_match_score(hint, topic),
+            topic_match_score(str(item.get("raw_task") or ""), topic),
+        )
+        if score >= 0.4:
+            matched.append((score, item))
+    matched.sort(key=lambda x: x[0], reverse=True)
+    return [item for _, item in matched]
+
+
+def _first_substantive_sentence(text: str) -> str:
+    for chunk in re.split(r"(?<=[.!?])\s+", text or ""):
+        cleaned = clean_one_line(chunk)
+        if len(cleaned) >= 40:
+            return cleaned
+    cleaned = clean_one_line(text or "")
+    return cleaned if len(cleaned) >= 20 else ""
+
+
+def _fallback_concept_title(topic: str, section_text: str) -> str:
+    topic_name = normalize_topic_name(topic)
+    sentence = _first_substantive_sentence(section_text)
+    if sentence:
+        words = re.findall(r"[A-Za-z][A-Za-z'-]{2,}", sentence)
+        if len(words) >= 3:
+            return " ".join(words[:6]).strip()
+    return topic_name
+
+
+def _build_fallback_types(
+    inv_items: list[dict], *, chapter_text: str,
+) -> list[MinedType]:
+    types: list[MinedType] = []
+    for i, item in enumerate(inv_items[:2]):
+        prompt = str(
+            item.get("normalized_task")
+            or item.get("raw_task")
+            or ""
+        ).strip()
+        if not prompt:
+            continue
+        prompt = sanitize_case_prompt(prompt, chapter_text=chapter_text)
+        if not case_prompt_is_valid(prompt):
+            continue
+        qid = str(item.get("qid") or f"QINV-FB-{i + 1:04d}")
+        types.append(MinedType(
+            type_id=f"TYPE-FB-{i + 1:04d}",
+            type_title=str(item.get("source_kind") or "Application").title(),
+            source_question_ids=[qid],
+            cases=[MinedCase(
+                case_id=f"CASE-FB-{i + 1:04d}",
+                source_question_id=qid,
+                case_prompt=prompt,
+            )],
+        ))
+    return types
+
+
+def make_fallback_concept_for_topic(
+    topic: str,
+    *,
+    chapter_text: str,
+    question_inventory: list[dict],
+    locked_topics: list[str],
+    index: int,
+) -> ConceptRow:
+    """Deterministic last-resort concept when LLM repair leaves a topic empty."""
+    topic_name = normalize_topic_name(topic)
+    section = extract_topic_section(chapter_text, topic, locked_topics)
+    inv_items = inventory_for_topic(question_inventory, topic)
+    description = (
+        _first_substantive_sentence(section)
+        or f"The source section for {topic_name} teaches its core ideas and applications."
+    )
+    title = _fallback_concept_title(topic, section)
+    types = _build_fallback_types(inv_items, chapter_text=chapter_text)
+    keywords = [t for t in topic_tokens(topic)][:6] or ["concept"]
+    return ConceptWithTypes(
+        concept_id=f"FALLBACK-{index + 1:04d}",
+        topic=topic_name,
+        parent_concept=topic_name,
+        concept_title=title,
+        description_body=description,
+        mastery=f"Applying the key ideas of {topic_name} from the source section.",
+        misconception=None,
+        keywords=keywords,
+        source_evidence=[section[:240]] if section else [],
+        types=types,
+        is_culmination=False,
+    )
+
+
+def inject_fallback_concepts_for_missing_topics(
+    rows: list[ConceptRow],
+    *,
+    locked_topics: list[str],
+    chapter_text: str,
+    question_inventory: list[dict],
+) -> tuple[list[ConceptRow], int]:
+    """Add code-generated normal concepts for any still-uncovered locked topics."""
+    missing = topics_missing_coverage(locked_topics, rows)
+    if not missing:
+        return rows, 0
+    out = list(rows)
+    for i, topic in enumerate(missing):
+        out.append(make_fallback_concept_for_topic(
+            topic,
+            chapter_text=chapter_text,
+            question_inventory=question_inventory,
+            locked_topics=locked_topics,
+            index=len(out) + i,
+        ))
+    return out, len(missing)
+
+
+def build_missing_topic_fill_prompt(
+    *,
+    missing_topics: list[str],
+    current_rows: list[ConceptRow],
+    chapter_text: str,
+    question_inventory: list[dict],
+) -> str:
+    import json
+    return f"""
+You are adding missing concepts to a school concept map.
+
+Return ONLY strict JSON:
+{{
+  "concepts": [
+    {{
+      "concept_id": "",
+      "topic": "",
+      "parent_concept": "",
+      "concept_title": "",
+      "description_body": "",
+      "mastery": "",
+      "misconception": "",
+      "keywords": [],
+      "source_evidence": [],
+      "types": []
+    }}
+  ]
+}}
+
+MISSING LOCKED TOPICS — add exactly one NEW normal concept for EACH topic below:
+{chr(10).join(f"{i + 1}. {t}" for i, t in enumerate(missing_topics))}
+
+RULES:
+- Return ONLY the new concepts for the missing topics listed above.
+- Do NOT return any existing concepts.
+- topic must exactly match the missing locked topic name.
+- Use source-backed description_body and mastery from the chapter section for that topic.
+- Add Types/Cases only when source-backed assessable tasks exist in the inventory.
+- Do not create culmination rows.
+- Do not write source labels such as Example 3, Exercise 1.2, Fig 6.4, Table 1, or page numbers.
+
+EXISTING CONCEPTS (for context only — do not return these):
+{json.dumps([_concept_to_dict(c) for c in current_rows if not is_culmination_row(c)], ensure_ascii=False, indent=2)}
+
+QUESTION / TASK INVENTORY:
+{json.dumps(_slim_inventory(question_inventory), ensure_ascii=False, indent=2)}
+
+CHAPTER SOURCE:
+{chapter_text}
+""".strip()
+
+
+def merge_new_concept_rows(
+    existing: list[ConceptRow], new_rows: list[ConceptRow],
+) -> list[ConceptRow]:
+    """Append only novel normal concepts; never drop existing rows."""
+    out = list(existing)
+    seen = {
+        (topic_key(r.topic), slug(r.concept_title).lower())
+        for r in existing if not is_culmination_row(r)
+    }
+    for row in new_rows:
+        if is_culmination_row(row):
+            continue
+        key = (topic_key(row.topic), slug(row.concept_title).lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(row)
+    return out
+
+
 def short_concept_name(name: str) -> str:
     return re.sub(r"\s+", " ", re.sub(
         r"^Culmination\s*-\s*", "", str(name or ""), flags=re.IGNORECASE)).strip()
@@ -1094,7 +1439,7 @@ def generate_post_learning_concepts_safe(
     validate_structural: Callable[[list[ConceptRow]], list[str]] | None = None,
     log: Callable[[str, str], None] | None = None,
 ) -> list[ConceptRow]:
-    """Master prompt → coverage validation → strict repair → culmination → pre-deposit."""
+    """Master prompt → coverage validation → repair → fill → culmination → pre-deposit."""
     def _log(msg: str, level: str = "info") -> None:
         if log:
             log(msg, level)
@@ -1104,25 +1449,41 @@ def generate_post_learning_concepts_safe(
         "Return ONLY valid JSON matching the requested schema."
     )
 
+    def _coverage_errors(rows: list[ConceptRow]) -> list[str]:
+        return validate_locked_topic_coverage(
+            locked_topics=locked_topics,
+            rows=rows,
+            min_normal_concepts_per_topic=1,
+        )
+
+    def _structural_errors(rows: list[ConceptRow]) -> list[str]:
+        return validate_structural(rows) if validate_structural else []
+
+    def _normalize_topics(rows: list[ConceptRow]) -> list[ConceptRow]:
+        rows, snapped = snap_rows_to_locked_topics(rows, locked_topics)
+        if snapped:
+            _log(f"Snapped {snapped} concept(s) to locked topic names.")
+        rows, reassigned = reassign_misplaced_concepts(rows, locked_topics)
+        if reassigned:
+            _log(f"Reassigned {reassigned} concept(s) to uncovered locked topics.")
+        return rows
+
     _log(f"Locked topics: {len(locked_topics)}")
     data = call_llm_json(system, build_master_prompt())
     rows = strip_model_culmination_rows(parse_llm_response(data))
     rows = sanitize_concept_cases(rows, chapter_text=chapter_text)
+    rows = _normalize_topics(rows)
 
     normal_before = len(rows)
-    coverage_errors = validate_locked_topic_coverage(
-        locked_topics=locked_topics,
-        rows=rows,
-        min_normal_concepts_per_topic=1,
-    )
-    structural_errors = (
-        validate_structural(rows) if validate_structural else []
-    )
+    coverage_errors = _coverage_errors(rows)
+    structural_errors = _structural_errors(rows)
     all_errors = coverage_errors + structural_errors
     _log(f"Normal concepts before repair: {normal_before}")
     _log(f"Coverage errors before repair: {len(coverage_errors)}")
 
-    if all_errors:
+    for attempt in range(2):
+        if not all_errors:
+            break
         repair_prompt = build_strict_repair_prompt(
             locked_topics=locked_topics,
             current_rows=rows,
@@ -1131,26 +1492,87 @@ def generate_post_learning_concepts_safe(
             question_inventory=question_inventory,
         )
         _log(
-            f"Concept Map V2: {len(all_errors)} validation error(s) — strict repair pass.",
+            f"Concept Map V2: {len(all_errors)} validation error(s) — "
+            f"strict repair pass {attempt + 1}.",
             "warning",
         )
         repaired = call_llm_json(system, repair_prompt)
         rows = strip_model_culmination_rows(parse_llm_response(repaired))
         rows = sanitize_concept_cases(rows, chapter_text=chapter_text)
-
-        coverage_errors = validate_locked_topic_coverage(
-            locked_topics=locked_topics,
-            rows=rows,
-            min_normal_concepts_per_topic=1,
-        )
-        structural_errors = (
-            validate_structural(rows) if validate_structural else []
-        )
+        rows = _normalize_topics(rows)
+        coverage_errors = _coverage_errors(rows)
+        structural_errors = _structural_errors(rows)
         all_errors = coverage_errors + structural_errors
 
-    normal_after = len(rows)
-    _log(f"Normal concepts after repair: {normal_after}")
+    normal_after_repair = len(rows)
+    _log(f"Normal concepts after repair: {normal_after_repair}")
     _log(f"Coverage errors after repair: {len(coverage_errors)}")
+
+    missing_topics = topics_missing_coverage(locked_topics, rows)
+    if missing_topics:
+        fill_prompt = build_missing_topic_fill_prompt(
+            missing_topics=missing_topics,
+            current_rows=rows,
+            chapter_text=chapter_text,
+            question_inventory=question_inventory,
+        )
+        _log(
+            f"Concept Map V2: filling {len(missing_topics)} uncovered topic(s) "
+            f"via targeted prompt: {', '.join(missing_topics)}.",
+            "warning",
+        )
+        filled = call_llm_json(system, fill_prompt)
+        new_rows = strip_model_culmination_rows(parse_llm_response(filled))
+        new_rows = sanitize_concept_cases(new_rows, chapter_text=chapter_text)
+        rows = merge_new_concept_rows(rows, new_rows)
+        rows = _normalize_topics(rows)
+        coverage_errors = _coverage_errors(rows)
+        structural_errors = _structural_errors(rows)
+        _log(
+            f"Normal concepts after missing-topic fill: {len(rows)}; "
+            f"coverage errors: {len(coverage_errors)}."
+        )
+
+    missing_topics = topics_missing_coverage(locked_topics, rows)
+    if missing_topics:
+        rows, injected = inject_fallback_concepts_for_missing_topics(
+            rows,
+            locked_topics=locked_topics,
+            chapter_text=chapter_text,
+            question_inventory=question_inventory,
+        )
+        rows = sanitize_concept_cases(rows, chapter_text=chapter_text)
+        coverage_errors = _coverage_errors(rows)
+        structural_errors = _structural_errors(rows)
+        _log(
+            f"Injected {injected} deterministic fallback concept(s) for: "
+            f"{', '.join(missing_topics)}.",
+            "warning",
+        )
+        _log(
+            f"Normal concepts after fallback injection: {len(rows)}; "
+            f"coverage errors: {len(coverage_errors)}."
+        )
+
+    if structural_errors:
+        repair_prompt = build_strict_repair_prompt(
+            locked_topics=locked_topics,
+            current_rows=rows,
+            validation_errors=structural_errors,
+            chapter_text=chapter_text,
+            question_inventory=question_inventory,
+        )
+        _log(
+            f"Concept Map V2: {len(structural_errors)} structural error(s) — "
+            "final structural repair pass.",
+            "warning",
+        )
+        repaired = call_llm_json(system, repair_prompt)
+        rows = strip_model_culmination_rows(parse_llm_response(repaired))
+        rows = sanitize_concept_cases(rows, chapter_text=chapter_text)
+        rows = _normalize_topics(rows)
+        coverage_errors = _coverage_errors(rows)
+        structural_errors = _structural_errors(rows)
 
     if coverage_errors:
         raise RuntimeError(
@@ -1162,6 +1584,7 @@ def generate_post_learning_concepts_safe(
             "Concept map validation failed:\n" + "\n".join(structural_errors)
         )
 
+    normal_after = len([r for r in rows if not is_culmination_row(r)])
     rows = ensure_exactly_one_culmination_per_locked_topic(
         locked_topics=locked_topics,
         rows=rows,
