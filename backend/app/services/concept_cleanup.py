@@ -169,6 +169,8 @@ def replace_mmd_references(text: str) -> str:
 _ARTIFACT_NEUTRALIZATIONS = [
     (re.compile(r"\b(?:exercises?|ex)\.?\s+\d+(?:\.\d+)*\b", re.IGNORECASE),
      "the exercises"),
+    (re.compile(r"\b(?:activity|activities)\s+\d+(?:\.\d+)*\b", re.IGNORECASE),
+     "the activity"),
     (re.compile(r"\bexamples?\s+\d+(?:\.\d+)*\b", re.IGNORECASE),
      "a worked example"),
     (re.compile(r"\bfig(?:ure)?s?\.?\s+\d+(?:\.\d+)*\b", re.IGNORECASE),
@@ -189,6 +191,20 @@ def neutralize_source_artifacts(text: str) -> str:
     for pat, repl in _ARTIFACT_NEUTRALIZATIONS:
         text = pat.sub(repl, text)
     return _tidy(text)
+
+
+def neutralize_source_artifacts_preserve_images(text: str) -> str:
+    """Like ``neutralize_source_artifacts`` but leaves ``![alt](url)`` spans intact."""
+    if not text:
+        return text
+    parts: list[str] = []
+    last = 0
+    for m in re.finditer(r"!\[[^\]]*\]\([^)]+\)", text):
+        parts.append(neutralize_source_artifacts(text[last:m.start()]))
+        parts.append(m.group(0))
+        last = m.end()
+    parts.append(neutralize_source_artifacts(text[last:]))
+    return "".join(parts)
 
 
 # Canonical separator between Description / Types / Misconception sections.

@@ -216,3 +216,33 @@ def enrich_mmd_with_figures(mmd: str, lines_data: dict[str, Any] | None) -> str:
         return mmd
     fig_map = build_figure_map(lines_data)
     return inline_figure_references(mmd, fig_map)
+
+
+def figure_markdown_index_from_mmd(mmd: str) -> dict[str, str]:
+    """Map normalized figure numbers to markdown image spans already in MMD."""
+    index: dict[str, str] = {}
+    if not mmd:
+        return index
+    for m in re.finditer(r"!\[([^\]]*)\]\(([^)]+)\)", mmd):
+        alt, url = m.group(1), m.group(2)
+        md = f"![{alt}]({url})"
+        for num in _parse_fig_numbers(alt):
+            key = _normalize_fig_num(num)
+            if key not in index:
+                index[key] = md
+    return index
+
+
+def inline_figures_in_text(text: str, fig_index: dict[str, str]) -> str:
+    """Replace Figure/Fig labels with markdown images when indexed in MMD."""
+    if not text or not fig_index:
+        return text
+
+    def _repl(match: re.Match[str]) -> str:
+        nums = _parse_fig_numbers(match.group(1))
+        if not nums:
+            return match.group(0)
+        key = _normalize_fig_num(nums[0])
+        return fig_index.get(key, match.group(0))
+
+    return _FIG_REF_RE.sub(_repl, text)
