@@ -637,7 +637,6 @@ def extract_topic_section(
     if parts:
         return "\n".join(parts)[:2500]
 
-    # Fallback: window around a case-insensitive topic mention in the full text.
     pattern = re.compile(re.escape(normalize_topic_name(topic)), re.IGNORECASE)
     match = pattern.search(chapter_text or "")
     if match:
@@ -664,119 +663,22 @@ def inventory_for_topic(inventory: list[dict], topic: str) -> list[dict]:
     return [item for _, item in matched]
 
 
-def _first_substantive_sentence(text: str) -> str:
-    for chunk in re.split(r"(?<=[.!?])\s+", text or ""):
-        cleaned = clean_one_line(chunk)
-        if len(cleaned) >= 40:
-            return cleaned
-    cleaned = clean_one_line(text or "")
-    return cleaned if len(cleaned) >= 20 else ""
-
-
-def _fallback_concept_title(topic: str, section_text: str) -> str:
-    topic_name = normalize_topic_name(topic)
-    sentence = _first_substantive_sentence(section_text)
-    if sentence:
-        words = re.findall(r"[A-Za-z][A-Za-z'-]{2,}", sentence)
-        if len(words) >= 3:
-            return " ".join(words[:6]).strip()
-    return topic_name
-
-
-def _build_fallback_types(
-    inv_items: list[dict], *, chapter_text: str,
-) -> list[MinedType]:
-    types: list[MinedType] = []
-    for i, item in enumerate(inv_items[:2]):
-        prompt = str(
-            item.get("normalized_task")
-            or item.get("raw_task")
-            or ""
-        ).strip()
-        if not prompt:
-            continue
-        prompt = sanitize_case_prompt(prompt, chapter_text=chapter_text)
-        if not case_prompt_is_valid(prompt):
-            continue
-        qid = str(item.get("qid") or f"QINV-FB-{i + 1:04d}")
-        types.append(MinedType(
-            type_id=f"TYPE-FB-{i + 1:04d}",
-            type_title=str(item.get("source_kind") or "Application").title(),
-            source_question_ids=[qid],
-            cases=[MinedCase(
-                case_id=f"CASE-FB-{i + 1:04d}",
-                source_question_id=qid,
-                case_prompt=prompt,
-            )],
-        ))
-    return types
-
-
-def make_fallback_concept_for_topic(
-    topic: str,
-    *,
-    chapter_text: str,
-    question_inventory: list[dict],
-    locked_topics: list[str],
-    index: int,
-) -> ConceptRow:
-    """Deterministic last-resort concept when LLM repair leaves a topic empty."""
-    topic_name = normalize_topic_name(topic)
-    section = extract_topic_section(chapter_text, topic, locked_topics)
-    inv_items = inventory_for_topic(question_inventory, topic)
-    description = (
-        _first_substantive_sentence(section)
-        or f"The source section for {topic_name} teaches its core ideas and applications."
-    )
-    title = _fallback_concept_title(topic, section)
-    types = _build_fallback_types(inv_items, chapter_text=chapter_text)
-    keywords = [t for t in topic_tokens(topic)][:6] or ["concept"]
-    return ConceptWithTypes(
-        concept_id=f"FALLBACK-{index + 1:04d}",
-        topic=topic_name,
-        parent_concept=topic_name,
-        concept_title=title,
-        description_body=description,
-        mastery=f"Applying the key ideas of {topic_name} from the source section.",
-        misconception=None,
-        keywords=keywords,
-        source_evidence=[section[:240]] if section else [],
-        types=types,
-        is_culmination=False,
-    )
-
-
-def inject_fallback_concepts_for_missing_topics(
-    rows: list[ConceptRow],
-    *,
-    locked_topics: list[str],
-    chapter_text: str,
-    question_inventory: list[dict],
-) -> tuple[list[ConceptRow], int]:
-    """Add code-generated normal concepts for any still-uncovered locked topics."""
-    missing = topics_missing_coverage(locked_topics, rows)
-    if not missing:
-        return rows, 0
-    out = list(rows)
-    for i, topic in enumerate(missing):
-        out.append(make_fallback_concept_for_topic(
-            topic,
-            chapter_text=chapter_text,
-            question_inventory=question_inventory,
-            locked_topics=locked_topics,
-            index=len(out) + i,
-        ))
-    return out, len(missing)
-
-
 def build_missing_topic_fill_prompt(
     *,
     missing_topics: list[str],
     current_rows: list[ConceptRow],
     chapter_text: str,
     question_inventory: list[dict],
+    locked_topics: list[str],
 ) -> str:
     import json
+    topic_sections = [
+        f"### {topic}\n{extract_topic_section(chapter_text, topic, locked_topics) or '(section not found)'}"
+        for topic in missing_topics
+    ]
+    relevant_inventory = []
+    for topic in missing_topics:
+        relevant_inventory.extend(inventory_for_topic(question_inventory, topic))
     return f"""
 You are adding missing concepts to a school concept map.
 
@@ -805,18 +707,79 @@ RULES:
 - Return ONLY the new concepts for the missing topics listed above.
 - Do NOT return any existing concepts.
 - topic must exactly match the missing locked topic name.
-- Use source-backed description_body and mastery from the chapter section for that topic.
+- Use source-backed description_body and mastery from that topic's chapter section.
 - Add Types/Cases only when source-backed assessable tasks exist in the inventory.
 - Do not create culmination rows.
 - Do not write source labels such as Example 3, Exercise 1.2, Fig 6.4, Table 1, or page numbers.
+- Every listed missing topic MUST appear in your response with at least one concept.
 
 EXISTING CONCEPTS (for context only — do not return these):
 {json.dumps([_concept_to_dict(c) for c in current_rows if not is_culmination_row(c)], ensure_ascii=False, indent=2)}
 
-QUESTION / TASK INVENTORY:
-{json.dumps(_slim_inventory(question_inventory), ensure_ascii=False, indent=2)}
+SOURCE SECTIONS FOR MISSING TOPICS:
+{chr(10).join(topic_sections)}
 
-CHAPTER SOURCE:
+RELEVANT QUESTION / TASK INVENTORY:
+{json.dumps(_slim_inventory(relevant_inventory), ensure_ascii=False, indent=2)}
+
+FULL CHAPTER SOURCE:
+{chapter_text}
+""".strip()
+
+
+def build_single_topic_fill_prompt(
+    *,
+    topic: str,
+    current_rows: list[ConceptRow],
+    chapter_text: str,
+    question_inventory: list[dict],
+    locked_topics: list[str],
+) -> str:
+    import json
+    section = extract_topic_section(chapter_text, topic, locked_topics)
+    inv_items = inventory_for_topic(question_inventory, topic)
+    return f"""
+You are adding one missing concept for a locked textbook topic.
+
+Return ONLY strict JSON:
+{{
+  "concepts": [
+    {{
+      "concept_id": "",
+      "topic": "{normalize_topic_name(topic)}",
+      "parent_concept": "",
+      "concept_title": "",
+      "description_body": "",
+      "mastery": "",
+      "misconception": "",
+      "keywords": [],
+      "source_evidence": [],
+      "types": []
+    }}
+  ]
+}}
+
+MISSING LOCKED TOPIC:
+{normalize_topic_name(topic)}
+
+RULES:
+- Return exactly one durable normal concept for this topic only.
+- topic must be exactly "{normalize_topic_name(topic)}".
+- Use vocabulary and ideas from the source section below.
+- Add Types/Cases only when source-backed assessable tasks exist.
+- Do not create culmination rows.
+- Do not write source labels such as Example 3, Exercise 1.2, Fig 6.4, Table 1, or page numbers.
+
+EXISTING CONCEPTS (do not return these):
+{json.dumps([_concept_to_dict(c) for c in current_rows if not is_culmination_row(c)], ensure_ascii=False, indent=2)}
+
+SOURCE SECTION:
+{section or "(section not found — use full chapter source below)"}
+
+RELEVANT QUESTION / TASK INVENTORY:
+{json.dumps(_slim_inventory(inv_items), ensure_ascii=False, indent=2)}
+
+FULL CHAPTER SOURCE:
 {chapter_text}
 """.strip()
 
@@ -1508,17 +1471,21 @@ def generate_post_learning_concepts_safe(
     _log(f"Normal concepts after repair: {normal_after_repair}")
     _log(f"Coverage errors after repair: {len(coverage_errors)}")
 
-    missing_topics = topics_missing_coverage(locked_topics, rows)
-    if missing_topics:
+    for fill_attempt in range(2):
+        missing_topics = topics_missing_coverage(locked_topics, rows)
+        if not missing_topics:
+            break
         fill_prompt = build_missing_topic_fill_prompt(
             missing_topics=missing_topics,
             current_rows=rows,
             chapter_text=chapter_text,
             question_inventory=question_inventory,
+            locked_topics=locked_topics,
         )
         _log(
-            f"Concept Map V2: filling {len(missing_topics)} uncovered topic(s) "
-            f"via targeted prompt: {', '.join(missing_topics)}.",
+            f"Concept Map V2: GPT fill pass {fill_attempt + 1} for "
+            f"{len(missing_topics)} uncovered topic(s): "
+            f"{', '.join(missing_topics)}.",
             "warning",
         )
         filled = call_llm_json(system, fill_prompt)
@@ -1526,33 +1493,52 @@ def generate_post_learning_concepts_safe(
         new_rows = sanitize_concept_cases(new_rows, chapter_text=chapter_text)
         rows = merge_new_concept_rows(rows, new_rows)
         rows = _normalize_topics(rows)
+
+        for topic in topics_missing_coverage(locked_topics, rows):
+            single_prompt = build_single_topic_fill_prompt(
+                topic=topic,
+                current_rows=rows,
+                chapter_text=chapter_text,
+                question_inventory=question_inventory,
+                locked_topics=locked_topics,
+            )
+            _log(
+                f"Concept Map V2: GPT single-topic fill for '{topic}'.",
+                "warning",
+            )
+            single = call_llm_json(system, single_prompt)
+            added = strip_model_culmination_rows(parse_llm_response(single))
+            added = sanitize_concept_cases(added, chapter_text=chapter_text)
+            rows = merge_new_concept_rows(rows, added)
+            rows = _normalize_topics(rows)
+
         coverage_errors = _coverage_errors(rows)
         structural_errors = _structural_errors(rows)
         _log(
-            f"Normal concepts after missing-topic fill: {len(rows)}; "
+            f"Normal concepts after GPT fill pass {fill_attempt + 1}: {len(rows)}; "
             f"coverage errors: {len(coverage_errors)}."
         )
 
-    missing_topics = topics_missing_coverage(locked_topics, rows)
-    if missing_topics:
-        rows, injected = inject_fallback_concepts_for_missing_topics(
-            rows,
+    coverage_errors = _coverage_errors(rows)
+    if coverage_errors:
+        repair_prompt = build_strict_repair_prompt(
             locked_topics=locked_topics,
+            current_rows=rows,
+            validation_errors=coverage_errors,
             chapter_text=chapter_text,
             question_inventory=question_inventory,
         )
-        rows = sanitize_concept_cases(rows, chapter_text=chapter_text)
-        coverage_errors = _coverage_errors(rows)
-        structural_errors = _structural_errors(rows)
         _log(
-            f"Injected {injected} deterministic fallback concept(s) for: "
-            f"{', '.join(missing_topics)}.",
+            f"Concept Map V2: final GPT coverage repair for "
+            f"{len(coverage_errors)} error(s).",
             "warning",
         )
-        _log(
-            f"Normal concepts after fallback injection: {len(rows)}; "
-            f"coverage errors: {len(coverage_errors)}."
-        )
+        repaired = call_llm_json(system, repair_prompt)
+        rows = strip_model_culmination_rows(parse_llm_response(repaired))
+        rows = sanitize_concept_cases(rows, chapter_text=chapter_text)
+        rows = _normalize_topics(rows)
+        coverage_errors = _coverage_errors(rows)
+        structural_errors = _structural_errors(rows)
 
     if structural_errors:
         repair_prompt = build_strict_repair_prompt(

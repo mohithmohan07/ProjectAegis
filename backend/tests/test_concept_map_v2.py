@@ -325,7 +325,7 @@ def test_topic_match_score_fuzzy_series_parallel():
         "Equivalent Resistance in Series", "Resistors in Series") >= 0.5
 
 
-def test_inject_fallback_concepts_for_missing_topics():
+def test_build_missing_topic_fill_prompt_includes_sections():
     locked = ["Topic A", "Resistors in Series", "Resistors in Parallel"]
     rows = [_concept(topic="Topic A", concept_title="Concept A")]
     chapter = (
@@ -334,17 +334,18 @@ def test_inject_fallback_concepts_for_missing_topics():
         "## Resistors in Parallel\n"
         "In a parallel combination, the potential difference is the same across branches."
     )
-    out, injected = v2.inject_fallback_concepts_for_missing_topics(
-        rows,
-        locked_topics=locked,
+    prompt = v2.build_missing_topic_fill_prompt(
+        missing_topics=["Resistors in Series", "Resistors in Parallel"],
+        current_rows=rows,
         chapter_text=chapter,
         question_inventory=[],
+        locked_topics=locked,
     )
-    assert injected == 2
-    assert not v2.topics_missing_coverage(locked, out)
+    assert "Resistors in Series" in prompt
+    assert "SOURCE SECTIONS FOR MISSING TOPICS" in prompt
 
 
-def test_generate_post_learning_falls_back_when_repair_leaves_gaps():
+def test_generate_post_learning_uses_gpt_fill_when_repair_leaves_gaps():
     locked = ["Topic A", "Resistors in Series", "Resistors in Parallel"]
     calls = 0
 
@@ -358,8 +359,19 @@ def test_generate_post_learning_falls_back_when_repair_leaves_gaps():
                  "description_body": "Body A", "mastery": "Mastery A.",
                  "keywords": ["a"], "types": []},
             ]}
-        if "MISSING LOCKED TOPICS" in prompt:
-            return {"concepts": []}
+        if "MISSING LOCKED TOPICS" in prompt or "MISSING LOCKED TOPIC:" in prompt:
+            return {"concepts": [
+                {"concept_id": "C2", "topic": "Resistors in Series",
+                 "parent_concept": "Circuits", "concept_title": "Series Resistance",
+                 "description_body": "In series, current is the same through each resistor.",
+                 "mastery": "Finding equivalent resistance in series.",
+                 "keywords": ["series"], "types": []},
+                {"concept_id": "C3", "topic": "Resistors in Parallel",
+                 "parent_concept": "Circuits", "concept_title": "Parallel Resistance",
+                 "description_body": "In parallel, potential difference is the same.",
+                 "mastery": "Finding equivalent resistance in parallel.",
+                 "keywords": ["parallel"], "types": []},
+            ]}
         return {"concepts": [
             {"concept_id": "C1", "topic": "Topic A",
              "parent_concept": "P", "concept_title": "Concept A",
