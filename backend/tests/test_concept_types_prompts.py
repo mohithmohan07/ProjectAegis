@@ -1,5 +1,4 @@
 """Concept-generation prompts must require rich Types classification."""
-from app.services import concept_map_v2 as cmv2
 from app.services import generation as g
 
 
@@ -382,85 +381,85 @@ def test_assign_mined_types_can_place_types_on_culminations(monkeypatch):
 
 
 def test_pipeline_builds_culminations_before_types(monkeypatch):
-    """V2 runs inventory extraction then one master concept-map prompt."""
     monkeypatch.setattr(g.config, "use_live_generation", lambda: True)
     order: list[str] = []
 
-    def fake_inventory(**kw):
-        order.append("inventory")
-        return g._empty_inventory()
-
-    def fake_v2(cfg, chapter_text, inventory, **kw):
-        order.append("v2_master")
-        meta, rows = cmv2.build_output_rows(cfg, [
-            cmv2.ConceptWithTypes(
-                concept_id="CONCEPT-0001",
-                topic=cfg.expected_topics[0],
-                parent_concept="Core",
-                concept_title="Sample Concept",
-                description_body="A teachable idea from the source.",
-                mastery="Applying the idea correctly.",
-                keywords=["sample"],
-                types=[],
-            ),
-        ])
-        return meta, rows, []
-
-    monkeypatch.setattr(g, "_extract_question_task_inventory_via_api", fake_inventory)
-    monkeypatch.setattr(cmv2, "generate_concept_map_v2", fake_v2)
+    monkeypatch.setattr(g, "_extract_skeleton_via_api", lambda chunks, **kw: [
+        {"topic": "T", "parent_concept": "P", "concept_title": "C",
+         "concept_details": "Description: d", "keywords": ""},
+    ])
+    monkeypatch.setattr(g, "_consolidate_concepts_via_api", lambda records, **kw: records)
+    monkeypatch.setattr(g, "_refine_descriptions_via_api", lambda records, **kw: records)
+    monkeypatch.setattr(g, "_ensure_mastery_lines_via_api", lambda records, **kw: records)
     monkeypatch.setattr(
-        g, "_topic_headings",
-        lambda sections: ["Similar Figures"])
-    g.concepts_from_mmd(
-        "## Similar Figures\nbody", subject="Mathematics", source_book="NCERT")
-    assert order == ["inventory", "v2_master"]
+        g, "_extract_question_task_inventory_via_api", lambda **kw: g._empty_inventory())
+    monkeypatch.setattr(
+        g, "_mine_types_from_inventory_via_api", lambda **kw: {"types": []})
+
+    def fake_culminations(records, **kw):
+        order.append("culmination")
+        return g._ensure_culmination_rows(records)
+
+    def fake_types(records, **kw):
+        order.append("types")
+        # Culminations must already exist when the Types pass runs.
+        assert any(
+            r["concept_title"].startswith("Culmination -") for r in records)
+        return records
+
+    monkeypatch.setattr(g, "_build_culminations_via_api", fake_culminations)
+    monkeypatch.setattr(g, "_assign_types_via_api", fake_types)
+    monkeypatch.setattr(g, "_repair_records_via_api", lambda records, **kw: records)
+    monkeypatch.setattr(
+        g, "_validate_final_or_raise",
+        lambda records, **kw: {"ok": True, "errors": [], "summary": {}})
+    g.concepts_from_mmd("## T\nbody", subject="Mathematics")
+    assert order == ["culmination", "types"]
 
 
 def test_concepts_pipeline_runs_types_assign(monkeypatch):
-    """Live post-learning uses Concept Map V2 master prompt output."""
     monkeypatch.setattr(g.config, "use_live_generation", lambda: True)
+    calls = []
 
-    def fake_v2(cfg, chapter_text, inventory, **kw):
-        concept = cmv2.ConceptWithTypes(
-            concept_id="CONCEPT-0001",
-            topic="Algebra",
-            parent_concept="Linear Equations",
-            concept_title="Linear equations",
-            description_body=(
-                "Linear equations use inverse operations to isolate the variable "
-                "while preserving equality."
-            ),
-            mastery="Solving one-step and two-step linear equations.",
-            misconception="Students may apply the wrong inverse operation.",
-            keywords=["linear", "equations"],
-            types=[
-                cmv2.MinedType(
-                    type_id="TYPE-0001",
-                    type_title="One-step Linear Equations",
-                    source_question_ids=["QINV-0001"],
-                    cases=[
-                        cmv2.MinedCase(
-                            case_id="CASE-0001",
-                            source_question_id="QINV-0001",
-                            case_prompt="Solve the equation x + 2 = 5 for x.",
-                        ),
-                    ],
+    def fake_openai(system, user, **kw):
+        calls.append(system[:40])
+        if "description-only" in system.lower():
+            return {"rows": [{
+                "topic": "Algebra", "concept": "Linear equations",
+                "concept_description": (
+                    "Description: Linear equations use inverse operations to isolate the variable "
+                    "while preserving equality. This supports solving one-step and two-step forms "
+                    "from the source material."
                 ),
-            ],
-        )
-        meta, rows = cmv2.build_output_rows(cfg, [concept])
-        return meta, rows, [concept]
+                "keywords": "linear",
+            }]}
+        if "Types-only" in system:
+            return {"rows": [{
+                "topic": "Algebra", "concept": "Linear equations",
+                "concept_description": (
+                    "Description: altered by model // "
+                    "Types: Type 01: One-step Case 01: Solve x+2=5 Case 02: Solve x-3=1 "
+                    "Type 02: Two-step Case 01: Solve 2x+1=7 Case 02: Solve 3x-2=4 "
+                    "// Misconception: wrong inverse op"
+                ),
+                "keywords": "linear",
+            }]}
+        if "Build culmination" in system:
+            return {"rows": []}
+        return {"rows": [{
+            "topic": "Algebra", "concept": "Linear equations",
+            "concept_description": "Description: solve ax+b=c // Misconception: wrong inverse op",
+            "keywords": "linear",
+        }]}
 
-    monkeypatch.setattr(cmv2, "generate_concept_map_v2", fake_v2)
-    monkeypatch.setattr(
-        g, "_extract_question_task_inventory_via_api",
-        lambda **kw: {"items": [{"qid": "QINV-0001", "normalized_task": "x+2=5"}],
-                      "stats": {}})
-    monkeypatch.setattr(g, "_topic_headings", lambda sections: ["Algebra"])
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
     records = g.concepts_from_mmd("## Algebra\nSolve linear equations.", subject="Mathematics")
+    assert any("description-only" in c.lower() for c in calls)
+    assert any("Types-only" in c for c in calls)
     assert "preserving equality" in records[0]["concept_details"]
-    assert "Type 01: One-step Linear Equations" in records[0]["concept_details"]
-    assert records[0]["topic"] == "Algebra"
+    assert "altered by model" not in records[0]["concept_details"]
+    assert g._has_meaningful_types(records[0]["concept_details"])
+    assert sum(r["concept_title"].startswith("Culmination -") for r in records) == 1
 
 
 def test_pre_learning_excludes_exact_current_concepts():
