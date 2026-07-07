@@ -317,52 +317,51 @@ def test_duplicate_concepts_are_merged_by_topic_and_title():
 
 
 def test_concepts_live_processes_every_chunk(monkeypatch):
-    """Live concept extraction must call GPT for each chunk and merge results."""
+    """Live V2 still chunks inventory extraction; concepts come from one master pass."""
+    from app.services import concept_map_v2 as cmv2
+
     monkeypatch.setattr(g.config, "use_live_generation", lambda: True)
     monkeypatch.setattr(g, "_MMD_CHUNK_CHARS", 4000)
 
-    calls = {"n": 0, "skeleton": 0}
+    inventory_calls = {"n": 0}
 
-    def fake_openai_json(system, user, **kw):
-        calls["n"] += 1
-        if "clean teachable concept skeleton" in system:
-            calls["skeleton"] += 1
-        n = calls["skeleton"] or calls["n"]
-        # Each chunk yields two unique concepts.
-        return {"rows": [
-            {"topic": "Topic A", "concept": f"Concept {n}a",
-             "concept_description": "Description: x // Types: // Misconception:",
-             "keywords": "k"},
-            {"topic": "Topic A", "concept": f"Concept {n}b",
-             "concept_description": "Description: y // Types: // Misconception:",
-             "keywords": "k"},
-        ]}
+    def fake_inventory(**kw):
+        inventory_calls["n"] += 1
+        return {"items": [{
+            "qid": f"QINV-{inventory_calls['n']:04d}",
+            "source_kind": "exercise",
+            "topic_hint": "Topic A",
+            "raw_task": f"Question from chunk {inventory_calls['n']}",
+            "normalized_task": f"Question from chunk {inventory_calls['n']}",
+            "order_index": inventory_calls["n"],
+        }], "stats": {}}
 
-    monkeypatch.setattr(g, "_openai_json", fake_openai_json)
-    monkeypatch.setattr(
-        g, "_consolidate_concepts_via_api",
-        lambda records, **kw: records)
-    monkeypatch.setattr(
-        g, "_refine_descriptions_via_api",
-        lambda records, **kw: records)
-    monkeypatch.setattr(
-        g, "_assign_types_via_api",
-        lambda records, **kw: records)
-    monkeypatch.setattr(
-        g, "_build_culminations_via_api",
-        lambda records, **kw: records)
-    monkeypatch.setattr(
-        g, "_repair_records_via_api",
-        lambda records, **kw: records)
-    monkeypatch.setattr(
-        g, "_validate_final_or_raise",
-        lambda records, **kw: {"ok": True, "errors": [], "summary": {}})
-    doc = _big_doc(20)  # forces several chunks at 4000 chars
-    records = g.concepts_from_mmd(doc, subject="Mathematics")
-    assert calls["skeleton"] >= 3, "expected multiple chunks to be processed"
-    # Every chunk's concepts survive the merge (2 per chunk, all unique).
+    def fake_v2(cfg, chapter_text, inventory, **kw):
+        concepts = [
+            cmv2.ConceptWithTypes(
+                concept_id=f"CONCEPT-{i:04d}",
+                topic="Topic A",
+                parent_concept="Core",
+                concept_title=f"Concept {i}",
+                description_body=f"Description body {i} with enough words to pass validation easily.",
+                mastery=f"Mastery skill {i}.",
+                keywords=["k"],
+                types=[],
+            )
+            for i in range(1, inventory_calls["n"] * 2 + 1)
+        ]
+        meta, rows = cmv2.build_output_rows(cfg, concepts)
+        return meta, rows, concepts
+
+    monkeypatch.setattr(g, "_extract_question_task_inventory_via_api", fake_inventory)
+    monkeypatch.setattr(cmv2, "generate_concept_map_v2", fake_v2)
+    monkeypatch.setattr(g, "_topic_headings", lambda sections: ["Topic A"])
+    doc = _big_doc(20)
+    records = g.concepts_from_mmd(doc, subject="Mathematics", source_book="NCERT")
+    assert inventory_calls["n"] >= 1
+    assert len(records) >= 2
     titles = {r["concept_title"] for r in records}
-    assert len(titles) >= calls["skeleton"] * 2
+    assert len(titles) == len(records)
 
 
 def test_identify_questions_live_merges_and_dedupes(monkeypatch):
