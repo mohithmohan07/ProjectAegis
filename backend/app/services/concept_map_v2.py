@@ -161,6 +161,11 @@ class ConceptCore:
 @dataclass
 class ConceptWithTypes(ConceptCore):
     types: list[MinedType] = field(default_factory=list)
+    is_culmination: bool = False
+
+
+# Alias for coverage/culmination helpers (matches workbook row shape).
+ConceptRow = ConceptWithTypes
 
 
 # --------------------------------------------------------------------------- #
@@ -355,11 +360,13 @@ def clean_one_line(s: str) -> str:
 
 
 def sanitize_description_body(s: str) -> str:
+    """Strip pre-rendered section labels so rendering never duplicates blocks."""
     out = str(s or "")
     out = re.sub(r"^Description:\s*", "", out, flags=re.I)
     out = re.sub(r"\s*//\s*Types:\s*.*$", "", out, flags=re.I | re.S)
     out = re.sub(r"\s*//\s*Misconceptions?:\s*.*$", "", out, flags=re.I | re.S)
     out = re.sub(r"\n?Achieving Mastery:\s*.*$", "", out, flags=re.I | re.S)
+    out = re.sub(r"\s*//\s*Achieving Mastery:\s*.*$", "", out, flags=re.I | re.S)
     out = clean_one_line(out.strip())
     if not out:
         raise ValueError("Empty description_body after sanitization.")
@@ -427,6 +434,166 @@ def render_concept_description(concept: ConceptWithTypes) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# Topic coverage + culmination helpers (deterministic, code-enforced)
+# --------------------------------------------------------------------------- #
+
+def normalize_topic_name(topic: str) -> str:
+    out = str(topic or "")
+    out = re.sub(
+        r"^(topic|section|chapter)\s*\d+\s*[:.)-]?\s*", "", out, flags=re.IGNORECASE)
+    out = re.sub(r"^\d+(\.\d+)*\s*[:.)-]?\s*", "", out)
+    return re.sub(r"\s+", " ", out).strip()
+
+
+def topic_key(topic: str) -> str:
+    return normalize_topic_name(topic).lower()
+
+
+def is_culmination_row(row: ConceptRow) -> bool:
+    return (
+        row.is_culmination is True
+        or (row.parent_concept or "").lower() == "culmination"
+        or (row.concept_title or "").lower().startswith("culmination -")
+    )
+
+
+def strip_model_culmination_rows(rows: list[ConceptRow]) -> list[ConceptRow]:
+    """Remove LLM-authored culmination rows before coverage validation."""
+    return [r for r in rows if not is_culmination_row(r)]
+
+
+def validate_locked_topic_coverage(
+    *,
+    locked_topics: list[str],
+    rows: list[ConceptRow],
+    min_normal_concepts_per_topic: int = 1,
+) -> list[str]:
+    errors: list[str] = []
+    normal_rows = [r for r in rows if not is_culmination_row(r)]
+
+    for locked_topic in locked_topics:
+        count = sum(
+            1 for r in normal_rows
+            if topic_key(r.topic) == topic_key(locked_topic)
+        )
+        if count < min_normal_concepts_per_topic:
+            errors.append(
+                f'missing_topic_concepts: "{locked_topic}" has {count} normal '
+                f"concept(s), expected at least {min_normal_concepts_per_topic}."
+            )
+
+    illegal_topics = sorted({
+        normalize_topic_name(r.topic)
+        for r in rows
+        if normalize_topic_name(r.topic)
+        and not any(
+            topic_key(locked) == topic_key(r.topic) for locked in locked_topics
+        )
+    })
+    for topic in illegal_topics:
+        errors.append(f'illegal_topic: "{topic}" is not in lockedTopics.')
+
+    return errors
+
+
+def short_concept_name(name: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(
+        r"^Culmination\s*-\s*", "", str(name or ""), flags=re.IGNORECASE)).strip()
+
+
+def build_culmination_title(topic_concepts: list[ConceptRow]) -> str:
+    names = [
+        short_concept_name(c.concept_title)
+        for c in topic_concepts
+        if not is_culmination_row(c) and short_concept_name(c.concept_title)
+    ][:4]
+
+    if not names:
+        return "Culmination - Topic Recap"
+    if len(names) == 1:
+        return f"Culmination - {names[0]}"
+    if len(names) == 2:
+        return f"Culmination - {names[0]} and {names[1]}"
+    return (
+        f"Culmination - {', '.join(names[:-1])} and {names[-1]}"
+    )
+
+
+def make_culmination_row(
+    topic: str, topic_concepts: list[ConceptRow], index: int,
+) -> ConceptRow:
+    topic_name = normalize_topic_name(topic)
+    return ConceptWithTypes(
+        concept_id=f"CULMINATION-{index + 1:04d}",
+        topic=topic_name,
+        parent_concept="Culmination",
+        concept_title=build_culmination_title(topic_concepts),
+        description_body="Recap",
+        mastery=(
+            f"Connecting the key ideas of {topic_name} to solve mixed "
+            "questions from the section."
+        ),
+        misconception=None,
+        keywords=["recap", "mixed application", "section review"],
+        source_evidence=[],
+        types=[],
+        is_culmination=True,
+    )
+
+
+def ensure_exactly_one_culmination_per_locked_topic(
+    *,
+    locked_topics: list[str],
+    rows: list[ConceptRow],
+) -> list[ConceptRow]:
+    normal_rows = [r for r in rows if not is_culmination_row(r)]
+    final_rows: list[ConceptRow] = []
+
+    for index, locked_topic in enumerate(locked_topics):
+        topic_concepts = [
+            r for r in normal_rows
+            if topic_key(r.topic) == topic_key(locked_topic)
+        ]
+        final_rows.extend(topic_concepts)
+        final_rows.append(make_culmination_row(locked_topic, topic_concepts, index))
+
+    return final_rows
+
+
+def validate_pre_deposit(
+    *,
+    locked_topics: list[str],
+    rows: list[ConceptRow],
+) -> list[str]:
+    errors: list[str] = []
+
+    for locked_topic in locked_topics:
+        normal_count = sum(
+            1 for r in rows
+            if topic_key(r.topic) == topic_key(locked_topic)
+            and not is_culmination_row(r)
+        )
+        culmination_count = sum(
+            1 for r in rows
+            if topic_key(r.topic) == topic_key(locked_topic)
+            and is_culmination_row(r)
+        )
+
+        if normal_count < 1:
+            errors.append(
+                f'predeposit_missing_topic_concepts: "{locked_topic}" has no '
+                "normal concepts."
+            )
+        if culmination_count != 1:
+            errors.append(
+                f'predeposit_culmination_count: "{locked_topic}" has '
+                f"{culmination_count} culmination row(s), expected exactly 1."
+            )
+
+    return errors
+
+
+# --------------------------------------------------------------------------- #
 # Validation
 # --------------------------------------------------------------------------- #
 
@@ -439,6 +606,8 @@ def validate_concept_map(cfg: RunConfig, concepts: list[ConceptWithTypes]) -> li
     seen_source_questions: dict[str, str] = {}
 
     for c in concepts:
+        if is_culmination_row(c):
+            continue
         topic = topic_display_name(c.topic)
         if topic.lower() not in allowed:
             errors.append(
@@ -631,7 +800,21 @@ TYPES AND CASES:
 - Include as many source examples as available for each Type.
 - Every inventory item must be assigned to exactly one concept unless it is truly rhetorical/non-assessable.
 - Do not assign one question/task to multiple concepts.
-- Culmination or mixed Types are allowed only when a source task combines multiple concepts from the same topic.
+
+TOPIC COVERAGE:
+- You are given locked textbook topics in reading order.
+- Every locked topic must receive at least one normal concept unless the source text for that topic is completely absent.
+- Do not create topics outside the locked topic list.
+- Do not collapse several textbook topics into one concept.
+- Do not duplicate the same concept across two topics.
+- Do not create culmination rows. Culmination rows are generated by code after validation.
+
+CONCEPT COUNT:
+- Do not target a fixed number of concepts.
+- Do not equalize concept counts across topics.
+- A narrow topic may have one durable concept.
+- A dense topic may have several durable concepts.
+- Do not create filler concepts to satisfy a count.
 
 SUBJECT-SPECIFIC RULES:
 - Mathematics: Types may be numerical, proof, construction, graph, theorem application, formula, diagram, reasoning, or word-problem patterns.
@@ -657,6 +840,78 @@ CHAPTER SOURCE:
 """.strip()
 
 
+def build_strict_repair_prompt(
+    *,
+    locked_topics: list[str],
+    current_rows: list[ConceptRow],
+    validation_errors: list[str],
+    chapter_text: str,
+    question_inventory: list[dict],
+) -> str:
+    import json
+    return f"""
+You are repairing a school concept map.
+
+Return ONLY strict JSON:
+{{
+  "concepts": [
+    {{
+      "concept_id": "",
+      "topic": "",
+      "parent_concept": "",
+      "concept_title": "",
+      "description_body": "",
+      "mastery": "",
+      "misconception": "",
+      "keywords": [],
+      "source_evidence": [],
+      "types": []
+    }}
+  ]
+}}
+
+LOCKED TOPICS:
+{chr(10).join(f"{i + 1}. {t}" for i, t in enumerate(locked_topics))}
+
+VALIDATION ERRORS TO FIX:
+{chr(10).join(f"{i + 1}. {e}" for i, e in enumerate(validation_errors))}
+
+STRICT REPAIR RULES:
+- Do not shrink the map.
+- Preserve all valid existing normal concept rows.
+- Add missing normal concepts for locked topics that have no concepts.
+- Reassign concepts to the correct locked topic when topic placement is wrong.
+- Use only the locked topics listed above.
+- Do not create Overview, Introduction, Exercise, Practice, Examples, Activity, or Miscellaneous topics unless one is explicitly present in locked topics.
+- Do not create culmination rows. Culmination rows are generated by code after this repair.
+- Do not create duplicate concepts.
+- Do not merge two textbook topics into one concept.
+- Keep each concept within its own topic scope.
+- Misconception must appear once only and must be specific.
+- Types must use source-backed full question prompts only.
+- Do not shorten source questions.
+- Do not write source labels such as Example 3, Exercise 1.2, Fig 6.4, Table 1, or page numbers.
+- Return the full repaired concept map, not only changed rows.
+
+ACADEMIC FLEXIBILITY:
+- Do not force equal concept counts across topics.
+- A topic may have one concept if it is genuinely narrow.
+- A topic may have multiple concepts if the source teaches multiple distinct objectives.
+- Do not create filler concepts just to increase count.
+- Do not force Types into purely definitional concepts.
+- Add Types only when source-backed assessable tasks exist.
+
+CURRENT CONCEPT MAP:
+{json.dumps({"concepts": [_concept_to_dict(c) for c in current_rows]}, ensure_ascii=False, indent=2)}
+
+QUESTION / TASK INVENTORY:
+{json.dumps(_slim_inventory(question_inventory), ensure_ascii=False, indent=2)}
+
+CHAPTER SOURCE:
+{chapter_text}
+""".strip()
+
+
 def build_repair_prompt(
     cfg: RunConfig,
     concepts: list[ConceptWithTypes],
@@ -664,45 +919,14 @@ def build_repair_prompt(
     chapter_text: str,
     inventory: list[dict],
 ) -> str:
-    import json
-    topics = canonical_topics(cfg)
-    topic_lines = "\n".join(f"  {i + 1}. {t}" for i, t in enumerate(topics))
-    err_lines = "\n".join(f"{i + 1}. {e}" for i, e in enumerate(errors))
-    payload = {"concepts": [_concept_to_dict(c) for c in concepts]}
-    inv_json = json.dumps(_slim_inventory(inventory), ensure_ascii=False, indent=2)
-    return f"""
-Repair the concept map JSON using ONLY the listed validation errors.
-
-Return ONLY strict JSON:
-{{ "concepts": [ ...same schema... ] }}
-
-Rules:
-- Fix only the errors listed.
-- Preserve valid rows, valid topics, valid descriptions, valid mastery lines, and valid types.
-- Do not rewrite the full chapter.
-- Do not create new topics.
-- Use only these allowed topics:
-{topic_lines}
-- Chapter duration remains exactly {cfg.chapter_duration_minutes}.
-- Chapter tag remains exactly {chapter_tag(cfg)}.
-- If a Case is too short or refers to Example/Exercise/Figure/Table/page, replace it with the full actual source question from the inventory/source.
-- If a Type has no valid source-backed Case, remove that Type.
-- If a misconception is duplicated or generic, keep only one specific misconception or remove it.
-- If a concept appears in two topics, keep it only in the source topic where it is directly taught.
-- If English Literature has pedagogy/activity concepts, replace them with source-text concepts following the literature template.
-
-VALIDATION ERRORS:
-{err_lines}
-
-CURRENT CONCEPT MAP:
-{json.dumps(payload, ensure_ascii=False, indent=2)}
-
-QUESTION / TASK INVENTORY:
-{inv_json}
-
-CHAPTER SOURCE:
-{chapter_text}
-""".strip()
+    """Backward-compatible wrapper around :func:`build_strict_repair_prompt`."""
+    return build_strict_repair_prompt(
+        locked_topics=canonical_topics(cfg),
+        current_rows=concepts,
+        validation_errors=errors,
+        chapter_text=chapter_text,
+        question_inventory=inventory,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -751,6 +975,7 @@ def _parse_concept(raw: dict) -> ConceptWithTypes:
         keywords=[str(k) for k in kws],
         source_evidence=[str(e) for e in evidence],
         types=[_parse_type(t) for t in (raw.get("types") or []) if isinstance(t, dict)],
+        is_culmination=bool(raw.get("is_culmination")),
     )
 
 
@@ -765,6 +990,7 @@ def _concept_to_dict(c: ConceptWithTypes) -> dict:
         "misconception": c.misconception or "",
         "keywords": c.keywords,
         "source_evidence": c.source_evidence,
+        "is_culmination": c.is_culmination,
         "types": [
             {
                 "type_id": t.type_id,
@@ -808,6 +1034,8 @@ def build_output_rows(
     topics = canonical_topics(cfg)
     by_topic: dict[str, list[ConceptCore]] = {}
     for c in concepts:
+        if is_culmination_row(c):
+            continue
         t = topic_display_name(c.topic)
         by_topic.setdefault(t, []).append(c)
 
@@ -856,6 +1084,108 @@ def to_legacy_records(rows: list[dict]) -> list[dict]:
     return out
 
 
+def generate_post_learning_concepts_safe(
+    *,
+    locked_topics: list[str],
+    chapter_text: str,
+    question_inventory: list[dict],
+    call_llm_json: Callable[[str, str], dict],
+    build_master_prompt: Callable[[], str],
+    validate_structural: Callable[[list[ConceptRow]], list[str]] | None = None,
+    log: Callable[[str, str], None] | None = None,
+) -> list[ConceptRow]:
+    """Master prompt → coverage validation → strict repair → culmination → pre-deposit."""
+    def _log(msg: str, level: str = "info") -> None:
+        if log:
+            log(msg, level)
+
+    system = (
+        "You are a strict source-grounded curriculum engine. "
+        "Return ONLY valid JSON matching the requested schema."
+    )
+
+    _log(f"Locked topics: {len(locked_topics)}")
+    data = call_llm_json(system, build_master_prompt())
+    rows = strip_model_culmination_rows(parse_llm_response(data))
+    rows = sanitize_concept_cases(rows, chapter_text=chapter_text)
+
+    normal_before = len(rows)
+    coverage_errors = validate_locked_topic_coverage(
+        locked_topics=locked_topics,
+        rows=rows,
+        min_normal_concepts_per_topic=1,
+    )
+    structural_errors = (
+        validate_structural(rows) if validate_structural else []
+    )
+    all_errors = coverage_errors + structural_errors
+    _log(f"Normal concepts before repair: {normal_before}")
+    _log(f"Coverage errors before repair: {len(coverage_errors)}")
+
+    if all_errors:
+        repair_prompt = build_strict_repair_prompt(
+            locked_topics=locked_topics,
+            current_rows=rows,
+            validation_errors=all_errors,
+            chapter_text=chapter_text,
+            question_inventory=question_inventory,
+        )
+        _log(
+            f"Concept Map V2: {len(all_errors)} validation error(s) — strict repair pass.",
+            "warning",
+        )
+        repaired = call_llm_json(system, repair_prompt)
+        rows = strip_model_culmination_rows(parse_llm_response(repaired))
+        rows = sanitize_concept_cases(rows, chapter_text=chapter_text)
+
+        coverage_errors = validate_locked_topic_coverage(
+            locked_topics=locked_topics,
+            rows=rows,
+            min_normal_concepts_per_topic=1,
+        )
+        structural_errors = (
+            validate_structural(rows) if validate_structural else []
+        )
+        all_errors = coverage_errors + structural_errors
+
+    normal_after = len(rows)
+    _log(f"Normal concepts after repair: {normal_after}")
+    _log(f"Coverage errors after repair: {len(coverage_errors)}")
+
+    if coverage_errors:
+        raise RuntimeError(
+            "Concept map failed locked topic coverage before culmination.\n"
+            + "\n".join(coverage_errors)
+        )
+    if structural_errors:
+        raise RuntimeError(
+            "Concept map validation failed:\n" + "\n".join(structural_errors)
+        )
+
+    rows = ensure_exactly_one_culmination_per_locked_topic(
+        locked_topics=locked_topics,
+        rows=rows,
+    )
+    culmination_count = sum(1 for r in rows if is_culmination_row(r))
+    _log(f"Culmination rows generated: {culmination_count}")
+    _log(
+        f"Final rows before deposit: {normal_after} normal + "
+        f"{culmination_count} culmination"
+    )
+
+    pre_deposit_errors = validate_pre_deposit(
+        locked_topics=locked_topics,
+        rows=rows,
+    )
+    if pre_deposit_errors:
+        raise RuntimeError(
+            "Concept map failed pre-deposit validation.\n"
+            + "\n".join(pre_deposit_errors)
+        )
+
+    return rows
+
+
 def generate_concept_map_v2(
     cfg: RunConfig,
     chapter_text: str,
@@ -864,37 +1194,25 @@ def generate_concept_map_v2(
     call_llm_json: Callable[[str, str], dict],
     log: Callable[[str, str], None] | None = None,
 ) -> tuple[dict, list[dict], list[ConceptWithTypes]]:
-    """Run the V2 pipeline: master prompt → validate → optional repair → render."""
-    def _log(msg: str, level: str = "info") -> None:
-        if log:
-            log(msg, level)
-
+    """Run the V2 pipeline: master prompt → coverage → repair → culmination → render."""
     assert_finalized_config(cfg)
-    system = (
-        "You are a strict source-grounded curriculum engine. "
-        "Return ONLY valid JSON matching the requested schema."
+    locked_topics = canonical_topics(cfg)
+
+    concepts = generate_post_learning_concepts_safe(
+        locked_topics=locked_topics,
+        chapter_text=chapter_text,
+        question_inventory=inventory,
+        call_llm_json=call_llm_json,
+        build_master_prompt=lambda: build_concept_map_prompt(
+            cfg, chapter_text, inventory),
+        validate_structural=lambda rows: validate_concept_map(cfg, rows),
+        log=log,
     )
-    prompt = build_concept_map_prompt(cfg, chapter_text, inventory)
-    _log("Concept Map V2: running master prompt.")
-    data = call_llm_json(system, prompt)
-    concepts = parse_llm_response(data)
-    if not concepts:
-        raise RuntimeError("Concept Map V2: master prompt returned no concepts")
-
-    concepts = sanitize_concept_cases(concepts, chapter_text=chapter_text)
-    errors = validate_concept_map(cfg, concepts)
-    if errors:
-        _log(f"Concept Map V2: {len(errors)} validation error(s) — repair pass.", "warning")
-        repair = build_repair_prompt(cfg, concepts, errors, chapter_text, inventory)
-        data = call_llm_json(system, repair)
-        concepts = parse_llm_response(data)
-        concepts = sanitize_concept_cases(concepts, chapter_text=chapter_text)
-        errors = validate_concept_map(cfg, concepts)
-
-    if errors:
-        raise RuntimeError(
-            "Concept map validation failed:\n" + "\n".join(errors))
 
     meta, rows = build_output_rows(cfg, concepts)
-    _log(f"Concept Map V2: {len(concepts)} concept(s) validated.", "success")
+    if log:
+        log(
+            f"Concept Map V2: {len(concepts)} concept(s) ready for deposit.",
+            "success",
+        )
     return meta, rows, concepts
