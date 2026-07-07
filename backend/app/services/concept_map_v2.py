@@ -20,6 +20,9 @@ import re
 from dataclasses import dataclass, field
 from typing import Callable
 
+from .concept_cleanup import neutralize_source_artifacts_preserve_images
+from .mmd_figures import figure_markdown_index_from_mmd, inline_figures_in_text
+
 # --------------------------------------------------------------------------- #
 # Constants
 # --------------------------------------------------------------------------- #
@@ -83,7 +86,17 @@ DEFAULT_ENGLISH_LIT_TEMPLATE = [
 ]
 
 _SOURCE_ARTIFACT_RE = re.compile(
-    r"\b(example|ex\.?|exercise|fig\.?|figure|table|page|mmd|mmds)\s*\d+",
+    r"\b(example|ex\.?|exercise|activity|activities|fig\.?|figure|table|page|mmd|mmds)\s*\d+",
+    re.IGNORECASE,
+)
+
+# Figure references in case prompts → inline markdown from chapter MMD when available.
+_FIG_REF_INLINE_RE = re.compile(
+    r"\b(Fig(?:ure)?\.?\s*(\d+(?:\.\d+)*))",
+    re.IGNORECASE,
+)
+_MARKDOWN_IMG_ANY_RE = re.compile(
+    r"!\[([^\]]*)\]\(([^)]+)\)",
     re.IGNORECASE,
 )
 
@@ -295,17 +308,49 @@ def run_config_from_meta(
     )
 
 
-# --------------------------------------------------------------------------- #
-# Sanitization + rendering
-# --------------------------------------------------------------------------- #
-
 def has_source_artifact(text: str) -> bool:
     return bool(_SOURCE_ARTIFACT_RE.search(text or ""))
 
 
+def sanitize_case_prompt(prompt: str, *, chapter_text: str = "") -> str:
+    """Rewrite source-artifact labels; inline figure images from chapter MMD."""
+    p = norm(prompt)
+    if not p:
+        return p
+    fig_index = figure_markdown_index_from_mmd(chapter_text)
+    p = inline_figures_in_text(p, fig_index)
+    p = neutralize_source_artifacts_preserve_images(p)
+    return clean_one_line(p)
+
+
+def sanitize_concept_cases(
+    concepts: list[ConceptWithTypes],
+    *,
+    chapter_text: str = "",
+) -> list[ConceptWithTypes]:
+    """Deterministically clean all case prompts before validation."""
+    for concept in concepts:
+        for type_ in concept.types:
+            for case in type_.cases:
+                case.case_prompt = sanitize_case_prompt(
+                    case.case_prompt, chapter_text=chapter_text,
+                )
+    return concepts
+
+
 def clean_one_line(s: str) -> str:
     out = norm(s).replace("MMDs", "chapter").replace("MMD", "chapter")
+    # Protect URLs before normalizing section separators (avoid breaking https://).
+    urls: list[str] = []
+
+    def _stash_url(match: re.Match[str]) -> str:
+        urls.append(match.group(0))
+        return f"__URL_{len(urls) - 1}__"
+
+    out = re.sub(r"https?://\S+", _stash_url, out)
     out = re.sub(r"\s*//\s*", " // ", out)
+    for i, url in enumerate(urls):
+        out = out.replace(f"__URL_{i}__", url)
     return out.strip()
 
 
@@ -346,7 +391,9 @@ def case_prompt_is_valid(prompt: str) -> bool:
     p = norm(prompt)
     if not p or len(p) < 20:
         return False
-    return not has_source_artifact(p)
+    # Alt text in inlined figure images may retain Fig. N labels — ignore those.
+    stripped = re.sub(r"!\[[^\]]*\]\([^)]+\)", "[figure]", p)
+    return not has_source_artifact(stripped)
 
 
 def render_types(types: list[MinedType]) -> str:
@@ -834,12 +881,14 @@ def generate_concept_map_v2(
     if not concepts:
         raise RuntimeError("Concept Map V2: master prompt returned no concepts")
 
+    concepts = sanitize_concept_cases(concepts, chapter_text=chapter_text)
     errors = validate_concept_map(cfg, concepts)
     if errors:
         _log(f"Concept Map V2: {len(errors)} validation error(s) — repair pass.", "warning")
         repair = build_repair_prompt(cfg, concepts, errors, chapter_text, inventory)
         data = call_llm_json(system, repair)
         concepts = parse_llm_response(data)
+        concepts = sanitize_concept_cases(concepts, chapter_text=chapter_text)
         errors = validate_concept_map(cfg, concepts)
 
     if errors:

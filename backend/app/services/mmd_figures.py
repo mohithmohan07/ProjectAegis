@@ -12,12 +12,16 @@ from figure_inline import (  # noqa: E402
     FigureEntry,
     build_figure_map,
     enrich_mmd_with_figures,
+    figure_markdown_index_from_mmd,
     inline_figure_references,
+    inline_figures_in_text,
 )
 
 __all__ = [
     "FigureEntry",
     "build_figure_map",
     "enrich_mmd_with_figures",
+    "figure_markdown_index_from_mmd",
     "inline_figure_references",
+    "inline_figures_in_text",
 ]
