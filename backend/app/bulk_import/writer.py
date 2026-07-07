@@ -305,6 +305,19 @@ def _concept_field_value(
     return ""
 
 
+def _chapter_book_source(chapter: models.Chapter, concept: models.Concept) -> str:
+    """Best book/publication token for the chapter tag (Fullmarks, NCERT, …)."""
+    book = directory.primary_book_source(concept.sources)
+    if book:
+        return book
+    for topic in chapter.topics:
+        for sibling in topic.concepts:
+            book = directory.primary_book_source(sibling.sources)
+            if book:
+                return book
+    return ""
+
+
 def _front_bands(concept: models.Concept, topic: models.Topic, *,
                  include_group_columns: bool = True,
                  concept_fields: list[str] | None = None) -> list:
@@ -317,13 +330,14 @@ def _front_bands(concept: models.Concept, topic: models.Topic, *,
     are filled later when assessments are built, not at concept generation.
     """
     chapter = topic.chapter
-    book = directory.primary_book_source(concept.sources)
+    book = _chapter_book_source(chapter, concept)
     c_tag = directory.chapter_tag(
         chapter.board, chapter.grade, chapter.subject, book=book)
     concept_fields = concept_fields or CONCEPT_FIELDS
     parent_column_present = "parent_concept" in concept_fields
     concept_labels = ", ".join(
-        c.concept_title for c in sorted(topic.concepts, key=lambda c: c.id))
+        strip_title_tag(c.concept_title) or c.concept_title
+        for c in sorted(topic.concepts, key=lambda c: c.id))
     return [
         # ---- Chapter band (tag in title, clean display) ----
         f"{chapter.chapter_title} ({c_tag})", chapter.chapter_title,

@@ -15,6 +15,10 @@ FORBIDDEN_NAMES = {
     "introduction", "overview", "basics", "misc", "miscellaneous",
     "examples", "practice", "basic concepts",
 }
+FORBIDDEN_TOPIC_NAMES = {
+    "overview", "basics", "basic concepts", "general",
+    "summary", "misc", "miscellaneous",
+}
 PLACEHOLDERS = {"n/a", "na", "none", "not applicable", "placeholder", "tbd", "lorem ipsum"}
 _SECTION_NUMBER_RE = re.compile(r"\b(?:exercise|ex)?\s*\d+(?:\.\d+)+\b", re.IGNORECASE)
 _SOURCE_ARTIFACT_RE = re.compile(
@@ -128,6 +132,9 @@ def validate_concept_rows(
         if title and _is_forbidden_name(title):
             _add(errors, i, "concept_title", "forbidden_name",
                  f"forbidden filler concept name: {title}")
+        if topic and _norm(topic) in FORBIDDEN_TOPIC_NAMES:
+            _add(errors, i, "topic", "forbidden_topic",
+                 f"forbidden filler topic name: {topic}", "warning")
         if title and _GENERIC_OPENER_RE.search(title):
             _add(errors, i, "concept_title", "generic_opener",
                  "generic Applications/Properties opener is too broad", "warning")

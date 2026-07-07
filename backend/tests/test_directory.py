@@ -114,7 +114,7 @@ def test_derive_chapter_meta_ncert_with_subject_folder_probe():
         "", "CBSE_NCERT_G08_English",
     )
     assert meta_eng["subject"] == "English"
-    assert meta_eng["chapter_code"].startswith("08CBEN_")
+    assert meta_eng["chapter_code"].startswith("08CBEL_")
 
 
 def test_derive_chapter_meta_ncert_without_subject_probe():
@@ -126,10 +126,13 @@ def test_derive_chapter_meta_ncert_without_subject_probe():
 
 
 def test_new_subject_codes_roundtrip():
-    for subject, code in (("Science", "SC"), ("Social Science", "SS"), ("English", "EN")):
+    for subject, code in (("Science", "SC"), ("Social Science", "SS")):
         chapter_code = directory.make_chapter_code("CBSE", "08", subject, "Sample")
         assert chapter_code.startswith(f"08CB{code}_")
         assert directory.parse_code_prefix(chapter_code) == ("08", "CBSE", subject)
+    eng_code = directory.make_chapter_code("CBSE", "10", "English", "Letter to God")
+    assert eng_code.startswith("10CBEL_")
+    assert directory.code_prefix("CBSE", "10", "English") == "10CBEL"
 
 
 def test_cbse_social_science_component_subjects_use_ss_code():

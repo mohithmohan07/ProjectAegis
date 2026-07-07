@@ -1061,9 +1061,15 @@ RULES:
    the concept it tests as Types/Cases.
 7. Omit Types for purely definitional concepts with zero assessable formats.
    Every problem-solving, calculation, application, or exercise-backed concept
-   MUST have Types with at least two varieties and multiple Cases.
-8. Culmination rows MUST include Types for mixed multi-concept application problems.
-9. NEVER mention groups or group columns.""")
+   MUST have Types with at least two varieties and at least one Case per Type.
+   Cases are sub-types: list a Case ONLY when a concrete source example exists;
+   never invent empty Case placeholders.
+8. Case prompts MUST quote the full source question/task verbatim — do not
+   shorten, paraphrase, or abbreviate; teachers execute from these cells.
+9. Mine ALL assessable problems from the source; skipping exercises defeats
+   homework / in-class / board-teaching categorisation downstream.
+10. Culmination rows MUST include Types for mixed multi-concept application problems.
+11. NEVER mention groups or group columns.""")
 
 
 prompts.register(
@@ -1431,6 +1437,21 @@ Rules:
 """)
 
 prompts.register(
+    "concepts.english.system", category=_CONCEPTS_CAT,
+    label="English literature concept-mapping supplement",
+    default="""\
+ENGLISH LITERATURE RULES (mandatory when Subject is English):
+- Topic names MUST be the prose piece, poem, or drama title — never pedagogy
+  labels like "Pre-reading", "Informal Letter Writing", or "Oral Checks".
+- Map ONLY literary concepts from the text (characters, themes, episodes,
+  poetic devices, narrative moves) following the universal English concept map.
+- When a unit contains both prose and poem, list ALL prose episode topics first,
+  then poem episode topics; never drop the poem because the chapter title names
+  only the prose piece.
+- Do not create writing-skills, letter-format, or classroom-activity concepts.
+""")
+
+prompts.register(
     "concepts.chapter_meta.system", category=_CONCEPTS_CAT,
     label="Chapter/topic metadata writer system prompt",
     default="""\
@@ -1445,7 +1466,9 @@ Rules:
   never generic filler like "This chapter develops N concepts across M topics".
 - chapter_duration_minutes: a realistic INTEGER estimate of total classroom
   minutes needed to teach the full chapter (typical school periods are
-  35-45 minutes; a standard chapter runs roughly 4-14 periods).
+  35-45 minutes; a standard chapter runs roughly 4-14 periods). When a
+  FINALIZED chapter duration is provided in the metadata block, return that
+  exact integer — do not override it.
 - topics: one entry per provided topic, using the EXACT same topic strings.
 - topic_description: 2-3 sentences specific to that topic — what it teaches,
   the key ideas/skills among its concepts, and how it connects to the
@@ -1463,6 +1486,7 @@ def _metadata(
     *, subject: str = "", board: str = "", grade: str = "", unit: str = "",
     chapter_title: str = "", chapter_id: int | str | None = None,
     chapter_code: str = "", learning_kind: str = "Post",
+    finalized_duration_minutes: int = 0,
 ) -> dict:
     return {
         "subject": subject or "",
@@ -1473,11 +1497,12 @@ def _metadata(
         "chapter_id": "" if chapter_id is None else str(chapter_id),
         "chapter_code": chapter_code or "",
         "learning_kind": learning_kind or "Post",
+        "finalized_duration_minutes": int(finalized_duration_minutes or 0),
     }
 
 
 def _metadata_block(meta: dict) -> str:
-    return (
+    block = (
         f"Subject: {meta.get('subject', '')}\n"
         f"Board: {meta.get('board', '')}\n"
         f"Grade: {meta.get('grade', '')}\n"
@@ -1486,6 +1511,13 @@ def _metadata_block(meta: dict) -> str:
         f"Chapter ID/Code: {meta.get('chapter_id', '')} / {meta.get('chapter_code', '')}\n"
         f"Learning kind: {meta.get('learning_kind', 'Post')}"
     )
+    finalized = int(meta.get("finalized_duration_minutes") or 0)
+    if finalized > 0:
+        block += f"\nFinalized chapter duration (minutes): {finalized}"
+    subj = (meta.get("subject") or "").lower()
+    if "english" in subj:
+        block += "\n\n" + prompts.get_text("concepts.english.system")
+    return block
 
 
 # Process-wide gate on in-flight OpenAI calls. All users of this instance
@@ -3576,7 +3608,10 @@ def chapter_meta_via_api(
         minutes = int(float(data.get("chapter_duration_minutes") or 0))
     except (TypeError, ValueError):
         minutes = 0
-    if minutes > 0:
+    finalized = int(meta.get("finalized_duration_minutes") or 0)
+    if finalized > 0:
+        out["chapter_duration_minutes"] = finalized
+    elif minutes > 0:
         out["chapter_duration_minutes"] = minutes
     topic_descriptions: dict[str, str] = {}
     for row in data.get("topics", []) or []:
@@ -3671,6 +3706,9 @@ def concepts_from_mmd(
         out = _scrub_section_numbers(out)
         out = _merge_concept_records(out)
         out = _dedupe_titles_chapter_wide(out)
+        out = concept_cleanup.dedupe_similar_titles_chapter_wide(out)
+        out = concept_cleanup.filter_review_violations(
+            out, subject=subject, board=board)
         out = [
             concept_cleanup.clean_concept_record(dict(r), neutralize_artifacts=False)
             for r in out
@@ -3689,6 +3727,9 @@ def concepts_from_mmd(
         # rewrote may have lost their "Achieving Mastery" line — restore it
         # deterministically, without another API round-trip).
         out = _dedupe_titles_chapter_wide(out)
+        out = concept_cleanup.dedupe_similar_titles_chapter_wide(out)
+        out = concept_cleanup.filter_review_violations(
+            out, subject=subject, board=board)
         out = _ensure_mastery_lines_via_api(out, meta=meta, use_api=False)
         out = _enforce_culminations(out)
         _validate_final_or_raise(out, stage="final")
