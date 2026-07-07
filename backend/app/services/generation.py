@@ -16,7 +16,6 @@ import threading
 from .. import bulk_import as bi
 from .. import config, models
 from . import concept_cleanup
-from . import concept_map_v2 as cmv2
 from . import concept_validator as cv
 from . import katex_rules as kr
 from . import concept_refiner as cr
@@ -3597,15 +3596,15 @@ def concepts_from_mmd(
     unit: str = "", chapter_title: str = "", chapter_id: int | str | None = None,
     chapter_code: str = "", learning_kind: str = "Post",
     live: bool | None = None, artifacts: dict | None = None,
-    source_book: str = "", chapter_duration: str = "",
 ) -> list[dict]:
     """Parse an MMD document into concept records (post-learning).
 
-    Live mode uses Concept Map V2: one source-locked master prompt (+ repair),
-    deterministic tag/duration/topic locking, and structured Types rendering.
+    Large chapters are processed in ordered chunks (never trimmed) and the
+    per-chunk concepts are merged, so no chapter content is lost.
 
-    When ``artifacts`` is provided it is filled with the question/task inventory
-    and V2 metadata for auditing and chapter summary sync.
+    When ``artifacts`` is provided it is filled with the intermediate
+    ``question_task_inventory`` and ``mined_types`` so callers can persist
+    them (e.g. for the extraction-completeness CSV download).
     """
     use_live = config.use_live_generation() if live is None else live
     meta = _metadata(
@@ -3616,61 +3615,104 @@ def concepts_from_mmd(
     if use_live:
         chunks = _section_aware_chunks(mmd_text)
         sections = [s for c in chunks for s in c["sections"]]
-        headings = _topic_headings(sections)
-        if not headings:
-            headings = [chapter_title] if chapter_title else ["General"]
         progress.log("Concept generation metadata received:\n" + _metadata_block(meta))
         progress.log(
-            f"Concept Map V2: {len(mmd_text):,} chars, "
-            f"{len(headings)} locked topic(s), subject={subject or 'general'}.")
-
+            f"Extracting concepts from {len(mmd_text):,} chars "
+            f"across {len(chunks)} section-aware chunk(s) "
+            f"(subject: {subject or 'general'}).")
+        out = _extract_skeleton_via_api(chunks, meta=meta)
+        if not out:
+            raise RuntimeError("live concept extraction returned no rows")
+        # Structural OCR headings ("Solution", "Summary", "EXERCISE 6.1") must
+        # never become topics: merge their rows into the preceding real topic
+        # BEFORE any chapter-wide pass builds on the topic structure.
+        out = _scrub_section_numbers(out)
+        headings = _topic_headings(sections)
+        out = _snap_topics_to_headings(out, headings, chapter_title=chapter_title)
+        out = _consolidate_concepts_via_api(out, subject=subject, mmd_text=mmd_text, meta=meta)
+        if _topics_look_collapsed(out, headings):
+            progress.log(
+                f"Topic segregation collapsed: {len(out)} concepts share almost "
+                f"one topic while the source has {len(headings)} section "
+                "headings — re-segregating topics via API.",
+                level="warning",
+            )
+            out = _restructure_topics_via_api(out, meta=meta, headings=headings)
+        out = _snap_topics_to_headings(out, headings, chapter_title=chapter_title)
+        out = _refine_descriptions_via_api(
+            out, subject=subject, mmd_text=mmd_text, meta=meta, sections=sections)
+        out = _ensure_mastery_lines_via_api(out, meta=meta)
         question_task_inventory = _extract_question_task_inventory_via_api(
             meta=meta, sections=sections)
-        inventory_items = question_task_inventory.get("items") or []
+        mined_types = _mine_types_from_inventory_via_api(
+            meta=meta, inventory=question_task_inventory)
         if artifacts is not None:
             artifacts["question_task_inventory"] = question_task_inventory
-
-        cfg = cmv2.run_config_from_meta(
-            board=board,
-            grade=grade,
+            artifacts["mined_types"] = mined_types
+        # Culminations are built BEFORE Types assignment so mixed/synthesis
+        # Types mined from the source can be placed on culmination rows too.
+        out = _build_culminations_via_api(out, meta=meta)
+        out = _assign_types_via_api(
+            out,
             subject=subject,
-            chapter_title=chapter_title,
-            publication=source_book,
-            chapter_duration=chapter_duration,
-            expected_topics=headings,
+            mmd_text=mmd_text,
+            meta=meta,
+            sections=sections,
+            question_task_inventory=question_task_inventory,
+            mined_types=mined_types,
         )
-        progress.log(
-            f"Locked topics: {', '.join(cmv2.canonical_topics(cfg))}")
-        progress.log(
-            f"Chapter tag (code): {cmv2.chapter_tag(cfg)} | "
-            f"duration: {cfg.chapter_duration_minutes} min")
-
-        def _call_llm(system: str, user: str) -> dict:
-            return _openai_json(system, user)
-
-        def _v2_log(msg: str, level: str = "info") -> None:
-            progress.log(msg, level=level)
-
-        v2_meta, _v2_rows, _v2_concepts = cmv2.generate_concept_map_v2(
-            cfg, mmd_text, inventory_items,
-            call_llm_json=_call_llm,
-            log=_v2_log,
-        )
-        if artifacts is not None:
-            artifacts["concept_map_v2_meta"] = v2_meta
-            artifacts["mined_types"] = {
-                "types": [
-                    {
-                        "type_id": t.type_id,
-                        "type_title": t.type_title,
-                        "source_question_ids": t.source_question_ids,
-                    }
-                    for c in _v2_concepts for t in c.types
-                ],
-            }
-
-        out = cmv2.to_legacy_records(_v2_rows)
+        # Deterministic normalization BEFORE the strict repair: formatting
+        # failures the code can fix itself (section numbering in topics/titles,
+        # missing/duplicate culminations) must never fail a job or burn repair
+        # attempts needed for semantic issues. Source references ("Example 5",
+        # "Exercise 1.2") are deliberately KEPT here: the repair pass has the
+        # chapter source and substitutes the full actual problem content,
+        # which is preferred over neutral rewording.
+        out = _scrub_section_numbers(out)
+        out = _merge_concept_records(out)
+        out = _dedupe_titles_chapter_wide(out)
+        out = [
+            concept_cleanup.clean_concept_record(dict(r), neutralize_artifacts=False)
+            for r in out
+        ]
+        out = _enforce_culminations(out)
+        out = _repair_records_via_api(
+            out, meta=meta, stage="final", source_context=mmd_text, strict=False)
+        # Post-repair: neutralization is the deterministic last resort for any
+        # reference the repair pass failed to inline — a job must never fail
+        # on a reference the code can still remove.
         out = [concept_cleanup.clean_concept_record(dict(r)) for r in out]
+        out = cr.refine_chapter(out)
+        # The repair/cleanup passes may reorder, rename, or re-collide rows;
+        # re-assert the duplicate-title, culmination, and mastery-line
+        # invariants mechanically before the final gate (rows the repair pass
+        # rewrote may have lost their "Achieving Mastery" line — restore it
+        # deterministically, without another API round-trip).
+        out = _dedupe_titles_chapter_wide(out)
+        out = _ensure_mastery_lines_via_api(out, meta=meta, use_api=False)
+        out = _enforce_culminations(out)
+        _validate_final_or_raise(out, stage="final")
+        missing = sum(
+            1 for r in out
+            if not _has_meaningful_types(r.get("concept_details", ""))
+            and not cr.is_culmination(r.get("concept_title", ""))
+        )
+        if missing:
+            progress.log(
+                f"{missing} non-culmination concept(s) still lack Types after all passes.",
+                level="warning",
+            )
+        normal_count = sum(
+            1 for r in out if not cr.is_culmination(r.get("concept_title", "")))
+        expected_min = _expected_min_skeleton_rows(mmd_text)
+        if normal_count < expected_min:
+            progress.log(
+                f"Only {normal_count} concept(s) extracted from "
+                f"{len(mmd_text):,} chars of source (expected >= {expected_min}). "
+                "The chapter was likely under-extracted — check the per-stage "
+                "row counts above to see which pass lost rows.",
+                level="warning",
+            )
         progress.set_progress(1.0, label="Concept extraction complete")
         progress.log(f"Final concept count: {len(out)}.", level="success")
         return out

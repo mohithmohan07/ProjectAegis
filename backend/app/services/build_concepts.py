@@ -345,15 +345,11 @@ def generate_post_learning(db: Session, job_id: int, target_chapter_id: int) -> 
         chapter_code=chapter.chapter_code,
         learning_kind="Post",
         artifacts=artifacts,
-        source_book=job.source_book,
-        chapter_duration=chapter.chapter_duration,
     )
     _store_inventory(job, artifacts)
     created_ids, merged_ids = _deposit_concepts(
         db, chapter, records, "Post", job.source_book)
-    v2_meta = artifacts.get("concept_map_v2_meta") or {}
-    _sync_chapter_topic_summary(
-        chapter, v2_meta or _chapter_meta_summary(chapter))
+    _sync_chapter_topic_summary(chapter, _chapter_meta_summary(chapter))
     db.commit()
 
     written = writer.append_concepts(
