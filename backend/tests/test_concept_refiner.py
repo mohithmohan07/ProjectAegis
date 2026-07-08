@@ -82,7 +82,7 @@ def test_refine_chapter_reduces_then_numbers_continuously():
 def test_records_without_types_are_untouched():
     records = [_rec("X", "Description: only // Misconception: none")]
     out = cr.refine_chapter(records)
-    assert out[0]["concept_details"] == "Description: only // Misconception: none"
+    assert out[0]["concept_details"] == "Description: only // Misconceptions: none"
 
 
 def test_refine_chapter_adds_missing_misconceptions_to_normal_concepts():
@@ -110,7 +110,7 @@ def test_culmination_description_becomes_recap():
     assert "long synthesis" not in culm
     # Types (Miscellaneous sequence) and Misconception are preserved.
     assert "Miscellaneous Type 01: Mixed" in culm
-    assert "Misconception: keep me" in culm
+    assert "Misconceptions: keep me" in culm
     # Regular concept keeps its continuous Type numbering.
     assert "Type 01: P" in out[0]["concept_details"]
 

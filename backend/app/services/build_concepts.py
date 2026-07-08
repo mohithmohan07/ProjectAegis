@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from sqlalchemy.orm import Session
@@ -101,6 +102,9 @@ def _deposit_concepts(
     # Types enrichment, naming) is done by the API passes in concepts_from_mmd;
     # this pass only enforces the numbering/format the team requires.
     records = [concept_cleanup.clean_concept_record(dict(r)) for r in records]
+    records = concept_cleanup.filter_review_violations(
+        records, subject=chapter.subject, board=chapter.board)
+    records = concept_cleanup.dedupe_similar_titles_chapter_wide(records)
     records = concept_refiner.refine_chapter(records)
     report = concept_validator.validate_concept_rows(
         records,
@@ -148,6 +152,20 @@ def _is_blank(value: str) -> bool:
     return (value or "").strip().lower() in _BLANK_VALUES
 
 
+def _parse_duration_minutes(value: str) -> int | None:
+    """Parse finalized duration strings like '270 minutes' or '270'."""
+    text = (value or "").strip().lower()
+    if not text or text in _BLANK_VALUES:
+        return None
+    m = re.search(r"(\d+)", text)
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except ValueError:
+        return None
+
+
 def _chapter_meta_summary(chapter: models.Chapter) -> dict:
     """API-written chapter/topic metadata (empty dict in dry mode / on failure).
 
@@ -155,6 +173,7 @@ def _chapter_meta_summary(chapter: models.Chapter) -> dict:
     fallback; a metadata failure must never fail a generation job that has
     already produced a valid concept map.
     """
+    finalized = _parse_duration_minutes(chapter.chapter_duration)
     topics_payload = [
         {
             "topic": t.topic_title,
@@ -169,6 +188,7 @@ def _chapter_meta_summary(chapter: models.Chapter) -> dict:
         subject=chapter.subject, board=chapter.board, grade=chapter.grade,
         unit=chapter.unit, chapter_title=chapter.chapter_title,
         chapter_id=chapter.id, chapter_code=chapter.chapter_code,
+        finalized_duration_minutes=finalized or 0,
     )
     try:
         return generation.chapter_meta_via_api(meta=meta, topics=topics_payload)
@@ -217,11 +237,16 @@ def _sync_chapter_topic_summary(
     if meta_summary.get("chapter_description"):
         chapter.chapter_description = meta_summary["chapter_description"]
     elif _is_blank(chapter.chapter_description) and topics:
+        topic_names = ", ".join(
+            bi.strip_topic_title(t.topic_title) or t.topic_title for t in topics)
         chapter.chapter_description = (
             f"This chapter develops {n_concepts} concept(s) across "
-            f"{len(topics)} topic(s): " + ", ".join(t.topic_title for t in topics) + "."
+            f"{len(topics)} topic(s): {topic_names}."
         )
-    if meta_summary.get("chapter_duration_minutes") and _is_blank(chapter.chapter_duration):
+    finalized = _parse_duration_minutes(chapter.chapter_duration)
+    if finalized:
+        chapter.chapter_duration = f"{finalized} minutes"
+    elif meta_summary.get("chapter_duration_minutes") and _is_blank(chapter.chapter_duration):
         chapter.chapter_duration = f"{meta_summary['chapter_duration_minutes']} minutes"
     elif _is_blank(chapter.chapter_duration) and n_concepts:
         # Rough classroom estimate: ~12 minutes of instruction per concept.

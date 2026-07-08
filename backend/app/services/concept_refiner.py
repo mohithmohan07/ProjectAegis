@@ -175,6 +175,18 @@ _MASTERY_LABEL_RE = re.compile(
     r"\s*(?:achieving\s+mastery|mastery(?:\s+indicators?)?)\s*[:\-]\s*",
     re.IGNORECASE,
 )
+# Inline misconception markers inside the Description body (before a separate section).
+_INLINE_MISCONCEPTION_RE = re.compile(
+    r"\s*(?://\s*)?(?:Misconception(?:s)?|Common (?:error|misconception))\s*[:\-]\s*",
+    re.IGNORECASE,
+)
+# Generic fallback text from ``_fallback_misconception`` — reviewers asked to drop
+# the second, post-mastery copy when the model duplicates it.
+_GENERIC_MISCONCEPTION_RE = re.compile(
+    r"^Students may apply .+ as a memorized rule without checking "
+    r"the conditions, context, or representation given in the problem\.?$",
+    re.IGNORECASE,
+)
 
 
 def format_mastery_statement(details: str) -> str:
@@ -213,6 +225,89 @@ def _fallback_misconception(title: str) -> str:
     )
 
 
+def _is_generic_misconception(text: str) -> bool:
+    return bool(_GENERIC_MISCONCEPTION_RE.match((text or "").strip()))
+
+
+def normalize_misconception_sections(details: str) -> str:
+    """Keep exactly one Misconceptions section in canonical order.
+
+    Review feedback: misconceptions appeared twice — inline in Description
+    (sometimes after Achieving Mastery) AND as a separate section. We strip
+    inline copies from Description, merge duplicate sections, drop a trailing
+    generic duplicate, and enforce Description // Types // Misconceptions order.
+    """
+    sections = split_sections(details)
+    if not sections:
+        return details
+
+    misconception_texts: list[str] = []
+    cleaned: list[tuple[str, str]] = []
+    for label, content in sections:
+        lower = label.strip().lower()
+        if lower.startswith("misconception"):
+            if content.strip():
+                misconception_texts.append(content.strip())
+            continue
+        if lower.startswith("description"):
+            body = content
+            # Remove inline misconception before or after the mastery line.
+            m_mastery = _MASTERY_LABEL_RE.search(body)
+            if m_mastery:
+                pre = body[:m_mastery.start()]
+                post_mastery = body[m_mastery.end():]
+                inline = _INLINE_MISCONCEPTION_RE.search(post_mastery)
+                if inline:
+                    extracted = post_mastery[inline.end():].strip()
+                    if extracted:
+                        misconception_texts.append(extracted)
+                    post_mastery = post_mastery[:inline.start()].rstrip()
+                body = body[:m_mastery.start()] + body[m_mastery.start():m_mastery.end()] + post_mastery
+            inline_pre = _INLINE_MISCONCEPTION_RE.search(body)
+            if inline_pre:
+                extracted = body[inline_pre.end():].strip()
+                if extracted:
+                    misconception_texts.append(extracted)
+                body = body[:inline_pre.start()].rstrip()
+            cleaned.append((label, body))
+            continue
+        cleaned.append((label, content))
+
+    # Prefer the first specific misconception; drop trailing generic duplicates.
+    chosen = ""
+    for text in misconception_texts:
+        if text and not _is_generic_misconception(text):
+            chosen = text
+            break
+    if not chosen and misconception_texts:
+        chosen = misconception_texts[0]
+
+    ordered: list[tuple[str, str]] = []
+    types_block: tuple[str, str] | None = None
+    for label, content in cleaned:
+        if label.strip().lower().startswith("type"):
+            types_block = (label, content)
+        else:
+            ordered.append((label, content))
+    if types_block:
+        ordered.append(types_block)
+    if chosen:
+        ordered.append(("Misconceptions", chosen))
+    return join_sections(ordered)
+
+
+def split_merged_description_blocks(details: str) -> str:
+    """When a cell accidentally concatenates multiple concepts, keep the first."""
+    raw = (details or "").strip()
+    if not raw:
+        return raw
+    parts = re.split(r"(?<=[.!?])\s*(?=Description\s*:)", raw, flags=re.IGNORECASE)
+    if len(parts) <= 1:
+        return raw
+    first = parts[0].strip()
+    return first if first.lower().startswith("description:") else raw
+
+
 def ensure_misconceptions(records: list[dict]) -> list[dict]:
     """Append a Misconceptions section to every normal concept when missing."""
     for rec in records:
@@ -238,9 +333,11 @@ def refine_chapter(records: list[dict]) -> list[dict]:
     """Full deterministic refinement pass over a chapter's ordered records."""
     for rec in records:
         if rec.get("concept_details"):
-            details = reduce_type_sections(rec["concept_details"])
+            details = split_merged_description_blocks(rec["concept_details"])
+            details = reduce_type_sections(details)
             if not is_culmination(rec.get("concept_title", "")):
                 details = format_mastery_statement(details)
+            details = normalize_misconception_sections(details)
             rec["concept_details"] = details
     records = ensure_misconceptions(records)
     records = renumber_types_continuously(records)

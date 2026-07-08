@@ -122,6 +122,8 @@ _BOOK_TAG_HINTS = [
     ("frank", "FRANK"),
     ("together with", "TW"),
     ("xam idea", "XAMIDEA"),
+    ("fullmarks", "Fullmarks"),
+    ("full marks", "Fullmarks"),
 ]
 
 _CBSE_SOCIAL_SCIENCE_COMPONENTS = {
@@ -188,6 +190,16 @@ def effective_subject_for_tags(board: str, subject: str) -> str:
     return subj
 
 
+def subject_code(board: str, subject: str) -> str:
+    """Two-letter subject code for ID prefixes (e.g. 10CBEL, 09CBSS)."""
+    subj = effective_subject_for_tags(board, subject)
+    if (board or "").strip().upper() == "CBSE" and subj.lower() in {
+        "english", "english language", "english literature",
+    }:
+        return "EL"
+    return bi.SUBJECT_CODE_INV.get(subj, (subj[:2] or "XX").upper())
+
+
 def derive_chapter_meta(chapter_title: str, chapter_display_name: str, *probes: str) -> dict:
     """Best-effort board/grade/subject/code/unit for a chapter from its text fields."""
     for candidate in (chapter_display_name, chapter_title, *probes):
@@ -243,7 +255,7 @@ def make_chapter_code(board: str, grade: str, subject: str, chapter_title: str) 
     """Construct an ID prefix-style chapter code for newly created chapters."""
     subject = effective_subject_for_tags(board, subject)
     b = bi.BOARD_CODE_INV.get(board, (board[:2] or "XX").upper())
-    s = bi.SUBJECT_CODE_INV.get(subject, (subject[:2] or "XX").upper())
+    s = subject_code(board, subject)
     slug = re.sub(r"[^A-Za-z0-9]", "", (chapter_title or "CH").title())[:12] or "CH"
     return f"{(grade or '00')}{b}{s}_{slug}"
 
@@ -297,7 +309,7 @@ def code_prefix(board: str, grade: str, subject: str) -> str:
     """ID prefix like '09CBSS' (grade + board code + subject code)."""
     subject = effective_subject_for_tags(board, subject)
     b = bi.BOARD_CODE_INV.get(board, (board[:2] or "XX").upper())
-    s = bi.SUBJECT_CODE_INV.get(subject, (subject[:2] or "XX").upper())
+    s = subject_code(board, subject)
     return f"{grade or '00'}{b}{s}"
 
 

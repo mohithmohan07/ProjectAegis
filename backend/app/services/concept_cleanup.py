@@ -22,6 +22,26 @@ from __future__ import annotations
 import re
 import string
 
+from .. import bulk_import as bi
+from . import concept_refiner as cr
+
+# Topics that must never appear as standalone teaching topics in output.
+_FORBIDDEN_TOPIC_NAMES = {
+    "overview", "basics", "basic concepts", "general",
+    "summary", "misc", "miscellaneous",
+}
+
+# English-literature pedagogy rows that are not part of the universal concept map.
+_ENGLISH_FORBIDDEN_CONCEPT_RE = re.compile(
+    r"\b(?:"
+    r"pre-?\s*reading|informal letter|formal letter|letter writing|"
+    r"reading in manageable parts|oral check|prediction and discussion|"
+    r"family news|january 2006|comprehension drill|"
+    r"discussion questions|warm-?up activity"
+    r")\b",
+    re.IGNORECASE,
+)
+
 # Connector words kept lowercase in Title Case (unless first/last word).
 _TITLE_SMALL_WORDS = {
     "a", "an", "and", "as", "at", "but", "by", "for", "from", "in", "into",
@@ -84,6 +104,81 @@ _INLINE_REF_RE = re.compile(
     r"(?:[,]\s*|\b(?:and|or)\s+)?(?:\b(?:see|refer(?:\s+to)?)\s+)?" + _REF_CORE,
     re.IGNORECASE,
 )
+
+
+def filter_review_violations(
+    records: list[dict], *, subject: str = "", board: str = "",
+) -> list[dict]:
+    """Drop or reassign rows that QA flagged across subject samples."""
+    if not records:
+        return records
+
+    real_topics: list[str] = []
+    for rec in records:
+        topic = (rec.get("topic") or "").strip()
+        key = bi.normalize_question_text(topic)
+        if key and key not in _FORBIDDEN_TOPIC_NAMES and topic not in real_topics:
+            real_topics.append(topic)
+    fallback_topic = real_topics[0] if real_topics else (records[0].get("topic") or "General")
+
+    out: list[dict] = []
+    dropped = 0
+    subj = (subject or "").strip().lower()
+    is_english = "english" in subj
+
+    for rec in records:
+        title = (rec.get("concept_title") or "").strip()
+        topic = (rec.get("topic") or "").strip()
+        topic_key = bi.normalize_question_text(topic)
+
+        if is_english and _ENGLISH_FORBIDDEN_CONCEPT_RE.search(title):
+            dropped += 1
+            continue
+        if topic_key in _FORBIDDEN_TOPIC_NAMES:
+            rec = dict(rec)
+            rec["topic"] = fallback_topic
+        out.append(rec)
+
+    if dropped:
+        from . import progress as _progress
+        _progress.log(
+            f"Dropped {dropped} English pedagogy / filler concept row(s).",
+            level="warning",
+        )
+    return out
+
+
+def dedupe_similar_titles_chapter_wide(records: list[dict]) -> list[dict]:
+    """Drop near-duplicate concept titles (e.g. BPT restated under two topics)."""
+    kept: list[str] = []
+    out: list[dict] = []
+    dropped = 0
+
+    def _similar(a: str, b: str) -> bool:
+        na, nb = bi.normalize_question_text(a), bi.normalize_question_text(b)
+        if not na or not nb:
+            return False
+        if na == nb:
+            return True
+        if na in nb or nb in na:
+            return True
+        return False
+
+    for rec in records:
+        title = (rec.get("concept_title") or "").strip()
+        if title and not cr.is_culmination(title):
+            if any(_similar(title, prev) for prev in kept):
+                dropped += 1
+                continue
+            kept.append(title)
+        out.append(rec)
+    if dropped:
+        from . import progress as _progress
+        _progress.log(
+            f"Dropped {dropped} near-duplicate concept-title row(s) chapter-wide.",
+            level="warning",
+        )
+    return out
 
 
 def clean_concept_name(name: str) -> str:

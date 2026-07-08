@@ -108,7 +108,7 @@ def test_deposit_applies_numbering_recap_titlecase_and_topic_columns(db):
     assert "Miscellaneous Type 01: Mixed" in culm
     assert "Description: Recap" in culm
     assert "long synthesis" not in culm
-    assert "Misconception: keep me" in culm
+    assert "Misconceptions: keep me" in culm
 
     # Column E (post_topics) lists tagged Topic Titles (with the code).
     assert "Topic 01:" in chapter.post_topics
