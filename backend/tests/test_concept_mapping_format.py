@@ -46,9 +46,13 @@ def test_writer_composes_tags_labels_and_clean_display(db):
     assert row[7] == clean_topic
     assert "_" not in row[7]  # display name carries no code/tag
 
-    # topic_concept_labels (col 9) lists the topic's concept titles.
+    # topic_concept_labels (col 9) lists the topic's concept titles in the
+    # tagged "Name (tag)" form of the concept_title column (review: labels
+    # must be concept title, not the clean display name).
     assert bi.OBJECTIVE_FIELDS[9] == "topic_concept_labels"
     assert concept.concept_title in row[9]
+    # Each label matches the tagged concept_title column (col 12) exactly.
+    assert row[12] in row[9]
 
     # Concept: tag in title (col 12), clean display (col 13).
     assert bi.strip_title_tag(row[12]) == concept.concept_title

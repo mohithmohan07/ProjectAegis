@@ -252,3 +252,180 @@ def test_power_sharing_metadata_names_required_forms_topic():
     block = g._metadata_block(meta)
     assert "Forms of Power-sharing" in block
     assert "Do not merge horizontal" in block
+
+
+# --------------------------------------------------------------------------- #
+# V3 review: Type -> Case (defined sub-type) -> Example (full question)
+# --------------------------------------------------------------------------- #
+
+def test_mined_type_renders_case_subtypes_with_example_lines():
+    body, n = g._mined_type_to_body({
+        "type_title": "Questions based on computing resistance",
+        "type_description": "Given electrical readings, compute resistance "
+                            "using Ohm's law.",
+        "case_prompts": [
+            {
+                "case_title": "Ohm's law formula-based question when V and I "
+                              "are given (without circuit)",
+                "examples": [
+                    {"example_prompt": "Calculate the resistance of the circuit "
+                                       "if V is 220 V and I is 0.5 mA."},
+                ],
+            },
+            {
+                "case_title": "Ohm's law formula-based question when the "
+                              "circuit diagram is given",
+                "examples": [
+                    {"example_prompt": "Calculate the resistance for the given "
+                                       "circuit. (Refer fig. 11.1) "
+                                       "![](https://cdn.mathpix.com/f11.jpg)"},
+                ],
+            },
+        ],
+    }, 0)
+    assert n == 1
+    assert "Case 01: Ohm's law formula-based question when V and I are given" in body
+    assert "Example: Calculate the resistance of the circuit if V is 220 V" in body
+    assert "Case 02: Ohm's law formula-based question when the circuit diagram" in body
+    assert "(Refer fig. 11.1) ![](https://cdn.mathpix.com/f11.jpg)" in body
+
+
+def test_inventory_task_text_prefers_raw_task_and_ships_images():
+    item = {
+        "raw_task": "Calculate the resistance for the given circuit. (Refer fig. 11.1)",
+        "normalized_task": "Compute resistance.",
+        "image_urls": ["https://cdn.mathpix.com/f11.jpg"],
+    }
+    text = g._inventory_task_text(item)
+    assert text.startswith("Calculate the resistance for the given circuit.")
+    assert "![](https://cdn.mathpix.com/f11.jpg)" in text
+
+
+def test_validator_allows_figure_reference_with_embedded_image():
+    details = (
+        "Description: Ohm's law relates V, I and R. // "
+        "Types: Type 01: Computing resistance Case 01: Circuit diagram given "
+        "Example: Calculate the resistance for the given circuit. "
+        "(Refer fig. 11.1) ![](https://cdn.mathpix.com/f11.jpg) // "
+        "Misconceptions: Students may invert the V/I ratio."
+    )
+    rows = [{"topic": "Electricity", "parent_concept": "Ohm's Law",
+             "concept_title": "Resistance", "concept_details": details,
+             "keywords": ""}]
+    report = concept_validator.validate_concept_rows(rows, allow_types=True)
+    assert not any(e["code"] == "source_artifact" for e in report["errors"])
+    assert not any(e["code"] == "short_case_example" for e in report["errors"])
+
+    # Without the image URL the bare figure pointer is still an artifact.
+    no_image = [{"topic": "Electricity", "parent_concept": "Ohm's Law",
+                 "concept_title": "Resistance",
+                 "concept_details": details.replace(
+                     " ![](https://cdn.mathpix.com/f11.jpg)", ""),
+                 "keywords": ""}]
+    report2 = concept_validator.validate_concept_rows(no_image, allow_types=True)
+    assert any(e["code"] == "source_artifact" for e in report2["errors"])
+
+
+def test_validator_flags_truncated_example_lines():
+    rows = [{
+        "topic": "Electricity",
+        "parent_concept": "Ohm's Law",
+        "concept_title": "Resistance",
+        "concept_details": (
+            "Description: Ohm's law relates V, I and R. // "
+            "Types: Type 01: Computing resistance Case 01: V and I given "
+            "Example: q // "
+            "Misconceptions: Students may invert the V/I ratio."
+        ),
+        "keywords": "",
+    }]
+    report = concept_validator.validate_concept_rows(rows, allow_types=True)
+    assert any(e["code"] == "short_case_example" for e in report["errors"])
+
+
+def test_cleanup_keeps_figure_reference_next_to_embedded_image():
+    text = ("Calculate the resistance for the given circuit. (Refer fig. 11.1) "
+            "![](https://cdn.mathpix.com/f11.jpg)")
+    assert concept_cleanup.strip_dangling_references(text) == text
+    assert concept_cleanup.neutralize_source_artifacts(text) == text
+    # Without the image, the bare reference is still neutralized.
+    bare = "Calculate the resistance for the given circuit shown in fig. 11.1."
+    assert "fig. 11.1" not in concept_cleanup.neutralize_source_artifacts(bare)
+
+
+def test_multiple_specific_misconceptions_are_kept():
+    details = (
+        "Description: Resistance depends on material and geometry. // "
+        "Misconceptions: Students may think doubling length halves resistance. // "
+        "Misconception: Students may confuse resistance with resistivity."
+    )
+    out = cr.normalize_misconception_sections(details)
+    assert out.count("Misconceptions:") == 1
+    assert "doubling length halves resistance" in out
+    assert "confuse resistance with resistivity" in out
+
+
+def test_duplicate_mastery_statements_keep_the_second():
+    details = (
+        "Description: A concept body.\n"
+        "Achieving Mastery: Applying Resistance correctly in new problems. "
+        "More explanation. Achieving Mastery: Selecting and rearranging R = V/I "
+        "for the given circuit values."
+    )
+    out = cr.format_mastery_statement(details)
+    assert out.count("Achieving Mastery:") == 1
+    assert "Selecting and rearranging R = V/I" in out
+    assert "Applying Resistance correctly in new problems" not in out
+
+
+def test_mastery_after_misconceptions_replaces_the_earlier_statement():
+    details = (
+        "Description: A concept body.\n"
+        "Achieving Mastery: Applying the concept to problems. // "
+        "Misconceptions: A real learner error. "
+        "Achieving Mastery: Explaining resistance from V-I data."
+    )
+    out = cr.normalize_misconception_sections(details)
+    assert out.count("Achieving Mastery:") == 1
+    assert "Explaining resistance from V-I data" in out
+    assert "Misconceptions: A real learner error." in out
+
+
+def test_topic_headings_prefer_main_sections_over_subtopics():
+    def sec(heading, prefix, level=1):
+        return {
+            "heading": heading,
+            "heading_level": level,
+            "heading_numbered": True,
+            "heading_number_prefix": prefix,
+            "heading_chapter": False,
+        }
+
+    sections = [
+        sec("1 The French Revolution and the Idea of the Nation", "1"),
+        sec("2 The Making of Nationalism in Europe", "2"),
+        sec("2.1 The Aristocracy and the New Middle Class", "2.1", level=2),
+        sec("2.2 What Did Liberal Nationalism Stand For?", "2.2", level=2),
+        sec("3 The Age of Revolutions: 1830-1848", "3"),
+        sec("4 The Making of Germany and Italy", "4"),
+        sec("4.1 Germany - Can the Army Be the Architect of a Nation?", "4.1", level=2),
+        sec("4.2 Italy Unified", "4.2", level=2),
+    ]
+    headings = g._topic_headings(sections)
+    assert "2 The Making of Nationalism in Europe" in headings
+    assert "4 The Making of Germany and Italy" in headings
+    assert not any("Aristocracy" in h for h in headings)
+    assert not any("Italy Unified" in h for h in headings)
+
+
+def test_inventory_prompt_requires_checkpoints_activities_and_images():
+    inventory = g.prompts.get_text("concepts.question_task_inventory.system")
+    assert "checkpoint_question" in inventory
+    assert "activity" in inventory
+    assert "image_urls" in inventory
+    assert "cdn.mathpix.com" in inventory
+    assert "never truncate" in inventory
+    embedding = g.prompts.get_text("concepts.type_embedding.system")
+    assert "is_activity" in embedding
+    assert "Respect chapter position" in embedding
+    assert "heating-effect" in embedding

@@ -114,9 +114,18 @@ _REF_CORE = (
     r"(?:examples?|ex|fig(?:ure)?s?|tables?)\b\.?\s*(?:no\.?\s*)?"
     r"(?:type\s+)?(?:[IVXLCDM]+|\d+(?:\s*[,&]\s*\d+)*)\b"
 )
+# Same reference token WITHOUT figure/table: when the actual image is embedded
+# as a URL, figure/table references are meaningful and must be preserved.
+_REF_CORE_NO_FIG = (
+    r"(?:examples?|ex)\b\.?\s*(?:no\.?\s*)?"
+    r"(?:type\s+)?(?:[IVXLCDM]+|\d+(?:\s*[,&]\s*\d+)*)\b"
+)
 # Parenthetical reference, e.g. "(Example 19)", "(Examples Type III)", "(see Fig 2)".
 _PAREN_REF_RE = re.compile(
     r"\(\s*(?:see\s+)?(?:" + _REF_CORE + r")\s*\)", re.IGNORECASE,
+)
+_PAREN_REF_NO_FIG_RE = re.compile(
+    r"\(\s*(?:see\s+)?(?:" + _REF_CORE_NO_FIG + r")\s*\)", re.IGNORECASE,
 )
 # Bare inline reference, optionally led by a connector ("and"/"or"/",") and/or a
 # cue word ("see"/"refer"). Consuming the leading connector keeps multi-reference
@@ -124,6 +133,14 @@ _PAREN_REF_RE = re.compile(
 _INLINE_REF_RE = re.compile(
     r"(?:[,]\s*|\b(?:and|or)\s+)?(?:\b(?:see|refer(?:\s+to)?)\s+)?" + _REF_CORE,
     re.IGNORECASE,
+)
+_INLINE_REF_NO_FIG_RE = re.compile(
+    r"(?:[,]\s*|\b(?:and|or)\s+)?(?:\b(?:see|refer(?:\s+to)?)\s+)?" + _REF_CORE_NO_FIG,
+    re.IGNORECASE,
+)
+# Markdown image or bare URL — presence means real source visuals are embedded.
+_IMAGE_URL_RE = re.compile(
+    r"!\[[^\]]*\]\(https?://[^)]+\)|https?://\S+", re.IGNORECASE,
 )
 
 
@@ -306,16 +323,23 @@ def _tidy(text: str) -> str:
 
 
 def strip_dangling_references(text: str) -> str:
-    """Remove bare source-artifact references; keep real worded content."""
+    """Remove bare source-artifact references; keep real worded content.
+
+    When the text embeds an actual image URL, figure/table references stay
+    (they point at the shipped image, e.g. "(Refer fig. 11.1) ![](https://…)").
+    """
     if not text:
         return text
-    out = _PAREN_REF_RE.sub("", text)
+    has_image = bool(_IMAGE_URL_RE.search(text))
+    paren_re = _PAREN_REF_NO_FIG_RE if has_image else _PAREN_REF_RE
+    inline_re = _INLINE_REF_NO_FIG_RE if has_image else _INLINE_REF_RE
+    out = paren_re.sub("", text)
 
     def _inline_sub(m: re.Match) -> str:
         # Drop the reference and an immediately-trailing dangling connector.
         return ""
 
-    out = _INLINE_REF_RE.sub(_inline_sub, out)
+    out = inline_re.sub(_inline_sub, out)
     # Clean any connector the removal still stranded before punctuation / line end.
     out = re.sub(r"\s*\b(?:or|and)\s+(?=[.;,)]|$)", "", out, flags=re.IGNORECASE)
     # Drop an orphan leading connector left at the very start.
@@ -354,14 +378,18 @@ _ARTIFACT_NEUTRALIZATIONS = [
      "the exercises"),
     (re.compile(r"\bexamples?\s+\d+(?:\.\d+)*\b", re.IGNORECASE),
      "a worked example"),
-    (re.compile(r"\bfig(?:ure)?s?\.?\s+\d+(?:\.\d+)*\b", re.IGNORECASE),
-     "the figure"),
-    (re.compile(r"\btables?\s+\d+(?:\.\d+)*\b", re.IGNORECASE),
-     "the given table"),
     (re.compile(r"\b(?:on\s+)?page\s+(?:no\.?\s*)?\d+\b", re.IGNORECASE),
      "in the chapter"),
     (re.compile(r"\bp(?:age)?\.\s*\d+\b", re.IGNORECASE),
      "in the chapter"),
+]
+# Figure/table references are only neutralized when the row ships NO image —
+# with an embedded Mathpix URL they point at real, visible content.
+_FIG_TABLE_NEUTRALIZATIONS = [
+    (re.compile(r"\bfig(?:ure)?s?\.?\s+\d+(?:\.\d+)*\b", re.IGNORECASE),
+     "the figure"),
+    (re.compile(r"\btables?\s+\d+(?:\.\d+)*\b", re.IGNORECASE),
+     "the given table"),
 ]
 
 
@@ -371,6 +399,9 @@ def neutralize_source_artifacts(text: str) -> str:
         return text
     for pat, repl in _ARTIFACT_NEUTRALIZATIONS:
         text = pat.sub(repl, text)
+    if not _IMAGE_URL_RE.search(text):
+        for pat, repl in _FIG_TABLE_NEUTRALIZATIONS:
+            text = pat.sub(repl, text)
     return _tidy(text)
 
 

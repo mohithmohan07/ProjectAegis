@@ -52,8 +52,13 @@ def test_universal_question_task_inventory_and_type_mining_prompts():
     assert "COVERAGE IS MANDATORY" in mining
     assert "NEVER skip an item" in mining
     assert "A missed question is a defect" in mining
-    assert "CASE PROMPTS CARRY THE FULL SOURCE QUESTION" in mining
-    assert "Do not shorten source questions" in mining
+    assert "EXAMPLES CARRY THE FULL SOURCE QUESTION" in mining
+    assert "Do not shorten or truncate source questions" in mining
+    # Cases are defined sub-types; examples carry the full questions.
+    assert "CASE WORDING" in mining
+    assert "case_title DEFINES the sub-type" in mining
+    assert "checkpoint" in mining.lower()
+    assert "cdn.mathpix.com" in mining
     # Types must be properly defined (precise wording + definition).
     assert "TYPE WORDING" in mining
     assert "precise, self-explanatory pattern name" in mining

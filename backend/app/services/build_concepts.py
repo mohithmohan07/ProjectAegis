@@ -278,7 +278,7 @@ _INVENTORY_CSV_COLUMNS = [
     "qid", "order_index", "source_kind", "source_label", "parent_source_label",
     "topic_hint", "page_hint", "subpart_label", "requires_visual",
     "requires_context", "normalized_task", "raw_task",
-    "raw_solution_or_answer", "shared_context", "content_objects",
+    "raw_solution_or_answer", "shared_context", "image_urls", "content_objects",
     "classified", "mined_type_ids", "mined_type_titles",
 ]
 
@@ -310,8 +310,13 @@ def inventory_csv(db: Session, job_id: int) -> str:
         title = (t.get("type_title") or "").strip()
         qids = set(t.get("source_question_ids") or [])
         for case in t.get("case_prompts") or []:
-            if isinstance(case, dict) and case.get("source_question_id"):
+            if not isinstance(case, dict):
+                continue
+            if case.get("source_question_id"):
                 qids.add(case["source_question_id"])
+            for ex in case.get("examples") or []:
+                if isinstance(ex, dict) and ex.get("source_question_id"):
+                    qids.add(ex["source_question_id"])
         for qid in qids:
             types_by_qid.setdefault((qid or "").strip(), []).append((tid, title))
 
@@ -324,6 +329,8 @@ def inventory_csv(db: Session, job_id: int) -> str:
         row = {col: item.get(col, "") for col in _INVENTORY_CSV_COLUMNS}
         row["content_objects"] = json.dumps(
             item.get("content_objects") or {}, ensure_ascii=False)
+        row["image_urls"] = ", ".join(
+            str(u) for u in (item.get("image_urls") or []) if u)
         row["requires_visual"] = "yes" if item.get("requires_visual") else "no"
         row["requires_context"] = "yes" if item.get("requires_context") else "no"
         row["classified"] = "yes" if assigned else "no"

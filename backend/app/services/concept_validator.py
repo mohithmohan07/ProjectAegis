@@ -22,7 +22,7 @@ FORBIDDEN_TOPIC_NAMES = {
 PLACEHOLDERS = {"n/a", "na", "none", "not applicable", "placeholder", "tbd", "lorem ipsum"}
 _SECTION_NUMBER_RE = re.compile(r"\b(?:exercise|ex)?\s*\d+(?:\.\d+)+\b", re.IGNORECASE)
 _SOURCE_ARTIFACT_RE = re.compile(
-    r"\b(?:MMD|Example\s+\d+|Fig(?:ure)?\s+\d+|Table\s+\d+|"
+    r"\b(?:MMD|Example\s+\d+|Fig(?:ure)?s?\.?\s*\d+|Tables?\.?\s*\d+|"
     r"Exercise\s+\d+(?:\.\d+)?|Ex\s+\d+(?:\.\d+)?|"
     r"page\s+(?:no\.?\s*)?\d+|p(?:age)?\.?\s*\d+)\b",
     re.IGNORECASE,
@@ -42,6 +42,17 @@ _CASE_TASK_VERB_RE = re.compile(
     re.IGNORECASE,
 )
 _CASE_SPECIFIC_DETAIL_RE = re.compile(r"(?:\d|[+\-*/÷×=^]|[A-Za-z]\s*\^\s*\d)")
+_EXAMPLE_SPLIT_RE = re.compile(r"\bExamples?\s*:\s*", re.IGNORECASE)
+_IMAGE_URL_RE = re.compile(r"!\[[^\]]*\]\(https?://[^)]+\)|https?://\S+", re.IGNORECASE)
+# With embedded Mathpix images, figure/table references are legitimate content
+# ("Refer fig. 11.1" next to its image URL); only textual pointers to unshipped
+# source artifacts (Example 5, Exercise 1.2, page 14, MMD) stay forbidden.
+_SOURCE_ARTIFACT_NO_FIG_RE = re.compile(
+    r"\b(?:MMD|Example\s+\d+|"
+    r"Exercise\s+\d+(?:\.\d+)?|Ex\s+\d+(?:\.\d+)?|"
+    r"page\s+(?:no\.?\s*)?\d+|p(?:age)?\.?\s*\d+)\b",
+    re.IGNORECASE,
+)
 
 
 def _norm(text: str) -> str:
@@ -101,17 +112,30 @@ def _misconception_text(details: str) -> str:
     return ""
 
 
-def _case_example_too_short(case_text: str) -> bool:
-    words = re.findall(r"\w+", case_text or "")
+def _example_too_short(example_text: str) -> bool:
+    words = re.findall(r"\w+", example_text or "")
     if len(words) >= 5:
         return False
     # Some textbook prompts are legitimately concise math tasks; accept them
     # when they still carry an action and concrete expression/value detail.
     return not (
         len(words) >= 3
-        and _CASE_TASK_VERB_RE.search(case_text or "")
-        and _CASE_SPECIFIC_DETAIL_RE.search(case_text or "")
+        and _CASE_TASK_VERB_RE.search(example_text or "")
+        and _CASE_SPECIFIC_DETAIL_RE.search(example_text or "")
     )
+
+
+def _case_example_too_short(case_text: str) -> bool:
+    """A Case is 'Case NN: <sub-type definition> Example: <full question> ...'.
+
+    When Example lines exist, each must carry a substantive untruncated
+    question. Legacy cases carry the question directly in the Case text.
+    """
+    parts = _EXAMPLE_SPLIT_RE.split(case_text or "")
+    examples = [p.strip() for p in parts[1:] if p.strip()]
+    if examples:
+        return any(_example_too_short(ex) for ex in examples)
+    return _example_too_short(parts[0].strip() if parts else "")
 
 
 def _add(errors: list[dict], row_index: int, field: str, code: str,
@@ -174,7 +198,14 @@ def validate_concept_rows(
         if _SECTION_NUMBER_RE.search(topic):
             _add(errors, i, "topic", "section_number",
                  "topic contains section/exercise numbering")
-        if _SOURCE_ARTIFACT_RE.search(" ".join([topic, parent, title, details])):
+        row_text = " ".join([topic, parent, title, details])
+        # Figure/table references are allowed once the actual image URL is
+        # embedded (reviewers want "(Refer fig. 11.1)" + the Mathpix image).
+        artifact_re = (
+            _SOURCE_ARTIFACT_NO_FIG_RE if _IMAGE_URL_RE.search(details)
+            else _SOURCE_ARTIFACT_RE
+        )
+        if artifact_re.search(row_text):
             _add(errors, i, "concept_details", "source_artifact",
                  "row contains source artifact references")
         if details and not details.startswith("Description:"):
