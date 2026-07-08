@@ -41,6 +41,27 @@ _ENGLISH_FORBIDDEN_CONCEPT_RE = re.compile(
     r")\b",
     re.IGNORECASE,
 )
+_ENGLISH_FORBIDDEN_TOPIC_RE = re.compile(
+    r"\b(?:"
+    r"pre-?\s*reading|informal letter|formal letter|letter writing|"
+    r"reading in manageable parts|oral check|prediction and discussion|"
+    r"classroom activity|january\s+\d{4}|\d{1,2}\s+[A-Za-z]+\s+\d{4}"
+    r")\b",
+    re.IGNORECASE,
+)
+_KNOWN_CONCEPT_ALIASES = {
+    "bpt": "basic proportionality theorem",
+    "basic proportionality theorem": "bpt",
+    "cbpt": "converse basic proportionality theorem",
+    "converse basic proportionality theorem": "cbpt",
+}
+_POWER_SHARING_FORMS_RE = re.compile(
+    r"\b(?:forms?\s+of\s+power[-\s]*sharing|horizontal\s+distribution|"
+    r"vertical\s+(?:division|distribution)|different\s+organs\s+of\s+government|"
+    r"different\s+levels\s+of\s+government|social\s+groups|political\s+parties|"
+    r"pressure\s+groups|movements)\b",
+    re.IGNORECASE,
+)
 
 # Connector words kept lowercase in Title Case (unless first/last word).
 _TITLE_SMALL_WORDS = {
@@ -93,9 +114,18 @@ _REF_CORE = (
     r"(?:examples?|ex|fig(?:ure)?s?|tables?)\b\.?\s*(?:no\.?\s*)?"
     r"(?:type\s+)?(?:[IVXLCDM]+|\d+(?:\s*[,&]\s*\d+)*)\b"
 )
+# Same reference token WITHOUT figure/table: when the actual image is embedded
+# as a URL, figure/table references are meaningful and must be preserved.
+_REF_CORE_NO_FIG = (
+    r"(?:examples?|ex)\b\.?\s*(?:no\.?\s*)?"
+    r"(?:type\s+)?(?:[IVXLCDM]+|\d+(?:\s*[,&]\s*\d+)*)\b"
+)
 # Parenthetical reference, e.g. "(Example 19)", "(Examples Type III)", "(see Fig 2)".
 _PAREN_REF_RE = re.compile(
     r"\(\s*(?:see\s+)?(?:" + _REF_CORE + r")\s*\)", re.IGNORECASE,
+)
+_PAREN_REF_NO_FIG_RE = re.compile(
+    r"\(\s*(?:see\s+)?(?:" + _REF_CORE_NO_FIG + r")\s*\)", re.IGNORECASE,
 )
 # Bare inline reference, optionally led by a connector ("and"/"or"/",") and/or a
 # cue word ("see"/"refer"). Consuming the leading connector keeps multi-reference
@@ -104,10 +134,19 @@ _INLINE_REF_RE = re.compile(
     r"(?:[,]\s*|\b(?:and|or)\s+)?(?:\b(?:see|refer(?:\s+to)?)\s+)?" + _REF_CORE,
     re.IGNORECASE,
 )
+_INLINE_REF_NO_FIG_RE = re.compile(
+    r"(?:[,]\s*|\b(?:and|or)\s+)?(?:\b(?:see|refer(?:\s+to)?)\s+)?" + _REF_CORE_NO_FIG,
+    re.IGNORECASE,
+)
+# Markdown image or bare URL — presence means real source visuals are embedded.
+_IMAGE_URL_RE = re.compile(
+    r"!\[[^\]]*\]\(https?://[^)]+\)|https?://\S+", re.IGNORECASE,
+)
 
 
 def filter_review_violations(
     records: list[dict], *, subject: str = "", board: str = "",
+    chapter_title: str = "",
 ) -> list[dict]:
     """Drop or reassign rows that QA flagged across subject samples."""
     if not records:
@@ -125,6 +164,7 @@ def filter_review_violations(
     dropped = 0
     subj = (subject or "").strip().lower()
     is_english = "english" in subj
+    english_topic = to_title_case(chapter_title.strip()) if is_english and chapter_title.strip() else ""
 
     for rec in records:
         title = (rec.get("concept_title") or "").strip()
@@ -134,10 +174,16 @@ def filter_review_violations(
         if is_english and _ENGLISH_FORBIDDEN_CONCEPT_RE.search(title):
             dropped += 1
             continue
-        if topic_key in _FORBIDDEN_TOPIC_NAMES:
+        if is_english and english_topic and _ENGLISH_FORBIDDEN_TOPIC_RE.search(topic):
             rec = dict(rec)
-            rec["topic"] = fallback_topic
+            rec["topic"] = english_topic
+        elif topic_key in _FORBIDDEN_TOPIC_NAMES:
+            rec = dict(rec)
+            rec["topic"] = english_topic or fallback_topic
         out.append(rec)
+
+    out = _reassign_power_sharing_forms_topic(
+        out, subject=subject, chapter_title=chapter_title)
 
     if dropped:
         from . import progress as _progress
@@ -148,26 +194,113 @@ def filter_review_violations(
     return out
 
 
+def _reassign_power_sharing_forms_topic(
+    records: list[dict], *, subject: str = "", chapter_title: str = "",
+) -> list[dict]:
+    """Keep the reviewed Power Sharing forms section as its own topic."""
+    subj = (subject or "").strip().lower()
+    ch = bi.normalize_question_text(chapter_title)
+    if "power sharing" not in ch or not (
+        "civic" in subj or "social science" in subj or subj in {"politics", "political science"}
+    ):
+        return records
+
+    expected = "Forms of Power-sharing"
+    expected_keys = {
+        bi.normalize_question_text(expected),
+        bi.normalize_question_text("Forms of Power Sharing"),
+    }
+    if any(bi.normalize_question_text(r.get("topic", "")) in expected_keys for r in records):
+        return records
+
+    changed = 0
+    out: list[dict] = []
+    for rec in records:
+        haystack = " ".join([
+            str(rec.get("topic") or ""),
+            str(rec.get("parent_concept") or ""),
+            str(rec.get("concept_title") or rec.get("concept") or ""),
+            str(rec.get("concept_details") or rec.get("concept_description") or ""),
+        ])
+        if _POWER_SHARING_FORMS_RE.search(haystack):
+            rec = dict(rec)
+            rec["topic"] = expected
+            changed += 1
+        out.append(rec)
+
+    if changed:
+        from . import progress as _progress
+        _progress.log(
+            f"Reassigned {changed} Power Sharing form(s) to '{expected}'.",
+            level="warning",
+        )
+    return out
+
+
+def _title_similarity_keys(title: str) -> set[str]:
+    norm = bi.normalize_question_text(title)
+    words = [w for w in norm.split() if w not in {"the", "a", "an", "and", "of"}]
+    keys = {norm, " ".join(words)}
+    if len(words) >= 2 and all(w.isalpha() for w in words):
+        keys.add("".join(w[0] for w in words))
+    tokens = set(norm.split())
+    for alias, expansion in _KNOWN_CONCEPT_ALIASES.items():
+        if alias in keys or expansion in keys or alias in tokens:
+            keys.add(alias)
+            keys.add(expansion)
+    return {k for k in keys if k}
+
+
+def titles_look_similar(a: str, b: str) -> bool:
+    """True when two concept titles restate the same idea (BPT vs. its echo)."""
+    ka, kb = _title_similarity_keys(a), _title_similarity_keys(b)
+    if ka & kb:
+        return True
+    na, nb = bi.normalize_question_text(a), bi.normalize_question_text(b)
+    if not na or not nb:
+        return False
+    if na in nb or nb in na:
+        if ("converse" in na.split()) != ("converse" in nb.split()):
+            return False
+        return True
+    return False
+
+
+def find_similar_title_groups(records: list[dict]) -> list[list[int]]:
+    """Groups of row indexes whose titles restate the same concept.
+
+    Detector only — deciding WHICH content to keep/merge is a quality call
+    that belongs to the GPT merge pass; this never modifies records.
+    """
+    groups: list[list[int]] = []
+    for i, rec in enumerate(records):
+        title = (rec.get("concept_title") or "").strip()
+        if not title or cr.is_culmination(title):
+            continue
+        for group in groups:
+            if titles_look_similar(
+                    title, (records[group[0]].get("concept_title") or "")):
+                group.append(i)
+                break
+        else:
+            groups.append([i])
+    return [g for g in groups if len(g) > 1]
+
+
 def dedupe_similar_titles_chapter_wide(records: list[dict]) -> list[dict]:
-    """Drop near-duplicate concept titles (e.g. BPT restated under two topics)."""
+    """Drop near-duplicate concept titles (e.g. BPT restated under two topics).
+
+    Deterministic last resort — the live pipeline first asks GPT to MERGE the
+    duplicate rows' content (``_merge_similar_concepts_via_api``); this drop
+    only runs in dry mode or when that pass failed.
+    """
     kept: list[str] = []
     out: list[dict] = []
     dropped = 0
-
-    def _similar(a: str, b: str) -> bool:
-        na, nb = bi.normalize_question_text(a), bi.normalize_question_text(b)
-        if not na or not nb:
-            return False
-        if na == nb:
-            return True
-        if na in nb or nb in na:
-            return True
-        return False
-
     for rec in records:
         title = (rec.get("concept_title") or "").strip()
         if title and not cr.is_culmination(title):
-            if any(_similar(title, prev) for prev in kept):
+            if any(titles_look_similar(title, prev) for prev in kept):
                 dropped += 1
                 continue
             kept.append(title)
@@ -218,16 +351,23 @@ def _tidy(text: str) -> str:
 
 
 def strip_dangling_references(text: str) -> str:
-    """Remove bare source-artifact references; keep real worded content."""
+    """Remove bare source-artifact references; keep real worded content.
+
+    When the text embeds an actual image URL, figure/table references stay
+    (they point at the shipped image, e.g. "(Refer fig. 11.1) ![](https://…)").
+    """
     if not text:
         return text
-    out = _PAREN_REF_RE.sub("", text)
+    has_image = bool(_IMAGE_URL_RE.search(text))
+    paren_re = _PAREN_REF_NO_FIG_RE if has_image else _PAREN_REF_RE
+    inline_re = _INLINE_REF_NO_FIG_RE if has_image else _INLINE_REF_RE
+    out = paren_re.sub("", text)
 
     def _inline_sub(m: re.Match) -> str:
         # Drop the reference and an immediately-trailing dangling connector.
         return ""
 
-    out = _INLINE_REF_RE.sub(_inline_sub, out)
+    out = inline_re.sub(_inline_sub, out)
     # Clean any connector the removal still stranded before punctuation / line end.
     out = re.sub(r"\s*\b(?:or|and)\s+(?=[.;,)]|$)", "", out, flags=re.IGNORECASE)
     # Drop an orphan leading connector left at the very start.
@@ -266,14 +406,18 @@ _ARTIFACT_NEUTRALIZATIONS = [
      "the exercises"),
     (re.compile(r"\bexamples?\s+\d+(?:\.\d+)*\b", re.IGNORECASE),
      "a worked example"),
-    (re.compile(r"\bfig(?:ure)?s?\.?\s+\d+(?:\.\d+)*\b", re.IGNORECASE),
-     "the figure"),
-    (re.compile(r"\btables?\s+\d+(?:\.\d+)*\b", re.IGNORECASE),
-     "the given table"),
     (re.compile(r"\b(?:on\s+)?page\s+(?:no\.?\s*)?\d+\b", re.IGNORECASE),
      "in the chapter"),
     (re.compile(r"\bp(?:age)?\.\s*\d+\b", re.IGNORECASE),
      "in the chapter"),
+]
+# Figure/table references are only neutralized when the row ships NO image —
+# with an embedded Mathpix URL they point at real, visible content.
+_FIG_TABLE_NEUTRALIZATIONS = [
+    (re.compile(r"\bfig(?:ure)?s?\.?\s+\d+(?:\.\d+)*\b", re.IGNORECASE),
+     "the figure"),
+    (re.compile(r"\btables?\s+\d+(?:\.\d+)*\b", re.IGNORECASE),
+     "the given table"),
 ]
 
 
@@ -283,6 +427,9 @@ def neutralize_source_artifacts(text: str) -> str:
         return text
     for pat, repl in _ARTIFACT_NEUTRALIZATIONS:
         text = pat.sub(repl, text)
+    if not _IMAGE_URL_RE.search(text):
+        for pat, repl in _FIG_TABLE_NEUTRALIZATIONS:
+            text = pat.sub(repl, text)
     return _tidy(text)
 
 

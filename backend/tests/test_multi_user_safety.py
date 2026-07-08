@@ -233,8 +233,8 @@ def test_pre_repair_cleanup_keeps_references_for_content_inlining():
 
 def test_prompts_require_full_source_content():
     mining = g.prompts.get_text("concepts.type_mining.system")
-    assert "CASE PROMPTS CARRY THE FULL SOURCE QUESTION" in mining
-    assert "Do not shorten source questions" in mining
+    assert "EXAMPLES CARRY THE FULL SOURCE QUESTION" in mining
+    assert "Do not shorten or truncate source questions" in mining
     assert "Rationalise the denominator of 1/(7 + 3*sqrt(2))" in mining
     repair = g.prompts.get_text("concepts.repair.system")
     assert "substitute the FULL actual" in repair

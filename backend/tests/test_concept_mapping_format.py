@@ -46,9 +46,13 @@ def test_writer_composes_tags_labels_and_clean_display(db):
     assert row[7] == clean_topic
     assert "_" not in row[7]  # display name carries no code/tag
 
-    # topic_concept_labels (col 9) lists the topic's concept titles.
+    # topic_concept_labels (col 9) lists the topic's concept titles in the
+    # tagged "Name (tag)" form of the concept_title column (review: labels
+    # must be concept title, not the clean display name).
     assert bi.OBJECTIVE_FIELDS[9] == "topic_concept_labels"
     assert concept.concept_title in row[9]
+    # Each label matches the tagged concept_title column (col 12) exactly.
+    assert row[12] in row[9]
 
     # Concept: tag in title (col 12), clean display (col 13).
     assert bi.strip_title_tag(row[12]) == concept.concept_title
@@ -72,21 +76,28 @@ def test_deposit_applies_numbering_recap_titlecase_and_topic_columns(db):
     records = [
         {"topic": "operations on numbers", "concept_title": "addition of integers",
          "parent_concept": "integer operations",
-         "concept_details": ("Description: a // Types: Type 01: Direct Case 01: 2+3 "
-                             "Case 02: 5+9 // Misconception: m"), "keywords": ""},
+         "concept_details": (
+             "Description: a // Types: Type 01: Direct "
+             "Case 01: Add 2 and 3 using integer addition rules. "
+             "Case 02: Add 5 and 9 using integer addition rules. // "
+             "Misconception: m"), "keywords": ""},
         {"topic": "operations on numbers", "concept_title": "Culmination - Operations On Numbers",
          "parent_concept": "Culmination",
          "concept_details": ("Description: a long synthesis paragraph // "
-                             "Types: Type 01: Mixed Case 01: combine ops // "
+                             "Types: Type 01: Mixed Case 01: Combine addition and subtraction steps in one integer problem. // "
                              "Misconception: keep me"), "keywords": ""},
         {"topic": "powers and roots", "concept_title": "squares of numbers",
          "parent_concept": "powers",
-         "concept_details": ("Description: b // Types: Type 01: Compute Case 01: 4^2 "
-                             "// Misconception: m"), "keywords": ""},
+         "concept_details": (
+             "Description: b // Types: Type 01: Compute "
+             "Case 01: Calculate 4 squared and explain the multiplication. // "
+             "Misconception: m"), "keywords": ""},
         {"topic": "powers and roots", "concept_title": "Culmination - Powers and Roots",
          "parent_concept": "Culmination",
-         "concept_details": ("Description: recap // Types: Type 01: Mixed Case 01: combine powers "
-                             "// Misconception: keep me"), "keywords": ""},
+         "concept_details": (
+             "Description: recap // Types: Type 01: Mixed "
+             "Case 01: Combine square and square-root facts in one review problem. // "
+             "Misconception: keep me"), "keywords": ""},
     ]
     build_concepts._deposit_concepts(db, chapter, records, "Post", "")
     build_concepts._sync_chapter_topic_summary(chapter)

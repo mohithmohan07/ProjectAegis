@@ -789,11 +789,14 @@ prompts.register(
    Types classify EVERY distinct question/task pattern under the concept —
    numerical, formula, proof, construction, graph, diagram, reasoning, or word
    problem patterns as the source demands. Mine the Question / Task Inventory
-   first, then fold each reusable pattern into the concept it assesses. Each
-   variety = one solving/answering/task pattern; each Case is a sub-type /
-   concrete source-derived example question. Include as many source examples
-   as are available for that Type; only skip Types when a concept has zero
-   meaningful assessable task varieties.""")
+   first, then fold each reusable pattern into the concept it assesses.
+   A Type is one solving/answering/task pattern. A Case is a DEFINED sub-type
+   of that pattern (what is given, what is asked, with what constraint) —
+   never a raw question. Every concrete source question goes on its own
+   "Example:" line under the Case it instantiates, copied in FULL without
+   truncation (all givens, values, conditions, figure references and their
+   image URLs). Include EVERY source example available for each Case; only
+   skip Types when a concept has zero meaningful assessable task varieties.""")
 
 prompts.register(
     "concepts.types_guidance.descriptive", category=_CONCEPTS_CAT,
@@ -805,21 +808,27 @@ prompts.register(
    writing, literature extract, coding/debugging, short-answer, long-answer, or
    numerical patterns as appropriate to the subject. Mine the Question / Task
    Inventory first; never force non-math material into numerical templates.
-   Each variety = one reusable assessable format with concrete Case sub-types
-   and source example questions. Include as many source examples as are
-   available for that Type; only skip Types when the concept has zero meaningful
-   assessable varieties.""")
+   A Type is one reusable assessable format. A Case is a DEFINED sub-type of
+   that format (what is given, what is asked, with what constraint) — never a
+   raw question. Every concrete source question goes on its own "Example:"
+   line under the Case it instantiates, copied in FULL without truncation.
+   Include EVERY source example available for each Case; only skip Types when
+   the concept has zero meaningful assessable varieties.""")
 
 prompts.register(
     "concepts.types_example", category=_CONCEPTS_CAT,
     label="Types section format example",
     default=(
-        "Types: Type 01: Applying a reusable source-derived task pattern "
-        "Case 01: Solve, explain, label, interpret, transform, trace, compare, "
-        "or write using a concrete source prompt "
-        "Type 02: Interpreting subject-specific evidence or representation "
-        "Case 01: Use a diagram, graph, table, map, passage, source, experiment, "
-        "code snippet, quotation, or data set from the chapter"
+        "Types: Type 01: Questions based on computing resistance — given "
+        "electrical readings, compute resistance using Ohm's law "
+        "Case 01: Ohm's law formula-based question when V and I are given "
+        "(without circuit) "
+        "Example: Calculate the resistance of the circuit if V is 220 V and "
+        "I is 0.5 mA. "
+        "Case 02: Ohm's law formula-based question when the circuit diagram "
+        "is given "
+        "Example: Calculate the resistance for the given circuit. "
+        "(Refer fig. 11.1) ![](https://cdn.mathpix.com/cropped/fig_11_1.jpg)"
     ))
 
 prompts.register(
@@ -883,15 +892,19 @@ OUTPUT CONTRACT for concept_description (ONE string, sections joined by " // "):
   from, but not a long chapter dump. Prefer 2-4 compact sentences.
 - Then include Types ONLY IF the concept has assessable question/problem
   varieties. {{types_guidance}}
-  Format — use zero-padded numeric labels exactly "Type 01:", "Case 01:":
-  Types: Type 01: <variety title> Case 01: <concrete worked example prompt>
-  Case 02: <...> Type 02: <next variety title> Case 01: <...> ...
+  Format — use zero-padded numeric labels exactly "Type 01:", "Case 01:", and
+  an "Example:" line for every concrete source question:
+  Types: Type 01: <pattern definition> Case 01: <defined sub-type>
+  Example: <full source question> Example: <another full source question>
+  Case 02: <defined sub-type> Example: <...> Type 02: <next pattern> ...
   Restart at Type 01 within each concept — they are renumbered continuously
   across the whole chapter afterwards, so do NOT try to continue numbers yourself.
 - Example Types block:
   {{types_example}}
-- End with Misconceptions for normal concepts: name the real likely learner
-  error from the material. Do not invent filler misconceptions, and never write
+- End with Misconceptions for normal concepts: name every REAL likely learner
+  error from the material — one is the minimum, and when the material triggers
+  several distinct errors, list them all in the same Misconceptions section.
+  Do not invent filler misconceptions, and never write
   "N/A", "None", "Not applicable", or placeholder text.
 - Valid structures:
   Description: ...
@@ -1051,25 +1064,38 @@ RULES:
    Description: ... // Types: ... // Misconception: ...
    Description: ... // Types: ...
 3. {{types_guidance}}
-4. Format — zero-padded numeric labels exactly "Type 01:", "Case 01:":
-   Types: Type 01: <variety title> Case 01: <concrete prompt> Case 02: ...
-   Type 02: <next variety> Case 01: ... (restart at Type 01 per concept;
-   continuous renumbering across the chapter happens downstream).
+4. Format — zero-padded numeric labels exactly "Type 01:", "Case 01:", and an
+   "Example:" line per concrete source question:
+   Types: Type 01: <pattern definition> Case 01: <defined sub-type>
+   Example: <full source question> Example: <another full source question>
+   Case 02: <defined sub-type> Example: <...> Type 02: <next pattern> ...
+   (restart at Type 01 per concept; continuous renumbering across the chapter
+   happens downstream).
 5. Example:
    {{types_example}}
 6. Mine CHAPTER SOURCE for ALL assessable question/task patterns; fold each into
-   the concept it tests as Types/Cases.
+   the concept it tests as Types/Cases/Examples.
 7. Omit Types for purely definitional concepts with zero assessable formats.
    Every problem-solving, calculation, application, or exercise-backed concept
    MUST have Types with at least two varieties and at least one Case per Type.
-   Cases are sub-types: list a Case ONLY when a concrete source example exists;
-   never invent empty Case placeholders.
-8. Case prompts MUST quote the full source question/task verbatim — do not
+   Cases are DEFINED sub-types (what is given, what is asked, with what
+   constraint) — never raw questions; list a Case ONLY when a concrete source
+   example exists; never invent empty Case placeholders.
+8. Example lines MUST quote the full source question/task verbatim — do not
    shorten, paraphrase, or abbreviate; teachers execute from these cells.
-9. Mine ALL assessable problems from the source; skipping exercises defeats
-   homework / in-class / board-teaching categorisation downstream.
-10. Culmination rows MUST include Types for mixed multi-concept application problems.
-11. NEVER mention groups or group columns.""")
+   When the question needs a figure/diagram, keep the figure reference AND
+   embed the Mathpix image URL from the source right after it, e.g.
+   "(Refer fig. 11.1) ![](https://cdn.mathpix.com/...)".
+9. Mine ALL assessable problems from the source; skipping exercises, in-text
+   checkpoint questions, or activities defeats homework / in-class /
+   board-teaching categorisation downstream.
+10. Place each question under a concept that is taught at or before the point
+    of the chapter where the question appears — NEVER attach a question to an
+    earlier concept when it actually assesses later material.
+11. Textbook ACTIVITY tasks belong on the topic's culmination row (mixed
+    multi-concept application), not on single-focus concepts.
+12. Culmination rows MUST include Types for mixed multi-concept application problems.
+13. NEVER mention groups or group columns.""")
 
 
 prompts.register(
@@ -1094,12 +1120,18 @@ COVERAGE IS MANDATORY (most important rule):
   be a case/example is also a defect.
 
 TOPIC SEGREGATION IS MANDATORY (second most important rule):
-- topic MUST be the textbook SECTION heading the content sits under (use the
-  HEADING PATH / SECTION HEADINGS given with the text); strip section numbers.
+- topic MUST be the textbook MAIN SECTION heading the content sits under (use
+  the HEADING PATH / SECTION HEADINGS given with the text); strip section numbers.
+- When the textbook nests subsections under a main numbered section (e.g.
+  "2 The Making of Nationalism in Europe" containing "2.1 The Aristocracy and
+  the New Middle Class"), the MAIN section is the topic; each subsection
+  becomes a parent_concept cluster (or concepts) under that topic — NEVER a
+  topic of its own.
 - The chapter title or book title is NEVER a topic. Filing every concept under
   one umbrella topic is a defect.
-- When the text spans several section headings it MUST produce several topics,
-  in the same reading order.
+- When the text spans several main section headings it MUST produce several
+  topics, in the same reading order. Cover EVERY main section of the chapter —
+  missing tail sections is a defect.
 
 Rules:
 - Do not invent textbook topics; preserve the section order from the source.
@@ -1165,7 +1197,10 @@ Rules:
 - Use 45-90 words unless the concept is very simple.
 - Do not include Types.
 - Include a Misconceptions section for every non-culmination concept. Make it
-  specific to the learner error this concept usually triggers; never use filler.
+  specific to the learner error this concept usually triggers; list EVERY real
+  distinct misconception (one or more) in the same section; never use filler.
+- Write the mastery statement exactly ONCE, at the end of the Description —
+  never repeat it inside or after the Misconceptions section.
 - No N/A, None, Not applicable, or placeholder text.
 - No source artifacts such as MMD, Example 3, Fig 2, Table 1, Exercise 1.1, or
   page references. When the source text cites one, substitute the full actual
@@ -1225,23 +1260,34 @@ This is subject-agnostic and board-agnostic: Mathematics, Science, Social Scienc
 languages, literature, Computer Science, practical work, and any school subject.
 
 Return ONLY strict JSON:
-{"items":[{"qid":"QINV-0001","source_kind":"worked_example|solved_example|exercise|intext_question|mcq|fill_blank|true_false|match|assertion_reason|diagram_task|map_task|table_task|graph_task|source_task|case_task|passage_task|grammar_task|writing_task|experiment_task|coding_task|long_answer|short_answer|other","source_label":"","parent_source_label":"","topic_hint":"","page_hint":"","block_ids":[],"raw_task":"","raw_solution_or_answer":"","normalized_task":"","shared_context":"","subpart_label":"","content_objects":{"numbers":[],"variables":[],"equations":[],"coordinates":[],"ratios":[],"diagrams":[],"graphs":[],"tables":[],"maps":[],"passages":[],"sources":[],"experiments":[],"observations":[],"characters":[],"events":[],"dates":[],"places":[],"terms":[],"definitions":[],"processes":[],"comparisons":[],"causes":[],"effects":[],"code_snippets":[],"grammar_items":[],"unknowns":[],"given_values":[],"conditions":[]},"requires_visual":false,"requires_context":false,"order_index":1}],"stats":{"worked_examples":0,"solved_examples":0,"exercise_questions":0,"objective_items":0,"subjective_items":0,"descriptive_items":0,"subparts":0,"visual_tasks":0,"table_or_graph_tasks":0,"source_or_passage_tasks":0,"total_inventory_items":0}}.
+{"items":[{"qid":"QINV-0001","source_kind":"worked_example|solved_example|exercise|intext_question|checkpoint_question|activity|mcq|fill_blank|true_false|match|assertion_reason|diagram_task|map_task|table_task|graph_task|source_task|case_task|passage_task|grammar_task|writing_task|experiment_task|coding_task|long_answer|short_answer|other","source_label":"","parent_source_label":"","topic_hint":"","page_hint":"","block_ids":[],"raw_task":"","raw_solution_or_answer":"","normalized_task":"","shared_context":"","subpart_label":"","image_urls":[],"content_objects":{"numbers":[],"variables":[],"equations":[],"coordinates":[],"ratios":[],"diagrams":[],"graphs":[],"tables":[],"maps":[],"passages":[],"sources":[],"experiments":[],"observations":[],"characters":[],"events":[],"dates":[],"places":[],"terms":[],"definitions":[],"processes":[],"comparisons":[],"causes":[],"effects":[],"code_snippets":[],"grammar_items":[],"unknowns":[],"given_values":[],"conditions":[]},"requires_visual":false,"requires_context":false,"order_index":1}],"stats":{"worked_examples":0,"solved_examples":0,"exercise_questions":0,"checkpoint_questions":0,"activities":0,"objective_items":0,"subjective_items":0,"descriptive_items":0,"subparts":0,"visual_tasks":0,"table_or_graph_tasks":0,"source_or_passage_tasks":0,"total_inventory_items":0}}.
 
 COVERAGE IS MANDATORY (most important rule):
 - Extract EVERY assessable question/task from the first line to the last.
 - Each numbered problem, sub-part, intext question, think-and-reflect prompt,
   and worked example is its OWN item — never summarize an exercise set or
   question list into one item.
+- In-text CHECKPOINT questions (boxed "?" questions, "Let's recall",
+  "Check your progress", mid-section question boxes) are inventory items
+  exactly like end-of-chapter exercises. Chapters typically carry a dozen or
+  more of them — walk every section and capture each one.
+- Textbook ACTIVITY tasks (Activity 11.1 etc.) are inventory items with
+  source_kind "activity" — they later feed culmination concepts.
 - A missed question is a defect; an extra item is not.
 - Skip only purely introductory or rhetorical prompts that do not expect a
   student answer or action.
 
 Rules:
 - Extract all assessable questions/tasks from first to last: examples, intext
-  questions, exercises, objective items, diagrams, graphs, maps, data/tables,
-  sources/passages/cases, experiments, observations, grammar, writing, literature
-  extracts, vocabulary, coding, proof/reasoning, numerical, application, project
-  or activity prompts if assessable.
+  questions, checkpoints, exercises, objective items, diagrams, graphs, maps,
+  data/tables, sources/passages/cases, experiments, observations, grammar,
+  writing, literature extracts, vocabulary, coding, proof/reasoning, numerical,
+  application, project or activity prompts if assessable.
+- raw_task must carry the COMPLETE question wording verbatim — never truncate,
+  paraphrase, or drop givens, data, sub-parts, quotations, or conditions.
+- When the question depends on a figure/diagram/table image, copy the Mathpix
+  image URL(s) from the source markdown (![](https://cdn.mathpix.com/...))
+  into image_urls AND keep the figure reference in raw_task.
 - Use content_objects for all extracted subject matter and representations.
 - A task may be non-numerical; do not reject it as generic because it is descriptive.
 - Preserve source traceability in this debug JSON only; source labels must not be
@@ -1255,15 +1301,20 @@ prompts.register(
     default="""\
 Classify the Question / Task Inventory into reusable academic Types appropriate
 to the subject and chapter. A Type is a reusable assessment/task pattern found
-in the source. A Case is a concrete source-derived instance of that pattern.
+in the source. A Case is a DEFINED sub-type of that pattern (what is given,
+what is asked, with what constraint) — never a raw question. An Example is one
+concrete source question that instantiates a Case, copied in full.
 
 Return ONLY strict JSON:
-{"types":[{"type_id":"TYPE-0001","type_title":"","type_description":"","task_pattern":"","source_question_ids":["QINV-0001"],"case_prompts":[{"case_id":"CASE-0001","source_question_id":"QINV-0001","case_prompt":"","case_signature":""}],"concept_match_hint":"","parent_concept_match_hint":"","topic_match_hint":"","difficulty_hint":"Basic|Intermediate|Advanced","cognitive_skill_hint":"","subject_skill_hint":""}]}.
+{"types":[{"type_id":"TYPE-0001","type_title":"","type_description":"","task_pattern":"","source_question_ids":["QINV-0001"],"case_prompts":[{"case_id":"CASE-0001","case_title":"","examples":[{"source_question_id":"QINV-0001","example_prompt":""}],"case_signature":""}],"concept_match_hint":"","parent_concept_match_hint":"","topic_match_hint":"","difficulty_hint":"Basic|Intermediate|Advanced","cognitive_skill_hint":"","subject_skill_hint":"","is_activity":false}]}.
 
 COVERAGE IS MANDATORY (most important rule):
-- EVERY inventory item MUST appear in at least one Type's source_question_ids.
+- EVERY inventory item MUST appear in at least one Type's source_question_ids
+  AND as an example_prompt under a Case.
 - NEVER skip an item because it looks trivial, routine, descriptive, or hard to
   classify. If an item fits no existing Type, CREATE a new Type for it.
+- In-text checkpoint questions, boxed "?" questions, and textbook activities
+  count exactly like exercise questions — every one of them must be classified.
 - Classification should be inclusive, not strict: when unsure between dropping
   an item and creating an extra Type, always create the extra Type.
 - A missed question is a defect; an extra Type is not.
@@ -1276,19 +1327,37 @@ Rules:
   coding, experimental, or practical patterns.
 - Preserve source_question_ids and source traceability in debug JSON.
 - Do not include source labels in public concept_details.
+- Set "is_activity": true when the Type groups textbook Activity tasks
+  (hands-on classroom activities); these are embedded on culmination rows.
 
-CASE PROMPTS CARRY THE FULL SOURCE QUESTION (mandatory):
-- case_prompt must be fully self-contained: copy the ACTUAL numbers,
-  expressions, equations, data, quotations, conditions, and task text from the source
-  question (its raw_task / normalized_task) into the prompt.
-- Do not shorten source questions. Keep the full teacher-executable wording,
-  including all givens and the exact ask; omit only source labels and page refs.
+CASE WORDING (each Case must be properly defined):
+- case_title DEFINES the sub-type: what is given to the student, what must be
+  done, and the distinguishing condition — e.g. "Ohm's law formula-based
+  question when V and I are given (without circuit)" vs "... (circuit diagram
+  given)". A case_title is NEVER a raw question.
+- Create a separate Case for every distinct given/asked/constraint combination.
+
+EXAMPLES CARRY THE FULL SOURCE QUESTION (mandatory):
+- Every example_prompt must be fully self-contained: copy the ACTUAL numbers,
+  expressions, equations, data, quotations, conditions, and task text from the
+  source question (its raw_task / normalized_task) into the prompt.
+- Do not shorten or truncate source questions. Keep the full teacher-executable
+  wording, including all givens and the exact ask; omit only source labels and
+  page refs.
+- Include EVERY inventory question that fits a Case as its own example_prompt —
+  more examples per Case is always better; never keep just one representative.
+- When the source question relies on a figure/diagram/table image, KEEP the
+  figure reference and append the Mathpix image URL from the source markdown
+  immediately after it, e.g.
+  "Calculate the resistance for the given circuit. (Refer fig. 11.1)
+  ![](https://cdn.mathpix.com/cropped/...)".
 - Correct: "Rationalise the denominator of 1/(7 + 3*sqrt(2))".
 - WRONG: "Rationalise the expressions given in Exercise 1.5",
-  "Solve the problem from Example 11", "As shown in Fig 6.4".
-- NEVER write Exercise/Example/Figure/Table/page references in case_prompt,
+  "Solve the problem from Example 11".
+- NEVER write Exercise/Example/page references in example_prompt, case_title,
   type_title, type_description, or task_pattern — always substitute the real
-  content those labels point to.
+  content those labels point to. Figure references WITH their image URL are
+  allowed and encouraged.
 
 TYPE WORDING (each Type must be properly defined):
 - type_title must be a precise, self-explanatory pattern name that states the
@@ -1336,10 +1405,18 @@ Rules:
 - Never invent concept_id or type_id values; use only the ones provided.
 - A concept may receive multiple type_ids; a Type belongs to one concept.
 - Choose the concept that the Type most directly assesses (subject-appropriate).
+- Respect chapter position: a question assesses the concept taught at (or just
+  before) the point of the chapter where it appears. NEVER assign a Type whose
+  questions come from a LATER part of the chapter to an EARLIER concept — e.g.
+  heating-effect questions never belong under a resistivity concept. Use the
+  Type's topic_match_hint and the concepts' topic order to keep placements in
+  reading order.
 - Concepts flagged "is_culmination": true are topic recap rows. Assign a Type
   there when the Type combines/mixes several concepts of that topic (synthesis,
   mixed application, multi-step, cross-concept comparison). Single-concept
   Types go to the specific concept, not the culmination.
+- Types flagged "is_activity": true group textbook Activity tasks; assign them
+  to the culmination row of the topic they belong to, not to a single concept.
 - Do not drop any type_id. If unsure, pick the closest concept_id.
 - Return no prose, only the JSON object.
 """)
@@ -1389,6 +1466,13 @@ Rules:
   content: the real numbers, expressions, equations, data, conditions, and task, e.g.
   "solve the problem in Exercise 1.5" becomes
   "rationalise the denominator of 1/(7 + 3*sqrt(2))".
+  A figure/table reference WITH its Mathpix image URL embedded right after it
+  is valid content — keep it.
+- For merged_description issues (one cell carrying two or more concepts'
+  "Description:" blocks): keep ONLY the content belonging to THIS row's
+  concept — rewrite the cell so it describes exactly one concept. NEVER
+  delete the other concept's material blindly; if it clearly belongs to a
+  different provided row, move it there.
 """)
 
 prompts.register(
@@ -1413,23 +1497,78 @@ Rules:
 """)
 
 prompts.register(
+    "concepts.merge_duplicates.system", category=_CONCEPTS_CAT,
+    label="Near-duplicate concept merge system prompt",
+    default="""\
+Merge concept rows that restate the SAME idea under different titles
+(e.g. "Basic Proportionality Theorem" appearing again as "BPT" or
+"The Basic Proportionality Theorem" under another topic).
+Return ONLY strict JSON:
+{"rows":[{"topic":"","parent_concept":"","concept":"","concept_description":"","keywords":""}]}.
+
+Rules:
+- You receive one GROUP of rows that all describe the same concept. Return
+  EXACTLY ONE merged row for the group.
+- Keep the clearest, most textbook-faithful title.
+- Keep the topic where the textbook actually TEACHES the concept (usually the
+  first row's topic in reading order).
+- MERGE the content — never discard it: combine the Descriptions into one
+  coherent Description (no repetition), keep the union of all Types/Cases/
+  Examples, and the union of all specific Misconceptions.
+- Keep the "Description: ... // Types: ... // Misconceptions: ..." structure
+  and the single mastery line.
+- Never invent new content; only reorganize what the rows carry.
+""")
+
+prompts.register(
+    "concepts.misconceptions.system", category=_CONCEPTS_CAT,
+    label="Missing/generic misconception writer system prompt",
+    default="""\
+Write the missing or too-generic Misconceptions for concept rows.
+Return ONLY strict JSON:
+{"rows":[{"topic":"","parent_concept":"","concept":"","concept_description":"","keywords":""}]}.
+
+Rules:
+- Each provided row is missing its Misconceptions section, or carries only a
+  generic filler one. Return the SAME rows: identical topic, parent_concept,
+  concept, keywords, Description, and Types — the ONLY change is a rewritten
+  "Misconceptions:" section at the end.
+- Every misconception must name a REAL, specific learner error this exact
+  concept triggers, grounded in the chapter material (wrong condition, sign,
+  unit, cause-effect reversal, term confusion, misapplied formula, ...).
+- When the material triggers several distinct errors, list them all in the
+  same Misconceptions section — one is the minimum, more are welcome.
+- NEVER write templated filler like "Students may apply X as a memorized rule
+  without checking the conditions", and never "N/A"/"None"/placeholders.
+- No source artifacts (Example 3, Exercise 1.2, page numbers) and never the
+  words "MMD"/"MMDs".
+""")
+
+prompts.register(
     "concepts.topic_structure.system", category=_CONCEPTS_CAT,
     label="Topic re-segregation system prompt",
     default="""\
-Re-segregate a chapter concept map into its real textbook topics. The draft
-filed too many concepts under one umbrella topic; your ONLY job is to assign
-each concept to the textbook section that actually teaches it.
+Re-segregate a chapter concept map into its real textbook topics. Your ONLY
+job is to assign each concept to the textbook MAIN SECTION that actually
+teaches it, using the source file's own headings.
 Return ONLY strict JSON:
 {"rows":[{"topic":"","parent_concept":"","concept":"","concept_description":"","keywords":""}]}.
 
 Rules:
 - You are given the concept rows and the chapter's SECTION HEADINGS in reading
   order. Reassign ONLY the topic of each row.
+- Topic names must be the given source headings VERBATIM (only the section
+  number stripped) — never invent, rename, merge, or paraphrase headings.
+- The given headings are the MAIN sections. When a concept comes from a
+  subsection (e.g. "2.1 The Aristocracy and the New Middle Class"), file it
+  under its MAIN section heading ("The Making of Nationalism in Europe") —
+  subsections are never topics.
 - Keep EVERY row: same concept names, descriptions, keywords, and
   parent_concept, in the same relative order. Never add, drop, merge, split,
   or rename concepts.
-- Use several topics — a chapter is never one topic. Prefer the given section
-  headings verbatim (without section numbers) as the topic names.
+- Use several topics — a chapter is never one topic. Cover the chapter's full
+  span: rows from tail sections belong to those tail headings, not to an
+  earlier catch-all.
 - Assign each concept to the section whose content teaches it; consecutive
   concepts usually stay in the same section until the source moves on.
 - Do not create exercise, example, review, or practice topics.
@@ -1517,7 +1656,25 @@ def _metadata_block(meta: dict) -> str:
     subj = (meta.get("subject") or "").lower()
     if "english" in subj:
         block += "\n\n" + prompts.get_text("concepts.english.system")
+    if _needs_power_sharing_topic_guidance(meta):
+        block += (
+            "\n\nReview-required Civics coverage: include the textbook section "
+            "'Forms of Power-sharing' as its own topic. Do not merge horizontal "
+            "distribution, vertical division, social-group/community sharing, "
+            "political parties, pressure groups, or movements into unrelated "
+            "outcome/democracy topics."
+        )
     return block
+
+
+def _needs_power_sharing_topic_guidance(meta: dict) -> bool:
+    subject = (meta.get("subject") or "").strip().lower()
+    chapter = bi.normalize_question_text(meta.get("chapter_title") or "")
+    return "power sharing" in chapter and (
+        "civic" in subject
+        or "social science" in subject
+        or subject in {"politics", "political science"}
+    )
 
 
 # Process-wide gate on in-flight OpenAI calls. All users of this instance
@@ -2076,6 +2233,23 @@ def _extract_question_task_inventory_via_api(*, meta: dict, sections: list[dict]
     return inventory
 
 
+def _case_examples(case: dict) -> list[dict]:
+    """Normalized example list of a Case (supports the legacy case_prompt form)."""
+    out: list[dict] = []
+    for ex in case.get("examples") or []:
+        if isinstance(ex, dict):
+            out.append(ex)
+        elif isinstance(ex, str) and ex.strip():
+            out.append({"source_question_id": "", "example_prompt": ex})
+    legacy = (case.get("case_prompt") or "").strip()
+    if legacy and not out:
+        out.append({
+            "source_question_id": (case.get("source_question_id") or "").strip(),
+            "example_prompt": legacy,
+        })
+    return out
+
+
 def _uncovered_inventory_items(inventory: dict, types: list[dict]) -> list[dict]:
     """Inventory items whose qid appears in no mined Type's source_question_ids."""
     covered: set[str] = set()
@@ -2085,6 +2259,8 @@ def _uncovered_inventory_items(inventory: dict, types: list[dict]) -> list[dict]
         for case in t.get("case_prompts") or []:
             if isinstance(case, dict):
                 covered.add((case.get("source_question_id") or "").strip())
+                for ex in _case_examples(case):
+                    covered.add((ex.get("source_question_id") or "").strip())
     return [
         item for item in inventory.get("items", [])
         if (item.get("qid") or "").strip() not in covered
@@ -2098,10 +2274,16 @@ _CASE_SOURCE_ARTIFACT_RE = re.compile(
 
 
 def _inventory_task_text(item: dict) -> str:
-    """Full source task text used for public case prompts."""
+    """Full source task text used for public example prompts.
+
+    ``raw_task`` is preferred over ``normalized_task`` — reviewers require the
+    complete untruncated source wording, and normalization tends to compress.
+    Mathpix image URLs captured for the item are appended so figure-dependent
+    questions ship their visuals.
+    """
     task = (
-        item.get("normalized_task")
-        or item.get("raw_task")
+        item.get("raw_task")
+        or item.get("normalized_task")
         or item.get("question")
         or ""
     )
@@ -2109,7 +2291,12 @@ def _inventory_task_text(item: dict) -> str:
     context = bi.to_plain_text(str(item.get("shared_context") or "")).strip()
     if context and item.get("requires_context") and context not in task:
         task = f"{context} {task}".strip()
-    return re.sub(r"\s+", " ", task)
+    task = re.sub(r"\s+", " ", task)
+    for url in item.get("image_urls") or []:
+        url = str(url or "").strip()
+        if url and url not in task:
+            task = f"{task} ![]({url})"
+    return task.strip()
 
 
 def _case_prompt_needs_source(prompt: str, source_text: str) -> bool:
@@ -2126,7 +2313,12 @@ def _case_prompt_needs_source(prompt: str, source_text: str) -> bool:
 
 
 def _backfill_type_cases_from_inventory(types: list[dict], inventory: dict) -> list[dict]:
-    """Ensure every source question attached to a Type has a full case prompt."""
+    """Ensure every source question attached to a Type appears as a full example.
+
+    Works on the Case -> Examples schema (a Case is a defined sub-type; its
+    ``examples`` carry the full source questions) and remains compatible with
+    the legacy one-question-per-case ``case_prompt`` form.
+    """
     by_qid = {
         (item.get("qid") or "").strip(): item
         for item in inventory.get("items", [])
@@ -2144,32 +2336,43 @@ def _backfill_type_cases_from_inventory(types: list[dict], inventory: dict) -> l
             dict(case) if isinstance(case, dict) else {"case_prompt": str(case)}
             for case in (mtype.get("case_prompts") or [])
         ]
-        case_by_qid = {
-            (case.get("source_question_id") or "").strip(): case
-            for case in cases
-            if (case.get("source_question_id") or "").strip()
-        }
-        seen_prompts = {
-            bi.normalize_question_text(case.get("case_prompt", ""))
-            for case in cases
-            if case.get("case_prompt")
-        }
+        example_by_qid: dict[str, dict] = {}
+        seen_prompts: set[str] = set()
+        for case in cases:
+            legacy = (case.get("case_prompt") or "").strip()
+            if legacy:
+                qid = (case.get("source_question_id") or "").strip()
+                if qid:
+                    example_by_qid[qid] = case
+                seen_prompts.add(bi.normalize_question_text(legacy))
+            for ex in case.get("examples") or []:
+                if not isinstance(ex, dict):
+                    continue
+                qid = (ex.get("source_question_id") or "").strip()
+                if qid:
+                    example_by_qid[qid] = ex
+                if ex.get("example_prompt"):
+                    seen_prompts.add(bi.normalize_question_text(ex["example_prompt"]))
         for qid in source_ids:
             source_text = _inventory_task_text(by_qid.get(qid, {}))
             if not source_text:
                 continue
-            existing = case_by_qid.get(qid)
-            if existing:
-                if _case_prompt_needs_source(existing.get("case_prompt", ""), source_text):
-                    existing["case_prompt"] = source_text
+            existing = example_by_qid.get(qid)
+            if existing is not None:
+                field = "example_prompt" if "example_prompt" in existing else "case_prompt"
+                if _case_prompt_needs_source(existing.get(field, ""), source_text):
+                    existing[field] = source_text
                 continue
             key = bi.normalize_question_text(source_text)
             if key in seen_prompts:
                 continue
+            example = {"source_question_id": qid, "example_prompt": source_text}
             cases.append({
                 "case_id": f"CASE-{len(cases) + 1:04d}",
-                "source_question_id": qid,
-                "case_prompt": source_text,
+                "case_title": (
+                    mtype.get("task_pattern") or mtype.get("type_title") or ""
+                ).strip(),
+                "examples": [example],
                 "case_signature": "",
             })
             seen_prompts.add(key)
@@ -2178,7 +2381,7 @@ def _backfill_type_cases_from_inventory(types: list[dict], inventory: dict) -> l
 
 
 def _mine_types_from_inventory_via_api(
-    *, meta: dict, inventory: dict, max_coverage_attempts: int = 2,
+    *, meta: dict, inventory: dict, max_coverage_attempts: int = 4,
 ) -> dict:
     """Mine reusable Types with mandatory inventory coverage.
 
@@ -2282,22 +2485,34 @@ def _mined_type_to_body(mtype: dict, start_type: int) -> tuple[str, int]:
         (mtype.get("type_description") or "").strip())
     if definition and _norm_for_compare(definition) != _norm_for_compare(title):
         title = f"{title} — {definition.rstrip('.')}"
-    cases: list[str] = []
+    cases: list[tuple[str, list[str]]] = []
     for case in (mtype.get("case_prompts") or []):
-        prompt = ""
-        if isinstance(case, dict):
-            prompt = case.get("case_prompt", "")
-        elif isinstance(case, str):
-            prompt = case
-        prompt = (prompt or "").strip()
-        if prompt:
-            cases.append(prompt)
+        if isinstance(case, str):
+            case = {"case_prompt": case}
+        if not isinstance(case, dict):
+            continue
+        case_title = (case.get("case_title") or "").strip()
+        examples = [
+            (ex.get("example_prompt") or "").strip()
+            for ex in _case_examples(case)
+        ]
+        examples = [ex for ex in examples if ex]
+        if not case_title and not examples:
+            continue
+        # Legacy mined output has no sub-type definition; the full question
+        # doubles as the Case line so nothing is lost.
+        if not case_title:
+            case_title = examples[0]
+            examples = examples[1:]
+        cases.append((case_title, examples))
     if not title or not cases:
         return "", start_type
     n = start_type + 1
     parts = [f"Type {n:02d}: {title}"]
-    for c_i, prompt in enumerate(cases, start=1):
-        parts.append(f"Case {c_i:02d}: {prompt}")
+    for c_i, (case_title, examples) in enumerate(cases, start=1):
+        parts.append(f"Case {c_i:02d}: {case_title}")
+        for example in examples:
+            parts.append(f"Example: {example}")
     return " ".join(parts), n
 
 
@@ -2395,8 +2610,144 @@ def _ensure_mastery_lines_via_api(
     return records
 
 
+def _merge_similar_concepts_via_api(records: list[dict], *, meta: dict) -> list[dict]:
+    """Merge near-duplicate concept rows via GPT instead of dropping them.
+
+    ``concept_cleanup.find_similar_title_groups`` only DETECTS suspects; the
+    content decision (which title/topic survives, how Descriptions, Types and
+    Misconceptions combine) is GPT's. On failure the deterministic drop is the
+    last resort so duplicates never ship.
+    """
+    import json as _json
+
+    groups = concept_cleanup.find_similar_title_groups(records)
+    if not groups:
+        return records
+    progress.log(
+        f"Merging {len(groups)} group(s) of near-duplicate concepts via API.")
+    system = prompts.get_text("concepts.merge_duplicates.system")
+    merged_by_first: dict[int, dict] = {}
+    drop: set[int] = set()
+    for group in groups:
+        rows = [records[i] for i in group]
+        user = (
+            _metadata_block(meta)
+            + "\nRows restating the same concept — merge into ONE row:\n"
+            + _json.dumps({"rows": _records_to_api_rows(rows)}, ensure_ascii=False)
+        )
+        try:
+            data = _openai_json(system, user)
+            merged_rows = _concept_rows_to_records(data)
+        except Exception as exc:  # noqa: BLE001 — deterministic drop still guards
+            progress.log(
+                f"Duplicate-merge pass failed ({exc}) — deterministic dedupe "
+                "will handle this group.",
+                level="warning")
+            continue
+        if len(merged_rows) != 1:
+            progress.log(
+                f"Duplicate-merge returned {len(merged_rows)} row(s) for a "
+                f"group of {len(group)} — keeping deterministic dedupe.",
+                level="warning")
+            continue
+        merged_by_first[group[0]] = merged_rows[0]
+        drop.update(group[1:])
+    if not merged_by_first:
+        return records
+    out: list[dict] = []
+    for i, rec in enumerate(records):
+        if i in drop:
+            continue
+        out.append(merged_by_first.get(i, rec))
+    progress.log(
+        f"Merged {len(drop)} duplicate row(s) into {len(merged_by_first)} concept(s).",
+        level="success")
+    return out
+
+
+def _misconception_body(details: str) -> str:
+    for label, content in cr.split_sections(details or ""):
+        if label.strip().lower().startswith("misconception"):
+            return content.strip()
+    return ""
+
+
+def _ensure_misconceptions_via_api(
+    records: list[dict], *, meta: dict, use_api: bool = True,
+) -> list[dict]:
+    """Have GPT write missing or generic-only Misconceptions sections.
+
+    Reviewers flagged the deterministic fallback text as too generic; concept
+    quality requires real, concept-specific learner errors. Only rows whose
+    Misconceptions are missing, empty, or generic are sent. The deterministic
+    template remains the dry-mode / API-failure last resort (added later by
+    ``concept_refiner.ensure_misconceptions``).
+    """
+    import json as _json
+
+    targets = [
+        i for i, rec in enumerate(records)
+        if not cr.is_culmination(rec.get("concept_title", ""))
+        and (rec.get("concept_details") or "").strip()
+        and (
+            not _misconception_body(rec.get("concept_details", ""))
+            or cr._is_generic_misconception(
+                _misconception_body(rec.get("concept_details", "")))
+        )
+    ]
+    if not targets or not use_api:
+        return records
+    progress.log(
+        f"Writing specific Misconceptions for {len(targets)} concept(s) via API.")
+    system = prompts.get_text("concepts.misconceptions.system")
+    rows = [
+        {
+            "topic": records[i].get("topic", ""),
+            "parent_concept": records[i].get("parent_concept", ""),
+            "concept": records[i].get("concept_title", ""),
+            "concept_description": records[i].get("concept_details", ""),
+            "keywords": records[i].get("keywords", ""),
+        }
+        for i in targets
+    ]
+    user = (
+        _metadata_block(meta)
+        + "\nRows missing a specific Misconceptions section:\n"
+        + _json.dumps({"rows": rows}, ensure_ascii=False)
+    )
+    by_title: dict[str, str] = {}
+    try:
+        data = _openai_json(system, user)
+        for row in _concept_rows_to_records(data):
+            body = _misconception_body(row.get("concept_details", ""))
+            if body and not cr._is_generic_misconception(body):
+                by_title[bi.normalize_question_text(row["concept_title"])] = body
+    except Exception as exc:  # noqa: BLE001 — deterministic backstop follows later
+        progress.log(
+            f"Misconception pass failed ({exc}) — deterministic fallback will apply.",
+            level="warning")
+        return records
+    completed = 0
+    for i in targets:
+        rec = records[i]
+        body = by_title.get(bi.normalize_question_text(rec.get("concept_title", "")))
+        if not body:
+            continue
+        sections = [
+            (label, content)
+            for label, content in cr.split_sections(rec.get("concept_details", ""))
+            if not label.strip().lower().startswith("misconception")
+        ]
+        sections.append(("Misconceptions", body))
+        rec["concept_details"] = cr.join_sections(sections)
+        completed += 1
+    progress.log(f"Specific Misconceptions written for {completed} concept(s).",
+                 level="success")
+    return records
+
+
 def _assign_mined_types_via_api(
-    records: list[dict], *, meta: dict, mined_types: dict, max_attempts: int = 3,
+    records: list[dict], *, meta: dict, mined_types: dict, max_attempts: int = 4,
 ) -> list[dict]:
     """Embed every mined Type into a concept using a pure-API ID assignment.
 
@@ -2428,6 +2779,9 @@ def _assign_mined_types_via_api(
             "concept": rec.get("concept_title", ""),
             "concept_description": _concept_description_only(rec.get("concept_details", "")),
             "is_culmination": cr.is_culmination(rec.get("concept_title", "")),
+            # Reading-order position — placements must not jump ahead of the
+            # chapter (e.g. heating-effect questions under resistivity).
+            "chapter_position": i,
         })
 
     types_by_id: dict[str, dict] = {}
@@ -2468,6 +2822,32 @@ def _assign_mined_types_via_api(
         progress.log(
             f"Type embedding attempt {attempt}: {placed}/{len(types_by_id)} mined Types assigned.")
 
+    if remaining:
+        # No mined question may be dropped: whatever GPT left unassigned is
+        # force-attached to the culmination row of the Type's hinted topic
+        # (mixed/synthesis home), falling back to the chapter's last
+        # culmination, then the last concept.
+        progress.log(
+            f"{len(remaining)} mined Type(s) unassigned after {max_attempts} "
+            "attempt(s) — force-attaching to culmination rows so no source "
+            "question is lost.",
+            level="warning",
+        )
+        culm_by_topic = {
+            bi.normalize_question_text(p["topic"]): p["concept_id"]
+            for p in concept_payload if p["is_culmination"]
+        }
+        fallback_cid = next(
+            (p["concept_id"] for p in reversed(concept_payload) if p["is_culmination"]),
+            concept_payload[-1]["concept_id"],
+        )
+        for tid in sorted(remaining):
+            mtype = types_by_id[tid]
+            hint = bi.normalize_question_text(mtype.get("topic_match_hint") or "")
+            cid = culm_by_topic.get(hint, fallback_cid)
+            per_concept.setdefault(cid, []).append(mtype)
+        remaining.clear()
+
     for cid, tlist in per_concept.items():
         rec = cid_map[cid]
         fragments: list[str] = []
@@ -2479,12 +2859,6 @@ def _assign_mined_types_via_api(
         if fragments:
             rec["concept_details"] = _inject_types(
                 rec.get("concept_details", ""), " ".join(fragments))
-    if remaining:
-        progress.log(
-            f"{len(remaining)} mined Type(s) still unassigned after {max_attempts} "
-            "attempt(s); re-run or raise attempts if this persists.",
-            level="warning",
-        )
     return records
 
 
@@ -2565,7 +2939,8 @@ _FATAL_CODES = {
     "duplicate_topic_concept", "source_artifact", "types_too_early",
     "culmination_too_early", "types_format", "case_without_type",
     "type_without_case", "culmination_description", "culmination_count",
-    "culmination_order", "section_number", "empty_types",
+    "culmination_order", "section_number", "empty_types", "short_case_example",
+    "merged_description",
 }
 
 
@@ -2643,6 +3018,32 @@ def _repair_records_via_api(
         records = _ensure_parent_concepts(records)
         progress.log(f"{stage}: repaired {len(repaired)} row(s) on attempt {attempt + 1}.")
     return records
+
+
+def _neutralize_unrepaired_rows(records: list[dict]) -> list[dict]:
+    """Destructively neutralize source artifacts ONLY where GPT repair failed.
+
+    Rows that validate cleanly keep their GPT-authored wording verbatim; the
+    deterministic rewriter is a per-row last resort, never a blanket pass.
+    """
+    report = cv.validate_concept_rows(
+        records, allow_types=True, require_culmination=True, allow_culmination=True)
+    failing = {
+        e["row_index"] for e in report["errors"]
+        if e.get("severity") == "error" and e.get("row_index", -1) >= 0
+        and e.get("code") == "source_artifact"
+    }
+    out: list[dict] = []
+    for i, rec in enumerate(records):
+        out.append(concept_cleanup.clean_concept_record(
+            dict(rec), neutralize_artifacts=i in failing))
+    if failing:
+        progress.log(
+            f"Neutralized source artifacts on {len(failing)} unrepaired row(s); "
+            f"{len(records) - len(failing)} row(s) kept verbatim.",
+            level="warning",
+        )
+    return out
 
 
 def _validate_final_or_raise(records: list[dict], *, stage: str = "final") -> dict:
@@ -3439,9 +3840,19 @@ def _topic_headings(sections: list[dict]) -> list[str]:
             "chapter": bool(section.get("heading_chapter")),
         })
     numbered = [c for c in candidates if c["numbered"] and not c["chapter"]]
-    decimal_numbered = [c for c in numbered if "." in c["number_prefix"]]
-    if len(decimal_numbered) >= _MIN_MAIN_TOPIC_HEADINGS:
-        numbered = decimal_numbered
+    # Main topics are the SHALLOWEST numbering level with enough sections:
+    # NCERT History numbers main sections "1", "2", ... with "2.1", "2.2"
+    # subtopics beneath them, while NCERT Math numbers main sections "1.1",
+    # "1.2" (the integer level is only the chapter). Reviewers require the
+    # main textbook sections as topics — never their subtopics.
+    by_depth: dict[int, list[dict]] = {}
+    for c in numbered:
+        if c["number_prefix"]:
+            by_depth.setdefault(c["number_prefix"].count("."), []).append(c)
+    for depth in sorted(by_depth):
+        if len(by_depth[depth]) >= _MIN_MAIN_TOPIC_HEADINGS:
+            numbered = by_depth[depth]
+            break
     if len(numbered) >= _MIN_MAIN_TOPIC_HEADINGS:
         if len(numbered) > _MAX_MAIN_TOPIC_HEADINGS:
             progress.log(
@@ -3665,6 +4076,10 @@ def concepts_from_mmd(
         headings = _topic_headings(sections)
         out = _snap_topics_to_headings(out, headings, chapter_title=chapter_title)
         out = _consolidate_concepts_via_api(out, subject=subject, mmd_text=mmd_text, meta=meta)
+        # Topic names must follow the SOURCE file's own section headings.
+        # GPT re-segregates on EVERY run with a reliable heading list (not
+        # only when topics collapsed); the deterministic snap afterwards is
+        # only a straggler backstop.
         if _topics_look_collapsed(out, headings):
             progress.log(
                 f"Topic segregation collapsed: {len(out)} concepts share almost "
@@ -3672,6 +4087,7 @@ def concepts_from_mmd(
                 "headings — re-segregating topics via API.",
                 level="warning",
             )
+        if len(headings) >= 3 or (headings and _topics_look_collapsed(out, headings)):
             out = _restructure_topics_via_api(out, meta=meta, headings=headings)
         out = _snap_topics_to_headings(out, headings, chapter_title=chapter_title)
         out = _refine_descriptions_via_api(
@@ -3706,31 +4122,36 @@ def concepts_from_mmd(
         out = _scrub_section_numbers(out)
         out = _merge_concept_records(out)
         out = _dedupe_titles_chapter_wide(out)
+        # Near-duplicate titles: GPT merges the rows' content; the
+        # deterministic drop only guards whatever the merge pass left behind.
+        out = _merge_similar_concepts_via_api(out, meta=meta)
         out = concept_cleanup.dedupe_similar_titles_chapter_wide(out)
         out = concept_cleanup.filter_review_violations(
-            out, subject=subject, board=board)
+            out, subject=subject, board=board, chapter_title=chapter_title)
         out = [
             concept_cleanup.clean_concept_record(dict(r), neutralize_artifacts=False)
             for r in out
         ]
         out = _enforce_culminations(out)
+        out = _ensure_misconceptions_via_api(out, meta=meta)
         out = _repair_records_via_api(
-            out, meta=meta, stage="final", source_context=mmd_text, strict=False)
-        # Post-repair: neutralization is the deterministic last resort for any
-        # reference the repair pass failed to inline — a job must never fail
-        # on a reference the code can still remove.
-        out = [concept_cleanup.clean_concept_record(dict(r)) for r in out]
+            out, meta=meta, stage="final", source_context=mmd_text, strict=False,
+            max_attempts=3)
+        # Post-repair: neutralize ONLY rows the repair pass could not fix —
+        # rows that already validate cleanly keep their full GPT-authored
+        # wording untouched (no blanket deterministic rewriting).
+        out = _neutralize_unrepaired_rows(out)
         out = cr.refine_chapter(out)
         # The repair/cleanup passes may reorder, rename, or re-collide rows;
-        # re-assert the duplicate-title, culmination, and mastery-line
-        # invariants mechanically before the final gate (rows the repair pass
-        # rewrote may have lost their "Achieving Mastery" line — restore it
-        # deterministically, without another API round-trip).
+        # re-assert the duplicate-title, culmination, mastery-line, and
+        # misconception invariants before the final gate (rows the repair pass
+        # rewrote may have lost them).
         out = _dedupe_titles_chapter_wide(out)
         out = concept_cleanup.dedupe_similar_titles_chapter_wide(out)
         out = concept_cleanup.filter_review_violations(
-            out, subject=subject, board=board)
-        out = _ensure_mastery_lines_via_api(out, meta=meta, use_api=False)
+            out, subject=subject, board=board, chapter_title=chapter_title)
+        out = _ensure_mastery_lines_via_api(out, meta=meta)
+        out = _ensure_misconceptions_via_api(out, meta=meta)
         out = _enforce_culminations(out)
         _validate_final_or_raise(out, stage="final")
         missing = sum(

@@ -52,8 +52,13 @@ def test_universal_question_task_inventory_and_type_mining_prompts():
     assert "COVERAGE IS MANDATORY" in mining
     assert "NEVER skip an item" in mining
     assert "A missed question is a defect" in mining
-    assert "CASE PROMPTS CARRY THE FULL SOURCE QUESTION" in mining
-    assert "Do not shorten source questions" in mining
+    assert "EXAMPLES CARRY THE FULL SOURCE QUESTION" in mining
+    assert "Do not shorten or truncate source questions" in mining
+    # Cases are defined sub-types; examples carry the full questions.
+    assert "CASE WORDING" in mining
+    assert "case_title DEFINES the sub-type" in mining
+    assert "checkpoint" in mining.lower()
+    assert "cdn.mathpix.com" in mining
     # Types must be properly defined (precise wording + definition).
     assert "TYPE WORDING" in mining
     assert "precise, self-explanatory pattern name" in mining
@@ -177,9 +182,9 @@ def test_assign_types_uses_pure_api_id_assignment(monkeypatch):
     ]
     mined = {"types": [
         {"type_id": "TYPE-0001", "type_title": "Adding Given Numbers",
-         "case_prompts": [{"case_prompt": "Find 2+3"}]},
+         "case_prompts": [{"case_prompt": "Find the sum of 2 and 3 using addition."}]},
         {"type_id": "TYPE-0002", "type_title": "Dividing Powers with the Same Base",
-         "case_prompts": [{"case_prompt": "Simplify p^9 ÷ p^3"}]},
+         "case_prompts": [{"case_prompt": "Simplify p^9 divided by p^3 using exponent laws."}]},
     ]}
     out = g._assign_types_via_api(
         records, subject="Math", mmd_text="# Chapter\nsrc",
@@ -213,9 +218,9 @@ def test_assign_mined_types_retries_until_all_covered(monkeypatch):
     ]
     mined = {"types": [
         {"type_id": "TYPE-0001", "type_title": "Pattern One",
-         "case_prompts": [{"case_prompt": "do one"}]},
+         "case_prompts": [{"case_prompt": "Apply pattern one to solve the given classroom task."}]},
         {"type_id": "TYPE-0002", "type_title": "Pattern Two",
-         "case_prompts": [{"case_prompt": "do two"}]},
+         "case_prompts": [{"case_prompt": "Apply pattern two to solve the given classroom task."}]},
     ]}
     out = g._assign_mined_types_via_api(records, meta=g._metadata(subject="Math"), mined_types=mined)
     assert calls["n"] >= 2  # retried because the first attempt missed a type_id
@@ -438,8 +443,10 @@ def test_concepts_pipeline_runs_types_assign(monkeypatch):
                 "topic": "Algebra", "concept": "Linear equations",
                 "concept_description": (
                     "Description: altered by model // "
-                    "Types: Type 01: One-step Case 01: Solve x+2=5 Case 02: Solve x-3=1 "
-                    "Type 02: Two-step Case 01: Solve 2x+1=7 Case 02: Solve 3x-2=4 "
+                    "Types: Type 01: One-step Case 01: Solve x+2=5 by subtracting 2 from both sides. "
+                    "Case 02: Solve x-3=1 by adding 3 to both sides. "
+                    "Type 02: Two-step Case 01: Solve 2x+1=7 by undoing addition and multiplication. "
+                    "Case 02: Solve 3x-2=4 by undoing subtraction and multiplication. "
                     "// Misconception: wrong inverse op"
                 ),
                 "keywords": "linear",

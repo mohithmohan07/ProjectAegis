@@ -64,20 +64,28 @@ def test_validator_rejects_empty_sections_and_bad_types():
 
 def test_validator_rejects_culmination_before_culmination_pass():
     report = cv.validate_concept_rows([
-        _rec("Culmination - Early", "Description: Recap // Types: Type 01: Mix Case 01: combine", parent="Culmination"),
+        _rec(
+            "Culmination - Early",
+            "Description: Recap // Types: Type 01: Mix Case 01: Combine the listed concepts to solve a mixed review task.",
+            parent="Culmination",
+        ),
     ], require_culmination=False, allow_culmination=False)
     assert any(e["code"] == "culmination_too_early" for e in report["errors"])
 
 
 def test_validator_requires_one_culmination_last_per_topic():
+    culmination_details = (
+        "Description: Recap // Types: Type 01: Mix Case 01: "
+        "Combine the listed concepts to solve a mixed review task."
+    )
     report = cv.validate_concept_rows([
         _rec("Skill A"),
-        _rec("Culmination - Skill A", "Description: Recap // Types: Type 01: Mix Case 01: combine", parent="Culmination"),
+        _rec("Culmination - Skill A", culmination_details, parent="Culmination"),
     ], require_culmination=True)
     assert report["ok"]
 
     bad = cv.validate_concept_rows([
-        _rec("Culmination - Skill A", "Description: Recap // Types: Type 01: Mix Case 01: combine", parent="Culmination"),
+        _rec("Culmination - Skill A", culmination_details, parent="Culmination"),
         _rec("Skill A"),
     ], require_culmination=True)
     assert any(e["code"] == "culmination_order" for e in bad["errors"])

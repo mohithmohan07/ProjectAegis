@@ -42,15 +42,18 @@ def _find_concept_in_chapter(chapter: models.Chapter, title: str) -> models.Conc
 def _find_or_create_topic(
     db: Session, chapter: models.Chapter, topic_title: str, pre_post: str,
 ) -> models.Topic:
+    display_name = bi.strip_topic_title(topic_title) or topic_title
     for t in chapter.topics:
         if t.topic_title == topic_title and t.pre_post_learning == pre_post:
+            if t.topic_display_name != display_name:
+                t.topic_display_name = display_name
             return t
     # Create through the relationship so chapter.topics stays current within
     # this session — otherwise every repeat of the same topic title would
     # miss the lookup above and create a duplicate Topic row.
     topic = models.Topic(
         topic_title=topic_title,
-        topic_display_name=topic_title, pre_post_learning=pre_post,
+        topic_display_name=display_name, pre_post_learning=pre_post,
     )
     chapter.topics.append(topic)
     db.flush()
@@ -103,7 +106,8 @@ def _deposit_concepts(
     # this pass only enforces the numbering/format the team requires.
     records = [concept_cleanup.clean_concept_record(dict(r)) for r in records]
     records = concept_cleanup.filter_review_violations(
-        records, subject=chapter.subject, board=chapter.board)
+        records, subject=chapter.subject, board=chapter.board,
+        chapter_title=chapter.chapter_title)
     records = concept_cleanup.dedupe_similar_titles_chapter_wide(records)
     records = concept_refiner.refine_chapter(records)
     report = concept_validator.validate_concept_rows(
@@ -119,7 +123,7 @@ def _deposit_concepts(
             "required", "required_parent", "description_prefix", "source_artifact",
             "types_format", "case_without_type", "type_without_case",
             "culmination_description", "culmination_count", "culmination_order",
-            "section_number", "empty_types",
+            "section_number", "empty_types", "short_case_example",
         }
     ]
     progress.log(
@@ -190,15 +194,25 @@ def _chapter_meta_summary(chapter: models.Chapter) -> dict:
         chapter_id=chapter.id, chapter_code=chapter.chapter_code,
         finalized_duration_minutes=finalized or 0,
     )
-    try:
-        return generation.chapter_meta_via_api(meta=meta, topics=topics_payload)
-    except Exception as exc:  # noqa: BLE001 — metadata must never kill the job
-        progress.log(
-            f"Chapter/topic metadata pass failed ({exc}) — using deterministic "
-            "summaries instead.",
-            level="warning",
-        )
-        return {}
+    # GPT writes the chapter description/duration/topic descriptions; retry
+    # before ever falling back to deterministic summaries, so formula-estimate
+    # durations (reviewed as wrong) only ship as an absolute last resort.
+    last_exc: Exception | None = None
+    for attempt in range(1, 4):
+        try:
+            return generation.chapter_meta_via_api(meta=meta, topics=topics_payload)
+        except Exception as exc:  # noqa: BLE001 — metadata must never kill the job
+            last_exc = exc
+            progress.log(
+                f"Chapter/topic metadata attempt {attempt}/3 failed ({exc}).",
+                level="warning",
+            )
+    progress.log(
+        f"Chapter/topic metadata pass failed after retries ({last_exc}) — "
+        "using deterministic summaries instead.",
+        level="warning",
+    )
+    return {}
 
 
 def _sync_chapter_topic_summary(
@@ -274,7 +288,7 @@ _INVENTORY_CSV_COLUMNS = [
     "qid", "order_index", "source_kind", "source_label", "parent_source_label",
     "topic_hint", "page_hint", "subpart_label", "requires_visual",
     "requires_context", "normalized_task", "raw_task",
-    "raw_solution_or_answer", "shared_context", "content_objects",
+    "raw_solution_or_answer", "shared_context", "image_urls", "content_objects",
     "classified", "mined_type_ids", "mined_type_titles",
 ]
 
@@ -306,8 +320,13 @@ def inventory_csv(db: Session, job_id: int) -> str:
         title = (t.get("type_title") or "").strip()
         qids = set(t.get("source_question_ids") or [])
         for case in t.get("case_prompts") or []:
-            if isinstance(case, dict) and case.get("source_question_id"):
+            if not isinstance(case, dict):
+                continue
+            if case.get("source_question_id"):
                 qids.add(case["source_question_id"])
+            for ex in case.get("examples") or []:
+                if isinstance(ex, dict) and ex.get("source_question_id"):
+                    qids.add(ex["source_question_id"])
         for qid in qids:
             types_by_qid.setdefault((qid or "").strip(), []).append((tid, title))
 
@@ -320,6 +339,8 @@ def inventory_csv(db: Session, job_id: int) -> str:
         row = {col: item.get(col, "") for col in _INVENTORY_CSV_COLUMNS}
         row["content_objects"] = json.dumps(
             item.get("content_objects") or {}, ensure_ascii=False)
+        row["image_urls"] = ", ".join(
+            str(u) for u in (item.get("image_urls") or []) if u)
         row["requires_visual"] = "yes" if item.get("requires_visual") else "no"
         row["requires_context"] = "yes" if item.get("requires_context") else "no"
         row["classified"] = "yes" if assigned else "no"

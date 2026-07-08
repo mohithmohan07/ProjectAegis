@@ -335,8 +335,14 @@ def _front_bands(concept: models.Concept, topic: models.Topic, *,
         chapter.board, chapter.grade, chapter.subject, book=book)
     concept_fields = concept_fields or CONCEPT_FIELDS
     parent_column_present = "parent_concept" in concept_fields
+    # Column J lists each concept exactly as its concept_title column reads —
+    # the tagged "Name (tag)" form — so the importer links them (reviewers:
+    # "labels should be concept title, not concept display name").
+    cp_tag = directory.concept_tag(
+        chapter.board, chapter.grade, chapter.subject,
+        chapter.chapter_title, topic.topic_title)
     concept_labels = ", ".join(
-        strip_title_tag(c.concept_title) or c.concept_title
+        f"{strip_title_tag(c.concept_title) or c.concept_title} ({cp_tag})"
         for c in sorted(topic.concepts, key=lambda c: c.id))
     return [
         # ---- Chapter band (tag in title, clean display) ----

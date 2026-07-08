@@ -195,16 +195,25 @@ def format_mastery_statement(details: str) -> str:
     ``... Achieving Mastery: <statement>`` (any label variant, any spacing)
     becomes ``...\\nAchieving Mastery: <statement>``. Only the Description
     section is touched; nothing is invented when no mastery label exists.
+
+    When the model wrote TWO mastery statements (review feedback: one before
+    Misconceptions and one after), the SECOND is kept — the first tends to be
+    a formulaic "applying X to problems" line, while the second is written
+    with the concept's actual content in view.
     """
     sections = split_sections(details)
     for i, (label, content) in enumerate(sections):
         if not label.strip().lower().startswith("description"):
             continue
-        m = _MASTERY_LABEL_RE.search(content)
-        if not m or not content[m.end():].strip():
+        matches = list(_MASTERY_LABEL_RE.finditer(content))
+        matches = [m for m in matches if content[m.end():].strip()]
+        if not matches:
             break
-        body = content[:m.start()].rstrip()
-        statement = content[m.end():].strip()
+        first, last = matches[0], matches[-1]
+        body = content[:first.start()].rstrip()
+        statement = content[last.end():].strip()
+        if not statement:
+            statement = content[first.end():last.start()].strip()
         sections[i] = (label, f"{body}\nAchieving Mastery: {statement}")
         return join_sections(sections)
     return details
@@ -230,57 +239,77 @@ def _is_generic_misconception(text: str) -> bool:
 
 
 def normalize_misconception_sections(details: str) -> str:
-    """Keep exactly one Misconceptions section in canonical order.
+    """Keep exactly one Misconceptions SECTION in canonical order.
 
-    Review feedback: misconceptions appeared twice — inline in Description
+    Review feedback: misconception text appeared twice — inline in Description
     (sometimes after Achieving Mastery) AND as a separate section. We strip
-    inline copies from Description, merge duplicate sections, drop a trailing
-    generic duplicate, and enforce Description // Types // Misconceptions order.
+    inline copies from Description, merge every section into ONE Misconceptions
+    section, and enforce Description // Types // Misconceptions order.
+
+    A concept may legitimately carry MORE THAN ONE real misconception, so all
+    distinct specific misconception texts are kept (joined in one section);
+    only generic filler duplicates of a specific one are dropped.
     """
     sections = split_sections(details)
     if not sections:
         return details
 
     misconception_texts: list[str] = []
+    stray_mastery = ""
+
+    def _collect(text: str) -> None:
+        nonlocal stray_mastery
+        text = (text or "").strip()
+        if not text:
+            return
+        # A mastery statement drifted into the misconception text (review:
+        # mastery appearing again after Misconceptions) — pull it back out.
+        m = _MASTERY_LABEL_RE.search(text)
+        if m:
+            tail = text[m.end():].strip()
+            if tail:
+                stray_mastery = tail
+            text = text[:m.start()].strip()
+        if text:
+            misconception_texts.append(text)
+
     cleaned: list[tuple[str, str]] = []
     for label, content in sections:
         lower = label.strip().lower()
         if lower.startswith("misconception"):
-            if content.strip():
-                misconception_texts.append(content.strip())
+            _collect(content)
             continue
         if lower.startswith("description"):
             body = content
             # Remove inline misconception before or after the mastery line.
             m_mastery = _MASTERY_LABEL_RE.search(body)
             if m_mastery:
-                pre = body[:m_mastery.start()]
                 post_mastery = body[m_mastery.end():]
                 inline = _INLINE_MISCONCEPTION_RE.search(post_mastery)
                 if inline:
-                    extracted = post_mastery[inline.end():].strip()
-                    if extracted:
-                        misconception_texts.append(extracted)
+                    _collect(post_mastery[inline.end():])
                     post_mastery = post_mastery[:inline.start()].rstrip()
                 body = body[:m_mastery.start()] + body[m_mastery.start():m_mastery.end()] + post_mastery
             inline_pre = _INLINE_MISCONCEPTION_RE.search(body)
             if inline_pre:
-                extracted = body[inline_pre.end():].strip()
-                if extracted:
-                    misconception_texts.append(extracted)
+                _collect(body[inline_pre.end():])
                 body = body[:inline_pre.start()].rstrip()
             cleaned.append((label, body))
             continue
         cleaned.append((label, content))
 
-    # Prefer the first specific misconception; drop trailing generic duplicates.
-    chosen = ""
+    # Keep every distinct specific misconception; generic filler survives only
+    # when no specific one exists.
+    specific: list[str] = []
+    seen: set[str] = set()
     for text in misconception_texts:
-        if text and not _is_generic_misconception(text):
-            chosen = text
-            break
-    if not chosen and misconception_texts:
-        chosen = misconception_texts[0]
+        key = re.sub(r"\W+", " ", text.lower()).strip()
+        if key and key not in seen and not _is_generic_misconception(text):
+            seen.add(key)
+            specific.append(text)
+    if not specific and misconception_texts:
+        specific = [misconception_texts[0]]
+    chosen = " ".join(specific)
 
     ordered: list[tuple[str, str]] = []
     types_block: tuple[str, str] | None = None
@@ -289,6 +318,16 @@ def normalize_misconception_sections(details: str) -> str:
             types_block = (label, content)
         else:
             ordered.append((label, content))
+    # A mastery statement extracted from the misconception text replaces the
+    # Description's existing one (the reviewers prefer the later statement).
+    if stray_mastery:
+        for i, (label, content) in enumerate(ordered):
+            if not label.strip().lower().startswith("description"):
+                continue
+            m = _MASTERY_LABEL_RE.search(content)
+            body = content[:m.start()].rstrip() if m else content.rstrip()
+            ordered[i] = (label, f"{body}\nAchieving Mastery: {stray_mastery}")
+            break
     if types_block:
         ordered.append(types_block)
     if chosen:
