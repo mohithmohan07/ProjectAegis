@@ -55,6 +55,13 @@ _KNOWN_CONCEPT_ALIASES = {
     "cbpt": "converse basic proportionality theorem",
     "converse basic proportionality theorem": "cbpt",
 }
+_POWER_SHARING_FORMS_RE = re.compile(
+    r"\b(?:forms?\s+of\s+power[-\s]*sharing|horizontal\s+distribution|"
+    r"vertical\s+(?:division|distribution)|different\s+organs\s+of\s+government|"
+    r"different\s+levels\s+of\s+government|social\s+groups|political\s+parties|"
+    r"pressure\s+groups|movements)\b",
+    re.IGNORECASE,
+)
 
 # Connector words kept lowercase in Title Case (unless first/last word).
 _TITLE_SMALL_WORDS = {
@@ -158,10 +165,56 @@ def filter_review_violations(
             rec["topic"] = english_topic or fallback_topic
         out.append(rec)
 
+    out = _reassign_power_sharing_forms_topic(
+        out, subject=subject, chapter_title=chapter_title)
+
     if dropped:
         from . import progress as _progress
         _progress.log(
             f"Dropped {dropped} English pedagogy / filler concept row(s).",
+            level="warning",
+        )
+    return out
+
+
+def _reassign_power_sharing_forms_topic(
+    records: list[dict], *, subject: str = "", chapter_title: str = "",
+) -> list[dict]:
+    """Keep the reviewed Power Sharing forms section as its own topic."""
+    subj = (subject or "").strip().lower()
+    ch = bi.normalize_question_text(chapter_title)
+    if "power sharing" not in ch or not (
+        "civic" in subj or "social science" in subj or subj in {"politics", "political science"}
+    ):
+        return records
+
+    expected = "Forms of Power-sharing"
+    expected_keys = {
+        bi.normalize_question_text(expected),
+        bi.normalize_question_text("Forms of Power Sharing"),
+    }
+    if any(bi.normalize_question_text(r.get("topic", "")) in expected_keys for r in records):
+        return records
+
+    changed = 0
+    out: list[dict] = []
+    for rec in records:
+        haystack = " ".join([
+            str(rec.get("topic") or ""),
+            str(rec.get("parent_concept") or ""),
+            str(rec.get("concept_title") or rec.get("concept") or ""),
+            str(rec.get("concept_details") or rec.get("concept_description") or ""),
+        ])
+        if _POWER_SHARING_FORMS_RE.search(haystack):
+            rec = dict(rec)
+            rec["topic"] = expected
+            changed += 1
+        out.append(rec)
+
+    if changed:
+        from . import progress as _progress
+        _progress.log(
+            f"Reassigned {changed} Power Sharing form(s) to '{expected}'.",
             level="warning",
         )
     return out

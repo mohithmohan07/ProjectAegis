@@ -1,4 +1,5 @@
 """Regression tests for QA review feedback (Reviews 01–06)."""
+from app import models
 from app import bulk_import as bi
 from app.services import (
     build_concepts,
@@ -30,6 +31,21 @@ def test_misconception_strips_inline_after_mastery():
     out = cr.normalize_misconception_sections(details)
     assert "// Misconception:" not in out.split("Misconceptions:")[0]
     assert "Misconceptions: A common error." in out
+
+
+def test_misconception_prefers_specific_over_generic_duplicate():
+    details = (
+        "Description: BPT applies only under a parallel-line condition.\n"
+        "Achieving Mastery: Checking the parallel condition before using BPT. // "
+        "Misconceptions: Students may ignore the parallel-line condition. // "
+        "Misconception: Students may apply Basic Proportionality Theorem as a "
+        "memorized rule without checking the conditions, context, or "
+        "representation given in the problem."
+    )
+    out = cr.normalize_misconception_sections(details)
+    assert out.count("Misconception") == 1
+    assert "ignore the parallel-line condition" in out
+    assert "memorized rule" not in out
 
 
 def test_split_merged_description_blocks():
@@ -105,6 +121,21 @@ def test_overview_topic_reassigned():
     assert out[1]["topic"] == "Real Section"
 
 
+def test_power_sharing_forms_rows_get_their_own_topic():
+    records = [
+        {"topic": "Outcomes of Democracy", "concept_title": "Horizontal Distribution of Power",
+         "concept_details": "Description: Power is shared among legislature, executive and judiciary.",
+         "keywords": ""},
+        {"topic": "Outcomes of Democracy", "concept_title": "Respect for Diversity",
+         "concept_details": "Description: Democratic outcomes include accommodation.",
+         "keywords": ""},
+    ]
+    out = concept_cleanup.filter_review_violations(
+        records, subject="Civics", board="CBSE", chapter_title="Power Sharing")
+    assert out[0]["topic"] == "Forms of Power-sharing"
+    assert out[1]["topic"] == "Outcomes of Democracy"
+
+
 def test_fullmarks_book_tag():
     assert directory.book_tag("Fullmarks") == "Fullmarks"
     tag = directory.chapter_tag("CBSE", "09", "Geography", book="Fullmarks")
@@ -133,11 +164,39 @@ def test_parse_duration_minutes():
     assert build_concepts._parse_duration_minutes("160 minutes") == 160
 
 
+def test_topic_display_name_is_clean_when_topic_is_created_or_reused(db):
+    chapter = models.Chapter(
+        chapter_code="10CBMA_Triangles",
+        board="CBSE",
+        grade="10",
+        subject="Mathematics",
+        chapter_title="Triangles",
+    )
+    db.add(chapter)
+    db.flush()
+    topic = build_concepts._find_or_create_topic(
+        db,
+        chapter,
+        "Topic 03: Similarity Criteria (10CBMA_Triangles_PL)",
+        "Post",
+    )
+    assert topic.topic_display_name == "Similarity Criteria"
+    topic.topic_display_name = "Topic 03: Similarity Criteria (10CBMA_Triangles_PL)"
+    reused = build_concepts._find_or_create_topic(
+        db,
+        chapter,
+        "Topic 03: Similarity Criteria (10CBMA_Triangles_PL)",
+        "Post",
+    )
+    assert reused is topic
+    assert reused.topic_display_name == "Similarity Criteria"
+
+
 def test_strip_title_tag_in_labels():
     assert bi.strip_title_tag("What is Science (09CBSS_Ch_PL_T)") == "What is Science"
 
 
-def test_short_case_examples_warn_for_full_source_detail():
+def test_short_case_examples_fail_for_full_source_detail():
     rows = [{
         "topic": "Triangles",
         "parent_concept": "Similarity",
@@ -150,4 +209,30 @@ def test_short_case_examples_warn_for_full_source_detail():
         "keywords": "",
     }]
     report = concept_validator.validate_concept_rows(rows, allow_types=True)
-    assert any(e["code"] == "short_case_example" for e in report["errors"])
+    short_case = [e for e in report["errors"] if e["code"] == "short_case_example"]
+    assert short_case
+    assert short_case[0]["severity"] == "error"
+
+
+def test_generic_only_misconception_warns_for_review_quality():
+    rows = [{
+        "topic": "Triangles",
+        "parent_concept": "Similarity",
+        "concept_title": "Basic Proportionality Theorem",
+        "concept_details": (
+            "Description: Relates parallel lines and proportional segments. // "
+            "Misconceptions: Students may apply Basic Proportionality Theorem "
+            "as a memorized rule without checking the conditions, context, or "
+            "representation given in the problem."
+        ),
+        "keywords": "",
+    }]
+    report = concept_validator.validate_concept_rows(rows, allow_types=True)
+    assert any(e["code"] == "generic_misconception" for e in report["errors"])
+
+
+def test_power_sharing_metadata_names_required_forms_topic():
+    meta = g._metadata(subject="Civics", board="CBSE", chapter_title="Power Sharing")
+    block = g._metadata_block(meta)
+    assert "Forms of Power-sharing" in block
+    assert "Do not merge horizontal" in block

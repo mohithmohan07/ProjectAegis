@@ -1517,7 +1517,25 @@ def _metadata_block(meta: dict) -> str:
     subj = (meta.get("subject") or "").lower()
     if "english" in subj:
         block += "\n\n" + prompts.get_text("concepts.english.system")
+    if _needs_power_sharing_topic_guidance(meta):
+        block += (
+            "\n\nReview-required Civics coverage: include the textbook section "
+            "'Forms of Power-sharing' as its own topic. Do not merge horizontal "
+            "distribution, vertical division, social-group/community sharing, "
+            "political parties, pressure groups, or movements into unrelated "
+            "outcome/democracy topics."
+        )
     return block
+
+
+def _needs_power_sharing_topic_guidance(meta: dict) -> bool:
+    subject = (meta.get("subject") or "").strip().lower()
+    chapter = bi.normalize_question_text(meta.get("chapter_title") or "")
+    return "power sharing" in chapter and (
+        "civic" in subject
+        or "social science" in subject
+        or subject in {"politics", "political science"}
+    )
 
 
 # Process-wide gate on in-flight OpenAI calls. All users of this instance
@@ -2565,7 +2583,7 @@ _FATAL_CODES = {
     "duplicate_topic_concept", "source_artifact", "types_too_early",
     "culmination_too_early", "types_format", "case_without_type",
     "type_without_case", "culmination_description", "culmination_count",
-    "culmination_order", "section_number", "empty_types",
+    "culmination_order", "section_number", "empty_types", "short_case_example",
 }
 
 

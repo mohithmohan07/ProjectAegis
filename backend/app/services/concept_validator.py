@@ -88,6 +88,13 @@ def _description_text(details: str) -> str:
     return ""
 
 
+def _misconception_text(details: str) -> str:
+    for label, content in concept_refiner.split_sections(details):
+        if label.lower().startswith("misconception"):
+            return content.strip()
+    return ""
+
+
 def _add(errors: list[dict], row_index: int, field: str, code: str,
          message: str, severity: str = "error") -> None:
     errors.append({
@@ -168,6 +175,10 @@ def validate_concept_rows(
         if details and not is_culm and not _has_label(details, "misconception"):
             _add(errors, i, "concept_details", "missing_misconception",
                  "Misconceptions section is missing", "warning")
+        misconception = _misconception_text(details)
+        if misconception and concept_refiner._is_generic_misconception(misconception):
+            _add(errors, i, "concept_details", "generic_misconception",
+                 "Misconception should be specific to this concept", "warning")
         if details:
             words = _description_words(details)
             if not is_culm and (words < 4 or words > 120):
@@ -202,8 +213,7 @@ def validate_concept_rows(
                 case_text = re.sub(r"\s+", " ", case_match.group(1)).strip()
                 if len(re.findall(r"\w+", case_text)) < 5:
                     _add(errors, i, "concept_details", "short_case_example",
-                         "Case examples should include the full source question/task",
-                         "warning")
+                         "Case examples should include the full source question/task")
         if is_culm and details and not details.split(" // ", 1)[0].startswith(
                 "Description: Recap"):
             _add(errors, i, "concept_details", "culmination_description",

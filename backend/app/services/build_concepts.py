@@ -42,15 +42,18 @@ def _find_concept_in_chapter(chapter: models.Chapter, title: str) -> models.Conc
 def _find_or_create_topic(
     db: Session, chapter: models.Chapter, topic_title: str, pre_post: str,
 ) -> models.Topic:
+    display_name = bi.strip_topic_title(topic_title) or topic_title
     for t in chapter.topics:
         if t.topic_title == topic_title and t.pre_post_learning == pre_post:
+            if t.topic_display_name != display_name:
+                t.topic_display_name = display_name
             return t
     # Create through the relationship so chapter.topics stays current within
     # this session — otherwise every repeat of the same topic title would
     # miss the lookup above and create a duplicate Topic row.
     topic = models.Topic(
         topic_title=topic_title,
-        topic_display_name=topic_title, pre_post_learning=pre_post,
+        topic_display_name=display_name, pre_post_learning=pre_post,
     )
     chapter.topics.append(topic)
     db.flush()
@@ -120,7 +123,7 @@ def _deposit_concepts(
             "required", "required_parent", "description_prefix", "source_artifact",
             "types_format", "case_without_type", "type_without_case",
             "culmination_description", "culmination_count", "culmination_order",
-            "section_number", "empty_types",
+            "section_number", "empty_types", "short_case_example",
         }
     ]
     progress.log(
