@@ -41,6 +41,20 @@ _ENGLISH_FORBIDDEN_CONCEPT_RE = re.compile(
     r")\b",
     re.IGNORECASE,
 )
+_ENGLISH_FORBIDDEN_TOPIC_RE = re.compile(
+    r"\b(?:"
+    r"pre-?\s*reading|informal letter|formal letter|letter writing|"
+    r"reading in manageable parts|oral check|prediction and discussion|"
+    r"classroom activity|january\s+\d{4}|\d{1,2}\s+[A-Za-z]+\s+\d{4}"
+    r")\b",
+    re.IGNORECASE,
+)
+_KNOWN_CONCEPT_ALIASES = {
+    "bpt": "basic proportionality theorem",
+    "basic proportionality theorem": "bpt",
+    "cbpt": "converse basic proportionality theorem",
+    "converse basic proportionality theorem": "cbpt",
+}
 
 # Connector words kept lowercase in Title Case (unless first/last word).
 _TITLE_SMALL_WORDS = {
@@ -108,6 +122,7 @@ _INLINE_REF_RE = re.compile(
 
 def filter_review_violations(
     records: list[dict], *, subject: str = "", board: str = "",
+    chapter_title: str = "",
 ) -> list[dict]:
     """Drop or reassign rows that QA flagged across subject samples."""
     if not records:
@@ -125,6 +140,7 @@ def filter_review_violations(
     dropped = 0
     subj = (subject or "").strip().lower()
     is_english = "english" in subj
+    english_topic = to_title_case(chapter_title.strip()) if is_english and chapter_title.strip() else ""
 
     for rec in records:
         title = (rec.get("concept_title") or "").strip()
@@ -134,9 +150,12 @@ def filter_review_violations(
         if is_english and _ENGLISH_FORBIDDEN_CONCEPT_RE.search(title):
             dropped += 1
             continue
-        if topic_key in _FORBIDDEN_TOPIC_NAMES:
+        if is_english and english_topic and _ENGLISH_FORBIDDEN_TOPIC_RE.search(topic):
             rec = dict(rec)
-            rec["topic"] = fallback_topic
+            rec["topic"] = english_topic
+        elif topic_key in _FORBIDDEN_TOPIC_NAMES:
+            rec = dict(rec)
+            rec["topic"] = english_topic or fallback_topic
         out.append(rec)
 
     if dropped:
@@ -154,13 +173,29 @@ def dedupe_similar_titles_chapter_wide(records: list[dict]) -> list[dict]:
     out: list[dict] = []
     dropped = 0
 
+    def _keys(title: str) -> set[str]:
+        norm = bi.normalize_question_text(title)
+        words = [w for w in norm.split() if w not in {"the", "a", "an", "and", "of"}]
+        keys = {norm, " ".join(words)}
+        if len(words) >= 2 and all(w.isalpha() for w in words):
+            keys.add("".join(w[0] for w in words))
+        tokens = set(norm.split())
+        for alias, expansion in _KNOWN_CONCEPT_ALIASES.items():
+            if alias in keys or expansion in keys or alias in tokens:
+                keys.add(alias)
+                keys.add(expansion)
+        return {k for k in keys if k}
+
     def _similar(a: str, b: str) -> bool:
+        ka, kb = _keys(a), _keys(b)
+        if ka & kb:
+            return True
         na, nb = bi.normalize_question_text(a), bi.normalize_question_text(b)
         if not na or not nb:
             return False
-        if na == nb:
-            return True
         if na in nb or nb in na:
+            if ("converse" in na.split()) != ("converse" in nb.split()):
+                return False
             return True
         return False
 

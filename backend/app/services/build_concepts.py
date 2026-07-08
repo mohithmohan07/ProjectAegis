@@ -103,7 +103,8 @@ def _deposit_concepts(
     # this pass only enforces the numbering/format the team requires.
     records = [concept_cleanup.clean_concept_record(dict(r)) for r in records]
     records = concept_cleanup.filter_review_violations(
-        records, subject=chapter.subject, board=chapter.board)
+        records, subject=chapter.subject, board=chapter.board,
+        chapter_title=chapter.chapter_title)
     records = concept_cleanup.dedupe_similar_titles_chapter_wide(records)
     records = concept_refiner.refine_chapter(records)
     report = concept_validator.validate_concept_rows(

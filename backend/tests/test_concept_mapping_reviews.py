@@ -1,6 +1,11 @@
 """Regression tests for QA review feedback (Reviews 01–06)."""
 from app import bulk_import as bi
-from app.services import build_concepts, concept_cleanup, concept_refiner as cr
+from app.services import (
+    build_concepts,
+    concept_cleanup,
+    concept_refiner as cr,
+    concept_validator,
+)
 from app.services import directory, generation as g
 
 
@@ -47,6 +52,24 @@ def test_dedupe_similar_titles_drops_bpt_echo():
     assert len(out) == 1
 
 
+def test_dedupe_similar_titles_handles_bpt_abbreviation():
+    records = [
+        {"topic": "Similarity", "concept_title": "Basic Proportionality Theorem",
+         "concept_details": "Description: a", "keywords": ""},
+        {"topic": "Criteria", "concept_title": "BPT",
+         "concept_details": "Description: b", "keywords": ""},
+        {"topic": "Criteria", "concept_title": "Converse Basic Proportionality Theorem",
+         "concept_details": "Description: c", "keywords": ""},
+        {"topic": "Practice", "concept_title": "CBPT",
+         "concept_details": "Description: d", "keywords": ""},
+    ]
+    out = concept_cleanup.dedupe_similar_titles_chapter_wide(records)
+    assert [r["concept_title"] for r in out] == [
+        "Basic Proportionality Theorem",
+        "Converse Basic Proportionality Theorem",
+    ]
+
+
 def test_filter_drops_english_pedagogy_concepts():
     records = [
         {"topic": "A Letter to God", "concept_title": "Lencho's Faith",
@@ -59,6 +82,16 @@ def test_filter_drops_english_pedagogy_concepts():
         records, subject="English", board="CBSE")
     assert len(out) == 1
     assert out[0]["concept_title"] == "Lencho's Faith"
+
+
+def test_english_activity_topic_uses_chapter_title():
+    records = [
+        {"topic": "January 2006", "concept_title": "Lencho's Faith",
+         "concept_details": "Description: a", "keywords": ""},
+    ]
+    out = concept_cleanup.filter_review_violations(
+        records, subject="English", board="CBSE", chapter_title="A Letter to God")
+    assert out[0]["topic"] == "A Letter to God"
 
 
 def test_overview_topic_reassigned():
@@ -102,3 +135,19 @@ def test_parse_duration_minutes():
 
 def test_strip_title_tag_in_labels():
     assert bi.strip_title_tag("What is Science (09CBSS_Ch_PL_T)") == "What is Science"
+
+
+def test_short_case_examples_warn_for_full_source_detail():
+    rows = [{
+        "topic": "Triangles",
+        "parent_concept": "Similarity",
+        "concept_title": "Basic Proportionality Theorem",
+        "concept_details": (
+            "Description: Relates parallel lines and proportional segments. // "
+            "Types: Type 01: Direct Case 01: q // "
+            "Misconceptions: Students may ignore the parallel-line condition."
+        ),
+        "keywords": "",
+    }]
+    report = concept_validator.validate_concept_rows(rows, allow_types=True)
+    assert any(e["code"] == "short_case_example" for e in report["errors"])

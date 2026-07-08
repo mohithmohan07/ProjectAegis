@@ -3708,7 +3708,7 @@ def concepts_from_mmd(
         out = _dedupe_titles_chapter_wide(out)
         out = concept_cleanup.dedupe_similar_titles_chapter_wide(out)
         out = concept_cleanup.filter_review_violations(
-            out, subject=subject, board=board)
+            out, subject=subject, board=board, chapter_title=chapter_title)
         out = [
             concept_cleanup.clean_concept_record(dict(r), neutralize_artifacts=False)
             for r in out
@@ -3729,7 +3729,7 @@ def concepts_from_mmd(
         out = _dedupe_titles_chapter_wide(out)
         out = concept_cleanup.dedupe_similar_titles_chapter_wide(out)
         out = concept_cleanup.filter_review_violations(
-            out, subject=subject, board=board)
+            out, subject=subject, board=board, chapter_title=chapter_title)
         out = _ensure_mastery_lines_via_api(out, meta=meta, use_api=False)
         out = _enforce_culminations(out)
         _validate_final_or_raise(out, stage="final")

@@ -32,6 +32,10 @@ _CASE_RE = re.compile(r"\bCase\s+\d{2}:", re.IGNORECASE)
 _CASE_ANY_RE = re.compile(r"\bCase\s+\d{1,2}:", re.IGNORECASE)
 _TYPE_ANY_RE = re.compile(r"\bType\s+\d{1,2}:", re.IGNORECASE)
 _GENERIC_OPENER_RE = re.compile(r"^(applications|properties)\s+of\b", re.IGNORECASE)
+_CASE_SEGMENT_RE = re.compile(
+    r"\bCase\s+\d{1,2}:\s*(.*?)(?=\b(?:Case|Type)\s+\d{1,2}:|$)",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 def _norm(text: str) -> str:
@@ -194,6 +198,12 @@ def validate_concept_rows(
             if type_body and (not _TYPE_RE.search(type_body) or not _CASE_RE.search(type_body)):
                 _add(errors, i, "concept_details", "types_format",
                      "Types must use zero-padded Type NN and Case NN labels")
+            for case_match in _CASE_SEGMENT_RE.finditer(type_body or ""):
+                case_text = re.sub(r"\s+", " ", case_match.group(1)).strip()
+                if len(re.findall(r"\w+", case_text)) < 5:
+                    _add(errors, i, "concept_details", "short_case_example",
+                         "Case examples should include the full source question/task",
+                         "warning")
         if is_culm and details and not details.split(" // ", 1)[0].startswith(
                 "Description: Recap"):
             _add(errors, i, "concept_details", "culmination_description",
