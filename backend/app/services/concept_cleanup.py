@@ -237,42 +237,70 @@ def _reassign_power_sharing_forms_topic(
     return out
 
 
+def _title_similarity_keys(title: str) -> set[str]:
+    norm = bi.normalize_question_text(title)
+    words = [w for w in norm.split() if w not in {"the", "a", "an", "and", "of"}]
+    keys = {norm, " ".join(words)}
+    if len(words) >= 2 and all(w.isalpha() for w in words):
+        keys.add("".join(w[0] for w in words))
+    tokens = set(norm.split())
+    for alias, expansion in _KNOWN_CONCEPT_ALIASES.items():
+        if alias in keys or expansion in keys or alias in tokens:
+            keys.add(alias)
+            keys.add(expansion)
+    return {k for k in keys if k}
+
+
+def titles_look_similar(a: str, b: str) -> bool:
+    """True when two concept titles restate the same idea (BPT vs. its echo)."""
+    ka, kb = _title_similarity_keys(a), _title_similarity_keys(b)
+    if ka & kb:
+        return True
+    na, nb = bi.normalize_question_text(a), bi.normalize_question_text(b)
+    if not na or not nb:
+        return False
+    if na in nb or nb in na:
+        if ("converse" in na.split()) != ("converse" in nb.split()):
+            return False
+        return True
+    return False
+
+
+def find_similar_title_groups(records: list[dict]) -> list[list[int]]:
+    """Groups of row indexes whose titles restate the same concept.
+
+    Detector only — deciding WHICH content to keep/merge is a quality call
+    that belongs to the GPT merge pass; this never modifies records.
+    """
+    groups: list[list[int]] = []
+    for i, rec in enumerate(records):
+        title = (rec.get("concept_title") or "").strip()
+        if not title or cr.is_culmination(title):
+            continue
+        for group in groups:
+            if titles_look_similar(
+                    title, (records[group[0]].get("concept_title") or "")):
+                group.append(i)
+                break
+        else:
+            groups.append([i])
+    return [g for g in groups if len(g) > 1]
+
+
 def dedupe_similar_titles_chapter_wide(records: list[dict]) -> list[dict]:
-    """Drop near-duplicate concept titles (e.g. BPT restated under two topics)."""
+    """Drop near-duplicate concept titles (e.g. BPT restated under two topics).
+
+    Deterministic last resort — the live pipeline first asks GPT to MERGE the
+    duplicate rows' content (``_merge_similar_concepts_via_api``); this drop
+    only runs in dry mode or when that pass failed.
+    """
     kept: list[str] = []
     out: list[dict] = []
     dropped = 0
-
-    def _keys(title: str) -> set[str]:
-        norm = bi.normalize_question_text(title)
-        words = [w for w in norm.split() if w not in {"the", "a", "an", "and", "of"}]
-        keys = {norm, " ".join(words)}
-        if len(words) >= 2 and all(w.isalpha() for w in words):
-            keys.add("".join(w[0] for w in words))
-        tokens = set(norm.split())
-        for alias, expansion in _KNOWN_CONCEPT_ALIASES.items():
-            if alias in keys or expansion in keys or alias in tokens:
-                keys.add(alias)
-                keys.add(expansion)
-        return {k for k in keys if k}
-
-    def _similar(a: str, b: str) -> bool:
-        ka, kb = _keys(a), _keys(b)
-        if ka & kb:
-            return True
-        na, nb = bi.normalize_question_text(a), bi.normalize_question_text(b)
-        if not na or not nb:
-            return False
-        if na in nb or nb in na:
-            if ("converse" in na.split()) != ("converse" in nb.split()):
-                return False
-            return True
-        return False
-
     for rec in records:
         title = (rec.get("concept_title") or "").strip()
         if title and not cr.is_culmination(title):
-            if any(_similar(title, prev) for prev in kept):
+            if any(titles_look_similar(title, prev) for prev in kept):
                 dropped += 1
                 continue
             kept.append(title)

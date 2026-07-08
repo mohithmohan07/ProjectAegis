@@ -1466,6 +1466,13 @@ Rules:
   content: the real numbers, expressions, equations, data, conditions, and task, e.g.
   "solve the problem in Exercise 1.5" becomes
   "rationalise the denominator of 1/(7 + 3*sqrt(2))".
+  A figure/table reference WITH its Mathpix image URL embedded right after it
+  is valid content — keep it.
+- For merged_description issues (one cell carrying two or more concepts'
+  "Description:" blocks): keep ONLY the content belonging to THIS row's
+  concept — rewrite the cell so it describes exactly one concept. NEVER
+  delete the other concept's material blindly; if it clearly belongs to a
+  different provided row, move it there.
 """)
 
 prompts.register(
@@ -1490,23 +1497,78 @@ Rules:
 """)
 
 prompts.register(
+    "concepts.merge_duplicates.system", category=_CONCEPTS_CAT,
+    label="Near-duplicate concept merge system prompt",
+    default="""\
+Merge concept rows that restate the SAME idea under different titles
+(e.g. "Basic Proportionality Theorem" appearing again as "BPT" or
+"The Basic Proportionality Theorem" under another topic).
+Return ONLY strict JSON:
+{"rows":[{"topic":"","parent_concept":"","concept":"","concept_description":"","keywords":""}]}.
+
+Rules:
+- You receive one GROUP of rows that all describe the same concept. Return
+  EXACTLY ONE merged row for the group.
+- Keep the clearest, most textbook-faithful title.
+- Keep the topic where the textbook actually TEACHES the concept (usually the
+  first row's topic in reading order).
+- MERGE the content — never discard it: combine the Descriptions into one
+  coherent Description (no repetition), keep the union of all Types/Cases/
+  Examples, and the union of all specific Misconceptions.
+- Keep the "Description: ... // Types: ... // Misconceptions: ..." structure
+  and the single mastery line.
+- Never invent new content; only reorganize what the rows carry.
+""")
+
+prompts.register(
+    "concepts.misconceptions.system", category=_CONCEPTS_CAT,
+    label="Missing/generic misconception writer system prompt",
+    default="""\
+Write the missing or too-generic Misconceptions for concept rows.
+Return ONLY strict JSON:
+{"rows":[{"topic":"","parent_concept":"","concept":"","concept_description":"","keywords":""}]}.
+
+Rules:
+- Each provided row is missing its Misconceptions section, or carries only a
+  generic filler one. Return the SAME rows: identical topic, parent_concept,
+  concept, keywords, Description, and Types — the ONLY change is a rewritten
+  "Misconceptions:" section at the end.
+- Every misconception must name a REAL, specific learner error this exact
+  concept triggers, grounded in the chapter material (wrong condition, sign,
+  unit, cause-effect reversal, term confusion, misapplied formula, ...).
+- When the material triggers several distinct errors, list them all in the
+  same Misconceptions section — one is the minimum, more are welcome.
+- NEVER write templated filler like "Students may apply X as a memorized rule
+  without checking the conditions", and never "N/A"/"None"/placeholders.
+- No source artifacts (Example 3, Exercise 1.2, page numbers) and never the
+  words "MMD"/"MMDs".
+""")
+
+prompts.register(
     "concepts.topic_structure.system", category=_CONCEPTS_CAT,
     label="Topic re-segregation system prompt",
     default="""\
-Re-segregate a chapter concept map into its real textbook topics. The draft
-filed too many concepts under one umbrella topic; your ONLY job is to assign
-each concept to the textbook section that actually teaches it.
+Re-segregate a chapter concept map into its real textbook topics. Your ONLY
+job is to assign each concept to the textbook MAIN SECTION that actually
+teaches it, using the source file's own headings.
 Return ONLY strict JSON:
 {"rows":[{"topic":"","parent_concept":"","concept":"","concept_description":"","keywords":""}]}.
 
 Rules:
 - You are given the concept rows and the chapter's SECTION HEADINGS in reading
   order. Reassign ONLY the topic of each row.
+- Topic names must be the given source headings VERBATIM (only the section
+  number stripped) — never invent, rename, merge, or paraphrase headings.
+- The given headings are the MAIN sections. When a concept comes from a
+  subsection (e.g. "2.1 The Aristocracy and the New Middle Class"), file it
+  under its MAIN section heading ("The Making of Nationalism in Europe") —
+  subsections are never topics.
 - Keep EVERY row: same concept names, descriptions, keywords, and
   parent_concept, in the same relative order. Never add, drop, merge, split,
   or rename concepts.
-- Use several topics — a chapter is never one topic. Prefer the given section
-  headings verbatim (without section numbers) as the topic names.
+- Use several topics — a chapter is never one topic. Cover the chapter's full
+  span: rows from tail sections belong to those tail headings, not to an
+  earlier catch-all.
 - Assign each concept to the section whose content teaches it; consecutive
   concepts usually stay in the same section until the source moves on.
 - Do not create exercise, example, review, or practice topics.
@@ -2548,6 +2610,142 @@ def _ensure_mastery_lines_via_api(
     return records
 
 
+def _merge_similar_concepts_via_api(records: list[dict], *, meta: dict) -> list[dict]:
+    """Merge near-duplicate concept rows via GPT instead of dropping them.
+
+    ``concept_cleanup.find_similar_title_groups`` only DETECTS suspects; the
+    content decision (which title/topic survives, how Descriptions, Types and
+    Misconceptions combine) is GPT's. On failure the deterministic drop is the
+    last resort so duplicates never ship.
+    """
+    import json as _json
+
+    groups = concept_cleanup.find_similar_title_groups(records)
+    if not groups:
+        return records
+    progress.log(
+        f"Merging {len(groups)} group(s) of near-duplicate concepts via API.")
+    system = prompts.get_text("concepts.merge_duplicates.system")
+    merged_by_first: dict[int, dict] = {}
+    drop: set[int] = set()
+    for group in groups:
+        rows = [records[i] for i in group]
+        user = (
+            _metadata_block(meta)
+            + "\nRows restating the same concept — merge into ONE row:\n"
+            + _json.dumps({"rows": _records_to_api_rows(rows)}, ensure_ascii=False)
+        )
+        try:
+            data = _openai_json(system, user)
+            merged_rows = _concept_rows_to_records(data)
+        except Exception as exc:  # noqa: BLE001 — deterministic drop still guards
+            progress.log(
+                f"Duplicate-merge pass failed ({exc}) — deterministic dedupe "
+                "will handle this group.",
+                level="warning")
+            continue
+        if len(merged_rows) != 1:
+            progress.log(
+                f"Duplicate-merge returned {len(merged_rows)} row(s) for a "
+                f"group of {len(group)} — keeping deterministic dedupe.",
+                level="warning")
+            continue
+        merged_by_first[group[0]] = merged_rows[0]
+        drop.update(group[1:])
+    if not merged_by_first:
+        return records
+    out: list[dict] = []
+    for i, rec in enumerate(records):
+        if i in drop:
+            continue
+        out.append(merged_by_first.get(i, rec))
+    progress.log(
+        f"Merged {len(drop)} duplicate row(s) into {len(merged_by_first)} concept(s).",
+        level="success")
+    return out
+
+
+def _misconception_body(details: str) -> str:
+    for label, content in cr.split_sections(details or ""):
+        if label.strip().lower().startswith("misconception"):
+            return content.strip()
+    return ""
+
+
+def _ensure_misconceptions_via_api(
+    records: list[dict], *, meta: dict, use_api: bool = True,
+) -> list[dict]:
+    """Have GPT write missing or generic-only Misconceptions sections.
+
+    Reviewers flagged the deterministic fallback text as too generic; concept
+    quality requires real, concept-specific learner errors. Only rows whose
+    Misconceptions are missing, empty, or generic are sent. The deterministic
+    template remains the dry-mode / API-failure last resort (added later by
+    ``concept_refiner.ensure_misconceptions``).
+    """
+    import json as _json
+
+    targets = [
+        i for i, rec in enumerate(records)
+        if not cr.is_culmination(rec.get("concept_title", ""))
+        and (rec.get("concept_details") or "").strip()
+        and (
+            not _misconception_body(rec.get("concept_details", ""))
+            or cr._is_generic_misconception(
+                _misconception_body(rec.get("concept_details", "")))
+        )
+    ]
+    if not targets or not use_api:
+        return records
+    progress.log(
+        f"Writing specific Misconceptions for {len(targets)} concept(s) via API.")
+    system = prompts.get_text("concepts.misconceptions.system")
+    rows = [
+        {
+            "topic": records[i].get("topic", ""),
+            "parent_concept": records[i].get("parent_concept", ""),
+            "concept": records[i].get("concept_title", ""),
+            "concept_description": records[i].get("concept_details", ""),
+            "keywords": records[i].get("keywords", ""),
+        }
+        for i in targets
+    ]
+    user = (
+        _metadata_block(meta)
+        + "\nRows missing a specific Misconceptions section:\n"
+        + _json.dumps({"rows": rows}, ensure_ascii=False)
+    )
+    by_title: dict[str, str] = {}
+    try:
+        data = _openai_json(system, user)
+        for row in _concept_rows_to_records(data):
+            body = _misconception_body(row.get("concept_details", ""))
+            if body and not cr._is_generic_misconception(body):
+                by_title[bi.normalize_question_text(row["concept_title"])] = body
+    except Exception as exc:  # noqa: BLE001 — deterministic backstop follows later
+        progress.log(
+            f"Misconception pass failed ({exc}) — deterministic fallback will apply.",
+            level="warning")
+        return records
+    completed = 0
+    for i in targets:
+        rec = records[i]
+        body = by_title.get(bi.normalize_question_text(rec.get("concept_title", "")))
+        if not body:
+            continue
+        sections = [
+            (label, content)
+            for label, content in cr.split_sections(rec.get("concept_details", ""))
+            if not label.strip().lower().startswith("misconception")
+        ]
+        sections.append(("Misconceptions", body))
+        rec["concept_details"] = cr.join_sections(sections)
+        completed += 1
+    progress.log(f"Specific Misconceptions written for {completed} concept(s).",
+                 level="success")
+    return records
+
+
 def _assign_mined_types_via_api(
     records: list[dict], *, meta: dict, mined_types: dict, max_attempts: int = 4,
 ) -> list[dict]:
@@ -2624,6 +2822,32 @@ def _assign_mined_types_via_api(
         progress.log(
             f"Type embedding attempt {attempt}: {placed}/{len(types_by_id)} mined Types assigned.")
 
+    if remaining:
+        # No mined question may be dropped: whatever GPT left unassigned is
+        # force-attached to the culmination row of the Type's hinted topic
+        # (mixed/synthesis home), falling back to the chapter's last
+        # culmination, then the last concept.
+        progress.log(
+            f"{len(remaining)} mined Type(s) unassigned after {max_attempts} "
+            "attempt(s) — force-attaching to culmination rows so no source "
+            "question is lost.",
+            level="warning",
+        )
+        culm_by_topic = {
+            bi.normalize_question_text(p["topic"]): p["concept_id"]
+            for p in concept_payload if p["is_culmination"]
+        }
+        fallback_cid = next(
+            (p["concept_id"] for p in reversed(concept_payload) if p["is_culmination"]),
+            concept_payload[-1]["concept_id"],
+        )
+        for tid in sorted(remaining):
+            mtype = types_by_id[tid]
+            hint = bi.normalize_question_text(mtype.get("topic_match_hint") or "")
+            cid = culm_by_topic.get(hint, fallback_cid)
+            per_concept.setdefault(cid, []).append(mtype)
+        remaining.clear()
+
     for cid, tlist in per_concept.items():
         rec = cid_map[cid]
         fragments: list[str] = []
@@ -2635,12 +2859,6 @@ def _assign_mined_types_via_api(
         if fragments:
             rec["concept_details"] = _inject_types(
                 rec.get("concept_details", ""), " ".join(fragments))
-    if remaining:
-        progress.log(
-            f"{len(remaining)} mined Type(s) still unassigned after {max_attempts} "
-            "attempt(s); re-run or raise attempts if this persists.",
-            level="warning",
-        )
     return records
 
 
@@ -2722,6 +2940,7 @@ _FATAL_CODES = {
     "culmination_too_early", "types_format", "case_without_type",
     "type_without_case", "culmination_description", "culmination_count",
     "culmination_order", "section_number", "empty_types", "short_case_example",
+    "merged_description",
 }
 
 
@@ -2799,6 +3018,32 @@ def _repair_records_via_api(
         records = _ensure_parent_concepts(records)
         progress.log(f"{stage}: repaired {len(repaired)} row(s) on attempt {attempt + 1}.")
     return records
+
+
+def _neutralize_unrepaired_rows(records: list[dict]) -> list[dict]:
+    """Destructively neutralize source artifacts ONLY where GPT repair failed.
+
+    Rows that validate cleanly keep their GPT-authored wording verbatim; the
+    deterministic rewriter is a per-row last resort, never a blanket pass.
+    """
+    report = cv.validate_concept_rows(
+        records, allow_types=True, require_culmination=True, allow_culmination=True)
+    failing = {
+        e["row_index"] for e in report["errors"]
+        if e.get("severity") == "error" and e.get("row_index", -1) >= 0
+        and e.get("code") == "source_artifact"
+    }
+    out: list[dict] = []
+    for i, rec in enumerate(records):
+        out.append(concept_cleanup.clean_concept_record(
+            dict(rec), neutralize_artifacts=i in failing))
+    if failing:
+        progress.log(
+            f"Neutralized source artifacts on {len(failing)} unrepaired row(s); "
+            f"{len(records) - len(failing)} row(s) kept verbatim.",
+            level="warning",
+        )
+    return out
 
 
 def _validate_final_or_raise(records: list[dict], *, stage: str = "final") -> dict:
@@ -3831,6 +4076,10 @@ def concepts_from_mmd(
         headings = _topic_headings(sections)
         out = _snap_topics_to_headings(out, headings, chapter_title=chapter_title)
         out = _consolidate_concepts_via_api(out, subject=subject, mmd_text=mmd_text, meta=meta)
+        # Topic names must follow the SOURCE file's own section headings.
+        # GPT re-segregates on EVERY run with a reliable heading list (not
+        # only when topics collapsed); the deterministic snap afterwards is
+        # only a straggler backstop.
         if _topics_look_collapsed(out, headings):
             progress.log(
                 f"Topic segregation collapsed: {len(out)} concepts share almost "
@@ -3838,6 +4087,7 @@ def concepts_from_mmd(
                 "headings — re-segregating topics via API.",
                 level="warning",
             )
+        if len(headings) >= 3 or (headings and _topics_look_collapsed(out, headings)):
             out = _restructure_topics_via_api(out, meta=meta, headings=headings)
         out = _snap_topics_to_headings(out, headings, chapter_title=chapter_title)
         out = _refine_descriptions_via_api(
@@ -3872,6 +4122,9 @@ def concepts_from_mmd(
         out = _scrub_section_numbers(out)
         out = _merge_concept_records(out)
         out = _dedupe_titles_chapter_wide(out)
+        # Near-duplicate titles: GPT merges the rows' content; the
+        # deterministic drop only guards whatever the merge pass left behind.
+        out = _merge_similar_concepts_via_api(out, meta=meta)
         out = concept_cleanup.dedupe_similar_titles_chapter_wide(out)
         out = concept_cleanup.filter_review_violations(
             out, subject=subject, board=board, chapter_title=chapter_title)
@@ -3880,23 +4133,25 @@ def concepts_from_mmd(
             for r in out
         ]
         out = _enforce_culminations(out)
+        out = _ensure_misconceptions_via_api(out, meta=meta)
         out = _repair_records_via_api(
-            out, meta=meta, stage="final", source_context=mmd_text, strict=False)
-        # Post-repair: neutralization is the deterministic last resort for any
-        # reference the repair pass failed to inline — a job must never fail
-        # on a reference the code can still remove.
-        out = [concept_cleanup.clean_concept_record(dict(r)) for r in out]
+            out, meta=meta, stage="final", source_context=mmd_text, strict=False,
+            max_attempts=3)
+        # Post-repair: neutralize ONLY rows the repair pass could not fix —
+        # rows that already validate cleanly keep their full GPT-authored
+        # wording untouched (no blanket deterministic rewriting).
+        out = _neutralize_unrepaired_rows(out)
         out = cr.refine_chapter(out)
         # The repair/cleanup passes may reorder, rename, or re-collide rows;
-        # re-assert the duplicate-title, culmination, and mastery-line
-        # invariants mechanically before the final gate (rows the repair pass
-        # rewrote may have lost their "Achieving Mastery" line — restore it
-        # deterministically, without another API round-trip).
+        # re-assert the duplicate-title, culmination, mastery-line, and
+        # misconception invariants before the final gate (rows the repair pass
+        # rewrote may have lost them).
         out = _dedupe_titles_chapter_wide(out)
         out = concept_cleanup.dedupe_similar_titles_chapter_wide(out)
         out = concept_cleanup.filter_review_violations(
             out, subject=subject, board=board, chapter_title=chapter_title)
-        out = _ensure_mastery_lines_via_api(out, meta=meta, use_api=False)
+        out = _ensure_mastery_lines_via_api(out, meta=meta)
+        out = _ensure_misconceptions_via_api(out, meta=meta)
         out = _enforce_culminations(out)
         _validate_final_or_raise(out, stage="final")
         missing = sum(

@@ -43,6 +43,7 @@ _CASE_TASK_VERB_RE = re.compile(
 )
 _CASE_SPECIFIC_DETAIL_RE = re.compile(r"(?:\d|[+\-*/÷×=^]|[A-Za-z]\s*\^\s*\d)")
 _EXAMPLE_SPLIT_RE = re.compile(r"\bExamples?\s*:\s*", re.IGNORECASE)
+_DESCRIPTION_LABEL_RE = re.compile(r"\bDescription\s*:", re.IGNORECASE)
 _IMAGE_URL_RE = re.compile(r"!\[[^\]]*\]\(https?://[^)]+\)|https?://\S+", re.IGNORECASE)
 # With embedded Mathpix images, figure/table references are legitimate content
 # ("Refer fig. 11.1" next to its image URL); only textual pointers to unshipped
@@ -211,6 +212,9 @@ def validate_concept_rows(
         if details and not details.startswith("Description:"):
             _add(errors, i, "concept_details", "description_prefix",
                  "concept_details must start with 'Description:'")
+        if len(_DESCRIPTION_LABEL_RE.findall(details)) > 1:
+            _add(errors, i, "concept_details", "merged_description",
+                 "cell contains multiple concepts' Description blocks")
         if _norm(details) in PLACEHOLDERS or any(
             f" {p} " in f" {_norm(details)} " for p in PLACEHOLDERS
         ):

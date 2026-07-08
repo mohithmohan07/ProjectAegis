@@ -418,6 +418,172 @@ def test_topic_headings_prefer_main_sections_over_subtopics():
     assert not any("Italy Unified" in h for h in headings)
 
 
+# --------------------------------------------------------------------------- #
+# Full-GPT passes: misconceptions, duplicate merge, merged cells, no-loss types
+# --------------------------------------------------------------------------- #
+
+def test_misconceptions_via_api_replaces_generic_text(monkeypatch):
+    def fake_openai(system, user, **kw):
+        assert "Misconceptions" in system
+        return {"rows": [{
+            "topic": "Triangles", "parent_concept": "Similarity",
+            "concept": "Basic Proportionality Theorem",
+            "concept_description": (
+                "Description: unchanged // Misconceptions: Students may apply "
+                "the ratio to non-parallel cutting lines, and may also assume "
+                "AD/DB equals AE/EC without checking DE parallel to BC."
+            ),
+            "keywords": "",
+        }]}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    records = [{
+        "topic": "Triangles", "parent_concept": "Similarity",
+        "concept_title": "Basic Proportionality Theorem",
+        "concept_details": (
+            "Description: Relates parallel lines and proportional segments. // "
+            "Misconceptions: Students may apply Basic Proportionality Theorem "
+            "as a memorized rule without checking the conditions, context, or "
+            "representation given in the problem."
+        ),
+        "keywords": "",
+    }]
+    out = g._ensure_misconceptions_via_api(records, meta=g._metadata(subject="Math"))
+    details = out[0]["concept_details"]
+    assert "memorized rule" not in details
+    assert "non-parallel cutting lines" in details
+    assert "Relates parallel lines and proportional segments." in details
+
+
+def test_validator_flags_merged_description_blocks():
+    rows = [{
+        "topic": "T", "parent_concept": "P", "concept_title": "C",
+        "concept_details": (
+            "Description: First concept body. // Types: Type 01: X Case 01: "
+            "Solve the given task with all values shown. "
+            "Description: Second concept wrongly merged here."
+        ),
+        "keywords": "",
+    }]
+    report = concept_validator.validate_concept_rows(rows, allow_types=True)
+    assert any(e["code"] == "merged_description" for e in report["errors"])
+
+
+def test_find_similar_title_groups_detects_without_dropping():
+    records = [
+        {"topic": "Similarity", "concept_title": "Basic Proportionality Theorem",
+         "concept_details": "Description: a", "keywords": ""},
+        {"topic": "Criteria", "concept_title": "BPT",
+         "concept_details": "Description: b", "keywords": ""},
+        {"topic": "Criteria", "concept_title": "Unrelated Concept",
+         "concept_details": "Description: c", "keywords": ""},
+    ]
+    groups = concept_cleanup.find_similar_title_groups(records)
+    assert groups == [[0, 1]]
+    assert len(records) == 3  # detector never mutates
+
+
+def test_merge_similar_concepts_via_api_merges_content(monkeypatch):
+    def fake_openai(system, user, **kw):
+        assert "merge into ONE row" in user
+        return {"rows": [{
+            "topic": "Similarity", "parent_concept": "Similarity",
+            "concept": "Basic Proportionality Theorem",
+            "concept_description": "Description: merged body from both rows.",
+            "keywords": "bpt",
+        }]}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    records = [
+        {"topic": "Similarity", "parent_concept": "Similarity",
+         "concept_title": "Basic Proportionality Theorem",
+         "concept_details": "Description: a", "keywords": ""},
+        {"topic": "Criteria", "parent_concept": "Criteria",
+         "concept_title": "BPT", "concept_details": "Description: b",
+         "keywords": ""},
+        {"topic": "Criteria", "parent_concept": "Criteria",
+         "concept_title": "Unrelated Concept",
+         "concept_details": "Description: c", "keywords": ""},
+    ]
+    out = g._merge_similar_concepts_via_api(records, meta=g._metadata(subject="Math"))
+    assert len(out) == 2
+    assert out[0]["concept_details"] == "Description: merged body from both rows."
+    assert out[1]["concept_title"] == "Unrelated Concept"
+
+
+def test_unassigned_mined_types_are_force_attached_to_culminations(monkeypatch):
+    monkeypatch.setattr(g, "_openai_json", lambda *a, **kw: {"assignments": []})
+    records = [
+        {"topic": "Electricity", "parent_concept": "P",
+         "concept_title": "Resistance", "concept_details": "Description: d",
+         "keywords": ""},
+        {"topic": "Electricity", "parent_concept": "Culmination",
+         "concept_title": "Culmination - Electricity",
+         "concept_details": "Description: Recap", "keywords": ""},
+    ]
+    mined = {"types": [{
+        "type_id": "TYPE-0001", "type_title": "Activity-based observation",
+        "topic_match_hint": "Electricity",
+        "case_prompts": [{
+            "case_title": "Observe current variation in a test circuit",
+            "examples": [{"example_prompt": (
+                "Set up the circuit with a nichrome wire and record the "
+                "ammeter reading for each cell added.")}],
+        }],
+    }]}
+    out = g._assign_mined_types_via_api(
+        records, meta=g._metadata(subject="Physics"), mined_types=mined,
+        max_attempts=1)
+    assert g._has_meaningful_types(out[1]["concept_details"])
+    assert "nichrome wire" in out[1]["concept_details"]
+    assert not g._has_meaningful_types(out[0]["concept_details"])
+
+
+def test_neutralize_unrepaired_rows_keeps_clean_rows_verbatim():
+    clean = {
+        "topic": "Electricity", "parent_concept": "Ohm's Law",
+        "concept_title": "Resistance",
+        "concept_details": (
+            "Description: Ohm's law relates V, I and R. // "
+            "Misconceptions: Students may invert the V/I ratio."
+        ),
+        "keywords": "",
+    }
+    failing = {
+        "topic": "Electricity", "parent_concept": "Ohm's Law",
+        "concept_title": "Heating Effect",
+        "concept_details": (
+            "Description: See Example 11 for the heating computation. // "
+            "Misconceptions: Students may confuse power with energy."
+        ),
+        "keywords": "",
+    }
+    out = g._neutralize_unrepaired_rows([dict(clean), dict(failing)])
+    assert out[0]["concept_details"] == clean["concept_details"]
+    assert "Example 11" not in out[1]["concept_details"]
+
+
+def test_chapter_meta_summary_retries_before_deterministic_fallback(monkeypatch, db):
+    calls = {"n": 0}
+
+    def flaky_meta(**kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("transient API failure")
+        return {"chapter_duration_minutes": 270}
+
+    monkeypatch.setattr(build_concepts.generation, "chapter_meta_via_api", flaky_meta)
+    chapter = models.Chapter(
+        chapter_code="10CBSS_RiseNat", board="CBSE", grade="10",
+        subject="History", chapter_title="The Rise of Nationalism in Europe",
+    )
+    db.add(chapter)
+    db.flush()
+    meta = build_concepts._chapter_meta_summary(chapter)
+    assert calls["n"] == 2
+    assert meta["chapter_duration_minutes"] == 270
+
+
 def test_inventory_prompt_requires_checkpoints_activities_and_images():
     inventory = g.prompts.get_text("concepts.question_task_inventory.system")
     assert "checkpoint_question" in inventory

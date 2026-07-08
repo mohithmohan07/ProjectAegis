@@ -194,15 +194,25 @@ def _chapter_meta_summary(chapter: models.Chapter) -> dict:
         chapter_id=chapter.id, chapter_code=chapter.chapter_code,
         finalized_duration_minutes=finalized or 0,
     )
-    try:
-        return generation.chapter_meta_via_api(meta=meta, topics=topics_payload)
-    except Exception as exc:  # noqa: BLE001 — metadata must never kill the job
-        progress.log(
-            f"Chapter/topic metadata pass failed ({exc}) — using deterministic "
-            "summaries instead.",
-            level="warning",
-        )
-        return {}
+    # GPT writes the chapter description/duration/topic descriptions; retry
+    # before ever falling back to deterministic summaries, so formula-estimate
+    # durations (reviewed as wrong) only ship as an absolute last resort.
+    last_exc: Exception | None = None
+    for attempt in range(1, 4):
+        try:
+            return generation.chapter_meta_via_api(meta=meta, topics=topics_payload)
+        except Exception as exc:  # noqa: BLE001 — metadata must never kill the job
+            last_exc = exc
+            progress.log(
+                f"Chapter/topic metadata attempt {attempt}/3 failed ({exc}).",
+                level="warning",
+            )
+    progress.log(
+        f"Chapter/topic metadata pass failed after retries ({last_exc}) — "
+        "using deterministic summaries instead.",
+        level="warning",
+    )
+    return {}
 
 
 def _sync_chapter_topic_summary(
