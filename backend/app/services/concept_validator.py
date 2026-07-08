@@ -36,6 +36,12 @@ _CASE_SEGMENT_RE = re.compile(
     r"\bCase\s+\d{1,2}:\s*(.*?)(?=\b(?:Case|Type)\s+\d{1,2}:|$)",
     re.IGNORECASE | re.DOTALL,
 )
+_CASE_TASK_VERB_RE = re.compile(
+    r"\b(?:solve|simplify|find|write|identify|expand|compare|calculate|"
+    r"rationalise|express|evaluate|convert|draw|label|explain|prove)\b",
+    re.IGNORECASE,
+)
+_CASE_SPECIFIC_DETAIL_RE = re.compile(r"(?:\d|[+\-*/÷×=^]|[A-Za-z]\s*\^\s*\d)")
 
 
 def _norm(text: str) -> str:
@@ -93,6 +99,19 @@ def _misconception_text(details: str) -> str:
         if label.lower().startswith("misconception"):
             return content.strip()
     return ""
+
+
+def _case_example_too_short(case_text: str) -> bool:
+    words = re.findall(r"\w+", case_text or "")
+    if len(words) >= 5:
+        return False
+    # Some textbook prompts are legitimately concise math tasks; accept them
+    # when they still carry an action and concrete expression/value detail.
+    return not (
+        len(words) >= 3
+        and _CASE_TASK_VERB_RE.search(case_text or "")
+        and _CASE_SPECIFIC_DETAIL_RE.search(case_text or "")
+    )
 
 
 def _add(errors: list[dict], row_index: int, field: str, code: str,
@@ -211,7 +230,7 @@ def validate_concept_rows(
                      "Types must use zero-padded Type NN and Case NN labels")
             for case_match in _CASE_SEGMENT_RE.finditer(type_body or ""):
                 case_text = re.sub(r"\s+", " ", case_match.group(1)).strip()
-                if len(re.findall(r"\w+", case_text)) < 5:
+                if _case_example_too_short(case_text):
                     _add(errors, i, "concept_details", "short_case_example",
                          "Case examples should include the full source question/task")
         if is_culm and details and not details.split(" // ", 1)[0].startswith(

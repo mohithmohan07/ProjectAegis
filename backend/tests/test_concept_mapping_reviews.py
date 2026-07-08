@@ -214,6 +214,22 @@ def test_short_case_examples_fail_for_full_source_detail():
     assert short_case[0]["severity"] == "error"
 
 
+def test_concise_math_case_with_source_expression_is_allowed():
+    rows = [{
+        "topic": "Laws of Exponents",
+        "parent_concept": "Operations on Powers",
+        "concept_title": "Dividing Powers with the Same Base",
+        "concept_details": (
+            "Description: Dividing powers subtracts exponents for the same non-zero base. // "
+            "Types: Type 01: Same-base division Case 01: Simplify p^9 ÷ p^3. // "
+            "Misconceptions: Students may subtract bases instead of exponents."
+        ),
+        "keywords": "",
+    }]
+    report = concept_validator.validate_concept_rows(rows, allow_types=True)
+    assert not any(e["code"] == "short_case_example" for e in report["errors"])
+
+
 def test_generic_only_misconception_warns_for_review_quality():
     rows = [{
         "topic": "Triangles",
