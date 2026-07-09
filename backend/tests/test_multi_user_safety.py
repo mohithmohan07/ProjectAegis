@@ -237,7 +237,7 @@ def test_prompts_require_full_source_content():
     assert "Do not shorten or truncate source questions" in mining
     assert "Rationalise the denominator of 1/(7 + 3*sqrt(2))" in mining
     repair = g.prompts.get_text("concepts.repair.system")
-    assert "substitute the FULL actual" in repair
+    assert "substitute the FULL" in repair
     refine = g.prompts.get_text("concepts.description_refine.system")
     assert "substitute the full actual" in refine
 

@@ -109,16 +109,19 @@ def to_title_case(text: str) -> str:
     return " ".join(out)
 
 # A reference token: Example(s) / Ex / Figure(s) / Fig / Table, optionally
-# "no.", optionally "Type", followed by a number, number list, or roman numeral.
+# "no.", optionally "Type", followed by a number (incl. dotted forms like
+# fig.11.1 / Exercise 1.5), number list, or roman numeral. Whitespace between
+# the label and the number is optional — Mathpix OCR often emits "fig.11.1".
+_REF_NUM = r"(?:[IVXLCDM]+|\d+(?:\.\d+)*(?:\s*[,&]\s*\d+(?:\.\d+)*)*)"
 _REF_CORE = (
     r"(?:examples?|ex|fig(?:ure)?s?|tables?)\b\.?\s*(?:no\.?\s*)?"
-    r"(?:type\s+)?(?:[IVXLCDM]+|\d+(?:\s*[,&]\s*\d+)*)\b"
+    r"(?:type\s+)?" + _REF_NUM + r"\b"
 )
 # Same reference token WITHOUT figure/table: when the actual image is embedded
 # as a URL, figure/table references are meaningful and must be preserved.
 _REF_CORE_NO_FIG = (
     r"(?:examples?|ex)\b\.?\s*(?:no\.?\s*)?"
-    r"(?:type\s+)?(?:[IVXLCDM]+|\d+(?:\s*[,&]\s*\d+)*)\b"
+    r"(?:type\s+)?" + _REF_NUM + r"\b"
 )
 # Parenthetical reference, e.g. "(Example 19)", "(Examples Type III)", "(see Fig 2)".
 _PAREN_REF_RE = re.compile(
@@ -402,9 +405,9 @@ def replace_mmd_references(text: str) -> str:
 # recreating these, so they are rewritten deterministically into neutral
 # academic wording that preserves the task content.
 _ARTIFACT_NEUTRALIZATIONS = [
-    (re.compile(r"\b(?:exercises?|ex)\.?\s+\d+(?:\.\d+)*\b", re.IGNORECASE),
+    (re.compile(r"\b(?:exercises?|ex)\.?\s*\d+(?:\.\d+)*\b", re.IGNORECASE),
      "the exercises"),
-    (re.compile(r"\bexamples?\s+\d+(?:\.\d+)*\b", re.IGNORECASE),
+    (re.compile(r"\bexamples?\.?\s*\d+(?:\.\d+)*\b", re.IGNORECASE),
      "a worked example"),
     (re.compile(r"\b(?:on\s+)?page\s+(?:no\.?\s*)?\d+\b", re.IGNORECASE),
      "in the chapter"),
@@ -413,10 +416,11 @@ _ARTIFACT_NEUTRALIZATIONS = [
 ]
 # Figure/table references are only neutralized when the row ships NO image —
 # with an embedded Mathpix URL they point at real, visible content.
+# Optional whitespace covers OCR forms like "fig.11.1" and "Fig.11.2".
 _FIG_TABLE_NEUTRALIZATIONS = [
-    (re.compile(r"\bfig(?:ure)?s?\.?\s+\d+(?:\.\d+)*\b", re.IGNORECASE),
+    (re.compile(r"\bfig(?:ure)?s?\.?\s*\d+(?:\.\d+)*\b", re.IGNORECASE),
      "the figure"),
-    (re.compile(r"\btables?\s+\d+(?:\.\d+)*\b", re.IGNORECASE),
+    (re.compile(r"\btables?\.?\s*\d+(?:\.\d+)*\b", re.IGNORECASE),
      "the given table"),
 ]
 
@@ -437,6 +441,20 @@ def neutralize_source_artifacts(text: str) -> str:
 _SECTION_SEP = " // "
 
 
+_MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(https?://[^)]+\)", re.IGNORECASE)
+
+
+def _strip_images_from_prose(text: str) -> str:
+    """Remove Mathpix/CDN markdown images from Description/Misconception prose.
+
+    Image URLs are valid in Types Example lines (with their figure reference);
+    they are not acceptable in Description text.
+    """
+    if not text:
+        return text
+    return _tidy(_MARKDOWN_IMAGE_RE.sub("", text))
+
+
 def _clean_details(details: str, *, neutralize: bool = True) -> str:
     """Sanitize a concept_details string section-by-section.
 
@@ -454,12 +472,17 @@ def _clean_details(details: str, *, neutralize: bool = True) -> str:
     out: list[str] = []
     for part in parts:
         label = part.split(":", 1)[0].strip().lower() if ":" in part else ""
-        if label.startswith("type") or not neutralize:
+        is_types = label.startswith("type")
+        if is_types or not neutralize:
             # Types keep their structure verbatim; and when the caller wants
             # references preserved for content inlining, prose keeps them too.
             cleaned = replace_mmd_references(part)
         else:
             cleaned = replace_mmd_references(strip_dangling_references(part))
+        # Mathpix URLs are Types-only; strip them from Description/Misconception
+        # even when neutralize=False so pre-repair cleanup still enforces policy.
+        if not is_types:
+            cleaned = _strip_images_from_prose(cleaned)
         out.append(neutralize_source_artifacts(cleaned) if neutralize else cleaned)
     return _SECTION_SEP.join(out)
 
@@ -477,7 +500,10 @@ def _neutralize_name_artifacts(name: str) -> str:
         r"\b(?:on\s+)?(?:page\s+(?:no\.?\s*)?|p(?:age)?\.\s*)\d+\b", " ",
         out, flags=re.IGNORECASE)
     out = re.sub(
-        r"\b(?:exercises?|ex)\.?\s+\d+(?:\.\d+)*\b", " ", out, flags=re.IGNORECASE)
+        r"\b(?:exercises?|ex)\.?\s*\d+(?:\.\d+)*\b", " ", out, flags=re.IGNORECASE)
+    out = re.sub(
+        r"\b(?:examples?|fig(?:ure)?s?|tables?)\.?\s*\d+(?:\.\d+)*\b", " ",
+        out, flags=re.IGNORECASE)
     return re.sub(r"\s{2,}", " ", out).strip(" -:.,") or name
 
 

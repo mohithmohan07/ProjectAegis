@@ -99,6 +99,16 @@ def test_inline_figure_table_example_references_removed():
     assert out == "for details"
 
 
+def test_compact_fig_refs_without_space_are_stripped_and_neutralized():
+    from app.services.concept_cleanup import neutralize_source_artifacts
+
+    assert "fig.11" not in strip_dangling_references("Use fig.11.1 to find R.").lower()
+    assert "fig.11" not in neutralize_source_artifacts("Use fig.11.1 to find R.").lower()
+    assert neutralize_source_artifacts("Use fig.11.1 to find R.") == (
+        "Use the figure to find R."
+    )
+
+
 def test_worded_example_without_number_is_not_stripped():
     text = "Description: a worked example illustrates the parallelogram property."
     assert strip_dangling_references(text) == text

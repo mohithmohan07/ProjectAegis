@@ -1108,12 +1108,22 @@ Return ONLY strict JSON:
 
 COVERAGE IS MANDATORY (most important rule):
 - Build a compact teacher-facing concept map from the first line to the last.
-- A normal textbook section yields 1-4 concepts; a full chapter usually yields
-  12-35 concepts, depending on chapter size.
+- A normal textbook section yields 2-5 concepts; a full chapter usually yields
+  18-40 concepts, depending on chapter size. Prefer discrete mastery units
+  over broad umbrella concepts.
 - A concept is a durable teaching/mastery objective, not every term, example,
   subheading, exercise prompt, case, or factual detail.
 - When several definitions, examples, sub-types, or procedures serve one
   reusable objective, merge them under the same concept.
+- Keep SEPARATE concepts when the textbook teaches distinct country cases,
+  people, events, laws, or processes that a teacher would lesson-plan apart
+  (e.g. under "The Making of Germany and Italy", create separate concepts for
+  German unification and Italian unification — do not collapse them into one
+  "Germany and Italy Unified..." row plus a culmination).
+- Chapter-opening / pre-section narrative (HEADING PATH: [Chapter opening])
+  MUST yield at least one teachable concept under the first main topic (e.g.
+  Frédéric Sorrieu's utopian vision / the idea of the nation). Never skip
+  opening content just because it precedes section 1.
 - Do not create separate concept rows for cases/examples/questions. These are
   captured later as Types/Cases with full source questions.
 - A missed main teaching objective is a defect; a micro-concept row that should
@@ -1141,10 +1151,14 @@ Rules:
 - Concept names must be specific and non-repetitive.
 - No Types, no culmination rows, no groups, no assessment labels.
 - No vague or structural names: Introduction, Overview, Basics, Basic Concepts,
-  Misc, Miscellaneous, Examples, Practice, Definition of, Types of.
+  Misc, Miscellaneous, Examples, Practice, Definition of, Types of. Prefer a
+  content-specific title for opening material (e.g. "Frédéric Sorrieu's Vision
+  of Democratic and Social Republics") instead of the word "Introduction".
 - Do not use exercise/question-type headings as concepts.
 - Avoid repeated sibling openers.
-- concept_description starts with "Description:" and is 2-4 compact sentences.
+- concept_description starts with "Description:" and is 2-4 compact sentences
+  that name the key people, places, rules, formulas, or relationships from the
+  source — not a vague summary.
 - Keep source_evidence short: the phrase/heading/problem source that justifies the concept.
 - source_evidence is for validation/debug only and must not be written to workbook.
 """)
@@ -1163,13 +1177,18 @@ Rules:
   durable teaching concept. Terms, cases, examples, and exercise-question types
   belong inside concept descriptions/Types later, not as separate rows.
 - Do not over-merge unrelated major objectives; each main topic should retain
-  enough concepts for lesson planning.
+  enough concepts for lesson planning. Distinct country/case studies under one
+  topic (Germany vs Italy; Belgium vs Sri Lanka) stay as separate concepts.
+- Keep chapter-opening concepts (named people, paintings, framing ideas that
+  appear before section 1) — do not fold them away into a later section concept.
 - Remove a concept when it is a duplicate, pure filler, a structural heading,
   a question/example label, or only a sub-type/case of another concept.
 - Ensure concept titles are unique across the chapter.
 - Preserve textbook/topic order.
 - Rewrite repetitive names.
-- Parent concepts should group 3-8 related concepts where possible.
+- Parent concepts should group related concepts where possible, but a topic may
+  legitimately have only 2-3 concepts when the source is thin — never invent
+  filler to pad a parent.
 - Do not create culmination rows.
 - Do not generate Types.
 - Do not rewrite good concepts unnecessarily.
@@ -1189,12 +1208,15 @@ Rules:
 - Keep topic, parent_concept, concept name, keywords, and row order unchanged.
 - Rewrite only the Description section.
 - Description answers: what the concept is; what rule/process/relationship/method matters;
-  when/why it is used.
+  when/why it is used. Ground it in the source: name the key people, places,
+  dates, formulas, quantities, conditions, and causal links that a teacher
+  needs — do not stop at a vague one-sentence gloss.
 - END every Description with a mastery statement on its OWN line — a literal
   line break (\\n) followed by exactly this format:
   Achieving Mastery: <one short sentence stating what the learner can do when this concept is mastered>
   Example ending: "...\\nAchieving Mastery: Using the midpoint property to set up the smaller triangles correctly."
-- Use 45-90 words unless the concept is very simple.
+- Use 45-90 words unless the concept is very simple. Never leave a Description
+  truncated mid-sentence.
 - Do not include Types.
 - Include a Misconceptions section for every non-culmination concept. Make it
   specific to the learner error this concept usually triggers; list EVERY real
@@ -1206,6 +1228,9 @@ Rules:
   page references. When the source text cites one, substitute the full actual
   content it points to (the real numbers, expression, conditions, or task) —
   e.g. write "such as expressing 1.272727... as 14/11", never "as in Example 8".
+- Do NOT embed Mathpix / CDN image URLs in Description. Describe visual content
+  in words here; image URLs belong only in Types Example lines (with their
+  figure reference).
 """)
 
 prompts.register(
@@ -1263,19 +1288,30 @@ Return ONLY strict JSON:
 {"items":[{"qid":"QINV-0001","source_kind":"worked_example|solved_example|exercise|intext_question|checkpoint_question|activity|mcq|fill_blank|true_false|match|assertion_reason|diagram_task|map_task|table_task|graph_task|source_task|case_task|passage_task|grammar_task|writing_task|experiment_task|coding_task|long_answer|short_answer|other","source_label":"","parent_source_label":"","topic_hint":"","page_hint":"","block_ids":[],"raw_task":"","raw_solution_or_answer":"","normalized_task":"","shared_context":"","subpart_label":"","image_urls":[],"content_objects":{"numbers":[],"variables":[],"equations":[],"coordinates":[],"ratios":[],"diagrams":[],"graphs":[],"tables":[],"maps":[],"passages":[],"sources":[],"experiments":[],"observations":[],"characters":[],"events":[],"dates":[],"places":[],"terms":[],"definitions":[],"processes":[],"comparisons":[],"causes":[],"effects":[],"code_snippets":[],"grammar_items":[],"unknowns":[],"given_values":[],"conditions":[]},"requires_visual":false,"requires_context":false,"order_index":1}],"stats":{"worked_examples":0,"solved_examples":0,"exercise_questions":0,"checkpoint_questions":0,"activities":0,"objective_items":0,"subjective_items":0,"descriptive_items":0,"subparts":0,"visual_tasks":0,"table_or_graph_tasks":0,"source_or_passage_tasks":0,"total_inventory_items":0}}.
 
 COVERAGE IS MANDATORY (most important rule):
-- Extract EVERY assessable question/task from the first line to the last.
-- Each numbered problem, sub-part, intext question, think-and-reflect prompt,
-  and worked example is its OWN item — never summarize an exercise set or
-  question list into one item.
+- Extract EVERY assessable question/task from the first line to the last,
+  including the chapter opening / pre-section narrative.
+- Each numbered problem, intext question, think-and-reflect prompt, and worked
+  example is its OWN item — never summarize an exercise set or question list
+  into one item.
+- Multi-part questions with subquestions (a/b/c, i/ii/iii, or "Answer the
+  following") stay ONE inventory item: put the full stem + all subparts in
+  raw_task, and leave subpart_label empty unless the textbook numbers each
+  subpart as a standalone question with its own number.
 - In-text CHECKPOINT questions (boxed "?" questions, "Let's recall",
   "Check your progress", mid-section question boxes) are inventory items
   exactly like end-of-chapter exercises. Chapters typically carry a dozen or
-  more of them — walk every section and capture each one.
+  more of them — walk every section and capture each one. Missing even one
+  checkpoint is a defect.
+- Picture-/source-/map-based questions (including opening-page source analysis
+  such as describing Frédéric Sorrieu's prints) are inventory items with
+  source_kind "source_task" / "diagram_task" / "map_task" as appropriate —
+  never skip them as "introductory".
 - Textbook ACTIVITY tasks (Activity 11.1 etc.) are inventory items with
   source_kind "activity" — they later feed culmination concepts.
 - A missed question is a defect; an extra item is not.
-- Skip only purely introductory or rhetorical prompts that do not expect a
-  student answer or action.
+- Skip only purely rhetorical prompts that do not expect a student answer or
+  action (e.g. "Look at the picture" with no ask). If the text asks the student
+  to describe, explain, list, or interpret, extract it.
 
 Rules:
 - Extract all assessable questions/tasks from first to last: examples, intext
@@ -1288,6 +1324,8 @@ Rules:
 - When the question depends on a figure/diagram/table image, copy the Mathpix
   image URL(s) from the source markdown (![](https://cdn.mathpix.com/...))
   into image_urls AND keep the figure reference in raw_task.
+- Set topic_hint to the nearest MAIN section heading (or "[Chapter opening]"
+  for pre-section items) so later placement stays in reading order.
 - Use content_objects for all extracted subject matter and representations.
 - A task may be non-numerical; do not reject it as generic because it is descriptive.
 - Preserve source traceability in this debug JSON only; source labels must not be
@@ -1341,7 +1379,8 @@ CASE WORDING (each Case must be properly defined):
 - Create a separate Case for every distinct given/asked/constraint combination.
 - A multi-part source question with subquestions stays ONE Example under ONE
   Case unless the textbook numbers the subparts as separate standalone
-  questions; do not split the same prompt across multiple Cases.
+  questions; do not split the same prompt across multiple Cases, and never
+  invent multiple Cases that repeat the same stem with different subparts.
 
 EXAMPLES CARRY THE FULL SOURCE QUESTION (mandatory):
 - Every example_prompt must be fully self-contained: copy the ACTUAL numbers,
@@ -1417,6 +1456,10 @@ Rules:
   heating-effect questions never belong under a resistivity concept. Use the
   Type's topic_match_hint and the concepts' topic order to keep placements in
   reading order.
+- Picture-/source-/map-based questions belong with the concept that teaches the
+  visual's subject (the painting, map, diagram, or source discussed nearby),
+  not with a later unrelated concept that happens to share a keyword. Opening-
+  page source tasks (e.g. Sorrieu prints) go on the opening/first-topic concept.
 - Concepts flagged "is_culmination": true are topic recap rows. Assign a Type
   there when the Type combines/mixes several concepts of that topic (synthesis,
   mixed application, multi-step, cross-concept comparison). Single-concept
@@ -1501,18 +1544,24 @@ Rules:
 - Never add filler.
 - Keep strict JSON.
 - For source_artifact issues (references like "Example 5", "Exercise 1.2",
-  "Fig 6.4", "page 14"): NEVER just delete or reword the reference. Look the
-  label up in the provided source context and substitute the FULL actual
-  content: the real numbers, expressions, equations, data, conditions, and task, e.g.
-  "solve the problem in Exercise 1.5" becomes
+  "Fig 6.4", "fig.11.1", "page 14"): NEVER just delete or reword the reference.
+  Look the label up in the provided source context and substitute the FULL
+  actual content: the real numbers, expressions, equations, data, conditions,
+  and task, e.g. "solve the problem in Exercise 1.5" becomes
   "rationalise the denominator of 1/(7 + 3*sqrt(2))".
   A figure/table reference WITH its Mathpix image URL embedded right after it
-  is valid content — keep it.
+  is valid content — keep it (in Types Example lines). Never leave a
+  Description truncated mid-sentence while fixing artifacts.
+- Mathpix / CDN image URLs belong in Types Example lines next to the figure
+  reference. Do not put image URLs in the Description section; describe the
+  visual in words there instead.
 - For merged_description issues (one cell carrying two or more concepts'
   "Description:" blocks): keep ONLY the content belonging to THIS row's
   concept — rewrite the cell so it describes exactly one concept. NEVER
   delete the other concept's material blindly; if it clearly belongs to a
   different provided row, move it there.
+- For short_case_example issues: replace the truncated Example with the FULL
+  source question wording (and Mathpix URL when the question is visual).
 """)
 
 prompts.register(
@@ -2048,8 +2097,12 @@ def _format_section_chunk(sections: list[dict]) -> str:
     blocks = []
     for section in sections:
         exercises = "\n".join(section.get("exercise_blocks") or [])
+        path = section.get("heading_path") or []
+        # Pre-heading chapter body (NCERT openings like Frédéric Sorrieu) has
+        # an empty path — label it so skeleton/inventory treat it as content.
+        heading_path = " > ".join(path) if path else "[Chapter opening]"
         block = (
-            "HEADING PATH: " + " > ".join(section.get("heading_path") or []) + "\n"
+            f"HEADING PATH: {heading_path}\n"
             f"PREVIOUS HEADING: {section.get('previous_heading', '')}\n"
             f"NEXT HEADING: {section.get('next_heading', '')}\n"
             "SECTION TEXT:\n" + section.get("body", "")
@@ -2241,9 +2294,13 @@ def _extract_question_task_inventory_via_api(*, meta: dict, sections: list[dict]
                 user
                 + f"\n\nYOUR PREVIOUS ANSWER HAD ONLY {len(items)} ITEMS — that is "
                 "under-extraction. Re-read the chunk and itemize EVERY assessable "
-                "question/task: every numbered problem, every sub-part, every "
-                "intext/think-and-reflect prompt, and every worked example is its "
-                "own item. Never merge a question list into one item."
+                "question/task: every numbered exercise, every in-text checkpoint "
+                "/ boxed '?' / 'Let's recall' prompt, every picture- or "
+                "source-based ask (including chapter-opening source analysis), "
+                "every activity, and every worked example is its own item. "
+                "Multi-part questions with subquestions stay ONE item carrying "
+                "the full stem + all subparts. Never merge a question list into "
+                "one item, and never skip a checkpoint."
             )
             retry_data = _openai_json(system, retry_user)
             retry_items = [
@@ -2349,7 +2406,7 @@ def _duplicate_inventory_assignments(inventory: dict, types: list[dict]) -> list
 
 
 _CASE_SOURCE_ARTIFACT_RE = re.compile(
-    r"\b(?:examples?|exercise|ex|fig(?:ure)?|table|page|p\.)\s*\d",
+    r"\b(?:examples?|exercises?|ex|fig(?:ure)?s?|tables?|page|p\.)\.?\s*\d",
     re.IGNORECASE,
 )
 
@@ -3564,14 +3621,16 @@ def _dedupe_titles_chapter_wide(records: list[dict]) -> list[dict]:
 def _expected_min_skeleton_rows(chunk_text: str) -> int:
     """Minimum plausible concept count for a chunk, from its content size.
 
-    Roughly one teachable concept per ~3,000 chars of source, floored at 2 for
+    Roughly one teachable concept per ~2,500 chars of source, floored at 2 for
     any substantial chunk. Deliberately conservative — this only flags clear
     under-extraction (e.g. a whole chapter collapsed into a handful of rows).
+    Slightly denser than earlier so History-style chapters keep discrete
+    country/case concepts instead of one umbrella row per topic.
     """
     content = len((chunk_text or "").strip())
     if content < 2_000:
         return 1
-    return max(2, min(25, content // 3_000))
+    return max(2, min(28, content // 2_500))
 
 
 def _expected_max_skeleton_rows(chunk_text: str, headings: list[str]) -> int:
@@ -3622,9 +3681,11 @@ def _extract_skeleton_via_api(chunks: list[dict], *, meta: dict) -> list[dict]:
                 + f"\n\nYOUR PREVIOUS ANSWER HAD ONLY {len(chunk_records)} CONCEPTS — "
                 "that is under-extraction. Re-read the section text and extract "
                 "EVERY distinct teachable concept (each definition, rule, law, "
-                "method, procedure, property, distinction, relationship, or "
-                "skill). Do not summarize; split broad concepts into smaller "
-                "mastery units."
+                "method, procedure, property, distinction, relationship, "
+                "country/case study, or skill). Keep chapter-opening framing "
+                "ideas as their own concept. Do not summarize; split broad "
+                "umbrella concepts (e.g. Germany+Italy as one row) into "
+                "smaller mastery units."
             )
             retry_data = _openai_json(system, retry_user)
             retry_records = _strip_types_from_records(_concept_rows_to_records(retry_data))
