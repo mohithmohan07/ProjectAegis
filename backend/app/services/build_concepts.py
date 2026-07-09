@@ -22,7 +22,15 @@ from sqlalchemy.orm import Session
 from .. import config, models
 from .. import bulk_import as bi
 from ..bulk_import import writer
-from . import concept_cleanup, concept_refiner, concept_validator, generation, mmd, progress
+from . import (
+    chapter_durations,
+    concept_cleanup,
+    concept_refiner,
+    concept_validator,
+    generation,
+    mmd,
+    progress,
+)
 
 
 def _find_concept_in_chapter(chapter: models.Chapter, title: str) -> models.Concept | None:
@@ -178,6 +186,12 @@ def _chapter_meta_summary(chapter: models.Chapter) -> dict:
     already produced a valid concept map.
     """
     finalized = _parse_duration_minutes(chapter.chapter_duration)
+    expected_duration = finalized or chapter_durations.lookup_duration_minutes(
+        board=chapter.board,
+        grade=chapter.grade,
+        subject=chapter.subject,
+        chapter_title=chapter.chapter_title,
+    )
     topics_payload = [
         {
             "topic": t.topic_title,
@@ -192,7 +206,7 @@ def _chapter_meta_summary(chapter: models.Chapter) -> dict:
         subject=chapter.subject, board=chapter.board, grade=chapter.grade,
         unit=chapter.unit, chapter_title=chapter.chapter_title,
         chapter_id=chapter.id, chapter_code=chapter.chapter_code,
-        finalized_duration_minutes=finalized or 0,
+        finalized_duration_minutes=expected_duration or 0,
     )
     # GPT writes the chapter description/duration/topic descriptions; retry
     # before ever falling back to deterministic summaries, so formula-estimate

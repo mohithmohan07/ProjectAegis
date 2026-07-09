@@ -511,7 +511,9 @@ def test_merge_similar_concepts_via_api_merges_content(monkeypatch):
     assert out[1]["concept_title"] == "Unrelated Concept"
 
 
-def test_unassigned_mined_types_are_force_attached_to_culminations(monkeypatch):
+def test_unassigned_mined_types_fail_instead_of_guessing(monkeypatch):
+    import pytest
+
     monkeypatch.setattr(g, "_openai_json", lambda *a, **kw: {"assignments": []})
     records = [
         {"topic": "Electricity", "parent_concept": "P",
@@ -531,12 +533,118 @@ def test_unassigned_mined_types_are_force_attached_to_culminations(monkeypatch):
                 "ammeter reading for each cell added.")}],
         }],
     }]}
-    out = g._assign_mined_types_via_api(
-        records, meta=g._metadata(subject="Physics"), mined_types=mined,
-        max_attempts=1)
-    assert g._has_meaningful_types(out[1]["concept_details"])
-    assert "nichrome wire" in out[1]["concept_details"]
-    assert not g._has_meaningful_types(out[0]["concept_details"])
+    with pytest.raises(RuntimeError, match="unassigned mined Types"):
+        g._assign_mined_types_via_api(
+            records, meta=g._metadata(subject="Physics"), mined_types=mined,
+            max_attempts=1)
+
+
+def test_duplicate_inventory_assignments_are_reported():
+    inventory = {"items": [{"qid": "QINV-0001", "raw_task": "Why did tensions emerge?"}]}
+    types = {"types": [
+        {"type_id": "TYPE-0001", "source_question_ids": ["QINV-0001"],
+         "case_prompts": [{"case_title": "Cause question",
+                           "examples": [{"source_question_id": "QINV-0001",
+                                         "example_prompt": "Why did tensions emerge?"}]}]},
+        {"type_id": "TYPE-0002", "source_question_ids": ["QINV-0001"],
+         "case_prompts": [{"case_title": "Another cause question",
+                           "examples": [{"source_question_id": "QINV-0001",
+                                         "example_prompt": "Why did tensions emerge?"}]}]},
+    ]}
+    dupes = g._duplicate_inventory_assignments(inventory, types["types"])
+    assert dupes and dupes[0]["qid"] == "QINV-0001"
+    assert dupes[0]["assignment_count"] == 2
+
+
+def test_type_mining_retries_duplicate_assignments_with_complete_list(monkeypatch):
+    calls = {"n": 0}
+
+    def fake_openai(system, user, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {"types": [
+                {"type_id": "TYPE-0001", "type_title": "Pattern One",
+                 "source_question_ids": ["QINV-0001"],
+                 "case_prompts": [{"case_title": "Defined case",
+                                   "examples": [{"source_question_id": "QINV-0001",
+                                                 "example_prompt": "Question one"}]}]},
+                {"type_id": "TYPE-0002", "type_title": "Pattern Two",
+                 "source_question_ids": ["QINV-0001"],
+                 "case_prompts": [{"case_title": "Duplicate case",
+                                   "examples": [{"source_question_id": "QINV-0001",
+                                                 "example_prompt": "Question one"}]}]},
+            ]}
+        assert "duplicate_assignments" in user
+        assert "COMPLETE corrected" in user
+        return {"types": [
+            {"type_id": "TYPE-0001", "type_title": "Pattern One",
+             "source_question_ids": ["QINV-0001"],
+             "case_prompts": [{"case_title": "Defined case",
+                               "examples": [{"source_question_id": "QINV-0001",
+                                             "example_prompt": "Question one"}]}]},
+        ]}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    inventory = {"items": [{"qid": "QINV-0001", "raw_task": "Question one"}], "stats": {}}
+    mined = g._mine_types_from_inventory_via_api(
+        meta=g._metadata(subject="History"), inventory=inventory, max_coverage_attempts=2)
+    assert calls["n"] == 2
+    assert not g._duplicate_inventory_assignments(inventory, mined["types"])
+
+
+def test_type_alignment_review_preserves_non_type_sections(monkeypatch):
+    def fake_openai(system, user, **kw):
+        assert "exactly once" in system
+        return {"rows": [{
+            "topic": "Wrong",
+            "parent_concept": "Wrong",
+            "concept": "Wrong",
+            "concept_description": (
+                "Description: changed // Types: Type 01: Correct Pattern "
+                "Case 01: Defined sub-type Example: Why did nationalist "
+                "tensions emerge in the Balkans? // Misconceptions: changed"
+            ),
+            "keywords": "wrong",
+        }]}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    rows = [{
+        "topic": "Nationalism and Imperialism",
+        "parent_concept": "Balkan Nationalism",
+        "concept_title": "Late Nineteenth-century Nationalism Became More Aggressive",
+        "concept_details": (
+            "Description: Original description.\n"
+            "Achieving Mastery: Original mastery. // "
+            "Misconceptions: Original misconception."
+        ),
+        "keywords": "nationalism",
+    }]
+    out = g._review_type_concept_alignment_via_api(
+        rows,
+        meta=g._metadata(subject="History"),
+        question_task_inventory={"items": [{"qid": "QINV-0001", "raw_task": "Why did nationalist tensions emerge in the Balkans?"}]},
+        mined_types={"types": []},
+        source_context="",
+    )
+    assert out[0]["topic"] == rows[0]["topic"]
+    assert "Original description" in out[0]["concept_details"]
+    assert "Correct Pattern" in out[0]["concept_details"]
+    assert "changed" not in out[0]["concept_details"].split("Types:", 1)[0]
+
+
+def test_uploaded_duration_lookup_for_reviewed_chapters():
+    assert build_concepts.chapter_durations.lookup_duration_minutes(
+        board="CBSE",
+        grade="10",
+        subject="History",
+        chapter_title="The Rise of Nationalism in Europe",
+    ) == 343
+    assert build_concepts.chapter_durations.lookup_duration_minutes(
+        board="CBSE",
+        grade="10",
+        subject="Physics",
+        chapter_title="Electricity",
+    ) == 561
 
 
 def test_neutralize_unrepaired_rows_keeps_clean_rows_verbatim():
