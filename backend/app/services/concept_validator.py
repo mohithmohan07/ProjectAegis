@@ -21,9 +21,11 @@ FORBIDDEN_TOPIC_NAMES = {
 }
 PLACEHOLDERS = {"n/a", "na", "none", "not applicable", "placeholder", "tbd", "lorem ipsum"}
 _SECTION_NUMBER_RE = re.compile(r"\b(?:exercise|ex)?\s*\d+(?:\.\d+)+\b", re.IGNORECASE)
+# Optional whitespace after Fig/Example/Ex covers OCR forms like "fig.11.1".
 _SOURCE_ARTIFACT_RE = re.compile(
-    r"\b(?:MMD|Example\s+\d+|Fig(?:ure)?s?\.?\s*\d+|Tables?\.?\s*\d+|"
-    r"Exercise\s+\d+(?:\.\d+)?|Ex\s+\d+(?:\.\d+)?|"
+    r"\b(?:MMD|Examples?\.?\s*\d+(?:\.\d+)*|Fig(?:ure)?s?\.?\s*\d+(?:\.\d+)*|"
+    r"Tables?\.?\s*\d+(?:\.\d+)*|"
+    r"Exercises?\.?\s*\d+(?:\.\d+)*|Ex\.?\s*\d+(?:\.\d+)*|"
     r"page\s+(?:no\.?\s*)?\d+|p(?:age)?\.?\s*\d+)\b",
     re.IGNORECASE,
 )
@@ -49,8 +51,8 @@ _IMAGE_URL_RE = re.compile(r"!\[[^\]]*\]\(https?://[^)]+\)|https?://\S+", re.IGN
 # ("Refer fig. 11.1" next to its image URL); only textual pointers to unshipped
 # source artifacts (Example 5, Exercise 1.2, page 14, MMD) stay forbidden.
 _SOURCE_ARTIFACT_NO_FIG_RE = re.compile(
-    r"\b(?:MMD|Example\s+\d+|"
-    r"Exercise\s+\d+(?:\.\d+)?|Ex\s+\d+(?:\.\d+)?|"
+    r"\b(?:MMD|Examples?\.?\s*\d+(?:\.\d+)*|"
+    r"Exercises?\.?\s*\d+(?:\.\d+)*|Ex\.?\s*\d+(?:\.\d+)*|"
     r"page\s+(?:no\.?\s*)?\d+|p(?:age)?\.?\s*\d+)\b",
     re.IGNORECASE,
 )
@@ -239,6 +241,18 @@ def validate_concept_rows(
                 _add(errors, i, "concept_details", "description_length",
                      "description length is outside reasonable bounds", "warning")
             desc = _description_text(details)
+            if (
+                not is_culm
+                and _has_types(details)
+                and words < 20
+            ):
+                _add(errors, i, "concept_details", "thin_description",
+                     "Description is too thin for a concept that carries Types",
+                     "warning")
+            if _IMAGE_URL_RE.search(desc):
+                _add(errors, i, "concept_details", "description_image_url",
+                     "Mathpix/image URLs belong in Types Examples, not Description",
+                     "warning")
             if len(desc) > 450 and len(set(re.findall(r"\w+", desc.lower()))) < 35:
                 _add(errors, i, "concept_details", "textbook_dump",
                      "description appears broad or dump-like", "warning")

@@ -703,3 +703,109 @@ def test_inventory_prompt_requires_checkpoints_activities_and_images():
     assert "is_activity" in embedding
     assert "Respect chapter position" in embedding
     assert "heating-effect" in embedding
+
+
+def test_neutralize_compact_fig_refs_without_space():
+    """OCR often emits fig.11.1; neutralize must clear it or final validation fails."""
+    rec = {
+        "topic": "Electric Current And Circuit",
+        "parent_concept": "Resistance",
+        "concept_title": "What Determines Resistance in a Conductor",
+        "concept_details": (
+            "Description: Resistance is the opposition a conductor offers to "
+            "the flow of electric current. It depends mainly on three factors. "
+            "Achieving Mastery: Predicting how R changes with geometry.\n"
+            " // Types: Type 01: Relating resistance to geometry "
+            "Case 01: Length dependence "
+            "Example: Find the new resistance when the wire in fig.11.5 is "
+            "doubled in length. "
+            "// Misconceptions: Students may think thicker wires have higher "
+            "resistance."
+        ),
+        "keywords": "",
+    }
+    out = concept_cleanup.clean_concept_record(dict(rec), neutralize_artifacts=True)
+    report = concept_validator.validate_concept_rows(
+        [out], allow_types=True, require_culmination=False)
+    assert not any(e["code"] == "source_artifact" for e in report["errors"])
+    assert "fig.11" not in out["concept_details"].lower()
+
+
+def test_chapter_opening_labelled_in_section_chunks():
+    sections = g.parse_mmd_sections(
+        "Before any numbered section, Frédéric Sorrieu painted a series of "
+        "prints.\n\n"
+        "## 1 The French Revolution and the Idea of the Nation\n\n"
+        "The first clear expression of nationalism came with the French "
+        "Revolution.\n"
+    )
+    text = g._format_section_chunk(sections)
+    assert "HEADING PATH: [Chapter opening]" in text
+    assert "Frédéric Sorrieu" in text
+
+
+def test_v5_prompts_require_opening_granularity_and_mathpix_policy():
+    skeleton = g.prompts.get_text("concepts.skeleton.system")
+    assert "[Chapter opening]" in skeleton
+    assert "German unification and Italian unification" in skeleton
+    assert "Frédéric Sorrieu" in skeleton
+    canonicalize = g.prompts.get_text("concepts.canonicalize.system")
+    assert "Germany vs Italy" in canonicalize
+    refine = g.prompts.get_text("concepts.description_refine.system")
+    assert "Do NOT embed Mathpix" in refine
+    assert "truncated mid-sentence" in refine
+    inventory = g.prompts.get_text("concepts.question_task_inventory.system")
+    assert "stay ONE inventory item" in inventory
+    assert "Missing even one" in inventory and "checkpoint is a defect" in inventory
+    assert "Frédéric Sorrieu" in inventory
+    embedding = g.prompts.get_text("concepts.type_embedding.system")
+    assert "Picture-/source-/map-based" in embedding
+    repair = g.prompts.get_text("concepts.repair.system")
+    assert "fig.11.1" in repair
+    assert "Do not put image URLs in the Description" in repair
+
+
+def test_cleanup_strips_mathpix_from_description_keeps_types():
+    rec = {
+        "topic": "The French Revolution and the Idea of the Nation",
+        "parent_concept": "The Idea of the Nation",
+        "concept_title": "Frédéric Sorrieu's Vision of Democratic Republics",
+        "concept_details": (
+            "Description: Sorrieu's utopian print series. "
+            "![](https://cdn.mathpix.com/cropped/sorrieu.jpg) "
+            "Achieving Mastery: Interpreting nationalist allegory.\n"
+            " // Types: Type 01: Source interpretation "
+            "Case 01: Print analysis "
+            "Example: Describe the painting of the peoples of Europe. "
+            "(Refer fig. 1) ![](https://cdn.mathpix.com/cropped/sorrieu.jpg) "
+            "// Misconceptions: Students may treat the print as literal history."
+        ),
+        "keywords": "",
+    }
+    out = concept_cleanup.clean_concept_record(dict(rec), neutralize_artifacts=True)
+    desc, rest = out["concept_details"].split("Types:", 1)
+    assert "cdn.mathpix.com" not in desc
+    assert "cdn.mathpix.com" in rest
+    report = concept_validator.validate_concept_rows(
+        [out], allow_types=True, require_culmination=False)
+    assert not any(e["code"] == "description_image_url" for e in report["errors"])
+
+
+def test_validator_warns_on_mathpix_in_description():
+    rows = [{
+        "topic": "T", "parent_concept": "P", "concept_title": "C",
+        "concept_details": (
+            "Description: A visual concept "
+            "![](https://cdn.mathpix.com/cropped/x.jpg) "
+            "// Misconceptions: Students may ignore the figure."
+        ),
+        "keywords": "",
+    }]
+    report = concept_validator.validate_concept_rows(rows, allow_types=True)
+    assert any(e["code"] == "description_image_url" for e in report["errors"])
+
+
+def test_expected_min_skeleton_rows_is_denser_for_history_scale():
+    # ~10k chars should expect more than the old content//3000 floor.
+    text = "x" * 10_000
+    assert g._expected_min_skeleton_rows(text) >= 4
