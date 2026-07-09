@@ -1309,8 +1309,9 @@ Return ONLY strict JSON:
 {"types":[{"type_id":"TYPE-0001","type_title":"","type_description":"","task_pattern":"","source_question_ids":["QINV-0001"],"case_prompts":[{"case_id":"CASE-0001","case_title":"","examples":[{"source_question_id":"QINV-0001","example_prompt":""}],"case_signature":""}],"concept_match_hint":"","parent_concept_match_hint":"","topic_match_hint":"","difficulty_hint":"Basic|Intermediate|Advanced","cognitive_skill_hint":"","subject_skill_hint":"","is_activity":false}]}.
 
 COVERAGE IS MANDATORY (most important rule):
-- EVERY inventory item MUST appear in at least one Type's source_question_ids
-  AND as an example_prompt under a Case.
+- EVERY inventory item MUST appear in EXACTLY ONE Type's source_question_ids
+  AND EXACTLY ONE example_prompt under a Case. The same qid/question must
+  never appear in two Types, two Cases, or twice in the same Case.
 - NEVER skip an item because it looks trivial, routine, descriptive, or hard to
   classify. If an item fits no existing Type, CREATE a new Type for it.
 - In-text checkpoint questions, boxed "?" questions, and textbook activities
@@ -1320,7 +1321,9 @@ COVERAGE IS MANDATORY (most important rule):
 - A missed question is a defect; an extra Type is not.
 
 Rules:
-- One inventory item may map to multiple Types if it combines multiple skills.
+- One inventory item maps to exactly one best-fit Type. If it combines several
+  skills, choose the Type that most directly assesses the final ask, or create
+  one integrated Type for that mixed skill — never duplicate the question.
 - Group items that share the same pattern under one Type, but do not force
   dissimilar items together just to keep the Type count low.
 - Do not merge different academic, solving, answering, writing, interpretation,
@@ -1336,6 +1339,9 @@ CASE WORDING (each Case must be properly defined):
   question when V and I are given (without circuit)" vs "... (circuit diagram
   given)". A case_title is NEVER a raw question.
 - Create a separate Case for every distinct given/asked/constraint combination.
+- A multi-part source question with subquestions stays ONE Example under ONE
+  Case unless the textbook numbers the subparts as separate standalone
+  questions; do not split the same prompt across multiple Cases.
 
 EXAMPLES CARRY THE FULL SOURCE QUESTION (mandatory):
 - Every example_prompt must be fully self-contained: copy the ACTUAL numbers,
@@ -1419,6 +1425,40 @@ Rules:
   to the culmination row of the topic they belong to, not to a single concept.
 - Do not drop any type_id. If unsure, pick the closest concept_id.
 - Return no prose, only the JSON object.
+""")
+
+prompts.register(
+    "concepts.type_alignment_review.system", category=_CONCEPTS_CAT,
+    label="Type/concept alignment review prompt",
+    default="""\
+Review and repair the final concept map's Types/Cases/Examples against the
+Question / Task Inventory. This is a quality-control pass: Types and Examples
+must match the concept they are under, and every source question must appear
+exactly once.
+
+Return ONLY strict JSON:
+{"rows":[{"topic":"","parent_concept":"","concept":"","concept_description":"","keywords":""}]}.
+
+Rules:
+- Return the SAME concept rows in the SAME order. You may only move/rewrite the
+  Types section of each concept_description; keep Description, Achieving
+  Mastery, Misconceptions, topic, parent_concept, concept, and keywords intact.
+- Every inventory qid/question must appear exactly once as an Example under
+  exactly one Case in exactly one concept. Missing qids are defects. Duplicate
+  qids/questions are defects.
+- A Type must belong to the concept it directly assesses. Use topic_hint,
+  concept_match_hint, parent_concept_match_hint, topic order, and the actual
+  question wording. Do not attach a later-section question to an earlier
+  concept just because formulas overlap.
+- If a question combines several concepts or is a textbook Activity, place it
+  on the topic's culmination concept, not a narrow concept.
+- Cases are defined sub-types; Examples are full source questions. Do not turn
+  a raw question into a Case name.
+- Keep all full question wording, subquestions, values, units, conditions, and
+  Mathpix image URLs. Never truncate.
+- If a source question already appears under the correct concept, preserve it.
+- Never drop a question to fix duplication; move the duplicate to its correct
+  single home.
 """)
 
 prompts.register(
@@ -2267,6 +2307,47 @@ def _uncovered_inventory_items(inventory: dict, types: list[dict]) -> list[dict]
     ]
 
 
+def _inventory_assignment_counts(types: list[dict]) -> dict[str, int]:
+    """Count concrete Example placements per inventory qid.
+
+    ``source_question_ids`` is debug traceability; the public output is driven
+    by Examples. Count Examples first, then fall back to source_question_ids
+    only when a Type has not emitted any examples for a qid yet.
+    """
+    counts: dict[str, int] = {}
+    trace_only: dict[str, int] = {}
+    for t in types:
+        for qid in t.get("source_question_ids") or []:
+            qid = (qid or "").strip()
+            if qid:
+                trace_only[qid] = trace_only.get(qid, 0) + 1
+        for case in t.get("case_prompts") or []:
+            if not isinstance(case, dict):
+                continue
+            for ex in _case_examples(case):
+                qid = (ex.get("source_question_id") or "").strip()
+                if qid:
+                    counts[qid] = counts.get(qid, 0) + 1
+    for qid, n in trace_only.items():
+        counts.setdefault(qid, n)
+    return counts
+
+
+def _duplicate_inventory_assignments(inventory: dict, types: list[dict]) -> list[dict]:
+    """Inventory items assigned more than once across Types/Cases/Examples."""
+    counts = _inventory_assignment_counts(types)
+    by_qid = {
+        (item.get("qid") or "").strip(): item
+        for item in inventory.get("items", [])
+        if (item.get("qid") or "").strip()
+    }
+    return [
+        {**by_qid.get(qid, {"qid": qid}), "assignment_count": count}
+        for qid, count in counts.items()
+        if qid and count > 1
+    ]
+
+
 _CASE_SOURCE_ARTIFACT_RE = re.compile(
     r"\b(?:examples?|exercise|ex|fig(?:ure)?|table|page|p\.)\s*\d",
     re.IGNORECASE,
@@ -2409,60 +2490,43 @@ def _mine_types_from_inventory_via_api(
 
     for attempt in range(1, max_coverage_attempts + 1):
         missed = _uncovered_inventory_items(inventory, types)
-        if not missed:
+        duplicates = _duplicate_inventory_assignments(inventory, types)
+        if not missed and not duplicates:
             break
         progress.log(
             f"Type Mining coverage attempt {attempt}: {len(missed)} inventory "
-            "item(s) unclassified — re-mining the missed items.",
+            f"item(s) unclassified, {len(duplicates)} duplicate assignment(s) "
+            "— asking GPT for a complete corrected Type list.",
             level="warning",
         )
         follow_up = (
             _metadata_block(meta)
-            + "\nALREADY MINED TYPES (for context; extend or add, never delete):\n"
+            + "\nALREADY MINED TYPES (for context; return a COMPLETE corrected list):\n"
             + _json.dumps({"types": types}, ensure_ascii=False)
-            + "\n\nUNCLASSIFIED INVENTORY ITEMS — every one of these MUST be "
-            "classified. Assign each to an existing Type (repeat that Type with "
-            "the extra source_question_ids and case_prompts) or create a new "
-            "Type. Do not skip any item:\n"
-            + _json.dumps({"items": missed}, ensure_ascii=False)
+            + "\n\nCOVERAGE DEFECTS TO FIX:\n"
+            + _json.dumps({
+                "unclassified_items": missed,
+                "duplicate_assignments": duplicates,
+            }, ensure_ascii=False)
+            + "\n\nReturn the COMPLETE corrected {\"types\": [...]} list. "
+            "Every inventory qid must appear exactly once as one Example under "
+            "one Case in one Type. Remove duplicate placements; never drop the "
+            "question entirely. Keep full source wording."
         )
-        extra = _openai_json(system, follow_up)
-        extra_types = extra.get("types") or []
-        extra_types = _backfill_type_cases_from_inventory(extra_types, {"items": missed})
-        by_id = {t.get("type_id"): t for t in types if t.get("type_id")}
-        for et in extra_types:
-            existing = by_id.get(et.get("type_id"))
-            if existing is None:
-                types.append(et)
-                if et.get("type_id"):
-                    by_id[et["type_id"]] = et
-                continue
-            known_q = set(existing.get("source_question_ids") or [])
-            for qid in et.get("source_question_ids") or []:
-                if qid not in known_q:
-                    existing.setdefault("source_question_ids", []).append(qid)
-                    known_q.add(qid)
-            known_cases = {
-                (c.get("case_prompt") or "").strip()
-                for c in existing.get("case_prompts") or []
-                if isinstance(c, dict)
-            }
-            for case in et.get("case_prompts") or []:
-                prompt_text = (
-                    case.get("case_prompt", "") if isinstance(case, dict) else str(case)
-                ).strip()
-                if prompt_text and prompt_text not in known_cases:
-                    existing.setdefault("case_prompts", []).append(
-                        case if isinstance(case, dict) else {"case_prompt": prompt_text})
-                    known_cases.add(prompt_text)
+        corrected = _openai_json(system, follow_up)
+        corrected_types = corrected.get("types") or []
+        if corrected_types:
+            types = corrected_types
         types = _backfill_type_cases_from_inventory(types, inventory)
 
     still_missed = _uncovered_inventory_items(inventory, types)
+    still_duplicate = _duplicate_inventory_assignments(inventory, types)
     total = len(inventory.get("items", []))
     progress.log(
         f"Type Mining coverage: {total - len(still_missed)}/{total} inventory "
-        f"item(s) classified into {len(types)} Type(s).",
-        level="warning" if still_missed else "success",
+        f"item(s) classified into {len(types)} Type(s); "
+        f"{len(still_duplicate)} duplicate assignment(s).",
+        level="warning" if still_missed or still_duplicate else "success",
     )
     return {"types": types}
 
@@ -2823,30 +2887,16 @@ def _assign_mined_types_via_api(
             f"Type embedding attempt {attempt}: {placed}/{len(types_by_id)} mined Types assigned.")
 
     if remaining:
-        # No mined question may be dropped: whatever GPT left unassigned is
-        # force-attached to the culmination row of the Type's hinted topic
-        # (mixed/synthesis home), falling back to the chapter's last
-        # culmination, then the last concept.
         progress.log(
             f"{len(remaining)} mined Type(s) unassigned after {max_attempts} "
-            "attempt(s) — force-attaching to culmination rows so no source "
-            "question is lost.",
-            level="warning",
+            "attempt(s); failing instead of filing questions under the wrong "
+            "concept.",
+            level="error",
         )
-        culm_by_topic = {
-            bi.normalize_question_text(p["topic"]): p["concept_id"]
-            for p in concept_payload if p["is_culmination"]
-        }
-        fallback_cid = next(
-            (p["concept_id"] for p in reversed(concept_payload) if p["is_culmination"]),
-            concept_payload[-1]["concept_id"],
+        raise RuntimeError(
+            "type embedding failed: unassigned mined Types "
+            + ", ".join(sorted(remaining))
         )
-        for tid in sorted(remaining):
-            mtype = types_by_id[tid]
-            hint = bi.normalize_question_text(mtype.get("topic_match_hint") or "")
-            cid = culm_by_topic.get(hint, fallback_cid)
-            per_concept.setdefault(cid, []).append(mtype)
-        remaining.clear()
 
     for cid, tlist in per_concept.items():
         rec = cid_map[cid]
@@ -2884,6 +2934,78 @@ def _merge_types_from_fallback(
     if restored:
         progress.log(f"Restored Types on {restored} concept(s) from pre-pass snapshot.")
     return records
+
+
+def _review_type_concept_alignment_via_api(
+    records: list[dict], *, meta: dict,
+    question_task_inventory: dict | None = None,
+    mined_types: dict | None = None,
+    source_context: str = "",
+) -> list[dict]:
+    """Ask GPT to verify Type/Case/Example placement against the inventory.
+
+    This is the quality pass for the user's core issue: Types and concepts must
+    go hand in hand; every source question must appear exactly once; no later
+    section question should be filed under an earlier concept.
+    """
+    import json as _json
+
+    if not records:
+        return records
+    inventory = question_task_inventory or _empty_inventory()
+    if not inventory.get("items"):
+        return records
+    system = prompts.get_text("concepts.type_alignment_review.system")
+    payload = {
+        "rows": _records_to_api_rows(records),
+        "question_task_inventory": inventory,
+        "mined_types": mined_types or {"types": []},
+    }
+    user = (
+        _metadata_block(meta)
+        + "\nReview this concept map for Type/Case/Example placement defects:\n"
+        + _json.dumps(payload, ensure_ascii=False)
+    )
+    if source_context:
+        user += "\n\nCHAPTER SOURCE CONTEXT:\n" + _trim(source_context, 160_000)
+    progress.log("Reviewing Type/concept alignment via API.")
+    try:
+        data = _openai_json(system, user)
+    except Exception as exc:  # noqa: BLE001 — keep best output; validator follows
+        progress.log(
+            f"Type/concept alignment review failed ({exc}) — keeping best output.",
+            level="warning",
+        )
+        return records
+    reviewed = _concept_rows_to_records(data)
+    if not reviewed:
+        progress.log("Type/concept alignment review returned no rows.", level="warning")
+        return records
+    if len(reviewed) != len(records):
+        progress.log(
+            f"Type/concept alignment review returned {len(reviewed)} row(s) for "
+            f"{len(records)} input row(s); merging by concept key.",
+            level="warning",
+        )
+        return _merge_repaired_rows(records, reviewed)
+    out: list[dict] = []
+    for original, updated in zip(records, reviewed):
+        # Contract says only Types may move; enforce stable non-Type fields.
+        updated["topic"] = original.get("topic", "")
+        updated["parent_concept"] = original.get("parent_concept", "")
+        updated["concept_title"] = original.get("concept_title", "")
+        updated["keywords"] = original.get("keywords", "")
+        new_types = _types_body(updated.get("concept_details", ""))
+        if new_types:
+            updated["concept_details"] = _inject_types(
+                _strip_types_from_records([dict(original)])[0].get("concept_details", ""),
+                new_types,
+            )
+        else:
+            updated["concept_details"] = _strip_types_from_records([dict(original)])[0].get(
+                "concept_details", "")
+        out.append(updated)
+    return out
 
 
 def _ensure_parent_concepts(records: list[dict]) -> list[dict]:
@@ -3138,6 +3260,13 @@ def _assign_types_via_api(
             f"Embedding {len(mined_types['types'])} mined Types into concepts "
             "via API ID assignment.")
         merged = _assign_mined_types_via_api(records, meta=meta, mined_types=mined_types)
+        merged = _review_type_concept_alignment_via_api(
+            merged,
+            meta=meta,
+            question_task_inventory=question_task_inventory,
+            mined_types=mined_types,
+            source_context=mmd_text,
+        )
         merged = _repair_records_via_api(merged, meta=meta, stage="types", source_context=mmd_text)
         with_types = sum(1 for r in merged if _has_meaningful_types(r.get("concept_details", "")))
         progress.log(
@@ -3190,6 +3319,14 @@ def _assign_types_via_api(
             rec = dict(rec)
             rec["concept_details"] = _inject_types(rec.get("concept_details", ""), types_body)
         merged.append(rec)
+    merged = _repair_records_via_api(merged, meta=meta, stage="types", source_context=mmd_text)
+    merged = _review_type_concept_alignment_via_api(
+        merged,
+        meta=meta,
+        question_task_inventory=question_task_inventory,
+        mined_types=mined_types,
+        source_context=mmd_text,
+    )
     merged = _repair_records_via_api(merged, meta=meta, stage="types", source_context=mmd_text)
     with_types = sum(1 for r in merged if _has_meaningful_types(r.get("concept_details", "")))
     progress.log(

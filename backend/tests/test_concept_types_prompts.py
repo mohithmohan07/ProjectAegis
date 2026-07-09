@@ -298,14 +298,22 @@ def test_mine_types_retries_uncovered_inventory_items(monkeypatch):
                 "source_question_ids": ["QINV-0001"],
                 "case_prompts": [{"case_prompt": "do one", "source_question_id": "QINV-0001"}],
             }]}
-        # Coverage retry must receive the missed item and classify it.
-        assert "UNCLASSIFIED INVENTORY ITEMS" in user
+        # Coverage retry must receive defects and return a complete corrected list.
+        assert "COVERAGE DEFECTS TO FIX" in user
+        assert "COMPLETE corrected" in user
         assert "QINV-0002" in user
-        return {"types": [{
-            "type_id": "TYPE-0002", "type_title": "Pattern Two",
-            "source_question_ids": ["QINV-0002"],
-            "case_prompts": [{"case_prompt": "do two", "source_question_id": "QINV-0002"}],
-        }]}
+        return {"types": [
+            {
+                "type_id": "TYPE-0001", "type_title": "Pattern One",
+                "source_question_ids": ["QINV-0001"],
+                "case_prompts": [{"case_prompt": "do one", "source_question_id": "QINV-0001"}],
+            },
+            {
+                "type_id": "TYPE-0002", "type_title": "Pattern Two",
+                "source_question_ids": ["QINV-0002"],
+                "case_prompts": [{"case_prompt": "do two", "source_question_id": "QINV-0002"}],
+            },
+        ]}
 
     monkeypatch.setattr(g, "_openai_json", fake_openai)
     inventory = {"items": [
@@ -330,11 +338,14 @@ def test_mine_types_coverage_merges_into_existing_type(monkeypatch):
                 "source_question_ids": ["QINV-0001"],
                 "case_prompts": [{"case_prompt": "do one", "source_question_id": "QINV-0001"}],
             }]}
-        # The retry classifies the missed item into the EXISTING Type.
+        # The retry returns the COMPLETE corrected Type with both questions.
         return {"types": [{
             "type_id": "TYPE-0001", "type_title": "Pattern One",
-            "source_question_ids": ["QINV-0002"],
-            "case_prompts": [{"case_prompt": "do two", "source_question_id": "QINV-0002"}],
+            "source_question_ids": ["QINV-0001", "QINV-0002"],
+            "case_prompts": [
+                {"case_prompt": "do one", "source_question_id": "QINV-0001"},
+                {"case_prompt": "do two", "source_question_id": "QINV-0002"},
+            ],
         }]}
 
     monkeypatch.setattr(g, "_openai_json", fake_openai)
