@@ -3225,6 +3225,223 @@ def _neutralize_unrepaired_rows(records: list[dict]) -> list[dict]:
     return out
 
 
+_TYPE_SPLIT_RE = re.compile(r"(?=\b(?:Miscellaneous\s+)?Type\s+\d{1,2}:)", re.IGNORECASE)
+_CASE_SPLIT_RE = re.compile(r"(?=\bCase\s+\d{1,2}:)", re.IGNORECASE)
+_EXAMPLE_LINE_RE = re.compile(r"\bExamples?\s*:\s*", re.IGNORECASE)
+
+
+def _inventory_lookup_texts(inventory: dict | None) -> list[str]:
+    """Full teacher-facing task texts from the Question / Task Inventory."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in (inventory or {}).get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        text = _inventory_task_text(item)
+        key = bi.normalize_question_text(text)
+        if text and key and key not in seen:
+            seen.add(key)
+            out.append(text)
+    return out
+
+
+def _match_inventory_for_short_example(
+    stub: str, inventory_texts: list[str], *, used: set[str],
+    context: str = "",
+) -> str:
+    """Best full inventory question for a truncated Example stub.
+
+    ``context`` may carry the Case title / concept title so short stubs like
+    "Describe the print." can still match a Germania / allegory inventory item.
+    """
+    stub_key = bi.normalize_question_text(stub)
+    context_key = bi.normalize_question_text(context)
+    if not stub_key and not context_key:
+        return ""
+    stub_tokens = {t for t in stub_key.split() if len(t) > 2}
+    context_tokens = {t for t in context_key.split() if len(t) > 2}
+    # Prefer inventory items that already contain / start with the stub.
+    candidates: list[tuple[int, int, str, str]] = []
+    for text in inventory_texts:
+        key = bi.normalize_question_text(text)
+        if key in used:
+            continue
+        if stub_key and (stub_key in key or key.startswith(stub_key)):
+            used.add(key)
+            return text
+        text_tokens = set(key.split())
+        stub_overlap = len(stub_tokens & text_tokens) if stub_tokens else 0
+        ctx_overlap = len(context_tokens & text_tokens) if context_tokens else 0
+        if stub_overlap or ctx_overlap:
+            candidates.append((stub_overlap, ctx_overlap, key, text))
+    # Pure placeholder stubs ("q") with no useful context cannot be matched.
+    if len(stub_key.split()) <= 1 and not context_tokens:
+        return ""
+    if not candidates:
+        return ""
+    candidates.sort(key=lambda x: (-x[0], -x[1], -len(x[2])))
+    best_stub, best_ctx, best_key, best_text = candidates[0]
+    # Accept when the stub itself overlaps enough, OR when context strongly
+    # points at one unused inventory question (History allegory / source tasks).
+    if best_stub >= max(2, (len(stub_tokens) + 1) // 2 if stub_tokens else 2):
+        used.add(best_key)
+        return best_text
+    if best_ctx >= 2 and (best_stub >= 1 or len(stub_key.split()) <= 3):
+        used.add(best_key)
+        return best_text
+    return ""
+
+
+def _rebuild_types_body(
+    types: list[tuple[str, list[tuple[str, list[str]]]]],
+) -> str:
+    """Render ``[(type_header, [(case_title, [examples])])...]`` to Types body."""
+    parts: list[str] = []
+    for type_header, cases in types:
+        if not cases:
+            continue
+        parts.append(type_header.strip())
+        for case_i, (case_title, examples) in enumerate(cases, start=1):
+            parts.append(f"Case {case_i:02d}: {case_title.strip()}")
+            for example in examples:
+                parts.append(f"Example: {example.strip()}")
+    # Preserve original Type NN labels from headers; only Case indexes restart.
+    return " ".join(parts)
+
+
+def _salvage_short_case_examples(
+    records: list[dict], *, inventory: dict | None = None,
+) -> list[dict]:
+    """Expand truncated Case Examples from inventory; drop irrecoverable stubs.
+
+    GPT repair sometimes leaves ``Example: q`` / one-word stubs that hard-fail
+    final validation. Prefer inventory wording; if none matches, drop the stub
+    Example (and empty Cases) so the chapter can still deposit.
+    """
+    inventory_texts = _inventory_lookup_texts(inventory)
+    used: set[str] = set()
+    expanded = 0
+    dropped = 0
+    out: list[dict] = []
+    for rec in records:
+        rec = dict(rec)
+        details = rec.get("concept_details") or ""
+        sections = cr.split_sections(details)
+        types_idx = next(
+            (i for i, (label, _) in enumerate(sections)
+             if label.strip().lower().startswith("type")),
+            -1,
+        )
+        if types_idx < 0:
+            out.append(rec)
+            continue
+        label, body = sections[types_idx]
+        type_chunks = [c.strip() for c in _TYPE_SPLIT_RE.split(body) if c.strip()]
+        rebuilt_types: list[tuple[str, list[tuple[str, list[str]]]]] = []
+        changed = False
+        for chunk in type_chunks:
+            case_parts = [p.strip() for p in _CASE_SPLIT_RE.split(chunk) if p.strip()]
+            if not case_parts:
+                continue
+            type_header = case_parts[0]
+            # If the first piece is itself a Case, there is no Type header.
+            if re.match(r"^Case\s+\d{1,2}:", type_header, re.IGNORECASE):
+                type_header = "Type 01: Assessment pattern"
+                case_parts = case_parts
+            else:
+                case_parts = case_parts[1:]
+            cases: list[tuple[str, list[str]]] = []
+            for case_chunk in case_parts:
+                m = re.match(
+                    r"^Case\s+\d{1,2}:\s*(.*)$", case_chunk, re.IGNORECASE | re.DOTALL)
+                case_body = (m.group(1) if m else case_chunk).strip()
+                pieces = _EXAMPLE_LINE_RE.split(case_body)
+                case_title = (pieces[0] or "").strip() or "Source-based question"
+                examples = [p.strip() for p in pieces[1:] if p.strip()]
+                match_context = " ".join([
+                    case_title,
+                    rec.get("concept_title") or "",
+                    rec.get("parent_concept") or "",
+                    rec.get("topic") or "",
+                ])
+                # Legacy: question lived in the Case line with no Example: label.
+                if not examples and case_title:
+                    if cv._example_too_short(case_title):
+                        replacement = _match_inventory_for_short_example(
+                            case_title, inventory_texts, used=used,
+                            context=match_context,
+                        )
+                        if replacement:
+                            examples = [replacement]
+                            case_title = (
+                                rec.get("concept_title") or "Source-based question"
+                            )
+                            expanded += 1
+                            changed = True
+                        else:
+                            dropped += 1
+                            changed = True
+                            continue
+                    else:
+                        examples = [case_title]
+                        case_title = (
+                            rec.get("concept_title") or "Source-based question"
+                        )
+                        changed = True
+                new_examples: list[str] = []
+                for ex in examples:
+                    needs_source = (
+                        cv._example_too_short(ex)
+                        or bool(_CASE_SOURCE_ARTIFACT_RE.search(ex or ""))
+                    )
+                    if not needs_source:
+                        new_examples.append(ex)
+                        used.add(bi.normalize_question_text(ex))
+                        continue
+                    replacement = _match_inventory_for_short_example(
+                        ex, inventory_texts, used=used, context=match_context,
+                    )
+                    if replacement:
+                        new_examples.append(replacement)
+                        expanded += 1
+                        changed = True
+                    elif cv._example_too_short(ex):
+                        dropped += 1
+                        changed = True
+                    else:
+                        # Keep longer artifact-bearing text for neutralize/repair.
+                        new_examples.append(ex)
+                        used.add(bi.normalize_question_text(ex))
+                if new_examples:
+                    cases.append((case_title, new_examples))
+                elif case_title and not cv._example_too_short(case_title):
+                    # Keep a defined Case with no Example only when the Case
+                    # title itself is already a full question (legacy form).
+                    cases.append((case_title, []))
+            if cases:
+                # Keep the original Type NN: title from the header line.
+                header = type_header.split("Case", 1)[0].strip()
+                if not re.match(
+                        r"^(?:Miscellaneous\s+)?Type\s+\d{1,2}:", header, re.IGNORECASE):
+                    header = f"Type 01: {header}" if header else "Type 01: Assessment pattern"
+                rebuilt_types.append((header, cases))
+        if changed:
+            new_body = _rebuild_types_body(rebuilt_types)
+            if new_body.strip():
+                sections[types_idx] = (label, new_body)
+            else:
+                sections.pop(types_idx)
+            rec["concept_details"] = cr.join_sections(sections)
+        out.append(rec)
+    if expanded or dropped:
+        progress.log(
+            f"Short Case Example salvage: expanded {expanded} from inventory, "
+            f"dropped {dropped} irrecoverable stub(s).",
+            level="warning" if dropped else "success",
+        )
+    return out
+
+
 def _validate_final_or_raise(records: list[dict], *, stage: str = "final") -> dict:
     report = cv.validate_concept_rows(
         records, allow_types=True, require_culmination=True, allow_culmination=True)
@@ -4338,6 +4555,14 @@ def concepts_from_mmd(
         # Post-repair: neutralize ONLY rows the repair pass could not fix —
         # rows that already validate cleanly keep their full GPT-authored
         # wording untouched (no blanket deterministic rewriting).
+        out = _neutralize_unrepaired_rows(out)
+        # Truncated Case Examples ("Example: q") that GPT repair could not
+        # expand are filled from the Question / Task Inventory, or dropped
+        # when no match exists — never leave short_case_example as a fatal.
+        out = _salvage_short_case_examples(
+            out, inventory=question_task_inventory)
+        # Salvage may leave a bare figure ref if inventory lacked the URL;
+        # re-neutralize any residual source_artifact rows only.
         out = _neutralize_unrepaired_rows(out)
         out = cr.refine_chapter(out)
         # The repair/cleanup passes may reorder, rename, or re-collide rows;
