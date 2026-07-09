@@ -350,6 +350,19 @@ def _tidy(text: str) -> str:
     text = re.sub(r"(?:\s*,){2,}", ",", text)       # doubled commas
     text = re.sub(r"\bsee\s*([.;,])", r"\1", text, flags=re.IGNORECASE)  # orphan "see"
     text = re.sub(r"\b(?:or|and)\s*([.;])", r"\1", text, flags=re.IGNORECASE)
+    # Neutralization can stack ("as shown in in the chapter", "as in in the chapter").
+    text = re.sub(
+        r"\b(?:as\s+shown\s+)?(?:in|on)\s+in\s+the\s+chapter\b",
+        "in the chapter",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"\bas\s+in\s+in\s+the\s+chapter\b",
+        "in the chapter",
+        text,
+        flags=re.IGNORECASE,
+    )
     return text.strip()
 
 
@@ -404,14 +417,18 @@ def replace_mmd_references(text: str) -> str:
 # real source questions and often carry their labels). LLM repair passes keep
 # recreating these, so they are rewritten deterministically into neutral
 # academic wording that preserves the task content.
+# Keep these aligned with concept_validator._SOURCE_ARTIFACT_RE. Whitespace and
+# the dot after Fig/Ex/page are optional so OCR forms like fig.11.1 / p14 /
+# page14 / Example11 all neutralize.
 _ARTIFACT_NEUTRALIZATIONS = [
     (re.compile(r"\b(?:exercises?|ex)\.?\s*\d+(?:\.\d+)*\b", re.IGNORECASE),
      "the exercises"),
     (re.compile(r"\bexamples?\.?\s*\d+(?:\.\d+)*\b", re.IGNORECASE),
      "a worked example"),
-    (re.compile(r"\b(?:on\s+)?page\s+(?:no\.?\s*)?\d+\b", re.IGNORECASE),
+    (re.compile(r"\b(?:on\s+)?pages?\.?\s*(?:no\.?\s*)?\d+\b", re.IGNORECASE),
      "in the chapter"),
-    (re.compile(r"\bp(?:age)?\.\s*\d+\b", re.IGNORECASE),
+    # Bare "p14" / "p.14" / "p 14" page pointers (not "power"/"amp" — needs digit).
+    (re.compile(r"\bp\.?\s*\d+\b", re.IGNORECASE),
      "in the chapter"),
 ]
 # Figure/table references are only neutralized when the row ships NO image —
@@ -433,6 +450,46 @@ def neutralize_source_artifacts(text: str) -> str:
         text = pat.sub(repl, text)
     if not _IMAGE_URL_RE.search(text):
         for pat, repl in _FIG_TABLE_NEUTRALIZATIONS:
+            text = pat.sub(repl, text)
+    return _tidy(text)
+
+
+# Last-resort patterns that mirror concept_validator._SOURCE_ARTIFACT_RE so a
+# residual match can never survive into final validation. Prefer the named
+# rewrites above; these only fire when a validator-shaped token remains.
+_VALIDATOR_ALIGNED_SCRUBS = [
+    (re.compile(r"\bMMDs?\b", re.IGNORECASE), "chapter"),
+    (re.compile(
+        r"\bExamples?\.?\s*\d+(?:\.\d+)*\b", re.IGNORECASE), "a worked example"),
+    (re.compile(
+        r"\b(?:Exercises?|Ex)\.?\s*\d+(?:\.\d+)*\b", re.IGNORECASE),
+     "the exercises"),
+    (re.compile(
+        r"\b(?:on\s+)?pages?\.?\s*(?:no\.?\s*)?\d+\b", re.IGNORECASE),
+     "in the chapter"),
+    (re.compile(r"\bp\.?\s*\d+\b", re.IGNORECASE), "in the chapter"),
+]
+_VALIDATOR_ALIGNED_FIG_SCRUBS = [
+    (re.compile(
+        r"\bFig(?:ure)?s?\.?\s*\d+(?:\.\d+)*\b", re.IGNORECASE), "the figure"),
+    (re.compile(
+        r"\bTables?\.?\s*\d+(?:\.\d+)*\b", re.IGNORECASE), "the given table"),
+]
+
+
+def scrub_validator_artifacts(text: str) -> str:
+    """Force-clear any token the concept validator treats as source_artifact.
+
+    Used as a final deposit guarantee after named neutralization. Figure/table
+    refs are kept when a Mathpix/CDN image URL is already embedded.
+    """
+    if not text:
+        return text
+    text = replace_mmd_references(text)
+    for pat, repl in _VALIDATOR_ALIGNED_SCRUBS:
+        text = pat.sub(repl, text)
+    if not _IMAGE_URL_RE.search(text):
+        for pat, repl in _VALIDATOR_ALIGNED_FIG_SCRUBS:
             text = pat.sub(repl, text)
     return _tidy(text)
 
@@ -497,8 +554,9 @@ def _neutralize_name_artifacts(name: str) -> str:
         return name
     out = strip_dangling_references(name)
     out = re.sub(
-        r"\b(?:on\s+)?(?:page\s+(?:no\.?\s*)?|p(?:age)?\.\s*)\d+\b", " ",
+        r"\b(?:on\s+)?pages?\.?\s*(?:no\.?\s*)?\d+\b", " ",
         out, flags=re.IGNORECASE)
+    out = re.sub(r"\bp\.?\s*\d+\b", " ", out, flags=re.IGNORECASE)
     out = re.sub(
         r"\b(?:exercises?|ex)\.?\s*\d+(?:\.\d+)*\b", " ", out, flags=re.IGNORECASE)
     out = re.sub(
@@ -535,6 +593,12 @@ def clean_concept_record(rec: dict, *, neutralize_artifacts: bool = True) -> dic
     if rec.get("concept_details"):
         rec["concept_details"] = _clean_details(
             rec["concept_details"], neutralize=neutralize_artifacts)
+    if neutralize_artifacts:
+        # Absolute last resort: scrub any validator-shaped token that named
+        # neutralization missed (OCR forms, MMD leftovers, page14, etc.).
+        for field in ("topic", "parent_concept", "concept_title", "concept_details"):
+            if rec.get(field):
+                rec[field] = scrub_validator_artifacts(rec[field])
     return rec
 
 

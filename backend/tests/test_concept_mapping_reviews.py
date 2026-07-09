@@ -893,6 +893,56 @@ def test_salvage_short_case_examples_expands_from_inventory():
         )
 
 
+def test_final_scrub_clears_page14_and_reintroduced_artifacts():
+    """Electricity deposit must not die on OCR page14 / post-mastery Example N."""
+    rows = [
+        {
+            "topic": "Electric Current And Circuit",
+            "parent_concept": "Resistance",
+            "concept_title": "What Determines Resistance in a Conductor",
+            "concept_details": (
+                "Description: Resistance depends on three factors as shown in "
+                "Fig.12.1 and Table 12.2 on page14. "
+                "Achieving Mastery: Predicting how R changes.\n"
+                " // Types: Type 01: Geometry Case 01: Length "
+                "Example: Find R when the wire in fig.12.5 is doubled. "
+                "// Misconceptions: Students confuse R and resistivity."
+            ),
+            "keywords": "",
+        },
+        {
+            "topic": "Electric Current And Circuit",
+            "parent_concept": "Resistivity",
+            "concept_title": "Resistivity and Material Comparison",
+            "concept_details": (
+                "Description: Resistivity is intrinsic; see Example11 and p14. "
+                "Achieving Mastery: Comparing materials by resistivity.\n"
+                " // Types: Type 01: Material comparison Case 01: Table "
+                "Example: Compare the resistivities listed in Table12.2. "
+                "// Misconceptions: Students confuse resistance with resistivity."
+            ),
+            "keywords": "",
+        },
+    ]
+    out = g._neutralize_unrepaired_rows([dict(r) for r in rows])
+    # Simulate a later mastery GPT pass reintroducing an artifact.
+    out[0]["concept_details"] = out[0]["concept_details"].replace(
+        "Predicting how R changes.",
+        "Predicting how R changes as in Example 12 on page 20.",
+    )
+    out = g._neutralize_unrepaired_rows(out)
+    report = concept_validator.validate_concept_rows(
+        out, allow_types=True, require_culmination=False)
+    assert not any(
+        e["code"] == "source_artifact" and e["severity"] == "error"
+        for e in report["errors"]
+    )
+    combined = " ".join(r["concept_details"] for r in out)
+    assert "page14" not in combined.lower()
+    assert "example 12" not in combined.lower()
+    assert "fig.12" not in combined.lower()
+
+
 def test_salvage_replaces_artifact_examples_from_inventory():
     records = [{
         "topic": "The Age of Revolutions",

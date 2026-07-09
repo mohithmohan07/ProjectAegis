@@ -109,6 +109,15 @@ def test_compact_fig_refs_without_space_are_stripped_and_neutralized():
     )
 
 
+def test_page14_and_p14_are_neutralized():
+    from app.services.concept_cleanup import neutralize_source_artifacts, scrub_validator_artifacts
+
+    assert "page14" not in neutralize_source_artifacts("See page14.").lower()
+    assert "p14" not in neutralize_source_artifacts("See p14 for the table.").lower()
+    assert "in the chapter" in neutralize_source_artifacts("See page14.")
+    assert "Example11" not in scrub_validator_artifacts("As in Example11.").lower()
+
+
 def test_worded_example_without_number_is_not_stripped():
     text = "Description: a worked example illustrates the parallelogram property."
     assert strip_dangling_references(text) == text

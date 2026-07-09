@@ -22,11 +22,13 @@ FORBIDDEN_TOPIC_NAMES = {
 PLACEHOLDERS = {"n/a", "na", "none", "not applicable", "placeholder", "tbd", "lorem ipsum"}
 _SECTION_NUMBER_RE = re.compile(r"\b(?:exercise|ex)?\s*\d+(?:\.\d+)+\b", re.IGNORECASE)
 # Optional whitespace after Fig/Example/Ex covers OCR forms like "fig.11.1".
+# page14 / p14 (no space) are included — keep in sync with concept_cleanup
+# neutralize/scrub patterns.
 _SOURCE_ARTIFACT_RE = re.compile(
-    r"\b(?:MMD|Examples?\.?\s*\d+(?:\.\d+)*|Fig(?:ure)?s?\.?\s*\d+(?:\.\d+)*|"
+    r"\b(?:MMDs?|Examples?\.?\s*\d+(?:\.\d+)*|Fig(?:ure)?s?\.?\s*\d+(?:\.\d+)*|"
     r"Tables?\.?\s*\d+(?:\.\d+)*|"
     r"Exercises?\.?\s*\d+(?:\.\d+)*|Ex\.?\s*\d+(?:\.\d+)*|"
-    r"page\s+(?:no\.?\s*)?\d+|p(?:age)?\.?\s*\d+)\b",
+    r"pages?\.?\s*(?:no\.?\s*)?\d+|p\.?\s*\d+)\b",
     re.IGNORECASE,
 )
 _TYPE_RE = re.compile(r"\bType\s+\d{2}:", re.IGNORECASE)
@@ -59,9 +61,9 @@ _IMAGE_URL_RE = re.compile(r"!\[[^\]]*\]\(https?://[^)]+\)|https?://\S+", re.IGN
 # ("Refer fig. 11.1" next to its image URL); only textual pointers to unshipped
 # source artifacts (Example 5, Exercise 1.2, page 14, MMD) stay forbidden.
 _SOURCE_ARTIFACT_NO_FIG_RE = re.compile(
-    r"\b(?:MMD|Examples?\.?\s*\d+(?:\.\d+)*|"
+    r"\b(?:MMDs?|Examples?\.?\s*\d+(?:\.\d+)*|"
     r"Exercises?\.?\s*\d+(?:\.\d+)*|Ex\.?\s*\d+(?:\.\d+)*|"
-    r"page\s+(?:no\.?\s*)?\d+|p(?:age)?\.?\s*\d+)\b",
+    r"pages?\.?\s*(?:no\.?\s*)?\d+|p\.?\s*\d+)\b",
     re.IGNORECASE,
 )
 

@@ -3199,11 +3199,29 @@ def _repair_records_via_api(
     return records
 
 
+def _artifact_match_snippet(rec: dict) -> str:
+    """Return the first source_artifact substring in a row (for diagnostics)."""
+    row_text = " ".join([
+        str(rec.get("topic") or ""),
+        str(rec.get("parent_concept") or ""),
+        str(rec.get("concept_title") or ""),
+        str(rec.get("concept_details") or ""),
+    ])
+    details = str(rec.get("concept_details") or "")
+    artifact_re = (
+        cv._SOURCE_ARTIFACT_NO_FIG_RE if cv._IMAGE_URL_RE.search(details)
+        else cv._SOURCE_ARTIFACT_RE
+    )
+    m = artifact_re.search(row_text)
+    return m.group(0) if m else ""
+
+
 def _neutralize_unrepaired_rows(records: list[dict]) -> list[dict]:
     """Destructively neutralize source artifacts ONLY where GPT repair failed.
 
     Rows that validate cleanly keep their GPT-authored wording verbatim; the
     deterministic rewriter is a per-row last resort, never a blanket pass.
+    Re-runs once if a cleaned row still matches (regex drift / OCR forms).
     """
     report = cv.validate_concept_rows(
         records, allow_types=True, require_culmination=True, allow_culmination=True)
@@ -3217,11 +3235,39 @@ def _neutralize_unrepaired_rows(records: list[dict]) -> list[dict]:
         out.append(concept_cleanup.clean_concept_record(
             dict(rec), neutralize_artifacts=i in failing))
     if failing:
+        snippets = []
+        for idx in sorted(failing)[:5]:
+            if 0 <= idx < len(records):
+                snip = _artifact_match_snippet(records[idx])
+                if snip:
+                    snippets.append(snip)
         progress.log(
             f"Neutralized source artifacts on {len(failing)} unrepaired row(s); "
-            f"{len(records) - len(failing)} row(s) kept verbatim.",
+            f"{len(records) - len(failing)} row(s) kept verbatim"
+            + (f" (matched: {', '.join(repr(s) for s in snippets)})" if snippets else "")
+            + ".",
             level="warning",
         )
+        # Second pass: any row that STILL fails after neutralize (regex gap)
+        # gets cleaned again so final validation is not blocked.
+        again = cv.validate_concept_rows(
+            out, allow_types=True, require_culmination=True, allow_culmination=True)
+        still = {
+            e["row_index"] for e in again["errors"]
+            if e.get("severity") == "error" and e.get("row_index", -1) >= 0
+            and e.get("code") == "source_artifact"
+        }
+        if still:
+            for idx in still:
+                if 0 <= idx < len(out):
+                    snip = _artifact_match_snippet(out[idx])
+                    out[idx] = concept_cleanup.clean_concept_record(
+                        dict(out[idx]), neutralize_artifacts=True)
+                    progress.log(
+                        f"  re-scrubbed row {idx} after neutralize residual"
+                        + (f" ({snip!r})" if snip else "") + ".",
+                        level="warning",
+                    )
     return out
 
 
@@ -4576,6 +4622,10 @@ def concepts_from_mmd(
         out = _ensure_mastery_lines_via_api(out, meta=meta)
         out = _ensure_misconceptions_via_api(out, meta=meta)
         out = _enforce_culminations(out)
+        # Mastery/misconception GPT passes can reintroduce Example/Fig/page
+        # pointers — scrub source_artifact one last time immediately before
+        # the hard final gate so deposit is never blocked by residual refs.
+        out = _neutralize_unrepaired_rows(out)
         _validate_final_or_raise(out, stage="final")
         missing = sum(
             1 for r in out
