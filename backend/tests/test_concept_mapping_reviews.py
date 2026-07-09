@@ -809,3 +809,115 @@ def test_expected_min_skeleton_rows_is_denser_for_history_scale():
     # ~10k chars should expect more than the old content//3000 floor.
     text = "x" * 10_000
     assert g._expected_min_skeleton_rows(text) >= 4
+
+
+def test_history_descriptive_examples_are_not_short_case_errors():
+    rows = [{
+        "topic": "The Making of Germany and Italy",
+        "parent_concept": "German Unification",
+        "concept_title": "German Unification Under Prussian Leadership",
+        "concept_details": (
+            "Description: Prussia led German unification. // "
+            "Types: Type 01: Cause-effect Case 01: Leadership "
+            "Example: Explain German unification under Prussia. // "
+            "Misconceptions: Students may credit liberalism alone."
+        ),
+        "keywords": "",
+    }]
+    report = concept_validator.validate_concept_rows(rows, allow_types=True)
+    assert not any(e["code"] == "short_case_example" for e in report["errors"])
+
+
+def test_salvage_short_case_examples_expands_from_inventory():
+    records = [
+        {
+            "topic": "The Making of Germany and Italy",
+            "parent_concept": "German Unification",
+            "concept_title": "German Unification Under Prussian Leadership",
+            "concept_details": (
+                "Description: Prussia led German unification. "
+                "Achieving Mastery: Explaining Bismarck's role.\n"
+                " // Types: Type 01: Cause-effect "
+                "Case 01: Prussian leadership Example: q "
+                "Case 02: Wars "
+                "Example: Explain how the three wars of unification "
+                "strengthened Prussia. "
+                "// Misconceptions: Students may credit liberalism alone."
+            ),
+            "keywords": "",
+        },
+        {
+            "topic": "Visualising the Nation",
+            "parent_concept": "Allegory",
+            "concept_title": "National Allegory and the Visual Language of Nationalism",
+            "concept_details": (
+                "Description: Nations were personified as female figures. "
+                "Achieving Mastery: Reading nationalist allegory.\n"
+                " // Types: Type 01: Source interpretation "
+                "Case 01: Germania symbols Example: Describe the print. "
+                "// Misconceptions: Students treat allegory as literal history."
+            ),
+            "keywords": "",
+        },
+    ]
+    inventory = {"items": [
+        {
+            "qid": "QINV-0001",
+            "raw_task": (
+                "Explain how Prussian leadership under Bismarck used wars and "
+                "diplomacy to unify Germany."
+            ),
+        },
+        {
+            "qid": "QINV-0002",
+            "raw_task": (
+                "Describe the painting of Germania and identify the symbols "
+                "used to represent the German nation."
+            ),
+            "image_urls": ["https://cdn.mathpix.com/cropped/germania.jpg"],
+        },
+    ]}
+    out = g._salvage_short_case_examples(records, inventory=inventory)
+    out = g._neutralize_unrepaired_rows(out)
+    assert "Prussian leadership under Bismarck" in out[0]["concept_details"]
+    assert "Example: q" not in out[0]["concept_details"]
+    assert "Germania" in out[1]["concept_details"]
+    assert "cdn.mathpix.com" in out[1]["concept_details"]
+    for row in out:
+        report = concept_validator.validate_concept_rows(
+            [row], allow_types=True, require_culmination=False)
+        assert not any(
+            e["code"] in {"short_case_example", "source_artifact"}
+            and e["severity"] == "error"
+            for e in report["errors"]
+        )
+
+
+def test_salvage_replaces_artifact_examples_from_inventory():
+    records = [{
+        "topic": "The Age of Revolutions",
+        "parent_concept": "Liberal Nationalism",
+        "concept_title": "From Liberal Nationalism to Imperial Power Politics",
+        "concept_details": (
+            "Description: Liberal nationalism shifted toward imperial politics. "
+            "Achieving Mastery: Tracing the shift.\n"
+            " // Types: Type 01: Chronology Case 01: Balkan tension "
+            "Example: See Example 3 on page 14 for the Balkan conflict. "
+            "// Misconceptions: Students may treat 1848 as the end."
+        ),
+        "keywords": "",
+    }]
+    inventory = {"items": [{
+        "qid": "QINV-0003",
+        "raw_task": (
+            "Trace how the Balkans became a source of nationalist tension "
+            "in Europe after 1871."
+        ),
+    }]}
+    out = g._salvage_short_case_examples(records, inventory=inventory)
+    out = g._neutralize_unrepaired_rows(out)
+    assert "Balkans became a source" in out[0]["concept_details"]
+    assert "Example 3" not in out[0]["concept_details"]
+    report = concept_validator.validate_concept_rows(
+        out, allow_types=True, require_culmination=False)
+    assert not any(e["severity"] == "error" for e in report["errors"])

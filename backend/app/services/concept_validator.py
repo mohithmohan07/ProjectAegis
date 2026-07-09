@@ -40,10 +40,18 @@ _CASE_SEGMENT_RE = re.compile(
 )
 _CASE_TASK_VERB_RE = re.compile(
     r"\b(?:solve|simplify|find|write|identify|expand|compare|calculate|"
-    r"rationalise|express|evaluate|convert|draw|label|explain|prove)\b",
+    r"rationalise|express|evaluate|convert|draw|label|explain|prove|"
+    r"describe|discuss|analyse|analyze|examine|interpret|outline|assess|"
+    r"state|list|mention|account|justify|trace|distinguish|define|"
+    r"what|why|how|who|when|where)\b",
     re.IGNORECASE,
 )
-_CASE_SPECIFIC_DETAIL_RE = re.compile(r"(?:\d|[+\-*/÷×=^]|[A-Za-z]\s*\^\s*\d)")
+# Concrete detail: math tokens, proper-name phrases, or quoted source wording.
+_CASE_SPECIFIC_DETAIL_RE = re.compile(
+    r"(?:\d|[+\-*/÷×=^]|[A-Za-z]\s*\^\s*\d|"
+    r"[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+|"
+    r"['\"][^'\"]{3,}['\"])"
+)
 _EXAMPLE_SPLIT_RE = re.compile(r"\bExamples?\s*:\s*", re.IGNORECASE)
 _DESCRIPTION_LABEL_RE = re.compile(r"\bDescription\s*:", re.IGNORECASE)
 _IMAGE_URL_RE = re.compile(r"!\[[^\]]*\]\(https?://[^)]+\)|https?://\S+", re.IGNORECASE)
@@ -117,14 +125,18 @@ def _misconception_text(details: str) -> str:
 
 def _example_too_short(example_text: str) -> bool:
     words = re.findall(r"\w+", example_text or "")
+    text = example_text or ""
     if len(words) >= 5:
         return False
-    # Some textbook prompts are legitimately concise math tasks; accept them
-    # when they still carry an action and concrete expression/value detail.
+    # Descriptive/history prompts are often 4+ words with a clear ask and no
+    # digits (e.g. "Explain German unification under Prussia").
+    if len(words) >= 4 and _CASE_TASK_VERB_RE.search(text):
+        return False
+    # Concise math tasks: action + concrete expression/value detail.
     return not (
         len(words) >= 3
-        and _CASE_TASK_VERB_RE.search(example_text or "")
-        and _CASE_SPECIFIC_DETAIL_RE.search(example_text or "")
+        and _CASE_TASK_VERB_RE.search(text)
+        and _CASE_SPECIFIC_DETAIL_RE.search(text)
     )
 
 
