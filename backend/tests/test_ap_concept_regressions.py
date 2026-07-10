@@ -522,6 +522,171 @@ def test_canonicalization_cannot_drop_an_ap_derivation_row(monkeypatch):
     )
 
 
+def test_pipeline_restores_skeleton_method_rows_before_description_and_cleanup(
+    monkeypatch,
+):
+    anchors = [
+        {
+            "anchor_id": "METHOD-1111111111",
+            "topic_hint": "Arithmetic Progressions",
+            "required_formulas": [],
+            "source_evidence": "common difference derivation",
+            "evidence_terms": ["common", "difference", "derivation"],
+        },
+        {
+            "anchor_id": "METHOD-2222222222",
+            "topic_hint": "nth Term of an AP",
+            "required_formulas": [],
+            "source_evidence": "general term derivation",
+            "evidence_terms": ["general", "term", "derivation"],
+        },
+        {
+            "anchor_id": "METHOD-3333333333",
+            "topic_hint": "Sum of First n Terms of an AP",
+            "required_formulas": [],
+            "source_evidence": "finite sum derivation",
+            "evidence_terms": ["finite", "sum", "derivation"],
+        },
+    ]
+    skeleton = [
+        _row(
+            anchor["topic_hint"],
+            title,
+            evidence=f"{anchor['anchor_id']} | {anchor['source_evidence']}",
+        )
+        for anchor, title in zip(
+            anchors,
+            [
+                "Deriving the Common Difference",
+                "Deriving the General Term",
+                "Deriving the Finite Sum",
+            ],
+        )
+    ]
+    skeleton.append(_row("Introduction", "Patterns with Constant Change"))
+    dropped_titles = {
+        "Deriving the General Term",
+        "Deriving the Finite Sum",
+    }
+    description_input_ids: set[str] = set()
+
+    monkeypatch.setattr(
+        g, "_method_coverage_anchors", lambda sections: anchors)
+    monkeypatch.setattr(
+        g, "_extract_skeleton_via_api",
+        lambda chunks, **kwargs: [dict(record) for record in skeleton])
+
+    def drop_two_rows_during_canonicalization(records, **kwargs):
+        assert {
+            anchor_id
+            for record in records
+            for anchor_id in g._method_anchor_ids(record)
+        } == {anchor["anchor_id"] for anchor in anchors}
+        return [
+            dict(record) for record in records
+            if record["concept_title"] not in dropped_titles
+        ]
+
+    monkeypatch.setattr(
+        g, "_consolidate_concepts_via_api",
+        drop_two_rows_during_canonicalization)
+    monkeypatch.setattr(
+        g, "_restructure_topics_via_api",
+        lambda records, **kwargs: records)
+
+    def capture_and_refine_descriptions(records, **kwargs):
+        nonlocal description_input_ids
+        description_input_ids = {
+            anchor_id
+            for record in records
+            for anchor_id in g._method_anchor_ids(record)
+        }
+        assert description_input_ids == {
+            anchor["anchor_id"] for anchor in anchors
+        }
+        refined = []
+        for record in records:
+            record = dict(record)
+            record["concept_details"] = (
+                f"Description: Refined before cleanup: "
+                f"{record['concept_title']}.\n"
+                f"Achieving Mastery: Explain {record['concept_title']} "
+                "independently. // "
+                "Misconceptions: Omitting a required derivation step."
+            )
+            refined.append(record)
+        return refined
+
+    monkeypatch.setattr(
+        g, "_refine_descriptions_via_api",
+        capture_and_refine_descriptions)
+    monkeypatch.setattr(
+        g, "_ensure_mastery_lines_via_api",
+        lambda records, **kwargs: records)
+    monkeypatch.setattr(
+        g, "_extract_question_task_inventory_via_api",
+        lambda **kwargs: g._empty_inventory())
+    monkeypatch.setattr(
+        g, "_mine_types_from_inventory_via_api",
+        lambda **kwargs: {"types": []})
+    monkeypatch.setattr(
+        g, "_build_culminations_via_api",
+        lambda records, **kwargs: g._ensure_culmination_rows(records))
+    monkeypatch.setattr(
+        g, "_assign_types_via_api",
+        lambda records, **kwargs: records)
+    monkeypatch.setattr(
+        g, "_merge_similar_concepts_via_api",
+        lambda records, **kwargs: records)
+    monkeypatch.setattr(
+        g, "_repair_records_via_api",
+        lambda records, **kwargs: records)
+    monkeypatch.setattr(
+        g, "_ensure_misconceptions_via_api",
+        lambda records, **kwargs: records)
+
+    original_refine = g.cr.refine_chapter
+
+    def lose_restored_rows_during_final_cleanup(records):
+        refined = original_refine(records)
+        return [
+            record for record in refined
+            if record["concept_title"] not in dropped_titles
+        ]
+
+    monkeypatch.setattr(
+        g.cr, "refine_chapter", lose_restored_rows_during_final_cleanup)
+
+    out = g.concepts_from_mmd(
+        _ap_mmd(),
+        subject="Mathematics",
+        chapter_title="Arithmetic Progressions",
+        live=True,
+    )
+
+    expected_ids = {anchor["anchor_id"] for anchor in anchors}
+    assert description_input_ids == expected_ids
+    assert {
+        anchor_id
+        for record in out
+        for anchor_id in g._method_anchor_ids(record)
+    } == expected_ids
+    assert all(
+        "Refined before cleanup:" in record["concept_details"]
+        for record in out
+        if g._method_anchor_ids(record)
+    )
+    title_keys = [
+        g.bi.normalize_question_text(record["concept_title"])
+        for record in out
+    ]
+    assert len(title_keys) == len(set(title_keys))
+    for topic in {record["topic"] for record in out}:
+        topic_rows = [record for record in out if record["topic"] == topic]
+        assert g.cr.is_culmination(topic_rows[-1]["concept_title"])
+    assert g._missing_method_anchors(out, anchors) == []
+
+
 def test_final_pipeline_restores_post_description_method_snapshot(monkeypatch):
     anchors = [
         {

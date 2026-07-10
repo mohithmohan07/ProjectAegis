@@ -6840,6 +6840,11 @@ def concepts_from_mmd(
         out = _extract_skeleton_via_api(chunks, meta=meta)
         if not out:
             raise RuntimeError("live concept extraction returned no rows")
+        # The full-chapter anchors provide the authoritative METHOD IDs and
+        # source topics.  Keep immutable skeleton rows before any chapter-wide
+        # canonicalization or topic pass can merge them away.
+        skeleton_method_row_snapshot = _snapshot_method_anchor_rows(
+            out, method_anchors)
         progress.step("Concept extraction — canonicalizing skeleton", value=0.27)
         # Structural OCR headings ("Solution", "Summary", "EXERCISE 6.1") must
         # never become topics: merge their rows into the preceding real topic
@@ -6869,11 +6874,19 @@ def concepts_from_mmd(
         out = _snap_topics_to_headings(
             out, headings, chapter_title=chapter_title,
             allow_chapter_title_topic=allow_chapter_title_topic)
+        out = _restore_method_anchor_rows(
+            out, skeleton_method_row_snapshot)
         out = _enforce_method_anchor_topics(out, method_anchors)
         progress.step("Concept extraction — refining descriptions", value=0.42)
         out = _refine_descriptions_via_api(
             out, subject=subject, mmd_text=mmd_text, meta=meta, sections=sections)
         out = _ensure_mastery_lines_via_api(out, meta=meta)
+        # Description refinement receives every restored skeleton row.  Restore
+        # once more before taking the richer authoritative snapshot in case a
+        # description repair omitted a tagged row.
+        out = _restore_method_anchor_rows(
+            out, skeleton_method_row_snapshot)
+        out = _enforce_method_anchor_topics(out, method_anchors)
         # From this point onward, every whole-map/API cleanup is disposable:
         # these immutable, source-topic-keyed rows are the authoritative method
         # fallback immediately before the final gate.
@@ -6888,8 +6901,8 @@ def concepts_from_mmd(
         ]
         if unsnapshotted_anchors:
             raise RuntimeError(
-                "post-description concept map lacks tagged derivation/method "
-                "rows for: "
+                "post-description method-row restoration could not snapshot "
+                "mandatory full-chapter anchors: "
                 + ", ".join(
                     anchor["anchor_id"] for anchor in unsnapshotted_anchors)
             )
