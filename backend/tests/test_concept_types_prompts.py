@@ -1,7 +1,17 @@
 """Concept-generation prompts must require rich Types classification."""
+import json
+
 import pytest
 
 from app.services import generation as g
+
+
+def _type_embedding_request(user: str) -> tuple[list[dict], list[dict]]:
+    concepts_text, types_text = user.split(
+        "\n\nMINED TYPES TO ASSIGN (every type_id MUST be assigned):\n", 1)
+    concepts = json.loads(concepts_text.rsplit("\n", 1)[-1])["concepts"]
+    types = json.loads(types_text)["types"]
+    return concepts, types
 
 
 def test_concepts_system_requires_numeric_types_guidance():
@@ -230,6 +240,136 @@ def test_assign_mined_types_retries_until_all_covered(monkeypatch):
     assert g._has_meaningful_types(out[1]["concept_details"])
     assert "Pattern One" in out[0]["concept_details"]
     assert "Pattern Two" in out[1]["concept_details"]
+
+
+def test_scoped_type_embedding_groups_topics_and_excludes_other_concepts(monkeypatch):
+    calls = []
+
+    def fake_openai(system, user, **kw):
+        concepts, types = _type_embedding_request(user)
+        calls.append((concepts, types))
+        assert len({row["topic"] for row in concepts}) == 1
+        allowed = {row["concept_id"] for row in concepts}
+        assert all(set(item["allowed_concept_ids"]) == allowed for item in types)
+        assert any(row["is_culmination"] for row in concepts)
+        target = next(row for row in concepts if not row["is_culmination"])
+        return {"assignments": [{
+            "concept_id": target["concept_id"],
+            "type_ids": [item["type_id"] for item in types],
+        }]}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    records = [
+        {"topic": "Topic A", "parent_concept": "P", "concept_title": "Alpha",
+         "concept_details": "Description: alpha", "keywords": ""},
+        {"topic": "Topic A", "parent_concept": "Culmination",
+         "concept_title": "Culmination - Alpha",
+         "concept_details": "Description: recap alpha", "keywords": ""},
+        {"topic": "Topic B", "parent_concept": "P", "concept_title": "Beta",
+         "concept_details": "Description: beta", "keywords": ""},
+        {"topic": "Topic B", "parent_concept": "Culmination",
+         "concept_title": "Culmination - Beta",
+         "concept_details": "Description: recap beta", "keywords": ""},
+    ]
+    mined = {"types": [
+        {"type_id": "TYPE-0001", "type_title": "Alpha Pattern",
+         "topic_match_hint": "Topic A",
+         "case_prompts": [{"case_prompt": "Apply alpha."}]},
+        {"type_id": "TYPE-0002", "type_title": "Beta Pattern",
+         "topic_match_hint": "Topic B",
+         "case_prompts": [{"case_prompt": "Apply beta."}]},
+    ]}
+
+    out = g._assign_mined_types_via_api(
+        records, meta=g._metadata(subject="Math"), mined_types=mined)
+
+    assert len(calls) == 2
+    payload_by_topic = {concepts[0]["topic"]: concepts for concepts, _ in calls}
+    assert {row["concept_id"] for row in payload_by_topic["Topic A"]} == {
+        "CONCEPT-0001", "CONCEPT-0002"}
+    assert {row["concept_id"] for row in payload_by_topic["Topic B"]} == {
+        "CONCEPT-0003", "CONCEPT-0004"}
+    assert "Alpha Pattern" in out[0]["concept_details"]
+    assert "Beta Pattern" in out[2]["concept_details"]
+
+
+def test_scoped_type_embedding_retries_with_same_candidates_and_lands_ids_once(
+    monkeypatch,
+):
+    calls = []
+
+    def fake_openai(system, user, **kw):
+        concepts, types = _type_embedding_request(user)
+        calls.append((concepts, types))
+        if len(calls) == 1:
+            return {"assignments": [
+                {"concept_id": "CONCEPT-0001",
+                 "type_ids": ["TYPE-0001", "TYPE-0001"]},
+                {"concept_id": "CONCEPT-0002", "type_ids": ["TYPE-0001"]},
+            ]}
+        return {"assignments": [{
+            "concept_id": "CONCEPT-0002", "type_ids": ["TYPE-0002"],
+        }]}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    records = [
+        {"topic": "Topic A", "parent_concept": "P", "concept_title": "Alpha",
+         "concept_details": "Description: alpha", "keywords": ""},
+        {"topic": "Topic A", "parent_concept": "P", "concept_title": "Alpha Two",
+         "concept_details": "Description: alpha two", "keywords": ""},
+        {"topic": "Topic B", "parent_concept": "P", "concept_title": "Beta",
+         "concept_details": "Description: beta", "keywords": ""},
+    ]
+    mined = {"types": [
+        {"type_id": "TYPE-0001", "type_title": "First Alpha Pattern",
+         "topic_match_hint": "Topic A",
+         "case_prompts": [{"case_prompt": "Apply first alpha."}]},
+        {"type_id": "TYPE-0002", "type_title": "Second Alpha Pattern",
+         "topic_match_hint": "Topic A",
+         "case_prompts": [{"case_prompt": "Apply second alpha."}]},
+    ]}
+
+    out = g._assign_mined_types_via_api(
+        records, meta=g._metadata(subject="Math"), mined_types=mined,
+        max_attempts=2)
+
+    assert len(calls) == 2
+    assert [
+        {row["concept_id"] for row in concepts} for concepts, _ in calls
+    ] == [{"CONCEPT-0001", "CONCEPT-0002"}] * 2
+    assert [[item["type_id"] for item in types] for _, types in calls] == [
+        ["TYPE-0001", "TYPE-0002"], ["TYPE-0002"]]
+    details = " ".join(row["concept_details"] for row in out)
+    assert details.count("First Alpha Pattern") == 1
+    assert details.count("Second Alpha Pattern") == 1
+
+
+def test_scoped_type_embedding_empty_candidates_fail_before_api(monkeypatch):
+    calls = {"count": 0}
+
+    def fake_openai(system, user, **kw):
+        calls["count"] += 1
+        return {"assignments": []}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    records = [
+        {"topic": "Topic A", "parent_concept": "P", "concept_title": "Alpha",
+         "concept_details": "Description: alpha", "keywords": ""},
+    ]
+    mined = {"types": [{
+        "type_id": "TYPE-0008", "type_title": "Missing Topic Pattern",
+        "topic_match_hint": "Unmatched $ n $ Topic",
+        "case_prompts": [{"case_prompt": "Apply the missing topic."}],
+    }]}
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"TYPE-0008.*Unmatched \$ n \$ Topic.*normaliz",
+    ):
+        g._assign_mined_types_via_api(
+            records, meta=g._metadata(subject="Math"), mined_types=mined)
+
+    assert calls["count"] == 0
 
 
 def test_mined_type_body_includes_definition():

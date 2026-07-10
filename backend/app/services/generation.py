@@ -3677,20 +3677,17 @@ def _ensure_misconceptions_via_api(
 def _assign_mined_types_via_api(
     records: list[dict], *, meta: dict, mined_types: dict, max_attempts: int = 4,
 ) -> list[dict]:
-    """Embed every mined Type into a concept using a pure-API ID assignment.
+    """Embed every mined Type within its source topic using exact API IDs.
 
-    The model receives concepts (each with a stable ``concept_id``) and mined
-    Types (each with a stable ``type_id``) and returns a ``concept_id ->
-    type_ids`` mapping. Placement is joined by exact IDs only — no regex, token,
-    or word matching. Any type_ids the model omits are re-sent (up to
-    ``max_attempts``) so all refined Types end up embedded as Types.
+    Source-topic-scoped Types are grouped by canonical topic and allowed
+    concept IDs. Each group sees only those concepts, including that topic's
+    culmination, and omitted IDs are retried against the same candidate list.
+    Placement is joined by exact IDs only — no regex, token, or word matching.
     """
     import json as _json
 
     types = (mined_types or {}).get("types") or []
     if not types:
-        return records
-    if not records:
         return records
 
     # Culmination rows are included so mixed/synthesis Types mined from the
@@ -3717,80 +3714,147 @@ def _assign_mined_types_via_api(
         tid = (t.get("type_id") or f"TYPE-{i:04d}").strip() or f"TYPE-{i:04d}"
         t = dict(t)
         t["type_id"] = tid
+        if tid in types_by_id:
+            raise RuntimeError(
+                "type embedding failed: duplicate mined Type ID "
+                f"{tid} prevents exact-once assignment")
         types_by_id[tid] = t
 
-    concept_ids_by_topic: dict[str, set[str]] = {}
+    concept_ids_by_topic: dict[str, list[str]] = {}
     for row in concept_payload:
         topic_key = _topic_comparison_key(row.get("topic", ""))
-        concept_ids_by_topic.setdefault(topic_key, set()).add(row["concept_id"])
+        concept_ids_by_topic.setdefault(topic_key, []).append(row["concept_id"])
+
+    all_concept_ids = tuple(cid_map)
+    topic_key_by_tid: dict[str, str] = {}
     allowed_cids_by_tid: dict[str, set[str] | None] = {}
+    candidate_cids_by_tid: dict[str, tuple[str, ...]] = {}
+    missing_scopes: list[tuple[str, str, str]] = []
     for tid, mtype in types_by_id.items():
-        topic_key = _topic_comparison_key(mtype.get("topic_match_hint", ""))
-        allowed_cids_by_tid[tid] = (
-            set(concept_ids_by_topic.get(topic_key, set()))
-            if topic_key else None
+        source_topic = (mtype.get("topic_match_hint") or "").strip()
+        topic_key = _topic_comparison_key(source_topic)
+        topic_key_by_tid[tid] = topic_key
+        if topic_key:
+            allowed = set(concept_ids_by_topic.get(topic_key, []))
+            allowed_cids_by_tid[tid] = allowed
+            candidate_cids_by_tid[tid] = tuple(
+                cid for cid in all_concept_ids if cid in allowed)
+            if not allowed:
+                missing_scopes.append((tid, source_topic, topic_key))
+        else:
+            allowed_cids_by_tid[tid] = None
+            candidate_cids_by_tid[tid] = all_concept_ids
+
+    if missing_scopes:
+        failures = "; ".join(
+            f"{tid} source topic {topic!r} normalizes to {topic_key!r}"
+            for tid, topic, topic_key in missing_scopes
+        )
+        available_topics = sorted({
+            (
+                (row.get("topic") or "").strip(),
+                _topic_comparison_key(row.get("topic", "")),
+            )
+            for row in concept_payload
+            if _topic_comparison_key(row.get("topic", ""))
+        })
+        available = ", ".join(
+            f"{topic!r} -> {topic_key!r}"
+            for topic, topic_key in available_topics
+        ) or "(none)"
+        raise RuntimeError(
+            "type embedding source-topic normalization failed: no allowed "
+            f"concept candidates for {failures}; available normalized concept "
+            f"topics: {available}"
+        )
+
+    if not all_concept_ids:
+        raise RuntimeError(
+            "type embedding failed: no concept candidates for mined Types "
+            + ", ".join(types_by_id)
         )
 
     system = prompts.get_text("concepts.type_embedding.system")
-    remaining: set[str] = set(types_by_id)
+    concept_payload_by_id = {
+        row["concept_id"]: row for row in concept_payload
+    }
+    groups: dict[tuple[str, tuple[str, ...]], list[str]] = {}
+    for tid in types_by_id:
+        group_key = (topic_key_by_tid[tid], candidate_cids_by_tid[tid])
+        groups.setdefault(group_key, []).append(tid)
+
     per_concept: dict[str, list[dict]] = {}
-    for attempt in range(1, max_attempts + 1):
-        if not remaining:
-            break
-        pending = []
-        for tid in types_by_id:
-            if tid not in remaining:
-                continue
-            item = dict(types_by_id[tid])
-            allowed = allowed_cids_by_tid[tid]
-            if allowed is not None:
-                item["allowed_concept_ids"] = sorted(allowed)
-            pending.append(item)
-        user = (
-            _metadata_block(meta)
-            + "\nCONCEPTS (assign every mined Type to exactly one concept_id):\n"
-            + _json.dumps({"concepts": concept_payload}, ensure_ascii=False)
-            + "\n\nMINED TYPES TO ASSIGN (every type_id MUST be assigned):\n"
-            + _json.dumps({"types": pending}, ensure_ascii=False)
+    unassigned: set[str] = set()
+    for (_, candidate_cids), group_type_ids in groups.items():
+        scoped_concepts = [
+            concept_payload_by_id[cid] for cid in candidate_cids
+        ]
+        candidate_cid_set = set(candidate_cids)
+        remaining_in_group = set(group_type_ids)
+        scope_label = (
+            types_by_id[group_type_ids[0]].get("topic_match_hint")
+            or "unscoped chapter"
         )
-        data = _openai_json(system, user)
-        rejected_wrong_topic = 0
-        for assignment in data.get("assignments") or []:
-            if not isinstance(assignment, dict):
-                continue
-            cid = (assignment.get("concept_id") or "").strip()
-            rec = cid_map.get(cid)
-            if rec is None:
-                continue
-            for tid in assignment.get("type_ids") or []:
-                tid = (tid or "").strip()
-                if tid in remaining:
+        for attempt in range(1, max_attempts + 1):
+            if not remaining_in_group:
+                break
+            pending = []
+            for tid in group_type_ids:
+                if tid not in remaining_in_group:
+                    continue
+                item = dict(types_by_id[tid])
+                allowed = allowed_cids_by_tid[tid]
+                if allowed is not None:
+                    item["allowed_concept_ids"] = sorted(allowed)
+                pending.append(item)
+            user = (
+                _metadata_block(meta)
+                + "\nCONCEPTS (assign every mined Type to exactly one concept_id):\n"
+                + _json.dumps({"concepts": scoped_concepts}, ensure_ascii=False)
+                + "\n\nMINED TYPES TO ASSIGN (every type_id MUST be assigned):\n"
+                + _json.dumps({"types": pending}, ensure_ascii=False)
+            )
+            data = _openai_json(system, user)
+            rejected_wrong_topic = 0
+            for assignment in data.get("assignments") or []:
+                if not isinstance(assignment, dict):
+                    continue
+                cid = (assignment.get("concept_id") or "").strip()
+                for tid in assignment.get("type_ids") or []:
+                    tid = (tid or "").strip()
+                    if tid not in remaining_in_group:
+                        continue
                     allowed = allowed_cids_by_tid.get(tid)
-                    if allowed is not None and cid not in allowed:
+                    if (
+                        cid not in candidate_cid_set
+                        or (allowed is not None and cid not in allowed)
+                    ):
                         rejected_wrong_topic += 1
                         continue
                     per_concept.setdefault(cid, []).append(types_by_id[tid])
-                    remaining.discard(tid)
-        if rejected_wrong_topic:
+                    remaining_in_group.discard(tid)
+            if rejected_wrong_topic:
+                progress.log(
+                    f"Rejected {rejected_wrong_topic} mined Type placement(s) "
+                    "outside their source topic; retrying those Type IDs.",
+                    level="warning",
+                )
+            placed = len(group_type_ids) - len(remaining_in_group)
             progress.log(
-                f"Rejected {rejected_wrong_topic} mined Type placement(s) "
-                "outside their source topic; retrying those Type IDs.",
-                level="warning",
-            )
-        placed = len(types_by_id) - len(remaining)
-        progress.log(
-            f"Type embedding attempt {attempt}: {placed}/{len(types_by_id)} mined Types assigned.")
+                f"Type embedding scope {scope_label!r} attempt {attempt}: "
+                f"{placed}/{len(group_type_ids)} mined Types assigned.")
+        unassigned.update(remaining_in_group)
 
-    if remaining:
+    if unassigned:
         progress.log(
-            f"{len(remaining)} mined Type(s) unassigned after {max_attempts} "
+            f"{len(unassigned)} mined Type(s) unassigned after {max_attempts} "
             "attempt(s); failing instead of filing questions under the wrong "
             "concept.",
             level="error",
         )
         raise RuntimeError(
             "type embedding failed: unassigned mined Types "
-            + ", ".join(sorted(remaining))
+            + ", ".join(sorted(unassigned))
         )
 
     for cid, tlist in per_concept.items():
