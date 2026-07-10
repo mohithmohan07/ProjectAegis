@@ -177,6 +177,30 @@ def test_ap_gpt_first_inventory_backfills_missed_examples_and_exercises(
     )
 
 
+def test_inventory_does_not_density_retry_markerless_heading_chunks(monkeypatch):
+    calls = {"count": 0}
+
+    def empty_gpt_inventory(system, user, **kwargs):
+        calls["count"] += 1
+        return {"items": []}
+
+    sections = g.parse_mmd_sections(
+        r"\section*{Arithmetic Progressions}" "\n"
+        "This chapter introduces arithmetic progressions."
+    )
+    chunks = g._inventory_chunks_by_topic(sections)
+    assert len(chunks) == 1
+
+    monkeypatch.setattr(g, "_openai_json", empty_gpt_inventory)
+    inventory = g._extract_question_task_inventory_via_api(
+        meta=g._metadata(subject="Mathematics"),
+        sections=sections,
+    )
+
+    assert calls["count"] == len(chunks)
+    assert inventory["items"] == []
+
+
 def test_ap_method_anchors_force_skeleton_retry_and_survive(monkeypatch):
     chunks = g._section_aware_chunks(_ap_mmd(), max_chars=100_000)
     anchors = g._method_coverage_anchors(chunks[0]["sections"])

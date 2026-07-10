@@ -2404,6 +2404,17 @@ _NUMBERED_TASK_START_RE = re.compile(r"(?m)^[ \t]*(\d{1,3})[.)][ \t]+")
 _SOLUTION_START_RE = re.compile(
     r"(?im)^[ \t]*(?:solutions?|answers?)[ \t]*[:：][ \t]*",
 )
+_INVENTORY_TASK_MARKER_RE = re.compile(
+    r"(?im)(?:"
+    r"^\s*(?:worked\s+)?example\s+[A-Za-z0-9]+\s*[:：.)-]|"
+    r"^\s*\d{1,3}[.)]\s+|"
+    r"^\s*(?:questions?|checkpoint|activity|do\s+this|try\s+these|"
+    r"let['’]s\s+recall)\b|"
+    r"^\s*(?:find|calculate|determine|solve|show|prove|choose|write|state|"
+    r"explain|identify|check|fill|match|draw|compare|discuss|analy[sz]e)\b|"
+    r"\?"
+    r")",
+)
 
 
 def _inventory_task_without_solution(text: str, *, aggressive: bool = False) -> str:
@@ -2415,6 +2426,20 @@ def _inventory_task_without_solution(text: str, *, aggressive: bool = False) -> 
     if match is not None:
         text = text[:match.start()]
     return re.sub(r"\s+", " ", text).strip(" \n\t")
+
+
+def _inventory_chunk_has_task_markers(chunk: dict) -> bool:
+    """Whether source text explicitly signals an assessable inventory item."""
+    for section in chunk.get("sections") or []:
+        body = str(section.get("body") or "").strip()
+        if not body:
+            continue
+        heading = str(section.get("heading") or "")
+        if _EXERCISE_RE.search(heading):
+            return True
+        if _INVENTORY_TASK_MARKER_RE.search(body):
+            return True
+    return False
 
 
 def _source_task_anchors(sections: list[dict]) -> list[dict]:
@@ -2639,7 +2664,7 @@ def _extract_question_task_inventory_via_api(*, meta: dict, sections: list[dict]
         # A chapter-scale chunk yielding a handful of items means the model
         # summarized question lists instead of itemizing them — retry once.
         expected_min = max(2, min(40, len(chunk["text"]) // 2_000))
-        if len(items) < expected_min:
+        if len(items) < expected_min and _inventory_chunk_has_task_markers(chunk):
             progress.log(
                 f"  inventory chunk {i}/{len(chunks)} returned only {len(items)} "
                 f"item(s) for {len(chunk['text']):,} chars (expected >= "
