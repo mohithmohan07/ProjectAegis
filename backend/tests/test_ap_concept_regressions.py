@@ -522,6 +522,158 @@ def test_canonicalization_cannot_drop_an_ap_derivation_row(monkeypatch):
     )
 
 
+def test_final_pipeline_restores_post_description_method_snapshot(monkeypatch):
+    anchors = [
+        {
+            "anchor_id": "METHOD-AAAAAAAAAA",
+            "topic_hint": "nth Term of an AP",
+            "required_formulas": [],
+            "source_evidence": "alpha source derivation",
+            "evidence_terms": ["alpha", "source", "derivation"],
+        },
+        {
+            "anchor_id": "METHOD-BBBBBBBBBB",
+            "topic_hint": "nth Term of an AP",
+            "required_formulas": [],
+            "source_evidence": "beta source derivation",
+            "evidence_terms": ["beta", "source", "derivation"],
+        },
+        {
+            "anchor_id": "METHOD-CCCCCCCCCC",
+            "topic_hint": "Sum of First n Terms of an AP",
+            "required_formulas": [],
+            "source_evidence": "gamma source derivation",
+            "evidence_terms": ["gamma", "source", "derivation"],
+        },
+    ]
+    shared = _row(
+        "nth Term of an AP",
+        "Deriving the General Term",
+        evidence=(
+            "METHOD-AAAAAAAAAA | METHOD-BBBBBBBBBB | "
+            "alpha and beta source derivations"
+        ),
+    )
+    shared["concept_details"] = (
+        "Description: Build the general term from the first term and common "
+        "difference.\n"
+        "Achieving Mastery: Derive the general term independently. // "
+        "Misconceptions: Treating the term number as the value of the term."
+    )
+    dropped = _row(
+        "Sum of First n Terms of an AP",
+        "Deriving the Finite Sum",
+        evidence="METHOD-CCCCCCCCCC | gamma source derivation",
+    )
+    dropped["concept_details"] = (
+        "Description: Pair the forward and reversed finite progressions to "
+        "derive their sum.\n"
+        "Achieving Mastery: Derive the finite-sum rule independently. // "
+        "Misconceptions: Pairing terms without keeping the number of terms fixed."
+    )
+
+    monkeypatch.setattr(
+        g, "_method_coverage_anchors", lambda sections: anchors)
+    monkeypatch.setattr(
+        g, "_extract_skeleton_via_api",
+        lambda chunks, **kwargs: [dict(shared), dict(dropped)])
+    monkeypatch.setattr(
+        g, "_consolidate_concepts_via_api",
+        lambda records, **kwargs: records)
+    monkeypatch.setattr(
+        g, "_restructure_topics_via_api",
+        lambda records, **kwargs: records)
+    monkeypatch.setattr(
+        g, "_refine_descriptions_via_api",
+        lambda records, **kwargs: records)
+    monkeypatch.setattr(
+        g, "_extract_question_task_inventory_via_api",
+        lambda **kwargs: g._empty_inventory())
+    monkeypatch.setattr(
+        g, "_mine_types_from_inventory_via_api",
+        lambda **kwargs: {"types": []})
+    monkeypatch.setattr(
+        g, "_build_culminations_via_api",
+        lambda records, **kwargs: g._ensure_culmination_rows(records))
+
+    def add_richer_final_types(records, **kwargs):
+        out = [dict(record) for record in records]
+        target = next(
+            record for record in out
+            if record["concept_title"] == "Deriving the General Term"
+        )
+        target["concept_details"] = g._inject_types(
+            target["concept_details"],
+            "Type 01: Apply the general-term derivation "
+            "Case 01: Derive and use a requested term.",
+        )
+        return out
+
+    monkeypatch.setattr(g, "_assign_types_via_api", add_richer_final_types)
+    monkeypatch.setattr(
+        g, "_merge_similar_concepts_via_api",
+        lambda records, **kwargs: records)
+    monkeypatch.setattr(
+        g, "_repair_records_via_api",
+        lambda records, **kwargs: records)
+    monkeypatch.setattr(
+        g, "_ensure_misconceptions_via_api",
+        lambda records, **kwargs: records)
+
+    original_refine = g.cr.refine_chapter
+
+    def lose_method_rows_during_final_cleanup(records):
+        refined = original_refine(records)
+        out = []
+        for record in refined:
+            if record["concept_title"] == "Deriving the Finite Sum":
+                continue
+            record = dict(record)
+            if record["concept_title"] == "Deriving the General Term":
+                record["source_evidence"] = ""
+            out.append(record)
+        return out
+
+    monkeypatch.setattr(
+        g.cr, "refine_chapter", lose_method_rows_during_final_cleanup)
+
+    out = g.concepts_from_mmd(
+        _ap_mmd(),
+        subject="Mathematics",
+        chapter_title="Arithmetic Progressions",
+        live=True,
+    )
+
+    title_keys = [
+        g.bi.normalize_question_text(record["concept_title"])
+        for record in out
+    ]
+    assert len(title_keys) == len(set(title_keys))
+    shared_final = next(
+        record for record in out
+        if record["concept_title"] == "Deriving the General Term"
+    )
+    assert g._method_anchor_ids(shared_final) == {
+        "METHOD-AAAAAAAAAA", "METHOD-BBBBBBBBBB",
+    }
+    assert "Apply the general-term derivation" in shared_final["concept_details"]
+    assert shared_final["topic"] == "nth Term of an AP"
+    dropped_final = next(
+        record for record in out
+        if record["concept_title"] == "Deriving the Finite Sum"
+    )
+    assert dropped_final["topic"] == "Sum of First n Terms of an AP"
+    assert g._method_anchor_ids(dropped_final) == {"METHOD-CCCCCCCCCC"}
+    for restored in (shared_final, dropped_final):
+        assert g._has_mastery_line(restored["concept_details"])
+        assert g._misconception_body(restored["concept_details"])
+    for topic in {record["topic"] for record in out}:
+        topic_rows = [record for record in out if record["topic"] == topic]
+        assert g.cr.is_culmination(topic_rows[-1]["concept_title"])
+    assert g._missing_method_anchors(out, anchors) == []
+    assert g._fatal_errors(g._validate_final_or_raise(out)) == []
+
+
 def test_method_anchor_id_is_stable_across_chunk_topic_context():
     sections = g.parse_mmd_sections(
         r"""

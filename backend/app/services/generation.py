@@ -8,6 +8,7 @@ exercised end to end.
 """
 from __future__ import annotations
 
+import copy
 import os
 import random
 import re
@@ -5709,34 +5710,213 @@ def _missing_method_anchors(
     ]
 
 
-def _preserve_required_method_rows(
-    before: list[dict], after: list[dict],
+def _method_anchor_tagged_in_topic(
+    records: list[dict], anchor_id: str, topic: str,
+) -> bool:
+    """Whether an exact METHOD tag survives in its authoritative source topic."""
+    anchor_id = (anchor_id or "").upper()
+    topic_key = _topic_comparison_key(topic)
+    return any(
+        anchor_id in _method_anchor_ids(rec)
+        and _topic_comparison_key(rec.get("topic", "")) == topic_key
+        for rec in records
+    )
+
+
+def _method_row_quality(rec: dict, *, source_topic: str) -> tuple:
+    """Prefer source-topic rows with the richest post-description content."""
+    details = rec.get("concept_details", "")
+    return (
+        _topic_comparison_key(rec.get("topic", ""))
+        == _topic_comparison_key(source_topic),
+        _has_meaningful_types(details),
+        _has_mastery_line(details),
+        bool(_misconception_body(details)),
+        len(details),
+        len(rec.get("source_evidence", "")),
+    )
+
+
+def _snapshot_method_anchor_rows(
+    records: list[dict], anchors: list[dict] | None = None,
+) -> dict[tuple[str, str], dict]:
+    """Deep-copy the best tagged row for every ``(METHOD ID, source topic)``.
+
+    The snapshot is intentionally independent of the mutable records that flow
+    through later Type, repair, cleanup, and dedupe passes.
+    """
+    requested: list[tuple[str, str]] = []
+    if anchors is None:
+        seen: set[tuple[str, str]] = set()
+        for rec in records:
+            topic = (rec.get("topic") or "").strip()
+            topic_key = _topic_comparison_key(topic)
+            for anchor_id in sorted(_method_anchor_ids(rec)):
+                key = (anchor_id, topic_key)
+                if key not in seen:
+                    seen.add(key)
+                    requested.append((anchor_id, topic))
+    else:
+        requested = [
+            (
+                str(anchor.get("anchor_id") or "").upper(),
+                (anchor.get("topic_hint") or "").strip(),
+            )
+            for anchor in anchors
+            if str(anchor.get("anchor_id") or "").strip()
+        ]
+
+    snapshot: dict[tuple[str, str], dict] = {}
+    for anchor_id, source_topic in requested:
+        candidates = [
+            rec for rec in records
+            if anchor_id in _method_anchor_ids(rec)
+            and not cr.is_culmination(rec.get("concept_title", ""))
+        ]
+        if not candidates:
+            continue
+        best = max(
+            candidates,
+            key=lambda rec: _method_row_quality(
+                rec, source_topic=source_topic or rec.get("topic", "")),
+        )
+        authoritative_topic = source_topic or (best.get("topic") or "").strip()
+        saved = copy.deepcopy(best)
+        saved["topic"] = authoritative_topic
+        snapshot[(anchor_id, _topic_comparison_key(authoritative_topic))] = saved
+    return snapshot
+
+
+def _merge_method_source_evidence(*values: str) -> str:
+    """Merge exact METHOD IDs and de-duplicated source-grounding prose."""
+    anchor_ids: list[str] = []
+    prose: list[str] = []
+    seen_prose: set[str] = set()
+    for value in values:
+        text = str(value or "").strip()
+        for anchor_id in _METHOD_ANCHOR_ID_RE.findall(text.upper()):
+            if anchor_id not in anchor_ids:
+                anchor_ids.append(anchor_id)
+        without_ids = re.sub(
+            _METHOD_ANCHOR_ID_RE.pattern, " ", text, flags=re.IGNORECASE)
+        for part in re.split(r"\s*\|\s*", without_ids):
+            part = re.sub(r"\s+", " ", part).strip(" |;,:-")
+            key = bi.normalize_question_text(part)
+            if key and key not in seen_prose:
+                seen_prose.add(key)
+                prose.append(part)
+    return " | ".join(anchor_ids + prose)
+
+
+def _restore_method_anchor_rows(
+    records: list[dict], snapshot: dict[tuple[str, str], dict],
 ) -> list[dict]:
-    """Restore any anchor-tagged row a later whole-map pass omitted."""
+    """Restore exact METHOD tags/rows without replacing richer final content."""
+    out = [dict(rec) for rec in records]
+    groups: dict[tuple[str, str], dict] = {}
+    for (anchor_id, topic_key), saved in snapshot.items():
+        title_key = bi.normalize_question_text(saved.get("concept_title", ""))
+        if not title_key:
+            continue
+        group = groups.setdefault(
+            (topic_key, title_key),
+            {
+                "row": copy.deepcopy(saved),
+                "anchor_ids": [],
+                "evidence": [],
+            },
+        )
+        if _method_row_quality(
+            saved, source_topic=saved.get("topic", ""),
+        ) > _method_row_quality(
+            group["row"], source_topic=group["row"].get("topic", ""),
+        ):
+            group["row"] = copy.deepcopy(saved)
+        if anchor_id not in group["anchor_ids"]:
+            group["anchor_ids"].append(anchor_id)
+        group["evidence"].append(saved.get("source_evidence", ""))
+
     present = {
-        anchor_id for rec in after for anchor_id in _method_anchor_ids(rec)
+        (anchor_id, _topic_comparison_key(rec.get("topic", "")))
+        for rec in out
+        for anchor_id in _method_anchor_ids(rec)
     }
-    out = list(after)
-    restored = 0
-    for rec in before:
-        missing_ids = _method_anchor_ids(rec) - present
+    merged = 0
+    reinserted = 0
+    for (topic_key, title_key), group in groups.items():
+        missing_ids = [
+            anchor_id for anchor_id in group["anchor_ids"]
+            if (anchor_id, topic_key) not in present
+        ]
         if not missing_ids:
             continue
-        topic_key = _topic_comparison_key(rec.get("topic", ""))
-        insert_at = len(out)
-        for i, current in enumerate(out):
-            if _topic_comparison_key(current.get("topic", "")) == topic_key:
-                insert_at = i + 1
-        out.insert(insert_at, dict(rec))
-        present.update(missing_ids)
-        restored += 1
-    if restored:
+        saved = group["row"]
+        source_topic = saved.get("topic", "")
+        same_title = [
+            i for i, rec in enumerate(out)
+            if bi.normalize_question_text(rec.get("concept_title", "")) == title_key
+        ]
+        if same_title:
+            exact_topic = [
+                i for i in same_title
+                if _topic_comparison_key(out[i].get("topic", "")) == topic_key
+            ]
+            candidates = exact_topic or same_title
+            target_index = max(
+                candidates,
+                key=lambda i: _method_row_quality(
+                    out[i], source_topic=source_topic),
+            )
+            target = dict(out[target_index])
+            target["topic"] = source_topic
+            target["source_evidence"] = _merge_method_source_evidence(
+                target.get("source_evidence", ""),
+                *group["evidence"],
+                *missing_ids,
+            )
+            out[target_index] = target
+            merged += 1
+        else:
+            restored = copy.deepcopy(saved)
+            restored["topic"] = source_topic
+            restored["source_evidence"] = _merge_method_source_evidence(
+                restored.get("source_evidence", ""),
+                *group["evidence"],
+                *missing_ids,
+            )
+            topic_indexes = [
+                i for i, rec in enumerate(out)
+                if _topic_comparison_key(rec.get("topic", "")) == topic_key
+            ]
+            culmination_indexes = [
+                i for i in topic_indexes
+                if cr.is_culmination(out[i].get("concept_title", ""))
+            ]
+            insert_at = (
+                culmination_indexes[0]
+                if culmination_indexes
+                else (topic_indexes[-1] + 1 if topic_indexes else len(out))
+            )
+            out.insert(insert_at, restored)
+            reinserted += 1
+        present.update((anchor_id, topic_key) for anchor_id in group["anchor_ids"])
+
+    if merged or reinserted:
         progress.log(
-            f"Restored {restored} mandatory derivation/method concept row(s) "
-            "omitted by a whole-map pass.",
+            f"Method-row preservation merged METHOD evidence onto "
+            f"{merged} surviving row(s) and reinserted {reinserted} dropped "
+            "row(s).",
             level="warning",
         )
     return out
+
+
+def _preserve_required_method_rows(
+    before: list[dict], after: list[dict],
+) -> list[dict]:
+    """Restore tags/rows from an immediate pre-pass immutable snapshot."""
+    return _restore_method_anchor_rows(
+        after, _snapshot_method_anchor_rows(before))
 
 
 def _enforce_method_anchor_topics(
@@ -5749,8 +5929,12 @@ def _enforce_method_anchor_topics(
         for anchor in anchors
         if anchor.get("anchor_id") and (anchor.get("topic_hint") or "").strip()
     }
-    corrected = 0
-    for rec in records:
+    canonical_by_topic_key: dict[str, str] = {}
+    for source_topic in topic_by_anchor.values():
+        canonical_by_topic_key.setdefault(
+            _topic_comparison_key(source_topic), source_topic)
+    corrected: set[int] = set()
+    for i, rec in enumerate(records):
         source_topics = {
             topic_by_anchor[anchor_id]
             for anchor_id in _method_anchor_ids(rec)
@@ -5762,11 +5946,19 @@ def _enforce_method_anchor_topics(
         if _topic_comparison_key(rec.get("topic", "")) != _topic_comparison_key(
                 source_topic):
             rec["topic"] = source_topic
-            corrected += 1
+            corrected.add(i)
+    # Keep siblings and the culmination on the exact same source spelling;
+    # otherwise case/LaTeX normalization can split one logical topic in two.
+    for i, rec in enumerate(records):
+        source_topic = canonical_by_topic_key.get(
+            _topic_comparison_key(rec.get("topic", "")))
+        if source_topic and rec.get("topic") != source_topic:
+            rec["topic"] = source_topic
+            corrected.add(i)
     if corrected:
         progress.log(
-            f"Restored source topics on {corrected} derivation/method "
-            "concept row(s).",
+            f"Restored exact source topics on {len(corrected)} "
+            "derivation/method topic row(s).",
             level="warning",
         )
     return records
@@ -6682,6 +6874,36 @@ def concepts_from_mmd(
         out = _refine_descriptions_via_api(
             out, subject=subject, mmd_text=mmd_text, meta=meta, sections=sections)
         out = _ensure_mastery_lines_via_api(out, meta=meta)
+        # From this point onward, every whole-map/API cleanup is disposable:
+        # these immutable, source-topic-keyed rows are the authoritative method
+        # fallback immediately before the final gate.
+        method_row_snapshot = _snapshot_method_anchor_rows(
+            out, method_anchors)
+        unsnapshotted_anchors = [
+            anchor for anchor in method_anchors
+            if (
+                str(anchor.get("anchor_id") or "").upper(),
+                _topic_comparison_key(anchor.get("topic_hint", "")),
+            ) not in method_row_snapshot
+        ]
+        if unsnapshotted_anchors:
+            raise RuntimeError(
+                "post-description concept map lacks tagged derivation/method "
+                "rows for: "
+                + ", ".join(
+                    anchor["anchor_id"] for anchor in unsnapshotted_anchors)
+            )
+        if method_row_snapshot:
+            snapshotted_rows = {
+                (
+                    _topic_comparison_key(row.get("topic", "")),
+                    bi.normalize_question_text(row.get("concept_title", "")),
+                )
+                for row in method_row_snapshot.values()
+            }
+            progress.log(
+                f"Snapshotted {len(snapshotted_rows)} refined method row(s) "
+                f"covering {len(method_row_snapshot)} mandatory anchor(s).")
         progress.set_progress(
             0.55, label="Concept extraction — descriptions complete")
         progress.step(
@@ -6780,8 +7002,25 @@ def concepts_from_mmd(
         # pointers — scrub source_artifact one last time immediately before
         # the hard final gate so deposit is never blocked by residual refs.
         out = _neutralize_unrepaired_rows(out)
+        out = _restore_method_anchor_rows(out, method_row_snapshot)
+        # Restoration is the terminal row-membership operation. Only
+        # non-dropping field/ordering guarantees may run after this point.
+        out = _ensure_mastery_lines_via_api(
+            out, meta=meta, use_api=False)
+        out = cr.ensure_misconceptions(out)
         out = _enforce_method_anchor_topics(out, method_anchors)
-        missing_method_anchors = _missing_method_anchors(out, method_anchors)
+        out = _enforce_culminations(out)
+        missing_method_anchors = [
+            anchor for anchor in method_anchors
+            if (
+                not _method_anchor_tagged_in_topic(
+                    out,
+                    str(anchor.get("anchor_id") or ""),
+                    anchor.get("topic_hint", ""),
+                )
+                or not _method_anchor_covered(out, anchor)
+            )
+        ]
         if missing_method_anchors:
             raise RuntimeError(
                 "final concept map lost mandatory derivation/method anchors: "
