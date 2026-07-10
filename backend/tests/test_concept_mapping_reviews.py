@@ -971,3 +971,55 @@ def test_salvage_replaces_artifact_examples_from_inventory():
     report = concept_validator.validate_concept_rows(
         out, allow_types=True, require_culmination=False)
     assert not any(e["severity"] == "error" for e in report["errors"])
+
+
+def test_salvage_short_case_examples_is_idempotent_and_preserves_valid_types():
+    full_case_based = (
+        "Compare two source situations and justify which one forms an "
+        "arithmetic progression."
+    )
+    full_formula = (
+        "Find the twentieth term when the first term and common difference "
+        "are given."
+    )
+    records = [{
+        "topic": "Arithmetic Progressions",
+        "parent_concept": "Recognising Progressions",
+        "concept_title": "Recognise Arithmetic Progression Patterns",
+        "concept_details": (
+            "Description: Arithmetic progressions model patterns with a fixed "
+            "change between consecutive terms. "
+            "Achieving Mastery: Distinguishing constant-change patterns. // "
+            "Types: Type 07: Case-based source classification "
+            "Case 01: Truncated source task Example: q "
+            f"Case 02: Compare source situations Example: {full_case_based} "
+            "Type 08: Formula application "
+            f"Case 01: Requested term Example: {full_formula} "
+            "Type 09: Empty stub "
+            "Case 01: Missing source task Example: x // "
+            "Misconceptions: Students may compare terms instead of differences."
+        ),
+        "keywords": "arithmetic progression, common difference",
+    }]
+
+    short_only_inventory = {"items": [{"raw_task": "q"}]}
+    once = g._salvage_short_case_examples(
+        records, inventory=short_only_inventory)
+    twice = g._salvage_short_case_examples(
+        once, inventory=short_only_inventory)
+
+    assert twice == once
+    details = once[0]["concept_details"]
+    assert "Type 07: Case-based source classification" in details
+    assert "Type 08: Formula application" in details
+    assert "Type 09: Empty stub" not in details
+    assert full_case_based in details
+    assert full_formula in details
+    assert "Example: q" not in details
+    assert "Example: x" not in details
+    report = concept_validator.validate_concept_rows(
+        once, allow_types=True, require_culmination=False)
+    assert not any(
+        e["code"] == "short_case_example" and e["severity"] == "error"
+        for e in report["errors"]
+    )

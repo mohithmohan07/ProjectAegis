@@ -1187,6 +1187,142 @@ def test_final_pipeline_restores_post_description_method_snapshot(monkeypatch):
     assert g._fatal_errors(g._validate_final_or_raise(out)) == []
 
 
+def test_final_boundary_salvages_short_case_reintroduced_by_later_pass(
+    monkeypatch,
+):
+    full_question = (
+        "Determine whether the real-life savings pattern 100, 150, 200, 250 "
+        "forms an arithmetic progression and justify the answer."
+    )
+    other_question = (
+        "Find the next three terms after 21 when the common difference is 4."
+    )
+    inventory = {
+        "items": [{
+            "qid": "QINV-AP-0001",
+            "raw_task": full_question,
+        }],
+    }
+    normal = _row(
+        "Arithmetic Progressions",
+        "Recognize AP-like Patterns in Real Life",
+    )
+    normal["concept_details"] = (
+        "Description: Everyday savings can grow by a fixed amount, producing "
+        "an ordered sequence with a constant difference.\n"
+        "Achieving Mastery: Recognizing constant-change patterns independently. "
+        "// Misconceptions: Students may compare the terms instead of their "
+        "consecutive differences."
+    )
+
+    monkeypatch.setattr(g, "_method_coverage_anchors", lambda sections: [])
+    monkeypatch.setattr(
+        g, "_extract_skeleton_via_api",
+        lambda chunks, **kwargs: [dict(normal)])
+    monkeypatch.setattr(
+        g, "_consolidate_concepts_via_api",
+        lambda records, **kwargs: records)
+    monkeypatch.setattr(
+        g, "_refine_descriptions_via_api",
+        lambda records, **kwargs: records)
+    monkeypatch.setattr(
+        g, "_extract_question_task_inventory_via_api",
+        lambda **kwargs: inventory)
+    monkeypatch.setattr(
+        g, "_mine_types_from_inventory_via_api",
+        lambda **kwargs: {"types": []})
+    monkeypatch.setattr(
+        g, "_build_culminations_via_api",
+        lambda records, **kwargs: g._ensure_culmination_rows(records))
+
+    def assign_types(records, **kwargs):
+        out = [dict(record) for record in records]
+        target = next(
+            record for record in out
+            if record["concept_title"] == normal["concept_title"]
+        )
+        target["concept_details"] = g._inject_types(
+            target["concept_details"],
+            "Type 01: Recognize and extend AP patterns "
+            f"Case 01: Savings pattern Example: {full_question} "
+            f"Case 02: Extend a sequence Example: {other_question}",
+        )
+        return out
+
+    monkeypatch.setattr(g, "_assign_types_via_api", assign_types)
+    monkeypatch.setattr(
+        g, "_merge_similar_concepts_via_api",
+        lambda records, **kwargs: records)
+    monkeypatch.setattr(
+        g, "_repair_records_via_api",
+        lambda records, **kwargs: records)
+    monkeypatch.setattr(
+        g, "_ensure_misconceptions_via_api",
+        lambda records, **kwargs: records)
+
+    mastery_api_calls = 0
+    reintroduced_short_case = False
+
+    def reintroduce_short_case_during_late_mastery(records, **kwargs):
+        nonlocal mastery_api_calls, reintroduced_short_case
+        out = [dict(record) for record in records]
+        if kwargs.get("use_api", True):
+            mastery_api_calls += 1
+            if mastery_api_calls == 2:
+                target = next(
+                    record for record in out
+                    if record["concept_title"] == normal["concept_title"]
+                )
+                target["concept_details"] = target["concept_details"].replace(
+                    full_question, "q")
+                reintroduced_short_case = any(
+                    error["code"] == "short_case_example"
+                    for error in g.cv.validate_concept_rows(
+                        out, allow_types=True, require_culmination=False,
+                    )["errors"]
+                )
+        return out
+
+    monkeypatch.setattr(
+        g, "_ensure_mastery_lines_via_api",
+        reintroduce_short_case_during_late_mastery)
+
+    original_salvage = g._salvage_short_case_examples
+    salvage_outputs: list[list[dict]] = []
+
+    def capture_salvage(records, **kwargs):
+        salvaged = original_salvage(records, **kwargs)
+        salvage_outputs.append([dict(record) for record in salvaged])
+        return salvaged
+
+    monkeypatch.setattr(g, "_salvage_short_case_examples", capture_salvage)
+
+    out = g.concepts_from_mmd(
+        r"\section*{Arithmetic Progressions}"
+        "\nA real-life savings pattern can have a constant difference.",
+        subject="Mathematics",
+        chapter_title="Arithmetic Progressions",
+        live=True,
+    )
+
+    assert reintroduced_short_case
+    assert len(salvage_outputs) == 2
+    final = next(
+        record for record in out
+        if record["concept_title"] == normal["concept_title"]
+    )
+    assert "Type 01: Recognize and extend AP patterns" in final["concept_details"]
+    assert full_question in final["concept_details"]
+    assert other_question in final["concept_details"]
+    assert "Example: q" not in final["concept_details"]
+    assert not any(
+        error["code"] == "short_case_example"
+        for error in g.cv.validate_concept_rows(
+            out, allow_types=True, require_culmination=True,
+        )["errors"]
+    )
+
+
 def test_method_anchor_id_is_stable_across_chunk_topic_context():
     sections = g.parse_mmd_sections(
         r"""

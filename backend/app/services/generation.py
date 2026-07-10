@@ -5044,7 +5044,7 @@ def _inventory_lookup_texts(inventory: dict | None) -> list[str]:
             continue
         text = _inventory_task_text(item)
         key = bi.normalize_question_text(text)
-        if text and key and key not in seen:
+        if text and key and key not in seen and not cv._example_too_short(text):
             seen.add(key)
             out.append(text)
     return out
@@ -5225,7 +5225,7 @@ def _salvage_short_case_examples(
                     cases.append((case_title, []))
             if cases:
                 # Keep the original Type NN: title from the header line.
-                header = type_header.split("Case", 1)[0].strip()
+                header = type_header.strip()
                 if not re.match(
                         r"^(?:Miscellaneous\s+)?Type\s+\d{1,2}:", header, re.IGNORECASE):
                     header = f"Type 01: {header}" if header else "Type 01: Assessment pattern"
@@ -7300,6 +7300,22 @@ def concepts_from_mmd(
             )
             raise RuntimeError(
                 "mined Type source-topic validation failed: " + summary)
+        # This is the terminal content boundary: every API/refiner,
+        # method-snapshot restoration, and culmination pass has already run.
+        # Re-expand any short Example reintroduced by those passes, or remove
+        # only its irrecoverable stub/empty Case while retaining valid Types
+        # and full questions. Then neutralize artifacts exposed by replacement.
+        out = _salvage_short_case_examples(
+            out, inventory=question_task_inventory)
+        boundary_report = cv.validate_concept_rows(
+            out, allow_types=True, require_culmination=True,
+            allow_culmination=True)
+        if any(
+            error.get("code") == "source_artifact"
+            and error.get("severity") == "error"
+            for error in boundary_report["errors"]
+        ):
+            out = _neutralize_unrepaired_rows(out)
         _validate_final_or_raise(out, stage="final")
         missing = sum(
             1 for r in out
