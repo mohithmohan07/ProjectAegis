@@ -13,6 +13,7 @@ import os
 import random
 import re
 import threading
+import unicodedata
 
 from .. import bulk_import as bi
 from .. import config, models
@@ -1411,6 +1412,14 @@ Rules:
 - One inventory item maps to exactly one best-fit Type. If it combines several
   skills, choose the Type that most directly assesses the final ask, or create
   one integrated Type for that mixed skill — never duplicate the question.
+- Every Case and Example inside one Type MUST assess the same single granular
+  concept. concept_match_hint is Type-level, so it must accurately name that
+  one shared concept target; never use one Type as an umbrella for Cases that
+  belong to different concept rows.
+- Split Types when questions share a formula or surface procedure but assess
+  different concepts. In particular, direct formula calculations and
+  contextual/real-life modeling or applications belong in separate Types when
+  the concept map teaches them as separate rows.
 - For Mathematics, classify every worked, numerical, contextual, and real-life
   problem into a distinct Type or Case whenever its assessed action, givens,
   representation, constraint, or ask differs. Preserve the complete problem as
@@ -1513,6 +1522,11 @@ DELTA RULES:
   references, and image URLs. Never include a solution or answer.
 - A Type may cover only one exact topic_hint. Do not attach a missed item to an
   existing Type from another source topic; create a new topic-scoped Type.
+- Append to an existing Type only when the missed item assesses the same
+  granular concept as every existing Case in that Type. Because
+  concept_match_hint applies to the whole Type, create a new Type when the
+  missed item instead assesses a distinct method, application, or contextual
+  modeling concept, even if it uses the same formula.
 - Cover every provided missed qid, but emit no unchanged Type, Case, or Example.
 """)
 
@@ -1535,6 +1549,13 @@ Rules:
   assign it to exactly one of those concept IDs and never any other concept.
 - A concept may receive multiple type_ids; a Type belongs to one concept.
 - Choose the concept that the Type most directly assesses (subject-appropriate).
+- Within the already-constrained source topic, honor concept_match_hint and
+  parent_concept_match_hint at the most granular level. Prefer the specific
+  application, modeling, procedure, or worked-method concept that matches the
+  Type's Cases over a broad definition, general formula, or culmination row.
+- Formula overlap is not concept identity: direct formula calculations belong
+  with the direct-calculation concept, while contextual/real-life applications
+  belong with the granular application/modeling concept when that row exists.
 - Assign each worked, numerical, contextual, or real-life problem Type to the
   concept the problem actually assesses, never to a nearby formula merely
   because it shares notation.
@@ -1732,8 +1753,10 @@ Return ONLY strict JSON:
 {"rows":[{"topic":"","parent_concept":"","concept":"","concept_description":"","keywords":""}]}.
 
 Rules:
-- You are given the concept rows and the chapter's SECTION HEADINGS in reading
-  order. Reassign ONLY the topic of each row.
+- You are given the concept rows and grouped SOURCE TOPIC EXCERPTS in reading
+  order. Each excerpt includes all source blocks inherited by that main topic,
+  including worked examples, solutions, exercises, and structural subheadings.
+  Reassign ONLY the topic of each row.
 - Topic names must be the given source headings VERBATIM (only the section
   number stripped) — never invent, rename, merge, or paraphrase headings.
 - The given headings are the MAIN sections. When a concept comes from a
@@ -1748,6 +1771,11 @@ Rules:
   earlier catch-all.
 - Assign each concept to the section whose content teaches it; consecutive
   concepts usually stay in the same section until the source moves on.
+- Use each row's source_evidence against the grouped excerpts. Formulas,
+  reusable worked methods, contextual/real-life applications, and
+  exercise-derived concepts belong to the section that actually teaches or
+  uses that evidence—not automatically to the preceding topic or an
+  unnumbered chapter-title section.
 - Do not create exercise, example, review, or practice topics.
 - Do not use an unnumbered chapter title or book title as a topic. Exception:
   when a numbered MAIN section intentionally has the same title as the chapter,
@@ -2337,6 +2365,135 @@ def _sections_with_source_topics(sections: list[dict]) -> list[tuple[str, dict]]
             current = canonical[key]
         paired.append((current, section))
     return paired
+
+
+_NON_TEACHING_TOPIC_CONTEXT_RE = re.compile(
+    r"^(?:chapter\s+)?(?:summary|recap(?:itulation)?)\b|"
+    r"^(?:a\s+)?note\s+to\s+(?:the\s+)?reader\b|"
+    r"^(?:glossary|references?|bibliography|acknowledg(?:e)?ments?)\b",
+    re.IGNORECASE,
+)
+
+
+def _group_source_topic_excerpts(sections: list[dict]) -> list[dict]:
+    """Group source sections under their canonical main topic in reading order.
+
+    ``_sections_with_source_topics`` supplies the structural inheritance:
+    Example/Solution/Exercise-style headings stay attached to the nearest real
+    main section instead of becoming standalone topics.
+    """
+    grouped: list[dict] = []
+    index_by_key: dict[str, int] = {}
+    for topic, section in _sections_with_source_topics(sections):
+        # Chapter-level recaps/editorial notes have no reliable main-topic
+        # ownership. Treating their repeated or postscript content as evidence
+        # for the preceding topic would be a semantic guess.
+        section_heading = (section.get("heading") or "").strip()
+        if (
+            _is_non_topic_heading(section_heading)
+            and _NON_TEACHING_TOPIC_CONTEXT_RE.match(section_heading)
+        ):
+            continue
+        key = _topic_comparison_key(topic)
+        if not key:
+            continue
+        if key not in index_by_key:
+            index_by_key[key] = len(grouped)
+            grouped.append({
+                "topic": _strip_section_number(topic),
+                "sections": [],
+            })
+        grouped[index_by_key[key]]["sections"].append(section)
+    return [
+        {
+            "topic": group["topic"],
+            "excerpt": _format_section_chunk(group["sections"]),
+        }
+        for group in grouped
+    ]
+
+
+_SOURCE_EVIDENCE_BOUNDARY_RE = re.compile(
+    r"\s*(?:\||;|\n+|…+|(?:\.\s*){2,})\s*"
+)
+_MIN_EXACT_EVIDENCE_WORDS = 5
+_MIN_EXACT_EVIDENCE_CHARS = 20
+
+
+def _normalize_exact_source_text(text: str) -> str:
+    """Normalize source/evidence text for conservative exact phrase matching."""
+    out = unicodedata.normalize("NFKC", str(text or "")).casefold()
+    out = _METHOD_ANCHOR_ID_RE.sub(" ", out.upper()).casefold()
+    for _ in range(4):
+        out = re.sub(
+            r"\\(?:mathbf|boldsymbol|mathrm|text|operatorname)\s*\{([^{}]*)\}",
+            r" \1 ",
+            out,
+        )
+    out = re.sub(r"\\[a-zA-Z]+\*?", " ", out)
+    out = out.replace("_", " ").replace("^", " ")
+    out = re.sub(r"[^\w]+", " ", out, flags=re.UNICODE)
+    return re.sub(r"\s+", " ", out).strip()
+
+
+def _strong_exact_source_evidence_phrases(evidence: str) -> list[str]:
+    """Return only long, literal evidence fragments safe for deterministic use."""
+    evidence = _METHOD_ANCHOR_ID_RE.sub(" ", str(evidence or "").upper())
+    phrases: list[str] = []
+    seen: set[str] = set()
+    for fragment in _SOURCE_EVIDENCE_BOUNDARY_RE.split(evidence):
+        normalized = _normalize_exact_source_text(fragment)
+        words = normalized.split()
+        content_chars = sum(len(word) for word in words)
+        if (
+            len(words) < _MIN_EXACT_EVIDENCE_WORDS
+            or content_chars < _MIN_EXACT_EVIDENCE_CHARS
+            or normalized in seen
+        ):
+            continue
+        seen.add(normalized)
+        phrases.append(normalized)
+    return phrases
+
+
+def _assign_topics_from_source_evidence(
+    records: list[dict], source_topic_excerpts: list[dict],
+) -> list[dict]:
+    """Assign a topic only when exact source evidence has one unambiguous home.
+
+    Shared formulas, short/generic snippets, ties, and conflicting unique
+    snippets deliberately make no change. METHOD-tagged rows are excluded
+    because method-anchor topic authority is stronger than phrase placement.
+    """
+    normalized_sources = [
+        (
+            (group.get("topic") or "").strip(),
+            _normalize_exact_source_text(group.get("excerpt") or ""),
+        )
+        for group in source_topic_excerpts or []
+        if (group.get("topic") or "").strip()
+    ]
+    if not normalized_sources:
+        return records
+    padded_sources = [
+        (topic, f" {source} ") for topic, source in normalized_sources if source
+    ]
+    for record in records:
+        if _method_anchor_ids(record):
+            continue
+        unique_topic_matches: set[str] = set()
+        for phrase in _strong_exact_source_evidence_phrases(
+                record.get("source_evidence") or ""):
+            padded_phrase = f" {phrase} "
+            matching_topics = {
+                topic for topic, source in padded_sources
+                if padded_phrase in source
+            }
+            if len(matching_topics) == 1:
+                unique_topic_matches.update(matching_topics)
+        if len(unique_topic_matches) == 1:
+            record["topic"] = next(iter(unique_topic_matches))
+    return records
 
 
 def _inventory_chunks_by_topic(
@@ -6764,22 +6921,49 @@ def _topics_look_collapsed(records: list[dict], headings: list[str]) -> bool:
 
 
 def _restructure_topics_via_api(
-    records: list[dict], *, meta: dict, headings: list[str],
+    records: list[dict], *, meta: dict,
+    source_topic_excerpts: list[dict] | None = None,
+    headings: list[str] | None = None,
 ) -> list[dict]:
-    """Re-segregate collapsed topics using the source's section headings.
+    """Re-segregate collapsed topics using grouped source-topic excerpts.
 
     Only the ``topic`` field is taken from the model, matched back to the
     original rows by concept title — no concept can be added, dropped, or
-    rewritten by this pass.
+    rewritten by this pass. ``headings`` remains a compatibility fallback for
+    older direct callers; the live pipeline always supplies source excerpts.
     """
     import json as _json
 
+    source_topic_excerpts = list(source_topic_excerpts or [])
+    if not source_topic_excerpts:
+        source_topic_excerpts = [
+            {"topic": heading, "excerpt": ""} for heading in (headings or [])
+        ]
+    headings = [
+        (group.get("topic") or "").strip()
+        for group in source_topic_excerpts
+        if (group.get("topic") or "").strip()
+    ]
+    excerpt_budget = max(
+        12_000, 220_000 // max(1, len(source_topic_excerpts)))
+    prompt_excerpts = [
+        {
+            "topic": (group.get("topic") or "").strip(),
+            "excerpt": _trim(group.get("excerpt") or "", excerpt_budget),
+        }
+        for group in source_topic_excerpts
+        if (group.get("topic") or "").strip()
+    ]
+    records = _assign_topics_from_source_evidence(
+        records, source_topic_excerpts)
     system = prompts.get_text("concepts.topic_structure.system")
     payload = _json.dumps({"rows": _records_to_api_rows(records)}, ensure_ascii=False)
     user = (
         _metadata_block(meta)
         + "\nSECTION HEADINGS (reading order):\n- "
         + "\n- ".join(headings)
+        + "\n\nSOURCE TOPIC EXCERPTS (structural headings already inherited):\n"
+        + _json.dumps({"source_topics": prompt_excerpts}, ensure_ascii=False)
         + f"\n\nConcept map with collapsed topics ({len(records)} rows):\n"
         + payload
     )
@@ -6791,6 +6975,8 @@ def _restructure_topics_via_api(
     }
     updated = 0
     for rec in records:
+        if _method_anchor_ids(rec):
+            continue
         new_topic = topic_by_title.get(
             bi.normalize_question_text(rec.get("concept_title", "")))
         if new_topic and new_topic != rec.get("topic"):
@@ -6803,7 +6989,8 @@ def _restructure_topics_via_api(
         f"{len(distinct)} distinct topic(s).",
         level="success" if len(distinct) > 1 else "warning",
     )
-    return records
+    return _assign_topics_from_source_evidence(
+        records, source_topic_excerpts)
 
 
 def chapter_meta_via_api(
@@ -6905,6 +7092,7 @@ def concepts_from_mmd(
         # BEFORE any chapter-wide pass builds on the topic structure.
         out = _scrub_section_numbers(out)
         headings = _topic_headings(sections)
+        source_topic_excerpts = _group_source_topic_excerpts(sections)
         allow_chapter_title_topic = _chapter_title_is_main_topic(
             sections, chapter_title)
         out = _snap_topics_to_headings(
@@ -6924,7 +7112,14 @@ def concepts_from_mmd(
                 level="warning",
             )
         if len(headings) >= 3 or (headings and _topics_look_collapsed(out, headings)):
-            out = _restructure_topics_via_api(out, meta=meta, headings=headings)
+            out = _restructure_topics_via_api(
+                out,
+                meta=meta,
+                source_topic_excerpts=source_topic_excerpts,
+            )
+        else:
+            out = _assign_topics_from_source_evidence(
+                out, source_topic_excerpts)
         out = _snap_topics_to_headings(
             out, headings, chapter_title=chapter_title,
             allow_chapter_title_topic=allow_chapter_title_topic)

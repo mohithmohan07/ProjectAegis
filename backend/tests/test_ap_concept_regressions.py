@@ -71,6 +71,64 @@ Continuation of the preceding worked answer.
 """
 
 
+def _semantic_placement_mmd() -> str:
+    """Representative source excerpts copied from the audited AP chapter."""
+    return r"""
+\section*{5.2 Arithmetic Progressions}
+An arithmetic progression (AP) is a list of numbers in which each term is
+obtained by adding a fixed number to the preceding term.
+The general form of an AP is a, a+d, a+2d, a+3d, ...
+The common difference of the AP can be positive, negative or zero.
+A shared arithmetic progression phrase appears in both source topics.
+
+\section*{Example 2}
+The difference of any two consecutive terms is the same.
+
+\section*{5.3 nth Term of an AP}
+The nth term is given by a_n=a+(n-1)d.
+A shared arithmetic progression phrase appears in both source topics.
+
+\section*{Example 3}
+Find the 10th term of the AP: 2, 7, 12, ...
+We have a_n=a+(n-1)d.
+
+\section*{Example 4}
+Which term of the AP: 21,18,15,... is -81?
+
+\section*{Example 6}
+Check whether 301 is a term of the list of numbers.
+
+\section*{Example 7}
+How many two-digit numbers are divisible by 3?
+
+\section*{Example 8}
+Find the 11th term from the last term.
+
+\section*{Alternative Solution}
+If we write the given AP in the reverse order, then a=-62 and d=3.
+
+\section*{Example 9}
+A sum of ₹1000 is invested at 8% simple interest per year.
+
+\section*{Example 10}
+In a flower bed, there are 23 rose plants in the first row, 21 in the second,
+19 in the third, and so on.
+
+\section*{EXERCISE 5.2}
+Use the nth-term rule to answer each exercise-derived question.
+
+\section*{5.4 Sum of First n Terms of an AP}
+Rewriting the terms in reverse order, we have the same finite sum.
+On adding the two orders, the sum of the first n terms is obtained.
+
+\section*{5.5 Summary}
+The chapter recap repeats formulas from every section.
+
+\section*{A Note to the Reader}
+If a, b, c are in AP, then b = (a+c)/2.
+"""
+
+
 def _mathpix_ocr_edge_mmd() -> str:
     """Small synthetic fixture covering real Mathpix heading/task shapes."""
     return r"""
@@ -161,6 +219,163 @@ def test_ap_inventory_chunks_preserve_heading_context_and_topic_boundaries():
         == {chunk["source_topic"]}
         for chunk in chunks
     )
+
+
+def test_source_topic_excerpts_group_structural_sections_under_main_topic():
+    groups = g._group_source_topic_excerpts(
+        g.parse_mmd_sections(_semantic_placement_mmd()))
+
+    assert [group["topic"] for group in groups] == [
+        "Arithmetic Progressions",
+        "nth Term of an AP",
+        "Sum of First n Terms of an AP",
+    ]
+    nth_excerpt = groups[1]["excerpt"]
+    assert "HEADING PATH: Example 3" in nth_excerpt
+    assert "HEADING PATH: Alternative Solution" in nth_excerpt
+    assert "HEADING PATH: EXERCISE 5.2" in nth_excerpt
+    assert "A sum of ₹1000 is invested" in nth_excerpt
+    assert "flower bed" in nth_excerpt
+    assert "Example 3" not in groups[0]["excerpt"]
+    assert all(
+        "A Note to the Reader" not in group["excerpt"] for group in groups)
+
+
+def test_exact_source_evidence_places_audited_ap_concepts_semantically():
+    groups = g._group_source_topic_excerpts(
+        g.parse_mmd_sections(_semantic_placement_mmd()))
+    records = [
+        _row(
+            "Arithmetic Progressions",
+            "Definition and General Form of an Arithmetic Progression",
+            evidence=(
+                "An arithmetic progression (AP) is a list of numbers... "
+                "The general form of an AP is a, a+d, a+2d, a+3d, ... | "
+                "common difference of the AP... can be positive, negative or zero"
+            ),
+        ),
+        _row(
+            "Arithmetic Progressions",
+            "Finding Specific Terms and Term Positions",
+            evidence=(
+                "Find the 10th term... we have a_n=a+(n-1)d | "
+                "Which term of the AP: 21,18,15,... is -81? | "
+                "Check whether 301 is a term of the list of numbers"
+            ),
+        ),
+        _row(
+            "Arithmetic Progressions",
+            "Counting Terms and Working from the End of a Finite AP",
+            evidence=(
+                "How many two-digit numbers are divisible by 3? | "
+                "Find the 11th term from the last term | "
+                "If we write the given AP in the reverse order, then a=-62 and d=3"
+            ),
+        ),
+        _row(
+            "Arithmetic Progressions",
+            "Modeling Real-life Situations with Arithmetic Progressions",
+            evidence=(
+                "some daily life problems | "
+                "A sum of ₹1000 is invested at 8% simple interest per year | "
+                "In a flower bed, there are 23 rose plants in the first row..."
+            ),
+        ),
+        _row(
+            "Arithmetic Progressions",
+            "Using the Sum Formula in Problems",
+            evidence=(
+                "Rewriting the terms in reverse order | "
+                "On adding the two orders, the sum of the first n terms is obtained"
+            ),
+        ),
+        _row(
+            "Model-selected Topic",
+            "Ambiguous Shared Evidence",
+            evidence=(
+                "A shared arithmetic progression phrase appears in both source topics"
+            ),
+        ),
+        _row(
+            "Arithmetic Progressions",
+            "Arithmetic Mean as the Middle Term of Three Numbers in AP",
+            evidence="If a, b, c are in AP, then b = (a+c)/2",
+        ),
+        _row(
+            "Anchor-authoritative Topic",
+            "Anchored Method",
+            evidence=(
+                "METHOD-ABCDEF1234 | "
+                "A sum of ₹1000 is invested at 8% simple interest per year"
+            ),
+        ),
+    ]
+
+    out = g._assign_topics_from_source_evidence(records, groups)
+    by_title = {record["concept_title"]: record["topic"] for record in out}
+
+    assert by_title == {
+        "Definition and General Form of an Arithmetic Progression": (
+            "Arithmetic Progressions"
+        ),
+        "Finding Specific Terms and Term Positions": "nth Term of an AP",
+        "Counting Terms and Working from the End of a Finite AP": (
+            "nth Term of an AP"
+        ),
+        "Modeling Real-life Situations with Arithmetic Progressions": (
+            "nth Term of an AP"
+        ),
+        "Using the Sum Formula in Problems": "Sum of First n Terms of an AP",
+        "Ambiguous Shared Evidence": "Model-selected Topic",
+        "Arithmetic Mean as the Middle Term of Three Numbers in AP": (
+            "Arithmetic Progressions"
+        ),
+        "Anchored Method": "Anchor-authoritative Topic",
+    }
+
+
+def test_topic_restructuring_applies_exact_evidence_before_and_after_gpt(
+    monkeypatch,
+):
+    groups = g._group_source_topic_excerpts(
+        g.parse_mmd_sections(_semantic_placement_mmd()))
+    record = _row(
+        "Arithmetic Progressions",
+        "Modeling Real-life Situations with Arithmetic Progressions",
+        evidence=(
+            "A sum of ₹1000 is invested at 8% simple interest per year | "
+            "In a flower bed, there are 23 rose plants in the first row..."
+        ),
+    )
+    anchored = _row(
+        "nth Term of an AP",
+        "Deriving the Nth-term Formula",
+        evidence="METHOD-ABCDEF1234 | a_n=a+(n-1)d",
+    )
+
+    def wrong_topic_response(system, user, **kwargs):
+        # Exact grounding runs before GPT, so its input already has the source
+        # topic even though this simulated response tries to move it back.
+        assert '"topic": "nth Term of an AP"' in user
+        assert "SOURCE TOPIC EXCERPTS" in user
+        assert "flower bed" in user
+        return {"rows": [{
+            **_api_row(record),
+            "topic": "Arithmetic Progressions",
+        }, {
+            **_api_row(anchored),
+            "topic": "Arithmetic Progressions",
+        }]}
+
+    monkeypatch.setattr(g, "_openai_json", wrong_topic_response)
+    out = g._restructure_topics_via_api(
+        [record, anchored],
+        meta=g._metadata(subject="Mathematics"),
+        source_topic_excerpts=groups,
+    )
+
+    assert out[0]["topic"] == "nth Term of an AP"
+    assert out[1]["topic"] == "nth Term of an AP"
 
 
 def test_ap_gpt_first_inventory_backfills_missed_examples_and_exercises(

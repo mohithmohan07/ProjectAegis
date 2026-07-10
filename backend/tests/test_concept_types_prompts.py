@@ -51,6 +51,8 @@ def test_universal_question_task_inventory_and_type_mining_prompts():
     inventory = g.prompts.get_text("concepts.question_task_inventory.system")
     mining = g.prompts.get_text("concepts.type_mining.system")
     delta = g.prompts.get_text("concepts.type_mining_delta.system")
+    mining_contract = " ".join(mining.split())
+    delta_contract = " ".join(delta.split())
     assert "Question / Task Inventory" in inventory
     assert "content_objects" in inventory
     assert "math_objects" not in inventory
@@ -76,12 +78,28 @@ def test_universal_question_task_inventory_and_type_mining_prompts():
     assert "TYPE WORDING" in mining
     assert "precise, self-explanatory pattern name" in mining
     assert "type_description must DEFINE the pattern" in mining
+    # concept_match_hint is Type-level: Cases for distinct concept rows cannot
+    # be hidden inside one broad formula-sharing Type.
+    assert "same single granular concept" in mining_contract
+    assert "concept_match_hint is Type-level" in mining_contract
+    assert "direct formula calculations" in mining_contract
+    assert "contextual/real-life modeling or applications" in mining_contract
     assert "incremental delta" in delta
     assert "never return an already classified question" in delta
     assert "complete source task" in delta
+    assert "same granular concept as every existing Case" in delta_contract
+    assert "concept_match_hint applies to the whole Type" in delta_contract
     embedding = g.prompts.get_text("concepts.type_embedding.system")
+    embedding_contract = " ".join(embedding.split())
     assert "concept_id" in embedding and "type_ids" in embedding
     assert "every provided type_id MUST be assigned".lower() in embedding.lower()
+    assert "already-constrained source topic" in embedding_contract
+    assert "most granular level" in embedding_contract
+    assert (
+        "application, modeling, procedure, or worked-method concept"
+        in embedding_contract
+    )
+    assert "Formula overlap is not concept identity" in embedding_contract
     # Culmination rows are part of the assignment payload.
     assert "is_culmination" in embedding
 
