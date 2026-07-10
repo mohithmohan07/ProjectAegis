@@ -1,4 +1,6 @@
 """Concept-generation prompts must require rich Types classification."""
+import pytest
+
 from app.services import generation as g
 
 
@@ -361,6 +363,201 @@ def test_mine_types_coverage_merges_into_existing_type(monkeypatch):
     assert len(merged["case_prompts"]) == 2
     assert {c["case_prompt"] for c in merged["case_prompts"]} == {"one", "two"}
     assert not g._uncovered_inventory_items(inventory, mined["types"])
+
+
+def test_normalize_mined_types_recovers_live_nested_type_schema():
+    inventory = {"items": [
+        {"qid": "QINV-0001", "topic_hint": "Introduction", "raw_task": "one"},
+        {"qid": "QINV-0002", "topic_hint": "Arithmetic Progressions", "raw_task": "two"},
+        {"qid": "QINV-0003", "topic_hint": "nth Term of an AP", "raw_task": "three"},
+        {"qid": "QINV-0004", "topic_hint": "Sum of First n Terms of an AP", "raw_task": "four"},
+    ], "stats": {}}
+
+    def mined_type(index, qid):
+        return {
+            "type_id": f"TYPE-{index:04d}",
+            "type_title": f"Pattern {index}",
+            "source_question_ids": [qid],
+            "case_prompts": [{
+                "case_title": f"Case {index}",
+                "examples": [{
+                    "source_question_id": qid,
+                    "example_prompt": f"task {index}",
+                }],
+            }],
+        }
+
+    # /tmp/ap-live-fixed.json had this exact schema drift: each later Type
+    # appeared as an entry in the preceding Type's case_prompts list.
+    nested = [mined_type(1, "QINV-0001")]
+    parent = nested[0]
+    for index in range(2, 5):
+        child = mined_type(index, f"QINV-{index:04d}")
+        parent["case_prompts"].append(child)
+        parent = child
+
+    normalized = g._normalize_mined_type_candidate(nested, inventory)
+
+    assert len(normalized) == 4
+    assert not g._uncovered_inventory_items(inventory, normalized)
+    assert not g._duplicate_inventory_assignments(inventory, normalized)
+    assert all(
+        not any(
+            isinstance(case, dict) and case.get("type_id")
+            for case in mined_type["case_prompts"]
+        )
+        for mined_type in normalized
+    )
+
+
+def test_mine_types_recovers_after_regressive_coverage_candidate(monkeypatch):
+    inventory = {"items": [
+        {"qid": f"QINV-{index:04d}", "topic_hint": "T", "raw_task": f"task {index}"}
+        for index in range(1, 4)
+    ], "stats": {}}
+
+    def mined_type(qids):
+        return {
+            "type_id": "TYPE-0001",
+            "type_title": "Reusable pattern",
+            "source_question_ids": qids,
+            "case_prompts": [{
+                "case_title": "Defined case",
+                "examples": [{
+                    "source_question_id": qid,
+                    "example_prompt": f"task {int(qid[-4:])}",
+                } for qid in qids],
+            }],
+        }
+
+    responses = [
+        [mined_type(["QINV-0001", "QINV-0002"])],
+        [mined_type(["QINV-0001"])],
+        [mined_type(["QINV-0001", "QINV-0002", "QINV-0003"])],
+    ]
+    calls = {"n": 0}
+
+    def fake_openai(system, user, **kwargs):
+        index = calls["n"]
+        calls["n"] += 1
+        if index == 2:
+            # The rejected response must not poison the next repair context.
+            assert "QINV-0002" in user
+        return {"types": responses[index]}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    mined = g._mine_types_from_inventory_via_api(
+        meta=g._metadata(subject="Mathematics"),
+        inventory=inventory,
+        max_coverage_attempts=2,
+    )
+
+    assert calls["n"] == 3
+    assert not g._uncovered_inventory_items(inventory, mined["types"])
+    assert not g._duplicate_inventory_assignments(inventory, mined["types"])
+
+
+def test_mine_types_hard_fails_after_live_coverage_degradation(monkeypatch):
+    topics = (
+        ["Introduction"] * 2
+        + ["Arithmetic Progressions"] * 7
+        + ["nth Term of an AP"] * 31
+        + ["Sum of First n Terms of an AP"] * 37
+    )
+    inventory = {"items": [
+        {
+            "qid": f"QINV-{index:04d}",
+            "topic_hint": topic,
+            "raw_task": f"Complete source task {index} with all stated conditions.",
+        }
+        for index, topic in enumerate(topics, start=1)
+    ], "stats": {}}
+
+    def mined_type(type_id, title, first, last):
+        qids = [f"QINV-{index:04d}" for index in range(first, last + 1)]
+        return {
+            "type_id": type_id,
+            "type_title": title,
+            "source_question_ids": qids,
+            "case_prompts": [{
+                "case_title": f"Defined case for {title}",
+                "examples": [
+                    {
+                        "source_question_id": qid,
+                        "example_prompt": (
+                            f"Complete source task {int(qid[-4:])} "
+                            "with all stated conditions."
+                        ),
+                    }
+                    for qid in qids
+                ],
+            }],
+        }
+
+    initial = [
+        mined_type("TYPE-0001", "Initial pattern 1", 1, 2),
+        mined_type("TYPE-0002", "Initial pattern 2", 3, 9),
+        mined_type("TYPE-0003", "Initial pattern 3", 10, 24),
+        mined_type("TYPE-0004", "Initial pattern 4", 25, 40),
+        mined_type("TYPE-0005", "Initial pattern 5", 41, 74),
+    ]
+    catastrophic = [mined_type(
+        "TYPE-0001", "Catastrophically truncated correction", 1, 2)]
+    calls = {"n": 0}
+
+    def fake_openai(system, user, **kwargs):
+        calls["n"] += 1
+        return {"types": initial if calls["n"] == 1 else catastrophic}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    with pytest.raises(
+        RuntimeError, match=r"3 unclassified.*0 duplicate",
+    ):
+        g._mine_types_from_inventory_via_api(
+            meta=g._metadata(subject="Mathematics"),
+            inventory=inventory,
+            max_coverage_attempts=4,
+        )
+
+    assert calls["n"] == 5
+
+
+def test_mine_types_hard_fails_unrepaired_duplicate_assignments(monkeypatch):
+    inventory = {"items": [{
+        "qid": "QINV-0001", "topic_hint": "T", "raw_task": "Question one",
+    }], "stats": {}}
+    duplicate = [
+        {
+            "type_id": f"TYPE-{index:04d}",
+            "type_title": f"Pattern {index}",
+            "source_question_ids": ["QINV-0001"],
+            "case_prompts": [{
+                "case_title": f"Case {index}",
+                "examples": [{
+                    "source_question_id": "QINV-0001",
+                    "example_prompt": "Question one",
+                }],
+            }],
+        }
+        for index in range(1, 3)
+    ]
+    calls = {"n": 0}
+
+    def fake_openai(system, user, **kwargs):
+        calls["n"] += 1
+        return {"types": duplicate}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    with pytest.raises(
+        RuntimeError, match=r"0 unclassified.*1 duplicate",
+    ):
+        g._mine_types_from_inventory_via_api(
+            meta=g._metadata(subject="Mathematics"),
+            inventory=inventory,
+            max_coverage_attempts=2,
+        )
+
+    assert calls["n"] == 3
 
 
 def test_assign_mined_types_can_place_types_on_culminations(monkeypatch):

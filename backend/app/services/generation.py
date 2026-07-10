@@ -2554,14 +2554,26 @@ def _sanitize_inventory_item(item: dict, *, source_topic: str = "") -> dict:
     return cleaned
 
 
+_LEADING_INVENTORY_TASK_NUMBER_RE = re.compile(
+    r"^\s*(?:q(?:uestion)?\s*)?\d+\s*[.)]\s*",
+    re.IGNORECASE,
+)
+
+
+def _inventory_task_match_key(item: dict) -> str:
+    """Task text normalized for GPT-row/deterministic-anchor matching."""
+    task = bi.normalize_question_text(
+        item.get("raw_task") or item.get("normalized_task") or "")
+    return _LEADING_INVENTORY_TASK_NUMBER_RE.sub("", task, count=1)
+
+
 def _inventory_items_match(item: dict, anchor: dict) -> bool:
     label = bi.normalize_question_text(item.get("source_label", ""))
     anchor_label = bi.normalize_question_text(anchor.get("source_label", ""))
     if label and anchor_label and label == anchor_label:
         return True
-    task = bi.normalize_question_text(
-        item.get("raw_task") or item.get("normalized_task") or "")
-    anchor_task = bi.normalize_question_text(anchor.get("raw_task", ""))
+    task = _inventory_task_match_key(item)
+    anchor_task = _inventory_task_match_key(anchor)
     if not task or not anchor_task:
         return False
     if task == anchor_task:
@@ -2785,6 +2797,47 @@ def _duplicate_inventory_assignments(inventory: dict, types: list[dict]) -> list
     ]
 
 
+def _repair_nested_mined_types(raw_types: list) -> list[dict]:
+    """Lift Type-shaped objects that the model nested in ``case_prompts``."""
+    repaired: list[dict] = []
+    nested_count = 0
+
+    def is_type_payload(value: object) -> bool:
+        return (
+            isinstance(value, dict)
+            and bool(value.get("type_id"))
+            and bool(value.get("type_title") or value.get("task_pattern"))
+            and "case_prompts" in value
+        )
+
+    def visit(raw_type: dict, *, nested: bool = False) -> None:
+        nonlocal nested_count
+        item = dict(raw_type)
+        cases: list = []
+        nested_types: list[dict] = []
+        for case in item.get("case_prompts") or []:
+            if is_type_payload(case):
+                nested_types.append(case)
+            else:
+                cases.append(case)
+        item["case_prompts"] = cases
+        repaired.append(item)
+        if nested:
+            nested_count += 1
+        for nested_type in nested_types:
+            visit(nested_type, nested=True)
+
+    for raw_type in raw_types:
+        if isinstance(raw_type, dict):
+            visit(raw_type)
+    if nested_count:
+        progress.log(
+            f"Recovered {nested_count} Type(s) nested inside case_prompts.",
+            level="warning",
+        )
+    return repaired
+
+
 _CASE_SOURCE_ARTIFACT_RE = re.compile(
     r"\b(?:examples?|exercises?|ex|fig(?:ure)?s?|tables?|page|p\.)\.?\s*\d",
     re.IGNORECASE,
@@ -2998,6 +3051,15 @@ def _split_mined_types_by_source_topic(
     return _backfill_type_cases_from_inventory(split, inventory)
 
 
+def _normalize_mined_type_candidate(
+    raw_types: list, inventory: dict,
+) -> list[dict]:
+    """Repair model schema drift, then apply deterministic Type normalization."""
+    types = _repair_nested_mined_types(raw_types)
+    types = _backfill_type_cases_from_inventory(types, inventory)
+    return _split_mined_types_by_source_topic(types, inventory)
+
+
 def _mine_types_from_inventory_via_api(
     *, meta: dict, inventory: dict, max_coverage_attempts: int = 4,
 ) -> dict:
@@ -3021,9 +3083,8 @@ def _mine_types_from_inventory_via_api(
     progress.log(
         f"Mining reusable Types from {len(inventory.get('items', []))} inventory item(s).")
     data = _openai_json(system, user)
-    types = list(data.get("types") or [])
-    types = _backfill_type_cases_from_inventory(types, inventory)
-    types = _split_mined_types_by_source_topic(types, inventory)
+    types = _normalize_mined_type_candidate(
+        list(data.get("types") or []), inventory)
     progress.log(f"Type Mining produced {len(types)} reusable Type(s).")
 
     for attempt in range(1, max_coverage_attempts + 1):
@@ -3053,10 +3114,22 @@ def _mine_types_from_inventory_via_api(
         )
         corrected = _openai_json(system, follow_up)
         corrected_types = corrected.get("types") or []
-        if corrected_types:
-            types = corrected_types
-        types = _backfill_type_cases_from_inventory(types, inventory)
-        types = _split_mined_types_by_source_topic(types, inventory)
+        candidate = _normalize_mined_type_candidate(
+            list(corrected_types), inventory)
+        candidate_missed = _uncovered_inventory_items(inventory, candidate)
+        candidate_duplicates = _duplicate_inventory_assignments(
+            inventory, candidate)
+        current_defects = len(missed) + len(duplicates)
+        candidate_defects = len(candidate_missed) + len(candidate_duplicates)
+        if candidate_defects < current_defects:
+            types = candidate
+        else:
+            progress.log(
+                "Rejected Type Mining coverage repair because exact-once "
+                f"defects did not improve ({candidate_defects} candidate vs "
+                f"{current_defects} current).",
+                level="warning",
+            )
 
     still_missed = _uncovered_inventory_items(inventory, types)
     still_duplicate = _duplicate_inventory_assignments(inventory, types)
@@ -3067,6 +3140,13 @@ def _mine_types_from_inventory_via_api(
         f"{len(still_duplicate)} duplicate assignment(s).",
         level="warning" if still_missed or still_duplicate else "success",
     )
+    if still_missed or still_duplicate:
+        raise RuntimeError(
+            "Type Mining failed exact inventory coverage after "
+            f"{max_coverage_attempts} repair attempt(s): "
+            f"{len(still_missed)} unclassified item(s), "
+            f"{len(still_duplicate)} duplicate assignment(s)."
+        )
     return {"types": types}
 
 
@@ -4626,53 +4706,6 @@ def _method_anchor_ids(rec: dict) -> set[str]:
         str(rec.get("source_evidence") or "").upper()))
 
 
-def _debug_method_anchor_state(
-    stage: str, records: list[dict], anchors: list[dict], *,
-    hypothesis_id: str, location: str,
-) -> None:
-    """Temporary NDJSON trace for locating downstream method-anchor loss."""
-    import json as _debug_json
-    import time as _debug_time
-
-    anchor_ids = {
-        str(anchor.get("anchor_id") or "").upper() for anchor in anchors
-        if anchor.get("anchor_id")
-    }
-    rows = []
-    for index, rec in enumerate(records):
-        rows.append({
-            "index": index,
-            "topic": str(rec.get("topic") or ""),
-            "concept_title": str(rec.get("concept_title") or ""),
-            "source_evidence": str(rec.get("source_evidence") or ""),
-            "tagged_anchor_ids": sorted(_method_anchor_ids(rec) & anchor_ids),
-            "covers_anchor_ids": sorted(
-                str(anchor.get("anchor_id") or "").upper()
-                for anchor in anchors
-                if _method_anchor_covered([rec], anchor)
-            ),
-        })
-    payload = {
-        "hypothesisId": hypothesis_id,
-        "location": location,
-        "message": "method anchor state",
-        "data": {
-            "stage": stage,
-            "row_count": len(records),
-            "missing_anchor_ids": [
-                anchor["anchor_id"]
-                for anchor in _missing_method_anchors(records, anchors)
-            ],
-            "rows": rows,
-        },
-        "timestamp": int(_debug_time.time() * 1000),
-    }
-    # region agent log
-    with open("/opt/cursor/logs/debug.log", "a", encoding="utf-8") as debug_file:
-        debug_file.write(_debug_json.dumps(payload, ensure_ascii=False) + "\n")
-    # endregion
-
-
 def _method_anchor_covered(records: list[dict], anchor: dict) -> bool:
     anchor_id = (anchor.get("anchor_id") or "").upper()
     topic_hint = anchor.get("topic_hint", "")
@@ -5566,13 +5599,6 @@ def concepts_from_mmd(
             question_task_inventory=question_task_inventory,
             mined_types=mined_types,
         )
-        # region agent log
-        _debug_method_anchor_state(
-            "after_type_assignment", out, method_anchors,
-            hypothesis_id="A,B,C,D",
-            location="generation.py:concepts_from_mmd/after_type_assignment",
-        )
-        # endregion
         progress.set_progress(
             0.91, label="Concept extraction — Type assignment complete")
         # Deterministic normalization BEFORE the strict repair: formatting
@@ -5585,13 +5611,6 @@ def concepts_from_mmd(
         out = _scrub_section_numbers(out)
         out = _merge_concept_records(out)
         out = _dedupe_titles_chapter_wide(out)
-        # region agent log
-        _debug_method_anchor_state(
-            "after_pre_final_exact_dedupe", out, method_anchors,
-            hypothesis_id="A,D",
-            location="generation.py:concepts_from_mmd/after_pre_final_exact_dedupe",
-        )
-        # endregion
         # Near-duplicate titles: GPT merges the rows' content; the
         # deterministic drop only guards whatever the merge pass left behind.
         progress.step(
@@ -5600,13 +5619,6 @@ def concepts_from_mmd(
         )
         before_duplicate_merge = out
         out = _merge_similar_concepts_via_api(out, meta=meta)
-        # region agent log
-        _debug_method_anchor_state(
-            "after_duplicate_merge_before_preserve", out, method_anchors,
-            hypothesis_id="B,D",
-            location="generation.py:concepts_from_mmd/after_duplicate_merge_before_preserve",
-        )
-        # endregion
         out = _preserve_required_method_rows(before_duplicate_merge, out)
         out = concept_cleanup.dedupe_similar_titles_chapter_wide(out)
         out = concept_cleanup.filter_review_violations(
@@ -5617,24 +5629,10 @@ def concepts_from_mmd(
         ]
         out = _enforce_culminations(out)
         out = _ensure_misconceptions_via_api(out, meta=meta)
-        # region agent log
-        _debug_method_anchor_state(
-            "before_final_repair", out, method_anchors,
-            hypothesis_id="A,B,C,D",
-            location="generation.py:concepts_from_mmd/before_final_repair",
-        )
-        # endregion
         before_final_repair = out
         out = _repair_records_via_api(
             out, meta=meta, stage="final", source_context=mmd_text, strict=False,
             max_attempts=3)
-        # region agent log
-        _debug_method_anchor_state(
-            "after_final_repair_before_preserve", out, method_anchors,
-            hypothesis_id="C,D",
-            location="generation.py:concepts_from_mmd/after_final_repair_before_preserve",
-        )
-        # endregion
         out = _preserve_required_method_rows(before_final_repair, out)
         # Post-repair: neutralize ONLY rows the repair pass could not fix —
         # rows that already validate cleanly keep their full GPT-authored
@@ -5648,13 +5646,6 @@ def concepts_from_mmd(
         # Salvage may leave a bare figure ref if inventory lacked the URL;
         # re-neutralize any residual source_artifact rows only.
         out = _neutralize_unrepaired_rows(out)
-        # region agent log
-        _debug_method_anchor_state(
-            "after_repair_cleanup_and_salvage", out, method_anchors,
-            hypothesis_id="C,D",
-            location="generation.py:concepts_from_mmd/after_repair_cleanup_and_salvage",
-        )
-        # endregion
         out = cr.refine_chapter(out)
         # The repair/cleanup passes may reorder, rename, or re-collide rows;
         # re-assert the duplicate-title, culmination, mastery-line, and
@@ -5664,13 +5655,6 @@ def concepts_from_mmd(
         out = concept_cleanup.dedupe_similar_titles_chapter_wide(out)
         out = concept_cleanup.filter_review_violations(
             out, subject=subject, board=board, chapter_title=chapter_title)
-        # region agent log
-        _debug_method_anchor_state(
-            "after_post_refine_dedupes", out, method_anchors,
-            hypothesis_id="A,D",
-            location="generation.py:concepts_from_mmd/after_post_refine_dedupes",
-        )
-        # endregion
         out = _ensure_mastery_lines_via_api(out, meta=meta)
         out = _ensure_misconceptions_via_api(out, meta=meta)
         out = _enforce_culminations(out)
@@ -5679,13 +5663,6 @@ def concepts_from_mmd(
         # the hard final gate so deposit is never blocked by residual refs.
         out = _neutralize_unrepaired_rows(out)
         out = _enforce_method_anchor_topics(out, method_anchors)
-        # region agent log
-        _debug_method_anchor_state(
-            "before_final_anchor_gate", out, method_anchors,
-            hypothesis_id="C,D",
-            location="generation.py:concepts_from_mmd/before_final_anchor_gate",
-        )
-        # endregion
         missing_method_anchors = _missing_method_anchors(out, method_anchors)
         if missing_method_anchors:
             raise RuntimeError(

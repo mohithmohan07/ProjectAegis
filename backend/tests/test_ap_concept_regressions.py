@@ -177,6 +177,64 @@ def test_ap_gpt_first_inventory_backfills_missed_examples_and_exercises(
     )
 
 
+def test_ap_inventory_merges_numbered_gpt_rows_with_source_anchors():
+    spiral = (
+        "A spiral is made up of successive semicircles, with centres alternately "
+        "at A and B. What is the total length of thirteen consecutive semicircles?"
+    )
+    ladder = (
+        "A ladder has rungs 25 cm apart. The rungs decrease uniformly in length "
+        "from 45 cm at the bottom to 25 cm at the top. What length of wood is required?"
+    )
+    gpt_items = [
+        {
+            "source_kind": "exercise",
+            "source_label": "EXERCISE 5.3",
+            "raw_task": f"18. {spiral}",
+            "normalized_task": f"18. {spiral}",
+        },
+        {
+            "source_kind": "exercise",
+            "source_label": "EXERCISE 5.4 (Optional)*",
+            "raw_task": f"3. {ladder}",
+            "normalized_task": f"3. {ladder}",
+        },
+    ]
+    anchors = [
+        {
+            "source_kind": "exercise",
+            "source_label": "EXERCISE 5.3 Q18",
+            "parent_source_label": "EXERCISE 5.3",
+            "topic_hint": "Sum of First n Terms of an AP",
+            "raw_task": f"{spiral} [Hint: pair the semicircle lengths.]",
+            "normalized_task": f"{spiral} [Hint: pair the semicircle lengths.]",
+            "raw_solution_or_answer": "",
+            "image_urls": ["https://cdn.mathpix.com/spiral.jpg"],
+            "requires_visual": True,
+        },
+        {
+            "source_kind": "exercise",
+            "source_label": "EXERCISE 5.4 (Optional)* Q3",
+            "parent_source_label": "EXERCISE 5.4 (Optional)*",
+            "topic_hint": "Sum of First n Terms of an AP",
+            "raw_task": f"{ladder} [Hint: count the rungs.]",
+            "normalized_task": f"{ladder} [Hint: count the rungs.]",
+            "raw_solution_or_answer": "",
+            "image_urls": ["https://cdn.mathpix.com/ladder.jpg"],
+            "requires_visual": True,
+        },
+    ]
+
+    merged = g._merge_source_task_anchors(gpt_items, anchors)
+
+    assert len(merged) == 2
+    assert [item["source_label"] for item in merged] == [
+        "EXERCISE 5.3 Q18",
+        "EXERCISE 5.4 (Optional)* Q3",
+    ]
+    assert all(item["requires_visual"] for item in merged)
+
+
 def test_inventory_does_not_density_retry_markerless_heading_chunks(monkeypatch):
     calls = {"count": 0}
 
