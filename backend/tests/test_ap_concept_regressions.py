@@ -69,6 +69,33 @@ Continuation of the preceding worked answer.
 """
 
 
+def _mathpix_ocr_edge_mmd() -> str:
+    """Small synthetic fixture covering real Mathpix heading/task shapes."""
+    return r"""
+\section*{5．1 Introduction}
+Patterns with a constant change occur in school timetables.
+
+\subsection*{5.2 Progressions}
+Example 1 : Decide whether 4, 7, 10, 13 is a progression with constant change.
+
+\section*{Solution :}
+Subtract consecutive terms to obtain the worked answer.
+
+\section*{Alternative Solution :}
+Compare each term with the preceding term.
+
+\section*{Remarks:}
+The comparison must use the same term order.
+
+\subsection*{5.3 General Term}
+The nth-position rule gives a term directly.
+
+\section*{EXERCISE 5.3 (Optional)*}
+1. Read the pattern shown in Fig. 5.1 and state its next term.
+![](https://cdn.mathpix.com/cropped/synthetic-fig-5-1.jpg)
+"""
+
+
 def _row(topic: str, title: str, *, evidence: str = "") -> dict:
     return {
         "topic": topic,
@@ -195,6 +222,73 @@ def test_ap_method_anchors_force_skeleton_retry_and_survive(monkeypatch):
     }
 
 
+def test_formula_less_prose_method_anchor_is_covered_only_by_same_topic_evidence():
+    sections = g.parse_mmd_sections(
+        r"\section*{2.1 Comparing Historical Sources}" "\n"
+        "The corroboration method compares independent accounts side by side "
+        "to identify agreements and contradictions before drawing a conclusion."
+    )
+    anchors = g._method_coverage_anchors(sections)
+
+    assert len(anchors) == 1
+    anchor = anchors[0]
+    assert anchor["required_formulas"] == []
+    assert {"corroboration", "independent", "accounts"} <= set(
+        anchor["evidence_terms"])
+
+    covered = _row(
+        "Comparing Historical Sources",
+        "Corroborating Independent Accounts",
+    )
+    covered["concept_details"] = (
+        "Description: Compare independent accounts to identify agreements and "
+        "contradictions before reaching a historical conclusion."
+    )
+    wrong_topic = dict(covered, topic="Interpreting Timelines")
+    unrelated_same_topic = _row(
+        "Comparing Historical Sources",
+        "Introducing the Source Collection",
+    )
+    unrelated_same_topic["concept_details"] = (
+        "Description: The chapter names the sources and gives their dates."
+    )
+
+    assert g._method_anchor_covered([covered], anchor)
+    assert not g._method_anchor_covered([wrong_topic], anchor)
+    assert not g._method_anchor_covered([unrelated_same_topic], anchor)
+
+
+def test_anchor_retry_prefers_tagged_duplicate_concept_row(monkeypatch):
+    chunks = g._section_aware_chunks(
+        r"\section*{2.1 Building a General Rule}" "\n"
+        r"Use a derivation method to build the rule $$u_k=u_1+(k-1)c$$.",
+        max_chars=100_000,
+    )
+    anchor = g._method_coverage_anchors(chunks[0]["sections"])[0]
+    first = _row("Building a General Rule", "Deriving the General Rule")
+    retry = _row(
+        "Building a General Rule",
+        "Deriving the General Rule",
+        evidence=anchor["anchor_id"],
+    )
+    calls = {"count": 0}
+
+    def fake_openai(system, user, **kwargs):
+        calls["count"] += 1
+        return {"rows": [_api_row(first if calls["count"] == 1 else retry)]}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    monkeypatch.setattr(
+        g, "_repair_records_via_api", lambda records, **kwargs: records)
+
+    out = g._extract_skeleton_via_api(
+        chunks, meta=g._metadata(subject="Mathematics"))
+
+    assert calls["count"] == 2
+    assert len(out) == 1
+    assert anchor["anchor_id"] in out[0]["source_evidence"]
+
+
 def test_canonicalization_cannot_drop_an_ap_derivation_row(monkeypatch):
     method = _row(
         "nth Term of an AP",
@@ -300,6 +394,100 @@ def test_cross_topic_mined_type_is_split_at_source_topic_boundary():
     assert all(len(item["source_question_ids"]) == 1 for item in out)
 
 
+def test_cross_topic_split_keeps_empty_topic_qids_on_first_dominant_topic():
+    inventory = {"items": [
+        {"qid": "QINV-0001", "topic_hint": "nth Term", "raw_task": "Find a term."},
+        {"qid": "QINV-0002", "topic_hint": "", "raw_task": "Interpret the result."},
+        {"qid": "QINV-0003", "topic_hint": "Sum", "raw_task": "Find a sum."},
+    ]}
+    types = [{
+        "type_id": "TYPE-0001",
+        "type_title": "Applying a Progression Rule",
+        "source_question_ids": ["QINV-0001", "QINV-0002", "QINV-0003"],
+        "case_prompts": [{
+            "case_title": "Use the relevant rule",
+            "examples": [
+                {"source_question_id": item["qid"],
+                 "example_prompt": item["raw_task"]}
+                for item in inventory["items"]
+            ],
+        }],
+    }]
+
+    out = g._split_mined_types_by_source_topic(types, inventory)
+
+    assert len(out) == 2
+    qids_by_topic = {
+        item["topic_match_hint"]: item["source_question_ids"] for item in out
+    }
+    assert qids_by_topic == {
+        "nth Term": ["QINV-0001", "QINV-0002"],
+        "Sum": ["QINV-0003"],
+    }
+    assert sorted(qid for item in out for qid in item["source_question_ids"]) == [
+        "QINV-0001", "QINV-0002", "QINV-0003",
+    ]
+
+
+def test_mathpix_latex_topic_wrappers_share_one_source_topic_key(monkeypatch):
+    variants = [
+        "Sum of First $ n $ Terms",
+        r"Sum of First \boldsymbol{n} Terms",
+        "Sum of First n Terms",
+    ]
+    assert len({g._topic_comparison_key(value) for value in variants}) == 1
+
+    sections = [
+        {"heading": variants[0], "body": "", "heading_level": 2},
+        {"heading": "Solution", "body": "", "heading_level": 2},
+    ]
+    assert [topic for topic, _ in g._sections_with_source_topics(sections)] == [
+        variants[0], variants[0],
+    ]
+
+    records = [_row(variants[2], "Adding a Finite Sequence")]
+    mined = {"types": [{
+        "type_id": "TYPE-0001",
+        "type_title": "Finding a Finite Sum",
+        "topic_match_hint": variants[1],
+        "source_question_ids": ["QINV-0001"],
+        "case_prompts": [{
+            "case_title": "Number of terms is given",
+            "examples": [{
+                "source_question_id": "QINV-0001",
+                "example_prompt": "Find the finite sum for the stated terms.",
+            }],
+        }],
+    }]}
+
+    def fake_assignment(system, user, **kwargs):
+        assert '"allowed_concept_ids": ["CONCEPT-0001"]' in user
+        return {"assignments": [{
+            "concept_id": "CONCEPT-0001",
+            "type_ids": ["TYPE-0001"],
+        }]}
+
+    monkeypatch.setattr(g, "_openai_json", fake_assignment)
+    out = g._assign_mined_types_via_api(
+        records, meta=g._metadata(subject="Mathematics"), mined_types=mined)
+
+    assert not g._mined_type_topic_violations(out, mined)
+    prose_anchor = {
+        "anchor_id": "METHOD-ABCDEF1234",
+        "topic_hint": variants[0],
+        "required_formulas": [],
+        "source_evidence": "Reverse-order addition builds the finite sum rule.",
+        "evidence_terms": ["reverse", "order", "addition", "finite", "sum", "rule"],
+    }
+    assert g._method_anchor_covered([{
+        **_row(variants[2], "Reverse-Order Addition"),
+        "concept_details": (
+            "Description: Reverse the order before addition to build the finite "
+            "sum rule."
+        ),
+    }], prose_anchor)
+
+
 def test_type_assignment_rejects_wrong_ap_source_topic(monkeypatch):
     records = [
         _row("Arithmetic Progressions", "Common Difference"),
@@ -342,6 +530,59 @@ def test_type_assignment_rejects_wrong_ap_source_topic(monkeypatch):
     assert "Finding a Finite AP Sum" not in out[0]["concept_details"]
     assert "Finding a Finite AP Sum" in out[1]["concept_details"]
     assert not g._mined_type_topic_violations(out, mined)
+
+
+def test_numbered_main_section_chapter_title_exception_is_explicit_in_prompts():
+    skeleton = g.prompts.get_text("concepts.skeleton.system")
+    restructuring = g.prompts.get_text("concepts.topic_structure.system")
+
+    for prompt in (skeleton, restructuring):
+        assert "numbered MAIN section" in prompt
+        assert "same title as the chapter" in prompt
+        assert "valid topic" in prompt
+
+
+def test_math_prompts_separate_formula_building_from_problem_inventory():
+    skeleton = g.prompts.get_text("concepts.skeleton.system")
+    inventory = g.prompts.get_text("concepts.question_task_inventory.system")
+    mining = g.prompts.get_text("concepts.type_mining.system")
+    embedding = g.prompts.get_text("concepts.type_embedding.system")
+
+    assert "derivations and formula-building sequences" in skeleton
+    assert "worked, numerical, contextual, or real-life problems" in skeleton
+    assert "every worked, numerical, contextual, and real-life problem" in inventory
+    assert "never include its solution" in inventory
+    assert "distinct Type or Case" in mining
+    assert "never copy solutions" in mining
+    assert "concept the problem actually assesses" in embedding
+
+
+def test_representative_mathpix_ocr_edges_keep_topics_and_visual_questions():
+    sections = g.parse_mmd_sections(_mathpix_ocr_edge_mmd())
+
+    assert [section["heading"] for section in sections][0] == "Introduction"
+    assert g._topic_headings(sections) == [
+        "Introduction", "Progressions", "General Term",
+    ]
+    paired = g._sections_with_source_topics(sections)
+    topic_by_heading = {
+        section["heading"]: topic for topic, section in paired
+    }
+    assert topic_by_heading["Solution :"] == "Progressions"
+    assert topic_by_heading["Alternative Solution :"] == "Progressions"
+    assert topic_by_heading["Remarks:"] == "Progressions"
+    assert topic_by_heading["EXERCISE 5.3 (Optional)*"] == "General Term"
+
+    anchors = g._source_task_anchors(sections)
+    assert len(anchors) == 2
+    assert all(anchor["raw_solution_or_answer"] == "" for anchor in anchors)
+    optional = next(
+        anchor for anchor in anchors if anchor["source_kind"] == "exercise")
+    assert optional["topic_hint"] == "General Term"
+    assert optional["requires_visual"] is True
+    assert optional["image_urls"] == [
+        "https://cdn.mathpix.com/cropped/synthetic-fig-5-1.jpg",
+    ]
 
 
 def test_concept_pipeline_reports_progress_after_skeleton(monkeypatch):

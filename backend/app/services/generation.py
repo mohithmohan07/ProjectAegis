@@ -28,59 +28,6 @@ _SLUG_RE = re.compile(r"[^A-Za-z0-9]")
 _MATH_SUBJECTS = {"Mathematics", "Physics", "Chemistry"}
 
 
-# region agent log
-def _agent_debug_log(
-    hypothesis_id: str, location: str, message: str, data: dict,
-) -> None:
-    """Temporary hypothesis-driven diagnostics; never include source text."""
-    import json as _json
-    import time as _time
-
-    try:
-        with open("/opt/cursor/logs/debug.log", "a", encoding="utf-8") as handle:
-            handle.write(_json.dumps({
-                "hypothesisId": hypothesis_id,
-                "location": location,
-                "message": message,
-                "data": data,
-                "timestamp": int(_time.time() * 1000),
-            }, ensure_ascii=False, default=str) + "\n")
-    except OSError:
-        pass
-# endregion
-
-
-def _agent_debug_rows(records: list[dict]) -> dict:
-    """Metadata-only concept snapshot for temporary diagnostics."""
-    topic_counts: dict[str, int] = {}
-    rows: list[dict] = []
-    for rec in records:
-        topic = (rec.get("topic") or "").strip()
-        details = rec.get("concept_details") or ""
-        lowered = details.lower()
-        topic_counts[topic] = topic_counts.get(topic, 0) + 1
-        rows.append({
-            "topic": topic,
-            "parent": (rec.get("parent_concept") or "").strip(),
-            "concept": (rec.get("concept_title") or "").strip(),
-            "detailChars": len(details),
-            "hasDerivationCue": "deriv" in lowered,
-            "hasNthTermCue": bool(re.search(
-                r"\bn(?:th|\s*[- ]?term)\b|a_\{?n\}?|a\s*\+\s*\(?n\s*-\s*1\)?\s*d",
-                details, re.IGNORECASE)),
-            "hasSumCue": bool(re.search(
-                r"sum of (?:the )?first|s_\{?n\}?|n\s*/\s*2", details,
-                re.IGNORECASE)),
-            "hasRealLifeCue": bool(re.search(
-                r"real[- ]life|daily life|practical (?:use|application)",
-                details, re.IGNORECASE)),
-            "typeCount": len(re.findall(r"\bType\s+\d{1,2}:", details, re.IGNORECASE)),
-            "caseCount": len(re.findall(r"\bCase\s+\d{1,2}:", details, re.IGNORECASE)),
-            "exampleCount": len(re.findall(r"\bExample\s*:", details, re.IGNORECASE)),
-        })
-    return {"rowCount": len(records), "topicCounts": topic_counts, "rows": rows}
-
-
 def _is_math(concept: models.Concept) -> bool:
     return concept.topic.chapter.subject in _MATH_SUBJECTS
 
@@ -1179,10 +1126,15 @@ COVERAGE IS MANDATORY (most important rule):
   opening content just because it precedes section 1.
 - Do not create separate concept rows for cases/examples/questions. These are
   captured later as Types/Cases with full source questions.
-- Explicit derivations, proofs, reusable methods/procedures, and formula-building
-  sequences are durable concepts, never disposable worked examples. When the
-  input supplies MANDATORY DERIVATION / METHOD ANCHORS, emit one normal concept
-  for every anchor and copy its anchor_id verbatim into source_evidence.
+- Explicit proofs and reusable methods/procedures are durable concepts. For
+  Mathematics, derivations and formula-building sequences remain durable
+  concepts even when they are presented inside worked exposition; never reduce
+  them to disposable examples. When the input supplies MANDATORY DERIVATION /
+  METHOD ANCHORS, emit one normal concept for every anchor and copy its
+  anchor_id verbatim into source_evidence.
+- All worked, numerical, contextual, or real-life problems are inventory items,
+  not concept rows. They are classified later into distinct Types/Cases under
+  the concept they assess; never include their solutions in the skeleton.
 - A missed main teaching objective is a defect; a micro-concept row that should
   be a case/example is also a defect.
 
@@ -1194,8 +1146,10 @@ TOPIC SEGREGATION IS MANDATORY (second most important rule):
   the New Middle Class"), the MAIN section is the topic; each subsection
   becomes a parent_concept cluster (or concepts) under that topic — NEVER a
   topic of its own.
-- The chapter title or book title is NEVER a topic. Filing every concept under
-  one umbrella topic is a defect.
+- An unnumbered chapter title or book title is NEVER a topic. Exception: when a
+  numbered MAIN section intentionally has the same title as the chapter, that
+  numbered section is a valid topic. Filing every concept under one unnumbered
+  umbrella topic is still a defect.
 - When the text spans several main section headings it MUST produce several
   topics, in the same reading order. Cover EVERY main section of the chapter —
   missing tail sections is a defect.
@@ -1385,6 +1339,9 @@ Rules:
   immediately before "Solution:" or "Answer:", and always return
   raw_solution_or_answer as an empty string. Types must expose questions, not
   answer keys or textbook solutions.
+- For Mathematics, inventory every worked, numerical, contextual, and real-life problem
+  as its own item, including problems embedded in explanatory prose.
+  Capture its complete givens, context, and ask, but never include its solution.
 - When the question depends on a figure/diagram/table image, copy the Mathpix
   image URL(s) from the source markdown (![](https://cdn.mathpix.com/...))
   into image_urls AND keep the figure reference in raw_task.
@@ -1429,6 +1386,10 @@ Rules:
 - One inventory item maps to exactly one best-fit Type. If it combines several
   skills, choose the Type that most directly assesses the final ask, or create
   one integrated Type for that mixed skill — never duplicate the question.
+- For Mathematics, classify every worked, numerical, contextual, and real-life
+  problem into a distinct Type or Case whenever its assessed action, givens,
+  representation, constraint, or ask differs. Preserve the complete problem as
+  its Example, but never copy solutions or worked-answer steps.
 - A Type may contain source questions from exactly ONE topic_hint. Never group
   questions across textbook topics even when their formulas or surface patterns
   resemble each other; create separate topic-scoped Types instead.
@@ -1522,6 +1483,9 @@ Rules:
   assign it to exactly one of those concept IDs and never any other concept.
 - A concept may receive multiple type_ids; a Type belongs to one concept.
 - Choose the concept that the Type most directly assesses (subject-appropriate).
+- Assign each worked, numerical, contextual, or real-life problem Type to the
+  concept the problem actually assesses, never to a nearby formula merely
+  because it shares notation.
 - Respect chapter position: a question assesses the concept taught at (or just
   before) the point of the chapter where it appears. NEVER assign a Type whose
   questions come from a LATER part of the chapter to an EARLIER concept — e.g.
@@ -1733,7 +1697,10 @@ Rules:
 - Assign each concept to the section whose content teaches it; consecutive
   concepts usually stay in the same section until the source moves on.
 - Do not create exercise, example, review, or practice topics.
-- Do not use the chapter title or book title as a topic.
+- Do not use an unnumbered chapter title or book title as a topic. Exception:
+  when a numbered MAIN section intentionally has the same title as the chapter,
+  that numbered section is a valid topic and must remain available for rows
+  taught there.
 """)
 
 prompts.register(
@@ -2111,6 +2078,19 @@ def _strip_section_number(title: str) -> str:
     return _SECTION_NUM_PREFIX_RE.sub("", title).strip() or title
 
 
+def _topic_comparison_key(topic: str) -> str:
+    """Canonical key for source-topic constraints.
+
+    Mathpix may render the same heading as ``$ n $``, ``\\boldsymbol{n}``, or
+    plain ``n``. Strip those presentational wrappers plus punctuation before
+    comparing topics while retaining the original heading for display.
+    """
+    text = _strip_section_number(topic)
+    text = text.replace("$", " ")
+    text = re.sub(r"[\W_]+", " ", text, flags=re.UNICODE)
+    return re.sub(r"\s+", " ", text).strip().casefold()
+
+
 def _heading_number_prefix(title: str) -> str:
     title = _clean_heading_text(title)
     m = re.match(r"^\s*(?:chapter\s+)?(\d+(?:\.\d+)*)[\).\s:-]+", title,
@@ -2287,18 +2267,16 @@ def _sections_with_source_topics(sections: list[dict]) -> list[tuple[str, dict]]
     question inventory and mined-Type placement.
     """
     headings = _topic_headings(sections)
-    canonical = {
-        bi.normalize_question_text(_strip_section_number(heading)):
-        _strip_section_number(heading)
-        for heading in headings
-        if bi.normalize_question_text(_strip_section_number(heading))
-    }
+    canonical: dict[str, str] = {}
+    for heading in headings:
+        key = _topic_comparison_key(heading)
+        if key:
+            canonical.setdefault(key, _strip_section_number(heading))
     first_topic = next(iter(canonical.values()), "General")
     current = first_topic
     paired: list[tuple[str, dict]] = []
     for section in sections:
-        key = bi.normalize_question_text(
-            _strip_section_number(section.get("heading") or ""))
+        key = _topic_comparison_key(section.get("heading") or "")
         if key in canonical:
             current = canonical[key]
         paired.append((current, section))
@@ -2325,12 +2303,13 @@ def _inventory_chunks_by_topic(
 
 def _source_for_topic(topic: str, sections: list[dict]) -> str:
     """Return source/exercise context most relevant to a topic."""
-    topic_n = _strip_section_number(topic).lower()
+    topic_n = _topic_comparison_key(topic)
     selected = [
         s for s in sections
         if topic_n and (
-            topic_n == (s.get("heading") or "").lower()
-            or topic_n in " > ".join(s.get("heading_path") or []).lower()
+            topic_n == _topic_comparison_key(s.get("heading") or "")
+            or topic_n in _topic_comparison_key(
+                " > ".join(s.get("heading_path") or []))
         )
     ]
     if not selected:
@@ -2340,7 +2319,7 @@ def _source_for_topic(topic: str, sections: list[dict]) -> str:
 
 def _record_key(rec: dict) -> tuple[str, str]:
     return (
-        (rec.get("topic") or "").lower().strip(),
+        _topic_comparison_key(rec.get("topic") or ""),
         bi.normalize_question_text(rec.get("concept_title", "")),
     )
 
@@ -2938,8 +2917,20 @@ def _split_mined_types_by_source_topic(
             continue
 
         split_count += 1
+        # A blank/unknown hint is not permission to discard the qid. Attach
+        # those qids to the topic with the most sourced items; ties preserve
+        # source order because ``nonempty_topics`` follows insertion order.
+        dominant_topic = max(
+            nonempty_topics, key=lambda topic: len(groups[topic]))
         for topic in nonempty_topics:
-            qids = groups[topic]
+            qids = [
+                qid for qid in source_qids
+                if topic_by_qid.get(qid, "") == topic
+                or (
+                    not topic_by_qid.get(qid, "")
+                    and topic == dominant_topic
+                )
+            ]
             qid_set = set(qids)
             item = dict(original)
             item["source_question_ids"] = qids
@@ -3376,12 +3367,11 @@ def _assign_mined_types_via_api(
 
     concept_ids_by_topic: dict[str, set[str]] = {}
     for row in concept_payload:
-        topic_key = bi.normalize_question_text(row.get("topic", ""))
+        topic_key = _topic_comparison_key(row.get("topic", ""))
         concept_ids_by_topic.setdefault(topic_key, set()).add(row["concept_id"])
     allowed_cids_by_tid: dict[str, set[str] | None] = {}
     for tid, mtype in types_by_id.items():
-        topic_key = bi.normalize_question_text(
-            mtype.get("topic_match_hint", ""))
+        topic_key = _topic_comparison_key(mtype.get("topic_match_hint", ""))
         allowed_cids_by_tid[tid] = (
             set(concept_ids_by_topic.get(topic_key, set()))
             if topic_key else None
@@ -3474,7 +3464,7 @@ def _mined_type_topic_violations(
             (mtype.get("type_title") or mtype.get("task_pattern") or "").strip())
         if not topic or not title:
             continue
-        topic_key = bi.normalize_question_text(topic)
+        topic_key = _topic_comparison_key(topic)
         title_key = bi.normalize_question_text(title)
         matches = [
             rec for rec in records
@@ -3492,7 +3482,7 @@ def _mined_type_topic_violations(
             continue
         for rec in matches:
             actual = (rec.get("topic") or "").strip()
-            if bi.normalize_question_text(actual) != topic_key:
+            if _topic_comparison_key(actual) != topic_key:
                 violations.append({
                     "type_id": mtype.get("type_id") or "",
                     "type_title": title,
@@ -4405,15 +4395,21 @@ def _concept_rows_to_records(data: dict) -> list[dict]:
 
 
 def _merge_concept_records(records: list[dict]) -> list[dict]:
-    """De-duplicate merged concept rows by (topic, normalized title)."""
-    seen: set[tuple[str, str]] = set()
+    """De-duplicate by topic/title, preferring mandatory anchor-tagged rows."""
+    seen: dict[tuple[str, str], int] = {}
     out: list[dict] = []
     for rec in records:
-        key = (rec["topic"].lower().strip(),
+        key = (_topic_comparison_key(rec.get("topic", "")),
                bi.normalize_question_text(rec["concept_title"]))
         if key in seen:
+            kept_index = seen[key]
+            if (
+                _method_anchor_ids(rec)
+                and not _method_anchor_ids(out[kept_index])
+            ):
+                out[kept_index] = rec
             continue
-        seen.add(key)
+        seen[key] = len(out)
         out.append(rec)
     return out
 
@@ -4487,6 +4483,17 @@ _MATH_EXPRESSION_RE = re.compile(
     r"\$\$(.+?)\$\$|\$(.+?)\$", re.DOTALL,
 )
 _METHOD_ANCHOR_ID_RE = re.compile(r"\bMETHOD-[A-F0-9]{10}\b")
+_METHOD_EVIDENCE_STOPWORDS = {
+    "about", "after", "again", "all", "also", "and", "any", "are", "before",
+    "being", "between", "build", "can", "chapter", "could", "derived",
+    "derivation", "derive", "does", "every", "formula", "from", "general",
+    "given", "gives", "had", "has", "have", "how", "into", "its", "may",
+    "method", "methods", "more", "most", "must", "not", "one", "only", "our",
+    "procedure", "proof", "rule", "same", "should", "some", "such", "technique",
+    "than", "that", "the", "their", "them", "then", "there", "these", "they",
+    "this", "those", "through", "two", "using", "was", "were", "what", "when",
+    "where", "which", "while", "why", "will", "with", "would", "your",
+}
 
 
 def _normalize_math_evidence(text: str) -> str:
@@ -4507,6 +4514,23 @@ def _normalize_math_evidence(text: str) -> str:
     out = re.sub(r"\\(?:left|right|quad|qquad|,|;|!|:)", "", out)
     out = out.replace("{", "").replace("}", "").replace("_", "")
     return re.sub(r"\s+", "", out)
+
+
+def _method_evidence_terms(text: str, *, topic: str = "") -> list[str]:
+    """Ordered, distinctive prose terms used for formula-less method coverage."""
+    topic_terms = set(_topic_comparison_key(topic).split())
+    out: list[str] = []
+    for term in _topic_comparison_key(text).split():
+        if (
+            len(term) < 3
+            or term.isdigit()
+            or term in topic_terms
+            or term in _METHOD_EVIDENCE_STOPWORDS
+            or term in out
+        ):
+            continue
+        out.append(term)
+    return out
 
 
 def _method_coverage_anchors(sections: list[dict]) -> list[dict]:
@@ -4543,6 +4567,9 @@ def _method_coverage_anchors(sections: list[dict]) -> list[dict]:
         start = max(0, cue.start() - 180)
         evidence = re.sub(
             r"\s+", " ", searchable[start:cue.start() + 1_000]).strip()
+        cue_context = searchable[
+            max(0, cue.start() - 160):cue.end() + 400
+        ]
         digest = hashlib.sha1(
             f"{topic}|{heading}|{evidence}|{formulas}".encode("utf-8")
         ).hexdigest()[:10].upper()
@@ -4556,6 +4583,8 @@ def _method_coverage_anchors(sections: list[dict]) -> list[dict]:
             "kind": "derivation_or_method",
             "source_evidence": evidence[:1_200],
             "required_formulas": formulas[-3:],
+            "evidence_terms": _method_evidence_terms(
+                cue_context, topic=topic)[:24],
         })
     return anchors
 
@@ -4569,25 +4598,39 @@ def _method_anchor_covered(records: list[dict], anchor: dict) -> bool:
     anchor_id = (anchor.get("anchor_id") or "").upper()
     if any(anchor_id in _method_anchor_ids(rec) for rec in records):
         return True
-    topic_key = bi.normalize_question_text(anchor.get("topic_hint", ""))
+    topic_hint = anchor.get("topic_hint", "")
+    topic_key = _topic_comparison_key(topic_hint)
     formulae = [
         _normalize_math_evidence(formula)
         for formula in anchor.get("required_formulas") or []
         if len(_normalize_math_evidence(formula)) >= 8
     ]
-    if not formulae:
-        return False
+    evidence_terms = _method_evidence_terms(
+        " ".join(str(term) for term in anchor.get("evidence_terms") or []),
+        topic=topic_hint,
+    )
+    if not evidence_terms:
+        evidence_terms = _method_evidence_terms(
+            anchor.get("source_evidence", ""), topic=topic_hint)
     for rec in records:
-        if bi.normalize_question_text(rec.get("topic", "")) != topic_key:
+        if _topic_comparison_key(rec.get("topic", "")) != topic_key:
             continue
-        text = _normalize_math_evidence(
-            " ".join([
-                str(rec.get("concept_title") or ""),
-                str(rec.get("concept_details") or ""),
-                str(rec.get("source_evidence") or ""),
-            ]))
-        if any(formula in text for formula in formulae):
+        record_text = " ".join([
+            str(rec.get("concept_title") or ""),
+            str(rec.get("concept_details") or ""),
+            str(rec.get("source_evidence") or ""),
+        ])
+        if formulae and any(
+                formula in _normalize_math_evidence(record_text)
+                for formula in formulae):
             return True
+        if not formulae and evidence_terms:
+            record_terms = set(
+                _method_evidence_terms(record_text, topic=topic_hint))
+            overlap = record_terms.intersection(evidence_terms)
+            required_overlap = 1 if len(evidence_terms) == 1 else 2
+            if len(overlap) >= required_overlap:
+                return True
     return False
 
 
@@ -4613,10 +4656,10 @@ def _preserve_required_method_rows(
         missing_ids = _method_anchor_ids(rec) - present
         if not missing_ids:
             continue
-        topic_key = bi.normalize_question_text(rec.get("topic", ""))
+        topic_key = _topic_comparison_key(rec.get("topic", ""))
         insert_at = len(out)
         for i, current in enumerate(out):
-            if bi.normalize_question_text(current.get("topic", "")) == topic_key:
+            if _topic_comparison_key(current.get("topic", "")) == topic_key:
                 insert_at = i + 1
         out.insert(insert_at, dict(rec))
         present.update(missing_ids)
@@ -4764,19 +4807,6 @@ def _extract_skeleton_via_api(
             )
         chunk_records = _ensure_parent_concepts(chunk_records)
         progress.log(f"  chunk {i}/{len(chunks)} skeleton rows: {len(chunk_records)}")
-        # region agent log
-        _agent_debug_log(
-            "A,B", "generation.py:_extract_skeleton_via_api",
-            "Skeleton chunk completed", {
-                "chunk": i,
-                "chunkCount": len(chunks),
-                "chunkChars": len(chunk.get("text") or ""),
-                "headings": chunk_headings,
-                "expectedMin": expected_min,
-                "expectedMax": expected_max,
-                "snapshot": _agent_debug_rows(chunk_records),
-            })
-        # endregion
         all_records.extend(chunk_records)
         progress.set_progress(
             progress_start
@@ -5084,7 +5114,7 @@ def _topic_headings(sections: list[dict]) -> list[str]:
             continue
         if _is_non_topic_heading(heading):
             continue
-        key = bi.normalize_question_text(_strip_section_number(heading))
+        key = _topic_comparison_key(heading)
         if not key:
             continue
         try:
@@ -5154,14 +5184,13 @@ def _chapter_title_is_main_topic(
     sections: list[dict], chapter_title: str,
 ) -> bool:
     """Whether a numbered main section intentionally repeats the chapter name."""
-    chapter_key = bi.normalize_question_text(chapter_title)
+    chapter_key = _topic_comparison_key(chapter_title)
     if not chapter_key:
         return False
     return any(
         section.get("heading_numbered")
         and not section.get("heading_chapter")
-        and bi.normalize_question_text(
-            _strip_section_number(section.get("heading") or "")) == chapter_key
+        and _topic_comparison_key(section.get("heading") or "") == chapter_key
         for section in sections
     )
 
@@ -5181,10 +5210,10 @@ def _snap_topics_to_headings(
     """
     if len(headings) < 3:
         return records
-    chapter_key = bi.normalize_question_text(chapter_title)
+    chapter_key = _topic_comparison_key(chapter_title)
     valid: dict[str, str] = {}
     for h in headings:
-        key = bi.normalize_question_text(_strip_section_number(h))
+        key = _topic_comparison_key(h)
         # ``_topic_headings`` has already selected the real main sections.
         # A legitimate numbered section may intentionally repeat the chapter
         # title (NCERT Ch. 5 "Arithmetic Progressions" / §5.2
@@ -5197,7 +5226,7 @@ def _snap_topics_to_headings(
     prev: str | None = None
     snapped = 0
     for rec in records:
-        key = bi.normalize_question_text(rec.get("topic", ""))
+        key = _topic_comparison_key(rec.get("topic", ""))
         if key in valid:
             rec["topic"] = valid[key]
             prev = valid[key]
@@ -5216,7 +5245,7 @@ def _topics_look_collapsed(records: list[dict], headings: list[str]) -> bool:
     although the source clearly has several section headings."""
     if not records or len(headings) < 2:
         return False
-    topics = {(r.get("topic") or "").strip().lower() for r in records}
+    topics = {_topic_comparison_key(r.get("topic") or "") for r in records}
     topics.discard("")
     if len(topics) <= 1:
         return True
@@ -5344,41 +5373,6 @@ def concepts_from_mmd(
         chunks = _section_aware_chunks(mmd_text)
         sections = [s for c in chunks for s in c["sections"]]
         method_anchors = _method_coverage_anchors(sections)
-        # region agent log
-        _agent_debug_log(
-            "A,B,C", "generation.py:concepts_from_mmd:input",
-            "Live concept pipeline input parsed", {
-                "subject": subject,
-                "board": board,
-                "grade": grade,
-                "chapter": chapter_title,
-                "sourceChars": len(mmd_text),
-                "chunkCount": len(chunks),
-                "chunkChars": [len(c.get("text") or "") for c in chunks],
-                "topicHeadings": _topic_headings(sections),
-                "sections": [{
-                    "heading": s.get("heading") or "",
-                    "level": s.get("heading_level"),
-                    "numberPrefix": s.get("heading_number_prefix") or "",
-                    "bodyChars": len(s.get("body") or ""),
-                    "exampleMarkers": len(re.findall(
-                        r"\bExample\s*\d+", s.get("body") or "", re.IGNORECASE)),
-                    "exerciseMarkers": len(re.findall(
-                        r"\bExercise\s*\d", s.get("body") or "", re.IGNORECASE)),
-                    "numberedPromptLines": len(re.findall(
-                        r"(?m)^\s*\d+[\.\)]\s+", s.get("body") or "")),
-                    "nthTermMarkers": len(re.findall(
-                        r"\bn(?:th|\s*[- ]?term)\b|a_\{?n\}?",
-                        s.get("body") or "", re.IGNORECASE)),
-                    "sumMarkers": len(re.findall(
-                        r"sum of (?:the )?first|s_\{?n\}?",
-                        s.get("body") or "", re.IGNORECASE)),
-                    "realLifeMarkers": len(re.findall(
-                        r"real[- ]life|daily life|practical (?:use|application)",
-                        s.get("body") or "", re.IGNORECASE)),
-                } for s in sections],
-            })
-        # endregion
         progress.log("Concept generation metadata received:\n" + _metadata_block(meta))
         progress.log(
             f"Extracting concepts from {len(mmd_text):,} chars "
@@ -5422,12 +5416,6 @@ def concepts_from_mmd(
         out = _ensure_mastery_lines_via_api(out, meta=meta)
         progress.set_progress(
             0.55, label="Concept extraction — descriptions complete")
-        # region agent log
-        _agent_debug_log(
-            "B,C", "generation.py:concepts_from_mmd:descriptions",
-            "Topic structure and descriptions completed",
-            _agent_debug_rows(out))
-        # endregion
         progress.step(
             "Concept extraction — inventorying questions and worked examples",
             value=0.58,
@@ -5436,54 +5424,11 @@ def concepts_from_mmd(
             meta=meta, sections=sections)
         progress.set_progress(
             0.70, label="Concept extraction — question inventory complete")
-        # region agent log
-        _agent_debug_log(
-            "D", "generation.py:concepts_from_mmd:inventory",
-            "Question task inventory completed", {
-                "stats": question_task_inventory.get("stats") or {},
-                "items": [{
-                    "qid": item.get("qid") or "",
-                    "sourceKind": item.get("source_kind") or "",
-                    "sourceLabel": item.get("source_label") or "",
-                    "topicHint": item.get("topic_hint") or "",
-                    "rawTaskChars": len(str(item.get("raw_task") or "")),
-                    "solutionChars": len(str(item.get("raw_solution_or_answer") or "")),
-                    "requiresVisual": bool(item.get("requires_visual")),
-                    "imageCount": len(item.get("image_urls") or []),
-                    "hasRealLifeCue": bool(re.search(
-                        r"real[- ]life|daily life|practical|situation|context",
-                        str(item.get("raw_task") or item.get("normalized_task") or ""),
-                        re.IGNORECASE)),
-                } for item in question_task_inventory.get("items") or []],
-            })
-        # endregion
         progress.step("Concept extraction — mining reusable Types", value=0.72)
         mined_types = _mine_types_from_inventory_via_api(
             meta=meta, inventory=question_task_inventory)
         progress.set_progress(
             0.79, label="Concept extraction — reusable Types mined")
-        # region agent log
-        _agent_debug_log(
-            "D", "generation.py:concepts_from_mmd:type_mining",
-            "Type mining completed", {
-                "typeCount": len(mined_types.get("types") or []),
-                "uncoveredQids": [
-                    item.get("qid") or "" for item in _uncovered_inventory_items(
-                        question_task_inventory, mined_types.get("types") or [])],
-                "duplicateQids": [
-                    item.get("qid") or "" for item in _duplicate_inventory_assignments(
-                        question_task_inventory, mined_types.get("types") or [])],
-                "types": [{
-                    "typeId": item.get("type_id") or "",
-                    "title": item.get("type_title") or "",
-                    "sourceQids": item.get("source_question_ids") or [],
-                    "caseCount": len(item.get("case_prompts") or []),
-                    "exampleCount": sum(
-                        len(_case_examples(case)) for case in item.get("case_prompts") or []
-                        if isinstance(case, dict)),
-                } for item in mined_types.get("types") or []],
-            })
-        # endregion
         if artifacts is not None:
             artifacts["question_task_inventory"] = question_task_inventory
             artifacts["mined_types"] = mined_types
@@ -5506,12 +5451,6 @@ def concepts_from_mmd(
         )
         progress.set_progress(
             0.91, label="Concept extraction — Type assignment complete")
-        # region agent log
-        _agent_debug_log(
-            "D,E", "generation.py:concepts_from_mmd:type_assignment",
-            "Type assignment and alignment completed",
-            _agent_debug_rows(out))
-        # endregion
         # Deterministic normalization BEFORE the strict repair: formatting
         # failures the code can fix itself (section numbering in topics/titles,
         # missing/duplicate culminations) must never fail a job or burn repair

@@ -14,9 +14,7 @@
 """
 from __future__ import annotations
 
-import functools
 import re
-import traceback
 from pathlib import Path
 
 from sqlalchemy.orm import Session
@@ -33,26 +31,6 @@ from . import (
     mmd,
     progress,
 )
-
-
-def _agent_debug_post_learning_failures(fn):
-    """Temporary exception capture for the full post-learning operation."""
-    @functools.wraps(fn)
-    def wrapped(*args, **kwargs):
-        try:
-            return fn(*args, **kwargs)
-        except Exception as exc:
-            # region agent log
-            generation._agent_debug_log(
-                "A,E", "build_concepts.py:generate_post_learning",
-                "Post-learning generation raised", {
-                    "exceptionType": type(exc).__name__,
-                    "exceptionMessage": str(exc),
-                    "traceback": traceback.format_exc(limit=12),
-                })
-            # endregion
-            raise
-    return wrapped
 
 
 def _find_concept_in_chapter(chapter: models.Chapter, title: str) -> models.Concept | None:
@@ -407,7 +385,6 @@ def create_post_learning_job(
     return job
 
 
-@_agent_debug_post_learning_failures
 def generate_post_learning(db: Session, job_id: int, target_chapter_id: int) -> dict:
     job = db.get(models.UploadJob, job_id)
     chapter = db.get(models.Chapter, target_chapter_id)
@@ -415,7 +392,6 @@ def generate_post_learning(db: Session, job_id: int, target_chapter_id: int) -> 
         raise ValueError("upload job or target chapter not found")
     if not job.mmd_text:
         raise ValueError("convert the uploaded document to MMD before generating")
-    chapter_concepts_before = sum(len(topic.concepts) for topic in chapter.topics)
     progress.log(f"Post-learning generation into chapter '{chapter.chapter_title}'.")
     artifacts: dict = {}
     records = generation.concepts_from_mmd(
@@ -433,41 +409,6 @@ def generate_post_learning(db: Session, job_id: int, target_chapter_id: int) -> 
     _store_inventory(job, artifacts)
     created_ids, merged_ids = _deposit_concepts(
         db, chapter, records, "Post", job.source_book)
-    generated_by_title = {
-        bi.normalize_question_text(rec.get("concept_title", "")): rec
-        for rec in records
-    }
-    merged_comparison = []
-    for concept_id in merged_ids:
-        persisted = db.get(models.Concept, concept_id)
-        if persisted is None:
-            continue
-        generated = generated_by_title.get(
-            bi.normalize_question_text(persisted.concept_title)) or {}
-        cleaned = concept_cleanup.clean_concept_record(dict(generated)) if generated else {}
-        merged_comparison.append({
-            "concept": persisted.concept_title,
-            "persistedTopic": persisted.topic.topic_title,
-            "generatedTopic": generated.get("topic") or "",
-            "topicMatch": persisted.topic.topic_title == (generated.get("topic") or ""),
-            "persistedDetailChars": len(persisted.concept_details or ""),
-            "generatedDetailChars": len(cleaned.get("concept_details") or ""),
-            "detailsMatch": (persisted.concept_details or "")
-            == (cleaned.get("concept_details") or ""),
-        })
-    # region agent log
-    generation._agent_debug_log(
-        "E", "build_concepts.py:generate_post_learning:deposit",
-        "Final generated records reached deposit", {
-            "chapterId": target_chapter_id,
-            "chapterConceptsBefore": chapter_concepts_before,
-            "chapterConceptsAfter": sum(len(topic.concepts) for topic in chapter.topics),
-            "createdCount": len(created_ids),
-            "mergedCount": len(merged_ids),
-            "mergedComparison": merged_comparison,
-            "finalSnapshot": generation._agent_debug_rows(records),
-        })
-    # endregion
     _sync_chapter_topic_summary(chapter, _chapter_meta_summary(chapter))
     db.commit()
 
