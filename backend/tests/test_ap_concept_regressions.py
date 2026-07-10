@@ -131,7 +131,7 @@ def test_ap_deterministic_audit_finds_every_worked_example_without_solutions():
     by_label = {item["source_label"]: item["topic_hint"] for item in worked}
     assert by_label["Example 2"] == "Arithmetic Progressions"
     assert by_label["Example 10"] == "nth Term of an AP"
-    assert by_label["Example 16"] == "Sum of First $n$ Terms of an AP"
+    assert by_label["Example 16"] == "Sum of First n Terms of an AP"
 
 
 def test_ap_inventory_chunks_preserve_heading_context_and_topic_boundaries():
@@ -182,12 +182,12 @@ def test_ap_method_anchors_force_skeleton_retry_and_survive(monkeypatch):
     anchors = g._method_coverage_anchors(chunks[0]["sections"])
     assert {anchor["topic_hint"] for anchor in anchors} >= {
         "nth Term of an AP",
-        "Sum of First $n$ Terms of an AP",
+        "Sum of First n Terms of an AP",
     }
     base = [
         _row("Arithmetic Progressions", "Common Difference"),
         _row("nth Term of an AP", "General Term"),
-        _row("Sum of First $n$ Terms of an AP", "Finite AP Sums"),
+        _row("Sum of First n Terms of an AP", "Finite AP Sums"),
         _row("Introduction", "Patterns with Constant Change"),
     ]
     calls = {"count": 0}
@@ -445,7 +445,7 @@ def test_mathpix_latex_topic_wrappers_share_one_source_topic_key(monkeypatch):
         {"heading": "Solution", "body": "", "heading_level": 2},
     ]
     assert [topic for topic, _ in g._sections_with_source_topics(sections)] == [
-        variants[0], variants[0],
+        variants[2], variants[2],
     ]
 
     records = [_row(variants[2], "Adding a Finite Sequence")]
