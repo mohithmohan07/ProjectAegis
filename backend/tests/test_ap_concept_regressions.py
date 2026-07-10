@@ -109,6 +109,16 @@ def _row(topic: str, title: str, *, evidence: str = "") -> dict:
     }
 
 
+def _row_with_types(topic: str, *type_titles: str) -> dict:
+    row = _row(topic, f"{topic} concept")
+    body = " ".join(
+        f"Type {index:02d}: {type_title} Case 01: Solve the source task."
+        for index, type_title in enumerate(type_titles, start=1)
+    )
+    row["concept_details"] = g._inject_types(row["concept_details"], body)
+    return row
+
+
 def _api_row(record: dict) -> dict:
     return {
         "topic": record["topic"],
@@ -787,6 +797,111 @@ def test_type_assignment_rejects_wrong_ap_source_topic(monkeypatch):
     assert "Finding a Finite AP Sum" not in out[0]["concept_details"]
     assert "Finding a Finite AP Sum" in out[1]["concept_details"]
     assert not g._mined_type_topic_violations(out, mined)
+
+
+def test_topic_validator_accepts_same_title_split_across_expected_topics():
+    title = "Applying a shared arithmetic progression pattern"
+    mined = {"types": [
+        {
+            "type_id": "TYPE-0001",
+            "type_title": title,
+            "topic_match_hint": "Arithmetic Progressions",
+        },
+        {
+            "type_id": "TYPE-0002",
+            "type_title": title,
+            "topic_match_hint": "nth Term of an AP",
+        },
+    ]}
+    candidate = [
+        _row_with_types("Arithmetic Progressions", title),
+        _row_with_types("Nth Term of an AP", title),
+    ]
+    original = [_row("Arithmetic Progressions", "Original concept")]
+
+    assert not g._mined_type_topic_violations(candidate, mined)
+    assert g._accept_topic_safe_type_review(original, candidate, mined) is candidate
+
+
+def test_topic_validator_reports_missing_same_title_topic_sibling():
+    title = "Applying a shared arithmetic progression pattern"
+    mined = {"types": [
+        {
+            "type_id": "TYPE-0001",
+            "type_title": title,
+            "topic_match_hint": "Arithmetic Progressions",
+        },
+        {
+            "type_id": "TYPE-0002",
+            "type_title": title,
+            "topic_match_hint": "nth Term of an AP",
+        },
+    ]}
+    candidate = [_row_with_types("Arithmetic Progressions", title)]
+    original = [_row("Arithmetic Progressions", "Original concept")]
+
+    assert g._mined_type_topic_violations(candidate, mined) == [{
+        "type_id": "TYPE-0002",
+        "type_title": title,
+        "expected_topic": "nth Term of an AP",
+        "actual_topic": "",
+        "reason": "missing",
+    }]
+    assert g._accept_topic_safe_type_review(original, candidate, mined) is original
+
+
+def test_topic_validator_reports_only_unexpected_third_topic_for_shared_title():
+    title = "Applying a shared arithmetic progression pattern"
+    mined = {"types": [
+        {
+            "type_id": "TYPE-0001",
+            "type_title": title,
+            "topic_match_hint": "Arithmetic Progressions",
+        },
+        {
+            "type_id": "TYPE-0002",
+            "type_title": title,
+            "topic_match_hint": "nth Term of an AP",
+        },
+    ]}
+    candidate = [
+        _row_with_types("Arithmetic Progressions", title),
+        _row_with_types("Nth Term of an AP", title),
+        _row_with_types("Sum of First n Terms of an AP", title),
+    ]
+    original = [_row("Arithmetic Progressions", "Original concept")]
+    violations = g._mined_type_topic_violations(candidate, mined)
+
+    assert len(violations) == 1
+    assert violations[0]["reason"] == "wrong_topic"
+    assert violations[0]["actual_topic"] == "Sum of First n Terms of an AP"
+    assert g._accept_topic_safe_type_review(original, candidate, mined) is original
+
+
+def test_topic_validator_preserves_same_topic_title_multiplicity():
+    title = "Applying a duplicated arithmetic progression pattern"
+    mined = {"types": [
+        {
+            "type_id": "TYPE-0001",
+            "type_title": title,
+            "topic_match_hint": "Arithmetic Progressions",
+        },
+        {
+            "type_id": "TYPE-0002",
+            "type_title": title,
+            "topic_match_hint": "Arithmetic Progressions",
+        },
+    ]}
+
+    assert not g._mined_type_topic_violations([
+        _row_with_types("Arithmetic Progressions", title, title),
+    ], mined)
+    violations = g._mined_type_topic_violations([
+        _row_with_types("Arithmetic Progressions", title),
+    ], mined)
+    assert [(item["type_id"], item["reason"]) for item in violations] == [
+        ("TYPE-0002", "missing"),
+    ]
 
 
 def test_numbered_main_section_chapter_title_exception_is_explicit_in_prompts():

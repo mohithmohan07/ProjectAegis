@@ -4464,8 +4464,9 @@ def _assign_mined_types_via_api(
 def _mined_type_topic_violations(
     records: list[dict], mined_types: dict | None,
 ) -> list[dict]:
-    """Return mined Types missing from, or placed outside, their source topic."""
+    """Return missing or unexpected placements, grouped by normalized Type title."""
     violations: list[dict] = []
+    expected_by_title: dict[str, list[dict]] = {}
     for mtype in (mined_types or {}).get("types") or []:
         topic = (mtype.get("topic_match_hint") or "").strip()
         title = concept_cleanup.strip_dangling_references(
@@ -4474,12 +4475,55 @@ def _mined_type_topic_violations(
             continue
         topic_key = _topic_comparison_key(topic)
         title_key = bi.normalize_question_text(title)
-        matches = [
-            rec for rec in records
-            if title_key and title_key in bi.normalize_question_text(
-                _types_body(rec.get("concept_details", "")))
-        ]
-        if not matches:
+        expected_by_title.setdefault(title_key, []).append({
+            "mtype": mtype,
+            "title": title,
+            "topic": topic,
+            "topic_key": topic_key,
+        })
+
+    # Parse rendered Type headers rather than matching title text in Case/Example
+    # prose. Match longest normalized titles first because the rendered header
+    # may append a description after the title.
+    type_header_re = re.compile(
+        r"\b(?:Miscellaneous\s+)?Type\s+\d+\s*:\s*(?P<title>.*?)"
+        r"(?=\s+\bCase\s+\d+\s*:)",
+        re.IGNORECASE | re.DOTALL,
+    )
+    actual_by_title: dict[str, list[dict]] = {
+        title_key: [] for title_key in expected_by_title
+    }
+    known_title_keys = sorted(expected_by_title, key=len, reverse=True)
+    for rec in records:
+        body = _types_body(rec.get("concept_details", ""))
+        for match in type_header_re.finditer(body):
+            rendered_key = bi.normalize_question_text(match.group("title"))
+            title_key = rendered_key if rendered_key in expected_by_title else next(
+                (
+                    known_key for known_key in known_title_keys
+                    if rendered_key.startswith(f"{known_key} ")
+                ),
+                "",
+            )
+            if title_key:
+                actual_by_title[title_key].append(rec)
+
+    for title_key, expected in expected_by_title.items():
+        matches = actual_by_title[title_key]
+        remaining_by_topic: dict[str, int] = {}
+        for rec in matches:
+            actual_key = _topic_comparison_key((rec.get("topic") or "").strip())
+            remaining_by_topic[actual_key] = remaining_by_topic.get(actual_key, 0) + 1
+
+        for entry in expected:
+            mtype = entry["mtype"]
+            title = entry["title"]
+            topic = entry["topic"]
+            topic_key = entry["topic_key"]
+            if remaining_by_topic.get(topic_key, 0):
+                remaining_by_topic[topic_key] -= 1
+                continue
+
             violations.append({
                 "type_id": mtype.get("type_id") or "",
                 "type_title": title,
@@ -4487,17 +4531,24 @@ def _mined_type_topic_violations(
                 "actual_topic": "",
                 "reason": "missing",
             })
-            continue
+
+        expected_topic_keys = {entry["topic_key"] for entry in expected}
+        representative = expected[0]
         for rec in matches:
             actual = (rec.get("topic") or "").strip()
-            if _topic_comparison_key(actual) != topic_key:
-                violations.append({
-                    "type_id": mtype.get("type_id") or "",
-                    "type_title": title,
-                    "expected_topic": topic,
-                    "actual_topic": actual,
-                    "reason": "wrong_topic",
-                })
+            actual_key = _topic_comparison_key(actual)
+            if actual_key in expected_topic_keys:
+                continue
+            mtype = representative["mtype"]
+            title = representative["title"]
+            topic = representative["topic"]
+            violations.append({
+                "type_id": mtype.get("type_id") or "",
+                "type_title": title,
+                "expected_topic": topic,
+                "actual_topic": actual,
+                "reason": "wrong_topic",
+            })
     return violations
 
 
