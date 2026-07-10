@@ -1,6 +1,8 @@
 """Focused regressions for the NCERT Arithmetic Progressions chapter."""
 from __future__ import annotations
 
+import pytest
+
 from app.services import generation as g
 
 
@@ -369,6 +371,107 @@ def test_anchor_retry_prefers_tagged_duplicate_concept_row(monkeypatch):
     assert calls["count"] == 2
     assert len(out) == 1
     assert anchor["anchor_id"] in out[0]["source_evidence"]
+
+
+def test_focused_method_recovery_restores_anchor_after_broad_retry_omits_it(
+    monkeypatch,
+):
+    chunks = g._section_aware_chunks(
+        r"\section*{2.1 Building a General Rule}" "\n"
+        r"Use a derivation method to build the rule $$u_k=u_1+(k-1)c$$.",
+        max_chars=100_000,
+    )
+    anchor = g._method_coverage_anchors(chunks[0]["sections"])[0]
+    untagged = _row(
+        anchor["topic_hint"],
+        "Deriving the General Rule",
+    )
+    focused = _row(
+        "Wrong Model Topic",
+        "Deriving the General Rule",
+        evidence=f"{anchor['anchor_id']} | model-selected evidence",
+    )
+    focused["concept_details"] = (
+        "Description: Derive the term at position k by adding k minus one "
+        "copies of the common change to the first term."
+    )
+    calls: list[tuple[str, str]] = []
+
+    def fake_openai(system, user, **kwargs):
+        calls.append((system, user))
+        if len(calls) <= 2:
+            return {"rows": [_api_row(untagged)]}
+        assert "focused recovery" in system.lower()
+        assert anchor["anchor_id"] in user
+        assert anchor["source_evidence"] in user
+        assert all(formula in user for formula in anchor["required_formulas"])
+        assert chunks[0]["text"] in user
+        return {"rows": [_api_row(focused)]}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    monkeypatch.setattr(
+        g, "_repair_records_via_api", lambda records, **kwargs: records)
+
+    out = g._extract_skeleton_via_api(
+        chunks, meta=g._metadata(subject="Mathematics"))
+
+    assert len(calls) == 3
+    assert "Return the COMPLETE corrected skeleton" in calls[1][1]
+    assert "Return the COMPLETE corrected skeleton" not in calls[2][1]
+    assert len(out) == 1
+    assert out[0]["topic"] == anchor["topic_hint"]
+    assert out[0]["concept_details"] == focused["concept_details"]
+    assert anchor["anchor_id"] in out[0]["source_evidence"]
+    assert anchor["source_evidence"] in out[0]["source_evidence"]
+    assert "model-selected evidence" not in out[0]["source_evidence"]
+    assert not g._missing_method_anchors(out, [anchor])
+
+
+def test_focused_method_recovery_fails_clearly_after_malformed_responses(
+    monkeypatch,
+):
+    chunks = g._section_aware_chunks(
+        r"\section*{2.1 Building a General Rule}" "\n"
+        r"Use a derivation method to build the rule $$u_k=u_1+(k-1)c$$.",
+        max_chars=100_000,
+    )
+    anchor = g._method_coverage_anchors(chunks[0]["sections"])[0]
+    untagged = _row(
+        anchor["topic_hint"],
+        "Deriving the General Rule",
+    )
+    wrong_tag = _row(
+        anchor["topic_hint"],
+        "Deriving the General Rule",
+        evidence="METHOD-ABCDEF1234",
+    )
+    calls = {"count": 0}
+
+    def fake_openai(system, user, **kwargs):
+        calls["count"] += 1
+        if calls["count"] <= 2:
+            return {"rows": [_api_row(untagged)]}
+        if calls["count"] == 3:
+            return {"rows": "not-a-list"}
+        if calls["count"] == 4:
+            return {"rows": [{"topic": anchor["topic_hint"], "concept": ""}]}
+        return {"rows": [_api_row(wrong_tag)]}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    monkeypatch.setattr(
+        g, "_repair_records_via_api", lambda records, **kwargs: records)
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            r"focused method-anchor recovery failed after 3 attempt\(s\).*"
+            + anchor["anchor_id"]
+        ),
+    ):
+        g._extract_skeleton_via_api(
+            chunks, meta=g._metadata(subject="Mathematics"))
+
+    assert calls["count"] == 5
 
 
 def test_canonicalization_cannot_drop_an_ap_derivation_row(monkeypatch):

@@ -1175,6 +1175,30 @@ Rules:
 """)
 
 prompts.register(
+    "concepts.method_anchor_recovery.system", category=_CONCEPTS_CAT,
+    label="Focused derivation/method anchor recovery system prompt",
+    default="""\
+Perform focused recovery of missing derivation/method concepts.
+Return ONLY strict JSON:
+{"rows":[{"topic":"","parent_concept":"","concept":"","concept_description":"","keywords":"","source_evidence":""}]}.
+
+Rules:
+- Emit exactly one normal concept row for each supplied missing anchor and no
+  other rows.
+- Copy each supplied anchor_id verbatim, with identical uppercase spelling,
+  into that row's source_evidence. Never substitute or invent an ID.
+- Use the anchor's topic_hint exactly as topic.
+- Ground the concept title and 2-4 sentence Description in that anchor's source
+  evidence, required formulas, and the relevant chunk text. Explain the actual
+  reusable derivation or method; never write a vague placeholder.
+- Keep source_evidence concise but include the exact anchor_id and the specific
+  source phrase/formula that supports the row.
+- Include a meaningful parent_concept and keywords.
+- Do not emit Types, Cases, Examples, exercises, culmination rows, or unrelated
+  concepts.
+""")
+
+prompts.register(
     "concepts.canonicalize.system", category=_CONCEPTS_CAT,
     label="Chapter-wide concept canonicalization system prompt",
     default="""\
@@ -4822,6 +4846,161 @@ def _enforce_method_anchor_topics(
     return records
 
 
+def _recover_method_anchor_rows_via_api(
+    missing_anchors: list[dict], *, chunk_text: str, meta: dict,
+    max_attempts: int = 3,
+) -> list[dict]:
+    """Recover only missing method rows, accepting exact tagged normal rows."""
+    import json as _json
+
+    ordered_ids = [
+        str(anchor.get("anchor_id") or "").strip()
+        for anchor in missing_anchors
+        if str(anchor.get("anchor_id") or "").strip()
+    ]
+    pending = {
+        str(anchor.get("anchor_id") or "").strip(): anchor
+        for anchor in missing_anchors
+        if str(anchor.get("anchor_id") or "").strip()
+    }
+    recovered: dict[str, dict] = {}
+    recovered_keys: set[tuple[str, str]] = set()
+    attempt_limit = max(1, int(max_attempts))
+    system = prompts.get_text("concepts.method_anchor_recovery.system")
+
+    for attempt in range(1, attempt_limit + 1):
+        requested = [
+            {
+                "anchor_id": anchor_id,
+                "topic_hint": pending[anchor_id].get("topic_hint", ""),
+                "source_evidence": pending[anchor_id].get(
+                    "source_evidence", ""),
+                "required_formulas": pending[anchor_id].get(
+                    "required_formulas") or [],
+            }
+            for anchor_id in ordered_ids
+            if anchor_id in pending
+        ]
+        user = (
+            _metadata_block(meta)
+            + "\nSTILL-MISSING METHOD ANCHORS:\n"
+            + _json.dumps(requested, ensure_ascii=False)
+            + "\n\nRELEVANT CHUNK TEXT:\n"
+            + _trim(chunk_text, 120_000)
+        )
+        data = _openai_json(system, user)
+        raw_rows = data.get("rows") if isinstance(data, dict) else []
+        if not isinstance(raw_rows, list):
+            raw_rows = []
+
+        tagged_counts: dict[str, int] = {}
+        valid_by_anchor: dict[str, list[dict]] = {}
+        invalid_count = 0
+        for raw_row in raw_rows:
+            if not isinstance(raw_row, dict):
+                invalid_count += 1
+                continue
+            raw_evidence = raw_row.get("source_evidence")
+            if not isinstance(raw_evidence, str):
+                invalid_count += 1
+                continue
+            exact_ids = set(_METHOD_ANCHOR_ID_RE.findall(raw_evidence))
+            matching_ids = exact_ids.intersection(pending)
+            if len(exact_ids) != 1 or len(matching_ids) != 1:
+                invalid_count += 1
+                continue
+            anchor_id = next(iter(matching_ids))
+            tagged_counts[anchor_id] = tagged_counts.get(anchor_id, 0) + 1
+
+            required_fields = (
+                "topic", "parent_concept", "concept",
+                "concept_description", "source_evidence",
+            )
+            if any(
+                not isinstance(raw_row.get(field), str)
+                or not raw_row.get(field, "").strip()
+                for field in required_fields
+            ):
+                invalid_count += 1
+                continue
+            if (
+                raw_row.get("keywords") is not None
+                and not isinstance(raw_row.get("keywords"), str)
+            ):
+                invalid_count += 1
+                continue
+
+            parsed = _concept_rows_to_records({"rows": [raw_row]})
+            if len(parsed) != 1:
+                invalid_count += 1
+                continue
+            record = parsed[0]
+            anchor = pending[anchor_id]
+            source_topic = (anchor.get("topic_hint") or "").strip()
+            if source_topic:
+                record["topic"] = source_topic
+            source_evidence = re.sub(
+                r"\s+", " ",
+                str(anchor.get("source_evidence") or ""),
+            ).strip()
+            record["source_evidence"] = (
+                f"{anchor_id} | {source_evidence}"
+                if source_evidence else anchor_id
+            )
+
+            report = cv.validate_concept_rows(
+                [record],
+                allow_types=False,
+                require_culmination=False,
+                allow_culmination=False,
+            )
+            if not report["ok"]:
+                invalid_count += 1
+                continue
+            valid_by_anchor.setdefault(anchor_id, []).append(record)
+
+        accepted = 0
+        for anchor_id in ordered_ids:
+            if anchor_id not in pending:
+                continue
+            candidates = valid_by_anchor.get(anchor_id, [])
+            if tagged_counts.get(anchor_id) != 1 or len(candidates) != 1:
+                continue
+            record = candidates[0]
+            key = (
+                _topic_comparison_key(record.get("topic", "")),
+                bi.normalize_question_text(record.get("concept_title", "")),
+            )
+            if key in recovered_keys:
+                invalid_count += 1
+                continue
+            recovered[anchor_id] = record
+            recovered_keys.add(key)
+            del pending[anchor_id]
+            accepted += 1
+
+        progress.log(
+            f"  focused method-anchor recovery attempt {attempt}/"
+            f"{attempt_limit}: accepted {accepted} row(s), "
+            f"{len(pending)} anchor(s) still missing"
+            + (
+                f"; rejected {invalid_count} malformed row(s)."
+                if invalid_count else "."
+            ),
+            level="warning" if pending else "success",
+        )
+        if not pending:
+            return [recovered[anchor_id] for anchor_id in ordered_ids]
+
+    raise RuntimeError(
+        "focused method-anchor recovery failed after "
+        f"{attempt_limit} attempt(s); missing valid normal concept rows with "
+        "exact METHOD IDs: "
+        + ", ".join(
+            anchor_id for anchor_id in ordered_ids if anchor_id in pending)
+    )
+
+
 def _extract_skeleton_via_api(
     chunks: list[dict], *, meta: dict,
     progress_start: float = 0.03, progress_end: float = 0.24,
@@ -4949,8 +5128,21 @@ def _extract_skeleton_via_api(
             missing_method_anchors = _missing_method_anchors(
                 chunk_records, method_anchors)
         if missing_method_anchors:
+            focused_records = _recover_method_anchor_rows_via_api(
+                missing_method_anchors,
+                chunk_text=chunk["text"],
+                meta=meta,
+            )
+            chunk_records = _merge_concept_records(
+                chunk_records + focused_records)
+            chunk_records = _enforce_method_anchor_topics(
+                chunk_records, method_anchors)
+            missing_method_anchors = _missing_method_anchors(
+                chunk_records, method_anchors)
+        if missing_method_anchors:
             raise RuntimeError(
-                "concept skeleton omitted mandatory derivation/method anchors: "
+                "concept skeleton focused recovery did not preserve mandatory "
+                "derivation/method anchors: "
                 + ", ".join(
                     anchor["anchor_id"] for anchor in missing_method_anchors)
             )
