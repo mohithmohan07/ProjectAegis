@@ -352,6 +352,135 @@ def test_formula_less_prose_method_anchor_is_covered_only_by_same_topic_evidence
     assert not g._method_anchor_covered([unrelated_same_topic], anchor)
 
 
+def test_canonical_method_tags_prefer_formula_row_and_restore_without_duplicate(
+    monkeypatch,
+):
+    topic = "Sum of First n Terms of an AP"
+    anchors = [
+        {
+            "anchor_id": "METHOD-BBBBBBBBBB",
+            "topic_hint": topic,
+            "required_formulas": [r"2S=n[2a+(n-1)d]"],
+            "source_evidence": "reverse-order addition doubles the finite sum",
+            "evidence_terms": ["reverse", "order", "addition", "finite", "sum"],
+        },
+        {
+            "anchor_id": "METHOD-CCCCCCCCCC",
+            "topic_hint": topic,
+            "required_formulas": [r"S=\frac{n}{2}[2a+(n-1)d]"],
+            "source_evidence": "halving the doubled sum gives the sum rule",
+            "evidence_terms": ["halving", "doubled", "sum"],
+        },
+    ]
+    prose_row = _row(topic, "Explaining Reverse-Order Addition")
+    prose_row["concept_details"] = (
+        "Description: Reverse-order addition is introduced for finite sums."
+    )
+    formula_row = _row(
+        topic,
+        "Deriving the Finite Sum",
+        evidence="textbook equations | METHOD-AAAAAAAAAA",
+    )
+    formula_row["concept_details"] = (
+        r"Description: Adding in reverse gives $2S=n[2a+(n-1)d]$, then "
+        r"$S=\frac{n}{2}[2a+(n-1)d]$."
+    )
+
+    monkeypatch.setattr(
+        g,
+        "_recover_method_anchor_rows_via_api",
+        lambda *args, **kwargs: pytest.fail("formula coverage must not recover"),
+    )
+    tagged = g._canonicalize_method_anchor_tags(
+        [prose_row, formula_row],
+        anchors,
+        chunk_text="source",
+        meta=g._metadata(subject="Mathematics"),
+    )
+
+    assert len(tagged) == 2
+    assert g._method_anchor_ids(tagged[0]) == set()
+    assert g._method_anchor_ids(tagged[1]) == {
+        "METHOD-AAAAAAAAAA",
+        "METHOD-BBBBBBBBBB",
+        "METHOD-CCCCCCCCCC",
+    }
+    assert tagged[1]["source_evidence"].startswith(
+        "textbook equations | METHOD-AAAAAAAAAA")
+    snapshot = g._snapshot_method_anchor_rows(tagged, anchors)
+    assert set(snapshot) == {
+        (anchor["anchor_id"], g._topic_comparison_key(topic))
+        for anchor in anchors
+    }
+    survivor = dict(tagged[1])
+    survivor["topic"] = "Model-selected topic"
+    survivor["source_evidence"] = "surviving refined evidence"
+
+    restored = g._restore_method_anchor_rows([tagged[0], survivor], snapshot)
+
+    assert len(restored) == 2
+    restored_formula = next(
+        row for row in restored
+        if row["concept_title"] == "Deriving the Finite Sum"
+    )
+    assert restored_formula["topic"] == topic
+    assert {anchor["anchor_id"] for anchor in anchors} <= (
+        g._method_anchor_ids(restored_formula)
+    )
+    assert sum(
+        row["concept_title"] == "Deriving the Finite Sum" for row in restored
+    ) == 1
+
+
+def test_canonical_method_tags_recover_instead_of_tagging_unrelated_row(
+    monkeypatch,
+):
+    anchor = {
+        "anchor_id": "METHOD-DDDDDDDDDD",
+        "topic_hint": "nth Term of an AP",
+        "required_formulas": [r"a_n=a+(n-1)d"],
+        "source_evidence": "derive the nth term by repeated addition",
+        "evidence_terms": ["repeated", "addition", "term"],
+    }
+    unrelated = _row(
+        anchor["topic_hint"],
+        "Recognising an Arithmetic Progression",
+        evidence="constant differences identify an AP",
+    )
+    recovered = _row(
+        anchor["topic_hint"],
+        "Deriving the General Term",
+        evidence=anchor["anchor_id"],
+    )
+    recovered["concept_details"] = (
+        r"Description: Repeated addition gives $a_n=a+(n-1)d$."
+    )
+    calls: list[list[dict]] = []
+
+    def fake_recovery(missing, **kwargs):
+        calls.append(missing)
+        return [recovered]
+
+    monkeypatch.setattr(
+        g, "_recover_method_anchor_rows_via_api", fake_recovery)
+    tagged = g._canonicalize_method_anchor_tags(
+        [unrelated],
+        [anchor],
+        chunk_text="source",
+        meta=g._metadata(subject="Mathematics"),
+    )
+
+    assert calls == [[anchor]]
+    assert len(tagged) == 2
+    assert tagged[0] == unrelated
+    assert g._method_anchor_ids(tagged[0]) == set()
+    assert tagged[1]["topic"] == anchor["topic_hint"]
+    assert g._method_anchor_ids(tagged[1]) == {anchor["anchor_id"]}
+    assert len({
+        g.bi.normalize_question_text(row["concept_title"]) for row in tagged
+    }) == len(tagged)
+
+
 def test_anchor_retry_prefers_tagged_duplicate_concept_row(monkeypatch):
     chunks = g._section_aware_chunks(
         r"\section*{2.1 Building a General Rule}" "\n"
@@ -536,7 +665,7 @@ def test_pipeline_restores_skeleton_method_rows_before_description_and_cleanup(
         {
             "anchor_id": "METHOD-2222222222",
             "topic_hint": "nth Term of an AP",
-            "required_formulas": [],
+            "required_formulas": [r"a_n=a+(n-1)d"],
             "source_evidence": "general term derivation",
             "evidence_terms": ["general", "term", "derivation"],
         },
@@ -563,6 +692,10 @@ def test_pipeline_restores_skeleton_method_rows_before_description_and_cleanup(
             ],
         )
     ]
+    skeleton[1]["source_evidence"] = "general-term textbook equation"
+    skeleton[1]["concept_details"] = (
+        r"Description: Repeated addition gives $a_n=a+(n-1)d$."
+    )
     skeleton.append(_row("Introduction", "Patterns with Constant Change"))
     dropped_titles = {
         "Deriving the General Term",

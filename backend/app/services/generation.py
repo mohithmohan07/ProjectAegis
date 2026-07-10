@@ -5657,16 +5657,15 @@ def _method_anchor_ids(rec: dict) -> set[str]:
         str(rec.get("source_evidence") or "").upper()))
 
 
-def _method_anchor_covered(records: list[dict], anchor: dict) -> bool:
+def _method_anchor_match_priority(rec: dict, anchor: dict) -> int:
+    """Rank exact-tag, formula, then prose coverage within the source topic."""
     anchor_id = (anchor.get("anchor_id") or "").upper()
     topic_hint = anchor.get("topic_hint", "")
     topic_key = _topic_comparison_key(topic_hint)
-    if any(
-        anchor_id in _method_anchor_ids(rec)
-        and _topic_comparison_key(rec.get("topic", "")) == topic_key
-        for rec in records
-    ):
-        return True
+    if _topic_comparison_key(rec.get("topic", "")) != topic_key:
+        return 0
+    if anchor_id and anchor_id in _method_anchor_ids(rec):
+        return 3
     formulae = [
         _normalize_math_evidence(formula)
         for formula in anchor.get("required_formulas") or []
@@ -5679,26 +5678,27 @@ def _method_anchor_covered(records: list[dict], anchor: dict) -> bool:
     if not evidence_terms:
         evidence_terms = _method_evidence_terms(
             anchor.get("source_evidence", ""), topic=topic_hint)
-    for rec in records:
-        if _topic_comparison_key(rec.get("topic", "")) != topic_key:
-            continue
-        record_text = " ".join([
-            str(rec.get("concept_title") or ""),
-            str(rec.get("concept_details") or ""),
-            str(rec.get("source_evidence") or ""),
-        ])
-        if formulae and any(
-                formula in _normalize_math_evidence(record_text)
-                for formula in formulae):
-            return True
-        if not formulae and evidence_terms:
-            record_terms = set(
-                _method_evidence_terms(record_text, topic=topic_hint))
-            overlap = record_terms.intersection(evidence_terms)
-            required_overlap = 1 if len(evidence_terms) == 1 else 2
-            if len(overlap) >= required_overlap:
-                return True
-    return False
+    record_text = " ".join([
+        str(rec.get("concept_title") or ""),
+        str(rec.get("concept_details") or ""),
+        str(rec.get("source_evidence") or ""),
+    ])
+    if formulae and any(
+            formula in _normalize_math_evidence(record_text)
+            for formula in formulae):
+        return 2
+    if not formulae and evidence_terms:
+        record_terms = set(
+            _method_evidence_terms(record_text, topic=topic_hint))
+        overlap = record_terms.intersection(evidence_terms)
+        required_overlap = 1 if len(evidence_terms) == 1 else 2
+        if len(overlap) >= required_overlap:
+            return 1
+    return 0
+
+
+def _method_anchor_covered(records: list[dict], anchor: dict) -> bool:
+    return any(_method_anchor_match_priority(rec, anchor) for rec in records)
 
 
 def _missing_method_anchors(
@@ -6117,6 +6117,58 @@ def _recover_method_anchor_rows_via_api(
         + ", ".join(
             anchor_id for anchor_id in ordered_ids if anchor_id in pending)
     )
+
+
+def _canonicalize_method_anchor_tags(
+    records: list[dict], anchors: list[dict], *, chunk_text: str, meta: dict,
+) -> list[dict]:
+    """Attach every full-chapter METHOD ID to its deterministic semantic row."""
+    out = _enforce_method_anchor_topics(
+        [dict(record) for record in records], anchors)
+
+    def tag_covered(candidates: list[dict]) -> list[dict]:
+        uncovered: list[dict] = []
+        for anchor in candidates:
+            anchor_id = str(anchor.get("anchor_id") or "").upper()
+            if not anchor_id:
+                continue
+            best_index: int | None = None
+            best_priority = 0
+            for index, record in enumerate(out):
+                if cr.is_culmination(record.get("concept_title", "")):
+                    continue
+                priority = _method_anchor_match_priority(record, anchor)
+                if priority > best_priority:
+                    best_index = index
+                    best_priority = priority
+            if best_index is None:
+                uncovered.append(anchor)
+                continue
+            if anchor_id in _method_anchor_ids(out[best_index]):
+                continue
+            tagged = dict(out[best_index])
+            existing = str(tagged.get("source_evidence") or "").strip()
+            tagged["source_evidence"] = (
+                f"{existing} | {anchor_id}" if existing else anchor_id
+            )
+            out[best_index] = tagged
+        return uncovered
+
+    uncovered = tag_covered(anchors)
+    if uncovered:
+        recovered = _recover_method_anchor_rows_via_api(
+            uncovered, chunk_text=chunk_text, meta=meta)
+        out = _merge_concept_records(out + recovered)
+        out = _enforce_method_anchor_topics(out, anchors)
+        uncovered = tag_covered(uncovered)
+    if uncovered:
+        raise RuntimeError(
+            "canonical method-anchor tagging could not preserve focused "
+            "recovery rows for: "
+            + ", ".join(
+                str(anchor.get("anchor_id") or "") for anchor in uncovered)
+        )
+    return out
 
 
 def _extract_skeleton_via_api(
@@ -6840,6 +6892,8 @@ def concepts_from_mmd(
         out = _extract_skeleton_via_api(chunks, meta=meta)
         if not out:
             raise RuntimeError("live concept extraction returned no rows")
+        out = _canonicalize_method_anchor_tags(
+            out, method_anchors, chunk_text=mmd_text, meta=meta)
         # The full-chapter anchors provide the authoritative METHOD IDs and
         # source topics.  Keep immutable skeleton rows before any chapter-wide
         # canonicalization or topic pass can merge them away.
@@ -6877,6 +6931,8 @@ def concepts_from_mmd(
         out = _restore_method_anchor_rows(
             out, skeleton_method_row_snapshot)
         out = _enforce_method_anchor_topics(out, method_anchors)
+        out = _canonicalize_method_anchor_tags(
+            out, method_anchors, chunk_text=mmd_text, meta=meta)
         progress.step("Concept extraction — refining descriptions", value=0.42)
         out = _refine_descriptions_via_api(
             out, subject=subject, mmd_text=mmd_text, meta=meta, sections=sections)
