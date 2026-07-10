@@ -501,10 +501,12 @@ def test_method_anchor_topic_is_restored_after_topic_restructuring():
         "Deriving the General Term",
         evidence=anchor["anchor_id"],
     )
+    assert not g._method_anchor_covered([row], anchor)
 
     out = g._enforce_method_anchor_topics([row], [anchor])
 
     assert out[0]["topic"] == "nth Term of an AP"
+    assert g._method_anchor_covered(out, anchor)
 
 
 def test_type_assignment_rejects_wrong_ap_source_topic(monkeypatch):

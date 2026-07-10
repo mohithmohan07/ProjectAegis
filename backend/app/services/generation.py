@@ -4600,10 +4600,14 @@ def _method_anchor_ids(rec: dict) -> set[str]:
 
 def _method_anchor_covered(records: list[dict], anchor: dict) -> bool:
     anchor_id = (anchor.get("anchor_id") or "").upper()
-    if any(anchor_id in _method_anchor_ids(rec) for rec in records):
-        return True
     topic_hint = anchor.get("topic_hint", "")
     topic_key = _topic_comparison_key(topic_hint)
+    if any(
+        anchor_id in _method_anchor_ids(rec)
+        and _topic_comparison_key(rec.get("topic", "")) == topic_key
+        for rec in records
+    ):
+        return True
     formulae = [
         _normalize_math_evidence(formula)
         for formula in anchor.get("required_formulas") or []
