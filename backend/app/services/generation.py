@@ -1534,10 +1534,12 @@ prompts.register(
     "concepts.type_embedding.system", category=_CONCEPTS_CAT,
     label="Universal Type-to-concept assignment prompt",
     default="""\
-Assign every mined Type to the concept it best belongs to. You are given a list
-of concepts (each with a stable concept_id) and a list of mined Types (each with
-a stable type_id). Decide the mapping using academic judgement about which
-concept each Type assesses.
+Assign every mined Type assignment unit to the concept it best belongs to. You
+are given a list of concepts (each with a stable concept_id) and mined Type
+assignment units (each with a stable type_id). A multi-Case mined Type is
+expanded before this call into one case-scoped assignment unit per Case; all
+Examples belonging to that Case stay together. Legacy and single-Case Types
+remain one unit with their original type_id.
 
 Return ONLY strict JSON:
 {"assignments":[{"concept_id":"CONCEPT-0001","type_ids":["TYPE-0001","TYPE-0002"]}]}.
@@ -1545,6 +1547,13 @@ Return ONLY strict JSON:
 Rules:
 - Every provided type_id MUST be assigned to exactly one concept_id.
 - Never invent concept_id or type_id values; use only the ones provided.
+- Treat type_id as an opaque assignment-unit ID. A case-scoped ID identifies
+  the one Case carried by that unit, not the whole original multi-Case Type.
+- Choose from the unit's actual Case, all of its Examples, and its
+  source_question_ids. Never split Examples within one Case across concepts.
+- The original Type title, description, and concept hints are supporting
+  context. When they are broad or conflict with the sole Case, the Case and its
+  concrete Examples determine the most specific concept.
 - When a mined Type includes allowed_concept_ids, its source topic is proven:
   assign it to exactly one of those concept IDs and never any other concept.
 - A concept may receive multiple type_ids; a Type belongs to one concept.
@@ -1556,9 +1565,9 @@ Rules:
 - Formula overlap is not concept identity: direct formula calculations belong
   with the direct-calculation concept, while contextual/real-life applications
   belong with the granular application/modeling concept when that row exists.
-- Assign each worked, numerical, contextual, or real-life problem Type to the
-  concept the problem actually assesses, never to a nearby formula merely
-  because it shares notation.
+- Assign each direct, counting, contextual/real-life, diagram, worked, or mixed
+  Case unit to the concept the problem actually assesses, using its Examples;
+  never choose a nearby formula merely because it shares notation.
 - Respect chapter position: a question assesses the concept taught at (or just
   before) the point of the chapter where it appears. NEVER assign a Type whose
   questions come from a LATER part of the chapter to an EARLIER concept — e.g.
@@ -4422,15 +4431,137 @@ def _ensure_misconceptions_via_api(
     return records
 
 
+def _assignment_case_qids(raw_case: object) -> list[str]:
+    """Return one Case's ordered qids without splitting any of its Examples."""
+    if isinstance(raw_case, str):
+        case = {"case_prompt": raw_case}
+    elif isinstance(raw_case, dict):
+        case = raw_case
+    else:
+        return []
+    qids: list[str] = []
+    direct_qid = (case.get("source_question_id") or "").strip()
+    if direct_qid:
+        qids.append(direct_qid)
+    for example in _case_examples(case):
+        qid = (example.get("source_question_id") or "").strip()
+        if qid and qid not in qids:
+            qids.append(qid)
+    return qids
+
+
+def _expand_mined_types_to_assignment_units(types: list[dict]) -> list[dict]:
+    """Create stable one-Case assignment units while preserving qids exactly.
+
+    Inventory coverage is deliberately not reinterpreted here: it has already
+    been validated against the original mined Types. This boundary only proves
+    that expansion neither loses nor duplicates any of those original qids.
+    """
+    units: list[dict] = []
+    original_qid_owners: dict[str, list[str]] = {}
+    for mtype in types:
+        type_id = (mtype.get("type_id") or "").strip()
+        for qid in _type_source_qids(mtype):
+            original_qid_owners.setdefault(qid, []).append(type_id)
+
+        raw_cases = list(mtype.get("case_prompts") or [])
+        if len(raw_cases) <= 1:
+            unit = copy.deepcopy(mtype)
+            if raw_cases:
+                unit["case_prompts"] = [copy.deepcopy(raw_cases[0])]
+                case_qids = _assignment_case_qids(raw_cases[0])
+                # A sole Case owns all Type-level trace qids, including legacy
+                # payloads where source_question_id existed only on the Type.
+                for qid in _type_source_qids(mtype):
+                    if qid not in case_qids:
+                        case_qids.append(qid)
+                unit["source_question_ids"] = case_qids
+            else:
+                unit["source_question_ids"] = _type_source_qids(mtype)
+            units.append(unit)
+            continue
+
+        for case_index, raw_case in enumerate(raw_cases, start=1):
+            case_id = (
+                (raw_case.get("case_id") or "").strip()
+                if isinstance(raw_case, dict) else ""
+            )
+            case_id = case_id or f"CASE-{case_index:04d}"
+            unit = copy.deepcopy(mtype)
+            unit["type_id"] = (
+                f"{type_id}::{case_id}::{case_index:04d}")
+            unit["source_question_ids"] = _assignment_case_qids(raw_case)
+            unit["case_prompts"] = [copy.deepcopy(raw_case)]
+            units.append(unit)
+
+    original_duplicates = sorted(
+        qid for qid, owners in original_qid_owners.items()
+        if len(owners) != 1
+    )
+    unit_qid_owners: dict[str, list[str]] = {}
+    for unit in units:
+        unit_id = (unit.get("type_id") or "").strip()
+        for qid in unit.get("source_question_ids") or []:
+            qid = (qid or "").strip()
+            if qid:
+                unit_qid_owners.setdefault(qid, []).append(unit_id)
+
+    expected_qids = set(original_qid_owners)
+    actual_qids = set(unit_qid_owners)
+    lost_qids = sorted(expected_qids - actual_qids)
+    extra_qids = sorted(actual_qids - expected_qids)
+    duplicated_qids = sorted(
+        qid for qid, owners in unit_qid_owners.items()
+        if len(owners) != 1
+    )
+    unit_counts = _inventory_assignment_counts(units)
+    non_exact_counts = sorted(
+        (qid, unit_counts.get(qid, 0))
+        for qid in expected_qids
+        if unit_counts.get(qid, 0) != 1
+    )
+    if (
+        original_duplicates
+        or lost_qids
+        or extra_qids
+        or duplicated_qids
+        or non_exact_counts
+    ):
+        defects: list[str] = []
+        if original_duplicates:
+            defects.append(
+                "original duplicate qids " + ", ".join(original_duplicates))
+        if lost_qids:
+            defects.append("lost qids " + ", ".join(lost_qids))
+        if extra_qids:
+            defects.append("unexpected qids " + ", ".join(extra_qids))
+        if duplicated_qids:
+            defects.append(
+                "duplicated qids " + ", ".join(duplicated_qids))
+        if non_exact_counts:
+            defects.append(
+                "non-exact unit Example counts "
+                + ", ".join(f"{qid}={count}" for qid, count in non_exact_counts)
+            )
+        raise RuntimeError(
+            "type embedding assignment-unit qid invariant failed: "
+            + "; ".join(defects)
+        )
+    return units
+
+
 def _assign_mined_types_via_api(
     records: list[dict], *, meta: dict, mined_types: dict, max_attempts: int = 4,
 ) -> list[dict]:
-    """Embed every mined Type within its source topic using exact API IDs.
+    """Embed every mined Case within its source topic using exact API IDs.
 
-    Source-topic-scoped Types are grouped by canonical topic and allowed
-    concept IDs. Each group sees only those concepts, including that topic's
-    culmination, and omitted IDs are retried against the same candidate list.
-    Placement is joined by exact IDs only — no regex, token, or word matching.
+    Exact inventory coverage belongs to the original mined Types. Multi-Case
+    Types are expanded only for assignment into one internal unit per Case, with
+    all Examples in that Case kept together. Source-topic-scoped units are
+    grouped by canonical topic and allowed concept IDs. Each group sees only
+    those concepts, including that topic's culmination, and omitted IDs are
+    retried against the same candidate list. Placement is joined by exact IDs
+    only — no regex, token, or word matching.
     """
     import json as _json
 
@@ -4457,16 +4588,26 @@ def _assign_mined_types_via_api(
             "chapter_position": i,
         })
 
-    types_by_id: dict[str, dict] = {}
+    original_types_by_id: dict[str, dict] = {}
     for i, t in enumerate(types, start=1):
         tid = (t.get("type_id") or f"TYPE-{i:04d}").strip() or f"TYPE-{i:04d}"
-        t = dict(t)
+        t = copy.deepcopy(t)
         t["type_id"] = tid
-        if tid in types_by_id:
+        if tid in original_types_by_id:
             raise RuntimeError(
                 "type embedding failed: duplicate mined Type ID "
                 f"{tid} prevents exact-once assignment")
-        types_by_id[tid] = t
+        original_types_by_id[tid] = t
+
+    assignment_units = _expand_mined_types_to_assignment_units(
+        list(original_types_by_id.values()))
+    types_by_id = {
+        unit["type_id"]: unit
+        for unit in assignment_units
+    }
+    if len(types_by_id) != len(assignment_units):
+        raise RuntimeError(
+            "type embedding failed: duplicate case-scoped assignment-unit ID")
 
     concept_ids_by_topic: dict[str, list[str]] = {}
     for row in concept_payload:
@@ -4557,9 +4698,11 @@ def _assign_mined_types_via_api(
                 pending.append(item)
             user = (
                 _metadata_block(meta)
-                + "\nCONCEPTS (assign every mined Type to exactly one concept_id):\n"
+                + "\nCONCEPTS (assign every mined Type assignment unit to "
+                "exactly one concept_id):\n"
                 + _json.dumps({"concepts": scoped_concepts}, ensure_ascii=False)
-                + "\n\nMINED TYPES TO ASSIGN (every type_id MUST be assigned):\n"
+                + "\n\nMINED TYPE ASSIGNMENT UNITS "
+                "(every type_id MUST be assigned):\n"
                 + _json.dumps({"types": pending}, ensure_ascii=False)
             )
             data = _openai_json(system, user)
@@ -4583,25 +4726,26 @@ def _assign_mined_types_via_api(
                     remaining_in_group.discard(tid)
             if rejected_wrong_topic:
                 progress.log(
-                    f"Rejected {rejected_wrong_topic} mined Type placement(s) "
-                    "outside their source topic; retrying those Type IDs.",
+                    f"Rejected {rejected_wrong_topic} mined Type assignment-unit "
+                    "placement(s) outside their source topic; retrying those "
+                    "type IDs.",
                     level="warning",
                 )
             placed = len(group_type_ids) - len(remaining_in_group)
             progress.log(
                 f"Type embedding scope {scope_label!r} attempt {attempt}: "
-                f"{placed}/{len(group_type_ids)} mined Types assigned.")
+                f"{placed}/{len(group_type_ids)} assignment units assigned.")
         unassigned.update(remaining_in_group)
 
     if unassigned:
         progress.log(
-            f"{len(unassigned)} mined Type(s) unassigned after {max_attempts} "
-            "attempt(s); failing instead of filing questions under the wrong "
-            "concept.",
+            f"{len(unassigned)} mined Type assignment unit(s) unassigned after "
+            f"{max_attempts} attempt(s); failing instead of filing questions "
+            "under the wrong concept.",
             level="error",
         )
         raise RuntimeError(
-            "type embedding failed: unassigned mined Types "
+            "type embedding failed: unassigned mined Types/case units "
             + ", ".join(sorted(unassigned))
         )
 
@@ -5329,10 +5473,11 @@ def _assign_types_via_api(
     """Dedicated Types-only API pass — mirrors manual types-first workflow.
 
     When mined Types are available they are embedded via a pure-API ID
-    assignment (``_assign_mined_types_via_api``): the model maps each mined
-    ``type_id`` to a concept and we join by exact IDs, guaranteeing every
-    refined Type is embedded without any regex/word matching. When no mined
-    Types exist (e.g. no source/inventory), the model authors Types per topic.
+    assignment (``_assign_mined_types_via_api``): the model maps each legacy
+    single-Type or case-scoped internal ``type_id`` to a concept and we join by
+    exact IDs, guaranteeing every refined Case is embedded without any
+    regex/word matching. When no mined Types exist (e.g. no source/inventory),
+    the model authors Types per topic.
     """
     import json as _json
 

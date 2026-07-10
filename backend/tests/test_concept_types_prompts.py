@@ -8,7 +8,8 @@ from app.services import generation as g
 
 def _type_embedding_request(user: str) -> tuple[list[dict], list[dict]]:
     concepts_text, types_text = user.split(
-        "\n\nMINED TYPES TO ASSIGN (every type_id MUST be assigned):\n", 1)
+        "\n\nMINED TYPE ASSIGNMENT UNITS "
+        "(every type_id MUST be assigned):\n", 1)
     concepts = json.loads(concepts_text.rsplit("\n", 1)[-1])["concepts"]
     types = json.loads(types_text)["types"]
     return concepts, types
@@ -262,6 +263,236 @@ def test_assign_mined_types_retries_until_all_covered(monkeypatch):
     assert g._has_meaningful_types(out[1]["concept_details"])
     assert "Pattern One" in out[0]["concept_details"]
     assert "Pattern Two" in out[1]["concept_details"]
+
+
+def test_case_scoped_embedding_splits_formula_and_real_life_cases(monkeypatch):
+    calls = []
+
+    def fake_openai(system, user, **kw):
+        concepts, units = _type_embedding_request(user)
+        calls.append((concepts, units))
+        assert "case-scoped assignment unit" in system
+        assert len(units) == 2
+        direct = next(
+            unit for unit in units
+            if unit["case_prompts"][0]["case_id"] == "CASE-DIRECT"
+        )
+        real_life = next(
+            unit for unit in units
+            if unit["case_prompts"][0]["case_id"] == "CASE-REAL-LIFE"
+        )
+        assert direct["type_id"] == "TYPE-0001::CASE-DIRECT::0001"
+        assert real_life["type_id"] == "TYPE-0001::CASE-REAL-LIFE::0002"
+        assert direct["source_question_ids"] == ["QINV-0001"]
+        assert real_life["source_question_ids"] == [
+            "QINV-0002", "QINV-0003"]
+        assert len(direct["case_prompts"]) == len(real_life["case_prompts"]) == 1
+        assert all(
+            unit["type_title"]
+            == "Finding Terms and Indices Using the Nth Term of an AP"
+            and unit["type_description"]
+            == "Use AP term information to find a term or index."
+            and unit["topic_match_hint"] == "nth Term of an AP"
+            and unit["is_activity"] is False
+            for unit in units
+        )
+        formula_cid = next(
+            row["concept_id"] for row in concepts
+            if row["concept"] == "Derive and Apply the Nth-term Formula"
+        )
+        real_life_cid = next(
+            row["concept_id"] for row in concepts
+            if row["concept"] == "Model Real Situations with Arithmetic Progressions"
+        )
+        return {"assignments": [
+            {"concept_id": formula_cid, "type_ids": [direct["type_id"]]},
+            {"concept_id": real_life_cid, "type_ids": [real_life["type_id"]]},
+        ]}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    records = [
+        {"topic": "nth Term of an AP", "parent_concept": "Formula",
+         "concept_title": "Derive and Apply the Nth-term Formula",
+         "concept_details": "Description: formula", "keywords": ""},
+        {"topic": "nth Term of an AP", "parent_concept": "Applications",
+         "concept_title": "Model Real Situations with Arithmetic Progressions",
+         "concept_details": "Description: applications", "keywords": ""},
+        {"topic": "nth Term of an AP", "parent_concept": "Culmination",
+         "concept_title": "Culmination - Nth-term Formula and Applications",
+         "concept_details": "Description: Recap", "keywords": ""},
+    ]
+    direct_example = "Find the 20th term of the AP 3, 7, 11, ..."
+    salary_example = (
+        "A salary starts at ₹8000 and increases by ₹500 yearly. "
+        "Find the salary in the fifth year."
+    )
+    flower_example = (
+        "A flower bed has 23 roses in the first row, then 21, 19, and so on, "
+        "with 5 in the last row. Find the number of rows."
+    )
+    mined = {"types": [{
+        "type_id": "TYPE-0001",
+        "type_title": "Finding Terms and Indices Using the Nth Term of an AP",
+        "type_description": "Use AP term information to find a term or index.",
+        "topic_match_hint": "nth Term of an AP",
+        "source_question_ids": ["QINV-0001", "QINV-0002", "QINV-0003"],
+        "case_prompts": [
+            {
+                "case_id": "CASE-DIRECT",
+                "case_title": "Find a specified term from a numerical AP",
+                "examples": [{
+                    "source_question_id": "QINV-0001",
+                    "example_prompt": direct_example,
+                }],
+            },
+            {
+                "case_id": "CASE-REAL-LIFE",
+                "case_title": "Model a salary or flower-row pattern as an AP",
+                "examples": [
+                    {"source_question_id": "QINV-0002",
+                     "example_prompt": salary_example},
+                    {"source_question_id": "QINV-0003",
+                     "example_prompt": flower_example},
+                ],
+            },
+        ],
+        "is_activity": False,
+    }]}
+
+    out = g._assign_mined_types_via_api(
+        records, meta=g._metadata(subject="Mathematics"), mined_types=mined)
+
+    assert len(calls) == 1
+    formula_details = out[0]["concept_details"]
+    real_life_details = out[1]["concept_details"]
+    assert direct_example in formula_details
+    assert salary_example not in formula_details
+    assert flower_example not in formula_details
+    assert salary_example in real_life_details
+    assert flower_example in real_life_details
+    assert direct_example not in real_life_details
+    assert "Types:" not in out[2]["concept_details"]
+    assert not g._mined_type_topic_violations(out, mined)
+
+
+def test_case_scoped_activity_units_keep_flag_and_reach_culmination(monkeypatch):
+    def fake_openai(system, user, **kw):
+        concepts, units = _type_embedding_request(user)
+        assert len(units) == 2
+        assert all(unit["is_activity"] is True for unit in units)
+        culmination = next(row for row in concepts if row["is_culmination"])
+        return {"assignments": [{
+            "concept_id": culmination["concept_id"],
+            "type_ids": [unit["type_id"] for unit in units],
+        }]}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    records = [
+        {"topic": "Electricity", "parent_concept": "Circuits",
+         "concept_title": "Measure Current in a Circuit",
+         "concept_details": "Description: current", "keywords": ""},
+        {"topic": "Electricity", "parent_concept": "Culmination",
+         "concept_title": "Culmination - Electric Circuits",
+         "concept_details": "Description: Recap", "keywords": ""},
+    ]
+    mined = {"types": [{
+        "type_id": "TYPE-ACTIVITY",
+        "type_title": "Investigating Electric Circuits",
+        "topic_match_hint": "Electricity",
+        "source_question_ids": ["QINV-0001", "QINV-0002"],
+        "case_prompts": [
+            {"case_id": "CASE-CURRENT", "case_title": "Observe current",
+             "examples": [{"source_question_id": "QINV-0001",
+                           "example_prompt": "Measure current as cells are added."}]},
+            {"case_id": "CASE-VOLTAGE", "case_title": "Observe voltage",
+             "examples": [{"source_question_id": "QINV-0002",
+                           "example_prompt": "Measure voltage across the wire."}]},
+        ],
+        "is_activity": True,
+    }]}
+
+    out = g._assign_mined_types_via_api(
+        records, meta=g._metadata(subject="Physics"), mined_types=mined)
+
+    assert "Types:" not in out[0]["concept_details"]
+    assert "Measure current as cells are added." in out[1]["concept_details"]
+    assert "Measure voltage across the wire." in out[1]["concept_details"]
+
+
+def test_single_case_embedding_keeps_original_type_id(monkeypatch):
+    def fake_openai(system, user, **kw):
+        _concepts, units = _type_embedding_request(user)
+        assert len(units) == 1
+        assert units[0]["type_id"] == "TYPE-0001"
+        assert units[0]["source_question_ids"] == [
+            "QINV-0001", "QINV-0002"]
+        assert len(units[0]["case_prompts"]) == 1
+        return {"assignments": [{
+            "concept_id": "CONCEPT-0001",
+            "type_ids": ["TYPE-0001"],
+        }]}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    records = [{
+        "topic": "T", "parent_concept": "P", "concept_title": "Formula",
+        "concept_details": "Description: formula", "keywords": "",
+    }]
+    mined = {"types": [{
+        "type_id": "TYPE-0001",
+        "type_title": "Apply One Formula",
+        "source_question_ids": ["QINV-0001", "QINV-0002"],
+        "case_prompts": [{
+            "case_id": "CASE-0001",
+            "case_title": "Apply the formula to supplied values",
+            "examples": [
+                {"source_question_id": "QINV-0001",
+                 "example_prompt": "Apply the formula to the first values."},
+                {"source_question_id": "QINV-0002",
+                 "example_prompt": "Apply the formula to the second values."},
+            ],
+        }],
+    }]}
+
+    out = g._assign_mined_types_via_api(
+        records, meta=g._metadata(subject="Math"), mined_types=mined)
+
+    assert "Apply the formula to the first values." in out[0]["concept_details"]
+    assert "Apply the formula to the second values." in out[0]["concept_details"]
+
+
+def test_case_scoped_embedding_hard_fails_on_qid_duplication_or_loss(monkeypatch):
+    calls = {"count": 0}
+
+    def fake_openai(*args, **kwargs):
+        calls["count"] += 1
+        return {"assignments": []}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    records = [{
+        "topic": "T", "parent_concept": "P", "concept_title": "Formula",
+        "concept_details": "Description: formula", "keywords": "",
+    }]
+    mined = {"types": [{
+        "type_id": "TYPE-0001",
+        "type_title": "Malformed Multi-case Type",
+        "source_question_ids": ["QINV-0001", "QINV-0002"],
+        "case_prompts": [
+            {"case_id": "CASE-0001", "case_title": "First",
+             "examples": [{"source_question_id": "QINV-0001",
+                           "example_prompt": "First question."}]},
+            {"case_id": "CASE-0002", "case_title": "Second",
+             "examples": [{"source_question_id": "QINV-0001",
+                           "example_prompt": "Duplicated first question."}]},
+        ],
+    }]}
+
+    with pytest.raises(
+        RuntimeError, match=r"assignment-unit qid invariant.*QINV-000[12]",
+    ):
+        g._assign_mined_types_via_api(
+            records, meta=g._metadata(subject="Math"), mined_types=mined)
+
+    assert calls["count"] == 0
 
 
 def test_scoped_type_embedding_groups_topics_and_excludes_other_concepts(monkeypatch):
