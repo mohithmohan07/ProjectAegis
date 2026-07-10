@@ -522,7 +522,195 @@ def test_mine_types_hard_fails_after_live_coverage_degradation(monkeypatch):
     assert calls["n"] == 5
 
 
-def test_mine_types_hard_fails_unrepaired_duplicate_assignments(monkeypatch):
+def test_exact_once_duplicate_backstop_prunes_all_duplicate_shapes():
+    inventory = {"items": [
+        {
+            "qid": "QINV-0001",
+            "topic_hint": "Topic A",
+            "raw_task": "Full source question one with every stated condition.",
+        },
+        {
+            "qid": "QINV-0002",
+            "topic_hint": "Topic A",
+            "raw_task": "Full source question two with every stated condition.",
+        },
+        {
+            "qid": "QINV-0003",
+            "topic_hint": "Topic B",
+            "raw_task": "Full source question three with every stated condition.",
+        },
+    ], "stats": {}}
+    types = [
+        {
+            "type_id": "TYPE-0001",
+            "type_title": "Wrong-topic first placement",
+            "topic_match_hint": "Topic B",
+            "source_question_ids": ["QINV-0001", "QINV-0003"],
+            "case_prompts": [{
+                "case_title": "Mixed duplicate and unique examples",
+                "examples": [
+                    {
+                        "source_question_id": "QINV-0001",
+                        "example_prompt": inventory["items"][0]["raw_task"],
+                        "marker": "wrong-topic-first",
+                    },
+                    {
+                        "source_question_id": "QINV-0003",
+                        "example_prompt": inventory["items"][2]["raw_task"],
+                    },
+                ],
+            }],
+        },
+        {
+            "type_id": "TYPE-0002",
+            "type_title": "Matching-topic retained placement",
+            "topic_match_hint": "Topic A",
+            "source_question_ids": ["QINV-0001", "QINV-0002"],
+            "case_prompts": [
+                {
+                    "case_title": "Duplicate examples within one Case",
+                    "examples": [
+                        {
+                            "source_question_id": "QINV-0001",
+                            "example_prompt": "Shortened question one.",
+                            "marker": "matching-first",
+                        },
+                        {
+                            "source_question_id": "QINV-0001",
+                            "example_prompt": inventory["items"][0]["raw_task"],
+                            "marker": "matching-second",
+                        },
+                        {
+                            "source_question_id": "QINV-0002",
+                            "example_prompt": inventory["items"][1]["raw_task"],
+                        },
+                    ],
+                },
+                {
+                    "case_title": "Duplicate-only Case",
+                    "examples": [{
+                        "source_question_id": "QINV-0001",
+                        "example_prompt": inventory["items"][0]["raw_task"],
+                        "marker": "matching-later-case",
+                    }],
+                },
+            ],
+        },
+        {
+            "type_id": "TYPE-0003",
+            "type_title": "Legacy-only duplicate Type",
+            "topic_match_hint": "Topic A",
+            "source_question_ids": ["QINV-0001"],
+            "case_prompts": [
+                {
+                    "case_title": "Legacy duplicate",
+                    "source_question_id": "QINV-0001",
+                    "case_prompt": inventory["items"][0]["raw_task"],
+                },
+                {
+                    "case_title": "Model-emitted empty Case",
+                    "examples": [],
+                },
+            ],
+        },
+    ]
+
+    out, removed = g._apply_exact_once_duplicate_backstop(types, inventory)
+
+    assert removed == 4
+    assert len(out) == 2
+    assert not g._uncovered_inventory_items(inventory, out)
+    assert not g._duplicate_inventory_assignments(inventory, out)
+    assert all(count == 1 for count in g._inventory_assignment_counts(out).values())
+    assert not any(
+        item["type_title"] == "Legacy-only duplicate Type" for item in out)
+
+    matching = next(
+        item for item in out
+        if item["type_title"] == "Matching-topic retained placement")
+    retained = [
+        example
+        for case in matching["case_prompts"]
+        for example in g._case_examples(case)
+        if example.get("source_question_id") == "QINV-0001"
+    ]
+    assert len(retained) == 1
+    assert retained[0]["marker"] == "matching-first"
+    assert retained[0]["example_prompt"] == inventory["items"][0]["raw_task"]
+    assert len(matching["case_prompts"]) == 1
+
+    wrong_topic = next(
+        item for item in out
+        if item["type_title"] == "Wrong-topic first placement")
+    assert wrong_topic["source_question_ids"] == ["QINV-0003"]
+    assert all(
+        example.get("source_question_id") != "QINV-0001"
+        for case in wrong_topic["case_prompts"]
+        for example in g._case_examples(case)
+    )
+    prompts_by_qid = {
+        example["source_question_id"]: example["example_prompt"]
+        for item in out
+        for case in item["case_prompts"]
+        for example in g._case_examples(case)
+    }
+    assert prompts_by_qid == {
+        item["qid"]: item["raw_task"] for item in inventory["items"]
+    }
+
+
+def test_exact_once_duplicate_backstop_backfills_trace_only_ids():
+    inventory = {"items": [
+        {
+            "qid": "QINV-0001",
+            "topic_hint": "Topic A",
+            "raw_task": "Complete first source question, copied without shortening.",
+        },
+        {
+            "qid": "QINV-0002",
+            "topic_hint": "Topic B",
+            "raw_task": "Complete second source question, copied without shortening.",
+        },
+    ], "stats": {}}
+    types = [
+        {
+            "type_id": "TYPE-0001",
+            "type_title": "Wrong-topic trace",
+            "topic_match_hint": "Topic B",
+            "source_question_ids": ["QINV-0001", "QINV-0002"],
+            "case_prompts": [],
+        },
+        {
+            "type_id": "TYPE-0002",
+            "type_title": "Matching-topic trace",
+            "topic_match_hint": "Topic A",
+            "source_question_ids": ["QINV-0001"],
+            "case_prompts": [],
+        },
+    ]
+
+    out, removed = g._apply_exact_once_duplicate_backstop(types, inventory)
+
+    assert removed == 1
+    assert not g._uncovered_inventory_items(inventory, out)
+    assert not g._duplicate_inventory_assignments(inventory, out)
+    matching = next(
+        item for item in out if item["type_title"] == "Matching-topic trace")
+    examples = [
+        example
+        for case in matching["case_prompts"]
+        for example in g._case_examples(case)
+    ]
+    assert examples == [{
+        "source_question_id": "QINV-0001",
+        "example_prompt": inventory["items"][0]["raw_task"],
+    }]
+    wrong_topic = next(
+        item for item in out if item["type_title"] == "Wrong-topic trace")
+    assert wrong_topic["source_question_ids"] == ["QINV-0002"]
+
+
+def test_mine_types_uses_duplicate_backstop_only_after_repairs(monkeypatch):
     inventory = {"items": [{
         "qid": "QINV-0001", "topic_hint": "T", "raw_task": "Question one",
     }], "stats": {}}
@@ -547,17 +735,26 @@ def test_mine_types_hard_fails_unrepaired_duplicate_assignments(monkeypatch):
         calls["n"] += 1
         return {"types": duplicate}
 
+    logs = []
     monkeypatch.setattr(g, "_openai_json", fake_openai)
-    with pytest.raises(
-        RuntimeError, match=r"0 unclassified.*1 duplicate",
-    ):
-        g._mine_types_from_inventory_via_api(
-            meta=g._metadata(subject="Mathematics"),
-            inventory=inventory,
-            max_coverage_attempts=2,
-        )
+    monkeypatch.setattr(
+        g.progress, "log",
+        lambda message, **kwargs: logs.append((message, kwargs)),
+    )
+    mined = g._mine_types_from_inventory_via_api(
+        meta=g._metadata(subject="Mathematics"),
+        inventory=inventory,
+        max_coverage_attempts=2,
+    )
 
     assert calls["n"] == 3
+    assert len(mined["types"]) == 1
+    assert not g._uncovered_inventory_items(inventory, mined["types"])
+    assert not g._duplicate_inventory_assignments(inventory, mined["types"])
+    assert any(
+        "exact-once duplicate backstop removed 1 duplicate placement" in message
+        for message, _ in logs
+    )
 
 
 def test_assign_mined_types_can_place_types_on_culminations(monkeypatch):

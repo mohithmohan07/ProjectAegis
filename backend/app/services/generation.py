@@ -3084,6 +3084,217 @@ def _normalize_mined_type_candidate(
     return _split_mined_types_by_source_topic(types, inventory)
 
 
+def _apply_exact_once_duplicate_backstop(
+    types: list[dict], inventory: dict,
+) -> tuple[list[dict], int]:
+    """Prune duplicate qids while retaining one stable, full Example placement."""
+    inventory_by_qid = {
+        (item.get("qid") or "").strip(): item
+        for item in inventory.get("items") or []
+        if (item.get("qid") or "").strip()
+    }
+    before_counts = _inventory_assignment_counts(types)
+    duplicate_qids = [
+        qid for qid, count in before_counts.items()
+        if count > 1 and qid in inventory_by_qid
+    ]
+    if not duplicate_qids:
+        return types, 0
+
+    duplicate_set = set(duplicate_qids)
+    concrete: dict[str, list[dict]] = {
+        qid: [] for qid in duplicate_qids}
+    trace_types: dict[str, list[int]] = {
+        qid: [] for qid in duplicate_qids}
+    for type_index, mtype in enumerate(types):
+        if not isinstance(mtype, dict):
+            continue
+        for source_qid in mtype.get("source_question_ids") or []:
+            qid = (source_qid or "").strip()
+            if qid in duplicate_set:
+                trace_types[qid].append(type_index)
+        for case_index, case in enumerate(mtype.get("case_prompts") or []):
+            if not isinstance(case, dict):
+                continue
+            raw_examples = case.get("examples") or []
+            usable_examples = [
+                example for example in raw_examples
+                if isinstance(example, dict)
+                or (isinstance(example, str) and example.strip())
+            ]
+            for example_index, example in enumerate(raw_examples):
+                if not isinstance(example, dict):
+                    continue
+                qid = (example.get("source_question_id") or "").strip()
+                if qid in duplicate_set:
+                    concrete[qid].append({
+                        "type_index": type_index,
+                        "case_index": case_index,
+                        "example_index": example_index,
+                        "kind": "example",
+                    })
+            legacy_qid = (case.get("source_question_id") or "").strip()
+            if (
+                legacy_qid in duplicate_set
+                and (case.get("case_prompt") or "").strip()
+                and not usable_examples
+            ):
+                concrete[legacy_qid].append({
+                    "type_index": type_index,
+                    "case_index": case_index,
+                    "example_index": None,
+                    "kind": "legacy",
+                })
+
+    def topic_matches(qid: str, placement: dict) -> bool:
+        source_topic = _topic_comparison_key(
+            inventory_by_qid[qid].get("topic_hint") or "")
+        type_index = placement["type_index"]
+        if not source_topic or not 0 <= type_index < len(types):
+            return False
+        mtype = types[type_index]
+        return (
+            isinstance(mtype, dict)
+            and _topic_comparison_key(
+                mtype.get("topic_match_hint") or "") == source_topic
+        )
+
+    winners: dict[str, dict] = {}
+    for qid in duplicate_qids:
+        placements = concrete[qid]
+        if not placements:
+            # A trace-only duplicate can be made concrete only when the
+            # inventory has full source wording for deterministic backfill.
+            if not _inventory_task_text(inventory_by_qid[qid]):
+                continue
+            placements = [
+                {
+                    "type_index": type_index,
+                    "case_index": None,
+                    "example_index": None,
+                    "kind": "trace",
+                }
+                for type_index in trace_types[qid]
+            ]
+        if not placements:
+            continue
+        winners[qid] = next(
+            (
+                placement for placement in placements
+                if topic_matches(qid, placement)
+            ),
+            placements[0],
+        )
+    if not winners:
+        return types, 0
+
+    pruned: list[dict] = []
+    winner_qids = set(winners)
+    for type_index, raw_type in enumerate(types):
+        if not isinstance(raw_type, dict):
+            continue
+        mtype = dict(raw_type)
+        source_ids: list[str] = []
+        kept_source_ids: set[str] = set()
+        for source_qid in raw_type.get("source_question_ids") or []:
+            qid = (source_qid or "").strip()
+            if qid not in winner_qids:
+                source_ids.append(source_qid)
+                continue
+            if (
+                winners[qid]["type_index"] == type_index
+                and qid not in kept_source_ids
+            ):
+                source_ids.append(qid)
+                kept_source_ids.add(qid)
+        for qid, winner in winners.items():
+            if (
+                winner["type_index"] == type_index
+                and qid not in kept_source_ids
+            ):
+                source_ids.append(qid)
+                kept_source_ids.add(qid)
+        mtype["source_question_ids"] = source_ids
+
+        cases: list = []
+        for case_index, raw_case in enumerate(
+            raw_type.get("case_prompts") or []
+        ):
+            if not isinstance(raw_case, dict):
+                cases.append(raw_case)
+                continue
+            case = dict(raw_case)
+            if "examples" in raw_case:
+                examples: list = []
+                for example_index, raw_example in enumerate(
+                    raw_case.get("examples") or []
+                ):
+                    if not isinstance(raw_example, dict):
+                        examples.append(raw_example)
+                        continue
+                    example = dict(raw_example)
+                    qid = (
+                        example.get("source_question_id") or "").strip()
+                    if qid not in winner_qids:
+                        examples.append(example)
+                        continue
+                    winner = winners[qid]
+                    if (
+                        winner["kind"] == "example"
+                        and winner["type_index"] == type_index
+                        and winner["case_index"] == case_index
+                        and winner["example_index"] == example_index
+                    ):
+                        examples.append(example)
+                case["examples"] = examples
+
+            legacy_qid = (
+                raw_case.get("source_question_id") or "").strip()
+            if legacy_qid in winner_qids:
+                winner = winners[legacy_qid]
+                keep_legacy = (
+                    winner["kind"] == "legacy"
+                    and winner["type_index"] == type_index
+                    and winner["case_index"] == case_index
+                )
+                if not keep_legacy:
+                    case.pop("source_question_id", None)
+                    usable_examples = [
+                        example
+                        for example in (case.get("examples") or [])
+                        if isinstance(example, dict)
+                        or (isinstance(example, str) and example.strip())
+                    ]
+                    if not usable_examples:
+                        case.pop("case_prompt", None)
+
+            case_examples = _case_examples(case)
+            has_example = any(
+                (example.get("source_question_id") or "").strip()
+                or (example.get("example_prompt") or "").strip()
+                for example in case_examples
+            )
+            if (
+                not has_example
+                and not (case.get("source_question_id") or "").strip()
+            ):
+                continue
+            cases.append(case)
+        mtype["case_prompts"] = cases
+        if source_ids or cases:
+            pruned.append(mtype)
+
+    normalized = _normalize_mined_type_candidate(pruned, inventory)
+    after_counts = _inventory_assignment_counts(normalized)
+    if any(after_counts.get(qid, 0) < 1 for qid in winners):
+        return types, 0
+    removed = sum(
+        max(0, before_counts[qid] - after_counts.get(qid, 0))
+        for qid in winners
+    )
+    return normalized, removed
+
+
 def _mine_types_from_inventory_via_api(
     *, meta: dict, inventory: dict, max_coverage_attempts: int = 4,
 ) -> dict:
@@ -3154,6 +3365,16 @@ def _mine_types_from_inventory_via_api(
                 f"{current_defects} current).",
                 level="warning",
             )
+
+    remaining_duplicates = _duplicate_inventory_assignments(inventory, types)
+    if remaining_duplicates:
+        types, removed = _apply_exact_once_duplicate_backstop(types, inventory)
+        progress.log(
+            "Type Mining exact-once duplicate backstop removed "
+            f"{removed} duplicate placement(s) across "
+            f"{len(remaining_duplicates)} inventory item(s).",
+            level="warning",
+        )
 
     still_missed = _uncovered_inventory_items(inventory, types)
     still_duplicate = _duplicate_inventory_assignments(inventory, types)
