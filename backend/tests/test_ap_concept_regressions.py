@@ -327,6 +327,57 @@ def test_canonicalization_cannot_drop_an_ap_derivation_row(monkeypatch):
     )
 
 
+def test_method_anchor_id_is_stable_across_chunk_topic_context():
+    sections = g.parse_mmd_sections(
+        r"""
+\section*{5.1 Introduction}
+Patterns begin the chapter.
+\subsection*{5.2 Arithmetic Progressions}
+An AP has a common difference.
+\section*{5.3 nth Term of an AP}
+An AP term has a position.
+\subsection*{5.4 Sum of First $n$ Terms of an AP}
+Finite AP terms can be added.
+\section*{So, the sum of the first $n$ terms of an AP is given by}
+$$S=\frac{n}{2}[2a+(n-1)d]$$
+\section*{So, the sum of first $n$ positive integers is given by}
+$$S_n=\frac{n(n+1)}{2}$$
+"""
+    )
+    local_sections = sections[-3:]
+    formula = g._normalize_math_evidence(r"S_n=\frac{n(n+1)}{2}")
+    global_anchor = next(
+        anchor for anchor in g._method_coverage_anchors(sections)
+        if formula in {
+            g._normalize_math_evidence(value)
+            for value in anchor["required_formulas"]
+        }
+    )
+    local_anchor = next(
+        anchor for anchor in g._method_coverage_anchors(local_sections)
+        if formula in {
+            g._normalize_math_evidence(value)
+            for value in anchor["required_formulas"]
+        }
+    )
+
+    assert global_anchor["topic_hint"] == "Sum of First n Terms of an AP"
+    assert local_anchor["topic_hint"] == (
+        "So, the sum of first n positive integers is given by"
+    )
+    assert local_anchor["anchor_id"] == global_anchor["anchor_id"]
+
+    row = _row(
+        local_anchor["topic_hint"],
+        "Derive the Sum of the First n Positive Integers",
+        evidence=local_anchor["anchor_id"],
+    )
+    out = g._enforce_method_anchor_topics([row], [global_anchor])
+
+    assert out[0]["topic"] == global_anchor["topic_hint"]
+    assert g._method_anchor_covered(out, global_anchor)
+
+
 def test_ap_section_is_not_discarded_when_it_matches_chapter_title():
     sections = g.parse_mmd_sections(_ap_mmd())
     assert g._chapter_title_is_main_topic(

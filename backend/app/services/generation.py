@@ -4574,8 +4574,11 @@ def _method_coverage_anchors(sections: list[dict]) -> list[dict]:
         cue_context = searchable[
             max(0, cue.start() - 160):cue.end() + 400
         ]
+        # The same source block can inherit a different topic when viewed in a
+        # section chunk versus the full chapter. Identity must not depend on
+        # that chunk-local context; the full-chapter topic is enforced later.
         digest = hashlib.sha1(
-            f"{topic}|{heading}|{evidence}|{formulas}".encode("utf-8")
+            f"{heading}|{evidence}|{formulas}".encode("utf-8")
         ).hexdigest()[:10].upper()
         anchor_id = f"METHOD-{digest}"
         if anchor_id in seen:
@@ -4596,6 +4599,53 @@ def _method_coverage_anchors(sections: list[dict]) -> list[dict]:
 def _method_anchor_ids(rec: dict) -> set[str]:
     return set(_METHOD_ANCHOR_ID_RE.findall(
         str(rec.get("source_evidence") or "").upper()))
+
+
+def _debug_method_anchor_state(
+    stage: str, records: list[dict], anchors: list[dict], *,
+    hypothesis_id: str, location: str,
+) -> None:
+    """Temporary NDJSON trace for locating downstream method-anchor loss."""
+    import json as _debug_json
+    import time as _debug_time
+
+    anchor_ids = {
+        str(anchor.get("anchor_id") or "").upper() for anchor in anchors
+        if anchor.get("anchor_id")
+    }
+    rows = []
+    for index, rec in enumerate(records):
+        rows.append({
+            "index": index,
+            "topic": str(rec.get("topic") or ""),
+            "concept_title": str(rec.get("concept_title") or ""),
+            "source_evidence": str(rec.get("source_evidence") or ""),
+            "tagged_anchor_ids": sorted(_method_anchor_ids(rec) & anchor_ids),
+            "covers_anchor_ids": sorted(
+                str(anchor.get("anchor_id") or "").upper()
+                for anchor in anchors
+                if _method_anchor_covered([rec], anchor)
+            ),
+        })
+    payload = {
+        "hypothesisId": hypothesis_id,
+        "location": location,
+        "message": "method anchor state",
+        "data": {
+            "stage": stage,
+            "row_count": len(records),
+            "missing_anchor_ids": [
+                anchor["anchor_id"]
+                for anchor in _missing_method_anchors(records, anchors)
+            ],
+            "rows": rows,
+        },
+        "timestamp": int(_debug_time.time() * 1000),
+    }
+    # region agent log
+    with open("/opt/cursor/logs/debug.log", "a", encoding="utf-8") as debug_file:
+        debug_file.write(_debug_json.dumps(payload, ensure_ascii=False) + "\n")
+    # endregion
 
 
 def _method_anchor_covered(records: list[dict], anchor: dict) -> bool:
@@ -5491,6 +5541,13 @@ def concepts_from_mmd(
             question_task_inventory=question_task_inventory,
             mined_types=mined_types,
         )
+        # region agent log
+        _debug_method_anchor_state(
+            "after_type_assignment", out, method_anchors,
+            hypothesis_id="A,B,C,D",
+            location="generation.py:concepts_from_mmd/after_type_assignment",
+        )
+        # endregion
         progress.set_progress(
             0.91, label="Concept extraction — Type assignment complete")
         # Deterministic normalization BEFORE the strict repair: formatting
@@ -5503,6 +5560,13 @@ def concepts_from_mmd(
         out = _scrub_section_numbers(out)
         out = _merge_concept_records(out)
         out = _dedupe_titles_chapter_wide(out)
+        # region agent log
+        _debug_method_anchor_state(
+            "after_pre_final_exact_dedupe", out, method_anchors,
+            hypothesis_id="A,D",
+            location="generation.py:concepts_from_mmd/after_pre_final_exact_dedupe",
+        )
+        # endregion
         # Near-duplicate titles: GPT merges the rows' content; the
         # deterministic drop only guards whatever the merge pass left behind.
         progress.step(
@@ -5511,6 +5575,13 @@ def concepts_from_mmd(
         )
         before_duplicate_merge = out
         out = _merge_similar_concepts_via_api(out, meta=meta)
+        # region agent log
+        _debug_method_anchor_state(
+            "after_duplicate_merge_before_preserve", out, method_anchors,
+            hypothesis_id="B,D",
+            location="generation.py:concepts_from_mmd/after_duplicate_merge_before_preserve",
+        )
+        # endregion
         out = _preserve_required_method_rows(before_duplicate_merge, out)
         out = concept_cleanup.dedupe_similar_titles_chapter_wide(out)
         out = concept_cleanup.filter_review_violations(
@@ -5521,10 +5592,24 @@ def concepts_from_mmd(
         ]
         out = _enforce_culminations(out)
         out = _ensure_misconceptions_via_api(out, meta=meta)
+        # region agent log
+        _debug_method_anchor_state(
+            "before_final_repair", out, method_anchors,
+            hypothesis_id="A,B,C,D",
+            location="generation.py:concepts_from_mmd/before_final_repair",
+        )
+        # endregion
         before_final_repair = out
         out = _repair_records_via_api(
             out, meta=meta, stage="final", source_context=mmd_text, strict=False,
             max_attempts=3)
+        # region agent log
+        _debug_method_anchor_state(
+            "after_final_repair_before_preserve", out, method_anchors,
+            hypothesis_id="C,D",
+            location="generation.py:concepts_from_mmd/after_final_repair_before_preserve",
+        )
+        # endregion
         out = _preserve_required_method_rows(before_final_repair, out)
         # Post-repair: neutralize ONLY rows the repair pass could not fix —
         # rows that already validate cleanly keep their full GPT-authored
@@ -5538,6 +5623,13 @@ def concepts_from_mmd(
         # Salvage may leave a bare figure ref if inventory lacked the URL;
         # re-neutralize any residual source_artifact rows only.
         out = _neutralize_unrepaired_rows(out)
+        # region agent log
+        _debug_method_anchor_state(
+            "after_repair_cleanup_and_salvage", out, method_anchors,
+            hypothesis_id="C,D",
+            location="generation.py:concepts_from_mmd/after_repair_cleanup_and_salvage",
+        )
+        # endregion
         out = cr.refine_chapter(out)
         # The repair/cleanup passes may reorder, rename, or re-collide rows;
         # re-assert the duplicate-title, culmination, mastery-line, and
@@ -5547,6 +5639,13 @@ def concepts_from_mmd(
         out = concept_cleanup.dedupe_similar_titles_chapter_wide(out)
         out = concept_cleanup.filter_review_violations(
             out, subject=subject, board=board, chapter_title=chapter_title)
+        # region agent log
+        _debug_method_anchor_state(
+            "after_post_refine_dedupes", out, method_anchors,
+            hypothesis_id="A,D",
+            location="generation.py:concepts_from_mmd/after_post_refine_dedupes",
+        )
+        # endregion
         out = _ensure_mastery_lines_via_api(out, meta=meta)
         out = _ensure_misconceptions_via_api(out, meta=meta)
         out = _enforce_culminations(out)
@@ -5555,6 +5654,13 @@ def concepts_from_mmd(
         # the hard final gate so deposit is never blocked by residual refs.
         out = _neutralize_unrepaired_rows(out)
         out = _enforce_method_anchor_topics(out, method_anchors)
+        # region agent log
+        _debug_method_anchor_state(
+            "before_final_anchor_gate", out, method_anchors,
+            hypothesis_id="C,D",
+            location="generation.py:concepts_from_mmd/before_final_anchor_gate",
+        )
+        # endregion
         missing_method_anchors = _missing_method_anchors(out, method_anchors)
         if missing_method_anchors:
             raise RuntimeError(
