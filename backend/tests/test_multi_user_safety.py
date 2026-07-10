@@ -11,11 +11,14 @@ from app import config
 from app.services import generation as g
 
 
-def _rate_limit_error(retry_after: str | None = None) -> RateLimitError:
+def _rate_limit_error(
+    retry_after: str | None = None, *, code: str | None = None,
+) -> RateLimitError:
     request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
     headers = {"retry-after": retry_after} if retry_after is not None else {}
     response = httpx.Response(429, request=request, headers=headers)
-    return RateLimitError("rate limited", response=response, body=None)
+    body = {"error": {"code": code}} if code else None
+    return RateLimitError("rate limited", response=response, body=body)
 
 
 class _FakeResponse:
@@ -97,6 +100,24 @@ def test_rate_limit_is_retried_until_success(fake_openai, monkeypatch):
     backoffs = [s for s in sleeps if s >= 1]  # ignore the fake client's 0.05s work
     assert len(backoffs) == 2
     assert all(s > 0 for s in backoffs)
+
+
+def test_insufficient_quota_fails_immediately_without_retry(
+    fake_openai, monkeypatch,
+):
+    sleeps: list[float] = []
+    monkeypatch.setattr(time, "sleep", lambda seconds: sleeps.append(seconds))
+    fake_openai.plan = [
+        _rate_limit_error(code="insufficient_quota"),
+        None,
+    ]
+
+    with pytest.raises(RuntimeError, match="quota exhausted.*not retried"):
+        g._openai_json("s", "u")
+
+    # The scripted success remains untouched: only one provider call occurred.
+    assert fake_openai.plan == [None]
+    assert not [seconds for seconds in sleeps if seconds >= 1]
 
 
 def test_retry_after_header_is_honoured(fake_openai, monkeypatch):

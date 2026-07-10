@@ -297,13 +297,32 @@ def dedupe_similar_titles_chapter_wide(records: list[dict]) -> list[dict]:
     duplicate rows' content (``_merge_similar_concepts_via_api``); this drop
     only runs in dry mode or when that pass failed.
     """
+    def required(rec: dict) -> bool:
+        return bool(re.search(
+            r"\bMETHOD-[A-F0-9]{10}\b",
+            str(rec.get("source_evidence") or ""),
+            re.IGNORECASE,
+        ))
+
     kept: list[str] = []
     out: list[dict] = []
     dropped = 0
     for rec in records:
         title = (rec.get("concept_title") or "").strip()
         if title and not cr.is_culmination(title):
-            if any(titles_look_similar(title, prev) for prev in kept):
+            similar_index = next(
+                (i for i, prev in enumerate(kept)
+                 if titles_look_similar(title, prev)),
+                None,
+            )
+            if similar_index is not None:
+                if required(rec) and required(out[similar_index]):
+                    kept.append(title)
+                    out.append(rec)
+                    continue
+                if required(rec):
+                    kept[similar_index] = title
+                    out[similar_index] = rec
                 dropped += 1
                 continue
             kept.append(title)
