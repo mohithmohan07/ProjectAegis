@@ -3312,12 +3312,12 @@ def _compact_mined_type_metadata(types: list[dict]) -> dict:
 def _validate_focused_type_delta(
     data: dict, *, missed_items: list[dict], existing_types: list[dict],
 ) -> list[dict]:
-    """Validate that a focused response is an additive, full-source delta."""
+    """Validate an additive delta and restore its source-owned Example text."""
     import copy
 
     if not isinstance(data, dict) or not isinstance(data.get("types"), list):
         raise ValueError("response must contain a types list")
-    raw_types = data["types"]
+    raw_types = copy.deepcopy(data["types"])
     if not raw_types:
         raise ValueError("response contains no delta Types")
 
@@ -3461,14 +3461,14 @@ def _validate_focused_type_delta(
                 if existing_counts.get(qid, 0):
                     errors.append(
                         f"{example_label} duplicates an existing assignment")
-                prompt = example.get("example_prompt")
                 expected = _inventory_task_text(allowed_by_qid[qid])
-                actual = re.sub(
-                    r"\s+", " ", prompt.strip()
-                ) if isinstance(prompt, str) else ""
-                if not expected or actual != re.sub(r"\s+", " ", expected):
+                if not expected:
                     errors.append(
-                        f"{example_label} does not carry the full source task")
+                        f"{example_label} has no source task to restore")
+                    continue
+                # Prompt wording, shared context, and image URLs belong to the
+                # inventory. The model owns only the Type/Case classification.
+                example["example_prompt"] = expected
 
         for qid in source_ids:
             if qid not in allowed_by_qid:
@@ -3485,7 +3485,7 @@ def _validate_focused_type_delta(
             "delta assigns qids more than once: " + ", ".join(repeated))
     if errors:
         raise ValueError("; ".join(errors))
-    return copy.deepcopy(raw_types)
+    return raw_types
 
 
 def _merge_focused_type_delta(

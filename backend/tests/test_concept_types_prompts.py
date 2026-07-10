@@ -523,10 +523,17 @@ def test_mine_types_merges_focused_delta_for_only_missed_inventory(monkeypatch):
     assert not g._duplicate_inventory_assignments(inventory, mined["types"])
 
 
-def test_mine_types_rejects_malformed_and_extraneous_focused_deltas(monkeypatch):
+def test_mine_types_keeps_delta_guards_and_restores_authoritative_source(
+    monkeypatch,
+):
     calls = {"n": 0}
     task_one = "Complete source task one without omitting any stated condition."
     task_two = "Complete source task two without omitting any stated condition."
+    shared_context = "Use the labelled construction shown in Figure 2."
+    image_url = "https://cdn.mathpix.com/cropped/focused-delta-2.png"
+    authoritative_task_two = (
+        f"{shared_context} {task_two} ![]({image_url})"
+    )
 
     def fake_openai(system, user, **kw):
         calls["n"] += 1
@@ -551,22 +558,33 @@ def test_mine_types_rejects_malformed_and_extraneous_focused_deltas(monkeypatch)
                 "source_question_ids": ["QINV-0002"],
                 "case_prompts": [{
                     "case_id": "NEW-CASE-0002",
-                    "case_title": "Malformed shortened case",
+                    "case_title": "Malformed legacy case",
+                    "source_question_id": "QINV-0002",
+                    "case_prompt": "shortened",
+                }],
+            }]}
+        if calls["n"] == 3:
+            return {"types": [{
+                "type_id": "TYPE-0001",
+                "source_question_ids": ["QINV-0001"],
+                "case_prompts": [{
+                    "case_id": "NEW-CASE-0003",
+                    "case_title": "Extraneous already-classified case",
                     "examples": [{
-                        "source_question_id": "QINV-0002",
-                        "example_prompt": "shortened",
+                        "source_question_id": "QINV-0001",
+                        "example_prompt": task_one,
                     }],
                 }],
             }]}
         return {"types": [{
             "type_id": "TYPE-0001",
-            "source_question_ids": ["QINV-0001"],
+            "source_question_ids": ["QINV-0002"],
             "case_prompts": [{
-                "case_id": "NEW-CASE-0003",
-                "case_title": "Extraneous already-classified case",
+                "case_id": "NEW-CASE-0004",
+                "case_title": "Valid source-owned case",
                 "examples": [{
-                    "source_question_id": "QINV-0001",
-                    "example_prompt": task_one,
+                    "source_question_id": "QINV-0002",
+                    "example_prompt": "shortened",
                 }],
             }],
         }]}
@@ -578,29 +596,41 @@ def test_mine_types_rejects_malformed_and_extraneous_focused_deltas(monkeypatch)
             "topic_hint": "Topic A", "raw_task": task_one,
         },
         {
-            "qid": "QINV-0002", "source_kind": "exercise",
+            "qid": "QINV-0002", "source_kind": "diagram_task",
             "topic_hint": "Topic A", "raw_task": task_two,
+            "shared_context": shared_context,
+            "requires_context": True,
+            "image_urls": [image_url],
         },
     ], "stats": {}}
     mined = g._mine_types_from_inventory_via_api(
         meta=g._metadata(subject="Math"),
         inventory=inventory,
-        max_focused_attempts=2,
+        max_focused_attempts=3,
     )
 
-    assert calls["n"] == 3
-    assert len(mined["types"]) == 2
-    authored = next(
-        item for item in mined["types"] if "QINV-0001" in item["source_question_ids"])
-    fallback = next(
-        item for item in mined["types"] if "QINV-0002" in item["source_question_ids"])
+    # The malformed legacy shape and existing-qid claim were both rejected;
+    # only the structurally valid delta was merged.
+    assert calls["n"] == 4
+    assert len(mined["types"]) == 1
+    authored = mined["types"][0]
     assert authored["type_title"] == "Pattern One"
     assert authored["type_description"] == "GPT-authored metadata must remain."
-    assert len(authored["case_prompts"]) == 1
-    assert fallback["type_title"] == "Solving an Exercise Problem"
-    assert fallback["topic_match_hint"] == "Topic A"
-    assert g._case_examples(fallback["case_prompts"][0])[0][
-        "example_prompt"] == task_two
+    assert len(authored["case_prompts"]) == 2
+    examples = [
+        example
+        for case in authored["case_prompts"]
+        for example in g._case_examples(case)
+    ]
+    assert [
+        (example["source_question_id"], example["example_prompt"])
+        for example in examples
+    ] == [
+        ("QINV-0001", task_one),
+        ("QINV-0002", authoritative_task_two),
+    ]
+    assert all(
+        example["example_prompt"] != "shortened" for example in examples)
     assert not g._uncovered_inventory_items(inventory, mined["types"])
     assert not g._duplicate_inventory_assignments(inventory, mined["types"])
 
