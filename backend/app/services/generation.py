@@ -2066,7 +2066,11 @@ def _clean_heading_text(title: str) -> str:
     for _ in range(3):
         title = re.sub(
             r"\\(?:mathbf|boldsymbol|mathrm|text)\s*\{([^{}]*)\}", r"\1", title)
-    title = title.replace("\\(", " ").replace("\\)", " ")
+    title = (
+        title.replace("\\(", " ").replace("\\)", " ")
+        .replace("\\[", " ").replace("\\]", " ")
+        .replace("$", " ")
+    )
     title = re.sub(r"\\[a-zA-Z]+\*?", " ", title)
     title = title.replace("{", " ").replace("}", " ")
     title = re.sub(r"\s+", " ", title).strip()
@@ -4673,6 +4677,39 @@ def _preserve_required_method_rows(
     return out
 
 
+def _enforce_method_anchor_topics(
+    records: list[dict], anchors: list[dict],
+) -> list[dict]:
+    """Keep anchor-tagged derivations under their source section topic."""
+    topic_by_anchor = {
+        str(anchor.get("anchor_id") or "").upper():
+        (anchor.get("topic_hint") or "").strip()
+        for anchor in anchors
+        if anchor.get("anchor_id") and (anchor.get("topic_hint") or "").strip()
+    }
+    corrected = 0
+    for rec in records:
+        source_topics = {
+            topic_by_anchor[anchor_id]
+            for anchor_id in _method_anchor_ids(rec)
+            if anchor_id in topic_by_anchor
+        }
+        if len(source_topics) != 1:
+            continue
+        source_topic = next(iter(source_topics))
+        if _topic_comparison_key(rec.get("topic", "")) != _topic_comparison_key(
+                source_topic):
+            rec["topic"] = source_topic
+            corrected += 1
+    if corrected:
+        progress.log(
+            f"Restored source topics on {corrected} derivation/method "
+            "concept row(s).",
+            level="warning",
+        )
+    return records
+
+
 def _extract_skeleton_via_api(
     chunks: list[dict], *, meta: dict,
     progress_start: float = 0.03, progress_end: float = 0.24,
@@ -5410,6 +5447,7 @@ def concepts_from_mmd(
         out = _snap_topics_to_headings(
             out, headings, chapter_title=chapter_title,
             allow_chapter_title_topic=allow_chapter_title_topic)
+        out = _enforce_method_anchor_topics(out, method_anchors)
         progress.step("Concept extraction — refining descriptions", value=0.42)
         out = _refine_descriptions_via_api(
             out, subject=subject, mmd_text=mmd_text, meta=meta, sections=sections)
@@ -5512,6 +5550,7 @@ def concepts_from_mmd(
         # pointers — scrub source_artifact one last time immediately before
         # the hard final gate so deposit is never blocked by residual refs.
         out = _neutralize_unrepaired_rows(out)
+        out = _enforce_method_anchor_topics(out, method_anchors)
         missing_method_anchors = _missing_method_anchors(out, method_anchors)
         if missing_method_anchors:
             raise RuntimeError(

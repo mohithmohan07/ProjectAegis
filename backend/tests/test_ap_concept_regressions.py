@@ -436,6 +436,9 @@ def test_mathpix_latex_topic_wrappers_share_one_source_topic_key(monkeypatch):
         "Sum of First n Terms",
     ]
     assert len({g._topic_comparison_key(value) for value in variants}) == 1
+    assert g._clean_heading_text(
+        r"Sum of First $ \boldsymbol{n} $ Terms"
+    ) == "Sum of First n Terms"
 
     sections = [
         {"heading": variants[0], "body": "", "heading_level": 2},
@@ -486,6 +489,22 @@ def test_mathpix_latex_topic_wrappers_share_one_source_topic_key(monkeypatch):
             "sum rule."
         ),
     }], prose_anchor)
+
+
+def test_method_anchor_topic_is_restored_after_topic_restructuring():
+    anchor = {
+        "anchor_id": "METHOD-ABCDEF1234",
+        "topic_hint": "nth Term of an AP",
+    }
+    row = _row(
+        "Introduction",
+        "Deriving the General Term",
+        evidence=anchor["anchor_id"],
+    )
+
+    out = g._enforce_method_anchor_topics([row], [anchor])
+
+    assert out[0]["topic"] == "nth Term of an AP"
 
 
 def test_type_assignment_rejects_wrong_ap_source_topic(monkeypatch):
