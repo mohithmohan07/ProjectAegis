@@ -356,6 +356,9 @@ def test_restructure_topics_reassigns_only_topics(monkeypatch):
 
     def fake_openai(system, user, **kw):
         assert "SECTION HEADINGS" in user
+        assert "SOURCE TOPIC EXCERPTS" in user
+        assert "Ratios teach similarity of figures." in user
+        assert "Angle criteria teach similar triangles." in user
         return {"rows": [
             {"topic": "Similarity of Figures", "parent_concept": "P",
              "concept": "Meaning of Similarity",
@@ -368,7 +371,17 @@ def test_restructure_topics_reassigns_only_topics(monkeypatch):
     monkeypatch.setattr(g, "_openai_json", fake_openai)
     out = g._restructure_topics_via_api(
         records, meta=g._metadata(subject="Math"),
-        headings=["Similarity of Figures", "Criteria for Similarity"])
+        source_topic_excerpts=[
+            {
+                "topic": "Similarity of Figures",
+                "excerpt": "Ratios teach similarity of figures.",
+            },
+            {
+                "topic": "Criteria for Similarity",
+                "excerpt": "Angle criteria teach similar triangles.",
+            },
+        ],
+    )
     assert [r["topic"] for r in out] == [
         "Similarity of Figures", "Criteria for Similarity"]
     # ONLY the topic moved; descriptions/keywords stay as authored upstream.
