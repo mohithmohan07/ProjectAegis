@@ -50,6 +50,7 @@ def test_split_prompt_contracts_are_separated():
 def test_universal_question_task_inventory_and_type_mining_prompts():
     inventory = g.prompts.get_text("concepts.question_task_inventory.system")
     mining = g.prompts.get_text("concepts.type_mining.system")
+    delta = g.prompts.get_text("concepts.type_mining_delta.system")
     assert "Question / Task Inventory" in inventory
     assert "content_objects" in inventory
     assert "math_objects" not in inventory
@@ -75,6 +76,9 @@ def test_universal_question_task_inventory_and_type_mining_prompts():
     assert "TYPE WORDING" in mining
     assert "precise, self-explanatory pattern name" in mining
     assert "type_description must DEFINE the pattern" in mining
+    assert "incremental delta" in delta
+    assert "never return an already classified question" in delta
+    assert "complete source task" in delta
     embedding = g.prompts.get_text("concepts.type_embedding.system")
     assert "concept_id" in embedding and "type_ids" in embedding
     assert "every provided type_id MUST be assigned".lower() in embedding.lower()
@@ -428,81 +432,159 @@ def test_type_cases_backfill_full_source_questions_from_inventory():
     assert "Find EC with full reasoning" in prompt
 
 
-def test_mine_types_retries_uncovered_inventory_items(monkeypatch):
+def test_mine_types_merges_focused_delta_for_only_missed_inventory(monkeypatch):
     calls = {"n": 0}
+    task_one = "Use the first complete source task with every stated condition."
+    task_two = "Use the second complete source task with every stated condition."
 
     def fake_openai(system, user, **kw):
         calls["n"] += 1
         if calls["n"] == 1:
-            # First mining pass only classifies one of the two items.
             return {"types": [{
                 "type_id": "TYPE-0001", "type_title": "Pattern One",
+                "type_description": "Immutable authored description.",
+                "task_pattern": "Complete a source task under its conditions.",
+                "topic_match_hint": "Topic A",
+                "authored_marker": "preserve-me",
                 "source_question_ids": ["QINV-0001"],
-                "case_prompts": [{"case_prompt": "do one", "source_question_id": "QINV-0001"}],
+                "case_prompts": [{
+                    "case_id": "CASE-0001",
+                    "case_title": "First defined case",
+                    "examples": [{
+                        "source_question_id": "QINV-0001",
+                        "example_prompt": task_one,
+                    }],
+                }],
             }]}
-        # Coverage retry must receive defects and return a complete corrected list.
-        assert "COVERAGE DEFECTS TO FIX" in user
-        assert "COMPLETE corrected" in user
+        assert "incremental delta" in system
+        assert "MISSED INVENTORY ITEMS" in user
+        assert "COMPACT EXISTING TYPE METADATA" in user
         assert "QINV-0002" in user
-        return {"types": [
-            {
-                "type_id": "TYPE-0001", "type_title": "Pattern One",
-                "source_question_ids": ["QINV-0001"],
-                "case_prompts": [{"case_prompt": "do one", "source_question_id": "QINV-0001"}],
-            },
-            {
-                "type_id": "TYPE-0002", "type_title": "Pattern Two",
-                "source_question_ids": ["QINV-0002"],
-                "case_prompts": [{"case_prompt": "do two", "source_question_id": "QINV-0002"}],
-            },
-        ]}
-
-    monkeypatch.setattr(g, "_openai_json", fake_openai)
-    inventory = {"items": [
-        {"qid": "QINV-0001", "normalized_task": "one"},
-        {"qid": "QINV-0002", "normalized_task": "two"},
-    ], "stats": {}}
-    mined = g._mine_types_from_inventory_via_api(
-        meta=g._metadata(subject="Math"), inventory=inventory)
-    assert calls["n"] == 2
-    assert {t["type_id"] for t in mined["types"]} == {"TYPE-0001", "TYPE-0002"}
-    assert not g._uncovered_inventory_items(inventory, mined["types"])
-
-
-def test_mine_types_coverage_merges_into_existing_type(monkeypatch):
-    calls = {"n": 0}
-
-    def fake_openai(system, user, **kw):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            return {"types": [{
-                "type_id": "TYPE-0001", "type_title": "Pattern One",
-                "source_question_ids": ["QINV-0001"],
-                "case_prompts": [{"case_prompt": "do one", "source_question_id": "QINV-0001"}],
-            }]}
-        # The retry returns the COMPLETE corrected Type with both questions.
+        assert "QINV-0001" not in user
+        assert task_one not in user
+        assert "Pattern One" in user
+        assert "COMPLETE corrected" not in user
         return {"types": [{
-            "type_id": "TYPE-0001", "type_title": "Pattern One",
-            "source_question_ids": ["QINV-0001", "QINV-0002"],
-            "case_prompts": [
-                {"case_prompt": "do one", "source_question_id": "QINV-0001"},
-                {"case_prompt": "do two", "source_question_id": "QINV-0002"},
-            ],
+            "type_id": "TYPE-0001",
+            "source_question_ids": ["QINV-0002"],
+            "case_prompts": [{
+                "case_id": "NEW-CASE-0002",
+                "case_title": "Second defined case",
+                "examples": [{
+                    "source_question_id": "QINV-0002",
+                    "example_prompt": task_two,
+                }],
+            }],
         }]}
 
     monkeypatch.setattr(g, "_openai_json", fake_openai)
     inventory = {"items": [
-        {"qid": "QINV-0001", "normalized_task": "one"},
-        {"qid": "QINV-0002", "normalized_task": "two"},
+        {"qid": "QINV-0001", "topic_hint": "Topic A", "raw_task": task_one},
+        {"qid": "QINV-0002", "topic_hint": "Topic A", "raw_task": task_two},
     ], "stats": {}}
     mined = g._mine_types_from_inventory_via_api(
         meta=g._metadata(subject="Math"), inventory=inventory)
+
+    assert calls["n"] == 2
     assert len(mined["types"]) == 1
     merged = mined["types"][0]
-    assert set(merged["source_question_ids"]) == {"QINV-0001", "QINV-0002"}
-    assert len(merged["case_prompts"]) == 2
-    assert {c["case_prompt"] for c in merged["case_prompts"]} == {"one", "two"}
+    assert merged["authored_marker"] == "preserve-me"
+    assert merged["type_description"] == "Immutable authored description."
+    assert merged["source_question_ids"] == ["QINV-0001", "QINV-0002"]
+    examples = [
+        example
+        for case in merged["case_prompts"]
+        for example in g._case_examples(case)
+    ]
+    assert [(example["source_question_id"], example["example_prompt"])
+            for example in examples] == [
+        ("QINV-0001", task_one),
+        ("QINV-0002", task_two),
+    ]
     assert not g._uncovered_inventory_items(inventory, mined["types"])
+    assert not g._duplicate_inventory_assignments(inventory, mined["types"])
+
+
+def test_mine_types_rejects_malformed_and_extraneous_focused_deltas(monkeypatch):
+    calls = {"n": 0}
+    task_one = "Complete source task one without omitting any stated condition."
+    task_two = "Complete source task two without omitting any stated condition."
+
+    def fake_openai(system, user, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {"types": [{
+                "type_id": "TYPE-0001", "type_title": "Pattern One",
+                "type_description": "GPT-authored metadata must remain.",
+                "topic_match_hint": "Topic A",
+                "source_question_ids": ["QINV-0001"],
+                "case_prompts": [{
+                    "case_id": "CASE-0001",
+                    "case_title": "Original defined case",
+                    "examples": [{
+                        "source_question_id": "QINV-0001",
+                        "example_prompt": task_one,
+                    }],
+                }],
+            }]}
+        if calls["n"] == 2:
+            return {"types": [{
+                "type_id": "TYPE-0001",
+                "source_question_ids": ["QINV-0002"],
+                "case_prompts": [{
+                    "case_id": "NEW-CASE-0002",
+                    "case_title": "Malformed shortened case",
+                    "examples": [{
+                        "source_question_id": "QINV-0002",
+                        "example_prompt": "shortened",
+                    }],
+                }],
+            }]}
+        return {"types": [{
+            "type_id": "TYPE-0001",
+            "source_question_ids": ["QINV-0001"],
+            "case_prompts": [{
+                "case_id": "NEW-CASE-0003",
+                "case_title": "Extraneous already-classified case",
+                "examples": [{
+                    "source_question_id": "QINV-0001",
+                    "example_prompt": task_one,
+                }],
+            }],
+        }]}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    inventory = {"items": [
+        {
+            "qid": "QINV-0001", "source_kind": "exercise",
+            "topic_hint": "Topic A", "raw_task": task_one,
+        },
+        {
+            "qid": "QINV-0002", "source_kind": "exercise",
+            "topic_hint": "Topic A", "raw_task": task_two,
+        },
+    ], "stats": {}}
+    mined = g._mine_types_from_inventory_via_api(
+        meta=g._metadata(subject="Math"),
+        inventory=inventory,
+        max_focused_attempts=2,
+    )
+
+    assert calls["n"] == 3
+    assert len(mined["types"]) == 2
+    authored = next(
+        item for item in mined["types"] if "QINV-0001" in item["source_question_ids"])
+    fallback = next(
+        item for item in mined["types"] if "QINV-0002" in item["source_question_ids"])
+    assert authored["type_title"] == "Pattern One"
+    assert authored["type_description"] == "GPT-authored metadata must remain."
+    assert len(authored["case_prompts"]) == 1
+    assert fallback["type_title"] == "Solving an Exercise Problem"
+    assert fallback["topic_match_hint"] == "Topic A"
+    assert g._case_examples(fallback["case_prompts"][0])[0][
+        "example_prompt"] == task_two
+    assert not g._uncovered_inventory_items(inventory, mined["types"])
+    assert not g._duplicate_inventory_assignments(inventory, mined["types"])
 
 
 def test_normalize_mined_types_recovers_live_nested_type_schema():
@@ -550,18 +632,20 @@ def test_normalize_mined_types_recovers_live_nested_type_schema():
     )
 
 
-def test_mine_types_recovers_after_regressive_coverage_candidate(monkeypatch):
+def test_mine_types_keeps_monotonic_broad_repairs_then_uses_delta(monkeypatch):
     inventory = {"items": [
         {"qid": f"QINV-{index:04d}", "topic_hint": "T", "raw_task": f"task {index}"}
         for index in range(1, 4)
     ], "stats": {}}
 
-    def mined_type(qids):
+    def mined_type(type_id, qids, title="Reusable pattern"):
         return {
-            "type_id": "TYPE-0001",
-            "type_title": "Reusable pattern",
+            "type_id": type_id,
+            "type_title": title,
+            "topic_match_hint": "T",
             "source_question_ids": qids,
             "case_prompts": [{
+                "case_id": f"CASE-{type_id[-4:]}",
                 "case_title": "Defined case",
                 "examples": [{
                     "source_question_id": qid,
@@ -571,19 +655,41 @@ def test_mine_types_recovers_after_regressive_coverage_candidate(monkeypatch):
         }
 
     responses = [
-        [mined_type(["QINV-0001", "QINV-0002"])],
-        [mined_type(["QINV-0001"])],
-        [mined_type(["QINV-0001", "QINV-0002", "QINV-0003"])],
+        [
+            mined_type("TYPE-0001", ["QINV-0001", "QINV-0002"]),
+            mined_type("TYPE-0002", ["QINV-0001"], "Duplicate pattern"),
+        ],
+        [mined_type("TYPE-0001", ["QINV-0001"])],
+        [mined_type("TYPE-0001", ["QINV-0001", "QINV-0002"])],
     ]
     calls = {"n": 0}
 
     def fake_openai(system, user, **kwargs):
         index = calls["n"]
         calls["n"] += 1
-        if index == 2:
-            # The rejected response must not poison the next repair context.
-            assert "QINV-0002" in user
-        return {"types": responses[index]}
+        if index < 3:
+            if index:
+                assert "COMPLETE corrected" in user
+            if index == 2:
+                # The rejected response must not poison the next repair context.
+                assert "QINV-0002" in user
+            return {"types": responses[index]}
+        assert "incremental delta" in system
+        assert "QINV-0003" in user
+        assert "QINV-0001" not in user
+        assert "QINV-0002" not in user
+        return {"types": [{
+            "type_id": "TYPE-0001",
+            "source_question_ids": ["QINV-0003"],
+            "case_prompts": [{
+                "case_id": "NEW-CASE-0002",
+                "case_title": "Focused missing-item case",
+                "examples": [{
+                    "source_question_id": "QINV-0003",
+                    "example_prompt": "task 3",
+                }],
+            }],
+        }]}
 
     monkeypatch.setattr(g, "_openai_json", fake_openai)
     mined = g._mine_types_from_inventory_via_api(
@@ -592,74 +698,113 @@ def test_mine_types_recovers_after_regressive_coverage_candidate(monkeypatch):
         max_coverage_attempts=2,
     )
 
-    assert calls["n"] == 3
+    assert calls["n"] == 4
+    assert len(mined["types"]) == 1
+    assert mined["types"][0]["type_title"] == "Reusable pattern"
     assert not g._uncovered_inventory_items(inventory, mined["types"])
     assert not g._duplicate_inventory_assignments(inventory, mined["types"])
 
 
-def test_mine_types_hard_fails_after_live_coverage_degradation(monkeypatch):
-    topics = (
-        ["Introduction"] * 2
-        + ["Arithmetic Progressions"] * 7
-        + ["nth Term of an AP"] * 31
-        + ["Sum of First n Terms of an AP"] * 37
-    )
-    inventory = {"items": [
-        {
-            "qid": f"QINV-{index:04d}",
-            "topic_hint": topic,
-            "raw_task": f"Complete source task {index} with all stated conditions.",
-        }
-        for index, topic in enumerate(topics, start=1)
-    ], "stats": {}}
-
-    def mined_type(type_id, title, first, last):
-        qids = [f"QINV-{index:04d}" for index in range(first, last + 1)]
-        return {
-            "type_id": type_id,
-            "type_title": title,
-            "source_question_ids": qids,
-            "case_prompts": [{
-                "case_title": f"Defined case for {title}",
-                "examples": [
-                    {
-                        "source_question_id": qid,
-                        "example_prompt": (
-                            f"Complete source task {int(qid[-4:])} "
-                            "with all stated conditions."
-                        ),
-                    }
-                    for qid in qids
-                ],
-            }],
-        }
-
-    initial = [
-        mined_type("TYPE-0001", "Initial pattern 1", 1, 2),
-        mined_type("TYPE-0002", "Initial pattern 2", 3, 9),
-        mined_type("TYPE-0003", "Initial pattern 3", 10, 24),
-        mined_type("TYPE-0004", "Initial pattern 4", 25, 40),
-        mined_type("TYPE-0005", "Initial pattern 5", 41, 74),
-    ]
-    catastrophic = [mined_type(
-        "TYPE-0001", "Catastrophically truncated correction", 1, 2)]
+def test_mine_types_retains_hard_gate_for_unrecoverable_empty_task(monkeypatch):
     calls = {"n": 0}
 
     def fake_openai(system, user, **kwargs):
         calls["n"] += 1
-        return {"types": initial if calls["n"] == 1 else catastrophic}
+        return {"types": []}
 
     monkeypatch.setattr(g, "_openai_json", fake_openai)
     with pytest.raises(
-        RuntimeError, match=r"3 unclassified.*0 duplicate",
+        RuntimeError, match=r"1 unclassified.*0 duplicate",
     ):
         g._mine_types_from_inventory_via_api(
             meta=g._metadata(subject="Mathematics"),
-            inventory=inventory,
-            max_coverage_attempts=4,
+            inventory={"items": [{
+                "qid": "QINV-0001",
+                "source_kind": "exercise",
+                "topic_hint": "Topic A",
+                "raw_task": "",
+                "normalized_task": "",
+            }], "stats": {}},
+            max_focused_attempts=1,
         )
 
-    assert calls["n"] == 5
+    assert calls["n"] == 2
+
+
+def test_single_item_fallback_preserves_source_image_topic_and_embeds(monkeypatch):
+    image_url = "https://cdn.mathpix.com/cropped/diagram-42.png"
+    source_task = (
+        "Study the construction in Figure 4.2 and determine the requested "
+        "length, using every labelled value."
+    )
+    item = {
+        "qid": "QINV-0042",
+        "source_kind": "diagram_task",
+        "topic_hint": "Geometric Constructions",
+        "raw_task": source_task + "\nSolution: The length is 8 cm.",
+        "normalized_task": "shortened task",
+        "raw_solution_or_answer": "The length is 8 cm.",
+        "image_urls": [image_url],
+    }
+    inventory = {"items": [item], "stats": {}}
+
+    normalized, added = g._append_deterministic_type_fallbacks(
+        [], missed_items=[item], inventory=inventory)
+
+    assert added == 1
+    assert len(normalized) == 1
+    fallback = normalized[0]
+    assert fallback["topic_match_hint"] == "Geometric Constructions"
+    assert fallback["type_title"] == "Interpreting a Diagram to Complete a Task"
+    assert fallback["case_prompts"][0]["case_title"] == (
+        "Diagram-dependent task with its referenced visual and complete ask")
+    example = g._case_examples(fallback["case_prompts"][0])[0]
+    assert example == {
+        "source_question_id": "QINV-0042",
+        "example_prompt": f"{source_task} ![]({image_url})",
+    }
+    assert "The length is 8 cm." not in example["example_prompt"]
+
+    records = [
+        {
+            "topic": "Triangles",
+            "parent_concept": "Triangles",
+            "concept_title": "Triangle Properties",
+            "concept_details": "Description: Triangle properties.",
+            "keywords": "",
+        },
+        {
+            "topic": "Geometric Constructions",
+            "parent_concept": "Constructions",
+            "concept_title": "Constructing Similar Triangles",
+            "concept_details": "Description: Construct similar triangles.",
+            "keywords": "",
+        },
+    ]
+
+    def fake_openai(system, user, **kwargs):
+        concepts, types = _type_embedding_request(user)
+        assert [concept["concept_id"] for concept in concepts] == ["CONCEPT-0002"]
+        assert types[0]["topic_match_hint"] == "Geometric Constructions"
+        assert types[0]["type_title"] == fallback["type_title"]
+        return {
+            "assignments": [{
+                "concept_id": "CONCEPT-0002",
+                "type_ids": [fallback["type_id"]],
+            }],
+        }
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    embedded = g._assign_mined_types_via_api(
+        records,
+        meta=g._metadata(subject="Mathematics"),
+        mined_types={"types": normalized},
+    )
+
+    assert fallback["type_title"] not in embedded[0]["concept_details"]
+    assert fallback["type_title"] in embedded[1]["concept_details"]
+    assert source_task in embedded[1]["concept_details"]
+    assert image_url in embedded[1]["concept_details"]
 
 
 def test_exact_once_duplicate_backstop_prunes_all_duplicate_shapes():

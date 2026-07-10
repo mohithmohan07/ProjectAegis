@@ -1489,6 +1489,33 @@ TYPE WORDING (each Type must be properly defined):
 """)
 
 prompts.register(
+    "concepts.type_mining_delta.system", category=_CONCEPTS_CAT,
+    label="Focused Type coverage delta prompt",
+    default="""\
+Add classifications only for the provided MISSED inventory items. Existing Type
+metadata is context, not content to restate. Return ONLY an incremental delta;
+never return an already classified question, an existing Example, or a complete
+replacement Type list.
+
+Return ONLY strict JSON:
+{"types":[{"type_id":"TYPE-0001 or NEW-TYPE-0001","type_title":"","type_description":"","task_pattern":"","source_question_ids":["QINV-0001"],"case_prompts":[{"case_id":"existing CASE id or NEW-CASE-0001","case_title":"","examples":[{"source_question_id":"QINV-0001","example_prompt":""}],"case_signature":""}],"concept_match_hint":"","parent_concept_match_hint":"","topic_match_hint":"","difficulty_hint":"Basic|Intermediate|Advanced","cognitive_skill_hint":"","subject_skill_hint":"","is_activity":false}]}.
+
+DELTA RULES:
+- Use an existing type_id (and optionally an existing case_id) to append only
+  new Cases/Examples to that Type. Its existing metadata is immutable.
+- If no existing Type fits, create a new topic-scoped Type with a new temporary
+  type_id and complete, precise Type and Case metadata.
+- Claim only qids present in MISSED INVENTORY ITEMS. Each claimed qid must occur
+  exactly once in source_question_ids and exactly once as an Example.
+- Every returned Example must copy that missed item's complete source task
+  verbatim, including all givens, subparts, conditions, context, figure
+  references, and image URLs. Never include a solution or answer.
+- A Type may cover only one exact topic_hint. Do not attach a missed item to an
+  existing Type from another source topic; create a new topic-scoped Type.
+- Cover every provided missed qid, but emit no unchanged Type, Case, or Example.
+""")
+
+prompts.register(
     "concepts.type_embedding.system", category=_CONCEPTS_CAT,
     label="Universal Type-to-concept assignment prompt",
     default="""\
@@ -2882,6 +2909,11 @@ def _inventory_task_text(item: dict) -> str:
         or item.get("question")
         or ""
     )
+    source_kind = (item.get("source_kind") or "").strip().lower()
+    task = _inventory_task_without_solution(
+        str(task),
+        aggressive=source_kind in {"worked_example", "solved_example"},
+    )
     task = bi.to_plain_text(str(task)).strip()
     context = bi.to_plain_text(str(item.get("shared_context") or "")).strip()
     if context and item.get("requires_context") and context not in task:
@@ -3082,6 +3114,521 @@ def _normalize_mined_type_candidate(
     types = _repair_nested_mined_types(raw_types)
     types = _backfill_type_cases_from_inventory(types, inventory)
     return _split_mined_types_by_source_topic(types, inventory)
+
+
+def _compact_mined_type_metadata(types: list[dict]) -> dict:
+    """Small, assignment-free Type context for focused coverage calls."""
+    type_fields = (
+        "type_id", "type_title", "type_description", "task_pattern",
+        "concept_match_hint", "parent_concept_match_hint", "topic_match_hint",
+        "difficulty_hint", "cognitive_skill_hint", "subject_skill_hint",
+        "is_activity",
+    )
+    case_fields = ("case_id", "case_title", "case_signature")
+    compact: list[dict] = []
+    for mtype in types:
+        if not isinstance(mtype, dict):
+            continue
+        item = {
+            field: mtype[field]
+            for field in type_fields
+            if mtype.get(field) not in (None, "", [], {})
+        }
+        cases = []
+        for case in mtype.get("case_prompts") or []:
+            if not isinstance(case, dict):
+                continue
+            case_meta = {
+                field: case[field]
+                for field in case_fields
+                if case.get(field) not in (None, "", [], {})
+            }
+            if case_meta:
+                cases.append(case_meta)
+        if cases:
+            item["cases"] = cases
+        compact.append(item)
+    return {"types": compact}
+
+
+def _validate_focused_type_delta(
+    data: dict, *, missed_items: list[dict], existing_types: list[dict],
+) -> list[dict]:
+    """Validate that a focused response is an additive, full-source delta."""
+    import copy
+
+    if not isinstance(data, dict) or not isinstance(data.get("types"), list):
+        raise ValueError("response must contain a types list")
+    raw_types = data["types"]
+    if not raw_types:
+        raise ValueError("response contains no delta Types")
+
+    allowed_by_qid = {
+        (item.get("qid") or "").strip(): item
+        for item in missed_items
+        if isinstance(item, dict) and (item.get("qid") or "").strip()
+    }
+    existing_counts = _inventory_assignment_counts(existing_types)
+    existing_by_id = {
+        (mtype.get("type_id") or "").strip(): mtype
+        for mtype in existing_types
+        if isinstance(mtype, dict) and (mtype.get("type_id") or "").strip()
+    }
+    errors: list[str] = []
+    delta_counts: dict[str, int] = {}
+
+    for type_index, raw_type in enumerate(raw_types, start=1):
+        label = f"delta Type {type_index}"
+        if not isinstance(raw_type, dict):
+            errors.append(f"{label} is not an object")
+            continue
+        type_id = (raw_type.get("type_id") or "").strip()
+        if not type_id:
+            errors.append(f"{label} has no type_id")
+        existing_type = existing_by_id.get(type_id)
+        if existing_type is None and not (
+            raw_type.get("type_title") or raw_type.get("task_pattern") or ""
+        ).strip():
+            errors.append(f"{label} has no precise Type title")
+        if existing_type is not None:
+            for field in (
+                "type_title", "type_description", "task_pattern",
+                "concept_match_hint", "parent_concept_match_hint",
+                "topic_match_hint", "difficulty_hint", "cognitive_skill_hint",
+                "subject_skill_hint", "is_activity",
+            ):
+                proposed = raw_type.get(field)
+                current = existing_type.get(field)
+                if (
+                    proposed not in (None, "")
+                    and current not in (None, "")
+                    and proposed != current
+                ):
+                    errors.append(
+                        f"{label} attempts to change immutable {field}")
+
+        raw_source_ids = raw_type.get("source_question_ids")
+        if not isinstance(raw_source_ids, list) or not raw_source_ids:
+            errors.append(f"{label} has no source_question_ids list")
+            source_ids: list[str] = []
+        else:
+            source_ids = []
+            for raw_qid in raw_source_ids:
+                if not isinstance(raw_qid, str) or not raw_qid.strip():
+                    errors.append(f"{label} has an invalid source qid")
+                    continue
+                source_ids.append(raw_qid.strip())
+        if len(source_ids) != len(set(source_ids)):
+            errors.append(f"{label} repeats a source qid")
+
+        source_topics = {
+            (allowed_by_qid[qid].get("topic_hint") or "").strip()
+            for qid in source_ids
+            if qid in allowed_by_qid
+        }
+        if len(source_topics) > 1:
+            errors.append(f"{label} crosses source topics")
+        if existing_type is not None and source_topics:
+            existing_topic = (
+                existing_type.get("topic_match_hint") or "").strip()
+            source_topic = next(iter(source_topics))
+            if (
+                existing_topic
+                and source_topic
+                and _topic_comparison_key(existing_topic)
+                != _topic_comparison_key(source_topic)
+            ):
+                errors.append(
+                    f"{label} attaches a missed qid to a different-topic Type")
+
+        existing_cases_by_id = {
+            (case.get("case_id") or "").strip(): case
+            for case in (
+                existing_type.get("case_prompts") or []
+                if existing_type is not None else []
+            )
+            if isinstance(case, dict) and (case.get("case_id") or "").strip()
+        }
+        raw_cases = raw_type.get("case_prompts")
+        if not isinstance(raw_cases, list) or not raw_cases:
+            errors.append(f"{label} has no Case delta")
+            raw_cases = []
+        example_ids: list[str] = []
+        for case_index, case in enumerate(raw_cases, start=1):
+            case_label = f"{label} Case {case_index}"
+            if not isinstance(case, dict):
+                errors.append(f"{case_label} is not an object")
+                continue
+            case_id = (case.get("case_id") or "").strip()
+            existing_case = existing_cases_by_id.get(case_id)
+            if (
+                existing_case is None
+                and not (case.get("case_title") or "").strip()
+            ):
+                errors.append(f"{case_label} has no precise case_title")
+            if existing_case is not None:
+                for field in ("case_title", "case_signature"):
+                    proposed = case.get(field)
+                    current = existing_case.get(field)
+                    if (
+                        proposed not in (None, "")
+                        and current not in (None, "")
+                        and proposed != current
+                    ):
+                        errors.append(
+                            f"{case_label} attempts to change immutable {field}")
+            if (case.get("source_question_id") or "").strip() or (
+                case.get("case_prompt") or ""
+            ).strip():
+                errors.append(
+                    f"{case_label} uses a legacy Case instead of full Examples")
+            examples = case.get("examples")
+            if not isinstance(examples, list) or not examples:
+                errors.append(f"{case_label} has no Examples")
+                continue
+            for example_index, example in enumerate(examples, start=1):
+                example_label = f"{case_label} Example {example_index}"
+                if not isinstance(example, dict):
+                    errors.append(f"{example_label} is not an object")
+                    continue
+                qid = (example.get("source_question_id") or "").strip()
+                if not qid:
+                    errors.append(f"{example_label} has no source_question_id")
+                    continue
+                example_ids.append(qid)
+                delta_counts[qid] = delta_counts.get(qid, 0) + 1
+                if qid not in allowed_by_qid:
+                    errors.append(f"{example_label} claims non-missed qid {qid}")
+                    continue
+                if existing_counts.get(qid, 0):
+                    errors.append(
+                        f"{example_label} duplicates an existing assignment")
+                prompt = example.get("example_prompt")
+                expected = _inventory_task_text(allowed_by_qid[qid])
+                actual = re.sub(
+                    r"\s+", " ", prompt.strip()
+                ) if isinstance(prompt, str) else ""
+                if not expected or actual != re.sub(r"\s+", " ", expected):
+                    errors.append(
+                        f"{example_label} does not carry the full source task")
+
+        for qid in source_ids:
+            if qid not in allowed_by_qid:
+                errors.append(f"{label} claims non-missed qid {qid}")
+            elif existing_counts.get(qid, 0):
+                errors.append(f"{label} duplicates existing qid {qid}")
+        if sorted(source_ids) != sorted(example_ids):
+            errors.append(
+                f"{label} source_question_ids do not match its Examples")
+
+    repeated = sorted(qid for qid, count in delta_counts.items() if count != 1)
+    if repeated:
+        errors.append(
+            "delta assigns qids more than once: " + ", ".join(repeated))
+    if errors:
+        raise ValueError("; ".join(errors))
+    return copy.deepcopy(raw_types)
+
+
+def _merge_focused_type_delta(
+    types: list[dict], delta_types: list[dict],
+) -> list[dict]:
+    """Append a validated delta without replacing existing Type metadata."""
+    import copy
+
+    merged = copy.deepcopy(types)
+    by_id = {
+        (mtype.get("type_id") or "").strip(): mtype
+        for mtype in merged
+        if isinstance(mtype, dict) and (mtype.get("type_id") or "").strip()
+    }
+    for raw_delta in delta_types:
+        delta = copy.deepcopy(raw_delta)
+        type_id = (delta.get("type_id") or "").strip()
+        target = by_id.get(type_id)
+        if target is None:
+            merged.append(delta)
+            if type_id:
+                by_id[type_id] = delta
+            continue
+
+        source_ids = target.setdefault("source_question_ids", [])
+        for qid in delta.get("source_question_ids") or []:
+            if qid not in source_ids:
+                source_ids.append(qid)
+
+        target_cases = target.setdefault("case_prompts", [])
+        mergeable_cases = {
+            (case.get("case_id") or "").strip(): case
+            for case in target_cases
+            if (
+                isinstance(case, dict)
+                and (case.get("case_id") or "").strip()
+                and "examples" in case
+                and not (case.get("case_prompt") or "").strip()
+                and not (case.get("source_question_id") or "").strip()
+            )
+        }
+        for delta_case in delta.get("case_prompts") or []:
+            case_id = (delta_case.get("case_id") or "").strip()
+            target_case = mergeable_cases.get(case_id)
+            if target_case is None:
+                target_cases.append(delta_case)
+                continue
+            target_case.setdefault("examples", []).extend(
+                delta_case.get("examples") or [])
+    return merged
+
+
+def _recover_missed_type_deltas_via_api(
+    *, meta: dict, inventory: dict, types: list[dict], max_attempts: int = 2,
+) -> list[dict]:
+    """Incrementally classify only missed qids, preserving existing assignments."""
+    import copy
+    import json as _json
+
+    current = copy.deepcopy(types)
+    system = prompts.get_text("concepts.type_mining_delta.system")
+    for attempt in range(1, max(0, max_attempts) + 1):
+        missed = _uncovered_inventory_items(inventory, current)
+        if not missed:
+            break
+        user = (
+            _metadata_block(meta)
+            + "\nMISSED INVENTORY ITEMS (the only qids this delta may claim):\n"
+            + _json.dumps({"items": missed}, ensure_ascii=False)
+            + "\n\nCOMPACT EXISTING TYPE METADATA (immutable context; do not "
+            "restate existing assignments):\n"
+            + _json.dumps(
+                _compact_mined_type_metadata(current), ensure_ascii=False)
+        )
+        try:
+            data = _openai_json(system, user)
+            delta = _validate_focused_type_delta(
+                data, missed_items=missed, existing_types=current)
+            candidate = _normalize_mined_type_candidate(
+                _merge_focused_type_delta(current, delta), inventory)
+        except Exception as exc:  # noqa: BLE001 — bounded fallback follows
+            progress.log(
+                f"Focused Type coverage attempt {attempt}/{max_attempts} "
+                f"rejected: {exc}",
+                level="warning",
+            )
+            continue
+
+        current_counts = _inventory_assignment_counts(current)
+        candidate_counts = _inventory_assignment_counts(candidate)
+        altered = [
+            qid for qid, count in current_counts.items()
+            if count and candidate_counts.get(qid, 0) != count
+        ]
+        candidate_duplicates = _duplicate_inventory_assignments(
+            inventory, candidate)
+        candidate_missed = _uncovered_inventory_items(inventory, candidate)
+        if (
+            altered
+            or candidate_duplicates
+            or len(candidate_missed) >= len(missed)
+        ):
+            reasons = []
+            if altered:
+                reasons.append(
+                    f"altered {len(altered)} classified assignment(s)")
+            if candidate_duplicates:
+                reasons.append(
+                    f"created {len(candidate_duplicates)} duplicate(s)")
+            if len(candidate_missed) >= len(missed):
+                reasons.append("did not reduce missed coverage")
+            progress.log(
+                f"Focused Type coverage attempt {attempt}/{max_attempts} "
+                "rejected: " + ", ".join(reasons) + ".",
+                level="warning",
+            )
+            continue
+        accepted = len(missed) - len(candidate_missed)
+        current = candidate
+        progress.log(
+            f"Focused Type coverage attempt {attempt}/{max_attempts}: accepted "
+            f"{accepted} missed item(s); {len(candidate_missed)} still missed.",
+            level="success" if not candidate_missed else "warning",
+        )
+    return current
+
+
+_FALLBACK_TYPE_WORDING = {
+    "worked_example": (
+        "Solving a Worked-Example Problem",
+        "Worked-example problem with all stated givens and the requested result",
+    ),
+    "solved_example": (
+        "Solving a Worked-Example Problem",
+        "Worked-example problem with all stated givens and the requested result",
+    ),
+    "exercise": (
+        "Solving an Exercise Problem",
+        "Exercise problem with all stated givens, constraints, and asks",
+    ),
+    "intext_question": (
+        "Answering an In-text Question",
+        "In-text question with its complete context and requested response",
+    ),
+    "checkpoint_question": (
+        "Answering a Checkpoint Question",
+        "Checkpoint question with its complete context and requested response",
+    ),
+    "activity": (
+        "Completing a Source Activity",
+        "Activity task with every stated action, condition, and observation",
+    ),
+    "mcq": (
+        "Selecting the Correct Multiple-Choice Response",
+        "Multiple-choice question with the complete stem and all options",
+    ),
+    "fill_blank": (
+        "Completing a Fill-in-the-Blank Task",
+        "Fill-in-the-blank prompt with every supplied statement and blank",
+    ),
+    "true_false": (
+        "Evaluating a True-or-False Statement",
+        "True-or-false task with the complete statement and required justification",
+    ),
+    "match": (
+        "Matching Corresponding Items",
+        "Matching task with every item and available correspondence",
+    ),
+    "assertion_reason": (
+        "Evaluating an Assertion and Reason",
+        "Assertion-and-reason task with both complete statements",
+    ),
+    "diagram_task": (
+        "Interpreting a Diagram to Complete a Task",
+        "Diagram-dependent task with its referenced visual and complete ask",
+    ),
+    "map_task": (
+        "Interpreting a Map to Complete a Task",
+        "Map-dependent task with its referenced visual and complete ask",
+    ),
+    "table_task": (
+        "Interpreting a Table to Complete a Task",
+        "Table-dependent task with all supplied data and the complete ask",
+    ),
+    "graph_task": (
+        "Interpreting a Graph to Complete a Task",
+        "Graph-dependent task with its referenced visual and complete ask",
+    ),
+    "source_task": (
+        "Interpreting a Source to Answer a Question",
+        "Source-based task with the full source context and complete ask",
+    ),
+    "case_task": (
+        "Applying a Concept to a Case",
+        "Case-based task with the full case context and complete ask",
+    ),
+    "passage_task": (
+        "Interpreting a Passage to Answer a Question",
+        "Passage-based task with the full passage context and complete ask",
+    ),
+    "grammar_task": (
+        "Applying a Grammar Operation",
+        "Grammar task with the complete language context and requested operation",
+    ),
+    "writing_task": (
+        "Producing a Constrained Written Response",
+        "Writing task with its complete purpose, audience, form, and constraints",
+    ),
+    "experiment_task": (
+        "Completing an Experimental Task",
+        "Experimental task with all apparatus, conditions, actions, and observations",
+    ),
+    "coding_task": (
+        "Completing a Coding Task",
+        "Coding task with the full input, constraints, and requested output",
+    ),
+    "long_answer": (
+        "Constructing a Long-form Answer",
+        "Long-answer task with the complete context and every requested part",
+    ),
+    "short_answer": (
+        "Constructing a Short Answer",
+        "Short-answer task with the complete context and requested response",
+    ),
+    "other": (
+        "Completing a Source-defined Task",
+        "Source-defined task with all supplied context, conditions, and asks",
+    ),
+}
+
+
+def _deterministic_fallback_type(item: dict) -> dict | None:
+    """Build one source-faithful, topic-scoped Type for one missed item."""
+    qid = (item.get("qid") or "").strip()
+    if not qid:
+        return None
+    topic = (item.get("topic_hint") or "").strip()
+    cleaned = _sanitize_inventory_item(item, source_topic=topic)
+    cleaned["topic_hint"] = topic
+    cleaned["raw_task"] = _inventory_task_without_solution(
+        cleaned.get("raw_task") or "", aggressive=True)
+    cleaned["normalized_task"] = _inventory_task_without_solution(
+        cleaned.get("normalized_task") or cleaned["raw_task"], aggressive=True)
+    source_task = _inventory_task_text(cleaned)
+    if not source_task:
+        return None
+    source_kind = (cleaned.get("source_kind") or "other").strip().lower()
+    title, case_title = _FALLBACK_TYPE_WORDING.get(
+        source_kind,
+        (
+            "Completing the Stated Source Task",
+            "Source task with all supplied context, conditions, and requested outputs",
+        ),
+    )
+    return {
+        "type_id": f"FALLBACK-{qid}",
+        "type_title": title,
+        "type_description": (
+            f"The learner completes the {source_kind.replace('_', ' ')} exactly "
+            "as stated, retaining every supplied condition and representation."
+        ),
+        "task_pattern": (
+            f"Given a complete {source_kind.replace('_', ' ')} prompt, produce "
+            "the requested response without omitting its stated constraints."
+        ),
+        "source_question_ids": [qid],
+        "case_prompts": [{
+            "case_id": "CASE-FALLBACK-0001",
+            "case_title": case_title,
+            "examples": [{
+                "source_question_id": qid,
+                "example_prompt": source_task,
+            }],
+            "case_signature": source_kind,
+        }],
+        "concept_match_hint": "",
+        "parent_concept_match_hint": "",
+        "topic_match_hint": topic,
+        "difficulty_hint": "",
+        "cognitive_skill_hint": "",
+        "subject_skill_hint": "",
+        "is_activity": source_kind == "activity",
+    }
+
+
+def _append_deterministic_type_fallbacks(
+    types: list[dict], *, missed_items: list[dict], inventory: dict,
+) -> tuple[list[dict], int]:
+    """Append, normalize, and source-scope one fallback per still-missed qid."""
+    import copy
+
+    fallbacks = [
+        fallback
+        for item in missed_items
+        if (fallback := _deterministic_fallback_type(item)) is not None
+    ]
+    if not fallbacks:
+        return types, 0
+    merged = copy.deepcopy(types)
+    merged.extend(fallbacks)
+    return _normalize_mined_type_candidate(merged, inventory), len(fallbacks)
 
 
 def _apply_exact_once_duplicate_backstop(
@@ -3297,12 +3844,14 @@ def _apply_exact_once_duplicate_backstop(
 
 def _mine_types_from_inventory_via_api(
     *, meta: dict, inventory: dict, max_coverage_attempts: int = 4,
+    max_focused_attempts: int = 2,
 ) -> dict:
     """Mine reusable Types with mandatory inventory coverage.
 
-    After the first mining pass, any inventory items that no Type claims are
-    re-sent to the model (with the already-mined Types for context) so every
-    stored question/task ends up classified — inclusively, never strictly.
+    Broad replacement repairs resolve duplicate placements. Once only missed
+    qids remain, focused calls return additive deltas and a deterministic
+    single-item fallback closes any residual gap without replacing authored
+    Types. The final exact-once gate remains mandatory.
     """
     import json as _json
 
@@ -3326,6 +3875,13 @@ def _mine_types_from_inventory_via_api(
         missed = _uncovered_inventory_items(inventory, types)
         duplicates = _duplicate_inventory_assignments(inventory, types)
         if not missed and not duplicates:
+            break
+        if missed and not duplicates:
+            progress.log(
+                f"Type Mining broad repairs left {len(missed)} missed item(s) "
+                "and no duplicates — switching to focused coverage deltas.",
+                level="warning",
+            )
             break
         progress.log(
             f"Type Mining coverage attempt {attempt}: {len(missed)} inventory "
@@ -3376,6 +3932,39 @@ def _mine_types_from_inventory_via_api(
             level="warning",
         )
 
+    remaining_missed = _uncovered_inventory_items(inventory, types)
+    remaining_duplicates = _duplicate_inventory_assignments(inventory, types)
+    if remaining_missed and not remaining_duplicates:
+        types = _recover_missed_type_deltas_via_api(
+            meta=meta,
+            inventory=inventory,
+            types=types,
+            max_attempts=max_focused_attempts,
+        )
+
+    remaining_missed = _uncovered_inventory_items(inventory, types)
+    if remaining_missed:
+        types, fallback_count = _append_deterministic_type_fallbacks(
+            types, missed_items=remaining_missed, inventory=inventory)
+        if fallback_count:
+            progress.log(
+                "Type Mining deterministic coverage fallback added "
+                f"{fallback_count} single-item Type(s) for still-missed qids.",
+                level="warning",
+            )
+
+    # Re-run the exact-once pruning after focused merges/fallbacks; malformed
+    # or unrepairable residual defects still fail the hard gate below.
+    remaining_duplicates = _duplicate_inventory_assignments(inventory, types)
+    if remaining_duplicates:
+        types, removed = _apply_exact_once_duplicate_backstop(types, inventory)
+        progress.log(
+            "Type Mining final exact-once duplicate pruning removed "
+            f"{removed} duplicate placement(s) across "
+            f"{len(remaining_duplicates)} inventory item(s).",
+            level="warning",
+        )
+
     still_missed = _uncovered_inventory_items(inventory, types)
     still_duplicate = _duplicate_inventory_assignments(inventory, types)
     total = len(inventory.get("items", []))
@@ -3388,7 +3977,8 @@ def _mine_types_from_inventory_via_api(
     if still_missed or still_duplicate:
         raise RuntimeError(
             "Type Mining failed exact inventory coverage after "
-            f"{max_coverage_attempts} repair attempt(s): "
+            f"{max_coverage_attempts} broad and {max_focused_attempts} focused "
+            "repair attempt(s): "
             f"{len(still_missed)} unclassified item(s), "
             f"{len(still_duplicate)} duplicate assignment(s)."
         )
