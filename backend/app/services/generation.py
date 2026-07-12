@@ -1110,6 +1110,11 @@ Return ONLY strict JSON:
 
 COVERAGE IS MANDATORY (most important rule):
 - Build a compact teacher-facing concept map from the first line to the last.
+- Infer the document's teaching structure from its headings, reading order,
+  prose, representations, and task blocks. Subject metadata is context only;
+  never assume a fixed structure merely because the subject has a familiar
+  name. A narrative may be organized like a procedural text, and a quantitative
+  text may be organized as episodes or investigations.
 - A normal textbook section yields 2-5 concepts; a full chapter usually yields
   18-40 concepts, depending on chapter size. Prefer discrete mastery units
   over broad umbrella concepts.
@@ -1128,12 +1133,22 @@ COVERAGE IS MANDATORY (most important rule):
   opening content just because it precedes section 1.
 - Do not create separate concept rows for cases/examples/questions. These are
   captured later as Types/Cases with full source questions.
-- Explicit proofs and reusable methods/procedures are durable concepts. For
-  Mathematics, derivations and formula-building sequences remain durable
-  concepts even when they are presented inside worked exposition; never reduce
-  them to disposable examples. When the input supplies MANDATORY DERIVATION /
-  METHOD ANCHORS, emit one normal concept for every anchor and copy its
-  anchor_id verbatim into source_evidence.
+- Explicit proofs, derivations, algorithms, and reusable methods/procedures are
+  durable concepts even when presented inside worked exposition; never reduce
+  them to disposable examples. When the input supplies MANDATORY METHOD
+  ANCHORS, cover every anchor and copy every anchor_id verbatim into
+  source_evidence. Multiple anchors may share one concept when they are steps
+  or equivalent forms of the same mastery objective; distinct methods remain
+  distinct concepts.
+- Derivations and formula-building sequences are method concepts whenever the
+  source teaches them as reusable reasoning, independent of the subject label.
+- When the source is a story, play, poem, speech, memoir, or other literary
+  work, use its own episode/scene/stanza/argument structure. Cover major
+  episodes and analytical elements evidenced by the text, including narrative
+  development, character/theme, imagery, literary devices, poetic devices,
+  form, tone, and point of view. Pedagogy blocks such as pre-reading, oral
+  checks, letter-writing practice, and classroom instructions are tasks, not
+  literary concepts.
 - All worked, numerical, contextual, or real-life problems are inventory items,
   not concept rows. They are classified later into distinct Types/Cases under
   the concept they assess; never include their solutions in the skeleton.
@@ -1174,6 +1189,32 @@ Rules:
   source — not a vague summary.
 - Keep source_evidence short: the phrase/heading/problem source that justifies the concept.
 - source_evidence is for validation/debug only and must not be written to workbook.
+""")
+
+prompts.register(
+    "concepts.missing_topic_recovery.system", category=_CONCEPTS_CAT,
+    label="Source-topic concept coverage recovery prompt",
+    default="""\
+Recover teachable concepts only for source topics that are missing from an
+otherwise valid concept map. Return ONLY strict JSON:
+{"rows":[{"topic":"","parent_concept":"","concept":"","concept_description":"","keywords":"","source_evidence":""}]}.
+
+Rules:
+- Every supplied missing source topic MUST receive at least one normal concept.
+- Infer concept grain from that topic's own excerpt and hierarchy, not from the
+  subject label or from a conventional textbook template.
+- Preserve the supplied topic string exactly. Never create another topic.
+- Emit durable teaching/mastery objectives, not headings, examples, exercises,
+  raw questions, activities, or culmination rows.
+- Cover distinct episodes, cases, processes, methods, representations, or
+  analytical elements separately when the excerpt teaches them separately.
+- For literary source units, cover the substantive episodes and evidenced
+  literary/poetic/analytical elements; do not turn pedagogy instructions into
+  concepts.
+- Description must start with "Description:" and contain 2-4 source-grounded
+  sentences. Include concise literal source_evidence that proves placement.
+- Do not repeat any supplied existing concept title.
+- Do not emit Types, Cases, Examples, or Misconceptions.
 """)
 
 prompts.register(
@@ -1221,8 +1262,9 @@ Rules:
 - Remove a concept when it is a duplicate, pure filler, a structural heading,
   a question/example label, or only a sub-type/case of another concept.
 - Rows whose source_evidence contains a METHOD-* anchor are mandatory
-  derivation/method concepts: never drop them, merge away their distinct
-  method, or remove their anchor IDs.
+  method/procedure coverage. Never drop an anchor ID. Merge anchored rows only
+  when they teach the same mastery objective, and carry every merged METHOD-*
+  ID plus all distinct source-grounded content onto the surviving row.
 - Ensure concept titles are unique across the chapter.
 - Preserve textbook/topic order.
 - Rewrite repetitive names.
@@ -1234,6 +1276,45 @@ Rules:
 - Do not rewrite good concepts unnecessarily.
 - Do not invent exercise/example/review/practice topics.
 - Never add filler concepts.
+""")
+
+prompts.register(
+    "concepts.task_fragment_consolidation.system", category=_CONCEPTS_CAT,
+    label="Task-grounded concept fragmentation consolidation prompt",
+    default="""\
+Consolidate an over-fragmented concept map for ONE source topic. Return ONLY
+strict JSON with the same schema:
+{"rows":[{"topic":"","parent_concept":"","concept":"","concept_description":"","keywords":"","source_evidence":""}]}.
+
+The draft contains several rows grounded mainly in individual Examples,
+Exercises, or question varieties. Those task varieties belong later as
+Types/Cases/Examples; they are not automatically separate teaching concepts.
+
+Rules:
+- Infer durable mastery objectives from the supplied rows and source excerpt.
+- Merge question-grounded rows that apply the same underlying idea/rule/method,
+  keeping distinct contexts and asks for the later Types pass.
+- A row grounded only by an Example/Exercise is not a durable concept merely
+  because its ask changes (direct result, unknown value, recognition first,
+  advanced/challenge item, or another difficulty/context). Merge such rows
+  into the closest reusable method/application objective.
+- For one underlying rule, normally retain at most one direct-application
+  concept and one genuinely distinct contextual/modeling concept. Further
+  givens, asks, constraints, and difficulty levels become Types and Cases.
+- Keep a distinct application/modeling concept only when the source teaches a
+  genuinely different transferable objective, not merely another question
+  pattern or difficulty label ("advanced", "challenge", "unknown quantity").
+- Preserve distinct definitions, derivations, representations, procedures, and
+  conceptual relationships that require separate teaching.
+- Preserve every METHOD-* ID. When anchored rows teach one objective, merge
+  them and carry every ID plus all distinct formulas/evidence onto one row.
+- Equivalent formula forms, notation changes, and links taught inside the same
+  derivation normally belong together; separate them only when the source
+  gives each a distinct reusable method or lesson-planning objective.
+- Preserve the exact supplied topic and reading order. Do not create or remove
+  topics, Types, Cases, Examples, culmination rows, or filler concepts.
+- Keep source-grounded Description text, keywords, and meaningful parent
+  concepts on every surviving row.
 """)
 
 prompts.register(
@@ -1286,18 +1367,18 @@ Rules:
 - Preserve topic, parent_concept, concept title, keywords, and row order exactly.
 - Insert or replace only Types.
 - Use the provided Question / Task Inventory and mined Types as the primary evidence.
-- One Type = one distinct reusable subject-appropriate assessment/task pattern.
-- One Case = one sub-type carrying one concrete source question prompt/stem.
-- For Mathematics, Types may be numerical/formula/problem-solving/proof/graph/diagram patterns.
-- For Science, Types may be numerical, diagram, experiment, observation, reasoning,
-  comparison, process, or application patterns.
-- For Social Science, Types may be definition, cause-effect, comparison, source,
-  map, chronology, case, data, or long-answer patterns.
-- For Languages and Literature, Types may be grammar transformation, comprehension,
-  extract analysis, vocabulary-in-context, writing format, literary interpretation,
-  theme, character, or reference-to-context patterns.
-- For Computer Science, Types may be code tracing, debugging, output prediction,
-  algorithm writing, logic correction, or concept explanation.
+- One Type = one distinct reusable assessment/task pattern evidenced by the
+  source. Infer patterns from the actual action, object, representation,
+  givens, constraints, and expected response—not from the subject label.
+- One Case = one defined sub-type. Multiple source questions with the same
+  action/object/method belong to one Type; differences in givens, ask,
+  representation, or constraint become Cases under that Type. Do not reproduce
+  the same Type wording as multiple one-Case Types.
+- Valid source-driven patterns include calculations, proofs, diagrams,
+  experiments, observations, comparisons, cause-effect, source/map/data
+  interpretation, chronology, comprehension, extract analysis, literary or
+  poetic analysis, grammar transformation, writing, code tracing/debugging,
+  algorithms, practical work, and structured explanations.
 - Omit Types only for concepts with zero meaningful assessable question/task varieties.
 - If a Type is present, every Case must include a full self-contained example
   question from the source. Do not shorten source questions; preserve all
@@ -1333,10 +1414,11 @@ COVERAGE IS MANDATORY (most important rule):
 - Each numbered problem, intext question, think-and-reflect prompt, and worked
   example is its OWN item — never summarize an exercise set or question list
   into one item.
-- Multi-part questions with subquestions (a/b/c, i/ii/iii, or "Answer the
-  following") stay ONE inventory item: put the full stem + all subparts in
-  raw_task, and leave subpart_label empty unless the textbook numbers each
-  subpart as a standalone question with its own number.
+- Keep dependent subquestions that share one stem/data/source as ONE inventory
+  item. Split independently assessable lettered/roman subparts into separate
+  items when each asks about a different person, event, method, case, concept,
+  or representation; prepend the complete shared stem/context to every split
+  item so each remains self-contained and can be assigned to its own concept.
 - In-text CHECKPOINT questions (boxed "?" questions, "Let's recall",
   "Check your progress", mid-section question boxes) are inventory items
   exactly like end-of-chapter exercises. Chapters typically carry a dozen or
@@ -1365,9 +1447,10 @@ Rules:
   immediately before "Solution:" or "Answer:", and always return
   raw_solution_or_answer as an empty string. Types must expose questions, not
   answer keys or textbook solutions.
-- For Mathematics, inventory every worked, numerical, contextual, and real-life problem
-  as its own item, including problems embedded in explanatory prose.
-  Capture its complete givens, context, and ask, but never include its solution.
+- Inventory every worked, numerical, contextual, interpretive, literary,
+  source-based, procedural, practical, and real-life task as its own item,
+  including assessable prompts embedded in explanatory prose. Capture complete
+  givens, context, quotations, representations, and asks, but never solutions.
 - When the question depends on a figure/diagram/table image, copy the Mathpix
   image URL(s) from the source markdown (![](https://cdn.mathpix.com/...))
   into image_urls AND keep the figure reference in raw_task.
@@ -1388,8 +1471,8 @@ prompts.register(
     label="Universal Type Mining prompt",
     default="""\
 Classify the Question / Task Inventory into reusable academic Types appropriate
-to the subject and chapter. A Type is a reusable assessment/task pattern found
-in the source. A Case is a DEFINED sub-type of that pattern (what is given,
+to the source chapter. A Type is a reusable assessment/task pattern found in
+the source. A Case is a DEFINED sub-type of that pattern (what is given,
 what is asked, with what constraint) — never a raw question. An Example is one
 concrete source question that instantiates a Case, copied in full.
 
@@ -1404,9 +1487,11 @@ COVERAGE IS MANDATORY (most important rule):
   classify. If an item fits no existing Type, CREATE a new Type for it.
 - In-text checkpoint questions, boxed "?" questions, and textbook activities
   count exactly like exercise questions — every one of them must be classified.
-- Classification should be inclusive, not strict: when unsure between dropping
-  an item and creating an extra Type, always create the extra Type.
-- A missed question is a defect; an extra Type is not.
+- Coverage and classification quality are both mandatory. Never drop an item,
+  but do not create one Type per question when several questions instantiate
+  the same reusable pattern; group them into Cases/Examples.
+- A missed question is a defect; an unnecessary one-question Type is also a
+  classification defect when that question fits an existing reusable pattern.
 
 Rules:
 - One inventory item maps to exactly one best-fit Type. If it combines several
@@ -1420,9 +1505,9 @@ Rules:
   different concepts. In particular, direct formula calculations and
   contextual/real-life modeling or applications belong in separate Types when
   the concept map teaches them as separate rows.
-- For Mathematics, classify every worked, numerical, contextual, and real-life
-  problem into a distinct Type or Case whenever its assessed action, givens,
-  representation, constraint, or ask differs. Preserve the complete problem as
+- Classify every worked, numerical, contextual, interpretive, source-based,
+  procedural, practical, and real-life task by its assessed action, object,
+  representation, givens, constraint, and ask. Preserve the complete prompt as
   its Example, but never copy solutions or worked-answer steps.
 - A Type may contain source questions from exactly ONE topic_hint. Never group
   questions across textbook topics even when their formulas or surface patterns
@@ -1480,22 +1565,36 @@ TYPE WORDING (each Type must be properly defined):
 - task_pattern must be a reusable template of the task, with the changing
   quantities/objects generalized (e.g. "Given a^m x a^n, simplify to a single
   power of a").
-- For Mathematics, Types may be numerical/formula/problem-solving patterns.
-- For Science, Types may be numerical, diagram, experiment, observation,
-  reasoning, comparison, process, or application patterns.
-- For Social Science, Types may be definition, cause-effect, comparison,
-  source-based, map-based, chronology, case-based, data, or long-answer patterns.
-- For Languages, Types may be grammar transformation, comprehension, extract
-  analysis, vocabulary-in-context, writing format, literary interpretation, or
-  theme/character analysis.
-- For Computer Science, Types may be code tracing, debugging, output prediction,
-  algorithm writing, logic correction, or concept explanation.
+- Infer the taxonomy from source tasks. It may include numerical/formula work,
+  proof/reasoning, diagram/experiment/observation, cause-effect/comparison,
+  source/map/data/chronology, comprehension/extract/literary/poetic analysis,
+  grammar/writing, code tracing/debugging/algorithm design, case application,
+  or structured explanation.
 - Use subject_skill_hint values such as Mathematical Calculation, Algebraic
   Reasoning, Diagram Interpretation, Experimental Inference, Conceptual
   Explanation, Definition Recall, Comparative Analysis, Source Interpretation,
   Map Skill, Data Interpretation, Grammar Transformation, Literary
   Interpretation, Code Tracing, Algorithm Design, Case Application, or
   Long-Answer Structuring.
+""")
+
+prompts.register(
+    "concepts.chapter_wide_task_topics.system", category=_CONCEPTS_CAT,
+    label="Chapter-wide task topic assignment prompt",
+    default="""\
+Assign each chapter-wide review/exercise task to the ONE source topic whose
+concepts it most directly assesses. Return ONLY strict JSON:
+{"assignments":[{"qid":"QINV-0001","topic":"exact supplied topic"}]}.
+
+Rules:
+- Return every supplied qid exactly once and invent no qids.
+- Use only exact topic strings from SOURCE TOPICS.
+- Base placement on the complete task wording and the supplied concepts/source
+  excerpts, never on the physical location of an end-of-chapter exercise.
+- A generic final Exercises/Questions/Review block may assess any earlier topic.
+- For a mixed task, choose the topic containing its final or dominant assessed
+  objective. Never place all tasks on the last topic merely because the review
+  block follows it.
 """)
 
 prompts.register(
@@ -1557,7 +1656,8 @@ Rules:
 - When a mined Type includes allowed_concept_ids, its source topic is proven:
   assign it to exactly one of those concept IDs and never any other concept.
 - A concept may receive multiple type_ids; a Type belongs to one concept.
-- Choose the concept that the Type most directly assesses (subject-appropriate).
+- Choose the concept that the Type most directly assesses from its actual
+  source task, regardless of the subject label.
 - Within the already-constrained source topic, honor concept_match_hint and
   parent_concept_match_hint at the most granular level. Prefer the specific
   application, modeling, procedure, or worked-method concept that matches the
@@ -1584,7 +1684,9 @@ Rules:
   Types go to the specific concept, not the culmination.
 - Types flagged "is_activity": true group textbook Activity tasks; assign them
   to the culmination row of the topic they belong to, not to a single concept.
-- Do not drop any type_id. If unsure, pick the closest concept_id.
+- Do not drop any type_id. If evidence is ambiguous, use concept_match_hint,
+  source order, and the concrete Case action/ask; never collapse unrelated
+  assignment units onto one broad or final concept for convenience.
 - Return no prose, only the JSON object.
 """)
 
@@ -1793,21 +1895,6 @@ Rules:
 """)
 
 prompts.register(
-    "concepts.english.system", category=_CONCEPTS_CAT,
-    label="English literature concept-mapping supplement",
-    default="""\
-ENGLISH LITERATURE RULES (mandatory when Subject is English):
-- Topic names MUST be the prose piece, poem, or drama title — never pedagogy
-  labels like "Pre-reading", "Informal Letter Writing", or "Oral Checks".
-- Map ONLY literary concepts from the text (characters, themes, episodes,
-  poetic devices, narrative moves) following the universal English concept map.
-- When a unit contains both prose and poem, list ALL prose episode topics first,
-  then poem episode topics; never drop the poem because the chapter title names
-  only the prose piece.
-- Do not create writing-skills, letter-format, or classroom-activity concepts.
-""")
-
-prompts.register(
     "concepts.chapter_meta.system", category=_CONCEPTS_CAT,
     label="Chapter/topic metadata writer system prompt",
     default="""\
@@ -1870,28 +1957,7 @@ def _metadata_block(meta: dict) -> str:
     finalized = int(meta.get("finalized_duration_minutes") or 0)
     if finalized > 0:
         block += f"\nFinalized chapter duration (minutes): {finalized}"
-    subj = (meta.get("subject") or "").lower()
-    if "english" in subj:
-        block += "\n\n" + prompts.get_text("concepts.english.system")
-    if _needs_power_sharing_topic_guidance(meta):
-        block += (
-            "\n\nReview-required Civics coverage: include the textbook section "
-            "'Forms of Power-sharing' as its own topic. Do not merge horizontal "
-            "distribution, vertical division, social-group/community sharing, "
-            "political parties, pressure groups, or movements into unrelated "
-            "outcome/democracy topics."
-        )
     return block
-
-
-def _needs_power_sharing_topic_guidance(meta: dict) -> bool:
-    subject = (meta.get("subject") or "").strip().lower()
-    chapter = bi.normalize_question_text(meta.get("chapter_title") or "")
-    return "power sharing" in chapter and (
-        "civic" in subject
-        or "social science" in subject
-        or subject in {"politics", "political science"}
-    )
 
 
 # Process-wide gate on in-flight OpenAI calls. All users of this instance
@@ -2108,7 +2174,8 @@ def _split_mmd_into_chunks(mmd_text: str, max_chars: int | None = None) -> list[
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 _EXERCISE_RE = re.compile(
-    r"\b(exercise|ex\.|review|practice|problems?|questions?)\b", re.IGNORECASE)
+    r"\b(exercises?|ex\.|review|practice|problems?|questions?)\b",
+    re.IGNORECASE)
 _SECTION_NUM_PREFIX_RE = re.compile(
     r"^\s*(?:chapter\s+)?(?:\d+(?:\.\d+)*[\).\s:-]+|[A-Z][\).:-]+\s*)",
     re.IGNORECASE,
@@ -2509,16 +2576,25 @@ def _inventory_chunks_by_topic(
     sections: list[dict], max_chars: int | None = None,
 ) -> list[dict]:
     """Build inventory chunks that never cross a source-topic boundary."""
-    groups: list[tuple[str, list[dict]]] = []
-    for topic, section in _sections_with_source_topics(sections):
-        if groups and groups[-1][0] == topic:
-            groups[-1][1].append(section)
+    groups: list[tuple[str, bool, list[dict]]] = []
+    paired = _sections_with_source_topics(sections)
+    for section_index, (topic, section) in enumerate(paired):
+        chapter_wide = _is_chapter_wide_task_section(
+            section, section_index=section_index, paired_sections=paired)
+        effective_topic = "" if chapter_wide else topic
+        if (
+            groups
+            and groups[-1][0] == effective_topic
+            and groups[-1][1] == chapter_wide
+        ):
+            groups[-1][2].append(section)
         else:
-            groups.append((topic, [section]))
+            groups.append((effective_topic, chapter_wide, [section]))
     chunks: list[dict] = []
-    for topic, topic_sections in groups:
+    for topic, chapter_wide, topic_sections in groups:
         for chunk in _pack_section_chunks(topic_sections, max_chars):
             chunk["source_topic"] = topic
+            chunk["chapter_wide_tasks"] = chapter_wide
             chunks.append(chunk)
     return chunks
 
@@ -2618,9 +2694,40 @@ _WORKED_EXAMPLE_START_RE = re.compile(
     r"(?im)^[ \t]*(?:worked[ \t]+)?example[ \t]+"
     r"([A-Za-z0-9]+)[ \t]*[:：.)-][ \t]*",
 )
-_NUMBERED_TASK_START_RE = re.compile(r"(?m)^[ \t]*(\d{1,3})[.)][ \t]+")
+_NUMBERED_TASK_START_RE = re.compile(
+    r"(?im)^[ \t]*(?:q(?:uestion)?[ \t]*)?[\[(]?"
+    r"(\d{1,3})[\])]?[ \t]*(?:[.):-][ \t]*|[ \t]+)"
+)
+_LETTERED_SUBTASK_START_RE = re.compile(
+    r"(?im)^[ \t]*(?:\(([a-z])\)|([a-z])[.)])[ \t]+"
+)
 _SOLUTION_START_RE = re.compile(
     r"(?im)^[ \t]*(?:solutions?|answers?)[ \t]*[:：][ \t]*",
+)
+_CHAPTER_WIDE_TASK_HEADING_RE = re.compile(
+    r"^(?:chapter\s+)?(?:exercises?|questions?|review(?:\s+questions?)?|"
+    r"assessment|write\s+in\s+brief|discuss|project|"
+    r"end[-\s]+of[-\s]+chapter\s+(?:review|questions?))\s*[:.]?$",
+    re.IGNORECASE,
+)
+_CHECKPOINT_CONTAINER_HEADING_RE = re.compile(
+    r"^(?:checkpoint|check\s+your\s+progress|let['’]s\s+(?:recall|discuss)|"
+    r"discuss|think(?:\s+about\s+it)?|do\s+this|try\s+these|find\s+out\s+more|"
+    r"activity|project)\b",
+    re.IGNORECASE,
+)
+_QUESTION_SENTENCE_RE = re.compile(
+    r"(?:^|(?<=[.!?:])\s+)"
+    r"(?P<question>(?:(?:what|why|how|when|where|who|whom|whose|which)\b|"
+    r"(?:can|could|do|does|did|is|are|was|were|will|would|should|has|have|"
+    r"had|may)\b)[^?]{8,800}\?)",
+    re.IGNORECASE,
+)
+_LEADING_SOURCE_TASK_LABEL_RE = re.compile(
+    r"^\s*(?:(?:worked\s+)?example\s+[A-Za-z0-9]+|"
+    r"exercise\s+\d+(?:\.\d+)*(?:\s+q(?:uestion)?\s*\d+)?|"
+    r"q(?:uestion)?\s*\d+)\s*[:：.)-]\s*",
+    re.IGNORECASE,
 )
 _INVENTORY_TASK_MARKER_RE = re.compile(
     r"(?im)(?:"
@@ -2646,6 +2753,61 @@ def _inventory_task_without_solution(text: str, *, aggressive: bool = False) -> 
     return re.sub(r"\s+", " ", text).strip(" \n\t")
 
 
+def _strip_leading_source_task_label(text: str) -> str:
+    """Remove a textbook source label while preserving the actual task."""
+    return _LEADING_SOURCE_TASK_LABEL_RE.sub("", str(text or ""), count=1).strip()
+
+
+def _is_chapter_wide_task_section(
+    section: dict, *, section_index: int,
+    paired_sections: list[tuple[str, dict]],
+) -> bool:
+    """Whether a final generic review block semantically spans the chapter."""
+    heading = _strip_section_number(section.get("heading") or "").strip()
+    if (
+        not _CHAPTER_WIDE_TASK_HEADING_RE.match(heading)
+        or section.get("heading_number_prefix")
+    ):
+        return False
+    # A generic task block followed by another real source topic is local to
+    # the current teaching unit. A final generic block is chapter-wide.
+    current_topic = paired_sections[section_index][0]
+    return not any(
+        later_topic != current_topic
+        for later_topic, _ in paired_sections[section_index + 1:]
+    )
+
+
+def _question_prompts_from_text(text: str) -> list[str]:
+    """Extract explicit interrogative prompts without guessing from subject."""
+    normalized = re.sub(r"\s+", " ", str(text or "")).strip()
+    prompts_out: list[str] = []
+    for match in _QUESTION_SENTENCE_RE.finditer(normalized):
+        prompt = match.group("question").strip()
+        if prompt and prompt not in prompts_out:
+            prompts_out.append(prompt)
+    return prompts_out
+
+
+def _independent_lettered_subtasks(text: str) -> list[tuple[str, str]]:
+    """Split a lettered task list while repeating its shared stem/context."""
+    raw = str(text or "")
+    matches = list(_LETTERED_SUBTASK_START_RE.finditer(raw))
+    if len(matches) < 2:
+        return []
+    stem = raw[:matches[0].start()].strip()
+    if not stem:
+        return []
+    subtasks: list[tuple[str, str]] = []
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(raw)
+        label = (match.group(1) or match.group(2) or "").lower()
+        body = raw[match.end():end].strip()
+        if body:
+            subtasks.append((label, f"{stem} {body}".strip()))
+    return subtasks if len(subtasks) >= 2 else []
+
+
 def _inventory_chunk_has_task_markers(chunk: dict) -> bool:
     """Whether source text explicitly signals an assessable inventory item."""
     for section in chunk.get("sections") or []:
@@ -2653,7 +2815,11 @@ def _inventory_chunk_has_task_markers(chunk: dict) -> bool:
         if not body:
             continue
         heading = str(section.get("heading") or "")
-        if _EXERCISE_RE.search(heading):
+        if (
+            _EXERCISE_RE.search(heading)
+            or _CHAPTER_WIDE_TASK_HEADING_RE.match(
+                _strip_section_number(heading).strip())
+        ):
             return True
         if _INVENTORY_TASK_MARKER_RE.search(body):
             return True
@@ -2668,9 +2834,43 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
     into its output when a worked example or numbered exercise was missed.
     """
     ordered: list[tuple[int, int, dict]] = []
-    for section_index, (topic, section) in enumerate(
-            _sections_with_source_topics(sections)):
+    paired = _sections_with_source_topics(sections)
+
+    def append_anchor(
+        *, section_index: int, position: int, topic: str, kind: str,
+        label: str, parent_label: str, task: str, chapter_wide: bool = False,
+    ) -> None:
+        task = _strip_leading_source_task_label(
+            _inventory_task_without_solution(task, aggressive=(
+                kind in {"worked_example", "solved_example"})))
+        if not task:
+            return
+        ordered.append((section_index, position, {
+            "source_kind": kind,
+            "source_label": label,
+            "parent_source_label": parent_label,
+            "topic_hint": "" if chapter_wide else topic,
+            "page_hint": "",
+            "block_ids": [],
+            "raw_task": task,
+            "raw_solution_or_answer": "",
+            "normalized_task": task,
+            "shared_context": "",
+            "subpart_label": "",
+            "image_urls": re.findall(
+                r"https?://cdn\.mathpix\.com/[^)\s]+", task),
+            "content_objects": {},
+            "requires_visual": bool(re.search(
+                r"\bfig(?:ure)?\.?\s*\d|!\[[^\]]*\]\(", task,
+                re.IGNORECASE)),
+            "requires_context": False,
+            "_topic_scope": "chapter" if chapter_wide else "topic",
+        }))
+
+    for section_index, (topic, section) in enumerate(paired):
         body = section.get("body") or ""
+        chapter_wide = _is_chapter_wide_task_section(
+            section, section_index=section_index, paired_sections=paired)
         example_matches = list(_WORKED_EXAMPLE_START_RE.finditer(body))
         for i, match in enumerate(example_matches):
             end = (
@@ -2678,72 +2878,120 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
                 if i + 1 < len(example_matches)
                 else len(body)
             )
-            task = _inventory_task_without_solution(
-                body[match.end():end], aggressive=True)
-            if not task:
-                continue
             label = f"Example {match.group(1)}"
-            ordered.append((section_index, match.start(), {
-                "source_kind": "worked_example",
-                "source_label": label,
-                "parent_source_label": "",
-                "topic_hint": topic,
-                "page_hint": "",
-                "block_ids": [],
-                "raw_task": task,
-                "raw_solution_or_answer": "",
-                "normalized_task": task,
-                "shared_context": "",
-                "subpart_label": "",
-                "image_urls": re.findall(
-                    r"https?://cdn\.mathpix\.com/[^)\s]+", task),
-                "content_objects": {},
-                "requires_visual": bool(re.search(
-                    r"\bfig(?:ure)?\.?\s*\d|!\[[^\]]*\]\(", task,
-                    re.IGNORECASE)),
-                "requires_context": False,
-            }))
+            append_anchor(
+                section_index=section_index,
+                position=match.start(),
+                topic=topic,
+                kind="worked_example",
+                label=label,
+                parent_label="",
+                task=body[match.end():end],
+            )
 
         heading = section.get("heading") or ""
-        if not _EXERCISE_RE.search(heading):
-            continue
-        task_matches = list(_NUMBERED_TASK_START_RE.finditer(body))
-        for i, match in enumerate(task_matches):
-            end = (
-                task_matches[i + 1].start()
-                if i + 1 < len(task_matches)
-                else len(body)
+        container_heading = _strip_section_number(heading).strip()
+        if (
+            not example_matches
+            and re.match(
+                r"^(?:activity|project)\b", container_heading,
+                re.IGNORECASE,
             )
-            task = _inventory_task_without_solution(body[match.end():end])
-            if not task:
-                continue
-            label = f"{heading} Q{match.group(1)}".strip()
-            ordered.append((section_index, match.start(), {
-                "source_kind": "exercise",
-                "source_label": label,
-                "parent_source_label": heading,
-                "topic_hint": topic,
-                "page_hint": "",
-                "block_ids": [],
-                "raw_task": task,
-                "raw_solution_or_answer": "",
-                "normalized_task": task,
-                "shared_context": "",
-                "subpart_label": "",
-                "image_urls": re.findall(
-                    r"https?://cdn\.mathpix\.com/[^)\s]+", task),
-                "content_objects": {},
-                "requires_visual": bool(re.search(
-                    r"\bfig(?:ure)?\.?\s*\d|!\[[^\]]*\]\(", task,
-                    re.IGNORECASE)),
-                "requires_context": False,
-            }))
+        ):
+            append_anchor(
+                section_index=section_index,
+                position=0,
+                topic=topic,
+                kind="activity",
+                label=heading or f"Activity {section_index + 1}",
+                parent_label=heading,
+                task=body,
+                chapter_wide=chapter_wide,
+            )
+            continue
+        is_task_list_heading = bool(
+            _EXERCISE_RE.search(heading)
+            or _CHAPTER_WIDE_TASK_HEADING_RE.match(
+                _strip_section_number(heading).strip())
+        )
+        if is_task_list_heading:
+            task_matches = list(_NUMBERED_TASK_START_RE.finditer(body))
+            for i, match in enumerate(task_matches):
+                end = (
+                    task_matches[i + 1].start()
+                    if i + 1 < len(task_matches)
+                    else len(body)
+                )
+                question_label = f"{heading} Q{match.group(1)}".strip()
+                task_text = body[match.end():end]
+                subtasks = _independent_lettered_subtasks(task_text)
+                if subtasks:
+                    for sub_index, (sub_label, subtask) in enumerate(subtasks):
+                        append_anchor(
+                            section_index=section_index,
+                            position=match.start() + sub_index,
+                            topic=topic,
+                            kind="exercise",
+                            label=f"{question_label}({sub_label})",
+                            parent_label=question_label,
+                            task=subtask,
+                            chapter_wide=chapter_wide,
+                        )
+                else:
+                    append_anchor(
+                        section_index=section_index,
+                        position=match.start(),
+                        topic=topic,
+                        kind="exercise",
+                        label=question_label,
+                        parent_label=heading,
+                        task=task_text,
+                        chapter_wide=chapter_wide,
+                    )
+
+        # Explicit checkpoint questions often live inside prose/boxed blocks
+        # rather than under a numbered exercise heading. Capture their literal
+        # asks as deterministic completeness evidence.
+        if not is_task_list_heading and not example_matches:
+            question_prompts = _question_prompts_from_text(body)
+            for question_index, task in enumerate(question_prompts, start=1):
+                append_anchor(
+                    section_index=section_index,
+                    position=body.find(task),
+                    topic=topic,
+                    kind="checkpoint_question",
+                    label=f"Checkpoint {section_index + 1}.{question_index}",
+                    parent_label=heading,
+                    task=task,
+                )
+            if (
+                not question_prompts
+                and _CHECKPOINT_CONTAINER_HEADING_RE.match(
+                    _strip_section_number(heading))
+            ):
+                kind = (
+                    "activity"
+                    if re.match(r"^(?:activity|project)\b", heading,
+                                re.IGNORECASE)
+                    else "checkpoint_question"
+                )
+                append_anchor(
+                    section_index=section_index,
+                    position=0,
+                    topic=topic,
+                    kind=kind,
+                    label=heading or f"Checkpoint {section_index + 1}",
+                    parent_label=heading,
+                    task=body,
+                )
     return [
         item for _, _, item in sorted(ordered, key=lambda row: (row[0], row[1]))
     ]
 
 
-def _sanitize_inventory_item(item: dict, *, source_topic: str = "") -> dict:
+def _sanitize_inventory_item(
+    item: dict, *, source_topic: str = "", chapter_wide: bool = False,
+) -> dict:
     """Normalize one GPT inventory row and remove answer material."""
     cleaned = dict(item)
     kind = (cleaned.get("source_kind") or "other").strip().lower()
@@ -2757,14 +3005,21 @@ def _sanitize_inventory_item(item: dict, *, source_topic: str = "") -> dict:
         aggressive=aggressive,
     )
     cleaned["source_kind"] = kind
+    raw_task = _strip_leading_source_task_label(raw_task)
+    normalized = _strip_leading_source_task_label(normalized or raw_task)
     cleaned["raw_task"] = raw_task
     cleaned["normalized_task"] = normalized or raw_task
     cleaned["raw_solution_or_answer"] = ""
     cleaned["topic_hint"] = (
-        source_topic
-        or (cleaned.get("topic_hint") or "").strip()
-        or "General"
+        (cleaned.get("topic_hint") or "").strip()
+        if chapter_wide
+        else (
+            source_topic
+            or (cleaned.get("topic_hint") or "").strip()
+            or "General"
+        )
     )
+    cleaned["_topic_scope"] = "chapter" if chapter_wide else "topic"
     cleaned.setdefault("content_objects", {})
     cleaned.setdefault("image_urls", [])
     cleaned.setdefault("requires_visual", False)
@@ -2803,6 +3058,25 @@ def _inventory_items_match(item: dict, anchor: dict) -> bool:
 def _merge_source_task_anchors(items: list[dict], anchors: list[dict]) -> list[dict]:
     """Backfill missing deterministic anchors and canonicalize matching rows."""
     merged = [dict(item) for item in items]
+    parent_counts: dict[str, int] = {}
+    for anchor in anchors:
+        parent = bi.normalize_question_text(
+            anchor.get("parent_source_label", ""))
+        if parent:
+            parent_counts[parent] = parent_counts.get(parent, 0) + 1
+    split_parent_labels = {
+        parent for parent, count in parent_counts.items() if count > 1
+    }
+    if split_parent_labels:
+        # A model may keep a compound Q1(a-e) as one item while deterministic
+        # anchors split its independently assessable subparts. Remove only the
+        # trace-equivalent parent row so the full question is not classified
+        # once as an umbrella and again per concept.
+        merged = [
+            item for item in merged
+            if bi.normalize_question_text(item.get("source_label", ""))
+            not in split_parent_labels
+        ]
     for anchor in anchors:
         match_index = next(
             (i for i, item in enumerate(merged)
@@ -2816,6 +3090,7 @@ def _merge_source_task_anchors(items: list[dict], anchors: list[dict]) -> list[d
         for field in (
             "source_kind", "source_label", "parent_source_label", "topic_hint",
             "raw_task", "normalized_task", "raw_solution_or_answer",
+            "_topic_scope",
         ):
             existing[field] = anchor.get(field, "")
         if anchor.get("image_urls"):
@@ -2824,16 +3099,20 @@ def _merge_source_task_anchors(items: list[dict], anchors: list[dict]) -> list[d
             existing.get("requires_visual") or anchor.get("requires_visual"))
 
     deduped: list[dict] = []
-    seen_labels: set[str] = set()
+    seen_label_tasks: set[tuple[str, str]] = set()
     seen_tasks: set[str] = set()
     for item in merged:
         label = bi.normalize_question_text(item.get("source_label", ""))
         task = bi.normalize_question_text(
             item.get("raw_task") or item.get("normalized_task") or "")
-        if (label and label in seen_labels) or (task and task in seen_tasks):
+        label_task = (label, task)
+        if (
+            (task and task in seen_tasks)
+            or (label and task and label_task in seen_label_tasks)
+        ):
             continue
-        if label:
-            seen_labels.add(label)
+        if label and task:
+            seen_label_tasks.add(label_task)
         if task:
             seen_tasks.add(task)
         deduped.append(item)
@@ -2869,7 +3148,128 @@ def _inventory_stats(items: list[dict]) -> dict:
     }
 
 
-def _extract_question_task_inventory_via_api(*, meta: dict, sections: list[dict]) -> dict:
+def _assign_chapter_wide_inventory_topics_via_api(
+    *, meta: dict, inventory: dict, records: list[dict],
+    source_topic_excerpts: list[dict], max_attempts: int = 3,
+) -> dict:
+    """Semantically place final chapter-review tasks across source topics."""
+    import json as _json
+
+    targets = [
+        item for item in inventory.get("items") or []
+        if item.get("_topic_scope") == "chapter"
+    ]
+    if not targets:
+        return inventory
+    topics: list[dict] = []
+    excerpts_by_key = {
+        _topic_comparison_key(group.get("topic") or ""):
+        _trim(group.get("excerpt") or "", 30_000)
+        for group in source_topic_excerpts or []
+    }
+    by_topic: dict[str, dict] = {}
+    for record in records:
+        topic = (record.get("topic") or "").strip()
+        key = _topic_comparison_key(topic)
+        if not key:
+            continue
+        entry = by_topic.setdefault(key, {
+            "topic": topic,
+            "concepts": [],
+            "source_excerpt": excerpts_by_key.get(key, ""),
+        })
+        if not cr.is_culmination(record.get("concept_title", "")):
+            entry["concepts"].append({
+                "concept": record.get("concept_title", ""),
+                "description": _concept_description_only(
+                    record.get("concept_details", "")),
+            })
+    topics = list(by_topic.values())
+    if not topics:
+        raise RuntimeError(
+            "chapter-wide task placement failed: no source topics/concepts")
+    target_qids = {
+        (item.get("qid") or "").strip() for item in targets
+        if (item.get("qid") or "").strip()
+    }
+    valid_topics = {
+        _topic_comparison_key(entry["topic"]): entry["topic"]
+        for entry in topics
+    }
+    assigned: dict[str, str] = {}
+    target_by_qid = {
+        (item.get("qid") or "").strip(): item for item in targets
+    }
+    system = prompts.get_text("concepts.chapter_wide_task_topics.system")
+    for attempt in range(1, max_attempts + 1):
+        pending_qids = [
+            qid for qid in target_by_qid if qid not in assigned
+        ]
+        if not pending_qids:
+            break
+        payload = {
+            "source_topics": topics,
+            "chapter_wide_tasks": [
+                {
+                    "qid": qid,
+                    "task": _inventory_task_text(target_by_qid[qid]),
+                    "source_kind": target_by_qid[qid].get("source_kind", ""),
+                }
+                for qid in pending_qids
+            ],
+        }
+        user = (
+            _metadata_block(meta)
+            + "\nSOURCE TOPICS, CONCEPTS, AND CHAPTER-WIDE TASKS:\n"
+            + _json.dumps(payload, ensure_ascii=False)
+        )
+        if attempt > 1:
+            user += (
+                "\n\nCORRECTION: Assign every pending qid exactly once using "
+                "one exact topic string from source_topics. Your previous "
+                "answer omitted a qid or used an invalid topic."
+            )
+        data = _openai_json(system, user)
+        rejected = 0
+        for row in data.get("assignments") or []:
+            if not isinstance(row, dict):
+                rejected += 1
+                continue
+            qid = (row.get("qid") or "").strip()
+            topic_key = _topic_comparison_key(row.get("topic") or "")
+            if (
+                qid not in pending_qids
+                or qid in assigned
+                or topic_key not in valid_topics
+            ):
+                rejected += 1
+                continue
+            assigned[qid] = valid_topics[topic_key]
+        if rejected or len(assigned) < len(target_qids):
+            progress.log(
+                f"Chapter-wide task placement attempt {attempt}: "
+                f"{len(assigned)}/{len(target_qids)} assigned; "
+                f"{rejected} invalid row(s) rejected.",
+                level="warning",
+            )
+    missing = sorted(target_qids - set(assigned))
+    if missing:
+        raise RuntimeError(
+            "chapter-wide task placement did not return exact valid assignments: "
+            f"missing={missing}"
+        )
+    for item in targets:
+        item["topic_hint"] = assigned[(item.get("qid") or "").strip()]
+    progress.log(
+        f"Assigned {len(targets)} chapter-wide review task(s) to source topics.",
+        level="success",
+    )
+    return inventory
+
+
+def _extract_question_task_inventory_via_api(
+    *, meta: dict, sections: list[dict], records: list[dict] | None = None,
+) -> dict:
     import json as _json
 
     system = prompts.get_text("concepts.question_task_inventory.system")
@@ -2887,7 +3287,10 @@ def _extract_question_task_inventory_via_api(*, meta: dict, sections: list[dict]
         data = _openai_json(system, user)
         items = [
             _sanitize_inventory_item(
-                x, source_topic=chunk.get("source_topic") or "")
+                x,
+                source_topic=chunk.get("source_topic") or "",
+                chapter_wide=bool(chunk.get("chapter_wide_tasks")),
+            )
             for x in (data.get("items") or [])
             if isinstance(x, dict)
         ]
@@ -2916,7 +3319,10 @@ def _extract_question_task_inventory_via_api(*, meta: dict, sections: list[dict]
             retry_data = _openai_json(system, retry_user)
             retry_items = [
                 _sanitize_inventory_item(
-                    x, source_topic=chunk.get("source_topic") or "")
+                    x,
+                    source_topic=chunk.get("source_topic") or "",
+                    chapter_wide=bool(chunk.get("chapter_wide_tasks")),
+                )
                 for x in (retry_data.get("items") or [])
                 if isinstance(x, dict)
             ]
@@ -2931,11 +3337,20 @@ def _extract_question_task_inventory_via_api(*, meta: dict, sections: list[dict]
     for i, item in enumerate(inventory["items"], start=1):
         item["qid"] = f"QINV-{i:04d}"
         item["order_index"] = i
+    if records:
+        inventory = _assign_chapter_wide_inventory_topics_via_api(
+            meta=meta,
+            inventory=inventory,
+            records=records,
+            source_topic_excerpts=_group_source_topic_excerpts(sections),
+        )
+    for item in inventory["items"]:
+        item.pop("_topic_scope", None)
     inventory["stats"] = _inventory_stats(inventory["items"])
     if anchors:
         progress.log(
             f"Question / Task Inventory deterministic audit covered "
-            f"{len(anchors)} worked-example/exercise anchor(s).")
+            f"{len(anchors)} explicit source task anchor(s).")
     progress.log(f"Question / Task Inventory items: {len(inventory['items'])}.")
     return inventory
 
@@ -3081,6 +3496,7 @@ def _inventory_task_text(item: dict) -> str:
         str(task),
         aggressive=source_kind in {"worked_example", "solved_example"},
     )
+    task = _strip_leading_source_task_label(task)
     task = bi.to_plain_text(str(task)).strip()
     context = bi.to_plain_text(str(item.get("shared_context") or "")).strip()
     if context and item.get("requires_context") and context not in task:
@@ -3094,16 +3510,16 @@ def _inventory_task_text(item: dict) -> str:
 
 
 def _case_prompt_needs_source(prompt: str, source_text: str) -> bool:
-    prompt = re.sub(r"\s+", " ", (prompt or "").strip())
     if not source_text:
         return False
-    if not prompt:
-        return True
-    if _CASE_SOURCE_ARTIFACT_RE.search(prompt):
-        return True
-    # When the source task is substantially richer, keep the teacher-facing
-    # example faithful instead of a shortened paraphrase.
-    return len(prompt) < max(25, int(len(source_text) * 0.7))
+    # A qid is an authoritative identity link, not a fuzzy text hint. Restore
+    # every model-authored variation from the inventory so same-length
+    # paraphrases, omitted context, and omitted visual URLs cannot survive into
+    # rendered Types and fail the exact-coverage boundary later.
+    return (
+        bi.normalize_question_text(prompt)
+        != bi.normalize_question_text(source_text)
+    )
 
 
 def _backfill_type_cases_from_inventory(types: list[dict], inventory: dict) -> list[dict]:
@@ -3280,7 +3696,92 @@ def _normalize_mined_type_candidate(
     """Repair model schema drift, then apply deterministic Type normalization."""
     types = _repair_nested_mined_types(raw_types)
     types = _backfill_type_cases_from_inventory(types, inventory)
-    return _split_mined_types_by_source_topic(types, inventory)
+    types = _split_mined_types_by_source_topic(types, inventory)
+    return _merge_equivalent_mined_types(types)
+
+
+def _merge_equivalent_mined_types(types: list[dict]) -> list[dict]:
+    """Merge repeated Type definitions into Cases without semantic guessing."""
+    merged: list[dict] = []
+    index_by_key: dict[tuple, int] = {}
+    merge_count = 0
+    for raw_type in types:
+        if not isinstance(raw_type, dict):
+            continue
+        mtype = copy.deepcopy(raw_type)
+        title = mtype.get("type_title") or mtype.get("task_pattern") or ""
+        key = (
+            _topic_comparison_key(mtype.get("topic_match_hint") or ""),
+            bi.normalize_question_text(title),
+            bi.normalize_question_text(mtype.get("type_description") or ""),
+            bi.normalize_question_text(mtype.get("task_pattern") or ""),
+            bi.normalize_question_text(mtype.get("concept_match_hint") or ""),
+            bi.normalize_question_text(
+                mtype.get("parent_concept_match_hint") or ""),
+            bool(mtype.get("is_activity")),
+        )
+        # Empty/generic metadata is not enough evidence that two patterns are
+        # equivalent; preserve those Types for semantic review.
+        if not key[1] or not key[4]:
+            merged.append(mtype)
+            continue
+        existing_index = index_by_key.get(key)
+        if existing_index is None:
+            index_by_key[key] = len(merged)
+            merged.append(mtype)
+            continue
+        target = merged[existing_index]
+        source_ids = target.setdefault("source_question_ids", [])
+        for qid in mtype.get("source_question_ids") or []:
+            if qid not in source_ids:
+                source_ids.append(qid)
+        target_cases = target.setdefault("case_prompts", [])
+        case_by_key = {
+            (
+                bi.normalize_question_text(case.get("case_title") or ""),
+                bi.normalize_question_text(case.get("case_signature") or ""),
+            ): case
+            for case in target_cases
+            if isinstance(case, dict)
+        }
+        for raw_case in mtype.get("case_prompts") or []:
+            if not isinstance(raw_case, dict):
+                target_cases.append(copy.deepcopy(raw_case))
+                continue
+            case = copy.deepcopy(raw_case)
+            case_key = (
+                bi.normalize_question_text(case.get("case_title") or ""),
+                bi.normalize_question_text(case.get("case_signature") or ""),
+            )
+            existing_case = case_by_key.get(case_key)
+            if existing_case is None or not case_key[0]:
+                target_cases.append(case)
+                if case_key[0]:
+                    case_by_key[case_key] = case
+                continue
+            examples = existing_case.setdefault("examples", [])
+            seen_qids = {
+                (example.get("source_question_id") or "").strip()
+                for example in examples if isinstance(example, dict)
+            }
+            for example in case.get("examples") or []:
+                qid = (
+                    (example.get("source_question_id") or "").strip()
+                    if isinstance(example, dict) else ""
+                )
+                if qid and qid in seen_qids:
+                    continue
+                examples.append(example)
+                if qid:
+                    seen_qids.add(qid)
+        merge_count += 1
+    if merge_count:
+        progress.log(
+            f"Grouped {merge_count} repeated Type definition(s) into "
+            "multi-Case reusable Types.",
+            level="success",
+        )
+    return merged
 
 
 def _compact_mined_type_metadata(types: list[dict]) -> dict:
@@ -4168,6 +4669,12 @@ def _mined_type_to_body(mtype: dict, start_type: int) -> tuple[str, int]:
         (mtype.get("type_title") or mtype.get("task_pattern") or "").strip())
     definition = concept_cleanup.strip_dangling_references(
         (mtype.get("type_description") or "").strip())
+    origin_case_count = int(mtype.get("_origin_case_count") or 0)
+    if origin_case_count and len(mtype.get("case_prompts") or []) < origin_case_count:
+        # A broad mined Type can be split across several concepts at Case
+        # granularity. Its whole-Type definition may no longer describe this
+        # subset; the precise Type title and Case definitions remain valid.
+        definition = ""
     if definition and _norm_for_compare(definition) != _norm_for_compare(title):
         title = f"{title} — {definition.rstrip('.')}"
     cases: list[tuple[str, list[str]]] = []
@@ -4176,9 +4683,12 @@ def _mined_type_to_body(mtype: dict, start_type: int) -> tuple[str, int]:
             case = {"case_prompt": case}
         if not isinstance(case, dict):
             continue
-        case_title = (case.get("case_title") or "").strip()
+        case_title = concept_cleanup.strip_dangling_references(
+            _strip_leading_source_task_label(
+                case.get("case_title") or "")).strip()
         examples = [
-            (ex.get("example_prompt") or "").strip()
+            _strip_leading_source_task_label(
+                ex.get("example_prompt") or "").strip()
             for ex in _case_examples(case)
         ]
         examples = [ex for ex in examples if ex]
@@ -4467,6 +4977,8 @@ def _expand_mined_types_to_assignment_units(types: list[dict]) -> list[dict]:
         raw_cases = list(mtype.get("case_prompts") or [])
         if len(raw_cases) <= 1:
             unit = copy.deepcopy(mtype)
+            unit["_origin_type_id"] = type_id
+            unit["_origin_case_count"] = len(raw_cases)
             if raw_cases:
                 unit["case_prompts"] = [copy.deepcopy(raw_cases[0])]
                 case_qids = _assignment_case_qids(raw_cases[0])
@@ -4488,6 +5000,8 @@ def _expand_mined_types_to_assignment_units(types: list[dict]) -> list[dict]:
             )
             case_id = case_id or f"CASE-{case_index:04d}"
             unit = copy.deepcopy(mtype)
+            unit["_origin_type_id"] = type_id
+            unit["_origin_case_count"] = len(raw_cases)
             unit["type_id"] = (
                 f"{type_id}::{case_id}::{case_index:04d}")
             unit["source_question_ids"] = _assignment_case_qids(raw_case)
@@ -4548,6 +5062,126 @@ def _expand_mined_types_to_assignment_units(types: list[dict]) -> list[dict]:
             + "; ".join(defects)
         )
     return units
+
+
+def _collapse_assignment_units_for_render(units: list[dict]) -> list[dict]:
+    """Rejoin same-concept Case units from one mined Type before rendering."""
+    collapsed: list[dict] = []
+    index_by_origin: dict[str, int] = {}
+    for raw_unit in units:
+        unit = copy.deepcopy(raw_unit)
+        origin = (
+            unit.pop("_origin_type_id", "")
+            or (unit.get("type_id") or "").split("::", 1)[0]
+        )
+        existing_index = index_by_origin.get(origin)
+        if existing_index is None:
+            unit["type_id"] = origin or unit.get("type_id", "")
+            index_by_origin[origin] = len(collapsed)
+            collapsed.append(unit)
+            continue
+        target = collapsed[existing_index]
+        for qid in unit.get("source_question_ids") or []:
+            if qid not in target.setdefault("source_question_ids", []):
+                target["source_question_ids"].append(qid)
+        target.setdefault("case_prompts", []).extend(
+            copy.deepcopy(unit.get("case_prompts") or []))
+    return collapsed
+
+
+_ASSIGNMENT_PREFIX_STOPWORDS = {
+    "appl", "base", "case", "conc", "desc", "dete", "exam", "expl",
+    "find", "give", "iden", "inte", "ques", "sour", "stat", "usin",
+    "writ", "thro",
+}
+_MIXED_ASSIGNMENT_CUE_RE = re.compile(
+    r"\b(?:any\s+two|two\s+(?:countries|cases|methods|concepts)|"
+    r"compare|comparison|across\s+(?:cases|concepts|topics)|"
+    r"several|multiple|combine|synthesi[sz]e)\b",
+    re.IGNORECASE,
+)
+
+
+def _assignment_prefixes(text: str) -> set[str]:
+    prefixes: set[str] = set()
+    for word in _topic_comparison_key(text).split():
+        if len(word) < 4:
+            continue
+        prefix = word[:4]
+        if prefix not in _ASSIGNMENT_PREFIX_STOPWORDS:
+            prefixes.add(prefix)
+    return prefixes
+
+
+def _assignment_unit_text(mtype: dict) -> str:
+    parts = [
+        mtype.get("type_title") or "",
+        mtype.get("type_description") or "",
+        mtype.get("task_pattern") or "",
+        mtype.get("concept_match_hint") or "",
+    ]
+    for case in mtype.get("case_prompts") or []:
+        if not isinstance(case, dict):
+            parts.append(str(case))
+            continue
+        parts.extend([
+            case.get("case_title") or "",
+            case.get("case_signature") or "",
+        ])
+        parts.extend(
+            example.get("example_prompt") or ""
+            for example in _case_examples(case)
+        )
+    return " ".join(str(part) for part in parts if part)
+
+
+def _high_confidence_assignment_override(
+    mtype: dict, candidate_cids: tuple[str, ...],
+    concept_payload_by_id: dict[str, dict],
+) -> str:
+    """Use unambiguous task/title evidence before accepting a model guess."""
+    candidates = [
+        concept_payload_by_id[cid] for cid in candidate_cids
+        if cid in concept_payload_by_id
+    ]
+    culminations = [
+        row["concept_id"] for row in candidates if row.get("is_culmination")
+    ]
+    if mtype.get("is_activity") and len(culminations) == 1:
+        return culminations[0]
+    evidence = _assignment_unit_text(mtype)
+    if (
+        len(culminations) == 1
+        and _MIXED_ASSIGNMENT_CUE_RE.search(evidence)
+    ):
+        return culminations[0]
+
+    normal = [row for row in candidates if not row.get("is_culmination")]
+    title_prefixes = {
+        row["concept_id"]: _assignment_prefixes(row.get("concept") or "")
+        for row in normal
+    }
+    topic_prefixes = _assignment_prefixes(
+        " ".join(row.get("topic") or "" for row in normal))
+    prefix_frequency: dict[str, int] = {}
+    for prefixes in title_prefixes.values():
+        for prefix in prefixes - topic_prefixes:
+            prefix_frequency[prefix] = prefix_frequency.get(prefix, 0) + 1
+    evidence_prefixes = _assignment_prefixes(evidence)
+    scores = {
+        cid: len({
+            prefix for prefix in prefixes - topic_prefixes
+            if prefix_frequency.get(prefix) == 1
+            and prefix in evidence_prefixes
+        })
+        for cid, prefixes in title_prefixes.items()
+    }
+    ranked = sorted(scores.items(), key=lambda pair: pair[1], reverse=True)
+    if ranked and ranked[0][1] > 0:
+        runner_up = ranked[1][1] if len(ranked) > 1 else 0
+        if ranked[0][1] > runner_up:
+            return ranked[0][0]
+    return ""
 
 
 def _assign_mined_types_via_api(
@@ -4680,6 +5314,15 @@ def _assign_mined_types_via_api(
         ]
         candidate_cid_set = set(candidate_cids)
         remaining_in_group = set(group_type_ids)
+        override_by_tid = {
+            tid: cid
+            for tid in group_type_ids
+            for cid in [_high_confidence_assignment_override(
+                types_by_id[tid], candidate_cids, concept_payload_by_id)
+            ]
+            if cid
+        }
+        overridden: set[str] = set()
         scope_label = (
             types_by_id[group_type_ids[0]].get("topic_match_hint")
             or "unscoped chapter"
@@ -4716,13 +5359,20 @@ def _assign_mined_types_via_api(
                     if tid not in remaining_in_group:
                         continue
                     allowed = allowed_cids_by_tid.get(tid)
+                    effective_cid = override_by_tid.get(tid) or cid
                     if (
-                        cid not in candidate_cid_set
-                        or (allowed is not None and cid not in allowed)
+                        effective_cid not in candidate_cid_set
+                        or (
+                            allowed is not None
+                            and effective_cid not in allowed
+                        )
                     ):
                         rejected_wrong_topic += 1
                         continue
-                    per_concept.setdefault(cid, []).append(types_by_id[tid])
+                    per_concept.setdefault(effective_cid, []).append(
+                        types_by_id[tid])
+                    if effective_cid != cid:
+                        overridden.add(tid)
                     remaining_in_group.discard(tid)
             if rejected_wrong_topic:
                 progress.log(
@@ -4735,6 +5385,17 @@ def _assign_mined_types_via_api(
             progress.log(
                 f"Type embedding scope {scope_label!r} attempt {attempt}: "
                 f"{placed}/{len(group_type_ids)} assignment units assigned.")
+        for tid in list(remaining_in_group):
+            cid = override_by_tid.get(tid)
+            if not cid:
+                continue
+            per_concept.setdefault(cid, []).append(types_by_id[tid])
+            remaining_in_group.discard(tid)
+            overridden.add(tid)
+        if overridden:
+            progress.log(
+                f"Corrected {len(overridden)} Type assignment unit(s) using "
+                "unambiguous source/concept evidence.")
         unassigned.update(remaining_in_group)
 
     if unassigned:
@@ -4753,7 +5414,7 @@ def _assign_mined_types_via_api(
         rec = cid_map[cid]
         fragments: list[str] = []
         counter = 0
-        for mtype in tlist:
+        for mtype in _collapse_assignment_units_for_render(tlist):
             body, counter = _mined_type_to_body(mtype, counter)
             if body:
                 fragments.append(body)
@@ -4852,6 +5513,30 @@ def _mined_type_topic_violations(
                 "reason": "wrong_topic",
             })
     return violations
+
+
+def _inventory_topic_type_coverage_violations(
+    records: list[dict], inventory: dict | None,
+) -> list[dict]:
+    """Topics with inventoried tasks but no rendered Types on any concept."""
+    task_counts: dict[str, dict] = {}
+    for item in (inventory or {}).get("items") or []:
+        topic = (item.get("topic_hint") or "").strip()
+        key = _topic_comparison_key(topic)
+        if not key:
+            continue
+        entry = task_counts.setdefault(
+            key, {"topic": topic, "inventory_items": 0})
+        entry["inventory_items"] += 1
+    covered = {
+        _topic_comparison_key(record.get("topic") or "")
+        for record in records
+        if _has_meaningful_types(record.get("concept_details", ""))
+    }
+    return [
+        entry for key, entry in task_counts.items()
+        if key not in covered
+    ]
 
 
 def _accept_topic_safe_type_review(
@@ -5036,12 +5721,15 @@ def _fatal_errors(report: dict) -> list[dict]:
 def _repair_records_via_api(
     records: list[dict], *, meta: dict, stage: str, source_context: str = "",
     max_attempts: int = 2, strict: bool = False,
+    allowed_source_examples: tuple[str, ...] | list[str] = (),
 ) -> list[dict]:
     """Validate rows and ask the repair prompt to fix hard failures."""
     records = _ensure_parent_concepts(records)
     opts = _validation_options(stage)
     for attempt in range(max_attempts + 1):
-        report = cv.validate_concept_rows(records, **opts)
+        report = cv.validate_concept_rows(
+            records, **opts,
+            allowed_source_examples=allowed_source_examples)
         hard = [e for e in report["errors"] if e["severity"] == "error"]
         progress.log(
             f"{stage}: validation found {len(hard)} error(s), "
@@ -5119,15 +5807,61 @@ def _artifact_match_snippet(rec: dict) -> str:
     return m.group(0) if m else ""
 
 
-def _neutralize_unrepaired_rows(records: list[dict]) -> list[dict]:
+_INVENTORY_EXAMPLE_SEGMENT_RE = re.compile(
+    r"(\bExamples?\s*:\s*)(.*?)"
+    r"(?=\bExamples?\s*:|\b(?:Case|Type)\s+\d{1,2}:|\s+//\s+|$)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _inventory_source_examples(inventory: dict | None) -> list[str]:
+    """Canonical public prompts that are identity-linked to inventory qids."""
+    return [
+        text
+        for item in (inventory or {}).get("items") or []
+        if isinstance(item, dict)
+        for text in [_inventory_task_text(item)]
+        if text
+    ]
+
+
+def _mask_inventory_examples(
+    details: str, inventory: dict | None,
+) -> tuple[str, dict[str, str]]:
+    """Protect exact inventory-owned Examples during destructive cleanup."""
+    source_by_key = {
+        bi.normalize_question_text(text): text
+        for text in _inventory_source_examples(inventory)
+    }
+    replacements: dict[str, str] = {}
+
+    def replace(match: re.Match) -> str:
+        source = source_by_key.get(
+            bi.normalize_question_text(match.group(2)))
+        if not source:
+            return match.group(0)
+        token = f"__INVENTORY_SOURCE_EXAMPLE_{len(replacements):04d}__"
+        replacements[token] = source
+        return match.group(1) + token
+
+    return _INVENTORY_EXAMPLE_SEGMENT_RE.sub(
+        replace, details or ""), replacements
+
+
+def _neutralize_unrepaired_rows(
+    records: list[dict], *, inventory: dict | None = None,
+) -> list[dict]:
     """Destructively neutralize source artifacts ONLY where GPT repair failed.
 
     Rows that validate cleanly keep their GPT-authored wording verbatim; the
     deterministic rewriter is a per-row last resort, never a blanket pass.
     Re-runs once if a cleaned row still matches (regex drift / OCR forms).
     """
+    allowed_source_examples = _inventory_source_examples(inventory)
     report = cv.validate_concept_rows(
-        records, allow_types=True, require_culmination=True, allow_culmination=True)
+        records, allow_types=True, require_culmination=True,
+        allow_culmination=True,
+        allowed_source_examples=allowed_source_examples)
     failing = {
         e["row_index"] for e in report["errors"]
         if e.get("severity") == "error" and e.get("row_index", -1) >= 0
@@ -5135,8 +5869,18 @@ def _neutralize_unrepaired_rows(records: list[dict]) -> list[dict]:
     }
     out: list[dict] = []
     for i, rec in enumerate(records):
-        out.append(concept_cleanup.clean_concept_record(
-            dict(rec), neutralize_artifacts=i in failing))
+        candidate = dict(rec)
+        replacements: dict[str, str] = {}
+        if i in failing and candidate.get("concept_details"):
+            candidate["concept_details"], replacements = (
+                _mask_inventory_examples(
+                    candidate["concept_details"], inventory))
+        cleaned = concept_cleanup.clean_concept_record(
+            candidate, neutralize_artifacts=i in failing)
+        for token, source in replacements.items():
+            cleaned["concept_details"] = cleaned["concept_details"].replace(
+                token, source)
+        out.append(cleaned)
     if failing:
         snippets = []
         for idx in sorted(failing)[:5]:
@@ -5154,7 +5898,9 @@ def _neutralize_unrepaired_rows(records: list[dict]) -> list[dict]:
         # Second pass: any row that STILL fails after neutralize (regex gap)
         # gets cleaned again so final validation is not blocked.
         again = cv.validate_concept_rows(
-            out, allow_types=True, require_culmination=True, allow_culmination=True)
+            out, allow_types=True, require_culmination=True,
+            allow_culmination=True,
+            allowed_source_examples=allowed_source_examples)
         still = {
             e["row_index"] for e in again["errors"]
             if e.get("severity") == "error" and e.get("row_index", -1) >= 0
@@ -5164,8 +5910,16 @@ def _neutralize_unrepaired_rows(records: list[dict]) -> list[dict]:
             for idx in still:
                 if 0 <= idx < len(out):
                     snip = _artifact_match_snippet(out[idx])
-                    out[idx] = concept_cleanup.clean_concept_record(
-                        dict(out[idx]), neutralize_artifacts=True)
+                    candidate = dict(out[idx])
+                    candidate["concept_details"], replacements = (
+                        _mask_inventory_examples(
+                            candidate.get("concept_details", ""), inventory))
+                    cleaned = concept_cleanup.clean_concept_record(
+                        candidate, neutralize_artifacts=True)
+                    for token, source in replacements.items():
+                        cleaned["concept_details"] = (
+                            cleaned["concept_details"].replace(token, source))
+                    out[idx] = cleaned
                     progress.log(
                         f"  re-scrubbed row {idx} after neutralize residual"
                         + (f" ({snip!r})" if snip else "") + ".",
@@ -5192,6 +5946,114 @@ def _inventory_lookup_texts(inventory: dict | None) -> list[str]:
             seen.add(key)
             out.append(text)
     return out
+
+
+def _rendered_type_examples(records: list[dict]) -> list[str]:
+    """Extract public Example prompts from rendered Types sections."""
+    examples: list[str] = []
+    for record in records:
+        body = _types_body(record.get("concept_details", ""))
+        for chunk in [
+            part.strip() for part in _TYPE_SPLIT_RE.split(body)
+            if part.strip()
+        ]:
+            case_parts = [
+                part.strip() for part in _CASE_SPLIT_RE.split(chunk)
+                if part.strip()
+            ]
+            if case_parts and not re.match(
+                r"^Case\s+\d{1,2}:", case_parts[0], re.IGNORECASE
+            ):
+                case_parts = case_parts[1:]
+            for case_chunk in case_parts:
+                match = re.match(
+                    r"^Case\s+\d{1,2}:\s*(.*)$",
+                    case_chunk,
+                    re.IGNORECASE | re.DOTALL,
+                )
+                case_body = (match.group(1) if match else case_chunk).strip()
+                pieces = _EXAMPLE_LINE_RE.split(case_body)
+                examples.extend(
+                    _strip_leading_source_task_label(piece).strip()
+                    for piece in pieces[1:]
+                    if piece.strip()
+                )
+    return examples
+
+
+def _rendered_inventory_example_counts(
+    records: list[dict], expected_keys: set[str],
+) -> dict[str, int]:
+    """Count exact inventory prompts that occupy rendered Example slots.
+
+    Inventory text is authoritative framing here. Parsing the flat public
+    ``Types`` string structurally is ambiguous when a source question itself
+    contains ``Type NN:``, ``Case NN:``, or ``Example:``. Match each known
+    prompt immediately after an Example marker and require the following text
+    to be the next structural marker (or the end of the Types section).
+    """
+    counts = {key: 0 for key in expected_keys if key}
+    for record in records:
+        body = bi.normalize_question_text(
+            _types_body(record.get("concept_details", "")))
+        for marker in _EXAMPLE_LINE_RE.finditer(body):
+            suffix = body[marker.end():]
+            for key in counts:
+                if not suffix.startswith(key):
+                    continue
+                tail = suffix[len(key):].lstrip()
+                if not tail or re.match(
+                    r"^(?:(?:Miscellaneous\s+)?Type\s+\d{1,2}:"
+                    r"|Case\s+\d{1,2}:|Examples?\s*:)",
+                    tail,
+                    re.IGNORECASE,
+                ):
+                    counts[key] += 1
+    return counts
+
+
+def _rendered_inventory_coverage_defects(
+    records: list[dict], inventory: dict | None,
+) -> dict:
+    """Missing/duplicate inventory prompts in rendered public Examples."""
+    items_by_qid = {
+        (item.get("qid") or "").strip(): item
+        for item in (inventory or {}).get("items") or []
+        if (item.get("qid") or "").strip()
+    }
+    expected_by_qid = {
+        qid: bi.normalize_question_text(_inventory_task_text(item))
+        for qid, item in items_by_qid.items()
+    }
+    rendered_counts = _rendered_inventory_example_counts(
+        records, set(expected_by_qid.values()))
+    defects = {
+        "missing": sorted(
+            qid for qid, key in expected_by_qid.items()
+            if not key or rendered_counts.get(key, 0) == 0
+        ),
+        "duplicate": sorted(
+            qid for qid, key in expected_by_qid.items()
+            if key and rendered_counts.get(key, 0) > 1
+        ),
+    }
+    return defects
+
+
+def _accept_exact_inventory_type_review(
+    original: list[dict], candidate: list[dict], inventory: dict | None,
+) -> list[dict]:
+    """Reject a Types rewrite that loses or duplicates source questions."""
+    defects = _rendered_inventory_coverage_defects(candidate, inventory)
+    if defects["missing"] or defects["duplicate"]:
+        progress.log(
+            "Rejected Types rewrite that changed exact inventory coverage: "
+            f"{len(defects['missing'])} missing, "
+            f"{len(defects['duplicate'])} duplicated Example(s).",
+            level="warning",
+        )
+        return original
+    return candidate
 
 
 def _match_inventory_for_short_example(
@@ -5391,9 +6253,14 @@ def _salvage_short_case_examples(
     return out
 
 
-def _validate_final_or_raise(records: list[dict], *, stage: str = "final") -> dict:
+def _validate_final_or_raise(
+    records: list[dict], *, stage: str = "final",
+    inventory: dict | None = None,
+) -> dict:
     report = cv.validate_concept_rows(
-        records, allow_types=True, require_culmination=True, allow_culmination=True)
+        records, allow_types=True, require_culmination=True,
+        allow_culmination=True,
+        allowed_source_examples=_inventory_source_examples(inventory))
     fatal = _fatal_errors(report)
     progress.log(
         f"{stage}: final validation found {len(fatal)} fatal error(s), "
@@ -5490,18 +6357,25 @@ def _assign_types_via_api(
             f"Embedding {len(mined_types['types'])} mined Types into concepts "
             "via API ID assignment.")
         merged = _assign_mined_types_via_api(records, meta=meta, mined_types=mined_types)
-        merged = _review_type_concept_alignment_via_api(
+        before_alignment = merged
+        aligned = _review_type_concept_alignment_via_api(
             merged,
             meta=meta,
             question_task_inventory=question_task_inventory,
             mined_types=mined_types,
             source_context=mmd_text,
         )
+        merged = _accept_exact_inventory_type_review(
+            before_alignment, aligned, question_task_inventory)
         before_repair = merged
         repaired = _repair_records_via_api(
-            merged, meta=meta, stage="types", source_context=mmd_text)
-        merged = _accept_topic_safe_type_review(
+            merged, meta=meta, stage="types", source_context=mmd_text,
+            allowed_source_examples=_inventory_source_examples(
+                question_task_inventory))
+        repaired = _accept_topic_safe_type_review(
             before_repair, repaired, mined_types)
+        merged = _accept_exact_inventory_type_review(
+            before_repair, repaired, question_task_inventory)
         with_types = sum(1 for r in merged if _has_meaningful_types(r.get("concept_details", "")))
         progress.log(
             f"Types assignment complete: {with_types}/{len(merged)} concepts have Types.",
@@ -5553,7 +6427,10 @@ def _assign_types_via_api(
             rec = dict(rec)
             rec["concept_details"] = _inject_types(rec.get("concept_details", ""), types_body)
         merged.append(rec)
-    merged = _repair_records_via_api(merged, meta=meta, stage="types", source_context=mmd_text)
+    merged = _repair_records_via_api(
+        merged, meta=meta, stage="types", source_context=mmd_text,
+        allowed_source_examples=_inventory_source_examples(
+            question_task_inventory))
     merged = _review_type_concept_alignment_via_api(
         merged,
         meta=meta,
@@ -5561,7 +6438,10 @@ def _assign_types_via_api(
         mined_types=mined_types,
         source_context=mmd_text,
     )
-    merged = _repair_records_via_api(merged, meta=meta, stage="types", source_context=mmd_text)
+    merged = _repair_records_via_api(
+        merged, meta=meta, stage="types", source_context=mmd_text,
+        allowed_source_examples=_inventory_source_examples(
+            question_task_inventory))
     with_types = sum(1 for r in merged if _has_meaningful_types(r.get("concept_details", "")))
     progress.log(
         f"Types assignment complete: {with_types}/{len(merged)} concepts have Types.",
@@ -5714,6 +6594,295 @@ def _consolidate_concepts_via_api(
     out = _preserve_required_method_rows(before_repair, out)
     out = _dedupe_titles_chapter_wide(out)
     progress.log(f"Rows after canonicalization: {len(out)}.", level="success")
+    return out
+
+
+_QUESTION_GROUNDED_EVIDENCE_RE = re.compile(
+    r"\b(?:examples?|exercises?|ex)\s*(?:\d|[ivxlcdm]+\b)",
+    re.IGNORECASE,
+)
+_NON_DURABLE_TASK_CONCEPT_RE = re.compile(
+    r"\b(?:advanced|challenge|challenging|miscellaneous|unknown[-\s]+"
+    r"(?:value|quantity|term)|harder\s+problems?)\b",
+    re.IGNORECASE,
+)
+
+
+def _question_grounded_fragmentation_topics(
+    records: list[dict], *, minimum_rows: int = 3,
+) -> set[str]:
+    """Topics with several non-method concepts grounded mainly in tasks."""
+    counts: dict[str, int] = {}
+    for record in records:
+        if _method_anchor_ids(record):
+            continue
+        if not _QUESTION_GROUNDED_EVIDENCE_RE.search(
+            record.get("source_evidence") or ""
+        ):
+            continue
+        key = _topic_comparison_key(record.get("topic") or "")
+        if key:
+            counts[key] = counts.get(key, 0) + 1
+    return {key for key, count in counts.items() if count >= minimum_rows}
+
+
+def _formula_family_fragments(formula: str) -> set[str]:
+    normalized = _normalize_math_evidence(formula).replace("&", "")
+    if len(normalized) < 8:
+        return set()
+    fragments = {normalized}
+    fragments.update(
+        part for part in normalized.split("=") if len(part) >= 8)
+    return fragments
+
+
+def _method_formula_family_groups(
+    records: list[dict], method_anchors: list[dict] | None,
+) -> list[list[str]]:
+    """Anchor-ID groups whose required formula expressions overlap."""
+    formulae_by_id = {
+        str(anchor.get("anchor_id") or "").upper(): {
+            fragment
+            for formula in anchor.get("required_formulas") or []
+            for fragment in _formula_family_fragments(formula)
+        }
+        for anchor in method_anchors or []
+    }
+    indexed_formulae: list[tuple[int, set[str], set[str]]] = []
+    for index, record in enumerate(records):
+        anchor_ids = _method_anchor_ids(record)
+        formulae = {
+            formula
+            for anchor_id in anchor_ids
+            for formula in formulae_by_id.get(anchor_id, set())
+        }
+        if formulae:
+            indexed_formulae.append((index, formulae, anchor_ids))
+    parent = {index: index for index, _, _ in indexed_formulae}
+
+    def root(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    for offset, (left_index, left_formulae, _) in enumerate(indexed_formulae):
+        for right_index, right_formulae, _ in indexed_formulae[offset + 1:]:
+            overlaps = any(
+                left in right or right in left
+                for left in left_formulae
+                for right in right_formulae
+            )
+            if overlaps:
+                parent[root(right_index)] = root(left_index)
+    families: dict[int, set[str]] = {}
+    for index, _, anchor_ids in indexed_formulae:
+        families.setdefault(root(index), set()).update(anchor_ids)
+    return [
+        sorted(anchor_ids) for anchor_ids in families.values()
+        if len(anchor_ids) > 1
+    ]
+
+
+def _method_formula_family_reduction(
+    records: list[dict], method_anchors: list[dict] | None,
+) -> int:
+    """Redundant anchored rows that teach overlapping formula families."""
+    return sum(
+        len(group) - 1
+        for group in _method_formula_family_groups(records, method_anchors)
+    )
+
+
+def _coalesce_method_family_rows(
+    records: list[dict], method_family_groups: list[list[str]],
+) -> list[dict]:
+    """Deterministically combine rows the source proves share one formula family."""
+    out = [dict(record) for record in records]
+    for family in method_family_groups:
+        family_ids = set(family)
+        indexes = [
+            index for index, record in enumerate(out)
+            if _method_anchor_ids(record) & family_ids
+        ]
+        if len(indexes) < 2:
+            continue
+        target_index = indexes[0]
+        target = dict(out[target_index])
+        merged_details: list[str] = []
+        merged_keywords: list[str] = []
+        merged_evidence: list[str] = []
+        for index in indexes:
+            record = out[index]
+            detail = _DESCRIPTION_PREFIX_RE.sub(
+                "", record.get("concept_details") or "").strip()
+            if detail and detail not in merged_details:
+                merged_details.append(detail)
+            for keyword in re.split(r"\s*,\s*", record.get("keywords") or ""):
+                keyword = keyword.strip()
+                if keyword and keyword not in merged_keywords:
+                    merged_keywords.append(keyword)
+            merged_evidence.append(record.get("source_evidence") or "")
+        if merged_details:
+            target["concept_details"] = (
+                "Description: " + " ".join(merged_details))
+        target["keywords"] = ", ".join(merged_keywords)
+        target["source_evidence"] = _merge_method_source_evidence(
+            *merged_evidence, *family)
+        out[target_index] = target
+        for index in reversed(indexes[1:]):
+            out.pop(index)
+    return out
+
+
+def _consolidate_task_grounded_fragments_via_api(
+    records: list[dict], *, meta: dict,
+    source_topic_excerpts: list[dict],
+    method_anchors: list[dict] | None = None,
+) -> list[dict]:
+    """Merge Example/Exercise-shaped concept rows into durable objectives."""
+    import json as _json
+
+    suspicious = _question_grounded_fragmentation_topics(records)
+    if not suspicious:
+        return records
+    excerpt_by_key = {
+        _topic_comparison_key(group.get("topic") or ""):
+        group.get("excerpt") or ""
+        for group in source_topic_excerpts or []
+    }
+    replacement_by_key: dict[str, list[dict]] = {}
+    system = prompts.get_text("concepts.task_fragment_consolidation.system")
+    for topic_key in suspicious:
+        topic_records = [
+            record for record in records
+            if _topic_comparison_key(record.get("topic") or "") == topic_key
+            and not cr.is_culmination(record.get("concept_title", ""))
+        ]
+        if len(topic_records) < 3:
+            continue
+        topic = (topic_records[0].get("topic") or "").strip()
+        task_grounded_count = sum(
+            not _method_anchor_ids(record)
+            and bool(_QUESTION_GROUNDED_EVIDENCE_RE.search(
+                record.get("source_evidence") or ""))
+            for record in topic_records
+        )
+        method_family_groups = _method_formula_family_groups(
+            topic_records, method_anchors)
+        method_family_reduction = sum(
+            len(group) - 1 for group in method_family_groups)
+        max_rows = max(
+            2,
+            len(topic_records) - task_grounded_count + 2
+            - method_family_reduction,
+        )
+        user = (
+            _metadata_block(meta)
+            + f"\nSOURCE TOPIC: {topic}\n"
+            + f"CONSOLIDATION BOUND: return AT MOST {max_rows} rows. "
+            + f"The draft has {task_grounded_count} question-grounded rows; "
+            + "retain no more than two durable application/modeling objectives "
+            + "for those rows, while preserving distinct non-task objectives. "
+            + f"Merge {method_family_reduction} redundant anchored row(s) whose "
+            + "required formulas overlap, carrying all METHOD IDs forward. "
+            + "OVERLAPPING METHOD FAMILIES (every list MUST become one row): "
+            + _json.dumps(method_family_groups)
+            + "\n"
+            + "\nDRAFT CONCEPT ROWS:\n"
+            + _json.dumps(
+                {"rows": _records_to_api_rows(topic_records)},
+                ensure_ascii=False,
+            )
+            + "\n\nSOURCE TOPIC EXCERPT:\n"
+            + _trim(excerpt_by_key.get(topic_key, ""), 160_000)
+        )
+        candidate: list[dict] = []
+        rejected_titles: list[str] = []
+        unmerged_method_families: list[list[str]] = []
+        for attempt in range(1, 4):
+            attempt_user = user
+            if attempt > 1:
+                attempt_user += (
+                    "\n\nCORRECTION: Your prior consolidation retained "
+                    "question/difficulty labels as concepts: "
+                    + (", ".join(rejected_titles) or "(none)")
+                    + ". It also failed to coalesce these overlapping METHOD "
+                    "families into one row per list: "
+                    + _json.dumps(unmerged_method_families)
+                    + ". Merge those exact IDs onto one row, merge task labels "
+                    "into direct/contextual application objectives, and obey "
+                    "the row bound."
+                )
+            data = _openai_json(system, attempt_user)
+            candidate = [
+                row for row in _concept_rows_to_records(data)
+                if _topic_comparison_key(row.get("topic") or "") == topic_key
+                and not cr.is_culmination(row.get("concept_title", ""))
+            ]
+            candidate = _preserve_required_method_rows(
+                topic_records, candidate)
+            candidate = _coalesce_method_family_rows(
+                candidate, method_family_groups)
+            candidate = _dedupe_titles_chapter_wide(
+                _ensure_parent_concepts(candidate))
+            rejected_titles = [
+                row.get("concept_title", "")
+                for row in candidate
+                if not _method_anchor_ids(row)
+                and _QUESTION_GROUNDED_EVIDENCE_RE.search(
+                    row.get("source_evidence") or "")
+                and _NON_DURABLE_TASK_CONCEPT_RE.search(
+                    row.get("concept_title") or "")
+            ]
+            unmerged_method_families = [
+                family for family in method_family_groups
+                if not any(
+                    set(family) <= _method_anchor_ids(row)
+                    for row in candidate
+                )
+            ]
+            if (
+                2 <= len(candidate) <= max_rows < len(topic_records)
+                and not rejected_titles
+                and not unmerged_method_families
+            ):
+                replacement_by_key[topic_key] = candidate
+                progress.log(
+                    f"Consolidated task-grounded concept fragments in "
+                    f"{topic!r}: {len(topic_records)} -> "
+                    f"{len(candidate)} rows.",
+                    level="success",
+                )
+                break
+        if topic_key not in replacement_by_key:
+            progress.log(
+                f"Rejected task-fragment consolidation for {topic!r}: "
+                f"{len(topic_records)} -> {len(candidate)} rows"
+                + (
+                    f"; non-durable titles: {', '.join(rejected_titles)}"
+                    if rejected_titles else ""
+                )
+                + (
+                    "; unmerged METHOD families: "
+                    + _json.dumps(unmerged_method_families)
+                    if unmerged_method_families else ""
+                )
+                + ".",
+                level="warning",
+            )
+    if not replacement_by_key:
+        return records
+    out: list[dict] = []
+    emitted: set[str] = set()
+    for record in records:
+        key = _topic_comparison_key(record.get("topic") or "")
+        replacement = replacement_by_key.get(key)
+        if replacement is None:
+            out.append(record)
+        elif key not in emitted:
+            out.extend(replacement)
+            emitted.add(key)
     return out
 
 
@@ -6680,7 +7849,8 @@ _NON_TOPIC_RE = re.compile(
     r"assertion\s*(?:and|&)?\s*reason(?:s)?|case\s+based(?:\s+questions?)?|"
     r"passage[-\s]+based(?:\s+questions?)?|source[-\s]+based(?:\s+questions?)?|"
     r"map\s+(?:work|skills?|questions?)|"
-    r"do\s+this|.*\bactivity\b.*|activities|project\s+work|things\s+to\s+remember|"
+    r"do\s+this|write\s+in\s+brief|discuss|.*\bactivity\b.*|activities|"
+    r"projects?(?:\s+work)?|things\s+to\s+remember|"
     r"points\s+to\s+remember|key\s+points|glossary)\b[\s\d.:()\-]*$",
     re.IGNORECASE,
 )
@@ -6891,7 +8061,6 @@ def _build_culminations_via_api(records: list[dict], *, meta: dict) -> list[dict
 
 _PART_SUFFIX_RE = re.compile(r"\s*\(part \d+/\d+\)$", re.IGNORECASE)
 _MIN_MAIN_TOPIC_HEADINGS = 3
-_MAX_MAIN_TOPIC_HEADINGS = 12
 
 
 def _looks_like_math_fragment_heading(heading: str) -> bool:
@@ -6957,22 +8126,12 @@ def _topic_headings(sections: list[dict]) -> list[str]:
             numbered = by_depth[depth]
             break
     if len(numbered) >= _MIN_MAIN_TOPIC_HEADINGS:
-        if len(numbered) > _MAX_MAIN_TOPIC_HEADINGS:
-            progress.log(
-                f"Collapsed {len(numbered)} numbered headings to "
-                f"{_MAX_MAIN_TOPIC_HEADINGS} main topic headings.",
-                level="warning",
-            )
-            numbered = numbered[:_MAX_MAIN_TOPIC_HEADINGS]
         return _dedupe_topic_candidates(numbered)
 
     levels = sorted({c["level"] for c in candidates})
     if len(levels) > 1 and sum(1 for c in candidates if c["level"] == levels[0]) == 1:
         candidates = [c for c in candidates if c["level"] != levels[0]]
         levels = sorted({c["level"] for c in candidates})
-    if len(candidates) <= _MAX_MAIN_TOPIC_HEADINGS:
-        return _dedupe_topic_candidates(candidates)
-
     start = 0
 
     selected: list[dict] = []
@@ -6983,13 +8142,6 @@ def _topic_headings(sections: list[dict]) -> list[str]:
     if len(selected) < _MIN_MAIN_TOPIC_HEADINGS:
         selected = candidates
 
-    if len(selected) > _MAX_MAIN_TOPIC_HEADINGS:
-        progress.log(
-            f"Collapsed {len(candidates)} candidate headings to "
-            f"{_MAX_MAIN_TOPIC_HEADINGS} main topic headings.",
-            level="warning",
-        )
-        selected = selected[:_MAX_MAIN_TOPIC_HEADINGS]
     return _dedupe_topic_candidates(selected)
 
 
@@ -7063,6 +8215,97 @@ def _topics_look_collapsed(records: list[dict], headings: list[str]) -> bool:
     if len(topics) <= 1:
         return True
     return len(records) >= 12 and len(topics) <= 2 and len(headings) >= 4
+
+
+def _missing_source_topic_excerpts(
+    records: list[dict], source_topic_excerpts: list[dict],
+) -> list[dict]:
+    """Source topics with no normal concept row, preserving reading order."""
+    covered = {
+        _topic_comparison_key(rec.get("topic") or "")
+        for rec in records
+        if not cr.is_culmination(rec.get("concept_title", ""))
+    }
+    return [
+        group for group in source_topic_excerpts or []
+        if _topic_comparison_key(group.get("topic") or "") not in covered
+    ]
+
+
+def _recover_missing_topic_concepts_via_api(
+    records: list[dict], *, meta: dict, source_topic_excerpts: list[dict],
+    max_attempts: int = 2,
+) -> list[dict]:
+    """Recover concepts for structurally proven topics omitted by the model."""
+    import json as _json
+
+    out = [dict(record) for record in records]
+    missing = _missing_source_topic_excerpts(out, source_topic_excerpts)
+    if not missing:
+        return out
+    system = prompts.get_text("concepts.missing_topic_recovery.system")
+    for attempt in range(1, max_attempts + 1):
+        missing = _missing_source_topic_excerpts(out, source_topic_excerpts)
+        if not missing:
+            break
+        existing_titles = [
+            record.get("concept_title", "") for record in out
+            if (record.get("concept_title") or "").strip()
+        ]
+        payload = {
+            "missing_source_topics": [
+                {
+                    "topic": (group.get("topic") or "").strip(),
+                    "excerpt": _trim(group.get("excerpt") or "", 80_000),
+                }
+                for group in missing
+            ],
+            "existing_concept_titles": existing_titles,
+        }
+        user = (
+            _metadata_block(meta)
+            + "\nMissing source-topic coverage to recover:\n"
+            + _json.dumps(payload, ensure_ascii=False)
+        )
+        progress.log(
+            f"Topic coverage recovery attempt {attempt}: "
+            f"{len(missing)} source topic(s) have no concept.")
+        data = _openai_json(system, user)
+        allowed = {
+            _topic_comparison_key(group.get("topic") or ""):
+            (group.get("topic") or "").strip()
+            for group in missing
+            if _topic_comparison_key(group.get("topic") or "")
+        }
+        existing_keys = {
+            bi.normalize_question_text(record.get("concept_title", ""))
+            for record in out
+        }
+        added = 0
+        for candidate in _concept_rows_to_records(data):
+            topic_key = _topic_comparison_key(candidate.get("topic") or "")
+            title_key = bi.normalize_question_text(
+                candidate.get("concept_title", ""))
+            if topic_key not in allowed or not title_key or title_key in existing_keys:
+                continue
+            candidate["topic"] = allowed[topic_key]
+            if not (candidate.get("parent_concept") or "").strip():
+                candidate["parent_concept"] = allowed[topic_key]
+            out.append(candidate)
+            existing_keys.add(title_key)
+            added += 1
+        progress.log(
+            f"Topic coverage recovery added {added} concept row(s).",
+            level="success" if added else "warning",
+        )
+    missing = _missing_source_topic_excerpts(out, source_topic_excerpts)
+    if missing:
+        raise RuntimeError(
+            "concept extraction omitted structurally proven source topics: "
+            + ", ".join(
+                (group.get("topic") or "").strip() for group in missing)
+        )
+    return out
 
 
 def _restructure_topics_via_api(
@@ -7268,8 +8511,19 @@ def concepts_from_mmd(
         out = _snap_topics_to_headings(
             out, headings, chapter_title=chapter_title,
             allow_chapter_title_topic=allow_chapter_title_topic)
+        out = _recover_missing_topic_concepts_via_api(
+            out, meta=meta, source_topic_excerpts=source_topic_excerpts)
         out = _restore_method_anchor_rows(
             out, skeleton_method_row_snapshot)
+        out = _enforce_method_anchor_topics(out, method_anchors)
+        out = _canonicalize_method_anchor_tags(
+            out, method_anchors, chunk_text=mmd_text, meta=meta)
+        out = _consolidate_task_grounded_fragments_via_api(
+            out,
+            meta=meta,
+            source_topic_excerpts=source_topic_excerpts,
+            method_anchors=method_anchors,
+        )
         out = _enforce_method_anchor_topics(out, method_anchors)
         out = _canonicalize_method_anchor_tags(
             out, method_anchors, chunk_text=mmd_text, meta=meta)
@@ -7320,7 +8574,7 @@ def concepts_from_mmd(
             value=0.58,
         )
         question_task_inventory = _extract_question_task_inventory_via_api(
-            meta=meta, sections=sections)
+            meta=meta, sections=sections, records=out)
         progress.set_progress(
             0.70, label="Concept extraction — question inventory complete")
         progress.step("Concept extraction — mining reusable Types", value=0.72)
@@ -7381,12 +8635,17 @@ def concepts_from_mmd(
         before_final_repair = out
         out = _repair_records_via_api(
             out, meta=meta, stage="final", source_context=mmd_text, strict=False,
-            max_attempts=3)
+            max_attempts=3,
+            allowed_source_examples=_inventory_source_examples(
+                question_task_inventory))
         out = _preserve_required_method_rows(before_final_repair, out)
+        out = _accept_exact_inventory_type_review(
+            before_final_repair, out, question_task_inventory)
         # Post-repair: neutralize ONLY rows the repair pass could not fix —
         # rows that already validate cleanly keep their full GPT-authored
         # wording untouched (no blanket deterministic rewriting).
-        out = _neutralize_unrepaired_rows(out)
+        out = _neutralize_unrepaired_rows(
+            out, inventory=question_task_inventory)
         # Truncated Case Examples ("Example: q") that GPT repair could not
         # expand are filled from the Question / Task Inventory, or dropped
         # when no match exists — never leave short_case_example as a fatal.
@@ -7394,7 +8653,8 @@ def concepts_from_mmd(
             out, inventory=question_task_inventory)
         # Salvage may leave a bare figure ref if inventory lacked the URL;
         # re-neutralize any residual source_artifact rows only.
-        out = _neutralize_unrepaired_rows(out)
+        out = _neutralize_unrepaired_rows(
+            out, inventory=question_task_inventory)
         out = cr.refine_chapter(out)
         # The repair/cleanup passes may reorder, rename, or re-collide rows;
         # re-assert the duplicate-title, culmination, mastery-line, and
@@ -7410,7 +8670,8 @@ def concepts_from_mmd(
         # Mastery/misconception GPT passes can reintroduce Example/Fig/page
         # pointers — scrub source_artifact one last time immediately before
         # the hard final gate so deposit is never blocked by residual refs.
-        out = _neutralize_unrepaired_rows(out)
+        out = _neutralize_unrepaired_rows(
+            out, inventory=question_task_inventory)
         out = _restore_method_anchor_rows(out, method_row_snapshot)
         # Restoration is the terminal row-membership operation. Only
         # non-dropping field/ordering guarantees may run after this point.
@@ -7436,6 +8697,15 @@ def concepts_from_mmd(
                 + ", ".join(
                     anchor["anchor_id"] for anchor in missing_method_anchors)
             )
+        missing_topics = _missing_source_topic_excerpts(
+            out, source_topic_excerpts)
+        if missing_topics:
+            raise RuntimeError(
+                "final concept map lost structurally proven source topics: "
+                + ", ".join(
+                    (group.get("topic") or "").strip()
+                    for group in missing_topics)
+            )
         type_topic_violations = _mined_type_topic_violations(
             out, mined_types)
         if type_topic_violations:
@@ -7445,6 +8715,15 @@ def concepts_from_mmd(
             )
             raise RuntimeError(
                 "mined Type source-topic validation failed: " + summary)
+        uncovered_type_topics = _inventory_topic_type_coverage_violations(
+            out, question_task_inventory)
+        if uncovered_type_topics:
+            raise RuntimeError(
+                "source topics with assessable inventory lost all Types: "
+                + ", ".join(
+                    f"{item['topic']} ({item['inventory_items']} items)"
+                    for item in uncovered_type_topics)
+            )
         # This is the terminal content boundary: every API/refiner,
         # method-snapshot restoration, and culmination pass has already run.
         # Re-expand any short Example reintroduced by those passes, or remove
@@ -7454,14 +8733,30 @@ def concepts_from_mmd(
             out, inventory=question_task_inventory)
         boundary_report = cv.validate_concept_rows(
             out, allow_types=True, require_culmination=True,
-            allow_culmination=True)
+            allow_culmination=True,
+            allowed_source_examples=_inventory_source_examples(
+                question_task_inventory))
         if any(
             error.get("code") == "source_artifact"
             and error.get("severity") == "error"
             for error in boundary_report["errors"]
         ):
-            out = _neutralize_unrepaired_rows(out)
-        _validate_final_or_raise(out, stage="final")
+            out = _neutralize_unrepaired_rows(
+                out, inventory=question_task_inventory)
+        rendered_inventory_defects = _rendered_inventory_coverage_defects(
+            out, question_task_inventory)
+        if (
+            rendered_inventory_defects["missing"]
+            or rendered_inventory_defects["duplicate"]
+        ):
+            raise RuntimeError(
+                "rendered Types failed exact inventory coverage: "
+                f"{len(rendered_inventory_defects['missing'])} missing, "
+                f"{len(rendered_inventory_defects['duplicate'])} duplicate "
+                "source question(s)"
+            )
+        _validate_final_or_raise(
+            out, stage="final", inventory=question_task_inventory)
         missing = sum(
             1 for r in out
             if not _has_meaningful_types(r.get("concept_details", ""))

@@ -941,6 +941,15 @@ def test_pipeline_restores_skeleton_method_rows_before_description_and_cleanup(
     monkeypatch.setattr(
         g, "_restructure_topics_via_api",
         lambda records, **kwargs: records)
+    monkeypatch.setattr(
+        g, "_recover_missing_topic_concepts_via_api",
+        lambda records, **kwargs: records)
+    monkeypatch.setattr(
+        g, "_missing_source_topic_excerpts",
+        lambda records, source_topic_excerpts: [])
+    monkeypatch.setattr(
+        g, "_consolidate_task_grounded_fragments_via_api",
+        lambda records, **kwargs: records)
 
     def capture_and_refine_descriptions(records, **kwargs):
         nonlocal description_input_ids
@@ -1095,6 +1104,15 @@ def test_final_pipeline_restores_post_description_method_snapshot(monkeypatch):
         lambda records, **kwargs: records)
     monkeypatch.setattr(
         g, "_restructure_topics_via_api",
+        lambda records, **kwargs: records)
+    monkeypatch.setattr(
+        g, "_recover_missing_topic_concepts_via_api",
+        lambda records, **kwargs: records)
+    monkeypatch.setattr(
+        g, "_missing_source_topic_excerpts",
+        lambda records, source_topic_excerpts: [])
+    monkeypatch.setattr(
+        g, "_consolidate_task_grounded_fragments_via_api",
         lambda records, **kwargs: records)
     monkeypatch.setattr(
         g, "_refine_descriptions_via_api",
@@ -1253,9 +1271,27 @@ def test_final_boundary_salvages_short_case_reintroduced_by_later_pass(
     monkeypatch.setattr(
         g, "_merge_similar_concepts_via_api",
         lambda records, **kwargs: records)
+
+    final_repair_mutated = False
+
+    def mutate_inventory_prompt_during_final_repair(records, **kwargs):
+        nonlocal final_repair_mutated
+        out = [dict(record) for record in records]
+        if kwargs.get("stage") == "final":
+            target = next(
+                record for record in out
+                if record["concept_title"] == normal["concept_title"]
+            )
+            target["concept_details"] = target["concept_details"].replace(
+                full_question,
+                full_question.replace("justify the answer", "explain the answer"),
+            )
+            final_repair_mutated = True
+        return out
+
     monkeypatch.setattr(
         g, "_repair_records_via_api",
-        lambda records, **kwargs: records)
+        mutate_inventory_prompt_during_final_repair)
     monkeypatch.setattr(
         g, "_ensure_misconceptions_via_api",
         lambda records, **kwargs: records)
@@ -1305,6 +1341,7 @@ def test_final_boundary_salvages_short_case_reintroduced_by_later_pass(
         live=True,
     )
 
+    assert final_repair_mutated
     assert reintroduced_short_case
     assert len(salvage_outputs) == 2
     final = next(
@@ -1721,13 +1758,103 @@ def test_math_prompts_separate_formula_building_from_problem_inventory():
     mining = g.prompts.get_text("concepts.type_mining.system")
     embedding = g.prompts.get_text("concepts.type_embedding.system")
 
-    assert "derivations and formula-building sequences" in skeleton
+    assert "derivations and formula-building sequences" in skeleton.lower()
+    assert "independent of the subject label" in skeleton
     assert "worked, numerical, contextual, or real-life problems" in skeleton
-    assert "every worked, numerical, contextual, and real-life problem" in inventory
-    assert "never include its solution" in inventory
-    assert "distinct Type or Case" in mining
+    assert "every worked, numerical, contextual, interpretive" in inventory
+    assert "but never solutions" in inventory
+    assert "Classify every worked, numerical, contextual, interpretive" in mining
     assert "never copy solutions" in mining
     assert "concept the problem actually assesses" in embedding
+
+
+def test_task_grounded_concept_fragments_consolidate_before_types(monkeypatch):
+    topic = "Finite Sequence Totals"
+    records = [
+        _row(topic, "Deriving the Finite-sum Rule", evidence="reverse and add"),
+        _row(topic, "Applying the Rule to Totals", evidence="Example 11"),
+        _row(topic, "Finding Unknown Values from Totals", evidence="Example 12"),
+        _row(topic, "Advanced Total Applications", evidence="Exercise 5.4"),
+    ]
+    assert g._question_grounded_fragmentation_topics(records) == {
+        g._topic_comparison_key(topic)
+    }
+
+    def fake_api(system, user):
+        assert "task varieties belong later as Types/Cases/Examples" in (
+            " ".join(system.split()))
+        assert "return AT MOST 3 rows" in user
+        return {"rows": [
+            _api_row(_row(
+                topic,
+                "Deriving and Interpreting the Finite-sum Rule",
+                evidence="reverse and add",
+            )),
+            _api_row(_row(
+                topic,
+                "Applying Finite Sums to Direct and Contextual Problems",
+                evidence="Examples 11-16; Exercise 5.4",
+            )),
+        ]}
+
+    monkeypatch.setattr(g, "_openai_json", fake_api)
+    out = g._consolidate_task_grounded_fragments_via_api(
+        records,
+        meta=g._metadata(subject="Any"),
+        source_topic_excerpts=[{
+            "topic": topic,
+            "excerpt": "A source excerpt teaching the finite-sum rule.",
+        }],
+    )
+    assert [record["concept_title"] for record in out] == [
+        "Deriving and Interpreting the Finite-sum Rule",
+        "Applying Finite Sums to Direct and Contextual Problems",
+    ]
+
+
+def test_overlapping_method_formulae_reduce_public_concept_bound():
+    rows = [
+        _row(
+            "Finite Sums",
+            "Reverse-and-add Derivation",
+            evidence="METHOD-AAAAAAAAAA",
+        ),
+        _row(
+            "Finite Sums",
+            "Equivalent Sum Formula",
+            evidence="METHOD-BBBBBBBBBB",
+        ),
+        _row(
+            "Finite Sums",
+            "Recovering Terms from Partial Sums",
+            evidence="METHOD-CCCCCCCCCC",
+        ),
+    ]
+    anchors = [
+        {
+            "anchor_id": "METHOD-AAAAAAAAAA",
+            "required_formulas": [r"S=\frac{n}{2}[2a+(n-1)d]"],
+        },
+        {
+            "anchor_id": "METHOD-BBBBBBBBBB",
+            "required_formulas": [
+                r"\begin{aligned}S=\frac{n}{2}[2a+(n-1)d]=12600\end{aligned}",
+            ],
+        },
+        {
+            "anchor_id": "METHOD-CCCCCCCCCC",
+            "required_formulas": [r"a_n=S_n-S_{n-1}"],
+        },
+    ]
+    assert g._method_formula_family_reduction(rows, anchors) == 1
+    groups = g._method_formula_family_groups(rows, anchors)
+    assert groups == [["METHOD-AAAAAAAAAA", "METHOD-BBBBBBBBBB"]]
+    merged = g._coalesce_method_family_rows(rows, groups)
+    assert len(merged) == 2
+    assert g._method_anchor_ids(merged[0]) == {
+        "METHOD-AAAAAAAAAA", "METHOD-BBBBBBBBBB",
+    }
+    assert "METHOD-CCCCCCCCCC" in merged[1]["source_evidence"]
 
 
 def test_representative_mathpix_ocr_edges_keep_topics_and_visual_questions():
@@ -1810,7 +1937,8 @@ def test_concept_pipeline_reports_progress_after_skeleton(monkeypatch):
         g, "_repair_records_via_api",
         lambda records, **kwargs: records)
     monkeypatch.setattr(
-        g, "_neutralize_unrepaired_rows", lambda records: records)
+        g, "_neutralize_unrepaired_rows",
+        lambda records, **kwargs: records)
     monkeypatch.setattr(
         g, "_salvage_short_case_examples",
         lambda records, **kwargs: records)

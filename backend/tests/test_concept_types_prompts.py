@@ -24,7 +24,8 @@ def test_concepts_system_requires_numeric_types_guidance():
     # Numeric zero-padded labels (Type 01:/Case 01:), not descriptive labels.
     types_system = g.prompts.get_text("concepts.types_assign.system")
     assert "Type 01:" in types_system and "Case 01:" in types_system
-    assert "One Type = one distinct reusable subject-appropriate assessment/task pattern" in types_system
+    assert "One Type = one distinct reusable assessment/task pattern" in types_system
+    assert "Infer patterns from the actual action" in types_system
     assert "Misconception is REQUIRED" not in system
     assert "description-only editor" in g.prompts.get_text("concepts.description_refine.system")
     canonicalize = g.prompts.get_text("concepts.canonicalize.system")
@@ -679,6 +680,79 @@ def test_type_cases_backfill_full_source_questions_from_inventory():
     prompt = out[0]["case_prompts"][0]["case_prompt"]
     assert "AD = 3 cm" in prompt
     assert "Find EC with full reasoning" in prompt
+
+
+def test_type_cases_restore_authoritative_source_for_every_qid():
+    image_url = "https://cdn.mathpix.com/cropped/source.jpg"
+    inventory = {"items": [
+        {
+            "qid": "QINV-0006",
+            "raw_task": (
+                "Plot on a map of Europe the changes drawn up by the "
+                "Vienna Congress."
+            ),
+        },
+        {
+            "qid": "QINV-0010",
+            "raw_task": "Why was it unjust to deny women political rights?",
+            "image_urls": [image_url],
+        },
+        {
+            "qid": "QINV-0018",
+            "raw_task": "Identify the attributes and interpret the painting.",
+            "shared_context": (
+                "Use the chart of symbols: broken chains, crown, sword, "
+                "tricolour, and rays of the rising sun."
+            ),
+            "requires_context": True,
+        },
+    ]}
+    paraphrases = {
+        "QINV-0006": (
+            "Plot on a map of Europe the territorial changes drawn up by the "
+            "Vienna Congress."
+        ),
+        "QINV-0010": "Why was it unjust to deny women political rights?",
+        "QINV-0018": "Identify the attributes and interpret the painting.",
+    }
+    types = [{
+        "type_id": "TYPE-0001",
+        "type_title": "Interpreting source tasks",
+        "source_question_ids": list(paraphrases),
+        "case_prompts": [
+            {
+                "case_id": f"CASE-{index:04d}",
+                "case_title": "Complete the supplied source task",
+                "examples": [{
+                    "source_question_id": qid,
+                    "example_prompt": prompt,
+                }],
+            }
+            for index, (qid, prompt) in enumerate(paraphrases.items(), start=1)
+        ],
+    }]
+
+    restored = g._backfill_type_cases_from_inventory(types, inventory)
+    examples = [
+        example
+        for case in restored[0]["case_prompts"]
+        for example in g._case_examples(case)
+    ]
+    expected_by_qid = {
+        item["qid"]: g._inventory_task_text(item)
+        for item in inventory["items"]
+    }
+    assert {
+        example["source_question_id"]: example["example_prompt"]
+        for example in examples
+    } == expected_by_qid
+
+    body, _ = g._mined_type_to_body(restored[0], 0)
+    records = [{"concept_details": f"Types: {body}"}]
+    assert g._rendered_inventory_coverage_defects(records, inventory) == {
+        "missing": [],
+        "duplicate": [],
+    }
 
 
 def test_mine_types_merges_focused_delta_for_only_missed_inventory(monkeypatch):

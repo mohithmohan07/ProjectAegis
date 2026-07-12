@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter, defaultdict
-from typing import Any
+from typing import Any, Collection
 
 from . import concept_cleanup, concept_refiner
 
@@ -55,6 +55,11 @@ _CASE_SPECIFIC_DETAIL_RE = re.compile(
     r"['\"][^'\"]{3,}['\"])"
 )
 _EXAMPLE_SPLIT_RE = re.compile(r"\bExamples?\s*:\s*", re.IGNORECASE)
+_EXAMPLE_SEGMENT_RE = re.compile(
+    r"(\bExamples?\s*:\s*)(.*?)"
+    r"(?=\bExamples?\s*:|\b(?:Case|Type)\s+\d{1,2}:|\s+//\s+|$)",
+    re.IGNORECASE | re.DOTALL,
+)
 _DESCRIPTION_LABEL_RE = re.compile(r"\bDescription\s*:", re.IGNORECASE)
 _IMAGE_URL_RE = re.compile(r"!\[[^\]]*\]\(https?://[^)]+\)|https?://\S+", re.IGNORECASE)
 # With embedded Mathpix images, figure/table references are legitimate content
@@ -70,6 +75,22 @@ _SOURCE_ARTIFACT_NO_FIG_RE = re.compile(
 
 def _norm(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").strip().lower())
+
+
+def _mask_allowed_source_examples(
+    details: str, allowed_source_examples: Collection[str],
+) -> str:
+    """Mask only exact, inventory-owned Example prompts for artifact checks."""
+    allowed = {_norm(text) for text in allowed_source_examples if _norm(text)}
+    if not details or not allowed:
+        return details
+
+    def replace(match: re.Match) -> str:
+        if _norm(match.group(2)) not in allowed:
+            return match.group(0)
+        return match.group(1) + "[inventory-owned source question]"
+
+    return _EXAMPLE_SEGMENT_RE.sub(replace, details)
 
 
 def _is_forbidden_name(title: str) -> bool:
@@ -172,6 +193,7 @@ def validate_concept_rows(
     allow_types: bool = True,
     require_culmination: bool = False,
     allow_culmination: bool = True,
+    allowed_source_examples: Collection[str] = (),
 ) -> dict:
     """Return a structured validation report for concept-map records."""
     errors: list[dict] = []
@@ -215,7 +237,9 @@ def validate_concept_rows(
         if _SECTION_NUMBER_RE.search(topic):
             _add(errors, i, "topic", "section_number",
                  "topic contains section/exercise numbering")
-        row_text = " ".join([topic, parent, title, details])
+        artifact_details = _mask_allowed_source_examples(
+            details, allowed_source_examples)
+        row_text = " ".join([topic, parent, title, artifact_details])
         # Figure/table references are allowed once the actual image URL is
         # embedded (reviewers want "(Refer fig. 11.1)" + the Mathpix image).
         artifact_re = (

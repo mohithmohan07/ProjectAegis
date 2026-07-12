@@ -86,7 +86,7 @@ def test_dedupe_similar_titles_handles_bpt_abbreviation():
     ]
 
 
-def test_filter_drops_english_pedagogy_concepts():
+def test_filter_drops_pedagogy_concepts_without_subject_branch():
     records = [
         {"topic": "A Letter to God", "concept_title": "Lencho's Faith",
          "concept_details": "Description: a", "keywords": ""},
@@ -95,18 +95,18 @@ def test_filter_drops_english_pedagogy_concepts():
          "concept_details": "Description: b", "keywords": ""},
     ]
     out = concept_cleanup.filter_review_violations(
-        records, subject="English", board="CBSE")
+        records, subject="Unclassified Upload", board="CBSE")
     assert len(out) == 1
     assert out[0]["concept_title"] == "Lencho's Faith"
 
 
-def test_english_activity_topic_uses_chapter_title():
+def test_pedagogy_topic_uses_chapter_title_without_subject_branch():
     records = [
         {"topic": "January 2006", "concept_title": "Lencho's Faith",
          "concept_details": "Description: a", "keywords": ""},
     ]
     out = concept_cleanup.filter_review_violations(
-        records, subject="English", board="CBSE", chapter_title="A Letter to God")
+        records, subject="", board="CBSE", chapter_title="A Letter to God")
     assert out[0]["topic"] == "A Letter to God"
 
 
@@ -121,7 +121,7 @@ def test_overview_topic_reassigned():
     assert out[1]["topic"] == "Real Section"
 
 
-def test_power_sharing_forms_rows_get_their_own_topic():
+def test_cleanup_does_not_invent_subject_specific_topics():
     records = [
         {"topic": "Outcomes of Democracy", "concept_title": "Horizontal Distribution of Power",
          "concept_details": "Description: Power is shared among legislature, executive and judiciary.",
@@ -132,7 +132,7 @@ def test_power_sharing_forms_rows_get_their_own_topic():
     ]
     out = concept_cleanup.filter_review_violations(
         records, subject="Civics", board="CBSE", chapter_title="Power Sharing")
-    assert out[0]["topic"] == "Forms of Power-sharing"
+    assert out[0]["topic"] == "Outcomes of Democracy"
     assert out[1]["topic"] == "Outcomes of Democracy"
 
 
@@ -247,11 +247,14 @@ def test_generic_only_misconception_warns_for_review_quality():
     assert any(e["code"] == "generic_misconception" for e in report["errors"])
 
 
-def test_power_sharing_metadata_names_required_forms_topic():
+def test_metadata_has_no_subject_specific_prompt_supplements():
     meta = g._metadata(subject="Civics", board="CBSE", chapter_title="Power Sharing")
     block = g._metadata_block(meta)
-    assert "Forms of Power-sharing" in block
-    assert "Do not merge horizontal" in block
+    assert "Forms of Power-sharing" not in block
+    assert "Do not merge horizontal" not in block
+    english = g._metadata_block(g._metadata(
+        subject="English", chapter_title="A Letter to God"))
+    assert "ENGLISH LITERATURE RULES" not in english
 
 
 # --------------------------------------------------------------------------- #
@@ -671,6 +674,61 @@ def test_neutralize_unrepaired_rows_keeps_clean_rows_verbatim():
     assert "Example 11" not in out[1]["concept_details"]
 
 
+def test_neutralize_preserves_exact_inventory_owned_figure_prompt():
+    task = (
+        "Look at Fig. 14(a). Do you think that the people living in any of "
+        "these regions thought of themselves as Italians? Examine Fig. 14(b). "
+        "Which was the first region to become a part of unified Italy? Which "
+        "was the last region to join? In which year did the largest number "
+        "of states join?"
+    )
+    inventory = {"items": [{"qid": "QINV-0031", "raw_task": task}]}
+    rows = [{
+        "topic": "Italian Unification",
+        "parent_concept": "National Unification",
+        "concept_title": "Regions of Unified Italy",
+        "concept_details": (
+            "Description: See Example 11 for the regional sequence. // "
+            "Types: Type 01: Interpreting territorial change over time "
+            f"Case 01: Compare mapped stages Example: {task} // "
+            "Misconceptions: Students may treat unification as simultaneous."
+        ),
+        "keywords": "",
+    }]
+
+    out = g._neutralize_unrepaired_rows(
+        rows, inventory=inventory)
+
+    assert "Example 11" not in out[0]["concept_details"]
+    assert task in out[0]["concept_details"]
+    assert g._rendered_inventory_coverage_defects(out, inventory) == {
+        "missing": [],
+        "duplicate": [],
+    }
+    report = concept_validator.validate_concept_rows(
+        out,
+        allow_types=True,
+        allowed_source_examples=g._inventory_source_examples(inventory),
+    )
+    assert not any(
+        error["code"] == "source_artifact"
+        for error in report["errors"]
+    )
+
+    unowned = [dict(out[0])]
+    unowned[0]["concept_details"] = unowned[0]["concept_details"].replace(
+        "Fig. 14(a)", "Fig. 15(a)")
+    hard_gate = concept_validator.validate_concept_rows(
+        unowned,
+        allow_types=True,
+        allowed_source_examples=g._inventory_source_examples(inventory),
+    )
+    assert any(
+        error["code"] == "source_artifact"
+        for error in hard_gate["errors"]
+    )
+
+
 def test_chapter_meta_summary_retries_before_deterministic_fallback(monkeypatch, db):
     calls = {"n": 0}
 
@@ -755,7 +813,8 @@ def test_v5_prompts_require_opening_granularity_and_mathpix_policy():
     assert "Do NOT embed Mathpix" in refine
     assert "truncated mid-sentence" in refine
     inventory = g.prompts.get_text("concepts.question_task_inventory.system")
-    assert "stay ONE inventory item" in inventory
+    assert "dependent subquestions" in inventory
+    assert "independently assessable" in inventory
     assert "Missing even one" in inventory and "checkpoint is a defect" in inventory
     assert "Frédéric Sorrieu" in inventory
     embedding = g.prompts.get_text("concepts.type_embedding.system")
@@ -1023,3 +1082,500 @@ def test_salvage_short_case_examples_is_idempotent_and_preserves_valid_types():
         e["code"] == "short_case_example" and e["severity"] == "error"
         for e in report["errors"]
     )
+
+
+def _reviewed_history_structure_mmd() -> str:
+    checkpoints = [
+        "What did the French revolutionaries do to create a collective identity?",
+        "How did language help to build the idea of the nation?",
+        "Why did conservative regimes impose censorship?",
+        "What did liberal nationalism stand for?",
+        "How did the Greek struggle mobilise European support?",
+        "Why was the Frankfurt Parliament unable to unite Germany?",
+        "How did Bismarck use war to unify Germany?",
+        "What role did Mazzini play in Italian unification?",
+        "How was Britain formed as a nation-state?",
+        "Why were female allegories used to represent nations?",
+        "What attributes were associated with Marianne?",
+        "How did Germania communicate the German national idea?",
+        "Why did nationalism become linked with imperialism?",
+        "How did Balkan rivalries create conflict in Europe?",
+    ]
+    topic_blocks = [
+        ("1 The French Revolution and the Idea of the Nation", checkpoints[:2]),
+        ("2 The Making of Nationalism in Europe", checkpoints[2:5]),
+        ("3 The Age of Revolutions", checkpoints[5:8]),
+        ("4 The Making of Germany and Italy", checkpoints[8:10]),
+        ("5 Visualising the Nation", checkpoints[10:12]),
+        ("6 Nationalism and Imperialism", checkpoints[12:]),
+    ]
+    source = []
+    for heading, asks in topic_blocks:
+        source.append(f"\\section*{{{heading}}}\n")
+        source.append("This section develops its own source-grounded ideas.\n")
+        source.extend(f"{ask}\n\n" for ask in asks)
+    source.append("\\section*{Write in brief}\n")
+    source.extend(
+        f"{number}. Explain the concise historical task numbered {number}.\n"
+        for number in range(1, 6)
+    )
+    source.append("\\section*{Discuss}\n")
+    source.extend(
+        f"{number}. Discuss the analytical historical task numbered {number}.\n"
+        for number in range(1, 7)
+    )
+    return "".join(source)
+
+
+def test_history_structure_audit_captures_all_checkpoints_and_exercises():
+    sections = g.parse_mmd_sections(_reviewed_history_structure_mmd())
+    anchors = g._source_task_anchors(sections)
+    checkpoints = [
+        item for item in anchors
+        if item["source_kind"] == "checkpoint_question"
+    ]
+    exercises = [
+        item for item in anchors if item["source_kind"] == "exercise"
+    ]
+    assert len(checkpoints) == 14
+    assert len(exercises) == 11
+    assert all(item["topic_hint"] for item in checkpoints)
+    assert all(not item["topic_hint"] for item in exercises)
+
+
+def test_inventory_keeps_distinct_questions_with_shared_section_label():
+    items = [
+        {
+            "source_kind": "exercise",
+            "source_label": "Exercises",
+            "raw_task": f"Explain historical development {number}.",
+            "normalized_task": f"Explain historical development {number}.",
+        }
+        for number in range(1, 12)
+    ]
+    assert len(g._merge_source_task_anchors(items, [])) == 11
+
+
+def test_independent_lettered_exercise_subparts_get_separate_anchors():
+    source = r"""
+\section*{1 Revolutions}
+Historical movements developed across Europe.
+
+\section*{Write in brief}
+1. Write a note on:
+a) Giuseppe Mazzini
+b) Count Camillo de Cavour
+c) The Greek war of independence
+d) Frankfurt parliament
+e) The role of women in nationalist struggles
+2. Explain the main revolutionary change.
+"""
+    anchors = g._source_task_anchors(g.parse_mmd_sections(source))
+    exercises = [
+        item for item in anchors if item["source_kind"] == "exercise"
+    ]
+    assert len(exercises) == 6
+    assert [item["source_label"] for item in exercises[:5]] == [
+        f"Write in brief Q1({letter})" for letter in "abcde"
+    ]
+    assert all(
+        item["raw_task"].startswith("Write a note on:")
+        for item in exercises[:5]
+    )
+    assert all(not item["topic_hint"] for item in exercises)
+
+
+def test_split_subpart_anchors_replace_compound_model_inventory_row():
+    parent = {
+        "source_kind": "exercise",
+        "source_label": "Write in brief Q1",
+        "raw_task": "Write a note on: a) Mazzini b) Cavour",
+        "normalized_task": "Write a note on: a) Mazzini b) Cavour",
+    }
+    anchors = [
+        {
+            "source_kind": "exercise",
+            "source_label": f"Write in brief Q1({letter})",
+            "parent_source_label": "Write in brief Q1",
+            "raw_task": f"Write a note on: {name}",
+            "normalized_task": f"Write a note on: {name}",
+        }
+        for letter, name in [("a", "Mazzini"), ("b", "Cavour")]
+    ]
+    merged = g._merge_source_task_anchors([parent], anchors)
+    assert len(merged) == 2
+    assert all(item["source_label"] != "Write in brief Q1" for item in merged)
+
+
+def test_topic_headings_never_truncate_valid_tail_topics():
+    source = "\n".join(
+        f"\\section*{{{number} Source Topic {number}}}\nBody {number}."
+        for number in range(1, 15)
+    )
+    headings = g._topic_headings(g.parse_mmd_sections(source))
+    assert len(headings) == 14
+    assert headings[-1] == "Source Topic 14"
+
+
+def test_missing_source_topic_recovery_adds_visualising_the_nation(monkeypatch):
+    records = [{
+        "topic": "The Making of Germany and Italy",
+        "parent_concept": "Unification",
+        "concept_title": "German Unification",
+        "concept_details": "Description: Germany was unified.",
+        "keywords": "Germany",
+        "source_evidence": "German unification",
+    }]
+    excerpts = [
+        {"topic": "The Making of Germany and Italy", "excerpt": "Germany."},
+        {
+            "topic": "Visualising the Nation",
+            "excerpt": "Marianne and Germania personified nations.",
+        },
+    ]
+
+    def fake_api(system, user):
+        assert "Visualising the Nation" in user
+        return {"rows": [{
+            "topic": "Visualising the Nation",
+            "parent_concept": "National Allegory",
+            "concept": "Marianne and Germania as National Allegories",
+            "concept_description": (
+                "Description: Marianne and Germania gave visual form to "
+                "otherwise abstract national identities."
+            ),
+            "keywords": "Marianne, Germania, allegory",
+            "source_evidence": "Marianne and Germania personified nations",
+        }]}
+
+    monkeypatch.setattr(g, "_openai_json", fake_api)
+    out = g._recover_missing_topic_concepts_via_api(
+        records,
+        meta=g._metadata(subject="Any"),
+        source_topic_excerpts=excerpts,
+    )
+    assert {record["topic"] for record in out} == {
+        "The Making of Germany and Italy",
+        "Visualising the Nation",
+    }
+
+
+def test_chapter_wide_tasks_are_semantically_distributed(monkeypatch):
+    records = [
+        {
+            "topic": topic,
+            "parent_concept": topic,
+            "concept_title": concept,
+            "concept_details": f"Description: {concept} is taught here.",
+            "keywords": "",
+        }
+        for topic, concept in [
+            ("Revolutions", "Liberal Revolution"),
+            ("Visualising the Nation", "National Allegory"),
+            ("Nationalism and Imperialism", "Balkan Rivalries"),
+        ]
+    ]
+    inventory = {"items": [
+        {
+            "qid": "QINV-0001",
+            "raw_task": "Explain how Marianne represented the French nation.",
+            "source_kind": "exercise",
+            "_topic_scope": "chapter",
+        },
+        {
+            "qid": "QINV-0002",
+            "raw_task": "Why did Balkan rivalries intensify imperial conflict?",
+            "source_kind": "exercise",
+            "_topic_scope": "chapter",
+        },
+    ]}
+
+    def fake_api(system, user):
+        assert "physical location" in system
+        return {"assignments": [
+            {"qid": "QINV-0001", "topic": "Visualising the Nation"},
+            {"qid": "QINV-0002", "topic": "Nationalism and Imperialism"},
+        ]}
+
+    monkeypatch.setattr(g, "_openai_json", fake_api)
+    out = g._assign_chapter_wide_inventory_topics_via_api(
+        meta=g._metadata(subject="Any"),
+        inventory=inventory,
+        records=records,
+        source_topic_excerpts=[
+            {"topic": record["topic"], "excerpt": record["concept_details"]}
+            for record in records
+        ],
+    )
+    assert [item["topic_hint"] for item in out["items"]] == [
+        "Visualising the Nation",
+        "Nationalism and Imperialism",
+    ]
+
+
+def test_chapter_wide_task_placement_retries_invalid_topic(monkeypatch):
+    calls = {"count": 0}
+    records = [{
+        "topic": "Visualising the Nation",
+        "parent_concept": "Allegory",
+        "concept_title": "National Allegory",
+        "concept_details": "Description: Nations were personified.",
+        "keywords": "",
+    }]
+    inventory = {"items": [{
+        "qid": "QINV-0001",
+        "raw_task": "Interpret the symbols carried by Germania.",
+        "source_kind": "exercise",
+        "_topic_scope": "chapter",
+    }]}
+
+    def fake_api(system, user):
+        calls["count"] += 1
+        topic = "Invented Review Topic" if calls["count"] == 1 else (
+            "Visualising the Nation")
+        return {"assignments": [{"qid": "QINV-0001", "topic": topic}]}
+
+    monkeypatch.setattr(g, "_openai_json", fake_api)
+    out = g._assign_chapter_wide_inventory_topics_via_api(
+        meta=g._metadata(subject="Any"),
+        inventory=inventory,
+        records=records,
+        source_topic_excerpts=[{
+            "topic": "Visualising the Nation",
+            "excerpt": "Germania carries symbolic attributes.",
+        }],
+    )
+    assert calls["count"] == 2
+    assert out["items"][0]["topic_hint"] == "Visualising the Nation"
+
+
+def test_repeated_type_definitions_merge_into_cases():
+    types = [
+        {
+            "type_id": "TYPE-0001",
+            "type_title": "Interpreting National Allegory",
+            "type_description": "Interpret symbols used to embody a nation.",
+            "task_pattern": "Given an allegory, explain its national symbols.",
+            "concept_match_hint": "National Allegory",
+            "topic_match_hint": "Visualising the Nation",
+            "source_question_ids": ["QINV-0001"],
+            "case_prompts": [{
+                "case_id": "CASE-0001",
+                "case_title": "Marianne with republican symbols",
+                "examples": [{
+                    "source_question_id": "QINV-0001",
+                    "example_prompt": "Explain the symbols associated with Marianne.",
+                }],
+            }],
+        },
+        {
+            "type_id": "TYPE-0002",
+            "type_title": "Interpreting National Allegory",
+            "type_description": "Interpret symbols used to embody a nation.",
+            "task_pattern": "Given an allegory, explain its national symbols.",
+            "concept_match_hint": "National Allegory",
+            "topic_match_hint": "Visualising the Nation",
+            "source_question_ids": ["QINV-0002"],
+            "case_prompts": [{
+                "case_id": "CASE-0002",
+                "case_title": "Germania with imperial symbols",
+                "examples": [{
+                    "source_question_id": "QINV-0002",
+                    "example_prompt": "Explain the symbols associated with Germania.",
+                }],
+            }],
+        },
+    ]
+    merged = g._merge_equivalent_mined_types(types)
+    assert len(merged) == 1
+    assert merged[0]["source_question_ids"] == ["QINV-0001", "QINV-0002"]
+    assert len(merged[0]["case_prompts"]) == 2
+
+
+def test_case_assignment_units_rejoin_when_assigned_to_same_concept():
+    units = [
+        {
+            "type_id": f"TYPE-0001::CASE-{number:04d}::{number:04d}",
+            "_origin_type_id": "TYPE-0001",
+            "type_title": "Applying a Reusable Rule",
+            "source_question_ids": [f"QINV-{number:04d}"],
+            "case_prompts": [{
+                "case_id": f"CASE-{number:04d}",
+                "case_title": f"Condition {number}",
+                "examples": [{
+                    "source_question_id": f"QINV-{number:04d}",
+                    "example_prompt": f"Apply the rule under condition {number}.",
+                }],
+            }],
+        }
+        for number in (1, 2)
+    ]
+    collapsed = g._collapse_assignment_units_for_render(units)
+    assert len(collapsed) == 1
+    body, _ = g._mined_type_to_body(collapsed[0], 0)
+    assert body.count("Type 01:") == 1
+    assert "Case 01: Condition 1" in body
+    assert "Case 02: Condition 2" in body
+
+
+def test_public_examples_strip_textbook_example_labels():
+    body, _ = g._mined_type_to_body({
+        "type_title": "Applying a Formula",
+        "case_prompts": [{
+            "case_title": "Example 11: Sum when the first and last terms are given",
+            "examples": [{
+                "example_prompt": "Example 11: Find the sum of the first ten terms.",
+            }],
+        }],
+    }, 0)
+    assert "Example 11" not in body
+    assert body.count("Example:") == 1
+    assert "Example: Find the sum of the first ten terms." in body
+
+
+def test_inventory_topic_with_tasks_requires_rendered_types():
+    records = [{
+        "topic": "Sum of First n Terms",
+        "parent_concept": "Finite Sums",
+        "concept_title": "Applying the Sum Formula",
+        "concept_details": "Description: Apply the finite-sum rule.",
+        "keywords": "",
+    }]
+    inventory = {"items": [{
+        "qid": "QINV-0001",
+        "topic_hint": "Sum of First n Terms",
+        "raw_task": "Find the sum of the first ten terms.",
+    }]}
+    assert g._inventory_topic_type_coverage_violations(records, inventory) == [{
+        "topic": "Sum of First n Terms",
+        "inventory_items": 1,
+    }]
+
+
+def test_type_review_cannot_drop_or_duplicate_inventory_examples():
+    first = "Explain how a shared identity was created by revolutionaries."
+    second = "Interpret the symbols used in a national allegory."
+    inventory = {"items": [
+        {"qid": "QINV-0001", "raw_task": first},
+        {"qid": "QINV-0002", "raw_task": second},
+    ]}
+    original = [{
+        "topic": "Nation",
+        "parent_concept": "Identity",
+        "concept_title": "National Identity",
+        "concept_details": (
+            "Description: Identity is constructed. // Types: "
+            f"Type 01: Source interpretation Case 01: Political identity "
+            f"Example: {first} "
+            f"Case 02: Visual identity Example: {second} // "
+            "Misconceptions: Identity is not timeless."
+        ),
+        "keywords": "",
+    }]
+    missing = [dict(original[0])]
+    missing[0]["concept_details"] = missing[0]["concept_details"].replace(
+        f"Case 02: Visual identity Example: {second} ", "")
+    duplicate = [dict(original[0])]
+    duplicate[0]["concept_details"] = duplicate[0]["concept_details"].replace(
+        "// Misconceptions:",
+        f"Case 03: Repeated visual identity Example: {second} // Misconceptions:",
+    )
+
+    assert g._accept_exact_inventory_type_review(
+        original, missing, inventory) == original
+    assert g._accept_exact_inventory_type_review(
+        original, duplicate, inventory) == original
+    assert g._rendered_inventory_coverage_defects(original, inventory) == {
+        "missing": [],
+        "duplicate": [],
+    }
+
+
+def test_rendered_inventory_coverage_handles_embedded_structure_tokens_exactly():
+    prompt = (
+        r"Compare Type 12: direct use with Case 03: boundary reasoning. "
+        r"For Example: preserve \begin{figure} and max width=\textwidth exactly."
+    )
+    inventory = {"items": [{
+        "qid": "QINV-0001",
+        "raw_task": prompt,
+    }]}
+    records = [{
+        "topic": "Reusable Tasks",
+        "parent_concept": "Exact Source Questions",
+        "concept_title": "Structural Words Inside a Question",
+        "concept_details": (
+            "Description: Structural words may be source content. // Types: "
+            "Type 01: Interpret a source Case 01: Keep literal wording "
+            f"Example: {prompt} // Misconceptions: Do not rewrite the source."
+        ),
+        "keywords": "",
+    }]
+
+    # The generic flat-string parser cannot disambiguate source-owned markers;
+    # exact coverage must therefore use inventory framing rather than its parts.
+    assert prompt not in g._rendered_type_examples(records)
+    assert g._rendered_inventory_coverage_defects(records, inventory) == {
+        "missing": [],
+        "duplicate": [],
+    }
+
+    mutated = [dict(records[0])]
+    mutated[0]["concept_details"] = mutated[0]["concept_details"].replace(
+        r"max width=\textwidth", "max width=textwidth")
+    assert g._rendered_inventory_coverage_defects(mutated, inventory) == {
+        "missing": ["QINV-0001"],
+        "duplicate": [],
+    }
+
+
+def test_unambiguous_case_evidence_overrides_wrong_concept_guess():
+    concepts = {
+        "CONCEPT-0001": {
+            "concept_id": "CONCEPT-0001",
+            "topic": "Nation Formation",
+            "concept": "Italian Fragmentation and Unification Efforts",
+            "is_culmination": False,
+        },
+        "CONCEPT-0002": {
+            "concept_id": "CONCEPT-0002",
+            "topic": "Nation Formation",
+            "concept": "British Nation-state Formation Through English Dominance",
+            "is_culmination": False,
+        },
+        "CONCEPT-0003": {
+            "concept_id": "CONCEPT-0003",
+            "topic": "Nation Formation",
+            "concept": "Culmination - Nation Formation",
+            "is_culmination": True,
+        },
+    }
+    britain = {
+        "type_title": "Explaining Nation Formation",
+        "case_prompts": [{
+            "case_title": "Explain why British nationalism differed",
+            "examples": [{
+                "example_prompt": (
+                    "How was the history of nationalism in Britain unlike "
+                    "the rest of Europe?"
+                ),
+            }],
+        }],
+    }
+    mixed = {
+        "type_title": "Comparing Nation Formation",
+        "case_prompts": [{
+            "case_title": "Compare any two countries",
+            "examples": [{
+                "example_prompt": (
+                    "Through a focus on any two countries, explain how "
+                    "nations developed."
+                ),
+            }],
+        }],
+    }
+    candidates = tuple(concepts)
+    assert g._high_confidence_assignment_override(
+        britain, candidates, concepts) == "CONCEPT-0002"
+    assert g._high_confidence_assignment_override(
+        mixed, candidates, concepts) == "CONCEPT-0003"

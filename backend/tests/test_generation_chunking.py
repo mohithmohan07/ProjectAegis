@@ -238,6 +238,9 @@ def test_inventory_extraction_retries_sparse_chunks(monkeypatch):
         return {"items": [{"raw_task": f"Q{i}"} for i in range(1, 13)]}
 
     monkeypatch.setattr(g, "_openai_json", fake_openai)
+    # This test isolates density retry behavior; deterministic source anchors
+    # have their own coverage regressions.
+    monkeypatch.setattr(g, "_source_task_anchors", lambda sections: [])
     body = "1. Solve for x in the equation shown below. " * 400  # ~18k chars
     sections = g.parse_mmd_sections("# Exercises\n\n" + body)
     inventory = g._extract_question_task_inventory_via_api(
@@ -357,6 +360,14 @@ def test_concepts_live_processes_every_chunk(monkeypatch):
     monkeypatch.setattr(
         g, "_validate_final_or_raise",
         lambda records, **kw: {"ok": True, "errors": [], "summary": {}})
+    # This test's fake model deliberately emits one invented topic ("Topic A")
+    # for every chunk. Source-topic coverage is validated in dedicated tests.
+    monkeypatch.setattr(
+        g, "_recover_missing_topic_concepts_via_api",
+        lambda records, **kw: records)
+    monkeypatch.setattr(
+        g, "_missing_source_topic_excerpts",
+        lambda records, source_topic_excerpts: [])
     doc = _big_doc(20)  # forces several chunks at 4000 chars
     records = g.concepts_from_mmd(doc, subject="Mathematics")
     assert calls["skeleton"] >= 3, "expected multiple chunks to be processed"
