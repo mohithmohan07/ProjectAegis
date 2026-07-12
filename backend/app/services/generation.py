@@ -5053,7 +5053,7 @@ def _collapse_assignment_units_for_render(units: list[dict]) -> list[dict]:
 _ASSIGNMENT_PREFIX_STOPWORDS = {
     "appl", "base", "case", "conc", "desc", "dete", "exam", "expl",
     "find", "give", "iden", "inte", "ques", "sour", "stat", "usin",
-    "writ",
+    "writ", "thro",
 }
 _MIXED_ASSIGNMENT_CUE_RE = re.compile(
     r"\b(?:any\s+two|two\s+(?:countries|cases|methods|concepts)|"
@@ -5110,6 +5110,12 @@ def _high_confidence_assignment_override(
     ]
     if mtype.get("is_activity") and len(culminations) == 1:
         return culminations[0]
+    evidence = _assignment_unit_text(mtype)
+    if (
+        len(culminations) == 1
+        and _MIXED_ASSIGNMENT_CUE_RE.search(evidence)
+    ):
+        return culminations[0]
 
     normal = [row for row in candidates if not row.get("is_culmination")]
     title_prefixes = {
@@ -5122,7 +5128,6 @@ def _high_confidence_assignment_override(
     for prefixes in title_prefixes.values():
         for prefix in prefixes - topic_prefixes:
             prefix_frequency[prefix] = prefix_frequency.get(prefix, 0) + 1
-    evidence = _assignment_unit_text(mtype)
     evidence_prefixes = _assignment_prefixes(evidence)
     scores = {
         cid: len({
@@ -5137,11 +5142,6 @@ def _high_confidence_assignment_override(
         runner_up = ranked[1][1] if len(ranked) > 1 else 0
         if ranked[0][1] > runner_up:
             return ranked[0][0]
-    if (
-        len(culminations) == 1
-        and _MIXED_ASSIGNMENT_CUE_RE.search(evidence)
-    ):
-        return culminations[0]
     return ""
 
 
@@ -5275,19 +5275,15 @@ def _assign_mined_types_via_api(
         ]
         candidate_cid_set = set(candidate_cids)
         remaining_in_group = set(group_type_ids)
-        overridden = 0
-        for tid in group_type_ids:
-            cid = _high_confidence_assignment_override(
+        override_by_tid = {
+            tid: cid
+            for tid in group_type_ids
+            for cid in [_high_confidence_assignment_override(
                 types_by_id[tid], candidate_cids, concept_payload_by_id)
-            if not cid:
-                continue
-            per_concept.setdefault(cid, []).append(types_by_id[tid])
-            remaining_in_group.discard(tid)
-            overridden += 1
-        if overridden:
-            progress.log(
-                f"Placed {overridden} Type assignment unit(s) using "
-                "unambiguous source/concept evidence.")
+            ]
+            if cid
+        }
+        overridden: set[str] = set()
         scope_label = (
             types_by_id[group_type_ids[0]].get("topic_match_hint")
             or "unscoped chapter"
@@ -5324,13 +5320,20 @@ def _assign_mined_types_via_api(
                     if tid not in remaining_in_group:
                         continue
                     allowed = allowed_cids_by_tid.get(tid)
+                    effective_cid = override_by_tid.get(tid) or cid
                     if (
-                        cid not in candidate_cid_set
-                        or (allowed is not None and cid not in allowed)
+                        effective_cid not in candidate_cid_set
+                        or (
+                            allowed is not None
+                            and effective_cid not in allowed
+                        )
                     ):
                         rejected_wrong_topic += 1
                         continue
-                    per_concept.setdefault(cid, []).append(types_by_id[tid])
+                    per_concept.setdefault(effective_cid, []).append(
+                        types_by_id[tid])
+                    if effective_cid != cid:
+                        overridden.add(tid)
                     remaining_in_group.discard(tid)
             if rejected_wrong_topic:
                 progress.log(
@@ -5343,6 +5346,17 @@ def _assign_mined_types_via_api(
             progress.log(
                 f"Type embedding scope {scope_label!r} attempt {attempt}: "
                 f"{placed}/{len(group_type_ids)} assignment units assigned.")
+        for tid in list(remaining_in_group):
+            cid = override_by_tid.get(tid)
+            if not cid:
+                continue
+            per_concept.setdefault(cid, []).append(types_by_id[tid])
+            remaining_in_group.discard(tid)
+            overridden.add(tid)
+        if overridden:
+            progress.log(
+                f"Corrected {len(overridden)} Type assignment unit(s) using "
+                "unambiguous source/concept evidence.")
         unassigned.update(remaining_in_group)
 
     if unassigned:
