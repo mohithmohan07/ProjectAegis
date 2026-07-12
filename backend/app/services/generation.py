@@ -1294,6 +1294,13 @@ Rules:
 - Infer durable mastery objectives from the supplied rows and source excerpt.
 - Merge question-grounded rows that apply the same underlying idea/rule/method,
   keeping distinct contexts and asks for the later Types pass.
+- A row grounded only by an Example/Exercise is not a durable concept merely
+  because its ask changes (direct result, unknown value, recognition first,
+  advanced/challenge item, or another difficulty/context). Merge such rows
+  into the closest reusable method/application objective.
+- For one underlying rule, normally retain at most one direct-application
+  concept and one genuinely distinct contextual/modeling concept. Further
+  givens, asks, constraints, and difficulty levels become Types and Cases.
 - Keep a distinct application/modeling concept only when the source teaches a
   genuinely different transferable objective, not merely another question
   pattern or difficulty label ("advanced", "challenge", "unknown quantity").
@@ -1301,6 +1308,9 @@ Rules:
   conceptual relationships that require separate teaching.
 - Preserve every METHOD-* ID. When anchored rows teach one objective, merge
   them and carry every ID plus all distinct formulas/evidence onto one row.
+- Equivalent formula forms, notation changes, and links taught inside the same
+  derivation normally belong together; separate them only when the source
+  gives each a distinct reusable method or lesson-planning objective.
 - Preserve the exact supplied topic and reading order. Do not create or remove
   topics, Types, Cases, Examples, culmination rows, or filler concepts.
 - Keep source-grounded Description text, keywords, and meaningful parent
