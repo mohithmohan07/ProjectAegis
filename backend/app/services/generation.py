@@ -6694,6 +6694,47 @@ def _method_formula_family_reduction(
     )
 
 
+def _coalesce_method_family_rows(
+    records: list[dict], method_family_groups: list[list[str]],
+) -> list[dict]:
+    """Deterministically combine rows the source proves share one formula family."""
+    out = [dict(record) for record in records]
+    for family in method_family_groups:
+        family_ids = set(family)
+        indexes = [
+            index for index, record in enumerate(out)
+            if _method_anchor_ids(record) & family_ids
+        ]
+        if len(indexes) < 2:
+            continue
+        target_index = indexes[0]
+        target = dict(out[target_index])
+        merged_details: list[str] = []
+        merged_keywords: list[str] = []
+        merged_evidence: list[str] = []
+        for index in indexes:
+            record = out[index]
+            detail = _DESCRIPTION_PREFIX_RE.sub(
+                "", record.get("concept_details") or "").strip()
+            if detail and detail not in merged_details:
+                merged_details.append(detail)
+            for keyword in re.split(r"\s*,\s*", record.get("keywords") or ""):
+                keyword = keyword.strip()
+                if keyword and keyword not in merged_keywords:
+                    merged_keywords.append(keyword)
+            merged_evidence.append(record.get("source_evidence") or "")
+        if merged_details:
+            target["concept_details"] = (
+                "Description: " + " ".join(merged_details))
+        target["keywords"] = ", ".join(merged_keywords)
+        target["source_evidence"] = _merge_method_source_evidence(
+            *merged_evidence, *family)
+        out[target_index] = target
+        for index in reversed(indexes[1:]):
+            out.pop(index)
+    return out
+
+
 def _consolidate_task_grounded_fragments_via_api(
     records: list[dict], *, meta: dict,
     source_topic_excerpts: list[dict],
@@ -6781,6 +6822,8 @@ def _consolidate_task_grounded_fragments_via_api(
             ]
             candidate = _preserve_required_method_rows(
                 topic_records, candidate)
+            candidate = _coalesce_method_family_rows(
+                candidate, method_family_groups)
             candidate = _dedupe_titles_chapter_wide(
                 _ensure_parent_concepts(candidate))
             rejected_titles = [

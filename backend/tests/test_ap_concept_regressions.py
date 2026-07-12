@@ -1829,6 +1829,14 @@ def test_overlapping_method_formulae_reduce_public_concept_bound():
         },
     ]
     assert g._method_formula_family_reduction(rows, anchors) == 1
+    groups = g._method_formula_family_groups(rows, anchors)
+    assert groups == [["METHOD-AAAAAAAAAA", "METHOD-BBBBBBBBBB"]]
+    merged = g._coalesce_method_family_rows(rows, groups)
+    assert len(merged) == 2
+    assert g._method_anchor_ids(merged[0]) == {
+        "METHOD-AAAAAAAAAA", "METHOD-BBBBBBBBBB",
+    }
+    assert "METHOD-CCCCCCCCCC" in merged[1]["source_evidence"]
 
 
 def test_representative_mathpix_ocr_edges_keep_topics_and_visual_questions():
