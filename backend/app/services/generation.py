@@ -3391,16 +3391,16 @@ def _inventory_task_text(item: dict) -> str:
 
 
 def _case_prompt_needs_source(prompt: str, source_text: str) -> bool:
-    prompt = re.sub(r"\s+", " ", (prompt or "").strip())
     if not source_text:
         return False
-    if not prompt:
-        return True
-    if _CASE_SOURCE_ARTIFACT_RE.search(prompt):
-        return True
-    # When the source task is substantially richer, keep the teacher-facing
-    # example faithful instead of a shortened paraphrase.
-    return len(prompt) < max(25, int(len(source_text) * 0.7))
+    # A qid is an authoritative identity link, not a fuzzy text hint. Restore
+    # every model-authored variation from the inventory so same-length
+    # paraphrases, omitted context, and omitted visual URLs cannot survive into
+    # rendered Types and fail the exact-coverage boundary later.
+    return (
+        bi.normalize_question_text(prompt)
+        != bi.normalize_question_text(source_text)
+    )
 
 
 def _backfill_type_cases_from_inventory(types: list[dict], inventory: dict) -> list[dict]:
@@ -5698,6 +5698,56 @@ def _rendered_inventory_coverage_defects(
     }
 
 
+def _debug_inventory_coverage(
+    stage: str, records: list[dict], inventory: dict | None,
+) -> None:
+    """Temporary stage trace for the live exact-coverage failure."""
+    import difflib
+    import json as _json
+    import time
+
+    defects = _rendered_inventory_coverage_defects(records, inventory)
+    examples = _rendered_type_examples(records)
+    missing_details = []
+    by_qid = {
+        (item.get("qid") or "").strip(): item
+        for item in (inventory or {}).get("items") or []
+        if (item.get("qid") or "").strip()
+    }
+    for qid in defects["missing"]:
+        expected = _inventory_task_text(by_qid.get(qid, {}))
+        expected_key = bi.normalize_question_text(expected)
+        closest = max(
+            examples,
+            key=lambda example: difflib.SequenceMatcher(
+                None, expected_key, bi.normalize_question_text(example)).ratio(),
+            default="",
+        )
+        missing_details.append({
+            "qid": qid,
+            "expected": expected,
+            "closest": closest,
+            "similarity": round(difflib.SequenceMatcher(
+                None, expected_key, bi.normalize_question_text(closest)).ratio(), 4),
+        })
+    # region agent log
+    open("/opt/cursor/logs/debug.log", "a").write(_json.dumps({
+        "hypothesisId": "A,B,C,D",
+        "location": "generation.py:_debug_inventory_coverage",
+        "message": "Rendered inventory coverage stage",
+        "data": {
+            "stage": stage,
+            "record_count": len(records),
+            "example_count": len(examples),
+            "missing": defects["missing"],
+            "duplicate": defects["duplicate"],
+            "missing_details": missing_details,
+        },
+        "timestamp": int(time.time() * 1000),
+    }, ensure_ascii=False) + "\n")
+    # endregion
+
+
 def _accept_exact_inventory_type_review(
     original: list[dict], candidate: list[dict], inventory: dict | None,
 ) -> list[dict]:
@@ -7949,6 +7999,10 @@ def concepts_from_mmd(
             question_task_inventory=question_task_inventory,
             mined_types=mined_types,
         )
+        # region agent log
+        _debug_inventory_coverage(
+            "types_assigned", out, question_task_inventory)
+        # endregion
         progress.set_progress(
             0.91, label="Concept extraction — Type assignment complete")
         # Deterministic normalization BEFORE the strict repair: formatting
@@ -7961,6 +8015,10 @@ def concepts_from_mmd(
         out = _scrub_section_numbers(out)
         out = _merge_concept_records(out)
         out = _dedupe_titles_chapter_wide(out)
+        # region agent log
+        _debug_inventory_coverage(
+            "initial_normalization", out, question_task_inventory)
+        # endregion
         # Near-duplicate titles: GPT merges the rows' content; the
         # deterministic drop only guards whatever the merge pass left behind.
         progress.step(
@@ -7979,15 +8037,27 @@ def concepts_from_mmd(
         ]
         out = _enforce_culminations(out)
         out = _ensure_misconceptions_via_api(out, meta=meta)
+        # region agent log
+        _debug_inventory_coverage(
+            "pre_final_repair", out, question_task_inventory)
+        # endregion
         before_final_repair = out
         out = _repair_records_via_api(
             out, meta=meta, stage="final", source_context=mmd_text, strict=False,
             max_attempts=3)
         out = _preserve_required_method_rows(before_final_repair, out)
+        # region agent log
+        _debug_inventory_coverage(
+            "final_repair", out, question_task_inventory)
+        # endregion
         # Post-repair: neutralize ONLY rows the repair pass could not fix —
         # rows that already validate cleanly keep their full GPT-authored
         # wording untouched (no blanket deterministic rewriting).
         out = _neutralize_unrepaired_rows(out)
+        # region agent log
+        _debug_inventory_coverage(
+            "first_neutralize", out, question_task_inventory)
+        # endregion
         # Truncated Case Examples ("Example: q") that GPT repair could not
         # expand are filled from the Question / Task Inventory, or dropped
         # when no match exists — never leave short_case_example as a fatal.
@@ -7996,7 +8066,15 @@ def concepts_from_mmd(
         # Salvage may leave a bare figure ref if inventory lacked the URL;
         # re-neutralize any residual source_artifact rows only.
         out = _neutralize_unrepaired_rows(out)
+        # region agent log
+        _debug_inventory_coverage(
+            "short_case_salvage", out, question_task_inventory)
+        # endregion
         out = cr.refine_chapter(out)
+        # region agent log
+        _debug_inventory_coverage(
+            "chapter_refinement", out, question_task_inventory)
+        # endregion
         # The repair/cleanup passes may reorder, rename, or re-collide rows;
         # re-assert the duplicate-title, culmination, mastery-line, and
         # misconception invariants before the final gate (rows the repair pass
@@ -8080,6 +8158,10 @@ def concepts_from_mmd(
             for error in boundary_report["errors"]
         ):
             out = _neutralize_unrepaired_rows(out)
+        # region agent log
+        _debug_inventory_coverage(
+            "terminal_boundary", out, question_task_inventory)
+        # endregion
         rendered_inventory_defects = _rendered_inventory_coverage_defects(
             out, question_task_inventory)
         if (
