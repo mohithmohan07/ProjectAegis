@@ -6626,9 +6626,56 @@ def _question_grounded_fragmentation_topics(
     return {key for key, count in counts.items() if count >= minimum_rows}
 
 
+def _method_formula_family_reduction(
+    records: list[dict], method_anchors: list[dict] | None,
+) -> int:
+    """Redundant anchored rows that teach overlapping formula families."""
+    formulae_by_id = {
+        str(anchor.get("anchor_id") or "").upper(): {
+            normalized
+            for formula in anchor.get("required_formulas") or []
+            for normalized in [_normalize_math_evidence(formula)]
+            if len(normalized) >= 8
+        }
+        for anchor in method_anchors or []
+    }
+    indexed_formulae: list[tuple[int, set[str]]] = []
+    for index, record in enumerate(records):
+        formulae = {
+            formula
+            for anchor_id in _method_anchor_ids(record)
+            for formula in formulae_by_id.get(anchor_id, set())
+        }
+        if formulae:
+            indexed_formulae.append((index, formulae))
+    parent = {index: index for index, _ in indexed_formulae}
+
+    def root(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    for offset, (left_index, left_formulae) in enumerate(indexed_formulae):
+        for right_index, right_formulae in indexed_formulae[offset + 1:]:
+            overlaps = any(
+                left in right or right in left
+                for left in left_formulae
+                for right in right_formulae
+            )
+            if overlaps:
+                parent[root(right_index)] = root(left_index)
+    families: dict[int, int] = {}
+    for index, _ in indexed_formulae:
+        family = root(index)
+        families[family] = families.get(family, 0) + 1
+    return sum(size - 1 for size in families.values() if size > 1)
+
+
 def _consolidate_task_grounded_fragments_via_api(
     records: list[dict], *, meta: dict,
     source_topic_excerpts: list[dict],
+    method_anchors: list[dict] | None = None,
 ) -> list[dict]:
     """Merge Example/Exercise-shaped concept rows into durable objectives."""
     import json as _json
@@ -6658,15 +6705,22 @@ def _consolidate_task_grounded_fragments_via_api(
                 record.get("source_evidence") or ""))
             for record in topic_records
         )
+        method_family_reduction = _method_formula_family_reduction(
+            topic_records, method_anchors)
         max_rows = max(
-            2, len(topic_records) - task_grounded_count + 2)
+            2,
+            len(topic_records) - task_grounded_count + 2
+            - method_family_reduction,
+        )
         user = (
             _metadata_block(meta)
             + f"\nSOURCE TOPIC: {topic}\n"
             + f"CONSOLIDATION BOUND: return AT MOST {max_rows} rows. "
             + f"The draft has {task_grounded_count} question-grounded rows; "
             + "retain no more than two durable application/modeling objectives "
-            + "for those rows, while preserving distinct non-task objectives.\n"
+            + "for those rows, while preserving distinct non-task objectives. "
+            + f"Merge {method_family_reduction} redundant anchored row(s) whose "
+            + "required formulas overlap, carrying all METHOD IDs forward.\n"
             + "\nDRAFT CONCEPT ROWS:\n"
             + _json.dumps(
                 {"rows": _records_to_api_rows(topic_records)},
@@ -8377,7 +8431,11 @@ def concepts_from_mmd(
         out = _canonicalize_method_anchor_tags(
             out, method_anchors, chunk_text=mmd_text, meta=meta)
         out = _consolidate_task_grounded_fragments_via_api(
-            out, meta=meta, source_topic_excerpts=source_topic_excerpts)
+            out,
+            meta=meta,
+            source_topic_excerpts=source_topic_excerpts,
+            method_anchors=method_anchors,
+        )
         out = _enforce_method_anchor_topics(out, method_anchors)
         out = _canonicalize_method_anchor_tags(
             out, method_anchors, chunk_text=mmd_text, meta=meta)

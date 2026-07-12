@@ -1794,6 +1794,43 @@ def test_task_grounded_concept_fragments_consolidate_before_types(monkeypatch):
     ]
 
 
+def test_overlapping_method_formulae_reduce_public_concept_bound():
+    rows = [
+        _row(
+            "Finite Sums",
+            "Reverse-and-add Derivation",
+            evidence="METHOD-AAAAAAAAAA",
+        ),
+        _row(
+            "Finite Sums",
+            "Equivalent Sum Formula",
+            evidence="METHOD-BBBBBBBBBB",
+        ),
+        _row(
+            "Finite Sums",
+            "Recovering Terms from Partial Sums",
+            evidence="METHOD-CCCCCCCCCC",
+        ),
+    ]
+    anchors = [
+        {
+            "anchor_id": "METHOD-AAAAAAAAAA",
+            "required_formulas": [r"S=\frac{n}{2}[2a+(n-1)d]"],
+        },
+        {
+            "anchor_id": "METHOD-BBBBBBBBBB",
+            "required_formulas": [
+                r"\begin{aligned}S=\frac{n}{2}[2a+(n-1)d]=12600\end{aligned}",
+            ],
+        },
+        {
+            "anchor_id": "METHOD-CCCCCCCCCC",
+            "required_formulas": [r"a_n=S_n-S_{n-1}"],
+        },
+    ]
+    assert g._method_formula_family_reduction(rows, anchors) == 1
+
+
 def test_representative_mathpix_ocr_edges_keep_topics_and_visual_questions():
     sections = g.parse_mmd_sections(_mathpix_ocr_edge_mmd())
 
