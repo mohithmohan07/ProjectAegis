@@ -1279,6 +1279,35 @@ Rules:
 """)
 
 prompts.register(
+    "concepts.task_fragment_consolidation.system", category=_CONCEPTS_CAT,
+    label="Task-grounded concept fragmentation consolidation prompt",
+    default="""\
+Consolidate an over-fragmented concept map for ONE source topic. Return ONLY
+strict JSON with the same schema:
+{"rows":[{"topic":"","parent_concept":"","concept":"","concept_description":"","keywords":"","source_evidence":""}]}.
+
+The draft contains several rows grounded mainly in individual Examples,
+Exercises, or question varieties. Those task varieties belong later as
+Types/Cases/Examples; they are not automatically separate teaching concepts.
+
+Rules:
+- Infer durable mastery objectives from the supplied rows and source excerpt.
+- Merge question-grounded rows that apply the same underlying idea/rule/method,
+  keeping distinct contexts and asks for the later Types pass.
+- Keep a distinct application/modeling concept only when the source teaches a
+  genuinely different transferable objective, not merely another question
+  pattern or difficulty label ("advanced", "challenge", "unknown quantity").
+- Preserve distinct definitions, derivations, representations, procedures, and
+  conceptual relationships that require separate teaching.
+- Preserve every METHOD-* ID. When anchored rows teach one objective, merge
+  them and carry every ID plus all distinct formulas/evidence onto one row.
+- Preserve the exact supplied topic and reading order. Do not create or remove
+  topics, Types, Cases, Examples, culmination rows, or filler concepts.
+- Keep source-grounded Description text, keywords, and meaningful parent
+  concepts on every surviving row.
+""")
+
+prompts.register(
     "concepts.description_refine.system", category=_CONCEPTS_CAT,
     label="Description-only concept refinement system prompt",
     default="""\
@@ -6558,6 +6587,104 @@ def _consolidate_concepts_via_api(
     return out
 
 
+_QUESTION_GROUNDED_EVIDENCE_RE = re.compile(
+    r"\b(?:examples?|exercises?|ex)\s*(?:\d|[ivxlcdm]+\b)",
+    re.IGNORECASE,
+)
+
+
+def _question_grounded_fragmentation_topics(
+    records: list[dict], *, minimum_rows: int = 3,
+) -> set[str]:
+    """Topics with several non-method concepts grounded mainly in tasks."""
+    counts: dict[str, int] = {}
+    for record in records:
+        if _method_anchor_ids(record):
+            continue
+        if not _QUESTION_GROUNDED_EVIDENCE_RE.search(
+            record.get("source_evidence") or ""
+        ):
+            continue
+        key = _topic_comparison_key(record.get("topic") or "")
+        if key:
+            counts[key] = counts.get(key, 0) + 1
+    return {key for key, count in counts.items() if count >= minimum_rows}
+
+
+def _consolidate_task_grounded_fragments_via_api(
+    records: list[dict], *, meta: dict,
+    source_topic_excerpts: list[dict],
+) -> list[dict]:
+    """Merge Example/Exercise-shaped concept rows into durable objectives."""
+    import json as _json
+
+    suspicious = _question_grounded_fragmentation_topics(records)
+    if not suspicious:
+        return records
+    excerpt_by_key = {
+        _topic_comparison_key(group.get("topic") or ""):
+        group.get("excerpt") or ""
+        for group in source_topic_excerpts or []
+    }
+    replacement_by_key: dict[str, list[dict]] = {}
+    system = prompts.get_text("concepts.task_fragment_consolidation.system")
+    for topic_key in suspicious:
+        topic_records = [
+            record for record in records
+            if _topic_comparison_key(record.get("topic") or "") == topic_key
+            and not cr.is_culmination(record.get("concept_title", ""))
+        ]
+        if len(topic_records) < 3:
+            continue
+        topic = (topic_records[0].get("topic") or "").strip()
+        user = (
+            _metadata_block(meta)
+            + f"\nSOURCE TOPIC: {topic}\n"
+            + "\nDRAFT CONCEPT ROWS:\n"
+            + _json.dumps(
+                {"rows": _records_to_api_rows(topic_records)},
+                ensure_ascii=False,
+            )
+            + "\n\nSOURCE TOPIC EXCERPT:\n"
+            + _trim(excerpt_by_key.get(topic_key, ""), 160_000)
+        )
+        data = _openai_json(system, user)
+        candidate = [
+            row for row in _concept_rows_to_records(data)
+            if _topic_comparison_key(row.get("topic") or "") == topic_key
+            and not cr.is_culmination(row.get("concept_title", ""))
+        ]
+        candidate = _preserve_required_method_rows(topic_records, candidate)
+        candidate = _dedupe_titles_chapter_wide(
+            _ensure_parent_concepts(candidate))
+        if 2 <= len(candidate) < len(topic_records):
+            replacement_by_key[topic_key] = candidate
+            progress.log(
+                f"Consolidated task-grounded concept fragments in {topic!r}: "
+                f"{len(topic_records)} -> {len(candidate)} rows.",
+                level="success",
+            )
+        else:
+            progress.log(
+                f"Rejected task-fragment consolidation for {topic!r}: "
+                f"{len(topic_records)} -> {len(candidate)} rows.",
+                level="warning",
+            )
+    if not replacement_by_key:
+        return records
+    out: list[dict] = []
+    emitted: set[str] = set()
+    for record in records:
+        key = _topic_comparison_key(record.get("topic") or "")
+        replacement = replacement_by_key.get(key)
+        if replacement is None:
+            out.append(record)
+        elif key not in emitted:
+            out.extend(replacement)
+            emitted.add(key)
+    return out
+
+
 _DESCRIPTION_PREFIX_RE = re.compile(r"^\s*description\s*[:：]\s*", re.IGNORECASE)
 
 
@@ -8187,6 +8314,11 @@ def concepts_from_mmd(
             out, meta=meta, source_topic_excerpts=source_topic_excerpts)
         out = _restore_method_anchor_rows(
             out, skeleton_method_row_snapshot)
+        out = _enforce_method_anchor_topics(out, method_anchors)
+        out = _canonicalize_method_anchor_tags(
+            out, method_anchors, chunk_text=mmd_text, meta=meta)
+        out = _consolidate_task_grounded_fragments_via_api(
+            out, meta=meta, source_topic_excerpts=source_topic_excerpts)
         out = _enforce_method_anchor_topics(out, method_anchors)
         out = _canonicalize_method_anchor_tags(
             out, method_anchors, chunk_text=mmd_text, meta=meta)

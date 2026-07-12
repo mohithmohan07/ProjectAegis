@@ -1750,6 +1750,48 @@ def test_math_prompts_separate_formula_building_from_problem_inventory():
     assert "concept the problem actually assesses" in embedding
 
 
+def test_task_grounded_concept_fragments_consolidate_before_types(monkeypatch):
+    topic = "Finite Sequence Totals"
+    records = [
+        _row(topic, "Deriving the Finite-sum Rule", evidence="reverse and add"),
+        _row(topic, "Applying the Rule to Totals", evidence="Example 11"),
+        _row(topic, "Finding Unknown Values from Totals", evidence="Example 12"),
+        _row(topic, "Advanced Total Applications", evidence="Exercise 5.4"),
+    ]
+    assert g._question_grounded_fragmentation_topics(records) == {
+        g._topic_comparison_key(topic)
+    }
+
+    def fake_api(system, user):
+        assert "task varieties belong later as Types/Cases/Examples" in system
+        return {"rows": [
+            _api_row(_row(
+                topic,
+                "Deriving and Interpreting the Finite-sum Rule",
+                evidence="reverse and add",
+            )),
+            _api_row(_row(
+                topic,
+                "Applying Finite Sums to Direct and Contextual Problems",
+                evidence="Examples 11-16; Exercise 5.4",
+            )),
+        ]}
+
+    monkeypatch.setattr(g, "_openai_json", fake_api)
+    out = g._consolidate_task_grounded_fragments_via_api(
+        records,
+        meta=g._metadata(subject="Any"),
+        source_topic_excerpts=[{
+            "topic": topic,
+            "excerpt": "A source excerpt teaching the finite-sum rule.",
+        }],
+    )
+    assert [record["concept_title"] for record in out] == [
+        "Deriving and Interpreting the Finite-sum Rule",
+        "Applying Finite Sums to Direct and Contextual Problems",
+    ]
+
+
 def test_representative_mathpix_ocr_edges_keep_topics_and_visual_questions():
     sections = g.parse_mmd_sections(_mathpix_ocr_edge_mmd())
 
