@@ -1721,7 +1721,8 @@ def test_math_prompts_separate_formula_building_from_problem_inventory():
     mining = g.prompts.get_text("concepts.type_mining.system")
     embedding = g.prompts.get_text("concepts.type_embedding.system")
 
-    assert "derivations and formula-building sequences" in skeleton
+    assert "derivations and formula-building sequences" in skeleton.lower()
+    assert "independent of the subject label" in skeleton
     assert "worked, numerical, contextual, or real-life problems" in skeleton
     assert "every worked, numerical, contextual, and real-life problem" in inventory
     assert "never include its solution" in inventory
