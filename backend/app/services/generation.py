@@ -6626,29 +6626,39 @@ def _question_grounded_fragmentation_topics(
     return {key for key, count in counts.items() if count >= minimum_rows}
 
 
-def _method_formula_family_reduction(
+def _formula_family_fragments(formula: str) -> set[str]:
+    normalized = _normalize_math_evidence(formula).replace("&", "")
+    if len(normalized) < 8:
+        return set()
+    fragments = {normalized}
+    fragments.update(
+        part for part in normalized.split("=") if len(part) >= 8)
+    return fragments
+
+
+def _method_formula_family_groups(
     records: list[dict], method_anchors: list[dict] | None,
-) -> int:
-    """Redundant anchored rows that teach overlapping formula families."""
+) -> list[list[str]]:
+    """Anchor-ID groups whose required formula expressions overlap."""
     formulae_by_id = {
         str(anchor.get("anchor_id") or "").upper(): {
-            normalized
+            fragment
             for formula in anchor.get("required_formulas") or []
-            for normalized in [_normalize_math_evidence(formula)]
-            if len(normalized) >= 8
+            for fragment in _formula_family_fragments(formula)
         }
         for anchor in method_anchors or []
     }
-    indexed_formulae: list[tuple[int, set[str]]] = []
+    indexed_formulae: list[tuple[int, set[str], set[str]]] = []
     for index, record in enumerate(records):
+        anchor_ids = _method_anchor_ids(record)
         formulae = {
             formula
-            for anchor_id in _method_anchor_ids(record)
+            for anchor_id in anchor_ids
             for formula in formulae_by_id.get(anchor_id, set())
         }
         if formulae:
-            indexed_formulae.append((index, formulae))
-    parent = {index: index for index, _ in indexed_formulae}
+            indexed_formulae.append((index, formulae, anchor_ids))
+    parent = {index: index for index, _, _ in indexed_formulae}
 
     def root(index: int) -> int:
         while parent[index] != index:
@@ -6656,8 +6666,8 @@ def _method_formula_family_reduction(
             index = parent[index]
         return index
 
-    for offset, (left_index, left_formulae) in enumerate(indexed_formulae):
-        for right_index, right_formulae in indexed_formulae[offset + 1:]:
+    for offset, (left_index, left_formulae, _) in enumerate(indexed_formulae):
+        for right_index, right_formulae, _ in indexed_formulae[offset + 1:]:
             overlaps = any(
                 left in right or right in left
                 for left in left_formulae
@@ -6665,11 +6675,23 @@ def _method_formula_family_reduction(
             )
             if overlaps:
                 parent[root(right_index)] = root(left_index)
-    families: dict[int, int] = {}
-    for index, _ in indexed_formulae:
-        family = root(index)
-        families[family] = families.get(family, 0) + 1
-    return sum(size - 1 for size in families.values() if size > 1)
+    families: dict[int, set[str]] = {}
+    for index, _, anchor_ids in indexed_formulae:
+        families.setdefault(root(index), set()).update(anchor_ids)
+    return [
+        sorted(anchor_ids) for anchor_ids in families.values()
+        if len(anchor_ids) > 1
+    ]
+
+
+def _method_formula_family_reduction(
+    records: list[dict], method_anchors: list[dict] | None,
+) -> int:
+    """Redundant anchored rows that teach overlapping formula families."""
+    return sum(
+        len(group) - 1
+        for group in _method_formula_family_groups(records, method_anchors)
+    )
 
 
 def _consolidate_task_grounded_fragments_via_api(
@@ -6705,8 +6727,10 @@ def _consolidate_task_grounded_fragments_via_api(
                 record.get("source_evidence") or ""))
             for record in topic_records
         )
-        method_family_reduction = _method_formula_family_reduction(
+        method_family_groups = _method_formula_family_groups(
             topic_records, method_anchors)
+        method_family_reduction = sum(
+            len(group) - 1 for group in method_family_groups)
         max_rows = max(
             2,
             len(topic_records) - task_grounded_count + 2
@@ -6720,7 +6744,10 @@ def _consolidate_task_grounded_fragments_via_api(
             + "retain no more than two durable application/modeling objectives "
             + "for those rows, while preserving distinct non-task objectives. "
             + f"Merge {method_family_reduction} redundant anchored row(s) whose "
-            + "required formulas overlap, carrying all METHOD IDs forward.\n"
+            + "required formulas overlap, carrying all METHOD IDs forward. "
+            + "OVERLAPPING METHOD FAMILIES (every list MUST become one row): "
+            + _json.dumps(method_family_groups)
+            + "\n"
             + "\nDRAFT CONCEPT ROWS:\n"
             + _json.dumps(
                 {"rows": _records_to_api_rows(topic_records)},
