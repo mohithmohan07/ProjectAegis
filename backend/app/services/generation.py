@@ -6758,15 +6758,20 @@ def _consolidate_task_grounded_fragments_via_api(
         )
         candidate: list[dict] = []
         rejected_titles: list[str] = []
-        for attempt in range(1, 3):
+        unmerged_method_families: list[list[str]] = []
+        for attempt in range(1, 4):
             attempt_user = user
             if attempt > 1:
                 attempt_user += (
                     "\n\nCORRECTION: Your prior consolidation retained "
                     "question/difficulty labels as concepts: "
-                    + ", ".join(rejected_titles)
-                    + ". Merge them into the direct or contextual application "
-                    "objective and obey the row bound."
+                    + (", ".join(rejected_titles) or "(none)")
+                    + ". It also failed to coalesce these overlapping METHOD "
+                    "families into one row per list: "
+                    + _json.dumps(unmerged_method_families)
+                    + ". Merge those exact IDs onto one row, merge task labels "
+                    "into direct/contextual application objectives, and obey "
+                    "the row bound."
                 )
             data = _openai_json(system, attempt_user)
             candidate = [
@@ -6787,9 +6792,17 @@ def _consolidate_task_grounded_fragments_via_api(
                 and _NON_DURABLE_TASK_CONCEPT_RE.search(
                     row.get("concept_title") or "")
             ]
+            unmerged_method_families = [
+                family for family in method_family_groups
+                if not any(
+                    set(family) <= _method_anchor_ids(row)
+                    for row in candidate
+                )
+            ]
             if (
                 2 <= len(candidate) <= max_rows < len(topic_records)
                 and not rejected_titles
+                and not unmerged_method_families
             ):
                 replacement_by_key[topic_key] = candidate
                 progress.log(
@@ -6806,6 +6819,11 @@ def _consolidate_task_grounded_fragments_via_api(
                 + (
                     f"; non-durable titles: {', '.join(rejected_titles)}"
                     if rejected_titles else ""
+                )
+                + (
+                    "; unmerged METHOD families: "
+                    + _json.dumps(unmerged_method_families)
+                    if unmerged_method_families else ""
                 )
                 + ".",
                 level="warning",
