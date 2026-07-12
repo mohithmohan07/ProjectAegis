@@ -1724,9 +1724,9 @@ def test_math_prompts_separate_formula_building_from_problem_inventory():
     assert "derivations and formula-building sequences" in skeleton.lower()
     assert "independent of the subject label" in skeleton
     assert "worked, numerical, contextual, or real-life problems" in skeleton
-    assert "every worked, numerical, contextual, and real-life problem" in inventory
-    assert "never include its solution" in inventory
-    assert "distinct Type or Case" in mining
+    assert "every worked, numerical, contextual, interpretive" in inventory
+    assert "but never solutions" in inventory
+    assert "Classify every worked, numerical, contextual, interpretive" in mining
     assert "never copy solutions" in mining
     assert "concept the problem actually assesses" in embedding
 
