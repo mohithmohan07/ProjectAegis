@@ -6601,6 +6601,11 @@ _QUESTION_GROUNDED_EVIDENCE_RE = re.compile(
     r"\b(?:examples?|exercises?|ex)\s*(?:\d|[ivxlcdm]+\b)",
     re.IGNORECASE,
 )
+_NON_DURABLE_TASK_CONCEPT_RE = re.compile(
+    r"\b(?:advanced|challenge|challenging|miscellaneous|unknown[-\s]+"
+    r"(?:value|quantity|term)|harder\s+problems?)\b",
+    re.IGNORECASE,
+)
 
 
 def _question_grounded_fragmentation_topics(
@@ -6670,26 +6675,58 @@ def _consolidate_task_grounded_fragments_via_api(
             + "\n\nSOURCE TOPIC EXCERPT:\n"
             + _trim(excerpt_by_key.get(topic_key, ""), 160_000)
         )
-        data = _openai_json(system, user)
-        candidate = [
-            row for row in _concept_rows_to_records(data)
-            if _topic_comparison_key(row.get("topic") or "") == topic_key
-            and not cr.is_culmination(row.get("concept_title", ""))
-        ]
-        candidate = _preserve_required_method_rows(topic_records, candidate)
-        candidate = _dedupe_titles_chapter_wide(
-            _ensure_parent_concepts(candidate))
-        if 2 <= len(candidate) <= max_rows < len(topic_records):
-            replacement_by_key[topic_key] = candidate
-            progress.log(
-                f"Consolidated task-grounded concept fragments in {topic!r}: "
-                f"{len(topic_records)} -> {len(candidate)} rows.",
-                level="success",
-            )
-        else:
+        candidate: list[dict] = []
+        rejected_titles: list[str] = []
+        for attempt in range(1, 3):
+            attempt_user = user
+            if attempt > 1:
+                attempt_user += (
+                    "\n\nCORRECTION: Your prior consolidation retained "
+                    "question/difficulty labels as concepts: "
+                    + ", ".join(rejected_titles)
+                    + ". Merge them into the direct or contextual application "
+                    "objective and obey the row bound."
+                )
+            data = _openai_json(system, attempt_user)
+            candidate = [
+                row for row in _concept_rows_to_records(data)
+                if _topic_comparison_key(row.get("topic") or "") == topic_key
+                and not cr.is_culmination(row.get("concept_title", ""))
+            ]
+            candidate = _preserve_required_method_rows(
+                topic_records, candidate)
+            candidate = _dedupe_titles_chapter_wide(
+                _ensure_parent_concepts(candidate))
+            rejected_titles = [
+                row.get("concept_title", "")
+                for row in candidate
+                if not _method_anchor_ids(row)
+                and _QUESTION_GROUNDED_EVIDENCE_RE.search(
+                    row.get("source_evidence") or "")
+                and _NON_DURABLE_TASK_CONCEPT_RE.search(
+                    row.get("concept_title") or "")
+            ]
+            if (
+                2 <= len(candidate) <= max_rows < len(topic_records)
+                and not rejected_titles
+            ):
+                replacement_by_key[topic_key] = candidate
+                progress.log(
+                    f"Consolidated task-grounded concept fragments in "
+                    f"{topic!r}: {len(topic_records)} -> "
+                    f"{len(candidate)} rows.",
+                    level="success",
+                )
+                break
+        if topic_key not in replacement_by_key:
             progress.log(
                 f"Rejected task-fragment consolidation for {topic!r}: "
-                f"{len(topic_records)} -> {len(candidate)} rows.",
+                f"{len(topic_records)} -> {len(candidate)} rows"
+                + (
+                    f"; non-durable titles: {', '.join(rejected_titles)}"
+                    if rejected_titles else ""
+                )
+                + ".",
                 level="warning",
             )
     if not replacement_by_key:
