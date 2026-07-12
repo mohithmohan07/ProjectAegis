@@ -813,7 +813,8 @@ def test_v5_prompts_require_opening_granularity_and_mathpix_policy():
     assert "Do NOT embed Mathpix" in refine
     assert "truncated mid-sentence" in refine
     inventory = g.prompts.get_text("concepts.question_task_inventory.system")
-    assert "stay ONE inventory item" in inventory
+    assert "dependent subquestions" in inventory
+    assert "independently assessable" in inventory
     assert "Missing even one" in inventory and "checkpoint is a defect" in inventory
     assert "Frédéric Sorrieu" in inventory
     embedding = g.prompts.get_text("concepts.type_embedding.system")
@@ -1155,6 +1156,57 @@ def test_inventory_keeps_distinct_questions_with_shared_section_label():
     assert len(g._merge_source_task_anchors(items, [])) == 11
 
 
+def test_independent_lettered_exercise_subparts_get_separate_anchors():
+    source = r"""
+\section*{1 Revolutions}
+Historical movements developed across Europe.
+
+\section*{Write in brief}
+1. Write a note on:
+a) Giuseppe Mazzini
+b) Count Camillo de Cavour
+c) The Greek war of independence
+d) Frankfurt parliament
+e) The role of women in nationalist struggles
+2. Explain the main revolutionary change.
+"""
+    anchors = g._source_task_anchors(g.parse_mmd_sections(source))
+    exercises = [
+        item for item in anchors if item["source_kind"] == "exercise"
+    ]
+    assert len(exercises) == 6
+    assert [item["source_label"] for item in exercises[:5]] == [
+        f"Write in brief Q1({letter})" for letter in "abcde"
+    ]
+    assert all(
+        item["raw_task"].startswith("Write a note on:")
+        for item in exercises[:5]
+    )
+    assert all(not item["topic_hint"] for item in exercises)
+
+
+def test_split_subpart_anchors_replace_compound_model_inventory_row():
+    parent = {
+        "source_kind": "exercise",
+        "source_label": "Write in brief Q1",
+        "raw_task": "Write a note on: a) Mazzini b) Cavour",
+        "normalized_task": "Write a note on: a) Mazzini b) Cavour",
+    }
+    anchors = [
+        {
+            "source_kind": "exercise",
+            "source_label": f"Write in brief Q1({letter})",
+            "parent_source_label": "Write in brief Q1",
+            "raw_task": f"Write a note on: {name}",
+            "normalized_task": f"Write a note on: {name}",
+        }
+        for letter, name in [("a", "Mazzini"), ("b", "Cavour")]
+    ]
+    merged = g._merge_source_task_anchors([parent], anchors)
+    assert len(merged) == 2
+    assert all(item["source_label"] != "Write in brief Q1" for item in merged)
+
+
 def test_topic_headings_never_truncate_valid_tail_topics():
     source = "\n".join(
         f"\\section*{{{number} Source Topic {number}}}\nBody {number}."
@@ -1437,3 +1489,55 @@ def test_type_review_cannot_drop_or_duplicate_inventory_examples():
         "missing": [],
         "duplicate": [],
     }
+
+
+def test_unambiguous_case_evidence_overrides_wrong_concept_guess():
+    concepts = {
+        "CONCEPT-0001": {
+            "concept_id": "CONCEPT-0001",
+            "topic": "Nation Formation",
+            "concept": "Italian Fragmentation and Unification Efforts",
+            "is_culmination": False,
+        },
+        "CONCEPT-0002": {
+            "concept_id": "CONCEPT-0002",
+            "topic": "Nation Formation",
+            "concept": "British Nation-state Formation Through English Dominance",
+            "is_culmination": False,
+        },
+        "CONCEPT-0003": {
+            "concept_id": "CONCEPT-0003",
+            "topic": "Nation Formation",
+            "concept": "Culmination - Nation Formation",
+            "is_culmination": True,
+        },
+    }
+    britain = {
+        "type_title": "Explaining Nation Formation",
+        "case_prompts": [{
+            "case_title": "Explain why British nationalism differed",
+            "examples": [{
+                "example_prompt": (
+                    "How was the history of nationalism in Britain unlike "
+                    "the rest of Europe?"
+                ),
+            }],
+        }],
+    }
+    mixed = {
+        "type_title": "Comparing Nation Formation",
+        "case_prompts": [{
+            "case_title": "Compare any two countries",
+            "examples": [{
+                "example_prompt": (
+                    "Through a focus on any two countries, explain how "
+                    "nations developed."
+                ),
+            }],
+        }],
+    }
+    candidates = tuple(concepts)
+    assert g._high_confidence_assignment_override(
+        britain, candidates, concepts) == "CONCEPT-0002"
+    assert g._high_confidence_assignment_override(
+        mixed, candidates, concepts) == "CONCEPT-0003"

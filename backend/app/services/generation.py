@@ -1375,10 +1375,11 @@ COVERAGE IS MANDATORY (most important rule):
 - Each numbered problem, intext question, think-and-reflect prompt, and worked
   example is its OWN item — never summarize an exercise set or question list
   into one item.
-- Multi-part questions with subquestions (a/b/c, i/ii/iii, or "Answer the
-  following") stay ONE inventory item: put the full stem + all subparts in
-  raw_task, and leave subpart_label empty unless the textbook numbers each
-  subpart as a standalone question with its own number.
+- Keep dependent subquestions that share one stem/data/source as ONE inventory
+  item. Split independently assessable lettered/roman subparts into separate
+  items when each asks about a different person, event, method, case, concept,
+  or representation; prepend the complete shared stem/context to every split
+  item so each remains self-contained and can be assigned to its own concept.
 - In-text CHECKPOINT questions (boxed "?" questions, "Let's recall",
   "Check your progress", mid-section question boxes) are inventory items
   exactly like end-of-chapter exercises. Chapters typically carry a dozen or
@@ -2658,6 +2659,9 @@ _NUMBERED_TASK_START_RE = re.compile(
     r"(?im)^[ \t]*(?:q(?:uestion)?[ \t]*)?[\[(]?"
     r"(\d{1,3})[\])]?[ \t]*(?:[.):-][ \t]*|[ \t]+)"
 )
+_LETTERED_SUBTASK_START_RE = re.compile(
+    r"(?im)^[ \t]*(?:\(([a-z])\)|([a-z])[.)])[ \t]+"
+)
 _SOLUTION_START_RE = re.compile(
     r"(?im)^[ \t]*(?:solutions?|answers?)[ \t]*[:：][ \t]*",
 )
@@ -2744,6 +2748,25 @@ def _question_prompts_from_text(text: str) -> list[str]:
         if prompt and prompt not in prompts_out:
             prompts_out.append(prompt)
     return prompts_out
+
+
+def _independent_lettered_subtasks(text: str) -> list[tuple[str, str]]:
+    """Split a lettered task list while repeating its shared stem/context."""
+    raw = str(text or "")
+    matches = list(_LETTERED_SUBTASK_START_RE.finditer(raw))
+    if len(matches) < 2:
+        return []
+    stem = raw[:matches[0].start()].strip()
+    if not stem:
+        return []
+    subtasks: list[tuple[str, str]] = []
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(raw)
+        label = (match.group(1) or match.group(2) or "").lower()
+        body = raw[match.end():end].strip()
+        if body:
+            subtasks.append((label, f"{stem} {body}".strip()))
+    return subtasks if len(subtasks) >= 2 else []
 
 
 def _inventory_chunk_has_task_markers(chunk: dict) -> bool:
@@ -2860,17 +2883,32 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
                     if i + 1 < len(task_matches)
                     else len(body)
                 )
-                label = f"{heading} Q{match.group(1)}".strip()
-                append_anchor(
-                    section_index=section_index,
-                    position=match.start(),
-                    topic=topic,
-                    kind="exercise",
-                    label=label,
-                    parent_label=heading,
-                    task=body[match.end():end],
-                    chapter_wide=chapter_wide,
-                )
+                question_label = f"{heading} Q{match.group(1)}".strip()
+                task_text = body[match.end():end]
+                subtasks = _independent_lettered_subtasks(task_text)
+                if subtasks:
+                    for sub_index, (sub_label, subtask) in enumerate(subtasks):
+                        append_anchor(
+                            section_index=section_index,
+                            position=match.start() + sub_index,
+                            topic=topic,
+                            kind="exercise",
+                            label=f"{question_label}({sub_label})",
+                            parent_label=question_label,
+                            task=subtask,
+                            chapter_wide=chapter_wide,
+                        )
+                else:
+                    append_anchor(
+                        section_index=section_index,
+                        position=match.start(),
+                        topic=topic,
+                        kind="exercise",
+                        label=question_label,
+                        parent_label=heading,
+                        task=task_text,
+                        chapter_wide=chapter_wide,
+                    )
 
         # Explicit checkpoint questions often live inside prose/boxed blocks
         # rather than under a numbered exercise heading. Capture their literal
@@ -2981,6 +3019,25 @@ def _inventory_items_match(item: dict, anchor: dict) -> bool:
 def _merge_source_task_anchors(items: list[dict], anchors: list[dict]) -> list[dict]:
     """Backfill missing deterministic anchors and canonicalize matching rows."""
     merged = [dict(item) for item in items]
+    parent_counts: dict[str, int] = {}
+    for anchor in anchors:
+        parent = bi.normalize_question_text(
+            anchor.get("parent_source_label", ""))
+        if parent:
+            parent_counts[parent] = parent_counts.get(parent, 0) + 1
+    split_parent_labels = {
+        parent for parent, count in parent_counts.items() if count > 1
+    }
+    if split_parent_labels:
+        # A model may keep a compound Q1(a-e) as one item while deterministic
+        # anchors split its independently assessable subparts. Remove only the
+        # trace-equivalent parent row so the full question is not classified
+        # once as an umbrella and again per concept.
+        merged = [
+            item for item in merged
+            if bi.normalize_question_text(item.get("source_label", ""))
+            not in split_parent_labels
+        ]
     for anchor in anchors:
         match_index = next(
             (i for i, item in enumerate(merged)
@@ -4993,6 +5050,101 @@ def _collapse_assignment_units_for_render(units: list[dict]) -> list[dict]:
     return collapsed
 
 
+_ASSIGNMENT_PREFIX_STOPWORDS = {
+    "appl", "base", "case", "conc", "desc", "dete", "exam", "expl",
+    "find", "give", "iden", "inte", "ques", "sour", "stat", "usin",
+    "writ",
+}
+_MIXED_ASSIGNMENT_CUE_RE = re.compile(
+    r"\b(?:any\s+two|two\s+(?:countries|cases|methods|concepts)|"
+    r"compare|comparison|across\s+(?:cases|concepts|topics)|"
+    r"several|multiple|combine|synthesi[sz]e)\b",
+    re.IGNORECASE,
+)
+
+
+def _assignment_prefixes(text: str) -> set[str]:
+    prefixes: set[str] = set()
+    for word in _topic_comparison_key(text).split():
+        if len(word) < 4:
+            continue
+        prefix = word[:4]
+        if prefix not in _ASSIGNMENT_PREFIX_STOPWORDS:
+            prefixes.add(prefix)
+    return prefixes
+
+
+def _assignment_unit_text(mtype: dict) -> str:
+    parts = [
+        mtype.get("type_title") or "",
+        mtype.get("type_description") or "",
+        mtype.get("task_pattern") or "",
+        mtype.get("concept_match_hint") or "",
+    ]
+    for case in mtype.get("case_prompts") or []:
+        if not isinstance(case, dict):
+            parts.append(str(case))
+            continue
+        parts.extend([
+            case.get("case_title") or "",
+            case.get("case_signature") or "",
+        ])
+        parts.extend(
+            example.get("example_prompt") or ""
+            for example in _case_examples(case)
+        )
+    return " ".join(str(part) for part in parts if part)
+
+
+def _high_confidence_assignment_override(
+    mtype: dict, candidate_cids: tuple[str, ...],
+    concept_payload_by_id: dict[str, dict],
+) -> str:
+    """Use unambiguous task/title evidence before accepting a model guess."""
+    candidates = [
+        concept_payload_by_id[cid] for cid in candidate_cids
+        if cid in concept_payload_by_id
+    ]
+    culminations = [
+        row["concept_id"] for row in candidates if row.get("is_culmination")
+    ]
+    if mtype.get("is_activity") and len(culminations) == 1:
+        return culminations[0]
+
+    normal = [row for row in candidates if not row.get("is_culmination")]
+    title_prefixes = {
+        row["concept_id"]: _assignment_prefixes(row.get("concept") or "")
+        for row in normal
+    }
+    topic_prefixes = _assignment_prefixes(
+        " ".join(row.get("topic") or "" for row in normal))
+    prefix_frequency: dict[str, int] = {}
+    for prefixes in title_prefixes.values():
+        for prefix in prefixes - topic_prefixes:
+            prefix_frequency[prefix] = prefix_frequency.get(prefix, 0) + 1
+    evidence = _assignment_unit_text(mtype)
+    evidence_prefixes = _assignment_prefixes(evidence)
+    scores = {
+        cid: len({
+            prefix for prefix in prefixes - topic_prefixes
+            if prefix_frequency.get(prefix) == 1
+            and prefix in evidence_prefixes
+        })
+        for cid, prefixes in title_prefixes.items()
+    }
+    ranked = sorted(scores.items(), key=lambda pair: pair[1], reverse=True)
+    if ranked and ranked[0][1] > 0:
+        runner_up = ranked[1][1] if len(ranked) > 1 else 0
+        if ranked[0][1] > runner_up:
+            return ranked[0][0]
+    if (
+        len(culminations) == 1
+        and _MIXED_ASSIGNMENT_CUE_RE.search(evidence)
+    ):
+        return culminations[0]
+    return ""
+
+
 def _assign_mined_types_via_api(
     records: list[dict], *, meta: dict, mined_types: dict, max_attempts: int = 4,
 ) -> list[dict]:
@@ -5123,6 +5275,19 @@ def _assign_mined_types_via_api(
         ]
         candidate_cid_set = set(candidate_cids)
         remaining_in_group = set(group_type_ids)
+        overridden = 0
+        for tid in group_type_ids:
+            cid = _high_confidence_assignment_override(
+                types_by_id[tid], candidate_cids, concept_payload_by_id)
+            if not cid:
+                continue
+            per_concept.setdefault(cid, []).append(types_by_id[tid])
+            remaining_in_group.discard(tid)
+            overridden += 1
+        if overridden:
+            progress.log(
+                f"Placed {overridden} Type assignment unit(s) using "
+                "unambiguous source/concept evidence.")
         scope_label = (
             types_by_id[group_type_ids[0]].get("topic_match_hint")
             or "unscoped chapter"
