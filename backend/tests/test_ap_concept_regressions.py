@@ -1765,6 +1765,7 @@ def test_task_grounded_concept_fragments_consolidate_before_types(monkeypatch):
     def fake_api(system, user):
         assert "task varieties belong later as Types/Cases/Examples" in (
             " ".join(system.split()))
+        assert "return AT MOST 3 rows" in user
         return {"rows": [
             _api_row(_row(
                 topic,

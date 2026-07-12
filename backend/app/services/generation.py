@@ -6647,9 +6647,21 @@ def _consolidate_task_grounded_fragments_via_api(
         if len(topic_records) < 3:
             continue
         topic = (topic_records[0].get("topic") or "").strip()
+        task_grounded_count = sum(
+            not _method_anchor_ids(record)
+            and bool(_QUESTION_GROUNDED_EVIDENCE_RE.search(
+                record.get("source_evidence") or ""))
+            for record in topic_records
+        )
+        max_rows = max(
+            2, len(topic_records) - task_grounded_count + 2)
         user = (
             _metadata_block(meta)
             + f"\nSOURCE TOPIC: {topic}\n"
+            + f"CONSOLIDATION BOUND: return AT MOST {max_rows} rows. "
+            + f"The draft has {task_grounded_count} question-grounded rows; "
+            + "retain no more than two durable application/modeling objectives "
+            + "for those rows, while preserving distinct non-task objectives.\n"
             + "\nDRAFT CONCEPT ROWS:\n"
             + _json.dumps(
                 {"rows": _records_to_api_rows(topic_records)},
@@ -6667,7 +6679,7 @@ def _consolidate_task_grounded_fragments_via_api(
         candidate = _preserve_required_method_rows(topic_records, candidate)
         candidate = _dedupe_titles_chapter_wide(
             _ensure_parent_concepts(candidate))
-        if 2 <= len(candidate) < len(topic_records):
+        if 2 <= len(candidate) <= max_rows < len(topic_records):
             replacement_by_key[topic_key] = candidate
             progress.log(
                 f"Consolidated task-grounded concept fragments in {topic!r}: "
