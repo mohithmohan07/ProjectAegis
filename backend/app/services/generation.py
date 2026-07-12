@@ -5894,6 +5894,25 @@ _CASE_SPLIT_RE = re.compile(r"(?=\bCase\s+\d{1,2}:)", re.IGNORECASE)
 _EXAMPLE_LINE_RE = re.compile(r"\bExamples?\s*:\s*", re.IGNORECASE)
 
 
+def _inventory_coverage_debug_log(
+    location: str, message: str, data: dict, hypothesis_id: str,
+) -> None:
+    """Temporary diagnostics for the live rendered-inventory hard gate."""
+    import json as _json
+    import time
+
+    # region agent log
+    with open("/opt/cursor/logs/debug.log", "a") as stream:
+        stream.write(_json.dumps({
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(time.time() * 1000),
+        }, ensure_ascii=False) + "\n")
+    # endregion
+
+
 def _inventory_lookup_texts(inventory: dict | None) -> list[str]:
     """Full teacher-facing task texts from the Question / Task Inventory."""
     out: list[str] = []
@@ -5912,8 +5931,20 @@ def _inventory_lookup_texts(inventory: dict | None) -> list[str]:
 def _rendered_type_examples(records: list[dict]) -> list[str]:
     """Extract public Example prompts from rendered Types sections."""
     examples: list[str] = []
-    for record in records:
-        body = _types_body(record.get("concept_details", ""))
+    bodies = [
+        _types_body(record.get("concept_details", ""))
+        for record in records
+    ]
+    # region agent log
+    _inventory_coverage_debug_log(
+        "generation.py:_rendered_type_examples:entry",
+        "Starting rendered Example extraction",
+        {"record_count": len(records),
+         "types_body_count": sum(bool(body) for body in bodies)},
+        "A,B,C,D,E",
+    )
+    # endregion
+    for body in bodies:
         for chunk in [
             part.strip() for part in _TYPE_SPLIT_RE.split(body)
             if part.strip()
@@ -5939,25 +5970,75 @@ def _rendered_type_examples(records: list[dict]) -> list[str]:
                     for piece in pieces[1:]
                     if piece.strip()
                 )
+    # region agent log
+    _inventory_coverage_debug_log(
+        "generation.py:_rendered_type_examples:exit",
+        "Finished rendered Example extraction",
+        {
+            "example_count": len(examples),
+            "type_token_count": sum(
+                len(_TYPE_SPLIT_RE.findall(body)) for body in bodies),
+            "case_token_count": sum(
+                len(_CASE_SPLIT_RE.findall(body)) for body in bodies),
+            "example_token_count": sum(
+                len(_EXAMPLE_LINE_RE.findall(body)) for body in bodies),
+        },
+        "A,B,C",
+    )
+    # endregion
     return examples
+
+
+def _rendered_inventory_example_counts(
+    records: list[dict], expected_keys: set[str],
+) -> dict[str, int]:
+    """Count exact inventory prompts that occupy rendered Example slots.
+
+    Inventory text is authoritative framing here. Parsing the flat public
+    ``Types`` string structurally is ambiguous when a source question itself
+    contains ``Type NN:``, ``Case NN:``, or ``Example:``. Match each known
+    prompt immediately after an Example marker and require the following text
+    to be the next structural marker (or the end of the Types section).
+    """
+    counts = {key: 0 for key in expected_keys if key}
+    for record in records:
+        body = bi.normalize_question_text(
+            _types_body(record.get("concept_details", "")))
+        for marker in _EXAMPLE_LINE_RE.finditer(body):
+            suffix = body[marker.end():]
+            for key in counts:
+                if not suffix.startswith(key):
+                    continue
+                tail = suffix[len(key):].lstrip()
+                if not tail or re.match(
+                    r"^(?:(?:Miscellaneous\s+)?Type\s+\d{1,2}:"
+                    r"|Case\s+\d{1,2}:|Examples?\s*:)",
+                    tail,
+                    re.IGNORECASE,
+                ):
+                    counts[key] += 1
+    return counts
 
 
 def _rendered_inventory_coverage_defects(
     records: list[dict], inventory: dict | None,
 ) -> dict:
     """Missing/duplicate inventory prompts in rendered public Examples."""
-    rendered_counts: dict[str, int] = {}
-    for example in _rendered_type_examples(records):
-        key = bi.normalize_question_text(example)
-        if key:
-            rendered_counts[key] = rendered_counts.get(key, 0) + 1
-    expected_by_qid = {
-        (item.get("qid") or "").strip():
-        bi.normalize_question_text(_inventory_task_text(item))
+    import difflib
+
+    examples = _rendered_type_examples(records)
+    items_by_qid = {
+        (item.get("qid") or "").strip(): item
         for item in (inventory or {}).get("items") or []
         if (item.get("qid") or "").strip()
     }
-    return {
+    expected_by_qid = {
+        qid: bi.normalize_question_text(_inventory_task_text(item))
+        for qid, item in items_by_qid.items()
+    }
+    rendered_counts = _rendered_inventory_example_counts(
+        records, set(expected_by_qid.values()))
+    defects = {
         "missing": sorted(
             qid for qid, key in expected_by_qid.items()
             if not key or rendered_counts.get(key, 0) == 0
@@ -5967,6 +6048,54 @@ def _rendered_inventory_coverage_defects(
             if key and rendered_counts.get(key, 0) > 1
         ),
     }
+    missing_details = []
+    normalized_bodies = [
+        bi.normalize_question_text(_types_body(
+            record.get("concept_details", "")))
+        for record in records
+    ]
+    for qid in defects["missing"]:
+        expected = _inventory_task_text(items_by_qid[qid])
+        expected_key = expected_by_qid[qid]
+        closest = max(
+            examples,
+            key=lambda example: difflib.SequenceMatcher(
+                None, expected_key,
+                bi.normalize_question_text(example)).ratio(),
+            default="",
+        )
+        missing_details.append({
+            "qid": qid,
+            "expected": expected,
+            "closest": closest,
+            "similarity": round(difflib.SequenceMatcher(
+                None, expected_key,
+                bi.normalize_question_text(closest)).ratio(), 4),
+            "present_contiguously_in_types": any(
+                expected_key and expected_key in body
+                for body in normalized_bodies
+            ),
+            "embedded_type_tokens": _TYPE_SPLIT_RE.findall(expected),
+            "embedded_case_tokens": _CASE_SPLIT_RE.findall(expected),
+            "embedded_example_tokens": _EXAMPLE_LINE_RE.findall(expected),
+            "source_label_strip_changed": (
+                _strip_leading_source_task_label(expected) != expected),
+        })
+    # region agent log
+    _inventory_coverage_debug_log(
+        "generation.py:_rendered_inventory_coverage_defects:result",
+        "Classified rendered inventory coverage defects",
+        {
+            "expected_count": len(expected_by_qid),
+            "unique_rendered_count": len(rendered_counts),
+            "missing": defects["missing"],
+            "duplicate": defects["duplicate"],
+            "missing_details": missing_details,
+        },
+        "A,B,C,D,E",
+    )
+    # endregion
+    return defects
 
 
 def _accept_exact_inventory_type_review(
@@ -8270,6 +8399,8 @@ def concepts_from_mmd(
             allowed_source_examples=_inventory_source_examples(
                 question_task_inventory))
         out = _preserve_required_method_rows(before_final_repair, out)
+        out = _accept_exact_inventory_type_review(
+            before_final_repair, out, question_task_inventory)
         # Post-repair: neutralize ONLY rows the repair pass could not fix —
         # rows that already validate cleanly keep their full GPT-authored
         # wording untouched (no blanket deterministic rewriting).

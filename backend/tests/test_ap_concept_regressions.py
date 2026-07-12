@@ -1253,9 +1253,27 @@ def test_final_boundary_salvages_short_case_reintroduced_by_later_pass(
     monkeypatch.setattr(
         g, "_merge_similar_concepts_via_api",
         lambda records, **kwargs: records)
+
+    final_repair_mutated = False
+
+    def mutate_inventory_prompt_during_final_repair(records, **kwargs):
+        nonlocal final_repair_mutated
+        out = [dict(record) for record in records]
+        if kwargs.get("stage") == "final":
+            target = next(
+                record for record in out
+                if record["concept_title"] == normal["concept_title"]
+            )
+            target["concept_details"] = target["concept_details"].replace(
+                full_question,
+                full_question.replace("justify the answer", "explain the answer"),
+            )
+            final_repair_mutated = True
+        return out
+
     monkeypatch.setattr(
         g, "_repair_records_via_api",
-        lambda records, **kwargs: records)
+        mutate_inventory_prompt_during_final_repair)
     monkeypatch.setattr(
         g, "_ensure_misconceptions_via_api",
         lambda records, **kwargs: records)
@@ -1305,6 +1323,7 @@ def test_final_boundary_salvages_short_case_reintroduced_by_later_pass(
         live=True,
     )
 
+    assert final_repair_mutated
     assert reintroduced_short_case
     assert len(salvage_outputs) == 2
     final = next(

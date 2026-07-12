@@ -1491,6 +1491,44 @@ def test_type_review_cannot_drop_or_duplicate_inventory_examples():
     }
 
 
+def test_rendered_inventory_coverage_handles_embedded_structure_tokens_exactly():
+    prompt = (
+        r"Compare Type 12: direct use with Case 03: boundary reasoning. "
+        r"For Example: preserve \begin{figure} and max width=\textwidth exactly."
+    )
+    inventory = {"items": [{
+        "qid": "QINV-0001",
+        "raw_task": prompt,
+    }]}
+    records = [{
+        "topic": "Reusable Tasks",
+        "parent_concept": "Exact Source Questions",
+        "concept_title": "Structural Words Inside a Question",
+        "concept_details": (
+            "Description: Structural words may be source content. // Types: "
+            "Type 01: Interpret a source Case 01: Keep literal wording "
+            f"Example: {prompt} // Misconceptions: Do not rewrite the source."
+        ),
+        "keywords": "",
+    }]
+
+    # The generic flat-string parser cannot disambiguate source-owned markers;
+    # exact coverage must therefore use inventory framing rather than its parts.
+    assert prompt not in g._rendered_type_examples(records)
+    assert g._rendered_inventory_coverage_defects(records, inventory) == {
+        "missing": [],
+        "duplicate": [],
+    }
+
+    mutated = [dict(records[0])]
+    mutated[0]["concept_details"] = mutated[0]["concept_details"].replace(
+        r"max width=\textwidth", "max width=textwidth")
+    assert g._rendered_inventory_coverage_defects(mutated, inventory) == {
+        "missing": ["QINV-0001"],
+        "duplicate": [],
+    }
+
+
 def test_unambiguous_case_evidence_overrides_wrong_concept_guess():
     concepts = {
         "CONCEPT-0001": {
