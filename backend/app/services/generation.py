@@ -1140,6 +1140,8 @@ COVERAGE IS MANDATORY (most important rule):
   source_evidence. Multiple anchors may share one concept when they are steps
   or equivalent forms of the same mastery objective; distinct methods remain
   distinct concepts.
+- Derivations and formula-building sequences are method concepts whenever the
+  source teaches them as reusable reasoning, independent of the subject label.
 - When the source is a story, play, poem, speech, memoir, or other literary
   work, use its own episode/scene/stanza/argument structure. Cover major
   episodes and analytical elements evidenced by the text, including narrative
@@ -2132,7 +2134,8 @@ def _split_mmd_into_chunks(mmd_text: str, max_chars: int | None = None) -> list[
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 _EXERCISE_RE = re.compile(
-    r"\b(exercise|ex\.|review|practice|problems?|questions?)\b", re.IGNORECASE)
+    r"\b(exercises?|ex\.|review|practice|problems?|questions?)\b",
+    re.IGNORECASE)
 _SECTION_NUM_PREFIX_RE = re.compile(
     r"^\s*(?:chapter\s+)?(?:\d+(?:\.\d+)*[\).\s:-]+|[A-Z][\).:-]+\s*)",
     re.IGNORECASE,
