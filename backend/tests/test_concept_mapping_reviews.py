@@ -674,6 +674,61 @@ def test_neutralize_unrepaired_rows_keeps_clean_rows_verbatim():
     assert "Example 11" not in out[1]["concept_details"]
 
 
+def test_neutralize_preserves_exact_inventory_owned_figure_prompt():
+    task = (
+        "Look at Fig. 14(a). Do you think that the people living in any of "
+        "these regions thought of themselves as Italians? Examine Fig. 14(b). "
+        "Which was the first region to become a part of unified Italy? Which "
+        "was the last region to join? In which year did the largest number "
+        "of states join?"
+    )
+    inventory = {"items": [{"qid": "QINV-0031", "raw_task": task}]}
+    rows = [{
+        "topic": "Italian Unification",
+        "parent_concept": "National Unification",
+        "concept_title": "Regions of Unified Italy",
+        "concept_details": (
+            "Description: See Example 11 for the regional sequence. // "
+            "Types: Type 01: Interpreting territorial change over time "
+            f"Case 01: Compare mapped stages Example: {task} // "
+            "Misconceptions: Students may treat unification as simultaneous."
+        ),
+        "keywords": "",
+    }]
+
+    out = g._neutralize_unrepaired_rows(
+        rows, inventory=inventory)
+
+    assert "Example 11" not in out[0]["concept_details"]
+    assert task in out[0]["concept_details"]
+    assert g._rendered_inventory_coverage_defects(out, inventory) == {
+        "missing": [],
+        "duplicate": [],
+    }
+    report = concept_validator.validate_concept_rows(
+        out,
+        allow_types=True,
+        allowed_source_examples=g._inventory_source_examples(inventory),
+    )
+    assert not any(
+        error["code"] == "source_artifact"
+        for error in report["errors"]
+    )
+
+    unowned = [dict(out[0])]
+    unowned[0]["concept_details"] = unowned[0]["concept_details"].replace(
+        "Fig. 14(a)", "Fig. 15(a)")
+    hard_gate = concept_validator.validate_concept_rows(
+        unowned,
+        allow_types=True,
+        allowed_source_examples=g._inventory_source_examples(inventory),
+    )
+    assert any(
+        error["code"] == "source_artifact"
+        for error in hard_gate["errors"]
+    )
+
+
 def test_chapter_meta_summary_retries_before_deterministic_fallback(monkeypatch, db):
     calls = {"n": 0}
 

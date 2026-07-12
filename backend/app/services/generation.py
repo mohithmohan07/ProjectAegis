@@ -5503,12 +5503,15 @@ def _fatal_errors(report: dict) -> list[dict]:
 def _repair_records_via_api(
     records: list[dict], *, meta: dict, stage: str, source_context: str = "",
     max_attempts: int = 2, strict: bool = False,
+    allowed_source_examples: tuple[str, ...] | list[str] = (),
 ) -> list[dict]:
     """Validate rows and ask the repair prompt to fix hard failures."""
     records = _ensure_parent_concepts(records)
     opts = _validation_options(stage)
     for attempt in range(max_attempts + 1):
-        report = cv.validate_concept_rows(records, **opts)
+        report = cv.validate_concept_rows(
+            records, **opts,
+            allowed_source_examples=allowed_source_examples)
         hard = [e for e in report["errors"] if e["severity"] == "error"]
         progress.log(
             f"{stage}: validation found {len(hard)} error(s), "
@@ -5586,15 +5589,61 @@ def _artifact_match_snippet(rec: dict) -> str:
     return m.group(0) if m else ""
 
 
-def _neutralize_unrepaired_rows(records: list[dict]) -> list[dict]:
+_INVENTORY_EXAMPLE_SEGMENT_RE = re.compile(
+    r"(\bExamples?\s*:\s*)(.*?)"
+    r"(?=\bExamples?\s*:|\b(?:Case|Type)\s+\d{1,2}:|\s+//\s+|$)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _inventory_source_examples(inventory: dict | None) -> list[str]:
+    """Canonical public prompts that are identity-linked to inventory qids."""
+    return [
+        text
+        for item in (inventory or {}).get("items") or []
+        if isinstance(item, dict)
+        for text in [_inventory_task_text(item)]
+        if text
+    ]
+
+
+def _mask_inventory_examples(
+    details: str, inventory: dict | None,
+) -> tuple[str, dict[str, str]]:
+    """Protect exact inventory-owned Examples during destructive cleanup."""
+    source_by_key = {
+        bi.normalize_question_text(text): text
+        for text in _inventory_source_examples(inventory)
+    }
+    replacements: dict[str, str] = {}
+
+    def replace(match: re.Match) -> str:
+        source = source_by_key.get(
+            bi.normalize_question_text(match.group(2)))
+        if not source:
+            return match.group(0)
+        token = f"__INVENTORY_SOURCE_EXAMPLE_{len(replacements):04d}__"
+        replacements[token] = source
+        return match.group(1) + token
+
+    return _INVENTORY_EXAMPLE_SEGMENT_RE.sub(
+        replace, details or ""), replacements
+
+
+def _neutralize_unrepaired_rows(
+    records: list[dict], *, inventory: dict | None = None,
+) -> list[dict]:
     """Destructively neutralize source artifacts ONLY where GPT repair failed.
 
     Rows that validate cleanly keep their GPT-authored wording verbatim; the
     deterministic rewriter is a per-row last resort, never a blanket pass.
     Re-runs once if a cleaned row still matches (regex drift / OCR forms).
     """
+    allowed_source_examples = _inventory_source_examples(inventory)
     report = cv.validate_concept_rows(
-        records, allow_types=True, require_culmination=True, allow_culmination=True)
+        records, allow_types=True, require_culmination=True,
+        allow_culmination=True,
+        allowed_source_examples=allowed_source_examples)
     failing = {
         e["row_index"] for e in report["errors"]
         if e.get("severity") == "error" and e.get("row_index", -1) >= 0
@@ -5602,8 +5651,18 @@ def _neutralize_unrepaired_rows(records: list[dict]) -> list[dict]:
     }
     out: list[dict] = []
     for i, rec in enumerate(records):
-        out.append(concept_cleanup.clean_concept_record(
-            dict(rec), neutralize_artifacts=i in failing))
+        candidate = dict(rec)
+        replacements: dict[str, str] = {}
+        if i in failing and candidate.get("concept_details"):
+            candidate["concept_details"], replacements = (
+                _mask_inventory_examples(
+                    candidate["concept_details"], inventory))
+        cleaned = concept_cleanup.clean_concept_record(
+            candidate, neutralize_artifacts=i in failing)
+        for token, source in replacements.items():
+            cleaned["concept_details"] = cleaned["concept_details"].replace(
+                token, source)
+        out.append(cleaned)
     if failing:
         snippets = []
         for idx in sorted(failing)[:5]:
@@ -5621,7 +5680,9 @@ def _neutralize_unrepaired_rows(records: list[dict]) -> list[dict]:
         # Second pass: any row that STILL fails after neutralize (regex gap)
         # gets cleaned again so final validation is not blocked.
         again = cv.validate_concept_rows(
-            out, allow_types=True, require_culmination=True, allow_culmination=True)
+            out, allow_types=True, require_culmination=True,
+            allow_culmination=True,
+            allowed_source_examples=allowed_source_examples)
         still = {
             e["row_index"] for e in again["errors"]
             if e.get("severity") == "error" and e.get("row_index", -1) >= 0
@@ -5631,8 +5692,16 @@ def _neutralize_unrepaired_rows(records: list[dict]) -> list[dict]:
             for idx in still:
                 if 0 <= idx < len(out):
                     snip = _artifact_match_snippet(out[idx])
-                    out[idx] = concept_cleanup.clean_concept_record(
-                        dict(out[idx]), neutralize_artifacts=True)
+                    candidate = dict(out[idx])
+                    candidate["concept_details"], replacements = (
+                        _mask_inventory_examples(
+                            candidate.get("concept_details", ""), inventory))
+                    cleaned = concept_cleanup.clean_concept_record(
+                        candidate, neutralize_artifacts=True)
+                    for token, source in replacements.items():
+                        cleaned["concept_details"] = (
+                            cleaned["concept_details"].replace(token, source))
+                    out[idx] = cleaned
                     progress.log(
                         f"  re-scrubbed row {idx} after neutralize residual"
                         + (f" ({snip!r})" if snip else "") + ".",
@@ -5984,9 +6053,14 @@ def _salvage_short_case_examples(
     return out
 
 
-def _validate_final_or_raise(records: list[dict], *, stage: str = "final") -> dict:
+def _validate_final_or_raise(
+    records: list[dict], *, stage: str = "final",
+    inventory: dict | None = None,
+) -> dict:
     report = cv.validate_concept_rows(
-        records, allow_types=True, require_culmination=True, allow_culmination=True)
+        records, allow_types=True, require_culmination=True,
+        allow_culmination=True,
+        allowed_source_examples=_inventory_source_examples(inventory))
     fatal = _fatal_errors(report)
     progress.log(
         f"{stage}: final validation found {len(fatal)} fatal error(s), "
@@ -6095,7 +6169,9 @@ def _assign_types_via_api(
             before_alignment, aligned, question_task_inventory)
         before_repair = merged
         repaired = _repair_records_via_api(
-            merged, meta=meta, stage="types", source_context=mmd_text)
+            merged, meta=meta, stage="types", source_context=mmd_text,
+            allowed_source_examples=_inventory_source_examples(
+                question_task_inventory))
         repaired = _accept_topic_safe_type_review(
             before_repair, repaired, mined_types)
         merged = _accept_exact_inventory_type_review(
@@ -6151,7 +6227,10 @@ def _assign_types_via_api(
             rec = dict(rec)
             rec["concept_details"] = _inject_types(rec.get("concept_details", ""), types_body)
         merged.append(rec)
-    merged = _repair_records_via_api(merged, meta=meta, stage="types", source_context=mmd_text)
+    merged = _repair_records_via_api(
+        merged, meta=meta, stage="types", source_context=mmd_text,
+        allowed_source_examples=_inventory_source_examples(
+            question_task_inventory))
     merged = _review_type_concept_alignment_via_api(
         merged,
         meta=meta,
@@ -6159,7 +6238,10 @@ def _assign_types_via_api(
         mined_types=mined_types,
         source_context=mmd_text,
     )
-    merged = _repair_records_via_api(merged, meta=meta, stage="types", source_context=mmd_text)
+    merged = _repair_records_via_api(
+        merged, meta=meta, stage="types", source_context=mmd_text,
+        allowed_source_examples=_inventory_source_examples(
+            question_task_inventory))
     with_types = sum(1 for r in merged if _has_meaningful_types(r.get("concept_details", "")))
     progress.log(
         f"Types assignment complete: {with_types}/{len(merged)} concepts have Types.",
@@ -8067,7 +8149,9 @@ def concepts_from_mmd(
         before_final_repair = out
         out = _repair_records_via_api(
             out, meta=meta, stage="final", source_context=mmd_text, strict=False,
-            max_attempts=3)
+            max_attempts=3,
+            allowed_source_examples=_inventory_source_examples(
+                question_task_inventory))
         out = _preserve_required_method_rows(before_final_repair, out)
         # region agent log
         _debug_inventory_coverage(
@@ -8076,7 +8160,8 @@ def concepts_from_mmd(
         # Post-repair: neutralize ONLY rows the repair pass could not fix —
         # rows that already validate cleanly keep their full GPT-authored
         # wording untouched (no blanket deterministic rewriting).
-        out = _neutralize_unrepaired_rows(out)
+        out = _neutralize_unrepaired_rows(
+            out, inventory=question_task_inventory)
         # region agent log
         _debug_inventory_coverage(
             "first_neutralize", out, question_task_inventory)
@@ -8088,7 +8173,8 @@ def concepts_from_mmd(
             out, inventory=question_task_inventory)
         # Salvage may leave a bare figure ref if inventory lacked the URL;
         # re-neutralize any residual source_artifact rows only.
-        out = _neutralize_unrepaired_rows(out)
+        out = _neutralize_unrepaired_rows(
+            out, inventory=question_task_inventory)
         # region agent log
         _debug_inventory_coverage(
             "short_case_salvage", out, question_task_inventory)
@@ -8112,7 +8198,8 @@ def concepts_from_mmd(
         # Mastery/misconception GPT passes can reintroduce Example/Fig/page
         # pointers — scrub source_artifact one last time immediately before
         # the hard final gate so deposit is never blocked by residual refs.
-        out = _neutralize_unrepaired_rows(out)
+        out = _neutralize_unrepaired_rows(
+            out, inventory=question_task_inventory)
         out = _restore_method_anchor_rows(out, method_row_snapshot)
         # Restoration is the terminal row-membership operation. Only
         # non-dropping field/ordering guarantees may run after this point.
@@ -8174,13 +8261,16 @@ def concepts_from_mmd(
             out, inventory=question_task_inventory)
         boundary_report = cv.validate_concept_rows(
             out, allow_types=True, require_culmination=True,
-            allow_culmination=True)
+            allow_culmination=True,
+            allowed_source_examples=_inventory_source_examples(
+                question_task_inventory))
         if any(
             error.get("code") == "source_artifact"
             and error.get("severity") == "error"
             for error in boundary_report["errors"]
         ):
-            out = _neutralize_unrepaired_rows(out)
+            out = _neutralize_unrepaired_rows(
+                out, inventory=question_task_inventory)
         # region agent log
         _debug_inventory_coverage(
             "terminal_boundary", out, question_task_inventory)
@@ -8197,7 +8287,8 @@ def concepts_from_mmd(
                 f"{len(rendered_inventory_defects['duplicate'])} duplicate "
                 "source question(s)"
             )
-        _validate_final_or_raise(out, stage="final")
+        _validate_final_or_raise(
+            out, stage="final", inventory=question_task_inventory)
         missing = sum(
             1 for r in out
             if not _has_meaningful_types(r.get("concept_details", ""))

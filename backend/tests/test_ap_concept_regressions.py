@@ -1811,7 +1811,8 @@ def test_concept_pipeline_reports_progress_after_skeleton(monkeypatch):
         g, "_repair_records_via_api",
         lambda records, **kwargs: records)
     monkeypatch.setattr(
-        g, "_neutralize_unrepaired_rows", lambda records: records)
+        g, "_neutralize_unrepaired_rows",
+        lambda records, **kwargs: records)
     monkeypatch.setattr(
         g, "_salvage_short_case_examples",
         lambda records, **kwargs: records)
