@@ -1206,6 +1206,42 @@ def test_chapter_wide_tasks_are_semantically_distributed(monkeypatch):
     ]
 
 
+def test_chapter_wide_task_placement_retries_invalid_topic(monkeypatch):
+    calls = {"count": 0}
+    records = [{
+        "topic": "Visualising the Nation",
+        "parent_concept": "Allegory",
+        "concept_title": "National Allegory",
+        "concept_details": "Description: Nations were personified.",
+        "keywords": "",
+    }]
+    inventory = {"items": [{
+        "qid": "QINV-0001",
+        "raw_task": "Interpret the symbols carried by Germania.",
+        "source_kind": "exercise",
+        "_topic_scope": "chapter",
+    }]}
+
+    def fake_api(system, user):
+        calls["count"] += 1
+        topic = "Invented Review Topic" if calls["count"] == 1 else (
+            "Visualising the Nation")
+        return {"assignments": [{"qid": "QINV-0001", "topic": topic}]}
+
+    monkeypatch.setattr(g, "_openai_json", fake_api)
+    out = g._assign_chapter_wide_inventory_topics_via_api(
+        meta=g._metadata(subject="Any"),
+        inventory=inventory,
+        records=records,
+        source_topic_excerpts=[{
+            "topic": "Visualising the Nation",
+            "excerpt": "Germania carries symbolic attributes.",
+        }],
+    )
+    assert calls["count"] == 2
+    assert out["items"][0]["topic_hint"] == "Visualising the Nation"
+
+
 def test_repeated_type_definitions_merge_into_cases():
     types = [
         {

@@ -3054,7 +3054,7 @@ def _inventory_stats(items: list[dict]) -> dict:
 
 def _assign_chapter_wide_inventory_topics_via_api(
     *, meta: dict, inventory: dict, records: list[dict],
-    source_topic_excerpts: list[dict],
+    source_topic_excerpts: list[dict], max_attempts: int = 3,
 ) -> dict:
     """Semantically place final chapter-review tasks across source topics."""
     import json as _json
@@ -3096,48 +3096,71 @@ def _assign_chapter_wide_inventory_topics_via_api(
         (item.get("qid") or "").strip() for item in targets
         if (item.get("qid") or "").strip()
     }
-    payload = {
-        "source_topics": topics,
-        "chapter_wide_tasks": [
-            {
-                "qid": item.get("qid", ""),
-                "task": _inventory_task_text(item),
-                "source_kind": item.get("source_kind", ""),
-            }
-            for item in targets
-        ],
-    }
-    user = (
-        _metadata_block(meta)
-        + "\nSOURCE TOPICS, CONCEPTS, AND CHAPTER-WIDE TASKS:\n"
-        + _json.dumps(payload, ensure_ascii=False)
-    )
-    data = _openai_json(
-        prompts.get_text("concepts.chapter_wide_task_topics.system"), user)
     valid_topics = {
         _topic_comparison_key(entry["topic"]): entry["topic"]
         for entry in topics
     }
     assigned: dict[str, str] = {}
-    invalid: list[str] = []
-    for row in data.get("assignments") or []:
-        if not isinstance(row, dict):
-            continue
-        qid = (row.get("qid") or "").strip()
-        topic_key = _topic_comparison_key(row.get("topic") or "")
-        if (
-            qid not in target_qids
-            or qid in assigned
-            or topic_key not in valid_topics
-        ):
-            invalid.append(qid or "(blank)")
-            continue
-        assigned[qid] = valid_topics[topic_key]
+    target_by_qid = {
+        (item.get("qid") or "").strip(): item for item in targets
+    }
+    system = prompts.get_text("concepts.chapter_wide_task_topics.system")
+    for attempt in range(1, max_attempts + 1):
+        pending_qids = [
+            qid for qid in target_by_qid if qid not in assigned
+        ]
+        if not pending_qids:
+            break
+        payload = {
+            "source_topics": topics,
+            "chapter_wide_tasks": [
+                {
+                    "qid": qid,
+                    "task": _inventory_task_text(target_by_qid[qid]),
+                    "source_kind": target_by_qid[qid].get("source_kind", ""),
+                }
+                for qid in pending_qids
+            ],
+        }
+        user = (
+            _metadata_block(meta)
+            + "\nSOURCE TOPICS, CONCEPTS, AND CHAPTER-WIDE TASKS:\n"
+            + _json.dumps(payload, ensure_ascii=False)
+        )
+        if attempt > 1:
+            user += (
+                "\n\nCORRECTION: Assign every pending qid exactly once using "
+                "one exact topic string from source_topics. Your previous "
+                "answer omitted a qid or used an invalid topic."
+            )
+        data = _openai_json(system, user)
+        rejected = 0
+        for row in data.get("assignments") or []:
+            if not isinstance(row, dict):
+                rejected += 1
+                continue
+            qid = (row.get("qid") or "").strip()
+            topic_key = _topic_comparison_key(row.get("topic") or "")
+            if (
+                qid not in pending_qids
+                or qid in assigned
+                or topic_key not in valid_topics
+            ):
+                rejected += 1
+                continue
+            assigned[qid] = valid_topics[topic_key]
+        if rejected or len(assigned) < len(target_qids):
+            progress.log(
+                f"Chapter-wide task placement attempt {attempt}: "
+                f"{len(assigned)}/{len(target_qids)} assigned; "
+                f"{rejected} invalid row(s) rejected.",
+                level="warning",
+            )
     missing = sorted(target_qids - set(assigned))
-    if missing or invalid:
+    if missing:
         raise RuntimeError(
             "chapter-wide task placement did not return exact valid assignments: "
-            f"missing={missing}, invalid={invalid}"
+            f"missing={missing}"
         )
     for item in targets:
         item["topic_hint"] = assigned[(item.get("qid") or "").strip()]
