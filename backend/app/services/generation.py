@@ -2663,7 +2663,8 @@ _SOLUTION_START_RE = re.compile(
 )
 _CHAPTER_WIDE_TASK_HEADING_RE = re.compile(
     r"^(?:chapter\s+)?(?:exercises?|questions?|review(?:\s+questions?)?|"
-    r"assessment|end[-\s]+of[-\s]+chapter\s+(?:review|questions?))\s*[:.]?$",
+    r"assessment|write\s+in\s+brief|discuss|project|"
+    r"end[-\s]+of[-\s]+chapter\s+(?:review|questions?))\s*[:.]?$",
     re.IGNORECASE,
 )
 _CHECKPOINT_CONTAINER_HEADING_RE = re.compile(
@@ -2752,7 +2753,11 @@ def _inventory_chunk_has_task_markers(chunk: dict) -> bool:
         if not body:
             continue
         heading = str(section.get("heading") or "")
-        if _EXERCISE_RE.search(heading):
+        if (
+            _EXERCISE_RE.search(heading)
+            or _CHAPTER_WIDE_TASK_HEADING_RE.match(
+                _strip_section_number(heading).strip())
+        ):
             return True
         if _INVENTORY_TASK_MARKER_RE.search(body):
             return True
@@ -2823,7 +2828,31 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
             )
 
         heading = section.get("heading") or ""
-        if _EXERCISE_RE.search(heading):
+        container_heading = _strip_section_number(heading).strip()
+        if (
+            not example_matches
+            and re.match(
+                r"^(?:activity|project)\b", container_heading,
+                re.IGNORECASE,
+            )
+        ):
+            append_anchor(
+                section_index=section_index,
+                position=0,
+                topic=topic,
+                kind="activity",
+                label=heading or f"Activity {section_index + 1}",
+                parent_label=heading,
+                task=body,
+                chapter_wide=chapter_wide,
+            )
+            continue
+        is_task_list_heading = bool(
+            _EXERCISE_RE.search(heading)
+            or _CHAPTER_WIDE_TASK_HEADING_RE.match(
+                _strip_section_number(heading).strip())
+        )
+        if is_task_list_heading:
             task_matches = list(_NUMBERED_TASK_START_RE.finditer(body))
             for i, match in enumerate(task_matches):
                 end = (
@@ -2846,7 +2875,7 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
         # Explicit checkpoint questions often live inside prose/boxed blocks
         # rather than under a numbered exercise heading. Capture their literal
         # asks as deterministic completeness evidence.
-        if not _EXERCISE_RE.search(heading) and not example_matches:
+        if not is_task_list_heading and not example_matches:
             question_prompts = _question_prompts_from_text(body)
             for question_index, task in enumerate(question_prompts, start=1):
                 append_anchor(
@@ -5609,6 +5638,82 @@ def _inventory_lookup_texts(inventory: dict | None) -> list[str]:
     return out
 
 
+def _rendered_type_examples(records: list[dict]) -> list[str]:
+    """Extract public Example prompts from rendered Types sections."""
+    examples: list[str] = []
+    for record in records:
+        body = _types_body(record.get("concept_details", ""))
+        for chunk in [
+            part.strip() for part in _TYPE_SPLIT_RE.split(body)
+            if part.strip()
+        ]:
+            case_parts = [
+                part.strip() for part in _CASE_SPLIT_RE.split(chunk)
+                if part.strip()
+            ]
+            if case_parts and not re.match(
+                r"^Case\s+\d{1,2}:", case_parts[0], re.IGNORECASE
+            ):
+                case_parts = case_parts[1:]
+            for case_chunk in case_parts:
+                match = re.match(
+                    r"^Case\s+\d{1,2}:\s*(.*)$",
+                    case_chunk,
+                    re.IGNORECASE | re.DOTALL,
+                )
+                case_body = (match.group(1) if match else case_chunk).strip()
+                pieces = _EXAMPLE_LINE_RE.split(case_body)
+                examples.extend(
+                    _strip_leading_source_task_label(piece).strip()
+                    for piece in pieces[1:]
+                    if piece.strip()
+                )
+    return examples
+
+
+def _rendered_inventory_coverage_defects(
+    records: list[dict], inventory: dict | None,
+) -> dict:
+    """Missing/duplicate inventory prompts in rendered public Examples."""
+    rendered_counts: dict[str, int] = {}
+    for example in _rendered_type_examples(records):
+        key = bi.normalize_question_text(example)
+        if key:
+            rendered_counts[key] = rendered_counts.get(key, 0) + 1
+    expected_by_qid = {
+        (item.get("qid") or "").strip():
+        bi.normalize_question_text(_inventory_task_text(item))
+        for item in (inventory or {}).get("items") or []
+        if (item.get("qid") or "").strip()
+    }
+    return {
+        "missing": sorted(
+            qid for qid, key in expected_by_qid.items()
+            if not key or rendered_counts.get(key, 0) == 0
+        ),
+        "duplicate": sorted(
+            qid for qid, key in expected_by_qid.items()
+            if key and rendered_counts.get(key, 0) > 1
+        ),
+    }
+
+
+def _accept_exact_inventory_type_review(
+    original: list[dict], candidate: list[dict], inventory: dict | None,
+) -> list[dict]:
+    """Reject a Types rewrite that loses or duplicates source questions."""
+    defects = _rendered_inventory_coverage_defects(candidate, inventory)
+    if defects["missing"] or defects["duplicate"]:
+        progress.log(
+            "Rejected Types rewrite that changed exact inventory coverage: "
+            f"{len(defects['missing'])} missing, "
+            f"{len(defects['duplicate'])} duplicated Example(s).",
+            level="warning",
+        )
+        return original
+    return candidate
+
+
 def _match_inventory_for_short_example(
     stub: str, inventory_texts: list[str], *, used: set[str],
     context: str = "",
@@ -5905,18 +6010,23 @@ def _assign_types_via_api(
             f"Embedding {len(mined_types['types'])} mined Types into concepts "
             "via API ID assignment.")
         merged = _assign_mined_types_via_api(records, meta=meta, mined_types=mined_types)
-        merged = _review_type_concept_alignment_via_api(
+        before_alignment = merged
+        aligned = _review_type_concept_alignment_via_api(
             merged,
             meta=meta,
             question_task_inventory=question_task_inventory,
             mined_types=mined_types,
             source_context=mmd_text,
         )
+        merged = _accept_exact_inventory_type_review(
+            before_alignment, aligned, question_task_inventory)
         before_repair = merged
         repaired = _repair_records_via_api(
             merged, meta=meta, stage="types", source_context=mmd_text)
-        merged = _accept_topic_safe_type_review(
+        repaired = _accept_topic_safe_type_review(
             before_repair, repaired, mined_types)
+        merged = _accept_exact_inventory_type_review(
+            before_repair, repaired, question_task_inventory)
         with_types = sum(1 for r in merged if _has_meaningful_types(r.get("concept_details", "")))
         progress.log(
             f"Types assignment complete: {with_types}/{len(merged)} concepts have Types.",
@@ -7095,7 +7205,8 @@ _NON_TOPIC_RE = re.compile(
     r"assertion\s*(?:and|&)?\s*reason(?:s)?|case\s+based(?:\s+questions?)?|"
     r"passage[-\s]+based(?:\s+questions?)?|source[-\s]+based(?:\s+questions?)?|"
     r"map\s+(?:work|skills?|questions?)|"
-    r"do\s+this|.*\bactivity\b.*|activities|project\s+work|things\s+to\s+remember|"
+    r"do\s+this|write\s+in\s+brief|discuss|.*\bactivity\b.*|activities|"
+    r"projects?(?:\s+work)?|things\s+to\s+remember|"
     r"points\s+to\s+remember|key\s+points|glossary)\b[\s\d.:()\-]*$",
     re.IGNORECASE,
 )
@@ -7969,6 +8080,18 @@ def concepts_from_mmd(
             for error in boundary_report["errors"]
         ):
             out = _neutralize_unrepaired_rows(out)
+        rendered_inventory_defects = _rendered_inventory_coverage_defects(
+            out, question_task_inventory)
+        if (
+            rendered_inventory_defects["missing"]
+            or rendered_inventory_defects["duplicate"]
+        ):
+            raise RuntimeError(
+                "rendered Types failed exact inventory coverage: "
+                f"{len(rendered_inventory_defects['missing'])} missing, "
+                f"{len(rendered_inventory_defects['duplicate'])} duplicate "
+                "source question(s)"
+            )
         _validate_final_or_raise(out, stage="final")
         missing = sum(
             1 for r in out

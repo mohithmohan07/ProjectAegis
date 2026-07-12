@@ -1058,10 +1058,15 @@ def _reviewed_history_structure_mmd() -> str:
         source.append(f"\\section*{{{heading}}}\n")
         source.append("This section develops its own source-grounded ideas.\n")
         source.extend(f"{ask}\n\n" for ask in asks)
-    source.append("\\section*{Exercises}\n")
+    source.append("\\section*{Write in brief}\n")
     source.extend(
-        f"{number}. Explain the source-grounded historical task numbered {number}.\n"
-        for number in range(1, 12)
+        f"{number}. Explain the concise historical task numbered {number}.\n"
+        for number in range(1, 6)
+    )
+    source.append("\\section*{Discuss}\n")
+    source.extend(
+        f"{number}. Discuss the analytical historical task numbered {number}.\n"
+        for number in range(1, 7)
     )
     return "".join(source)
 
@@ -1302,3 +1307,42 @@ def test_inventory_topic_with_tasks_requires_rendered_types():
         "topic": "Sum of First n Terms",
         "inventory_items": 1,
     }]
+
+
+def test_type_review_cannot_drop_or_duplicate_inventory_examples():
+    first = "Explain how a shared identity was created by revolutionaries."
+    second = "Interpret the symbols used in a national allegory."
+    inventory = {"items": [
+        {"qid": "QINV-0001", "raw_task": first},
+        {"qid": "QINV-0002", "raw_task": second},
+    ]}
+    original = [{
+        "topic": "Nation",
+        "parent_concept": "Identity",
+        "concept_title": "National Identity",
+        "concept_details": (
+            "Description: Identity is constructed. // Types: "
+            f"Type 01: Source interpretation Case 01: Political identity "
+            f"Example: {first} "
+            f"Case 02: Visual identity Example: {second} // "
+            "Misconceptions: Identity is not timeless."
+        ),
+        "keywords": "",
+    }]
+    missing = [dict(original[0])]
+    missing[0]["concept_details"] = missing[0]["concept_details"].replace(
+        f"Case 02: Visual identity Example: {second} ", "")
+    duplicate = [dict(original[0])]
+    duplicate[0]["concept_details"] = duplicate[0]["concept_details"].replace(
+        "// Misconceptions:",
+        f"Case 03: Repeated visual identity Example: {second} // Misconceptions:",
+    )
+
+    assert g._accept_exact_inventory_type_review(
+        original, missing, inventory) == original
+    assert g._accept_exact_inventory_type_review(
+        original, duplicate, inventory) == original
+    assert g._rendered_inventory_coverage_defects(original, inventory) == {
+        "missing": [],
+        "duplicate": [],
+    }
