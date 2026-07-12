@@ -24,7 +24,8 @@ def test_concepts_system_requires_numeric_types_guidance():
     # Numeric zero-padded labels (Type 01:/Case 01:), not descriptive labels.
     types_system = g.prompts.get_text("concepts.types_assign.system")
     assert "Type 01:" in types_system and "Case 01:" in types_system
-    assert "One Type = one distinct reusable subject-appropriate assessment/task pattern" in types_system
+    assert "One Type = one distinct reusable assessment/task pattern" in types_system
+    assert "Infer patterns from the actual action" in types_system
     assert "Misconception is REQUIRED" not in system
     assert "description-only editor" in g.prompts.get_text("concepts.description_refine.system")
     canonicalize = g.prompts.get_text("concepts.canonicalize.system")

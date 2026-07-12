@@ -31,8 +31,9 @@ _FORBIDDEN_TOPIC_NAMES = {
     "summary", "misc", "miscellaneous",
 }
 
-# English-literature pedagogy rows that are not part of the universal concept map.
-_ENGLISH_FORBIDDEN_CONCEPT_RE = re.compile(
+# Pedagogy/instruction rows are task containers, not durable teaching concepts,
+# regardless of the subject label attached to the upload.
+_PEDAGOGY_CONCEPT_RE = re.compile(
     r"\b(?:"
     r"pre-?\s*reading|informal letter|formal letter|letter writing|"
     r"reading in manageable parts|oral check|prediction and discussion|"
@@ -41,7 +42,7 @@ _ENGLISH_FORBIDDEN_CONCEPT_RE = re.compile(
     r")\b",
     re.IGNORECASE,
 )
-_ENGLISH_FORBIDDEN_TOPIC_RE = re.compile(
+_PEDAGOGY_TOPIC_RE = re.compile(
     r"\b(?:"
     r"pre-?\s*reading|informal letter|formal letter|letter writing|"
     r"reading in manageable parts|oral check|prediction and discussion|"
@@ -55,14 +56,6 @@ _KNOWN_CONCEPT_ALIASES = {
     "cbpt": "converse basic proportionality theorem",
     "converse basic proportionality theorem": "cbpt",
 }
-_POWER_SHARING_FORMS_RE = re.compile(
-    r"\b(?:forms?\s+of\s+power[-\s]*sharing|horizontal\s+distribution|"
-    r"vertical\s+(?:division|distribution)|different\s+organs\s+of\s+government|"
-    r"different\s+levels\s+of\s+government|social\s+groups|political\s+parties|"
-    r"pressure\s+groups|movements)\b",
-    re.IGNORECASE,
-)
-
 # Connector words kept lowercase in Title Case (unless first/last word).
 _TITLE_SMALL_WORDS = {
     "a", "an", "and", "as", "at", "but", "by", "for", "from", "in", "into",
@@ -159,82 +152,41 @@ def filter_review_violations(
     for rec in records:
         topic = (rec.get("topic") or "").strip()
         key = bi.normalize_question_text(topic)
-        if key and key not in _FORBIDDEN_TOPIC_NAMES and topic not in real_topics:
+        if (
+            key
+            and key not in _FORBIDDEN_TOPIC_NAMES
+            and not _PEDAGOGY_TOPIC_RE.search(topic)
+            and topic not in real_topics
+        ):
             real_topics.append(topic)
-    fallback_topic = real_topics[0] if real_topics else (records[0].get("topic") or "General")
+    fallback_topic = (
+        real_topics[0]
+        if real_topics
+        else (to_title_case(chapter_title.strip()) or records[0].get("topic") or "General")
+    )
 
     out: list[dict] = []
     dropped = 0
-    subj = (subject or "").strip().lower()
-    is_english = "english" in subj
-    english_topic = to_title_case(chapter_title.strip()) if is_english and chapter_title.strip() else ""
-
     for rec in records:
         title = (rec.get("concept_title") or "").strip()
         topic = (rec.get("topic") or "").strip()
         topic_key = bi.normalize_question_text(topic)
 
-        if is_english and _ENGLISH_FORBIDDEN_CONCEPT_RE.search(title):
+        if _PEDAGOGY_CONCEPT_RE.search(title):
             dropped += 1
             continue
-        if is_english and english_topic and _ENGLISH_FORBIDDEN_TOPIC_RE.search(topic):
+        if _PEDAGOGY_TOPIC_RE.search(topic):
             rec = dict(rec)
-            rec["topic"] = english_topic
+            rec["topic"] = fallback_topic
         elif topic_key in _FORBIDDEN_TOPIC_NAMES:
             rec = dict(rec)
-            rec["topic"] = english_topic or fallback_topic
+            rec["topic"] = fallback_topic
         out.append(rec)
-
-    out = _reassign_power_sharing_forms_topic(
-        out, subject=subject, chapter_title=chapter_title)
 
     if dropped:
         from . import progress as _progress
         _progress.log(
-            f"Dropped {dropped} English pedagogy / filler concept row(s).",
-            level="warning",
-        )
-    return out
-
-
-def _reassign_power_sharing_forms_topic(
-    records: list[dict], *, subject: str = "", chapter_title: str = "",
-) -> list[dict]:
-    """Keep the reviewed Power Sharing forms section as its own topic."""
-    subj = (subject or "").strip().lower()
-    ch = bi.normalize_question_text(chapter_title)
-    if "power sharing" not in ch or not (
-        "civic" in subj or "social science" in subj or subj in {"politics", "political science"}
-    ):
-        return records
-
-    expected = "Forms of Power-sharing"
-    expected_keys = {
-        bi.normalize_question_text(expected),
-        bi.normalize_question_text("Forms of Power Sharing"),
-    }
-    if any(bi.normalize_question_text(r.get("topic", "")) in expected_keys for r in records):
-        return records
-
-    changed = 0
-    out: list[dict] = []
-    for rec in records:
-        haystack = " ".join([
-            str(rec.get("topic") or ""),
-            str(rec.get("parent_concept") or ""),
-            str(rec.get("concept_title") or rec.get("concept") or ""),
-            str(rec.get("concept_details") or rec.get("concept_description") or ""),
-        ])
-        if _POWER_SHARING_FORMS_RE.search(haystack):
-            rec = dict(rec)
-            rec["topic"] = expected
-            changed += 1
-        out.append(rec)
-
-    if changed:
-        from . import progress as _progress
-        _progress.log(
-            f"Reassigned {changed} Power Sharing form(s) to '{expected}'.",
+            f"Dropped {dropped} pedagogy / filler concept row(s).",
             level="warning",
         )
     return out
