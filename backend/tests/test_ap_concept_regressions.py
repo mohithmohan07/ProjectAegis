@@ -945,6 +945,9 @@ def test_pipeline_restores_skeleton_method_rows_before_description_and_cleanup(
         g, "_recover_missing_topic_concepts_via_api",
         lambda records, **kwargs: records)
     monkeypatch.setattr(
+        g, "_missing_source_topic_excerpts",
+        lambda records, source_topic_excerpts: [])
+    monkeypatch.setattr(
         g, "_consolidate_task_grounded_fragments_via_api",
         lambda records, **kwargs: records)
 
@@ -1105,6 +1108,9 @@ def test_final_pipeline_restores_post_description_method_snapshot(monkeypatch):
     monkeypatch.setattr(
         g, "_recover_missing_topic_concepts_via_api",
         lambda records, **kwargs: records)
+    monkeypatch.setattr(
+        g, "_missing_source_topic_excerpts",
+        lambda records, source_topic_excerpts: [])
     monkeypatch.setattr(
         g, "_consolidate_task_grounded_fragments_via_api",
         lambda records, **kwargs: records)
