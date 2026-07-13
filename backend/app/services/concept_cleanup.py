@@ -178,9 +178,13 @@ def filter_review_violations(
         if _PEDAGOGY_TOPIC_RE.search(topic):
             rec = dict(rec)
             rec["topic"] = fallback_topic
-        elif topic_key in _FORBIDDEN_TOPIC_NAMES:
-            rec = dict(rec)
-            rec["topic"] = fallback_topic
+            out.append(rec)
+            continue
+        # Overview / Summary / Basics / … are omitted entirely — never pushed
+        # into a neighboring topic (that caused repeated preview/recap content).
+        if topic_key in _FORBIDDEN_TOPIC_NAMES:
+            dropped += 1
+            continue
         out.append(rec)
 
     if dropped:
