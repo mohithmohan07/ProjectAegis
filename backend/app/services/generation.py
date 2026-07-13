@@ -6056,6 +6056,209 @@ def _accept_exact_inventory_type_review(
     return candidate
 
 
+def _rendered_inventory_keys_present(
+    records: list[dict], inventory: dict | None,
+) -> set[str]:
+    """Normalized inventory prompts already occupying at least one Example slot."""
+    expected_keys = {
+        bi.normalize_question_text(_inventory_task_text(item))
+        for item in (inventory or {}).get("items") or []
+        if isinstance(item, dict)
+    }
+    expected_keys = {key for key in expected_keys if key}
+    if not expected_keys:
+        return set()
+    counts = _rendered_inventory_example_counts(records, expected_keys)
+    return {key for key, count in counts.items() if count > 0}
+
+
+def _next_rendered_type_number(body: str) -> int:
+    nums = [
+        int(match.group(1))
+        for match in re.finditer(
+            r"\b(?:Miscellaneous\s+)?Type\s+(\d{1,2}):", body or "", re.IGNORECASE
+        )
+    ]
+    return (max(nums) if nums else 0) + 1
+
+
+def _best_record_index_for_inventory_item(
+    records: list[dict], item: dict,
+) -> int:
+    """Pick the concept row that should host a still-missing inventory Example."""
+    if not records:
+        return 0
+    topic_hint = _topic_comparison_key(item.get("topic_hint") or "")
+    scored: list[tuple[int, int]] = []
+    for index, record in enumerate(records):
+        score = 0
+        record_topic = _topic_comparison_key(record.get("topic") or "")
+        if topic_hint and record_topic == topic_hint:
+            score += 10
+        title = record.get("concept_title") or ""
+        if cr.is_culmination(title):
+            score -= 3
+        if _has_meaningful_types(record.get("concept_details") or ""):
+            score += 2
+        scored.append((score, -index))
+    scored.sort(reverse=True)
+    return -scored[0][1]
+
+
+def _append_inventory_example_to_record(record: dict, text: str) -> dict:
+    """Append one inventory Example under a new Type/Case on the record."""
+    updated = dict(record)
+    details = updated.get("concept_details") or ""
+    body = _types_body(details)
+    type_no = _next_rendered_type_number(body)
+    addition = (
+        f"Type {type_no:02d}: Source inventory task "
+        f"Case 01: Source question Example: {text.strip()}"
+    )
+    new_body = f"{body} {addition}".strip() if body.strip() else addition
+    updated["concept_details"] = _inject_types(details, new_body)
+    return updated
+
+
+def _dedupe_rendered_inventory_examples(
+    records: list[dict], inventory: dict | None,
+) -> tuple[list[dict], int]:
+    """Keep the first Exact inventory Example; drop later duplicates."""
+    expected_keys = {
+        bi.normalize_question_text(_inventory_task_text(item))
+        for item in (inventory or {}).get("items") or []
+        if isinstance(item, dict)
+    }
+    expected_keys = {key for key in expected_keys if key}
+    if not expected_keys:
+        return records, 0
+
+    seen: set[str] = set()
+    removed = 0
+    out: list[dict] = []
+    for record in records:
+        rec = dict(record)
+        details = rec.get("concept_details") or ""
+        sections = cr.split_sections(details)
+        types_idx = next(
+            (
+                i for i, (label, _) in enumerate(sections)
+                if label.strip().lower().startswith("type")
+            ),
+            -1,
+        )
+        if types_idx < 0:
+            out.append(rec)
+            continue
+        label, body = sections[types_idx]
+        type_chunks = [c.strip() for c in _TYPE_SPLIT_RE.split(body) if c.strip()]
+        rebuilt_types: list[tuple[str, list[tuple[str, list[str]]]]] = []
+        changed = False
+        for chunk in type_chunks:
+            case_parts = [p.strip() for p in _CASE_SPLIT_RE.split(chunk) if p.strip()]
+            if not case_parts:
+                continue
+            type_header = case_parts[0]
+            if re.match(r"^Case\s+\d{1,2}:", type_header, re.IGNORECASE):
+                type_header = "Type 01: Assessment pattern"
+            else:
+                case_parts = case_parts[1:]
+            cases: list[tuple[str, list[str]]] = []
+            for case_chunk in case_parts:
+                match = re.match(
+                    r"^Case\s+\d{1,2}:\s*(.*)$",
+                    case_chunk,
+                    re.IGNORECASE | re.DOTALL,
+                )
+                case_body = (match.group(1) if match else case_chunk).strip()
+                pieces = _EXAMPLE_LINE_RE.split(case_body)
+                case_title = (pieces[0] or "").strip() or "Source-based question"
+                examples = [piece.strip() for piece in pieces[1:] if piece.strip()]
+                kept: list[str] = []
+                for example in examples:
+                    key = bi.normalize_question_text(example)
+                    if key in expected_keys:
+                        if key in seen:
+                            removed += 1
+                            changed = True
+                            continue
+                        seen.add(key)
+                    kept.append(example)
+                if kept:
+                    cases.append((case_title, kept))
+                elif case_title and not cv._example_too_short(case_title):
+                    cases.append((case_title, []))
+                else:
+                    changed = True
+            if cases:
+                header = type_header.strip()
+                if not re.match(
+                    r"^(?:Miscellaneous\s+)?Type\s+\d{1,2}:",
+                    header,
+                    re.IGNORECASE,
+                ):
+                    header = (
+                        f"Type 01: {header}" if header
+                        else "Type 01: Assessment pattern"
+                    )
+                rebuilt_types.append((header, cases))
+        if changed:
+            new_body = _rebuild_types_body(rebuilt_types)
+            if new_body.strip():
+                sections[types_idx] = (label, new_body)
+            else:
+                sections.pop(types_idx)
+            rec["concept_details"] = cr.join_sections(sections)
+        out.append(rec)
+    return out, removed
+
+
+def _repair_rendered_inventory_coverage(
+    records: list[dict], inventory: dict | None,
+) -> list[dict]:
+    """Restore exact-once inventory Example coverage after salvage/API drift."""
+    if not records or not (inventory or {}).get("items"):
+        return records
+
+    defects = _rendered_inventory_coverage_defects(records, inventory)
+    if not defects["missing"] and not defects["duplicate"]:
+        return records
+
+    out, removed = _dedupe_rendered_inventory_examples(records, inventory)
+    items_by_qid = {
+        (item.get("qid") or "").strip(): item
+        for item in (inventory or {}).get("items") or []
+        if isinstance(item, dict) and (item.get("qid") or "").strip()
+    }
+    placed = 0
+    still_missing = _rendered_inventory_coverage_defects(out, inventory)["missing"]
+    for qid in still_missing:
+        item = items_by_qid.get(qid)
+        if not item:
+            continue
+        text = _inventory_task_text(item)
+        if not text or cv._example_too_short(text):
+            continue
+        index = _best_record_index_for_inventory_item(out, item)
+        out[index] = _append_inventory_example_to_record(out[index], text)
+        placed += 1
+
+    repaired = _rendered_inventory_coverage_defects(out, inventory)
+    progress.log(
+        "Repaired rendered inventory coverage: "
+        f"removed {removed} duplicate Example(s), "
+        f"placed {placed} missing Example(s); "
+        f"now {len(repaired['missing'])} missing / "
+        f"{len(repaired['duplicate'])} duplicate.",
+        level=(
+            "warning"
+            if repaired["missing"] or repaired["duplicate"]
+            else "success"
+        ),
+    )
+    return out
+
+
 def _match_inventory_for_short_example(
     stub: str, inventory_texts: list[str], *, used: set[str],
     context: str = "",
@@ -6130,7 +6333,10 @@ def _salvage_short_case_examples(
     Example (and empty Cases) so the chapter can still deposit.
     """
     inventory_texts = _inventory_lookup_texts(inventory)
-    used: set[str] = set()
+    # Never expand a stub into an inventory prompt already rendered elsewhere;
+    # that creates the exact missing+duplicate coverage failure seen when
+    # short Case Examples fuzzy-match already-placed source questions.
+    used: set[str] = set(_rendered_inventory_keys_present(records, inventory))
     expanded = 0
     dropped = 0
     out: list[dict] = []
@@ -8655,6 +8861,8 @@ def concepts_from_mmd(
         # re-neutralize any residual source_artifact rows only.
         out = _neutralize_unrepaired_rows(
             out, inventory=question_task_inventory)
+        out = _repair_rendered_inventory_coverage(
+            out, question_task_inventory)
         out = cr.refine_chapter(out)
         # The repair/cleanup passes may reorder, rename, or re-collide rows;
         # re-assert the duplicate-title, culmination, mastery-line, and
@@ -8743,6 +8951,10 @@ def concepts_from_mmd(
         ):
             out = _neutralize_unrepaired_rows(
                 out, inventory=question_task_inventory)
+        # Salvage / mastery / neutralize can still drift Example coverage;
+        # restore exact-once inventory prompts before the hard gate.
+        out = _repair_rendered_inventory_coverage(
+            out, question_task_inventory)
         rendered_inventory_defects = _rendered_inventory_coverage_defects(
             out, question_task_inventory)
         if (
