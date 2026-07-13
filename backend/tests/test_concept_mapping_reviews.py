@@ -1529,6 +1529,125 @@ def test_rendered_inventory_coverage_handles_embedded_structure_tokens_exactly()
     }
 
 
+def test_salvage_does_not_duplicate_already_rendered_inventory_examples():
+    """Short stubs must not steal inventory prompts already placed elsewhere."""
+    germania = (
+        "Describe the painting of Germania and identify the symbols used to "
+        "represent the German nation."
+    )
+    prussia = (
+        "Explain how Prussian leadership under Bismarck used wars and "
+        "diplomacy to unify Germany."
+    )
+    liberal = (
+        "Explain what the ideas of liberal nationalists meant in the early "
+        "nineteenth century."
+    )
+    records = [
+        {
+            "topic": "Visualising the Nation",
+            "parent_concept": "Allegory",
+            "concept_title": "Culmination - Romantic Culture, Women's Exclusion",
+            "concept_details": (
+                "Description: Culmination of visual nationalism. "
+                "Achieving Mastery: Reading allegory. // Types: "
+                "Type 01: Source Case 01: Germania print "
+                "Example: Describe the print. "
+                "Case 02: Another Example: q // "
+                "Misconceptions: Allegory is not literal history."
+            ),
+            "keywords": "",
+        },
+        {
+            "topic": "Visualising the Nation",
+            "parent_concept": "Allegory",
+            "concept_title": "National Allegory Germania",
+            "concept_details": (
+                "Description: Nations were personified. "
+                "Achieving Mastery: Reading symbols. // Types: "
+                f"Type 01: Source Case 01: Germania Example: {germania} // "
+                "Misconceptions: Symbols are not decorative extras."
+            ),
+            "keywords": "",
+        },
+        {
+            "topic": "The French Revolution and the Idea of the Nation",
+            "parent_concept": "Liberalism",
+            "concept_title": "Liberal Nationalism",
+            "concept_details": (
+                "Description: Liberal ideas shaped early nationalism. "
+                "Achieving Mastery: Explaining liberal nationalism. // Types: "
+                f"Type 01: Ideas Case 01: Meaning Example: {prussia} // "
+                "Misconceptions: Liberalism is not only economic freedom."
+            ),
+            "keywords": "",
+        },
+    ]
+    inventory = {"items": [
+        {"qid": "QINV-0001", "raw_task": germania,
+         "topic_hint": "Visualising the Nation"},
+        {"qid": "QINV-0002", "raw_task": prussia,
+         "topic_hint": "The Making of Germany and Italy"},
+        {"qid": "QINV-0003", "raw_task": liberal,
+         "topic_hint": "The French Revolution and the Idea of the Nation"},
+    ]}
+
+    salvaged = g._salvage_short_case_examples(
+        [dict(row) for row in records], inventory=inventory)
+    # Germania must remain exactly once; stub must not duplicate it.
+    assert g._rendered_inventory_coverage_defects(salvaged, inventory)[
+        "duplicate"
+    ] == []
+    assert "Describe the print." not in salvaged[0]["concept_details"]
+    assert salvaged[0]["concept_details"].count(germania) == 0
+
+    repaired = g._repair_rendered_inventory_coverage(salvaged, inventory)
+    assert g._rendered_inventory_coverage_defects(repaired, inventory) == {
+        "missing": [],
+        "duplicate": [],
+    }
+    assert liberal in repaired[2]["concept_details"]
+
+
+def test_repair_rendered_inventory_coverage_removes_duplicates_and_fills_gaps():
+    first = "Explain how a shared identity was created by revolutionaries."
+    second = "Interpret the symbols used in a national allegory."
+    inventory = {"items": [
+        {"qid": "QINV-0001", "raw_task": first, "topic_hint": "Nation"},
+        {"qid": "QINV-0002", "raw_task": second, "topic_hint": "Nation"},
+    ]}
+    broken = [{
+        "topic": "Nation",
+        "parent_concept": "Identity",
+        "concept_title": "National Identity",
+        "concept_details": (
+            "Description: Identity is constructed. Achieving Mastery: x. // "
+            "Types: Type 01: Source interpretation "
+            f"Case 01: Political identity Example: {first} "
+            f"Case 02: Repeated Example: {first} // "
+            "Misconceptions: Identity is not timeless."
+        ),
+        "keywords": "",
+    }]
+
+    repaired = g._repair_rendered_inventory_coverage(broken, inventory)
+    assert g._rendered_inventory_coverage_defects(repaired, inventory) == {
+        "missing": [],
+        "duplicate": [],
+    }
+    assert repaired[0]["concept_details"].count(first) == 1
+    assert second in repaired[0]["concept_details"]
+
+
+def test_default_openai_model_is_gpt_56_terra():
+    from pathlib import Path
+
+    from app import config
+
+    source = Path(config.__file__).read_text()
+    assert 'os.environ.get("AEGIS_OPENAI_MODEL", "gpt-5.6-terra")' in source
+
+
 def test_unambiguous_case_evidence_overrides_wrong_concept_guess():
     concepts = {
         "CONCEPT-0001": {
