@@ -1639,6 +1639,37 @@ def test_repair_rendered_inventory_coverage_removes_duplicates_and_fills_gaps():
     assert second in repaired[0]["concept_details"]
 
 
+def test_repair_does_not_double_append_shared_normalized_inventory_prompts():
+    """Sibling qids with the same normalized text must place the prompt once."""
+    shared = (
+        "Explain how a shared identity was created by revolutionaries "
+        "across Europe."
+    )
+    inventory = {"items": [
+        {"qid": "QINV-0001", "raw_task": shared, "topic_hint": "Nation"},
+        # Same wording / normalization as QINV-0001 — both report missing when
+        # count is 0, but only one Example slot should be created.
+        {"qid": "QINV-0002", "raw_task": f"  {shared}  ", "topic_hint": "Nation"},
+    ]}
+    empty = [{
+        "topic": "Nation",
+        "parent_concept": "Identity",
+        "concept_title": "National Identity",
+        "concept_details": (
+            "Description: Identity is constructed. Achieving Mastery: x. // "
+            "Misconceptions: Identity is not timeless."
+        ),
+        "keywords": "",
+    }]
+
+    repaired = g._repair_rendered_inventory_coverage(empty, inventory)
+    assert g._rendered_inventory_coverage_defects(repaired, inventory) == {
+        "missing": [],
+        "duplicate": [],
+    }
+    assert repaired[0]["concept_details"].count(shared) == 1
+
+
 def test_default_openai_model_is_gpt_56_terra():
     from pathlib import Path
 
