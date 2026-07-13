@@ -8151,6 +8151,13 @@ _NON_TOPIC_RE = re.compile(
     r"points\s+to\s+remember|key\s+points|glossary)\b[\s\d.:()\-]*$",
     re.IGNORECASE,
 )
+# Filler umbrella headings that cleanup remaps away from the concept map.
+# Requiring them as "structurally proven source topics" aborts deposit after
+# they are intentionally reassigned (Power Sharing ``Overview``, etc.).
+_FILLER_SOURCE_TOPIC_KEYS = {
+    "overview", "basics", "basic concepts", "general",
+    "summary", "misc", "miscellaneous",
+}
 
 
 def _collapse_spaced_heading_word(heading: str) -> str:
@@ -8160,6 +8167,16 @@ def _collapse_spaced_heading_word(heading: str) -> str:
     return text.lower()
 
 
+def _is_filler_source_topic(heading: str) -> bool:
+    """True for umbrella filler headings that must not be mandatory topics."""
+    key = _topic_comparison_key(heading)
+    if key in _FILLER_SOURCE_TOPIC_KEYS:
+        return True
+    return bi.normalize_question_text(_strip_section_number(heading)) in (
+        _FILLER_SOURCE_TOPIC_KEYS
+    )
+
+
 def _is_non_topic_heading(heading: str) -> bool:
     # "(Optional)" suffixes and asterisks ("EXERCISE 6.6 (Optional)*") must not
     # hide an exercise heading from the match.
@@ -8167,6 +8184,8 @@ def _is_non_topic_heading(heading: str) -> bool:
     if re.fullmatch(r"\s*(?:\d+|[ivxlcdm]+)\s*", h, re.IGNORECASE):
         return True
     if _collapse_spaced_heading_word(h) in {"questions", "exercises"}:
+        return True
+    if _is_filler_source_topic(h):
         return True
     return bool(_EXERCISE_ONLY_RE.match(h) or _NON_TOPIC_RE.match(h))
 
@@ -8525,7 +8544,11 @@ def _missing_source_topic_excerpts(
     }
     return [
         group for group in source_topic_excerpts or []
-        if _topic_comparison_key(group.get("topic") or "") not in covered
+        if (
+            not _is_filler_source_topic(group.get("topic") or "")
+            and not _is_non_topic_heading(group.get("topic") or "")
+            and _topic_comparison_key(group.get("topic") or "") not in covered
+        )
     ]
 
 

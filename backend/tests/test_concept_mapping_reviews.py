@@ -121,6 +121,82 @@ def test_overview_topic_reassigned():
     assert out[1]["topic"] == "Real Section"
 
 
+def test_overview_is_not_a_mandatory_source_topic():
+    """Filler Overview headings must not hard-fail final topic coverage."""
+    assert g._is_non_topic_heading("Overview")
+    assert g._is_filler_source_topic("Overview")
+    sections = [
+        {
+            "heading": "Overview",
+            "heading_level": 2,
+            "heading_numbered": False,
+            "heading_number_prefix": "",
+            "heading_chapter": False,
+            "body": "Power sharing is the spirit of democracy.",
+            "exercise_blocks": [],
+        },
+        {
+            "heading": "1 Belgium and Sri Lanka",
+            "heading_level": 2,
+            "heading_numbered": True,
+            "heading_number_prefix": "1",
+            "heading_chapter": False,
+            "body": "Belgium and Sri Lanka illustrate power sharing.",
+            "exercise_blocks": [],
+        },
+        {
+            "heading": "2 Why Power Sharing is Desirable",
+            "heading_level": 2,
+            "heading_numbered": True,
+            "heading_number_prefix": "2",
+            "heading_chapter": False,
+            "body": "Power sharing reduces conflict.",
+            "exercise_blocks": [],
+        },
+        {
+            "heading": "3 Forms of Power Sharing",
+            "heading_level": 2,
+            "heading_numbered": True,
+            "heading_number_prefix": "3",
+            "heading_chapter": False,
+            "body": "Power is shared horizontally and vertically.",
+            "exercise_blocks": [],
+        },
+    ]
+    headings = g._topic_headings(sections)
+    assert "Overview" not in headings
+    assert any("Belgium" in h for h in headings)
+    excerpts = g._group_source_topic_excerpts(sections)
+    assert not any(
+        g._topic_comparison_key(group["topic"]) == "overview"
+        for group in excerpts
+    )
+    records = [
+        {
+            "topic": "Belgium and Sri Lanka",
+            "parent_concept": "Cases",
+            "concept_title": "Belgian Accommodation",
+            "concept_details": "Description: Belgium shares power.",
+            "keywords": "",
+        },
+        {
+            "topic": "Why Power Sharing is Desirable",
+            "parent_concept": "Rationale",
+            "concept_title": "Prudential Reasons for Power Sharing",
+            "concept_details": "Description: Power sharing reduces conflict.",
+            "keywords": "",
+        },
+        {
+            "topic": "Forms of Power Sharing",
+            "parent_concept": "Forms",
+            "concept_title": "Horizontal Power Sharing",
+            "concept_details": "Description: Organs of government share power.",
+            "keywords": "",
+        },
+    ]
+    assert g._missing_source_topic_excerpts(records, excerpts) == []
+
+
 def test_cleanup_does_not_invent_subject_specific_topics():
     records = [
         {"topic": "Outcomes of Democracy", "concept_title": "Horizontal Distribution of Power",
