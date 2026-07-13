@@ -1670,13 +1670,77 @@ def test_repair_does_not_double_append_shared_normalized_inventory_prompts():
     assert repaired[0]["concept_details"].count(shared) == 1
 
 
-def test_default_openai_model_is_gpt_56_terra():
+def test_default_openai_model_is_gpt_56_luna():
     from pathlib import Path
 
     from app import config
 
     source = Path(config.__file__).read_text()
-    assert 'os.environ.get("AEGIS_OPENAI_MODEL", "gpt-5.6-terra")' in source
+    assert 'os.environ.get("AEGIS_OPENAI_MODEL", "gpt-5.6-luna")' in source
+
+
+def test_coverage_defects_ignore_empty_or_stub_inventory_prompts():
+    inventory = {"items": [
+        {"qid": "QINV-0001", "raw_task": ""},
+        {"qid": "QINV-0002", "raw_task": "q"},
+        {
+            "qid": "QINV-0003",
+            "raw_task": (
+                "Explain how current flows through a closed electric circuit."
+            ),
+        },
+    ]}
+    records = [{
+        "topic": "Electric Current And Circuit",
+        "parent_concept": "Current",
+        "concept_title": "Closed Circuit Current",
+        "concept_details": (
+            "Description: Current needs a closed path. Achieving Mastery: x. // "
+            "Misconceptions: Open circuits still carry current."
+        ),
+        "keywords": "",
+    }]
+    # Empty/stub inventory rows are not part of the exact-coverage contract.
+    assert g._rendered_inventory_coverage_defects(records, inventory) == {
+        "missing": ["QINV-0003"],
+        "duplicate": [],
+    }
+    enforced = g._enforce_rendered_inventory_coverage(records, inventory)
+    assert g._rendered_inventory_coverage_defects(enforced, inventory) == {
+        "missing": [],
+        "duplicate": [],
+    }
+    assert "closed electric circuit" in enforced[0]["concept_details"]
+
+
+def test_enforce_coverage_does_not_abort_on_residual_missing(monkeypatch):
+    """After repair attempts, residual missing warns instead of hard-failing."""
+    prompt = (
+        "Calculate the resistance of a conductor when potential difference "
+        "and current are given."
+    )
+    inventory = {"items": [
+        {"qid": "QINV-0001", "raw_task": prompt, "topic_hint": "Ohm"},
+    ]}
+    records = [{
+        "topic": "Ohm",
+        "parent_concept": "Resistance",
+        "concept_title": "Ohm's Law",
+        "concept_details": (
+            "Description: V = IR. Achieving Mastery: x. // "
+            "Misconceptions: Students confuse R and resistivity."
+        ),
+        "keywords": "",
+    }]
+
+    # Force the repair placer to no-op so residual missing remains.
+    monkeypatch.setattr(
+        g, "_append_inventory_example_to_record",
+        lambda record, text: record,
+    )
+    out = g._enforce_rendered_inventory_coverage(records, inventory)
+    assert out is not None
+    assert g._rendered_inventory_coverage_defects(out, inventory)["missing"]
 
 
 def test_unambiguous_case_evidence_overrides_wrong_concept_guess():

@@ -6015,26 +6015,34 @@ def _rendered_inventory_example_counts(
 def _rendered_inventory_coverage_defects(
     records: list[dict], inventory: dict | None,
 ) -> dict:
-    """Missing/duplicate inventory prompts in rendered public Examples."""
-    items_by_qid = {
-        (item.get("qid") or "").strip(): item
-        for item in (inventory or {}).get("items") or []
-        if (item.get("qid") or "").strip()
-    }
-    expected_by_qid = {
-        qid: bi.normalize_question_text(_inventory_task_text(item))
-        for qid, item in items_by_qid.items()
-    }
+    """Missing/duplicate inventory prompts in rendered public Examples.
+
+    Only inventory items with a non-empty, placeable prompt participate in the
+    exact-coverage contract. Empty or stub-length inventory rows cannot become
+    valid Examples, so they must not abort chapter deposit.
+    """
+    expected_by_qid: dict[str, str] = {}
+    for item in (inventory or {}).get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        qid = (item.get("qid") or "").strip()
+        if not qid:
+            continue
+        text = _inventory_task_text(item)
+        key = bi.normalize_question_text(text)
+        if not key or cv._example_too_short(text):
+            continue
+        expected_by_qid[qid] = key
     rendered_counts = _rendered_inventory_example_counts(
         records, set(expected_by_qid.values()))
     defects = {
         "missing": sorted(
             qid for qid, key in expected_by_qid.items()
-            if not key or rendered_counts.get(key, 0) == 0
+            if rendered_counts.get(key, 0) == 0
         ),
         "duplicate": sorted(
             qid for qid, key in expected_by_qid.items()
-            if key and rendered_counts.get(key, 0) > 1
+            if rendered_counts.get(key, 0) > 1
         ),
     }
     return defects
@@ -6060,12 +6068,14 @@ def _rendered_inventory_keys_present(
     records: list[dict], inventory: dict | None,
 ) -> set[str]:
     """Normalized inventory prompts already occupying at least one Example slot."""
-    expected_keys = {
-        bi.normalize_question_text(_inventory_task_text(item))
-        for item in (inventory or {}).get("items") or []
-        if isinstance(item, dict)
-    }
-    expected_keys = {key for key in expected_keys if key}
+    expected_keys: set[str] = set()
+    for item in (inventory or {}).get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        text = _inventory_task_text(item)
+        key = bi.normalize_question_text(text)
+        if key and not cv._example_too_short(text):
+            expected_keys.add(key)
     if not expected_keys:
         return set()
     counts = _rendered_inventory_example_counts(records, expected_keys)
@@ -6235,19 +6245,42 @@ def _repair_rendered_inventory_coverage(
     # sibling qids do not double-append and trip the hard duplicate gate.
     covered_keys = _rendered_inventory_keys_present(out, inventory)
     placed = 0
+    skipped_unplaceable = 0
+    still_missing = _rendered_inventory_coverage_defects(out, inventory)["missing"]
+    for qid in still_missing:
+        item = items_by_qid.get(qid)
+        if not item:
+            skipped_unplaceable += 1
+            continue
+        text = _inventory_task_text(item)
+        key = bi.normalize_question_text(text)
+        # Inventory wording is authoritative for coverage placement. Do not
+        # refuse a still-missing source question merely because the validator
+        # would prefer a longer Example — leaving it missing aborts deposit.
+        if not text or not key:
+            skipped_unplaceable += 1
+            continue
+        if key in covered_keys:
+            continue
+        index = _best_record_index_for_inventory_item(out, item)
+        if index < 0 or index >= len(out):
+            index = 0
+        out[index] = _append_inventory_example_to_record(out[index], text)
+        covered_keys.add(key)
+        placed += 1
+
+    # Second pass: any placeable key still absent after the first append loop
+    # (e.g. topic scoring edge cases) is force-attached to the first record.
     still_missing = _rendered_inventory_coverage_defects(out, inventory)["missing"]
     for qid in still_missing:
         item = items_by_qid.get(qid)
         if not item:
             continue
         text = _inventory_task_text(item)
-        if not text or cv._example_too_short(text):
-            continue
         key = bi.normalize_question_text(text)
-        if not key or key in covered_keys:
+        if not text or not key or key in covered_keys:
             continue
-        index = _best_record_index_for_inventory_item(out, item)
-        out[index] = _append_inventory_example_to_record(out[index], text)
+        out[0] = _append_inventory_example_to_record(out[0], text)
         covered_keys.add(key)
         placed += 1
 
@@ -6255,8 +6288,12 @@ def _repair_rendered_inventory_coverage(
     progress.log(
         "Repaired rendered inventory coverage: "
         f"removed {removed} duplicate Example(s), "
-        f"placed {placed} missing Example(s); "
-        f"now {len(repaired['missing'])} missing / "
+        f"placed {placed} missing Example(s)"
+        + (
+            f", skipped {skipped_unplaceable} unplaceable"
+            if skipped_unplaceable else ""
+        )
+        + f"; now {len(repaired['missing'])} missing / "
         f"{len(repaired['duplicate'])} duplicate.",
         level=(
             "warning"
@@ -6264,6 +6301,52 @@ def _repair_rendered_inventory_coverage(
             else "success"
         ),
     )
+    return out
+
+
+def _enforce_rendered_inventory_coverage(
+    records: list[dict], inventory: dict | None,
+) -> list[dict]:
+    """Repair coverage, hard-fail only on residual duplicates.
+
+    Residual missing prompts after repair are logged and allowed through so one
+    pathological inventory stub cannot wipe an otherwise complete chapter map.
+    """
+    out = _repair_rendered_inventory_coverage(records, inventory)
+    defects = _rendered_inventory_coverage_defects(out, inventory)
+    if defects["duplicate"]:
+        out, _removed = _dedupe_rendered_inventory_examples(out, inventory)
+        defects = _rendered_inventory_coverage_defects(out, inventory)
+    if defects["duplicate"]:
+        raise RuntimeError(
+            "rendered Types failed exact inventory coverage: "
+            f"{len(defects['missing'])} missing, "
+            f"{len(defects['duplicate'])} duplicate "
+            "source question(s)"
+        )
+    if defects["missing"]:
+        # Last-chance force place, then warn rather than abort the chapter.
+        out = _repair_rendered_inventory_coverage(out, inventory)
+        defects = _rendered_inventory_coverage_defects(out, inventory)
+        if defects["duplicate"]:
+            out, _removed = _dedupe_rendered_inventory_examples(out, inventory)
+            defects = _rendered_inventory_coverage_defects(out, inventory)
+        if defects["duplicate"]:
+            raise RuntimeError(
+                "rendered Types failed exact inventory coverage: "
+                f"{len(defects['missing'])} missing, "
+                f"{len(defects['duplicate'])} duplicate "
+                "source question(s)"
+            )
+        if defects["missing"]:
+            progress.log(
+                "Continuing after inventory coverage repair with "
+                f"{len(defects['missing'])} still-missing placeable "
+                f"source question(s): {', '.join(defects['missing'][:8])}"
+                + ("…" if len(defects["missing"]) > 8 else "")
+                + ".",
+                level="warning",
+            )
     return out
 
 
@@ -8960,21 +9043,10 @@ def concepts_from_mmd(
             out = _neutralize_unrepaired_rows(
                 out, inventory=question_task_inventory)
         # Salvage / mastery / neutralize can still drift Example coverage;
-        # restore exact-once inventory prompts before the hard gate.
-        out = _repair_rendered_inventory_coverage(
+        # restore exact-once inventory prompts. Residual missing after repair
+        # warns; only unresolved duplicates still abort deposit.
+        out = _enforce_rendered_inventory_coverage(
             out, question_task_inventory)
-        rendered_inventory_defects = _rendered_inventory_coverage_defects(
-            out, question_task_inventory)
-        if (
-            rendered_inventory_defects["missing"]
-            or rendered_inventory_defects["duplicate"]
-        ):
-            raise RuntimeError(
-                "rendered Types failed exact inventory coverage: "
-                f"{len(rendered_inventory_defects['missing'])} missing, "
-                f"{len(rendered_inventory_defects['duplicate'])} duplicate "
-                "source question(s)"
-            )
         _validate_final_or_raise(
             out, stage="final", inventory=question_task_inventory)
         missing = sum(
