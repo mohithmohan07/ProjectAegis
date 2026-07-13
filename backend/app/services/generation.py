@@ -6230,6 +6230,10 @@ def _repair_rendered_inventory_coverage(
         for item in (inventory or {}).get("items") or []
         if isinstance(item, dict) and (item.get("qid") or "").strip()
     }
+    # Coverage is keyed by normalized prompt text. Multiple qids can share one
+    # key; place each unique missing prompt once, then mark the key covered so
+    # sibling qids do not double-append and trip the hard duplicate gate.
+    covered_keys = _rendered_inventory_keys_present(out, inventory)
     placed = 0
     still_missing = _rendered_inventory_coverage_defects(out, inventory)["missing"]
     for qid in still_missing:
@@ -6239,8 +6243,12 @@ def _repair_rendered_inventory_coverage(
         text = _inventory_task_text(item)
         if not text or cv._example_too_short(text):
             continue
+        key = bi.normalize_question_text(text)
+        if not key or key in covered_keys:
+            continue
         index = _best_record_index_for_inventory_item(out, item)
         out[index] = _append_inventory_example_to_record(out[index], text)
+        covered_keys.add(key)
         placed += 1
 
     repaired = _rendered_inventory_coverage_defects(out, inventory)
