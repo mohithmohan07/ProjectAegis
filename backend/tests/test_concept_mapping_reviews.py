@@ -110,21 +110,25 @@ def test_pedagogy_topic_uses_chapter_title_without_subject_branch():
     assert out[0]["topic"] == "A Letter to God"
 
 
-def test_overview_topic_reassigned():
+def test_overview_topic_is_dropped_not_reassigned():
+    """Overview/Summary rows are omitted entirely — never pushed next door."""
     records = [
         {"topic": "Real Section", "concept_title": "A",
          "concept_details": "Description: a", "keywords": ""},
         {"topic": "Overview", "concept_title": "B",
          "concept_details": "Description: b", "keywords": ""},
+        {"topic": "Summary", "concept_title": "C",
+         "concept_details": "Description: c", "keywords": ""},
     ]
     out = concept_cleanup.filter_review_violations(records, subject="Civics", board="CBSE")
-    assert out[1]["topic"] == "Real Section"
+    assert [r["concept_title"] for r in out] == ["A"]
 
 
-def test_overview_is_not_a_mandatory_source_topic():
-    """Filler Overview headings must not hard-fail final topic coverage."""
+def test_overview_and_summary_content_is_omitted_not_merged():
+    """Filler Overview/Summary bodies must not be attached to neighboring topics."""
     assert g._is_non_topic_heading("Overview")
     assert g._is_filler_source_topic("Overview")
+    assert g._is_filler_source_topic("Summary")
     sections = [
         {
             "heading": "Overview",
@@ -132,7 +136,7 @@ def test_overview_is_not_a_mandatory_source_topic():
             "heading_numbered": False,
             "heading_number_prefix": "",
             "heading_chapter": False,
-            "body": "Power sharing is the spirit of democracy.",
+            "body": "UNIQUE_OVERVIEW_PREVIEW about power sharing.",
             "exercise_blocks": [],
         },
         {
@@ -162,13 +166,30 @@ def test_overview_is_not_a_mandatory_source_topic():
             "body": "Power is shared horizontally and vertically.",
             "exercise_blocks": [],
         },
+        {
+            "heading": "Summary",
+            "heading_level": 2,
+            "heading_numbered": False,
+            "heading_number_prefix": "",
+            "heading_chapter": False,
+            "body": "UNIQUE_SUMMARY_RECAP of the chapter.",
+            "exercise_blocks": [],
+        },
     ]
     headings = g._topic_headings(sections)
     assert "Overview" not in headings
-    assert any("Belgium" in h for h in headings)
-    excerpts = g._group_source_topic_excerpts(sections)
+    assert "Summary" not in headings
+    paired = g._sections_with_source_topics(sections)
     assert not any(
-        g._topic_comparison_key(group["topic"]) == "overview"
+        g._is_filler_source_topic(section.get("heading") or "")
+        for _, section in paired
+    )
+    excerpts = g._group_source_topic_excerpts(sections)
+    joined = " ".join(group["excerpt"] for group in excerpts)
+    assert "UNIQUE_OVERVIEW_PREVIEW" not in joined
+    assert "UNIQUE_SUMMARY_RECAP" not in joined
+    assert not any(
+        g._topic_comparison_key(group["topic"]) in {"overview", "summary"}
         for group in excerpts
     )
     records = [
@@ -193,8 +214,21 @@ def test_overview_is_not_a_mandatory_source_topic():
             "concept_details": "Description: Organs of government share power.",
             "keywords": "",
         },
+        {
+            "topic": "Overview",
+            "parent_concept": "Preview",
+            "concept_title": "Should Be Dropped",
+            "concept_details": "Description: preview only.",
+            "keywords": "",
+        },
     ]
     assert g._missing_source_topic_excerpts(records, excerpts) == []
+    scrubbed = g._scrub_section_numbers([dict(r) for r in records])
+    assert [r["concept_title"] for r in scrubbed] == [
+        "Belgian Accommodation",
+        "Prudential Reasons for Power Sharing",
+        "Horizontal Power Sharing",
+    ]
 
 
 def test_cleanup_does_not_invent_subject_specific_topics():

@@ -2415,8 +2415,17 @@ def _pack_section_chunks(
 
 
 def _section_aware_chunks(mmd_text: str, max_chars: int | None = None) -> list[dict]:
-    """Pack parsed sections into chunks while preserving heading context."""
-    return _pack_section_chunks(parse_mmd_sections(mmd_text), max_chars)
+    """Pack parsed sections into chunks while preserving heading context.
+
+    Filler umbrella sections (Overview / Summary / Basics / …) are omitted
+    entirely so their preview/recap prose is not re-extracted into neighboring
+    topics.
+    """
+    sections = [
+        section for section in parse_mmd_sections(mmd_text)
+        if not _is_filler_source_topic(section.get("heading") or "")
+    ]
+    return _pack_section_chunks(sections, max_chars)
 
 
 def _sections_with_source_topics(sections: list[dict]) -> list[tuple[str, dict]]:
@@ -2425,6 +2434,9 @@ def _sections_with_source_topics(sections: list[dict]) -> list[tuple[str, dict]]
     Structural OCR headings such as ``Solution`` and ``EXERCISE 5.2`` inherit
     the preceding main topic. This association is the source of truth for
     question inventory and mined-Type placement.
+
+    Filler umbrella headings (Overview / Summary / Basics / …) are skipped
+    entirely — their bodies are not attached to neighboring topics.
     """
     headings = _topic_headings(sections)
     canonical: dict[str, str] = {}
@@ -2436,7 +2448,10 @@ def _sections_with_source_topics(sections: list[dict]) -> list[tuple[str, dict]]
     current = first_topic
     paired: list[tuple[str, dict]] = []
     for section in sections:
-        key = _topic_comparison_key(section.get("heading") or "")
+        heading = section.get("heading") or ""
+        if _is_filler_source_topic(heading):
+            continue
+        key = _topic_comparison_key(heading)
         if key in canonical:
             current = canonical[key]
         paired.append((current, section))
@@ -2465,6 +2480,8 @@ def _group_source_topic_excerpts(sections: list[dict]) -> list[dict]:
         # ownership. Treating their repeated or postscript content as evidence
         # for the preceding topic would be a semantic guess.
         section_heading = (section.get("heading") or "").strip()
+        if _is_filler_source_topic(section_heading):
+            continue
         if (
             _is_non_topic_heading(section_heading)
             and _NON_TEACHING_TOPIC_CONTEXT_RE.match(section_heading)
@@ -8194,9 +8211,12 @@ def _scrub_section_numbers(records: list[dict]) -> list[dict]:
     """Remove section/exercise numbering from topics and titles.
 
     Rows whose topic is a bare exercise or structural heading (e.g.
-    "EXERCISE 1.2", "Solution", "Summary", "Tick the Correct Answer" — these
-    slip through when OCR'd chapters mark such blocks as headings) are merged
-    into the preceding real topic so no content is dropped.
+    "EXERCISE 1.2", "Solution", "Tick the Correct Answer" — these slip through
+    when OCR'd chapters mark such blocks as headings) are merged into the
+    preceding real topic so exercise/solution content is not dropped.
+
+    Filler umbrella topics (Overview / Summary / Basics / …) are dropped
+    entirely so preview/recap rows are not reassigned into neighboring topics.
     """
 
     def _scrub(text: str) -> str:
@@ -8204,9 +8224,14 @@ def _scrub_section_numbers(records: list[dict]) -> list[dict]:
                       ).strip(" -:.,")
 
     prev_topic = ""
+    out: list[dict] = []
+    dropped = 0
     for rec in records:
         topic = rec.get("topic", "")
         scrubbed = _scrub(topic)
+        if _is_filler_source_topic(topic) or _is_filler_source_topic(scrubbed):
+            dropped += 1
+            continue
         if _is_non_topic_heading(topic) or not scrubbed or _is_non_topic_heading(scrubbed):
             rec["topic"] = prev_topic or "General"
         elif scrubbed != topic:
@@ -8216,7 +8241,13 @@ def _scrub_section_numbers(records: list[dict]) -> list[dict]:
         scrubbed_title = _scrub(title)
         if scrubbed_title and scrubbed_title != title:
             rec["concept_title"] = scrubbed_title
-    return records
+        out.append(rec)
+    if dropped:
+        progress.log(
+            f"Dropped {dropped} Overview/Summary/filler concept row(s).",
+            level="warning",
+        )
+    return out
 
 
 def _culmination_starter_types(topic_records: list[dict]) -> str:

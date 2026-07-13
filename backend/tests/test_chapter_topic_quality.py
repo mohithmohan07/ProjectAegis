@@ -324,9 +324,11 @@ def test_scrub_merges_structural_topics_into_previous():
         _rec("Pythagoras statement", "Description: d", topic="Pythagoras Theorem"),
     ]
     out = g._scrub_section_numbers(records)
+    # Solution inherits the previous teaching topic; Summary filler is dropped.
     assert [r["topic"] for r in out] == [
-        "Similar Figures", "Similar Figures", "Similar Figures",
-        "Pythagoras Theorem"]
+        "Similar Figures", "Similar Figures", "Pythagoras Theorem"]
+    assert [r["concept_title"] for r in out] == [
+        "Meaning of Similarity", "Worked ratio problem", "Pythagoras statement"]
 
 
 def test_enforce_culminations_injects_starter_types():
