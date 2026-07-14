@@ -483,8 +483,8 @@ _MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(https?://[^)]+\)", re.IGNORECASE)
 def _strip_images_from_prose(text: str) -> str:
     """Remove Mathpix/CDN markdown images from Description/Misconception prose.
 
-    Image URLs are valid in Types Example lines (with their figure reference);
-    they are not acceptable in Description text.
+    Image URLs are valid in Types Examples and Activity/Info Hub entries (with
+    their figure reference); they are not acceptable in Description text.
     """
     if not text:
         return text
@@ -519,9 +519,9 @@ def _clean_details(details: str, *, neutralize: bool = True) -> str:
             cleaned = replace_mmd_references(part)
         else:
             cleaned = replace_mmd_references(strip_dangling_references(part))
-        # Mathpix URLs are Types-only; strip them from Description/Misconception
-        # even when neutralize=False so pre-repair cleanup still enforces policy.
-        if not is_types:
+        # Mathpix URLs are Types/Hub-only; strip them from Description and
+        # Misconception even during reference-preserving pre-repair cleanup.
+        if not is_types and not is_hub:
             cleaned = _strip_images_from_prose(cleaned)
         out.append(neutralize_source_artifacts(cleaned) if neutralize else cleaned)
     return _SECTION_SEP.join(out)
