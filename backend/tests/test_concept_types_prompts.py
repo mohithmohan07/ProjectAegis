@@ -48,6 +48,10 @@ def test_split_prompt_contracts_are_separated():
     assert "Culmination rows may receive Types" in types
     assert "Activity/Info Hub" in types
     assert "Preserve valid fields, including parent_concept, Types" in repair
+    hub = g.prompts.get_text("concepts.activity_hub.system")
+    assert "UNIVERSAL" in hub
+    assert "Activity/Info Hub" in hub
+    assert "Ohm's" not in hub and "Belgium" not in hub and "Vetal" not in hub
 
 
 def test_universal_question_task_inventory_and_type_mining_prompts():

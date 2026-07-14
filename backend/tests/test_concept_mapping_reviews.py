@@ -102,7 +102,7 @@ def test_filter_drops_pedagogy_concepts_without_subject_branch():
 
 def test_pedagogy_topic_uses_chapter_title_without_subject_branch():
     records = [
-        {"topic": "January 2006", "concept_title": "Lencho's Faith",
+        {"topic": "Classroom Activity", "concept_title": "Lencho's Faith",
          "concept_details": "Description: a", "keywords": ""},
     ]
     out = concept_cleanup.filter_review_violations(
@@ -752,10 +752,59 @@ def test_activity_inventory_excluded_from_types_coverage_and_placed_in_hub():
     assert "nichrome" in cr.activity_hub_body(out[0]["concept_details"])
 
 
-def test_discussion_case_topics_are_filler():
-    assert g._is_filler_source_topic("Khalil's Dilemma")
-    assert g._is_filler_source_topic(
+def test_activity_hub_populated_via_api_not_chapter_filters(monkeypatch):
+    """GPT places activity inventory; chapter-named dilemma headings are not
+    hard-coded as filler topics."""
+    activity = "Observe how current changes when another cell is added."
+    inventory = {"items": [{
+        "qid": "QINV-0001",
+        "source_kind": "activity",
+        "source_label": "Lab activity",
+        "raw_task": activity,
+        "topic_hint": "Electric Current",
+    }]}
+    records = [
+        {
+            "topic": "Electric Current",
+            "parent_concept": "Current",
+            "concept_title": "Relationship Between V And I",
+            "concept_details": (
+                "Description: V and I are proportional for ohmic conductors.\n"
+                "Achieving Mastery: Relating V and I from readings. "
+                "// Misconceptions: Students treat all conductors as ohmic."
+            ),
+            "keywords": "",
+        },
+        {
+            "topic": "Electric Current",
+            "parent_concept": "Culmination",
+            "concept_title": "Culmination - Electric Current",
+            "concept_details": "Description: Recap",
+            "keywords": "",
+        },
+    ]
+    monkeypatch.setattr(
+        g, "_openai_json",
+        lambda *a, **kw: {
+            "placements": [{
+                "concept_id": "CONCEPT-0001",
+                "qid": "QINV-0001",
+                "hub_note": f"Activity: Lab activity. {activity}",
+            }],
+        },
+    )
+    out = g._populate_activity_hubs_via_api(
+        records, inventory, meta=g._metadata(subject="Physics"))
+    hub = cr.activity_hub_body(out[0]["concept_details"])
+    assert "Lab activity" in hub
+    assert "current changes" in hub
+    assert not cr.activity_hub_body(out[1]["concept_details"])
+    # Discussion-case chapter titles are not deterministic filler keys.
+    assert not g._is_filler_source_topic("Khalil's Dilemma")
+    assert not g._is_filler_source_topic(
         "Can You Help Poor Vikram in Answering Vetal?")
+    assert g._is_filler_source_topic("Overview")
+    assert g._is_filler_source_topic("Summary")
 
 
 def test_duplicate_inventory_assignments_are_reported():
@@ -1021,22 +1070,39 @@ def test_chapter_opening_labelled_in_section_chunks():
 def test_v5_prompts_require_opening_granularity_and_mathpix_policy():
     skeleton = g.prompts.get_text("concepts.skeleton.system")
     assert "[Chapter opening]" in skeleton
-    assert "German unification and Italian unification" in skeleton
-    assert "Frédéric Sorrieu" in skeleton
+    assert "lesson-plan" in skeleton and "apart" in skeleton
+    assert "Activity/Info" in skeleton
+    assert "Frédéric Sorrieu" not in skeleton
+    assert "Nationalism in Europe" not in skeleton
     canonicalize = g.prompts.get_text("concepts.canonicalize.system")
-    assert "Germany vs Italy" in canonicalize
+    assert "Belgium vs Sri Lanka" not in canonicalize
+    assert "lesson-plan them apart" in canonicalize
     refine = g.prompts.get_text("concepts.description_refine.system")
     assert "Do NOT embed Mathpix" in refine
     assert "truncated mid-sentence" in refine
+    assert "Preserve any existing Activity/Info Hub" in refine
     inventory = g.prompts.get_text("concepts.question_task_inventory.system")
     assert "dependent subquestions" in inventory
     assert "independently assessable" in inventory
     assert "Missing even one" in inventory and "checkpoint is a defect" in inventory
-    assert "Frédéric Sorrieu" in inventory
+    assert "Activity/Info Hub" in inventory
+    assert "feed culmination" not in inventory.lower()
+    assert "Frédéric Sorrieu" not in inventory
     embedding = g.prompts.get_text("concepts.type_embedding.system")
     assert "Picture-/source-/map-based" in embedding
     repair = g.prompts.get_text("concepts.repair.system")
     assert "fig.11.1" in repair
+    hub = g.prompts.get_text("concepts.activity_hub.system")
+    assert "UNIVERSAL" in hub
+    assert "is_culmination" in hub
+    assert "pending" in hub.lower()
+    types_example = g.prompts.get_text("concepts.types_example")
+    assert "Ohm's law" not in types_example
+    assert "reusable assessable pattern" in types_example
+    math_types = g.prompts.get_text("concepts.types_guidance.math")
+    assert "Ohm's Law" not in math_types
+    descriptive_types = g.prompts.get_text("concepts.types_guidance.descriptive")
+    assert "Belgium" not in descriptive_types
     assert "Do not put image URLs in the Description" in repair
 
 

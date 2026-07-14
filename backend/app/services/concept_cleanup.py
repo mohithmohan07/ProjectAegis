@@ -26,26 +26,20 @@ from .. import bulk_import as bi
 from . import concept_refiner as cr
 
 # Topics that must never appear as standalone teaching topics in output.
+# Structural umbrellas only — never chapter- or subject-named content.
 _FORBIDDEN_TOPIC_NAMES = {
     "overview", "basics", "basic concepts", "general",
     "summary", "misc", "miscellaneous",
 }
-_DISCUSSION_CASE_TOPIC_RE = re.compile(
-    r"\b(?:"
-    r"dilemma|can you help|vetal|discuss(?:ion)?|debate|"
-    r"in[- ]class|classroom discussion|think and discuss"
-    r")\b",
-    re.IGNORECASE,
-)
 
-# Pedagogy/instruction rows are task containers, not durable teaching concepts,
-# regardless of the subject label attached to the upload.
+# Pedagogy/instruction rows are task containers, not durable teaching concepts.
+# Patterns are universal classroom-instruction labels (not chapter titles).
 _PEDAGOGY_CONCEPT_RE = re.compile(
     r"\b(?:"
     r"pre-?\s*reading|informal letter|formal letter|letter writing|"
     r"reading in manageable parts|oral check|prediction and discussion|"
-    r"family news|january 2006|comprehension drill|"
-    r"discussion questions|warm-?up activity"
+    r"comprehension drill|discussion questions|warm-?up activity|"
+    r"think and discuss|classroom activity"
     r")\b",
     re.IGNORECASE,
 )
@@ -53,7 +47,8 @@ _PEDAGOGY_TOPIC_RE = re.compile(
     r"\b(?:"
     r"pre-?\s*reading|informal letter|formal letter|letter writing|"
     r"reading in manageable parts|oral check|prediction and discussion|"
-    r"classroom activity|january\s+\d{4}|\d{1,2}\s+[A-Za-z]+\s+\d{4}"
+    r"classroom activity|think and discuss|warm-?up activity|"
+    r"discussion questions|comprehension drill"
     r")\b",
     re.IGNORECASE,
 )
@@ -187,13 +182,11 @@ def filter_review_violations(
             rec["topic"] = fallback_topic
             out.append(rec)
             continue
-        # Overview / Summary / Basics / discussion-case topics are omitted
-        # entirely — never pushed into a neighboring topic (that caused
-        # repeated preview/recap or classroom-case content).
-        if (
-            topic_key in _FORBIDDEN_TOPIC_NAMES
-            or _DISCUSSION_CASE_TOPIC_RE.search(topic)
-        ):
+        # Overview / Summary / Basics topics are omitted entirely — never
+        # pushed into a neighboring topic (that caused repeated preview/recap).
+        # Classroom discussion cases / activity blocks are classified by the
+        # GPT Activity/Info Hub pass, not by chapter-named regex filters.
+        if topic_key in _FORBIDDEN_TOPIC_NAMES:
             dropped += 1
             continue
         out.append(rec)
