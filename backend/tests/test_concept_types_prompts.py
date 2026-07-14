@@ -43,10 +43,15 @@ def test_split_prompt_contracts_are_separated():
     repair = g.prompts.get_text("concepts.repair.system")
     assert "No Types" in skeleton and "no culmination rows" in skeleton
     assert "Do not include Types" in description
-    assert "Preserve Description exactly" in types
+    assert "Preserve Description and any existing Activity/Info Hub exactly" in types
     # Types run after the culmination pass; culminations may receive mixed Types.
     assert "Culmination rows may receive Types" in types
+    assert "Activity/Info Hub" in types
     assert "Preserve valid fields, including parent_concept, Types" in repair
+    hub = g.prompts.get_text("concepts.activity_hub.system")
+    assert "UNIVERSAL" in hub
+    assert "Activity/Info Hub" in hub
+    assert "Ohm's" not in hub and "Belgium" not in hub and "Vetal" not in hub
 
 
 def test_universal_question_task_inventory_and_type_mining_prompts():
@@ -376,11 +381,13 @@ def test_case_scoped_embedding_splits_formula_and_real_life_cases(monkeypatch):
     assert not g._mined_type_topic_violations(out, mined)
 
 
-def test_case_scoped_activity_units_keep_flag_and_reach_culmination(monkeypatch):
+def test_case_scoped_activity_units_go_to_activity_info_hub(monkeypatch):
     def fake_openai(system, user, **kw):
         concepts, units = _type_embedding_request(user)
         assert len(units) == 2
         assert all(unit["is_activity"] is True for unit in units)
+        # Even if the model wrongly targets Culmination, override routes
+        # activities to the normal concept for Activity/Info Hub.
         culmination = next(row for row in concepts if row["is_culmination"])
         return {"assignments": [{
             "concept_id": culmination["concept_id"],
@@ -415,9 +422,12 @@ def test_case_scoped_activity_units_keep_flag_and_reach_culmination(monkeypatch)
     out = g._assign_mined_types_via_api(
         records, meta=g._metadata(subject="Physics"), mined_types=mined)
 
+    hub = g.cr.activity_hub_body(out[0]["concept_details"])
+    assert "Measure current as cells are added." in hub
+    assert "Measure voltage across the wire." in hub
     assert "Types:" not in out[0]["concept_details"]
-    assert "Measure current as cells are added." in out[1]["concept_details"]
-    assert "Measure voltage across the wire." in out[1]["concept_details"]
+    assert "Types:" not in out[1]["concept_details"]
+    assert "Measure current as cells are added." not in out[1]["concept_details"]
 
 
 def test_single_case_embedding_keeps_original_type_id(monkeypatch):

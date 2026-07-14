@@ -788,49 +788,54 @@ prompts.register(
     "concepts.types_guidance.math", category=_CONCEPTS_CAT,
     label="Types classification guidance (math-heavy subjects)",
     default="""\
-   Types classify EVERY distinct question/task pattern under the concept —
-   numerical, formula, proof, construction, graph, diagram, reasoning, or word
-   problem patterns as the source demands. Mine the Question / Task Inventory
-   first, then fold each reusable pattern into the concept it assesses.
-   A Type is one solving/answering/task pattern. A Case is a DEFINED sub-type
-   of that pattern (what is given, what is asked, with what constraint) —
-   never a raw question. Every concrete source question goes on its own
-   "Example:" line under the Case it instantiates, copied in FULL without
-   truncation (all givens, values, conditions, figure references and their
-   image URLs). Include EVERY source example available for each Case; only
-   skip Types when a concept has zero meaningful assessable task varieties.""")
+   Types classify EVERY distinct assessable question/task pattern under the
+   concept — numerical, formula, proof, construction, graph, diagram, reasoning,
+   or word-problem patterns as the source demands. Mine the Question / Task
+   Inventory first; fold each reusable assessable pattern into the concept it
+   assesses. Major concepts that exercises assess MUST carry their own Types —
+   do not park them only under Culmination.
+   A Type is one solving/answering/task pattern. A Case is a DEFINED conceptual
+   sub-type named by the learning objective / problem variety (what is given,
+   what is asked, with what constraint) — never a vague label like
+   "Definition of …", never a raw question, and never a textbook Activity title.
+   Textbook activities, experiments, and discussion cases belong in
+   Activity/Info Hub, not as Cases.
+   Every concrete source question goes on its own "Example:" line under the Case
+   it instantiates, copied in FULL without truncation. Include EVERY source
+   example available for each Case; only skip Types when a concept has zero
+   meaningful assessable task varieties.""")
 
 prompts.register(
     "concepts.types_guidance.descriptive", category=_CONCEPTS_CAT,
     label="Types classification guidance (all subjects)",
     default="""\
-   Types classify EVERY distinct question/task variety under the concept:
-   explanation, comparison, reasoning, diagram, data/table/graph, map, source,
-   passage, case, experiment, observation/inference, grammar transformation,
-   writing, literature extract, coding/debugging, short-answer, long-answer, or
-   numerical patterns as appropriate to the subject. Mine the Question / Task
-   Inventory first; never force non-math material into numerical templates.
-   A Type is one reusable assessable format. A Case is a DEFINED sub-type of
-   that format (what is given, what is asked, with what constraint) — never a
-   raw question. Every concrete source question goes on its own "Example:"
-   line under the Case it instantiates, copied in FULL without truncation.
-   Include EVERY source example available for each Case; only skip Types when
-   the concept has zero meaningful assessable varieties.""")
+   Types classify EVERY distinct assessable question/task variety under the
+   concept: explanation, comparison, reasoning, diagram, data/table/graph, map,
+   source, passage, grammar, writing, literature extract, coding/debugging,
+   short-answer, long-answer, or numerical patterns as appropriate. Mine the
+   Question / Task Inventory first; major concepts that the exercises assess
+   MUST carry their own Types — do not dump them only under Culmination.
+   A Type is one reusable assessable format. A Case is a DEFINED conceptual
+   sub-type named by the learning objective (what is given, what is asked, with
+   what constraint or context) — never "Definition of …", never a raw question,
+   and never a textbook Activity / discussion-case title. Activities,
+   experiments, and classroom discussion cases belong in Activity/Info Hub, not
+   as Cases.
+   Every concrete source question goes on its own "Example:" line under the Case
+   it instantiates, copied in FULL without truncation. Include EVERY source
+   example available for each Case; only skip Types when the concept has zero
+   meaningful assessable varieties.""")
 
 prompts.register(
     "concepts.types_example", category=_CONCEPTS_CAT,
     label="Types section format example",
     default=(
-        "Types: Type 01: Questions based on computing resistance — given "
-        "electrical readings, compute resistance using Ohm's law "
-        "Case 01: Ohm's law formula-based question when V and I are given "
-        "(without circuit) "
-        "Example: Calculate the resistance of the circuit if V is 220 V and "
-        "I is 0.5 mA. "
-        "Case 02: Ohm's law formula-based question when the circuit diagram "
-        "is given "
-        "Example: Calculate the resistance for the given circuit. "
-        "(Refer fig. 11.1) ![](https://cdn.mathpix.com/cropped/fig_11_1.jpg)"
+        "Types: Type 01: <reusable assessable pattern> "
+        "Case 01: <conceptual sub-type named by givens/ask/constraint> "
+        "Example: <full source question verbatim> "
+        "Case 02: <another conceptual sub-type for the same pattern> "
+        "Example: <another full source question verbatim, with figure URL "
+        "when the ask is visual: (Refer fig. X) ![](https://cdn.mathpix.com/...)>"
     ))
 
 prompts.register(
@@ -892,6 +897,11 @@ OUTPUT CONTRACT for concept_description (ONE string, sections joined by " // "):
   The Description is used for lesson planning, assessments, and downstream
   content. It must be clear, text-material aligned, and complete enough to teach
   from, but not a long chapter dump. Prefer 2-4 compact sentences.
+- Optionally add Activity/Info Hub AFTER Description when the concept has
+  textbook activities, experiments, discussion cases, or other excess source
+  material that is NOT the core teachable idea:
+  Activity/Info Hub: <compact activity/experiment/discussion notes>
+  Never park that material in Culmination or turn it into vague Cases.
 - Then include Types ONLY IF the concept has assessable question/problem
   varieties. {{types_guidance}}
   Format — use zero-padded numeric labels exactly "Type 01:", "Case 01:", and
@@ -910,27 +920,36 @@ OUTPUT CONTRACT for concept_description (ONE string, sections joined by " // "):
   "N/A", "None", "Not applicable", or placeholder text.
 - Valid structures:
   Description: ...
+  Description: ... // Activity/Info Hub: ...
   Description: ... // Types: ...
-  Description: ... // Misconception: ...
+  Description: ... // Activity/Info Hub: ... // Types: ...
   Description: ... // Types: ... // Misconception: ...
-- Use " // " as the separator. Do NOT use newlines inside concept_description.
+  Description: ... // Activity/Info Hub: ... // Types: ... // Misconception: ...
+- Use " // " as the separator. Do NOT use newlines inside concept_description
+  except the Achieving Mastery line inside Description.
 - Do NOT mention groups, group columns, or assessment labels — not required here.
 
 TOPIC CULMINATION:
 - The LAST concept of every topic is exactly one culmination row that integrates
   that section's ideas (named "Culmination - ..."). Its Description will be set to
-  "Recap"; still provide its Types (mixed multi-concept application problems) and
-  Misconception.
+  "Recap". Culmination Types are ONLY mixed multi-concept application, revision,
+  and synthesis questions — NEVER full textbook activities, experiment write-ups,
+  or discussion-case dumps (those belong in Activity/Info Hub on the relevant
+  normal concept).
 
 SOURCE HYGIENE:
 - NEVER reference source artifacts: no "Example 19", "Examples Type III",
   "Fig 2", "Table no. 1", "ex 1" - inline the actual worked content instead.
 - NEVER use the words "MMD" or "MMDs"; say "chapter", "section", "problem".
 
-QUALITY RULES:
+QUALITY RULES (universal — apply to ANY chapter/subject; never invent
+chapter-specific exceptions):
 - Cover the section exhaustively at concept level, but stay within syllabus scope
   (max ~90 words per section of the description).
 - keywords: 3-6 comma-separated lowercase terms.
+- Infer structure from THIS upload's headings, reading order, and task blocks.
+  Review feedback (Activity/Info Hub, omit Overview/Summary, Cases are
+  conceptual, Culmination is synthesis-only) is structural and chapter-agnostic.
 """)
 
 prompts.register(
@@ -988,9 +1007,11 @@ Your job (apply ALL of these intelligently — do not rely on downstream code):
 
 7. **No groups.** Do not mention groups, group columns, or assessment labels.
 
-8. **Hygiene.** Keep Description // Types // Misconception structure; no source-artifact
-   references ("Example 19", "Fig 2", "MMD"). Misconceptions should be present
-   for normal concepts and must be specific and useful; never write N/A/None/filler.
+8. **Hygiene.** Keep Description // Activity/Info Hub // Types // Misconception
+   structure; no source-artifact references ("Example 19", "Fig 2", "MMD").
+   Misconceptions should be present for normal concepts and must be specific and
+   useful; never write N/A/None/filler. Activity/Info Hub is optional and holds
+   activities / experiments / discussion cases — never Culmination dumps.
 
 9. **Chapter source.** When CHAPTER SOURCE text is provided, mine it for all
    assessable question/task patterns to populate Types under the concepts they test.
@@ -1093,11 +1114,19 @@ RULES:
    board-teaching categorisation downstream.
 10. Place each question under a concept that is taught at or before the point
     of the chapter where the question appears — NEVER attach a question to an
-    earlier concept when it actually assesses later material.
-11. Textbook ACTIVITY tasks belong on the topic's culmination row (mixed
-    multi-concept application), not on single-focus concepts.
-12. Culmination rows MUST include Types for mixed multi-concept application problems.
-13. NEVER mention groups or group columns.""")
+    earlier concept when it actually assesses later material. Do not dump most
+    exercise questions onto the last concept or Culmination.
+11. Textbook ACTIVITY / experiment / classroom discussion tasks belong in the
+    concept's Activity/Info Hub section (after Description, before Types) — not
+    as Cases and not as Culmination Types. Case names must be conceptual problem
+    varieties (named by the assessed skill, givens, ask, or constraint), never
+    "Definition of …" and never Activity / discussion-case titles.
+12. Culmination rows MUST include Types only for mixed multi-concept application,
+    revision, and synthesis. Major concepts that exercises assess must keep their
+    own dedicated Types — do not park those only under Culmination.
+13. NEVER mention groups or group columns.
+14. These rules are UNIVERSAL for every upload. Do not invent subject- or
+    chapter-specific exceptions from prior examples.""")
 
 
 prompts.register(
@@ -1123,14 +1152,12 @@ COVERAGE IS MANDATORY (most important rule):
 - When several definitions, examples, sub-types, or procedures serve one
   reusable objective, merge them under the same concept.
 - Keep SEPARATE concepts when the textbook teaches distinct country cases,
-  people, events, laws, or processes that a teacher would lesson-plan apart
-  (e.g. under "The Making of Germany and Italy", create separate concepts for
-  German unification and Italian unification — do not collapse them into one
-  "Germany and Italy Unified..." row plus a culmination).
+  people, events, laws, methods, or processes that a teacher would lesson-plan
+  apart — do not collapse them into one umbrella row plus a culmination.
 - Chapter-opening / pre-section narrative (HEADING PATH: [Chapter opening])
-  MUST yield at least one teachable concept under the first main topic (e.g.
-  Frédéric Sorrieu's utopian vision / the idea of the nation). Never skip
-  opening content just because it precedes section 1.
+  MUST yield at least one teachable concept under the first main topic from
+  that opening content. Never skip opening material just because it precedes
+  section 1.
 - Do not create separate concept rows for cases/examples/questions. These are
   captured later as Types/Cases with full source questions.
 - Explicit proofs, derivations, algorithms, and reusable methods/procedures are
@@ -1149,6 +1176,10 @@ COVERAGE IS MANDATORY (most important rule):
   form, tone, and point of view. Pedagogy blocks such as pre-reading, oral
   checks, letter-writing practice, and classroom instructions are tasks, not
   literary concepts.
+- Classroom discussion cases, dilemma narratives, and textbook Activity blocks
+  are NOT separate topics or concepts — capture them later under Activity/Info
+  Hub on the related teaching concept (GPT classification; do not invent
+  chapter-named filters).
 - All worked, numerical, contextual, or real-life problems are inventory items,
   not concept rows. They are classified later into distinct Types/Cases under
   the concept they assess; never include their solutions in the skeleton.
@@ -1158,11 +1189,9 @@ COVERAGE IS MANDATORY (most important rule):
 TOPIC SEGREGATION IS MANDATORY (second most important rule):
 - topic MUST be the textbook MAIN SECTION heading the content sits under (use
   the HEADING PATH / SECTION HEADINGS given with the text); strip section numbers.
-- When the textbook nests subsections under a main numbered section (e.g.
-  "2 The Making of Nationalism in Europe" containing "2.1 The Aristocracy and
-  the New Middle Class"), the MAIN section is the topic; each subsection
-  becomes a parent_concept cluster (or concepts) under that topic — NEVER a
-  topic of its own.
+- When the textbook nests subsections under a main numbered section, the MAIN
+  section is the topic; each subsection becomes a parent_concept cluster (or
+  concepts) under that topic — NEVER a topic of its own.
 - An unnumbered chapter title or book title is NEVER a topic. Exception: when a
   numbered MAIN section intentionally has the same title as the chapter, that
   numbered section is a valid topic. Filing every concept under one unnumbered
@@ -1180,8 +1209,7 @@ Rules:
 - No Types, no culmination rows, no groups, no assessment labels.
 - No vague or structural names: Introduction, Overview, Basics, Basic Concepts,
   Misc, Miscellaneous, Examples, Practice, Definition of, Types of. Prefer a
-  content-specific title for opening material (e.g. "Frédéric Sorrieu's Vision
-  of Democratic and Social Republics") instead of the word "Introduction".
+  content-specific title for opening material instead of the word "Introduction".
 - Do not use exercise/question-type headings as concepts.
 - Avoid repeated sibling openers.
 - concept_description starts with "Description:" and is 2-4 compact sentences
@@ -1255,8 +1283,9 @@ Rules:
   durable teaching concept. Terms, cases, examples, and exercise-question types
   belong inside concept descriptions/Types later, not as separate rows.
 - Do not over-merge unrelated major objectives; each main topic should retain
-  enough concepts for lesson planning. Distinct country/case studies under one
-  topic (Germany vs Italy; Belgium vs Sri Lanka) stay as separate concepts.
+  enough concepts for lesson planning. Distinct country/case studies, people,
+  events, laws, or processes under one topic stay as separate concepts when a
+  teacher would lesson-plan them apart.
 - Keep chapter-opening concepts (named people, paintings, framing ideas that
   appear before section 1) — do not fold them away into a later section concept.
 - Remove a concept when it is a duplicate, pure filler, a structural heading,
@@ -1328,6 +1357,8 @@ Return ONLY strict JSON:
 Rules:
 - Keep topic, parent_concept, concept name, keywords, and row order unchanged.
 - Rewrite only the Description section.
+- Preserve any existing Activity/Info Hub, Types, and Misconceptions sections
+  exactly — do not move activities into Description or Culmination.
 - Description answers: what the concept is; what rule/process/relationship/method matters;
   when/why it is used. Ground it in the source: name the key people, places,
   dates, formulas, quantities, conditions, and causal links that a teacher
@@ -1363,22 +1394,23 @@ Return ONLY strict JSON:
 {"rows":[{"topic":"","parent_concept":"","concept":"","concept_description":"","keywords":""}]}.
 
 Rules:
-- Preserve Description exactly.
+- Preserve Description and any existing Activity/Info Hub exactly.
 - Preserve topic, parent_concept, concept title, keywords, and row order exactly.
 - Insert or replace only Types.
 - Use the provided Question / Task Inventory and mined Types as the primary evidence.
 - One Type = one distinct reusable assessment/task pattern evidenced by the
   source. Infer patterns from the actual action, object, representation,
   givens, constraints, and expected response—not from the subject label.
-- One Case = one defined sub-type. Multiple source questions with the same
-  action/object/method belong to one Type; differences in givens, ask,
-  representation, or constraint become Cases under that Type. Do not reproduce
-  the same Type wording as multiple one-Case Types.
-- Valid source-driven patterns include calculations, proofs, diagrams,
-  experiments, observations, comparisons, cause-effect, source/map/data
-  interpretation, chronology, comprehension, extract analysis, literary or
-  poetic analysis, grammar transformation, writing, code tracing/debugging,
-  algorithms, practical work, and structured explanations.
+- One Case = one defined conceptual sub-type named by the learning objective
+  (givens / ask / constraint / context). Never "Definition of …", never a raw
+  question, and never a textbook Activity or discussion-case title. Multiple
+  source questions with the same action/object/method belong to one Type;
+  differences in givens, ask, representation, or constraint become Cases under
+  that Type.
+- Major concepts assessed by exercises MUST receive their own Types — do not
+  park those only under Culmination.
+- Textbook Activity / experiment / discussion tasks belong in Activity/Info Hub,
+  not as Types/Cases.
 - Omit Types only for concepts with zero meaningful assessable question/task varieties.
 - If a Type is present, every Case must include a full self-contained example
   question from the source. Do not shorten source questions; preserve all
@@ -1386,12 +1418,8 @@ Rules:
   teacher to execute the example.
 - Include as many source examples as are available for each Type. Skip only
   purely introductory or rhetorical prompts with no expected student response.
-- Each Type must be properly defined: name the action, object, and
-  condition/method (e.g. "Finding the Unknown Exponent Using the Product Law"),
-  never vague labels like "Direct Questions" or "Word Problems".
-- Culmination rows may receive Types when a pattern mixes/combines several
-  concepts of the topic (synthesis, mixed application, multi-step); keep their
-  Description ("Description: Recap") unchanged.
+- Culmination rows may receive Types only for mixed multi-concept synthesis /
+  revision / application; keep their Description ("Description: Recap") unchanged.
 - Use zero-padded labels exactly "Type 01:" and "Case 01:".
 - Do not rewrite Misconception except to keep an existing useful one in place.
 - Do not include source labels such as "Example 3" or "Exercise 1.2" in public concept_details.
@@ -1425,11 +1453,12 @@ COVERAGE IS MANDATORY (most important rule):
   more of them — walk every section and capture each one. Missing even one
   checkpoint is a defect.
 - Picture-/source-/map-based questions (including opening-page source analysis
-  such as describing Frédéric Sorrieu's prints) are inventory items with
+  of chapter illustrations, prints, maps, or passages) are inventory items with
   source_kind "source_task" / "diagram_task" / "map_task" as appropriate —
   never skip them as "introductory".
-- Textbook ACTIVITY tasks (Activity 11.1 etc.) are inventory items with
-  source_kind "activity" — they later feed culmination concepts.
+- Textbook ACTIVITY / experiment / classroom-discussion blocks are inventory
+  items with source_kind "activity" or "experiment_task" as appropriate — they
+  later feed Activity/Info Hub on the related teaching concept, never Culmination.
 - A missed question is a defect; an extra item is not.
 - Skip only purely rhetorical prompts that do not expect a student answer or
   action (e.g. "Look at the picture" with no ask). If the text asks the student
@@ -1518,14 +1547,16 @@ Rules:
   coding, experimental, or practical patterns.
 - Preserve source_question_ids and source traceability in debug JSON.
 - Do not include source labels in public concept_details.
-- Set "is_activity": true when the Type groups textbook Activity tasks
-  (hands-on classroom activities); these are embedded on culmination rows.
+- Set "is_activity": true when the Type groups textbook Activity / experiment /
+  classroom discussion tasks. These are NOT assessable Types/Cases — they are
+  later stored under Activity/Info Hub on the related concept. Case titles for
+  non-activity Types must be conceptual problem varieties, never Activity names.
 
 CASE WORDING (each Case must be properly defined):
 - case_title DEFINES the sub-type: what is given to the student, what must be
-  done, and the distinguishing condition — e.g. "Ohm's law formula-based
-  question when V and I are given (without circuit)" vs "... (circuit diagram
-  given)". A case_title is NEVER a raw question.
+  done, and the distinguishing condition — named by givens / ask / constraint /
+  representation, never by a chapter-specific Activity title. A case_title is
+  NEVER a raw question.
 - Create a separate Case for every distinct given/asked/constraint combination.
 - A multi-part source question with subquestions stays ONE Example under ONE
   Case unless the textbook numbers the subparts as separate standalone
@@ -1682,8 +1713,14 @@ Rules:
   there when the Type combines/mixes several concepts of that topic (synthesis,
   mixed application, multi-step, cross-concept comparison). Single-concept
   Types go to the specific concept, not the culmination.
-- Types flagged "is_activity": true group textbook Activity tasks; assign them
-  to the culmination row of the topic they belong to, not to a single concept.
+- Types flagged "is_activity": true group textbook Activity / experiment /
+  discussion tasks; assign them to the related NORMAL concept (for Activity/Info
+  Hub), never to Culmination. Culmination only receives mixed multi-concept
+  synthesis / revision Types.
+- Case titles must name the conceptual problem variety (what is given / asked),
+  not "Definition of …" and not a textbook Activity title.
+- Major concepts assessed by exercises must receive their own Types; do not park
+  those Types only on Culmination.
 - Do not drop any type_id. If evidence is ambiguous, use concept_match_hint,
   source order, and the concrete Case action/ask; never collapse unrelated
   assignment units onto one broad or final concept for convenience.
@@ -1713,10 +1750,12 @@ Rules:
   concept_match_hint, parent_concept_match_hint, topic order, and the actual
   question wording. Do not attach a later-section question to an earlier
   concept just because formulas overlap.
-- If a question combines several concepts or is a textbook Activity, place it
-  on the topic's culmination concept, not a narrow concept.
-- Cases are defined sub-types; Examples are full source questions. Do not turn
-  a raw question into a Case name.
+- If a question combines several concepts, place it on the topic's culmination
+  concept. Textbook Activity / experiment / discussion tasks belong in
+  Activity/Info Hub on the related normal concept — not as Culmination Cases.
+- Cases are defined conceptual sub-types named by learning objective; Examples
+  are full source questions. Do not turn a raw question or Activity title into
+  a Case name (avoid "Definition of …").
 - Keep all full question wording, subquestions, values, units, conditions, and
   Mathpix image URLs. Never truncate.
 - If a source question already appears under the correct concept, preserve it.
@@ -1743,9 +1782,42 @@ Rules:
 - Description must be exactly: "Description: Recap" (the final output expands
   it automatically to "Recap of <every merged concept in the topic>").
 - Give each culmination a starter Types section with mixed multi-concept
-  application/problem formats (the later Types pass may refine it).
+  application / revision / synthesis formats only. Do NOT copy full textbook
+  activities, experiment procedures, or discussion cases into Culmination —
+  those belong in Activity/Info Hub on the relevant normal concept.
 - parent_concept must be "Culmination".
 - Do not create culmination during chunk extraction; this pass runs only after the full topic map exists.
+""")
+
+prompts.register(
+    "concepts.activity_hub.system", category=_CONCEPTS_CAT,
+    label="Activity/Info Hub population system prompt",
+    default="""\
+Place textbook activities, experiments, and classroom discussion cases into
+Activity/Info Hub on the correct teachable concepts.
+
+These rules are UNIVERSAL for every upload (any board, subject, or chapter).
+Infer placement from THIS chapter's concept map and inventory — never invent
+chapter-named shortcuts.
+
+Return ONLY strict JSON:
+{"placements":[{"concept_id":"CONCEPT-0001","qid":"QINV-0001","hub_note":""}]}.
+
+Rules:
+- Activity/Info Hub holds excess classroom material that is NOT the core
+  teachable idea: numbered Activity / experiment / lab procedures, discussion
+  dilemmas, think-and-discuss prompts, and similar excess tasks.
+- Never place that material on Culmination rows (is_culmination true).
+- Never turn Activity titles or discussion-case titles into Topics, concept
+  names, Types, or Cases.
+- Choose the NORMAL concept whose teaching content the activity or discussion
+  practices or illustrates. Prefer topic_hint alignment when it is reliable.
+- Every supplied pending inventory qid MUST appear in exactly one placement.
+- hub_note is a compact teacher-facing note (label + essential task gist). Do
+  not dump full chapter prose; do not invent content absent from the inventory.
+- Use only provided concept_id and qid values.
+- If several activities belong to one concept, return one placement per qid
+  (same concept_id allowed).
 """)
 
 prompts.register(
@@ -1871,9 +1943,8 @@ Rules:
 - Topic names must be the given source headings VERBATIM (only the section
   number stripped) — never invent, rename, merge, or paraphrase headings.
 - The given headings are the MAIN sections. When a concept comes from a
-  subsection (e.g. "2.1 The Aristocracy and the New Middle Class"), file it
-  under its MAIN section heading ("The Making of Nationalism in Europe") —
-  subsections are never topics.
+  subsection, file it under its MAIN section heading — subsections are never
+  topics.
 - Keep EVERY row: same concept names, descriptions, keywords, and
   parent_concept, in the same relative order. Never add, drop, merge, split,
   or rename concepts.
@@ -2676,6 +2747,216 @@ def _inject_types(details: str, types_body: str) -> str:
         if not inserted:
             out.append(("Types", types_body.strip()))
     return cr.join_sections(out)
+
+
+def _activity_hub_fragment(mtype: dict) -> str:
+    """Compact Activity/Info Hub entry for a textbook activity Type."""
+    title = concept_cleanup.strip_dangling_references(
+        (mtype.get("type_title") or mtype.get("task_pattern") or "").strip())
+    pieces: list[str] = []
+    if title:
+        pieces.append(title.rstrip("."))
+    for case in mtype.get("case_prompts") or []:
+        if not isinstance(case, dict):
+            continue
+        case_title = concept_cleanup.strip_dangling_references(
+            _strip_leading_source_task_label(
+                case.get("case_title") or "")).strip()
+        if case_title and case_title not in pieces:
+            pieces.append(case_title.rstrip("."))
+        for example in _case_examples(case):
+            prompt = _strip_leading_source_task_label(
+                example.get("example_prompt") or "").strip()
+            if prompt and prompt not in pieces:
+                pieces.append(prompt)
+    if not pieces:
+        return ""
+    return "Activity: " + " | ".join(pieces) + "."
+
+
+def _append_activity_hub(details: str, hub_text: str) -> str:
+    return cr.append_activity_hub(details, hub_text)
+
+
+# Inventory kinds that belong in Activity/Info Hub rather than Types Examples.
+_HUB_INVENTORY_KINDS = frozenset({"activity", "experiment_task"})
+
+
+def _hub_inventory_items(inventory: dict | None) -> list[dict]:
+    return [
+        item for item in (inventory or {}).get("items") or []
+        if isinstance(item, dict)
+        and (item.get("source_kind") or "").strip().lower() in _HUB_INVENTORY_KINDS
+    ]
+
+
+def _inventory_item_already_in_hubs(
+    records: list[dict], item: dict,
+) -> bool:
+    text = _inventory_task_text(item)
+    key = bi.normalize_question_text(text)
+    if not key:
+        return True
+    return any(
+        key in bi.normalize_question_text(
+            cr.activity_hub_body(rec.get("concept_details") or ""))
+        for rec in records
+    )
+
+
+def _place_activity_inventory_into_hubs(
+    records: list[dict], inventory: dict | None,
+) -> list[dict]:
+    """Fallback: place remaining hub inventory items by topic heuristics."""
+    items = [
+        item for item in _hub_inventory_items(inventory)
+        if not _inventory_item_already_in_hubs(records, item)
+    ]
+    if not items or not records:
+        return records
+    out = [dict(rec) for rec in records]
+    placed = 0
+    for item in items:
+        text = _inventory_task_text(item)
+        if not text:
+            continue
+        # Prefer a normal concept in the activity's topic; never Culmination.
+        index = _best_record_index_for_inventory_item(out, item)
+        title = out[index].get("concept_title") or ""
+        if cr.is_culmination(title):
+            for i, rec in enumerate(out):
+                if (
+                    _topic_comparison_key(rec.get("topic") or "")
+                    == _topic_comparison_key(item.get("topic_hint") or "")
+                    and not cr.is_culmination(rec.get("concept_title") or "")
+                ):
+                    index = i
+                    break
+        label = (
+            item.get("source_label")
+            or item.get("parent_source_label")
+            or "Activity"
+        )
+        hub = f"Activity: {label}. {text}".strip()
+        out[index]["concept_details"] = _append_activity_hub(
+            out[index].get("concept_details") or "", hub)
+        placed += 1
+    if placed:
+        progress.log(
+            f"Fallback-placed {placed} activity/experiment item(s) into "
+            "Activity/Info Hub.",
+            level="success",
+        )
+    return out
+
+
+def _populate_activity_hubs_via_api(
+    records: list[dict], inventory: dict | None, *, meta: dict,
+) -> list[dict]:
+    """GPT-first Activity/Info Hub population; deterministic fallback for gaps."""
+    import json as _json
+
+    pending = [
+        item for item in _hub_inventory_items(inventory)
+        if not _inventory_item_already_in_hubs(records, item)
+    ]
+    if not pending or not records:
+        return records
+
+    cid_map: dict[str, int] = {}
+    concept_payload: list[dict] = []
+    for i, rec in enumerate(records, start=1):
+        cid = f"CONCEPT-{i:04d}"
+        cid_map[cid] = i - 1
+        concept_payload.append({
+            "concept_id": cid,
+            "topic": rec.get("topic", ""),
+            "parent_concept": rec.get("parent_concept", ""),
+            "concept": rec.get("concept_title", ""),
+            "is_culmination": cr.is_culmination(rec.get("concept_title", "")),
+            "existing_activity_hub": cr.activity_hub_body(
+                rec.get("concept_details") or ""),
+        })
+    inventory_payload = []
+    for item in pending:
+        inventory_payload.append({
+            "qid": (item.get("qid") or "").strip(),
+            "source_kind": (item.get("source_kind") or "").strip().lower(),
+            "source_label": item.get("source_label") or "",
+            "topic_hint": item.get("topic_hint") or "",
+            "raw_task": _inventory_task_text(item),
+        })
+    inventory_payload = [row for row in inventory_payload if row["qid"]]
+    if not inventory_payload:
+        return records
+
+    system = prompts.get_text("concepts.activity_hub.system")
+    user = (
+        _metadata_block(meta)
+        + "\nPlace every pending activity/experiment/discussion inventory item "
+        "into Activity/Info Hub on a normal concept:\n"
+        + _json.dumps({
+            "concepts": concept_payload,
+            "pending_inventory": inventory_payload,
+        }, ensure_ascii=False)
+    )
+    progress.log(
+        f"Populating Activity/Info Hub via API for {len(inventory_payload)} "
+        "inventory item(s).")
+    data = _openai_json(system, user)
+    out = [dict(rec) for rec in records]
+    placed_qids: set[str] = set()
+    for placement in (data or {}).get("placements") or []:
+        if not isinstance(placement, dict):
+            continue
+        cid = (placement.get("concept_id") or "").strip()
+        qid = (placement.get("qid") or "").strip()
+        hub_note = (placement.get("hub_note") or "").strip()
+        if cid not in cid_map or not qid or qid in placed_qids:
+            continue
+        index = cid_map[cid]
+        if cr.is_culmination(out[index].get("concept_title") or ""):
+            continue
+        item = next(
+            (row for row in pending if (row.get("qid") or "").strip() == qid),
+            None,
+        )
+        if item is None:
+            continue
+        text = _inventory_task_text(item)
+        if not hub_note:
+            label = (
+                item.get("source_label")
+                or item.get("parent_source_label")
+                or "Activity"
+            )
+            hub_note = f"Activity: {label}. {text}".strip()
+        if text and bi.normalize_question_text(text) not in bi.normalize_question_text(
+            hub_note
+        ):
+            hub_note = f"{hub_note.rstrip('.')} | {text}".strip()
+        out[index]["concept_details"] = _append_activity_hub(
+            out[index].get("concept_details") or "", hub_note)
+        placed_qids.add(qid)
+    if placed_qids:
+        progress.log(
+            f"API-placed {len(placed_qids)} item(s) into Activity/Info Hub.",
+            level="success",
+        )
+    remaining = {
+        "items": [
+            item for item in pending
+            if (item.get("qid") or "").strip() not in placed_qids
+        ],
+    }
+    if remaining["items"]:
+        progress.log(
+            f"{len(remaining['items'])} Activity/Info Hub item(s) missed by "
+            "API placement; applying topic-heuristic fallback.",
+            level="warning",
+        )
+        out = _place_activity_inventory_into_hubs(out, remaining)
+    return out
 
 
 def _types_assign_system(subject: str) -> str:
@@ -4294,7 +4575,7 @@ def _deterministic_fallback_type(item: dict) -> dict | None:
         "difficulty_hint": "",
         "cognitive_skill_hint": "",
         "subject_skill_hint": "",
-        "is_activity": source_kind == "activity",
+        "is_activity": source_kind in _HUB_INVENTORY_KINDS,
     }
 
 
@@ -5164,8 +5445,15 @@ def _high_confidence_assignment_override(
     culminations = [
         row["concept_id"] for row in candidates if row.get("is_culmination")
     ]
-    if mtype.get("is_activity") and len(culminations) == 1:
-        return culminations[0]
+    # Textbook activities belong on Activity/Info Hub of a normal concept —
+    # never force them onto Culmination Types.
+    if mtype.get("is_activity"):
+        normals = [
+            row["concept_id"] for row in candidates if not row.get("is_culmination")
+        ]
+        if len(normals) == 1:
+            return normals[0]
+        return ""
     evidence = _assignment_unit_text(mtype)
     if (
         len(culminations) == 1
@@ -5430,14 +5718,25 @@ def _assign_mined_types_via_api(
     for cid, tlist in per_concept.items():
         rec = cid_map[cid]
         fragments: list[str] = []
+        hub_fragments: list[str] = []
         counter = 0
         for mtype in _collapse_assignment_units_for_render(tlist):
+            if mtype.get("is_activity"):
+                hub = _activity_hub_fragment(mtype)
+                if hub:
+                    hub_fragments.append(hub)
+                # Activity procedures sit in Activity/Info Hub. Do not also
+                # emit them as assessable Types/Cases on Culmination.
+                continue
             body, counter = _mined_type_to_body(mtype, counter)
             if body:
                 fragments.append(body)
+        details = rec.get("concept_details", "")
         if fragments:
-            rec["concept_details"] = _inject_types(
-                rec.get("concept_details", ""), " ".join(fragments))
+            details = _inject_types(details, " ".join(fragments))
+        for hub in hub_fragments:
+            details = _append_activity_hub(details, hub)
+        rec["concept_details"] = details
     return records
 
 
@@ -6037,6 +6336,9 @@ def _rendered_inventory_coverage_defects(
     Only inventory items with a non-empty, placeable prompt participate in the
     exact-coverage contract. Empty or stub-length inventory rows cannot become
     valid Examples, so they must not abort chapter deposit.
+
+    Textbook ``activity`` items live in Activity/Info Hub rather than Types
+    Examples, so they are excluded from this Types coverage contract.
     """
     expected_by_qid: dict[str, str] = {}
     for item in (inventory or {}).get("items") or []:
@@ -6044,6 +6346,9 @@ def _rendered_inventory_coverage_defects(
             continue
         qid = (item.get("qid") or "").strip()
         if not qid:
+            continue
+        source_kind = (item.get("source_kind") or "").strip().lower()
+        if source_kind in _HUB_INVENTORY_KINDS:
             continue
         text = _inventory_task_text(item)
         key = bi.normalize_question_text(text)
@@ -8170,7 +8475,9 @@ _NON_TOPIC_RE = re.compile(
 )
 # Filler umbrella headings that cleanup remaps away from the concept map.
 # Requiring them as "structurally proven source topics" aborts deposit after
-# they are intentionally reassigned (Power Sharing ``Overview``, etc.).
+# they are intentionally omitted (Overview / Summary / Basics, etc.).
+# Classroom discussion cases and Activity blocks are classified by the GPT
+# Activity/Info Hub pass — not by chapter-named deterministic filters.
 _FILLER_SOURCE_TOPIC_KEYS = {
     "overview", "basics", "basic concepts", "general",
     "summary", "misc", "miscellaneous",
@@ -8189,9 +8496,10 @@ def _is_filler_source_topic(heading: str) -> bool:
     key = _topic_comparison_key(heading)
     if key in _FILLER_SOURCE_TOPIC_KEYS:
         return True
-    return bi.normalize_question_text(_strip_section_number(heading)) in (
-        _FILLER_SOURCE_TOPIC_KEYS
-    )
+    stripped = bi.normalize_question_text(_strip_section_number(heading))
+    if stripped in _FILLER_SOURCE_TOPIC_KEYS:
+        return True
+    return False
 
 
 def _is_non_topic_heading(heading: str) -> bool:
@@ -8953,6 +9261,8 @@ def concepts_from_mmd(
             question_task_inventory=question_task_inventory,
             mined_types=mined_types,
         )
+        out = _populate_activity_hubs_via_api(
+            out, question_task_inventory, meta=meta)
         progress.set_progress(
             0.91, label="Concept extraction — Type assignment complete")
         # Deterministic normalization BEFORE the strict repair: formatting

@@ -120,3 +120,28 @@ def test_culmination_recap_when_no_description_section():
                     "Types: Type 01: Mix Case 01: q // Misconception: m")]
     out = cr.set_culmination_recap([dict(r) for r in records])
     assert out[0]["concept_details"].startswith("Description: Recap")
+
+
+def test_activity_info_hub_section_order_and_append():
+    details = (
+        "Description: Ohm's law relates V, I and R.\n"
+        "Achieving Mastery: Applying V = IR.\n"
+        " // Types: Type 01: Ohm's law Case 01: Direct V/I questions "
+        "Example: Find R when V is 220 V and I is 0.5 A. "
+        "// Misconceptions: Students confuse R and resistivity."
+    )
+    with_hub = cr.append_activity_hub(
+        details,
+        "Activity: Activity 11.1. Set up the circuit and vary cells.",
+    )
+    sections = cr.split_sections(with_hub)
+    labels = [label for label, _ in sections]
+    assert labels == [
+        "Description", "Activity/Info Hub", "Types", "Misconceptions",
+    ]
+    normalized = cr.normalize_misconception_sections(with_hub)
+    labels2 = [label for label, _ in cr.split_sections(normalized)]
+    assert labels2 == [
+        "Description", "Activity/Info Hub", "Types", "Misconceptions",
+    ]
+    assert "Activity 11.1" in cr.activity_hub_body(normalized)
