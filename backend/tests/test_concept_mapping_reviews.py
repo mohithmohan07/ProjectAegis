@@ -704,6 +704,80 @@ def test_activity_types_go_to_info_hub_not_culmination_types(monkeypatch):
     assert "Type 01:" not in ohms["concept_details"]
     assert "Type 01:" not in culm["concept_details"]
     assert "Miscellaneous Type" not in culm["concept_details"]
+    assert not g._mined_type_topic_violations(out, mined)
+
+
+def test_activity_types_use_normal_evidence_with_multiple_topic_concepts(
+    monkeypatch,
+):
+    """Activity assignment corrects Culmination guesses and defers ambiguity."""
+    def fake_openai(system, user, **kw):
+        return {"assignments": [{
+            "concept_id": "CONCEPT-0003",
+            "type_ids": ["TYPE-CURRENT", "TYPE-AMBIGUOUS"],
+        }]}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    records = [
+        {
+            "topic": "Electricity",
+            "parent_concept": "Current",
+            "concept_title": "Measuring Current in a Circuit",
+            "concept_details": "Description: Current is measured in series.",
+            "keywords": "",
+        },
+        {
+            "topic": "Electricity",
+            "parent_concept": "Resistance",
+            "concept_title": "Testing Wire Resistance",
+            "concept_details": "Description: Resistance depends on the wire.",
+            "keywords": "",
+        },
+        {
+            "topic": "Electricity",
+            "parent_concept": "Culmination",
+            "concept_title": "Culmination - Electricity",
+            "concept_details": "Description: Recap",
+            "keywords": "",
+        },
+    ]
+    mined = {"types": [
+        {
+            "type_id": "TYPE-CURRENT",
+            "type_title": "Measuring Current in a Circuit Activity",
+            "topic_match_hint": "Electricity",
+            "is_activity": True,
+            "case_prompts": [{
+                "case_title": "Observe current",
+                "examples": [{
+                    "example_prompt": "Measure current as cells are added.",
+                }],
+            }],
+        },
+        {
+            "type_id": "TYPE-AMBIGUOUS",
+            "type_title": "Classroom Investigation",
+            "topic_match_hint": "Electricity",
+            "is_activity": True,
+            "case_prompts": [{
+                "case_title": "Record observations",
+                "examples": [{
+                    "example_prompt": "Complete the classroom investigation.",
+                }],
+            }],
+        },
+    ]}
+
+    out = g._assign_mined_types_via_api(
+        records, meta=g._metadata(subject="Physics"), mined_types=mined,
+        max_attempts=1)
+
+    assert "Measure current as cells are added." in cr.activity_hub_body(
+        out[0]["concept_details"])
+    assert not cr.activity_hub_body(out[1]["concept_details"])
+    assert not cr.activity_hub_body(out[2]["concept_details"])
+    assert "Complete the classroom investigation." not in str(out)
+    assert not g._mined_type_topic_violations(out, mined)
 
 
 def test_activity_inventory_excluded_from_types_coverage_and_placed_in_hub():
@@ -750,6 +824,105 @@ def test_activity_inventory_excluded_from_types_coverage_and_placed_in_hub():
     out = g._place_activity_inventory_into_hubs(records, inventory)
     assert "Activity 11.1" in cr.activity_hub_body(out[0]["concept_details"])
     assert "nichrome" in cr.activity_hub_body(out[0]["concept_details"])
+
+
+def test_activity_hub_fallback_never_uses_culmination_without_topic_normal():
+    activity = "Observe how current changes when another cell is added."
+    inventory = {"items": [{
+        "qid": "QINV-0001",
+        "source_kind": "activity",
+        "source_label": "Lab activity",
+        "raw_task": activity,
+        "topic_hint": "Electricity",
+    }]}
+    records = [
+        {
+            "topic": "Electricity",
+            "parent_concept": "Culmination",
+            "concept_title": "Culmination - Electricity",
+            "concept_details": "Description: Recap",
+            "keywords": "",
+        },
+        {
+            "topic": "Magnetism",
+            "parent_concept": "Fields",
+            "concept_title": "Observing Magnetic Fields",
+            "concept_details": "Description: Field lines show magnetic effects.",
+            "keywords": "",
+        },
+    ]
+
+    out = g._place_activity_inventory_into_hubs(records, inventory)
+
+    assert not cr.activity_hub_body(out[0]["concept_details"])
+    assert activity in cr.activity_hub_body(out[1]["concept_details"])
+
+
+def test_empty_activity_task_uses_source_label_for_hub_fallback():
+    item = {
+        "qid": "QINV-0001",
+        "source_kind": "activity",
+        "source_label": "Activity 11.1",
+        "raw_task": "   ",
+        "normalized_task": "",
+        "topic_hint": "Electricity",
+    }
+    records = [{
+        "topic": "Electricity",
+        "parent_concept": "Current",
+        "concept_title": "Electric Current",
+        "concept_details": "Description: Current is moving charge.",
+        "keywords": "",
+    }]
+
+    assert not g._inventory_item_already_in_hubs(records, item)
+    out = g._place_activity_inventory_into_hubs(
+        records, {"items": [item]})
+
+    assert "Activity 11.1" in cr.activity_hub_body(
+        out[0]["concept_details"])
+    assert g._inventory_item_already_in_hubs(out, item)
+
+
+def test_type_review_rejects_activity_inventory_in_types_examples():
+    activity = "Observe how current changes when another cell is added."
+    item = {
+        "qid": "QINV-0001",
+        "source_kind": "activity",
+        "source_label": "Lab activity",
+        "raw_task": activity,
+        "topic_hint": "Electricity",
+    }
+    inventory = {"items": [item]}
+    original = [{
+        "topic": "Electricity",
+        "parent_concept": "Current",
+        "concept_title": "Electric Current",
+        "concept_details": (
+            "Description: Current is moving charge. // Activity/Info Hub: "
+            f"Activity: Lab activity. {activity} // "
+            "Misconceptions: Students may confuse current and charge."
+        ),
+        "keywords": "",
+    }]
+    candidate = [dict(original[0])]
+    candidate[0]["concept_details"] = g._inject_types(
+        candidate[0]["concept_details"],
+        "Type 01: Classroom investigation Case 01: Observe current "
+        f"Example: {activity}",
+    )
+
+    assert g._accept_exact_inventory_type_review(
+        original, candidate, inventory) is original
+
+    types_only = [dict(candidate[0])]
+    types_only[0]["concept_details"] = cr.join_sections([
+        (label, body)
+        for label, body in cr.split_sections(types_only[0]["concept_details"])
+        if not cr.is_activity_hub_label(label)
+    ])
+    assert g._place_activity_inventory_into_hubs(
+        types_only, inventory) == types_only
 
 
 def test_activity_hub_populated_via_api_not_chapter_filters(monkeypatch):
@@ -1106,27 +1279,31 @@ def test_v5_prompts_require_opening_granularity_and_mathpix_policy():
     assert "Do not put image URLs in the Description" in repair
 
 
-def test_cleanup_strips_mathpix_from_description_keeps_types():
+def test_cleanup_strips_mathpix_from_description_keeps_types_and_hub():
+    image_url = "https://cdn.mathpix.com/cropped/sorrieu.jpg"
     rec = {
         "topic": "The French Revolution and the Idea of the Nation",
         "parent_concept": "The Idea of the Nation",
         "concept_title": "Frédéric Sorrieu's Vision of Democratic Republics",
         "concept_details": (
             "Description: Sorrieu's utopian print series. "
-            "![](https://cdn.mathpix.com/cropped/sorrieu.jpg) "
+            f"![]({image_url}) "
             "Achieving Mastery: Interpreting nationalist allegory.\n"
+            " // Activity/Info Hub: Activity: Interpret the accompanying print. "
+            f"(Refer fig. 1) ![]({image_url}) "
             " // Types: Type 01: Source interpretation "
             "Case 01: Print analysis "
             "Example: Describe the painting of the peoples of Europe. "
-            "(Refer fig. 1) ![](https://cdn.mathpix.com/cropped/sorrieu.jpg) "
+            f"(Refer fig. 1) ![]({image_url}) "
             "// Misconceptions: Students may treat the print as literal history."
         ),
         "keywords": "",
     }
     out = concept_cleanup.clean_concept_record(dict(rec), neutralize_artifacts=True)
-    desc, rest = out["concept_details"].split("Types:", 1)
-    assert "cdn.mathpix.com" not in desc
-    assert "cdn.mathpix.com" in rest
+    sections = dict(cr.split_sections(out["concept_details"]))
+    assert image_url not in sections["Description"]
+    assert image_url in sections["Activity/Info Hub"]
+    assert image_url in sections["Types"]
     report = concept_validator.validate_concept_rows(
         [out], allow_types=True, require_culmination=False)
     assert not any(e["code"] == "description_image_url" for e in report["errors"])
