@@ -21,8 +21,11 @@ team requires regardless of which extractor produced them:
 6. **Misconceptions are always present on normal concepts.** If the model omits
    the section, a deterministic concept-specific fallback is appended.
 
-``concept_details`` is the canonical ``Description: ... // Types: ... //
-Misconception: ...`` string (sections joined by " // ").
+``concept_details`` is the canonical
+``Description: ... // Activity/Info Hub: ... // Types: ... // Misconception: ...``
+string (sections joined by " // "). Activity/Info Hub is optional and holds
+textbook activities, experiments, discussion cases, and other excess source
+material that must not overload Culmination or become vague Cases.
 """
 from __future__ import annotations
 
@@ -32,10 +35,16 @@ _SECTION_SEP = " // "
 # Matches a Type/Case token, optionally already prefixed with "Miscellaneous "
 # (so re-runs never stack the prefix).
 _TYPE_CASE_RE = re.compile(r"(?:Miscellaneous\s+)?(Type|Case)\s*0*\d+", re.IGNORECASE)
+_ACTIVITY_HUB_LABEL = "Activity/Info Hub"
 
 
 def is_culmination(title: str) -> bool:
     return (title or "").strip().lower().startswith("culmination")
+
+
+def is_activity_hub_label(label: str) -> bool:
+    key = re.sub(r"[\s/]+", "", (label or "").strip().lower())
+    return key.startswith("activityinfohub") or key.startswith("activityhub")
 
 
 def split_sections(details: str) -> list[tuple[str, str]]:
@@ -312,10 +321,15 @@ def normalize_misconception_sections(details: str) -> str:
     chosen = " ".join(specific)
 
     ordered: list[tuple[str, str]] = []
+    hub_block: tuple[str, str] | None = None
     types_block: tuple[str, str] | None = None
     for label, content in cleaned:
-        if label.strip().lower().startswith("type"):
+        lower = label.strip().lower()
+        if lower.startswith("type"):
             types_block = (label, content)
+        elif is_activity_hub_label(label):
+            if content.strip():
+                hub_block = (_ACTIVITY_HUB_LABEL, content.strip())
         else:
             ordered.append((label, content))
     # A mastery statement extracted from the misconception text replaces the
@@ -328,11 +342,52 @@ def normalize_misconception_sections(details: str) -> str:
             body = content[:m.start()].rstrip() if m else content.rstrip()
             ordered[i] = (label, f"{body}\nAchieving Mastery: {stray_mastery}")
             break
+    # Canonical order: Description (+ mastery) → Activity/Info Hub → Types →
+    # Misconceptions. Hub sits before Types so assessable Cases stay conceptual.
+    if hub_block:
+        ordered.append(hub_block)
     if types_block:
         ordered.append(types_block)
     if chosen:
         ordered.append(("Misconceptions", chosen))
     return join_sections(ordered)
+
+
+def append_activity_hub(details: str, hub_text: str) -> str:
+    """Append or extend the Activity/Info Hub section before Types."""
+    text = (hub_text or "").strip()
+    if not text:
+        return details
+    sections = split_sections(details or "")
+    for i, (label, content) in enumerate(sections):
+        if is_activity_hub_label(label):
+            existing = (content or "").strip()
+            if text in existing:
+                return details
+            merged = f"{existing} {text}".strip() if existing else text
+            sections[i] = (_ACTIVITY_HUB_LABEL, merged)
+            return join_sections(sections)
+
+    out: list[tuple[str, str]] = []
+    inserted = False
+    for label, content in sections:
+        lower = label.strip().lower()
+        if not inserted and (
+            lower.startswith("type") or lower.startswith("misconception")
+        ):
+            out.append((_ACTIVITY_HUB_LABEL, text))
+            inserted = True
+        out.append((label, content))
+    if not inserted:
+        out.append((_ACTIVITY_HUB_LABEL, text))
+    return join_sections(out)
+
+
+def activity_hub_body(details: str) -> str:
+    for label, content in split_sections(details or ""):
+        if is_activity_hub_label(label):
+            return (content or "").strip()
+    return ""
 
 
 def split_merged_description_blocks(details: str) -> str:

@@ -30,6 +30,13 @@ _FORBIDDEN_TOPIC_NAMES = {
     "overview", "basics", "basic concepts", "general",
     "summary", "misc", "miscellaneous",
 }
+_DISCUSSION_CASE_TOPIC_RE = re.compile(
+    r"\b(?:"
+    r"dilemma|can you help|vetal|discuss(?:ion)?|debate|"
+    r"in[- ]class|classroom discussion|think and discuss"
+    r")\b",
+    re.IGNORECASE,
+)
 
 # Pedagogy/instruction rows are task containers, not durable teaching concepts,
 # regardless of the subject label attached to the upload.
@@ -180,9 +187,13 @@ def filter_review_violations(
             rec["topic"] = fallback_topic
             out.append(rec)
             continue
-        # Overview / Summary / Basics / … are omitted entirely — never pushed
-        # into a neighboring topic (that caused repeated preview/recap content).
-        if topic_key in _FORBIDDEN_TOPIC_NAMES:
+        # Overview / Summary / Basics / discussion-case topics are omitted
+        # entirely — never pushed into a neighboring topic (that caused
+        # repeated preview/recap or classroom-case content).
+        if (
+            topic_key in _FORBIDDEN_TOPIC_NAMES
+            or _DISCUSSION_CASE_TOPIC_RE.search(topic)
+        ):
             dropped += 1
             continue
         out.append(rec)
@@ -505,9 +516,13 @@ def _clean_details(details: str, *, neutralize: bool = True) -> str:
     for part in parts:
         label = part.split(":", 1)[0].strip().lower() if ":" in part else ""
         is_types = label.startswith("type")
-        if is_types or not neutralize:
-            # Types keep their structure verbatim; and when the caller wants
-            # references preserved for content inlining, prose keeps them too.
+        is_hub = (
+            label.replace(" ", "").replace("/", "").startswith("activityinfohub")
+            or label.replace(" ", "").startswith("activityhub")
+        )
+        if is_types or is_hub or not neutralize:
+            # Types/Hub keep structure; and when the caller wants references
+            # preserved for content inlining, prose keeps them too.
             cleaned = replace_mmd_references(part)
         else:
             cleaned = replace_mmd_references(strip_dangling_references(part))

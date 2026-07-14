@@ -652,6 +652,112 @@ def test_unassigned_mined_types_fail_instead_of_guessing(monkeypatch):
             max_attempts=1)
 
 
+def test_activity_types_go_to_info_hub_not_culmination_types(monkeypatch):
+    """is_activity mined Types land in Activity/Info Hub on a normal concept."""
+    monkeypatch.setattr(
+        g, "_openai_json",
+        lambda *a, **kw: {
+            "assignments": [{
+                "concept_id": "CONCEPT-0001",
+                "type_ids": ["TYPE-0001"],
+            }],
+        },
+    )
+    records = [
+        {
+            "topic": "Electricity",
+            "parent_concept": "Current",
+            "concept_title": "Ohm's Law",
+            "concept_details": (
+                "Description: V = IR.\nAchieving Mastery: Applying Ohm's law. "
+                "// Misconceptions: Students confuse R and resistivity."
+            ),
+            "keywords": "",
+        },
+        {
+            "topic": "Electricity",
+            "parent_concept": "Culmination",
+            "concept_title": "Culmination - Electricity",
+            "concept_details": "Description: Recap",
+            "keywords": "",
+        },
+    ]
+    mined = {"types": [{
+        "type_id": "TYPE-0001",
+        "type_title": "Ohm's law experiment",
+        "topic_match_hint": "Electricity",
+        "is_activity": True,
+        "case_prompts": [{
+            "case_title": "Activity 11.1",
+            "examples": [{"example_prompt": (
+                "Set up the circuit with a nichrome wire and record the "
+                "ammeter reading for each cell added.")}],
+        }],
+    }]}
+    out = g._assign_mined_types_via_api(
+        records, meta=g._metadata(subject="Physics"), mined_types=mined,
+        max_attempts=1)
+    ohms = next(r for r in out if r["concept_title"] == "Ohm's Law")
+    culm = next(r for r in out if cr.is_culmination(r["concept_title"]))
+    hub = cr.activity_hub_body(ohms["concept_details"])
+    assert "Activity 11.1" in hub or "nichrome" in hub
+    assert "Type 01:" not in ohms["concept_details"]
+    assert "Type 01:" not in culm["concept_details"]
+    assert "Miscellaneous Type" not in culm["concept_details"]
+
+
+def test_activity_inventory_excluded_from_types_coverage_and_placed_in_hub():
+    activity = (
+        "Set up the circuit with a nichrome wire and record the ammeter "
+        "reading for each cell added."
+    )
+    exercise = (
+        "Calculate the resistance of a conductor when potential difference "
+        "is 12 V and current is 2 A."
+    )
+    inventory = {"items": [
+        {
+            "qid": "QINV-0001",
+            "source_kind": "activity",
+            "source_label": "Activity 11.1",
+            "raw_task": activity,
+            "topic_hint": "Electricity",
+        },
+        {
+            "qid": "QINV-0002",
+            "source_kind": "exercise",
+            "raw_task": exercise,
+            "topic_hint": "Electricity",
+        },
+    ]}
+    records = [{
+        "topic": "Electricity",
+        "parent_concept": "Current",
+        "concept_title": "Ohm's Law",
+        "concept_details": (
+            "Description: V = IR.\nAchieving Mastery: Applying Ohm's law. "
+            f"// Types: Type 01: Ohm's law Case 01: Direct V/I questions "
+            f"Example: {exercise} "
+            "// Misconceptions: Students confuse R and resistivity."
+        ),
+        "keywords": "",
+    }]
+    # Activity items are not part of the Types exact-coverage contract.
+    assert g._rendered_inventory_coverage_defects(records, inventory) == {
+        "missing": [],
+        "duplicate": [],
+    }
+    out = g._place_activity_inventory_into_hubs(records, inventory)
+    assert "Activity 11.1" in cr.activity_hub_body(out[0]["concept_details"])
+    assert "nichrome" in cr.activity_hub_body(out[0]["concept_details"])
+
+
+def test_discussion_case_topics_are_filler():
+    assert g._is_filler_source_topic("Khalil's Dilemma")
+    assert g._is_filler_source_topic(
+        "Can You Help Poor Vikram in Answering Vetal?")
+
+
 def test_duplicate_inventory_assignments_are_reported():
     inventory = {"items": [{"qid": "QINV-0001", "raw_task": "Why did tensions emerge?"}]}
     types = {"types": [
