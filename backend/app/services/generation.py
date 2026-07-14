@@ -2796,11 +2796,20 @@ def _inventory_item_already_in_hubs(
     text = _inventory_task_text(item)
     key = bi.normalize_question_text(text)
     if not key:
-        return True
-    return any(
+        label = item.get("source_label") or item.get("parent_source_label") or ""
+        key = bi.normalize_question_text(str(label))
+    if not key:
+        return False
+    if any(
         key in bi.normalize_question_text(
             cr.activity_hub_body(rec.get("concept_details") or ""))
         for rec in records
+    ):
+        return True
+    source_kind = (item.get("source_kind") or "").strip().lower()
+    return (
+        source_kind in _HUB_INVENTORY_KINDS
+        and _rendered_inventory_example_counts(records, {key}).get(key, 0) > 0
     )
 
 
@@ -2818,20 +2827,12 @@ def _place_activity_inventory_into_hubs(
     placed = 0
     for item in items:
         text = _inventory_task_text(item)
-        if not text:
+        # Activity/Info Hub never belongs on Culmination, even when no normal
+        # row shares the item's topic hint.
+        index = _best_record_index_for_inventory_item(
+            out, item, allow_culmination=False)
+        if index < 0:
             continue
-        # Prefer a normal concept in the activity's topic; never Culmination.
-        index = _best_record_index_for_inventory_item(out, item)
-        title = out[index].get("concept_title") or ""
-        if cr.is_culmination(title):
-            for i, rec in enumerate(out):
-                if (
-                    _topic_comparison_key(rec.get("topic") or "")
-                    == _topic_comparison_key(item.get("topic_hint") or "")
-                    and not cr.is_culmination(rec.get("concept_title") or "")
-                ):
-                    index = i
-                    break
         label = (
             item.get("source_label")
             or item.get("parent_source_label")
@@ -5442,26 +5443,23 @@ def _high_confidence_assignment_override(
         concept_payload_by_id[cid] for cid in candidate_cids
         if cid in concept_payload_by_id
     ]
+    normal = [row for row in candidates if not row.get("is_culmination")]
     culminations = [
         row["concept_id"] for row in candidates if row.get("is_culmination")
     ]
     # Textbook activities belong on Activity/Info Hub of a normal concept —
     # never force them onto Culmination Types.
-    if mtype.get("is_activity"):
-        normals = [
-            row["concept_id"] for row in candidates if not row.get("is_culmination")
-        ]
-        if len(normals) == 1:
-            return normals[0]
-        return ""
+    is_activity = bool(mtype.get("is_activity"))
+    if is_activity and len(normal) == 1:
+        return normal[0]["concept_id"]
     evidence = _assignment_unit_text(mtype)
     if (
-        len(culminations) == 1
+        not is_activity
+        and len(culminations) == 1
         and _MIXED_ASSIGNMENT_CUE_RE.search(evidence)
     ):
         return culminations[0]
 
-    normal = [row for row in candidates if not row.get("is_culmination")]
     title_prefixes = {
         row["concept_id"]: _assignment_prefixes(row.get("concept") or "")
         for row in normal
@@ -5671,6 +5669,11 @@ def _assign_mined_types_via_api(
                             allowed is not None
                             and effective_cid not in allowed
                         )
+                        or (
+                            types_by_id[tid].get("is_activity")
+                            and concept_payload_by_id.get(
+                                effective_cid, {}).get("is_culmination")
+                        )
                     ):
                         rejected_wrong_topic += 1
                         continue
@@ -5697,6 +5700,17 @@ def _assign_mined_types_via_api(
             per_concept.setdefault(cid, []).append(types_by_id[tid])
             remaining_in_group.discard(tid)
             overridden.add(tid)
+        deferred_activities = {
+            tid for tid in remaining_in_group
+            if types_by_id[tid].get("is_activity")
+        }
+        if deferred_activities:
+            remaining_in_group.difference_update(deferred_activities)
+            progress.log(
+                f"Deferred {len(deferred_activities)} ambiguous activity "
+                "assignment unit(s) to Activity/Info Hub inventory placement.",
+                level="warning",
+            )
         if overridden:
             progress.log(
                 f"Corrected {len(overridden)} Type assignment unit(s) using "
@@ -5747,6 +5761,8 @@ def _mined_type_topic_violations(
     violations: list[dict] = []
     expected_by_title: dict[str, list[dict]] = {}
     for mtype in (mined_types or {}).get("types") or []:
+        if mtype.get("is_activity"):
+            continue
         topic = (mtype.get("topic_match_hint") or "").strip()
         title = concept_cleanup.strip_dangling_references(
             (mtype.get("type_title") or mtype.get("task_pattern") or "").strip())
@@ -6256,6 +6272,9 @@ def _inventory_lookup_texts(inventory: dict | None) -> list[str]:
     for item in (inventory or {}).get("items") or []:
         if not isinstance(item, dict):
             continue
+        source_kind = (item.get("source_kind") or "").strip().lower()
+        if source_kind in _HUB_INVENTORY_KINDS:
+            continue
         text = _inventory_task_text(item)
         key = bi.normalize_question_text(text)
         if text and key and key not in seen and not cv._example_too_short(text):
@@ -6370,16 +6389,37 @@ def _rendered_inventory_coverage_defects(
     return defects
 
 
+def _hub_inventory_examples_in_types(
+    records: list[dict], inventory: dict | None,
+) -> set[str]:
+    """Hub inventory prompt keys incorrectly rendered as Types Examples."""
+    expected_keys = {
+        bi.normalize_question_text(_inventory_task_text(item))
+        for item in _hub_inventory_items(inventory)
+    }
+    expected_keys.discard("")
+    counts = _rendered_inventory_example_counts(records, expected_keys)
+    return {key for key, count in counts.items() if count > 0}
+
+
 def _accept_exact_inventory_type_review(
     original: list[dict], candidate: list[dict], inventory: dict | None,
 ) -> list[dict]:
-    """Reject a Types rewrite that loses or duplicates source questions."""
+    """Reject a Types rewrite that breaks inventory section or coverage rules."""
     defects = _rendered_inventory_coverage_defects(candidate, inventory)
     if defects["missing"] or defects["duplicate"]:
         progress.log(
             "Rejected Types rewrite that changed exact inventory coverage: "
             f"{len(defects['missing'])} missing, "
             f"{len(defects['duplicate'])} duplicated Example(s).",
+            level="warning",
+        )
+        return original
+    misplaced_hub_items = _hub_inventory_examples_in_types(candidate, inventory)
+    if misplaced_hub_items:
+        progress.log(
+            "Rejected Types rewrite that placed "
+            f"{len(misplaced_hub_items)} Activity/Info Hub item(s) in Examples.",
             level="warning",
         )
         return original
@@ -6415,7 +6455,7 @@ def _next_rendered_type_number(body: str) -> int:
 
 
 def _best_record_index_for_inventory_item(
-    records: list[dict], item: dict,
+    records: list[dict], item: dict, *, allow_culmination: bool = True,
 ) -> int:
     """Pick the concept row that should host a still-missing inventory Example."""
     if not records:
@@ -6428,11 +6468,16 @@ def _best_record_index_for_inventory_item(
         if topic_hint and record_topic == topic_hint:
             score += 10
         title = record.get("concept_title") or ""
-        if cr.is_culmination(title):
+        is_culmination = cr.is_culmination(title)
+        if is_culmination and not allow_culmination:
+            continue
+        if is_culmination:
             score -= 3
         if _has_meaningful_types(record.get("concept_details") or ""):
             score += 2
         scored.append((score, -index))
+    if not scored:
+        return -1
     scored.sort(reverse=True)
     return -scored[0][1]
 
