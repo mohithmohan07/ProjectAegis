@@ -300,11 +300,20 @@ def _store_inventory(job: models.UploadJob, artifacts: dict) -> None:
 
 
 def _generation_checkpoint_fingerprint(
-    job: models.UploadJob, target_chapter_id: int,
+    job: models.UploadJob, chapter: models.Chapter,
 ) -> str:
     payload = (
-        f"post-learning-checkpoint-v1\0{target_chapter_id}\0"
-        f"{job.mmd_text or ''}"
+        "post-learning-checkpoint-v1\0"
+        + "\0".join(str(value or "") for value in (
+            chapter.id,
+            chapter.board,
+            chapter.grade,
+            chapter.subject,
+            chapter.unit,
+            chapter.chapter_title,
+            chapter.chapter_code,
+            job.mmd_text,
+        ))
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -405,7 +414,7 @@ def generate_post_learning(db: Session, job_id: int, target_chapter_id: int) -> 
         raise ValueError("convert the uploaded document to MMD before generating")
     progress.log(f"Post-learning generation into chapter '{chapter.chapter_title}'.")
     artifacts: dict = {}
-    fingerprint = _generation_checkpoint_fingerprint(job, target_chapter_id)
+    fingerprint = _generation_checkpoint_fingerprint(job, chapter)
     stored_checkpoint = job.generation_checkpoint or {}
     resume_checkpoint = (
         stored_checkpoint

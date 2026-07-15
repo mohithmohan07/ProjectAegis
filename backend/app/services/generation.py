@@ -9777,7 +9777,7 @@ def concepts_from_mmd(
             mined_types = copy.deepcopy(resume_checkpoint["mined_types"])
             method_row_snapshot = _deserialize_method_row_snapshot(
                 resume_checkpoint["method_row_snapshot"])
-            if not out or not question_task_inventory.get("items"):
+            if not out:
                 raise RuntimeError(
                     "saved concept checkpoint is incomplete; replace the file "
                     "or clear the checkpoint before retrying")
