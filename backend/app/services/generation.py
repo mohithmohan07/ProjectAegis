@@ -7521,7 +7521,10 @@ def _enforce_rendered_inventory_coverage(
                 + ".",
                 level="warning",
             )
-    return out
+    # Coverage may already be exact while later merge/refinement passes have
+    # moved an assessable Activity Example away from its Hub. Reassert that
+    # identity-based placement invariant at this terminal repair boundary.
+    return _align_activity_examples_with_hubs(out, inventory)
 
 
 def _match_inventory_for_short_example(

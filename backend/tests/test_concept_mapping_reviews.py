@@ -1363,6 +1363,51 @@ def test_preexisting_activity_hub_is_aligned_without_an_api_call(monkeypatch):
     assert not g._activity_example_hub_alignment_violations(out, inventory)
 
 
+def test_terminal_coverage_repair_realigns_an_exact_activity_example():
+    prompt = "Record the current while increasing the number of cells."
+    item = {
+        "qid": "QINV-0001",
+        "source_kind": "checkpoint_question",
+        "source_label": "Activity 11.1 question",
+        "raw_task": prompt,
+        "topic_hint": "Ohm's Law",
+        "_activity_origin": True,
+    }
+    inventory = {"items": [item]}
+    records = [
+        {
+            "topic": "Ohm's Law",
+            "parent_concept": "Resistance",
+            "concept_title": "General Resistance",
+            "concept_details": (
+                "Description: Resistance opposes current. // Types: "
+                "Type 01: Experimental questions Case 01: Observe current "
+                f"Example: {prompt}"
+            ),
+            "keywords": "",
+        },
+        {
+            "topic": "Ohm's Law",
+            "parent_concept": "Experiments",
+            "concept_title": "Testing the Voltage-current Relationship",
+            "concept_details": (
+                "Description: Compare measured V and I. // Activity/Info Hub: "
+                f"Activity: Measure V and I. {prompt}"
+            ),
+            "keywords": "",
+        },
+    ]
+    assert g._rendered_inventory_coverage_defects(records, inventory) == {
+        "missing": [],
+        "duplicate": [],
+    }
+
+    out = g._enforce_rendered_inventory_coverage(records, inventory)
+
+    assert g._rendered_inventory_example_locations(out, item) == [1]
+    assert not g._activity_example_hub_alignment_violations(out, inventory)
+
+
 def test_cross_topic_gpt_hub_choice_falls_back_to_exact_example_row(monkeypatch):
     prompt = "Compare the current through the wire for each applied voltage."
     item = {
