@@ -418,14 +418,15 @@ def generate_post_learning(db: Session, job_id: int, target_chapter_id: int) -> 
     stored_checkpoint = job.generation_checkpoint or {}
     resume_checkpoint = (
         stored_checkpoint
-        if stored_checkpoint.get("fingerprint") == fingerprint
+        if generation._valid_concept_checkpoint(stored_checkpoint)
+        and stored_checkpoint.get("fingerprint") == fingerprint
         and stored_checkpoint.get("target_chapter_id") == target_chapter_id
         else None
     )
     if stored_checkpoint and resume_checkpoint is None:
         progress.log(
-            "Discarding a stale generation checkpoint because its source or "
-            "target chapter changed.",
+            "Discarding an invalid or stale generation checkpoint because its "
+            "schema, source, or target chapter no longer matches.",
             level="warning",
         )
         job.generation_checkpoint = {}
