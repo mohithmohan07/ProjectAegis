@@ -2400,6 +2400,49 @@ def test_type_review_cannot_drop_or_duplicate_inventory_examples():
     }
 
 
+def test_type_review_cannot_move_activity_example_away_from_its_hub():
+    prompt = "Interpret how the caricature represents parliamentary power."
+    inventory = {"items": [{
+        "qid": "QINV-0001",
+        "source_kind": "checkpoint_question",
+        "topic_hint": "German Unification",
+        "_activity_origin": True,
+        "raw_task": prompt,
+    }]}
+    original = [
+        {
+            "topic": "German Unification",
+            "concept_title": "Bismarck and Parliament",
+            "concept_details": (
+                "Description: The caricature contrasts executive and elected "
+                "power. // Activity/Info Hub: Activity: "
+                f"{prompt} // Types: Type 01: Interpreting political cartoons "
+                f"Case 01: Explain a power relationship Example: {prompt}"
+            ),
+        },
+        {
+            "topic": "Italian Unification",
+            "concept_title": "Garibaldi and Italy",
+            "concept_details": "Description: Garibaldi led a military campaign.",
+        },
+    ]
+    candidate = [dict(row) for row in original]
+    candidate[0]["concept_details"] = candidate[0]["concept_details"].replace(
+        " // Types: Type 01: Interpreting political cartoons "
+        f"Case 01: Explain a power relationship Example: {prompt}",
+        "",
+    )
+    candidate[1]["concept_details"] += (
+        " // Types: Type 01: Interpreting political cartoons "
+        f"Case 01: Explain a power relationship Example: {prompt}"
+    )
+
+    assert g._rendered_inventory_topic_violations(candidate, inventory)
+    assert g._activity_example_hub_alignment_violations(candidate, inventory)
+    assert g._accept_exact_inventory_type_review(
+        original, candidate, inventory) is original
+
+
 def test_rendered_inventory_coverage_handles_embedded_structure_tokens_exactly():
     prompt = (
         r"Compare Type 12: direct use with Case 03: boundary reasoning. "

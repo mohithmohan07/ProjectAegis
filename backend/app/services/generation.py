@@ -6851,6 +6851,76 @@ def _rendered_inventory_coverage_defects(
     return defects
 
 
+def _rendered_inventory_example_locations(
+    records: list[dict], item: dict,
+) -> list[int]:
+    key = bi.normalize_question_text(_inventory_task_text(item))
+    if not key:
+        return []
+    return [
+        index for index, record in enumerate(records)
+        if _rendered_inventory_example_counts([record], {key}).get(key, 0)
+    ]
+
+
+def _rendered_inventory_topic_violations(
+    records: list[dict], inventory: dict | None,
+) -> list[dict]:
+    """Exact Examples rendered outside their authoritative inventory topic."""
+    violations: list[dict] = []
+    for item in (inventory or {}).get("items") or []:
+        expected_topic = (item.get("topic_hint") or "").strip()
+        expected_key = _topic_comparison_key(expected_topic)
+        if not expected_key:
+            continue
+        for index in _rendered_inventory_example_locations(records, item):
+            actual_topic = (records[index].get("topic") or "").strip()
+            if _topic_comparison_key(actual_topic) == expected_key:
+                continue
+            violations.append({
+                "qid": (item.get("qid") or "").strip(),
+                "expected_topic": expected_topic,
+                "actual_topic": actual_topic,
+                "concept": records[index].get("concept_title") or "",
+            })
+    return violations
+
+
+def _activity_example_hub_alignment_violations(
+    records: list[dict], inventory: dict | None,
+) -> list[dict]:
+    """Assessable Activity Examples and Hub copies must share one concept row."""
+    violations: list[dict] = []
+    for item in (inventory or {}).get("items") or []:
+        if not item.get("_activity_origin"):
+            continue
+        key = bi.normalize_question_text(_inventory_task_text(item))
+        if not key:
+            continue
+        example_locations = set(
+            _rendered_inventory_example_locations(records, item))
+        hub_locations = {
+            index for index, record in enumerate(records)
+            if key in bi.normalize_question_text(
+                cr.activity_hub_body(record.get("concept_details") or ""))
+        }
+        if example_locations and hub_locations and not (
+            example_locations & hub_locations
+        ):
+            violations.append({
+                "qid": (item.get("qid") or "").strip(),
+                "example_concepts": [
+                    records[index].get("concept_title") or ""
+                    for index in sorted(example_locations)
+                ],
+                "hub_concepts": [
+                    records[index].get("concept_title") or ""
+                    for index in sorted(hub_locations)
+                ],
+            })
+    return violations
+
+
 def _hub_inventory_examples_in_types(
     records: list[dict], inventory: dict | None,
 ) -> set[str]:
@@ -6878,6 +6948,18 @@ def _accept_exact_inventory_type_review(
             "Rejected Types rewrite that changed exact inventory coverage: "
             f"{len(defects['missing'])} missing, "
             f"{len(defects['duplicate'])} duplicated Example(s).",
+            level="warning",
+        )
+        return original
+    topic_violations = _rendered_inventory_topic_violations(
+        candidate, inventory)
+    activity_violations = _activity_example_hub_alignment_violations(
+        candidate, inventory)
+    if topic_violations or activity_violations:
+        progress.log(
+            "Rejected Types rewrite that moved exact inventory Examples: "
+            f"{len(topic_violations)} outside their source topic, "
+            f"{len(activity_violations)} away from their Activity/Info Hub.",
             level="warning",
         )
         return original
@@ -10193,6 +10275,20 @@ def concepts_from_mmd(
         # warns; only unresolved duplicates still abort deposit.
         out = _enforce_rendered_inventory_coverage(
             out, question_task_inventory)
+        inventory_topic_violations = _rendered_inventory_topic_violations(
+            out, question_task_inventory)
+        activity_alignment_violations = (
+            _activity_example_hub_alignment_violations(
+                out, question_task_inventory)
+        )
+        if inventory_topic_violations or activity_alignment_violations:
+            raise RuntimeError(
+                "final inventory placement validation failed: "
+                f"{len(inventory_topic_violations)} Example(s) outside their "
+                "source topic, "
+                f"{len(activity_alignment_violations)} assessable Activity "
+                "Example(s) separated from their Activity/Info Hub"
+            )
         _validate_final_or_raise(
             out, stage="final", inventory=question_task_inventory)
         missing = sum(
