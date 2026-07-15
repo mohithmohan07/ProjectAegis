@@ -62,6 +62,11 @@ _EXAMPLE_SEGMENT_RE = re.compile(
 )
 _DESCRIPTION_LABEL_RE = re.compile(r"\bDescription\s*:", re.IGNORECASE)
 _IMAGE_URL_RE = re.compile(r"!\[[^\]]*\]\(https?://[^)]+\)|https?://\S+", re.IGNORECASE)
+_EMPTY_IMAGE_ALT_RE = re.compile(r"!\[\s*\]\(https?://[^)]+\)", re.IGNORECASE)
+_DESCRIPTION_SECTION_REF_RE = re.compile(
+    r"(?:\bsections?\s+|§\s*)\d+(?:\.\d+)+\b",
+    re.IGNORECASE,
+)
 # With embedded Mathpix images, figure/table references are legitimate content
 # ("Refer fig. 11.1" next to its image URL); only textual pointers to unshipped
 # source artifacts (Example 5, Exercise 1.2, page 14, MMD) stay forbidden.
@@ -273,6 +278,15 @@ def validate_concept_rows(
         if misconception and concept_refiner._is_generic_misconception(misconception):
             _add(errors, i, "concept_details", "generic_misconception",
                  "Misconception should be specific to this concept", "warning")
+        if (
+            misconception
+            and concept_refiner._is_correction_shaped_misconception(misconception)
+        ):
+            _add(
+                errors, i, "concept_details", "misconception_framing",
+                "Misconception must state the learner's false belief, not the correction",
+                "warning",
+            )
         if details:
             words = _description_words(details)
             if not is_culm and (words < 4 or words > 120):
@@ -291,6 +305,19 @@ def validate_concept_rows(
                 _add(errors, i, "concept_details", "description_image_url",
                      "Mathpix/image URLs belong in Types Examples, not Description",
                      "warning")
+            if _DESCRIPTION_SECTION_REF_RE.search(desc):
+                _add(
+                    errors, i, "concept_details",
+                    "section_number_in_description",
+                    "Description cites a textbook section number instead of the idea",
+                    "warning",
+                )
+            if _EMPTY_IMAGE_ALT_RE.search(details):
+                _add(
+                    errors, i, "concept_details", "empty_image_alt",
+                    "Shipped images need a source-grounded figure caption/alt",
+                    "warning",
+                )
             if len(desc) > 450 and len(set(re.findall(r"\w+", desc.lower()))) < 35:
                 _add(errors, i, "concept_details", "textbook_dump",
                      "description appears broad or dump-like", "warning")

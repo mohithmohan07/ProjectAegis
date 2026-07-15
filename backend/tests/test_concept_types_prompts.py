@@ -942,7 +942,7 @@ def test_mine_types_keeps_delta_guards_and_restores_authoritative_source(
         for example in examples
     ] == [
         ("QINV-0001", task_one),
-        ("QINV-0002", authoritative_task_two),
+        ("QINV-0002", g._inventory_task_text(inventory["items"][1])),
     ]
     assert all(
         example["example_prompt"] != "shortened" for example in examples)
@@ -1124,7 +1124,7 @@ def test_single_item_fallback_preserves_source_image_topic_and_embeds(monkeypatc
     example = g._case_examples(fallback["case_prompts"][0])[0]
     assert example == {
         "source_question_id": "QINV-0042",
-        "example_prompt": f"{source_task} ![]({image_url})",
+        "example_prompt": f"{source_task} ![Fig. 4.2]({image_url})",
     }
     assert "The length is 8 cm." not in example["example_prompt"]
 
