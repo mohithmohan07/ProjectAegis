@@ -7542,6 +7542,11 @@ def _rebuild_types_after_final_placement_drift(
     rebuilt = _assign_mined_types_via_api(
         rebuilt, meta=meta, mined_types=mined_types)
     rebuilt = _populate_activity_hubs_via_api(rebuilt, inventory, meta=meta)
+    # Reassignment re-renders the original mined wording after the ordinary
+    # terminal cleanup boundary. Apply the same source-artifact and short
+    # Example cleanup before rechecking coverage and placement.
+    rebuilt = _salvage_short_case_examples(rebuilt, inventory=inventory)
+    rebuilt = _neutralize_unrepaired_rows(rebuilt, inventory=inventory)
     return _enforce_rendered_inventory_coverage(
         rebuilt, inventory, mined_types)
 

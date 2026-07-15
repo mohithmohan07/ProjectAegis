@@ -1443,6 +1443,7 @@ def test_final_placement_rebuild_reuses_gpt_assignment_on_final_rows(monkeypatch
         },
     ]
     calls = []
+    cleanup_calls = []
 
     def fake_assign(candidate, *, meta, mined_types):
         calls.append((meta, mined_types))
@@ -1460,11 +1461,25 @@ def test_final_placement_rebuild_reuses_gpt_assignment_on_final_rows(monkeypatch
         g, "_populate_activity_hubs_via_api",
         lambda candidate, inventory, *, meta: candidate,
     )
+    original_salvage = g._salvage_short_case_examples
+    original_neutralize = g._neutralize_unrepaired_rows
+
+    def track_salvage(candidate, *, inventory):
+        cleanup_calls.append("salvage")
+        return original_salvage(candidate, inventory=inventory)
+
+    def track_neutralize(candidate, *, inventory):
+        cleanup_calls.append("neutralize")
+        return original_neutralize(candidate, inventory=inventory)
+
+    monkeypatch.setattr(g, "_salvage_short_case_examples", track_salvage)
+    monkeypatch.setattr(g, "_neutralize_unrepaired_rows", track_neutralize)
 
     out = g._rebuild_types_after_final_placement_drift(
         records, inventory, mined, meta=g._metadata(subject="Physics"))
 
     assert len(calls) == 1
+    assert cleanup_calls == ["salvage", "neutralize"]
     assert g._rendered_inventory_example_locations(
         out, inventory["items"][0]) == [1]
     assert not g._rendered_inventory_topic_violations(out, inventory, mined)
