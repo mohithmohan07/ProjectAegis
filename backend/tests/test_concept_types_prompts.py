@@ -1,5 +1,6 @@
 """Concept-generation prompts must require rich Types classification."""
 import json
+import re
 
 import pytest
 
@@ -109,6 +110,8 @@ def test_universal_question_task_inventory_and_type_mining_prompts():
     assert "Formula overlap is not concept identity" in embedding_contract
     # Culmination rows are part of the assignment payload.
     assert "is_culmination" in embedding
+    assert "cross_topic_synthesis" in mining
+    assert "later source topic" in embedding.lower()
 
 
 def test_has_meaningful_types():
@@ -1453,6 +1456,136 @@ def test_assign_mined_types_can_place_types_on_culminations(monkeypatch):
     assert any(row["is_culmination"] for row in mixed_payload)
     assert "Mixed Multi-Concept Pattern" in out[1]["concept_details"]
     assert "Single Concept Pattern" in out[0]["concept_details"]
+
+
+def test_cross_topic_synthesis_can_use_only_a_later_topic_culmination(
+    monkeypatch,
+):
+    prompt = (
+        "Compare resistance calculated from the voltage-current relationship "
+        "with the heating effect produced by the same conductor."
+    )
+    candidate_ids: dict[str, list[str]] = {}
+
+    def fake_openai(system, user, **kw):
+        concepts, types = _type_embedding_request(user)
+        unit = types[0]
+        type_id = unit["type_id"]
+        candidate_ids[type_id] = [
+            row["concept_id"] for row in concepts
+        ]
+        target_by_type = {
+            "TYPE-NORMAL-A": "CONCEPT-0001",
+            "TYPE-MIXED-A": "CONCEPT-0002",
+            "TYPE-NORMAL-B": "CONCEPT-0003",
+            "TYPE-CROSS": "CONCEPT-0004",
+        }
+        return {"assignments": [{
+            "concept_id": target_by_type[type_id],
+            "type_ids": [type_id],
+        }]}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    records = [
+        {
+            "topic": "Electric Current",
+            "parent_concept": "Current",
+            "concept_title": "Voltage-current Relationship",
+            "concept_details": "Description: Current depends on voltage.",
+            "keywords": "",
+        },
+        {
+            "topic": "Electric Current",
+            "parent_concept": "Culmination",
+            "concept_title": "Culmination - Electric Current",
+            "concept_details": "Description: Recap",
+            "keywords": "",
+        },
+        {
+            "topic": "Heating Effect",
+            "parent_concept": "Heating",
+            "concept_title": "Joule Heating",
+            "concept_details": "Description: Electrical energy becomes heat.",
+            "keywords": "",
+        },
+        {
+            "topic": "Heating Effect",
+            "parent_concept": "Culmination",
+            "concept_title": "Culmination - Heating Effect",
+            "concept_details": "Description: Recap",
+            "keywords": "",
+        },
+    ]
+
+    def mined_type(type_id, title, topic, scope, qid, example):
+        return {
+            "type_id": type_id,
+            "type_title": title,
+            "topic_match_hint": topic,
+            "placement_scope": scope,
+            "source_question_ids": [qid],
+            "case_prompts": [{
+                "case_id": f"CASE-{qid}",
+                "case_title": f"Case for {title}",
+                "placement_scope": scope,
+                "examples": [{
+                    "source_question_id": qid,
+                    "example_prompt": example,
+                }],
+            }],
+        }
+
+    mined = {"types": [
+        mined_type(
+            "TYPE-NORMAL-A", "Reading circuit values", "Electric Current",
+            "normal", "Q-A1", "Read the current shown by the ammeter."),
+        mined_type(
+            "TYPE-MIXED-A", "Combining current relationships",
+            "Electric Current", "mixed_synthesis", "Q-A2",
+            "Combine voltage, current, and resistance relationships."),
+        mined_type(
+            "TYPE-NORMAL-B", "Calculating Joule heating", "Heating Effect",
+            "normal", "Q-B1", "Calculate the heat produced in the conductor."),
+        mined_type(
+            "TYPE-CROSS", "Comparing electrical and heating effects",
+            "Electric Current", "cross_topic_synthesis", "Q-CROSS", prompt),
+    ]}
+
+    out = g._assign_mined_types_via_api(
+        records, meta=g._metadata(subject="Physics"), mined_types=mined)
+
+    # The GPT classifier sees the source topic's normal/culmination rows and
+    # later Culminations, but never a later ordinary concept.
+    assert candidate_ids["TYPE-CROSS"] == [
+        "CONCEPT-0001", "CONCEPT-0002", "CONCEPT-0004",
+    ]
+    assert prompt in out[3]["concept_details"]
+    assert prompt not in out[0]["concept_details"]
+    assert not g._mined_type_topic_violations(out, mined)
+
+    inventory = {"items": [{
+        "qid": "Q-CROSS",
+        "raw_task": prompt,
+        "topic_hint": "Electric Current",
+    }]}
+    assert g._rendered_inventory_coverage_defects(out, inventory) == {
+        "missing": [],
+        "duplicate": [],
+    }
+    assert not g._rendered_inventory_topic_violations(
+        out, inventory, mined)
+
+    regular = []
+    miscellaneous = []
+    for record in out:
+        labels = re.findall(
+            r"\b(?:(Miscellaneous)\s+)?Type\s+(\d{2}):",
+            g._types_body(record["concept_details"]),
+        )
+        for prefix, number in labels:
+            (miscellaneous if prefix else regular).append(number)
+    assert regular == ["01", "02"]
+    assert miscellaneous == ["01", "02"]
 
 
 def test_pipeline_builds_culminations_before_types(monkeypatch):

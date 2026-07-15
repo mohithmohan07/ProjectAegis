@@ -1193,6 +1193,226 @@ def test_activity_inventory_excluded_from_types_coverage_and_placed_in_hub():
     assert "nichrome" in cr.activity_hub_body(out[0]["concept_details"])
 
 
+def test_gpt_selected_activity_hub_relocates_exact_assessable_example(monkeypatch):
+    prompt = "Record the current while increasing the number of cells."
+    inventory = {"items": [{
+        "qid": "QINV-0001",
+        "source_kind": "checkpoint_question",
+        "source_label": "Activity 11.1 question",
+        "raw_task": prompt,
+        "topic_hint": "Ohm's Law",
+        "_activity_origin": True,
+    }]}
+    records = [
+        {
+            "topic": "Ohm's Law",
+            "parent_concept": "Resistance",
+            "concept_title": "General Resistance",
+            "concept_details": (
+                "Description: Resistance opposes current. // Types: "
+                "Type 01: Experimental questions Case 01: Observe current "
+                f"Example: {prompt}"
+            ),
+            "keywords": "",
+        },
+        {
+            "topic": "Ohm's Law",
+            "parent_concept": "Experiments",
+            "concept_title": "Testing the Voltage-current Relationship",
+            "concept_details": (
+                "Description: Compare measured V and I. // Types: "
+                "Type 01: Conceptual checks Case 01: Proportionality "
+                "Example: Explain why voltage and current are proportional. "
+                "Type 02: Reading graphs Case 01: Slope "
+                "Example: Interpret the slope of a voltage-current graph."
+            ),
+            "keywords": "",
+        },
+    ]
+    monkeypatch.setattr(
+        g, "_openai_json",
+        lambda *args, **kwargs: {"placements": [{
+            "qid": "QINV-0001",
+            "concept_id": "CONCEPT-0002",
+            "hub_note": f"Activity: Measure V and I. {prompt}",
+        }]},
+    )
+
+    out = g._populate_activity_hubs_via_api(
+        records, inventory, meta=g._metadata(subject="Physics"))
+
+    assert prompt not in g._types_body(out[0]["concept_details"])
+    assert prompt in g._types_body(out[1]["concept_details"])
+    assert prompt in cr.activity_hub_body(out[1]["concept_details"])
+    assert re.findall(
+        r"\bType\s+(\d{2}):", g._types_body(out[1]["concept_details"])
+    ) == ["01", "02", "03"]
+    assert g._rendered_inventory_example_locations(
+        out, inventory["items"][0]) == [1]
+    assert g._rendered_inventory_coverage_defects(out, inventory) == {
+        "missing": [],
+        "duplicate": [],
+    }
+    assert not g._rendered_inventory_topic_violations(out, inventory)
+    assert not g._activity_example_hub_alignment_violations(out, inventory)
+
+
+def test_activity_alignment_keeps_hub_copy_when_exact_example_is_duplicated():
+    prompt = "Record the current while increasing the number of cells."
+    item = {
+        "qid": "QINV-0001",
+        "source_kind": "checkpoint_question",
+        "source_label": "Activity 11.1 question",
+        "raw_task": prompt,
+        "topic_hint": "Ohm's Law",
+        "_activity_origin": True,
+    }
+    inventory = {"items": [item]}
+    records = [
+        {
+            "topic": "Ohm's Law",
+            "parent_concept": "Resistance",
+            "concept_title": "General Resistance",
+            "concept_details": (
+                "Description: Resistance opposes current. // Types: "
+                "Type 01: Experimental questions Case 01: Observe current "
+                f"Example: {prompt} "
+                "Type 02: Direct calculations Case 01: Find resistance "
+                "Example: Calculate resistance from 12 V and 2 A."
+            ),
+            "keywords": "",
+        },
+        {
+            "topic": "Ohm's Law",
+            "parent_concept": "Experiments",
+            "concept_title": "Testing the Voltage-current Relationship",
+            "concept_details": (
+                f"Description: Compare measured V and I. // Activity/Info Hub: "
+                f"Activity: Measure V and I. {prompt} // Types: "
+                "Type 01: Experimental questions Case 01: Compare readings "
+                f"Example: {prompt}"
+            ),
+            "keywords": "",
+        },
+    ]
+
+    out = g._align_activity_examples_with_hubs(records, inventory)
+
+    assert g._rendered_inventory_example_locations(out, item) == [1]
+    assert g._rendered_inventory_coverage_defects(out, inventory) == {
+        "missing": [],
+        "duplicate": [],
+    }
+    assert not g._activity_example_hub_alignment_violations(out, inventory)
+    assert re.findall(
+        r"\bType\s+(\d{2}):", g._types_body(out[0]["concept_details"])
+    ) == ["01"]
+    assert re.findall(
+        r"\bType\s+(\d{2}):", g._types_body(out[1]["concept_details"])
+    ) == ["02"]
+
+
+def test_preexisting_activity_hub_is_aligned_without_an_api_call(monkeypatch):
+    prompt = "Record the current while increasing the number of cells."
+    inventory = {"items": [{
+        "qid": "QINV-0001",
+        "source_kind": "checkpoint_question",
+        "source_label": "Activity 11.1 question",
+        "raw_task": prompt,
+        "topic_hint": "Ohm's Law",
+        "_activity_origin": True,
+    }]}
+    records = [
+        {
+            "topic": "Ohm's Law",
+            "parent_concept": "Resistance",
+            "concept_title": "General Resistance",
+            "concept_details": (
+                "Description: Resistance opposes current. // Types: "
+                "Type 01: Experimental questions Case 01: Observe current "
+                f"Example: {prompt}"
+            ),
+            "keywords": "",
+        },
+        {
+            "topic": "Ohm's Law",
+            "parent_concept": "Experiments",
+            "concept_title": "Testing the Voltage-current Relationship",
+            "concept_details": (
+                "Description: Compare measured V and I. // Activity/Info Hub: "
+                f"Activity: Measure V and I. {prompt}"
+            ),
+            "keywords": "",
+        },
+    ]
+
+    monkeypatch.setattr(
+        g, "_openai_json",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("an existing Hub must not trigger an API call")),
+    )
+    out = g._populate_activity_hubs_via_api(
+        records, inventory, meta=g._metadata(subject="Physics"))
+
+    assert g._rendered_inventory_example_locations(
+        out, inventory["items"][0]) == [1]
+    assert g._rendered_inventory_coverage_defects(out, inventory) == {
+        "missing": [],
+        "duplicate": [],
+    }
+    assert not g._activity_example_hub_alignment_violations(out, inventory)
+
+
+def test_cross_topic_gpt_hub_choice_falls_back_to_exact_example_row(monkeypatch):
+    prompt = "Compare the current through the wire for each applied voltage."
+    item = {
+        "qid": "QINV-0001",
+        "source_kind": "checkpoint_question",
+        "source_label": "Activity 11.2 question",
+        "raw_task": prompt,
+        "topic_hint": "Ohm's Law",
+        "_activity_origin": True,
+    }
+    inventory = {"items": [item]}
+    records = [
+        {
+            "topic": "Ohm's Law",
+            "parent_concept": "Current",
+            "concept_title": "Ohm's Law Measurements",
+            "concept_details": (
+                "Description: Voltage and current are proportional. // Types: "
+                "Type 01: Experimental questions Case 01: Compare readings "
+                f"Example: {prompt}"
+            ),
+            "keywords": "",
+        },
+        {
+            "topic": "Resistance Factors",
+            "parent_concept": "Materials",
+            "concept_title": "Conductor Material",
+            "concept_details": "Description: Materials have different resistivity.",
+            "keywords": "",
+        },
+    ]
+    monkeypatch.setattr(
+        g, "_openai_json",
+        lambda *args, **kwargs: {"placements": [{
+            "qid": "QINV-0001",
+            "concept_id": "CONCEPT-0002",
+            "hub_note": f"Activity: Compare conductor materials. {prompt}",
+        }]},
+    )
+
+    out = g._populate_activity_hubs_via_api(
+        records, inventory, meta=g._metadata(subject="Physics"))
+
+    assert prompt in cr.activity_hub_body(out[0]["concept_details"])
+    assert not cr.activity_hub_body(out[1]["concept_details"])
+    assert g._rendered_inventory_example_locations(out, item) == [0]
+    assert not g._rendered_inventory_topic_violations(out, inventory)
+    assert not g._activity_example_hub_alignment_violations(out, inventory)
+
+
 def test_activity_hub_fallback_never_uses_culmination_without_topic_normal():
     activity = "Observe how current changes when another cell is added."
     inventory = {"items": [{

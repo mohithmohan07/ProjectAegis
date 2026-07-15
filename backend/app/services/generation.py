@@ -1541,7 +1541,7 @@ what is asked, with what constraint) — never a raw question. An Example is one
 concrete source question that instantiates a Case, copied in full.
 
 Return ONLY strict JSON:
-{"types":[{"type_id":"TYPE-0001","type_title":"","type_description":"","task_pattern":"","source_question_ids":["QINV-0001"],"case_prompts":[{"case_id":"CASE-0001","case_title":"","examples":[{"source_question_id":"QINV-0001","example_prompt":""}],"case_signature":"","placement_scope":"normal|mixed_synthesis"}],"concept_match_hint":"","parent_concept_match_hint":"","topic_match_hint":"","difficulty_hint":"Basic|Intermediate|Advanced","cognitive_skill_hint":"","subject_skill_hint":"","is_activity":false,"placement_scope":"normal|mixed_synthesis"}]}.
+{"types":[{"type_id":"TYPE-0001","type_title":"","type_description":"","task_pattern":"","source_question_ids":["QINV-0001"],"case_prompts":[{"case_id":"CASE-0001","case_title":"","examples":[{"source_question_id":"QINV-0001","example_prompt":""}],"case_signature":"","placement_scope":"normal|mixed_synthesis|cross_topic_synthesis"}],"concept_match_hint":"","parent_concept_match_hint":"","topic_match_hint":"","difficulty_hint":"Basic|Intermediate|Advanced","cognitive_skill_hint":"","subject_skill_hint":"","is_activity":false,"placement_scope":"normal|mixed_synthesis|cross_topic_synthesis"}]}.
 
 COVERAGE IS MANDATORY (most important rule):
 - EVERY inventory item MUST appear in EXACTLY ONE Type's source_question_ids
@@ -1602,6 +1602,10 @@ CASE WORDING (each Case must be properly defined):
   from the same topic into synthesis/revision. A broad Type title does not make
   every Case mixed. Type-level placement_scope is only a default; Case-level is
   authoritative.
+- Use "cross_topic_synthesis" ONLY when the Case genuinely combines concepts
+  taught in two or more different source topics and fits neither one ordinary
+  concept nor a single-topic Culmination. Such a Case may be assigned only to
+  the Culmination of the later source topic, never to an earlier topic.
 
 EXAMPLES CARRY THE FULL SOURCE QUESTION (mandatory):
 - Every example_prompt must be fully self-contained: copy the ACTUAL numbers,
@@ -1678,7 +1682,7 @@ never return an already classified question, an existing Example, or a complete
 replacement Type list.
 
 Return ONLY strict JSON:
-{"types":[{"type_id":"TYPE-0001 or NEW-TYPE-0001","type_title":"","type_description":"","task_pattern":"","source_question_ids":["QINV-0001"],"case_prompts":[{"case_id":"existing CASE id or NEW-CASE-0001","case_title":"","examples":[{"source_question_id":"QINV-0001","example_prompt":""}],"case_signature":"","placement_scope":"normal|mixed_synthesis"}],"concept_match_hint":"","parent_concept_match_hint":"","topic_match_hint":"","difficulty_hint":"Basic|Intermediate|Advanced","cognitive_skill_hint":"","subject_skill_hint":"","is_activity":false,"placement_scope":"normal|mixed_synthesis"}]}.
+{"types":[{"type_id":"TYPE-0001 or NEW-TYPE-0001","type_title":"","type_description":"","task_pattern":"","source_question_ids":["QINV-0001"],"case_prompts":[{"case_id":"existing CASE id or NEW-CASE-0001","case_title":"","examples":[{"source_question_id":"QINV-0001","example_prompt":""}],"case_signature":"","placement_scope":"normal|mixed_synthesis|cross_topic_synthesis"}],"concept_match_hint":"","parent_concept_match_hint":"","topic_match_hint":"","difficulty_hint":"Basic|Intermediate|Advanced","cognitive_skill_hint":"","subject_skill_hint":"","is_activity":false,"placement_scope":"normal|mixed_synthesis|cross_topic_synthesis"}]}.
 
 DELTA RULES:
 - Use an existing type_id (and optionally an existing case_id) to append only
@@ -1727,8 +1731,10 @@ Rules:
 - When a mined Type includes allowed_concept_ids, its source topic is proven:
   assign it to exactly one of those concept IDs and never any other concept.
 - allowed_concept_ids are also placement-scope-safe: ordinary Cases never
-  include Culmination; mixed_synthesis Cases may include it. Never invent or
-  reuse a concept ID excluded from that list.
+  include Culmination; mixed_synthesis Cases may include their source topic's
+  Culmination; cross_topic_synthesis Cases may additionally include only
+  later-topic Culminations. Never invent or reuse a concept ID excluded from
+  that list.
 - When previous_rejections is present on a Type unit, correct the stated error;
   do not repeat the rejected concept_id or omit that type_id again.
 - A concept may receive multiple type_ids; a Type belongs to one concept.
@@ -1758,6 +1764,11 @@ Rules:
   there when the Type combines/mixes several concepts of that topic (synthesis,
   mixed application, multi-step, cross-concept comparison). Single-concept
   Types go to the specific concept, not the culmination.
+- A cross_topic_synthesis Case genuinely spans concepts taught in different
+  source topics. First prefer an ordinary concept or its source topic's
+  Culmination when either is a truthful fit. Only when neither fits may it go
+  to the Culmination of the LATER source topic represented in the task. Never
+  send it to an earlier topic or to a later ordinary concept.
 - Types flagged "is_activity": true group textbook Activity / experiment /
   discussion tasks; assign them to the related NORMAL concept (for Activity/Info
   Hub), never to Culmination. Culmination only receives mixed multi-concept
@@ -1795,9 +1806,12 @@ Rules:
   concept_match_hint, parent_concept_match_hint, topic order, and the actual
   question wording. Do not attach a later-section question to an earlier
   concept just because formulas overlap.
-- If a question combines several concepts, place it on the topic's culmination
-  concept. Textbook Activity / experiment / discussion tasks belong in
-  Activity/Info Hub on the related normal concept — not as Culmination Cases.
+- If a question combines several concepts from one topic, place it on that
+  topic's culmination concept. If it genuinely spans concepts across different
+  source topics and fits neither an ordinary concept nor one topic's
+  Culmination, it may go to the later source topic's Culmination. Textbook
+  Activity / experiment / discussion tasks belong in Activity/Info Hub on the
+  related normal concept — not as Culmination Cases.
 - Cases are defined conceptual sub-types named by learning objective; Examples
   are full source questions. Do not turn a raw question or Activity title into
   a Case name (avoid "Definition of …").
@@ -2913,12 +2927,20 @@ def _populate_activity_hubs_via_api(
     """GPT-first Activity/Info Hub population; deterministic fallback for gaps."""
     import json as _json
 
+    # region agent log
+    _debug_inventory_placement_log("activity_hub_api_entry", records, inventory)
+    # endregion
     pending = [
         item for item in _hub_inventory_items(inventory)
         if not _inventory_item_already_in_hubs(records, item)
     ]
-    if not pending or not records:
+    if not records:
         return records
+    if not pending:
+        # A Hub may have been populated by an earlier assignment pass. It is
+        # no longer pending, but its assessable exact Example must still be
+        # co-located before the snapshot/final placement guards run.
+        return _align_activity_examples_with_hubs(records, inventory)
 
     cid_map: dict[str, int] = {}
     concept_payload: list[dict] = []
@@ -2980,6 +3002,13 @@ def _populate_activity_hubs_via_api(
         )
         if item is None:
             continue
+        expected_topic = _topic_comparison_key(item.get("topic_hint") or "")
+        target_topic = _topic_comparison_key(out[index].get("topic") or "")
+        if expected_topic and target_topic != expected_topic:
+            # GPT owns the semantic concept choice only within the source
+            # item's authoritative topic. Leave an out-of-topic choice pending
+            # for deterministic exact-topic fallback.
+            continue
         text = _inventory_task_text(item)
         if not hub_note:
             label = (
@@ -3013,6 +3042,20 @@ def _populate_activity_hubs_via_api(
             level="warning",
         )
         out = _place_activity_inventory_into_hubs(out, remaining)
+    # region agent log
+    _debug_inventory_placement_log(
+        "activity_hub_api_pre_alignment", out, inventory,
+        extra={"gpt_placed_qids": sorted(placed_qids),
+               "fallback_qids": sorted(
+                   (item.get("qid") or "").strip()
+                   for item in remaining["items"])},
+    )
+    # endregion
+    out = _align_activity_examples_with_hubs(out, inventory)
+    # region agent log
+    _debug_inventory_placement_log(
+        "activity_hub_api_exit", out, inventory)
+    # endregion
     return out
 
 
@@ -5793,11 +5836,18 @@ _ASSIGNMENT_PREFIX_STOPWORDS = {
 }
 _MIXED_ASSIGNMENT_CUE_RE = re.compile(
     r"\b(?:any\s+two|two\s+(?:countries|cases|methods|concepts)|"
-    r"compare|comparison|across\s+(?:cases|concepts|topics)|"
+    r"compare|comparison|across\s+(?:cases|concepts)|"
     r"several|multiple|combine|synthesi[sz]e)\b",
     re.IGNORECASE,
 )
-_ASSIGNMENT_PLACEMENT_SCOPES = frozenset({"normal", "mixed_synthesis"})
+_CROSS_TOPIC_ASSIGNMENT_CUE_RE = re.compile(
+    r"\b(?:across|between|combining)\s+(?:different\s+)?"
+    r"(?:source\s+)?(?:topics|sections)\b",
+    re.IGNORECASE,
+)
+_ASSIGNMENT_PLACEMENT_SCOPES = frozenset({
+    "normal", "mixed_synthesis", "cross_topic_synthesis",
+})
 
 
 def _assignment_placement_scope(mtype: dict) -> str:
@@ -5818,11 +5868,12 @@ def _assignment_placement_scope(mtype: dict) -> str:
         return type_scope
     # Backward compatibility for persisted/fixture Types authored before
     # placement_scope existed. New GPT output uses the explicit Case field.
-    return (
-        "mixed_synthesis"
-        if _MIXED_ASSIGNMENT_CUE_RE.search(_assignment_unit_text(mtype))
-        else "normal"
-    )
+    evidence = _assignment_unit_text(mtype)
+    if _CROSS_TOPIC_ASSIGNMENT_CUE_RE.search(evidence):
+        return "cross_topic_synthesis"
+    if _MIXED_ASSIGNMENT_CUE_RE.search(evidence):
+        return "mixed_synthesis"
+    return "normal"
 
 
 def _assignment_prefixes(text: str) -> set[str]:
@@ -5883,6 +5934,12 @@ def _high_confidence_assignment_override(
         and _assignment_placement_scope(mtype) == "mixed_synthesis"
     ):
         return culminations[0]
+    if _assignment_placement_scope(mtype) == "cross_topic_synthesis":
+        # The explicit classifier and ID-constrained GPT assignment must decide
+        # whether this genuinely needs a later Culmination. Prefix overlap with
+        # the source topic is expected and must not deterministically override
+        # that semantic decision.
+        return ""
 
     title_prefixes = {
         row["concept_id"]: _assignment_prefixes(row.get("concept") or "")
@@ -5919,8 +5976,9 @@ def _assign_mined_types_via_api(
     Exact inventory coverage belongs to the original mined Types. Multi-Case
     Types are expanded only for assignment into one internal unit per Case, with
     all Examples in that Case kept together. Source-topic-scoped units are
-    grouped by canonical topic and allowed concept IDs. Each group sees only
-    those concepts, including that topic's culmination, and omitted IDs are
+    grouped by canonical topic and allowed concept IDs. Ordinary and same-topic
+    synthesis units stay in that source topic. Explicit cross-topic synthesis
+    units additionally see only later-topic Culminations. Omitted IDs are
     retried against the same candidate list. Placement is joined by exact IDs
     only — no regex, token, or word matching.
     """
@@ -5971,9 +6029,11 @@ def _assign_mined_types_via_api(
             "type embedding failed: duplicate case-scoped assignment-unit ID")
 
     concept_ids_by_topic: dict[str, list[str]] = {}
+    topic_position: dict[str, int] = {}
     for row in concept_payload:
         topic_key = _topic_comparison_key(row.get("topic", ""))
         concept_ids_by_topic.setdefault(topic_key, []).append(row["concept_id"])
+        topic_position.setdefault(topic_key, row["chapter_position"])
 
     all_concept_ids = tuple(cid_map)
     topic_key_by_tid: dict[str, str] = {}
@@ -5993,12 +6053,25 @@ def _assign_mined_types_via_api(
             if not cr.is_culmination(
                 cid_map[cid].get("concept_title", ""))
         }
-        allowed = (
-            topic_candidates
-            if _assignment_placement_scope(mtype) == "mixed_synthesis"
-            and not mtype.get("is_activity")
-            else normal_candidates
-        )
+        placement_scope = _assignment_placement_scope(mtype)
+        allowed = normal_candidates
+        if not mtype.get("is_activity") and placement_scope in {
+            "mixed_synthesis", "cross_topic_synthesis",
+        }:
+            allowed = set(topic_candidates)
+        if (
+            not mtype.get("is_activity")
+            and placement_scope == "cross_topic_synthesis"
+            and topic_key in topic_position
+        ):
+            source_position = topic_position[topic_key]
+            allowed.update(
+                row["concept_id"]
+                for row in concept_payload
+                if row["is_culmination"]
+                and row["chapter_position"] > source_position
+                and _topic_comparison_key(row.get("topic", "")) != topic_key
+            )
         allowed_cids_by_tid[tid] = allowed
         candidate_cids_by_tid[tid] = tuple(
             cid for cid in all_concept_ids if cid in allowed)
@@ -6107,7 +6180,7 @@ def _assign_mined_types_via_api(
                     type_allows_culmination = (
                         not types_by_id[tid].get("is_activity")
                         and _assignment_placement_scope(types_by_id[tid])
-                        == "mixed_synthesis"
+                        in {"mixed_synthesis", "cross_topic_synthesis"}
                     )
                     reason = ""
                     if effective_cid not in cid_map:
@@ -6213,7 +6286,42 @@ def _assign_mined_types_via_api(
         for hub in hub_fragments:
             details = _append_activity_hub(details, hub)
         rec["concept_details"] = details
-    return records
+    return cr.renumber_types_continuously(records)
+
+
+def _topic_first_positions(records: list[dict]) -> dict[str, int]:
+    """Reading-order position of each canonical source topic."""
+    positions: dict[str, int] = {}
+    for index, record in enumerate(records):
+        key = _topic_comparison_key(record.get("topic") or "")
+        if key:
+            positions.setdefault(key, index)
+    return positions
+
+
+def _mined_type_allows_record(
+    records: list[dict], mtype: dict, record: dict,
+) -> bool:
+    """Whether a rendered target obeys the mined unit's source-topic scope."""
+    expected_key = _topic_comparison_key(
+        mtype.get("topic_match_hint") or "")
+    actual_key = _topic_comparison_key(record.get("topic") or "")
+    if expected_key and actual_key == expected_key:
+        return True
+    if (
+        not expected_key
+        or not actual_key
+        or mtype.get("is_activity")
+        or _assignment_placement_scope(mtype) != "cross_topic_synthesis"
+        or not cr.is_culmination(record.get("concept_title") or "")
+    ):
+        return False
+    positions = _topic_first_positions(records)
+    return (
+        expected_key in positions
+        and actual_key in positions
+        and positions[actual_key] > positions[expected_key]
+    )
 
 
 def _mined_type_topic_violations(
@@ -6266,19 +6374,30 @@ def _mined_type_topic_violations(
                 actual_by_title[title_key].append(rec)
 
     for title_key, expected in expected_by_title.items():
-        matches = actual_by_title[title_key]
-        remaining_by_topic: dict[str, int] = {}
-        for rec in matches:
-            actual_key = _topic_comparison_key((rec.get("topic") or "").strip())
-            remaining_by_topic[actual_key] = remaining_by_topic.get(actual_key, 0) + 1
-
-        for entry in expected:
+        remaining_matches = list(actual_by_title[title_key])
+        # Reserve exact-topic rows for ordinary/same-topic Types before a
+        # cross-topic Type is allowed to consume its optional source-topic
+        # placement. This makes repeated identical Type titles deterministic.
+        ordered_expected = sorted(
+            expected,
+            key=lambda entry: (
+                _assignment_placement_scope(entry["mtype"])
+                == "cross_topic_synthesis"
+            ),
+        )
+        for entry in ordered_expected:
             mtype = entry["mtype"]
             title = entry["title"]
             topic = entry["topic"]
-            topic_key = entry["topic_key"]
-            if remaining_by_topic.get(topic_key, 0):
-                remaining_by_topic[topic_key] -= 1
+            match_index = next(
+                (
+                    index for index, record in enumerate(remaining_matches)
+                    if _mined_type_allows_record(records, mtype, record)
+                ),
+                -1,
+            )
+            if match_index >= 0:
+                remaining_matches.pop(match_index)
                 continue
 
             violations.append({
@@ -6289,13 +6408,17 @@ def _mined_type_topic_violations(
                 "reason": "missing",
             })
 
-        expected_topic_keys = {entry["topic_key"] for entry in expected}
         representative = expected[0]
-        for rec in matches:
-            actual = (rec.get("topic") or "").strip()
-            actual_key = _topic_comparison_key(actual)
-            if actual_key in expected_topic_keys:
+        for rec in remaining_matches:
+            # One mined Type may render on several concepts after Case-scoped
+            # assignment. Additional rows are valid when each stays within an
+            # allowed topic target for that original Type.
+            if any(
+                _mined_type_allows_record(records, entry["mtype"], rec)
+                for entry in expected
+            ):
                 continue
+            actual = (rec.get("topic") or "").strip()
             mtype = representative["mtype"]
             title = representative["title"]
             topic = representative["topic"]
@@ -6865,9 +6988,16 @@ def _rendered_inventory_example_locations(
 
 def _rendered_inventory_topic_violations(
     records: list[dict], inventory: dict | None,
+    mined_types: dict | None = None,
 ) -> list[dict]:
     """Exact Examples rendered outside their authoritative inventory topic."""
     violations: list[dict] = []
+    mined_by_qid: dict[str, list[dict]] = {}
+    for mtype in (mined_types or {}).get("types") or []:
+        if not isinstance(mtype, dict):
+            continue
+        for qid in _type_source_qids(mtype):
+            mined_by_qid.setdefault(qid, []).append(mtype)
     for item in (inventory or {}).get("items") or []:
         expected_topic = (item.get("topic_hint") or "").strip()
         expected_key = _topic_comparison_key(expected_topic)
@@ -6877,8 +7007,14 @@ def _rendered_inventory_topic_violations(
             actual_topic = (records[index].get("topic") or "").strip()
             if _topic_comparison_key(actual_topic) == expected_key:
                 continue
+            qid = (item.get("qid") or "").strip()
+            if any(
+                _mined_type_allows_record(records, mtype, records[index])
+                for mtype in mined_by_qid.get(qid, [])
+            ):
+                continue
             violations.append({
-                "qid": (item.get("qid") or "").strip(),
+                "qid": qid,
                 "expected_topic": expected_topic,
                 "actual_topic": actual_topic,
                 "concept": records[index].get("concept_title") or "",
@@ -6921,6 +7057,62 @@ def _activity_example_hub_alignment_violations(
     return violations
 
 
+# region agent log
+def _debug_inventory_placement_log(
+    stage: str, records: list[dict], inventory: dict | None,
+    *, mined_types: dict | None = None, extra: dict | None = None,
+) -> None:
+    """Temporary NDJSON instrumentation for exact inventory placement drift."""
+    activity_locations: list[dict] = []
+    for item in (inventory or {}).get("items") or []:
+        if not isinstance(item, dict) or not item.get("_activity_origin"):
+            continue
+        key = bi.normalize_question_text(_inventory_task_text(item))
+        examples = _rendered_inventory_example_locations(records, item)
+        hubs = [
+            index for index, record in enumerate(records)
+            if key and key in bi.normalize_question_text(
+                cr.activity_hub_body(record.get("concept_details") or ""))
+        ]
+        if examples or hubs:
+            activity_locations.append({
+                "qid": (item.get("qid") or "").strip(),
+                "expected_topic": item.get("topic_hint") or "",
+                "examples": [{
+                    "index": index,
+                    "topic": records[index].get("topic") or "",
+                    "concept": records[index].get("concept_title") or "",
+                    "culmination": cr.is_culmination(
+                        records[index].get("concept_title") or ""),
+                } for index in examples],
+                "hubs": [{
+                    "index": index,
+                    "topic": records[index].get("topic") or "",
+                    "concept": records[index].get("concept_title") or "",
+                } for index in hubs],
+            })
+    payload = {
+        "hypothesisId": "B",
+        "location": "generation.py:_debug_inventory_placement_log",
+        "message": stage,
+        "data": {
+            "row_count": len(records),
+            "coverage": _rendered_inventory_coverage_defects(records, inventory),
+            "topic_violations": _rendered_inventory_topic_violations(
+                records, inventory, mined_types),
+            "activity_alignment_violations":
+                _activity_example_hub_alignment_violations(records, inventory),
+            "activity_locations": activity_locations,
+            "extra": extra or {},
+        },
+        "timestamp": int(__import__("time").time() * 1000),
+    }
+    with open("/opt/cursor/logs/debug.log", "a", encoding="utf-8") as log_file:
+        log_file.write(
+            __import__("json").dumps(payload, ensure_ascii=False) + "\n")
+# endregion
+
+
 def _hub_inventory_examples_in_types(
     records: list[dict], inventory: dict | None,
 ) -> set[str]:
@@ -6940,6 +7132,7 @@ def _hub_inventory_examples_in_types(
 
 def _accept_exact_inventory_type_review(
     original: list[dict], candidate: list[dict], inventory: dict | None,
+    mined_types: dict | None = None,
 ) -> list[dict]:
     """Reject a Types rewrite that breaks inventory section or coverage rules."""
     defects = _rendered_inventory_coverage_defects(candidate, inventory)
@@ -6952,7 +7145,7 @@ def _accept_exact_inventory_type_review(
         )
         return original
     topic_violations = _rendered_inventory_topic_violations(
-        candidate, inventory)
+        candidate, inventory, mined_types)
     activity_violations = _activity_example_hub_alignment_violations(
         candidate, inventory)
     if topic_violations or activity_violations:
@@ -7021,6 +7214,22 @@ def _best_record_index_for_inventory_item(
             # The Hub was GPT-placed semantically. Keep the assessable Example
             # on that same concept instead of independently guessing again.
             return hub_matches[0]
+        expected_topic = _topic_comparison_key(item.get("topic_hint") or "")
+        example_matches = [
+            index for index in _rendered_inventory_example_locations(
+                records, item)
+            if not cr.is_culmination(
+                records[index].get("concept_title") or "")
+            and (
+                not expected_topic
+                or _topic_comparison_key(records[index].get("topic") or "")
+                == expected_topic
+            )
+        ]
+        if len(example_matches) == 1:
+            # If GPT omitted or invalidly cross-placed the Hub, keep fallback
+            # Hub placement on the exact source Example's existing row.
+            return example_matches[0]
     topic_hint = _topic_comparison_key(item.get("topic_hint") or "")
     scored: list[tuple[int, int]] = []
     for index, record in enumerate(records):
@@ -7179,13 +7388,83 @@ def _dedupe_rendered_inventory_examples(
     return out, removed
 
 
+def _align_activity_examples_with_hubs(
+    records: list[dict], inventory: dict | None,
+) -> list[dict]:
+    """Move each assessable Activity Example to its exact GPT-selected Hub row."""
+    out = [dict(record) for record in records]
+    moved = 0
+    for item in (inventory or {}).get("items") or []:
+        if not isinstance(item, dict) or not item.get("_activity_origin"):
+            continue
+        text = _inventory_task_text(item)
+        key = bi.normalize_question_text(text)
+        if not text or not key:
+            continue
+        example_locations = _rendered_inventory_example_locations(out, item)
+        hub_locations = [
+            index for index, record in enumerate(out)
+            if key in bi.normalize_question_text(
+                cr.activity_hub_body(record.get("concept_details") or ""))
+        ]
+        if len(hub_locations) != 1 or not example_locations:
+            continue
+        target = hub_locations[0]
+        if example_locations == [target]:
+            continue
+        if cr.is_culmination(out[target].get("concept_title") or ""):
+            continue
+        expected_topic = _topic_comparison_key(item.get("topic_hint") or "")
+        if (
+            expected_topic
+            and _topic_comparison_key(out[target].get("topic") or "")
+            != expected_topic
+        ):
+            continue
+
+        # Add the authoritative prompt to the selected row first, then run the
+        # exact-key duplicate remover with that row first. This preserves the
+        # GPT-selected Hub concept while removing only byte-equivalent inventory
+        # Examples from their old rows; no semantic/fuzzy matching is involved.
+        candidate = [dict(record) for record in out]
+        if target not in example_locations:
+            candidate[target] = _append_inventory_example_to_record(
+                candidate[target], text, item)
+        order = [target] + [
+            index for index in range(len(candidate)) if index != target
+        ]
+        ordered, _removed = _dedupe_rendered_inventory_examples(
+            [candidate[index] for index in order],
+            {"items": [item]},
+        )
+        rebuilt = [dict(record) for record in candidate]
+        for position, index in enumerate(order):
+            rebuilt[index] = ordered[position]
+        if _rendered_inventory_example_locations(rebuilt, item) != [target]:
+            continue
+        out = rebuilt
+        moved += 1
+    if moved:
+        progress.log(
+            f"Aligned {moved} assessable Activity Example(s) with their "
+            "GPT-selected Activity/Info Hub concept.",
+            level="success",
+        )
+    return cr.renumber_types_continuously(out)
+
+
 def _repair_rendered_inventory_coverage(
     records: list[dict], inventory: dict | None,
+    mined_types: dict | None = None,
 ) -> list[dict]:
     """Restore exact-once inventory Example coverage after salvage/API drift."""
     if not records or not (inventory or {}).get("items"):
         return records
 
+    # region agent log
+    _debug_inventory_placement_log(
+        "coverage_repair_entry", records, inventory, mined_types=mined_types)
+    # endregion
     defects = _rendered_inventory_coverage_defects(records, inventory)
     if not defects["missing"] and not defects["duplicate"]:
         return records
@@ -7274,13 +7553,15 @@ def _repair_rendered_inventory_coverage(
 
 def _enforce_rendered_inventory_coverage(
     records: list[dict], inventory: dict | None,
+    mined_types: dict | None = None,
 ) -> list[dict]:
     """Repair coverage, hard-fail only on residual duplicates.
 
     Residual missing prompts after repair are logged and allowed through so one
     pathological inventory stub cannot wipe an otherwise complete chapter map.
     """
-    out = _repair_rendered_inventory_coverage(records, inventory)
+    out = _repair_rendered_inventory_coverage(
+        records, inventory, mined_types)
     defects = _rendered_inventory_coverage_defects(out, inventory)
     if defects["duplicate"]:
         out, _removed = _dedupe_rendered_inventory_examples(out, inventory)
@@ -7294,7 +7575,8 @@ def _enforce_rendered_inventory_coverage(
         )
     if defects["missing"]:
         # Last-chance force place, then warn rather than abort the chapter.
-        out = _repair_rendered_inventory_coverage(out, inventory)
+        out = _repair_rendered_inventory_coverage(
+            out, inventory, mined_types)
         defects = _rendered_inventory_coverage_defects(out, inventory)
         if defects["duplicate"]:
             out, _removed = _dedupe_rendered_inventory_examples(out, inventory)
@@ -7631,7 +7913,7 @@ def _assign_types_via_api(
             source_context=mmd_text,
         )
         merged = _accept_exact_inventory_type_review(
-            before_alignment, aligned, question_task_inventory)
+            before_alignment, aligned, question_task_inventory, mined_types)
         before_repair = merged
         repaired = _repair_records_via_api(
             merged, meta=meta, stage="types", source_context=mmd_text,
@@ -7640,7 +7922,7 @@ def _assign_types_via_api(
         repaired = _accept_topic_safe_type_review(
             before_repair, repaired, mined_types)
         merged = _accept_exact_inventory_type_review(
-            before_repair, repaired, question_task_inventory)
+            before_repair, repaired, question_task_inventory, mined_types)
         with_types = sum(1 for r in merged if _has_meaningful_types(r.get("concept_details", "")))
         progress.log(
             f"Types assignment complete: {with_types}/{len(merged)} concepts have Types.",
@@ -10164,7 +10446,7 @@ def concepts_from_mmd(
                 question_task_inventory))
         out = _preserve_required_method_rows(before_final_repair, out)
         out = _accept_exact_inventory_type_review(
-            before_final_repair, out, question_task_inventory)
+            before_final_repair, out, question_task_inventory, mined_types)
         # Post-repair: neutralize ONLY rows the repair pass could not fix —
         # rows that already validate cleanly keep their full GPT-authored
         # wording untouched (no blanket deterministic rewriting).
@@ -10180,11 +10462,16 @@ def concepts_from_mmd(
         out = _neutralize_unrepaired_rows(
             out, inventory=question_task_inventory)
         out = _repair_rendered_inventory_coverage(
-            out, question_task_inventory)
+            out, question_task_inventory, mined_types)
         # This is the last known-good source-owned Type/Example placement.
         # Later chapter refiners may improve descriptions and misconceptions,
         # but must not move/drop these constrained assignments.
         coverage_safe_snapshot = copy.deepcopy(out)
+        # region agent log
+        _debug_inventory_placement_log(
+            "coverage_safe_snapshot", coverage_safe_snapshot,
+            question_task_inventory, mined_types=mined_types)
+        # endregion
         out = cr.refine_chapter(out)
         # The repair/cleanup passes may reorder, rename, or re-collide rows;
         # re-assert the duplicate-title, culmination, mastery-line, and
@@ -10202,10 +10489,15 @@ def concepts_from_mmd(
         # the hard final gate so deposit is never blocked by residual refs.
         out = _neutralize_unrepaired_rows(
             out, inventory=question_task_inventory)
+        # region agent log
+        _debug_inventory_placement_log(
+            "post_refiners_pre_snapshot_acceptance", out,
+            question_task_inventory, mined_types=mined_types)
+        # endregion
         out = _accept_topic_safe_type_review(
             coverage_safe_snapshot, out, mined_types)
         out = _accept_exact_inventory_type_review(
-            coverage_safe_snapshot, out, question_task_inventory)
+            coverage_safe_snapshot, out, question_task_inventory, mined_types)
         out = _restore_method_anchor_rows(out, method_row_snapshot)
         # Restoration is the terminal row-membership operation. Only
         # non-dropping field/ordering guarantees may run after this point.
@@ -10215,6 +10507,15 @@ def concepts_from_mmd(
         out = _enforce_method_anchor_topics(out, method_anchors)
         out = _enforce_culminations(out)
         out = _reorder_records_by_source_topics(out, headings)
+        # Snapshot restoration and culmination enforcement can restore
+        # pre-refiner labels. Reapply the two independent chapter-wide
+        # sequences without changing row membership or placement.
+        out = cr.renumber_types_continuously(out)
+        # region agent log
+        _debug_inventory_placement_log(
+            "post_method_restore_and_reorder", out,
+            question_task_inventory, mined_types=mined_types)
+        # endregion
         missing_method_anchors = [
             anchor for anchor in method_anchors
             if (
@@ -10282,9 +10583,15 @@ def concepts_from_mmd(
         # restore exact-once inventory prompts. Residual missing after repair
         # warns; only unresolved duplicates still abort deposit.
         out = _enforce_rendered_inventory_coverage(
-            out, question_task_inventory)
+            out, question_task_inventory, mined_types)
+        out = cr.renumber_types_continuously(out)
+        # region agent log
+        _debug_inventory_placement_log(
+            "final_pre_placement_gate", out, question_task_inventory,
+            mined_types=mined_types)
+        # endregion
         inventory_topic_violations = _rendered_inventory_topic_violations(
-            out, question_task_inventory)
+            out, question_task_inventory, mined_types)
         activity_alignment_violations = (
             _activity_example_hub_alignment_violations(
                 out, question_task_inventory)
