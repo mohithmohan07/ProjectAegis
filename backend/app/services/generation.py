@@ -10181,6 +10181,10 @@ def concepts_from_mmd(
             out, inventory=question_task_inventory)
         out = _repair_rendered_inventory_coverage(
             out, question_task_inventory)
+        # This is the last known-good source-owned Type/Example placement.
+        # Later chapter refiners may improve descriptions and misconceptions,
+        # but must not move/drop these constrained assignments.
+        coverage_safe_snapshot = copy.deepcopy(out)
         out = cr.refine_chapter(out)
         # The repair/cleanup passes may reorder, rename, or re-collide rows;
         # re-assert the duplicate-title, culmination, mastery-line, and
@@ -10198,6 +10202,10 @@ def concepts_from_mmd(
         # the hard final gate so deposit is never blocked by residual refs.
         out = _neutralize_unrepaired_rows(
             out, inventory=question_task_inventory)
+        out = _accept_topic_safe_type_review(
+            coverage_safe_snapshot, out, mined_types)
+        out = _accept_exact_inventory_type_review(
+            coverage_safe_snapshot, out, question_task_inventory)
         out = _restore_method_anchor_rows(out, method_row_snapshot)
         # Restoration is the terminal row-membership operation. Only
         # non-dropping field/ordering guarantees may run after this point.
