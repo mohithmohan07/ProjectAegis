@@ -120,6 +120,56 @@ def test_post_learning_failure_persists_and_resumes_type_checkpoint(
     assert db.get(models.UploadJob, job.id).generation_checkpoint == {}
 
 
+def test_post_learning_discards_matching_checkpoint_with_invalid_schema(
+    db, first_chapter, monkeypatch,
+):
+    job = models.UploadJob(
+        module="build_concepts",
+        upload_type="document",
+        learning_kind="post",
+        filename="invalid-checkpoint.mmd",
+        mmd_text="## Topic\nSource body",
+        status="converted",
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    chapter = db.get(models.Chapter, first_chapter["id"])
+    job.generation_checkpoint = {
+        "fingerprint": build_concepts._generation_checkpoint_fingerprint(
+            job, chapter),
+        "target_chapter_id": chapter.id,
+        "schema_version": 999,
+        "stage": "pre_type_assignment",
+    }
+    db.commit()
+
+    def regenerate(*args, resume_checkpoint=None, **kwargs):
+        assert resume_checkpoint is None
+        assert job.generation_checkpoint == {}
+        return [{
+            "topic": "T",
+            "parent_concept": "P",
+            "concept_title": "C",
+            "concept_details": "Description: complete",
+            "keywords": "",
+        }]
+
+    monkeypatch.setattr(
+        build_concepts.generation, "concepts_from_mmd", regenerate)
+    monkeypatch.setattr(
+        build_concepts, "_deposit_concepts", lambda *a, **kw: ([], []))
+    monkeypatch.setattr(
+        build_concepts.writer,
+        "append_concepts",
+        lambda *a, **kw: {
+            "written": 0, "sources_updated": 0, "parent_column": True,
+        },
+    )
+
+    build_concepts.generate_post_learning(db, job.id, chapter.id)
+
+
 def test_inventory_csv_download(client, db, first_chapter):
     """The stored Question / Task Inventory downloads as an audit CSV."""
     files = {"file": ("inv.txt", io.BytesIO(

@@ -4373,6 +4373,13 @@ def _split_mined_types_by_source_topic(
             ]
             qid_set = set(qids)
             item = dict(original)
+            # A topic-local fragment may still be mixed, but it no longer has
+            # evidence for placement on a later topic's Culmination.
+            if (
+                (item.get("placement_scope") or "").strip().lower()
+                == "cross_topic_synthesis"
+            ):
+                item["placement_scope"] = "mixed_synthesis"
             item["source_question_ids"] = qids
             item["topic_match_hint"] = topic
             filtered_cases: list[dict] = []
@@ -4380,6 +4387,11 @@ def _split_mined_types_by_source_topic(
                 if not isinstance(raw_case, dict):
                     continue
                 case = dict(raw_case)
+                if (
+                    (case.get("placement_scope") or "").strip().lower()
+                    == "cross_topic_synthesis"
+                ):
+                    case["placement_scope"] = "mixed_synthesis"
                 examples = [
                     dict(example)
                     for example in _case_examples(raw_case)
@@ -7123,8 +7135,31 @@ def _next_rendered_type_number(body: str) -> int:
     return (max(nums) if nums else 0) + 1
 
 
+def _mined_assignment_units_by_qid(
+    mined_types: dict | None,
+) -> dict[str, dict]:
+    """Resolve each qid to its authoritative Case-scoped assignment unit."""
+    units: dict[str, dict] = {}
+    for mtype in (mined_types or {}).get("types") or []:
+        if not isinstance(mtype, dict):
+            continue
+        for raw_case in mtype.get("case_prompts") or []:
+            case_qids = _assignment_case_qids(raw_case)
+            if not case_qids:
+                continue
+            unit = dict(mtype)
+            unit["case_prompts"] = [raw_case]
+            unit["source_question_ids"] = case_qids
+            for qid in case_qids:
+                units.setdefault(qid, unit)
+        for qid in _type_source_qids(mtype):
+            units.setdefault(qid, mtype)
+    return units
+
+
 def _best_record_index_for_inventory_item(
     records: list[dict], item: dict, *, allow_culmination: bool = False,
+    mined_type: dict | None = None,
 ) -> int:
     """Pick the concept row that should host a still-missing inventory Example."""
     if not records:
@@ -7158,9 +7193,52 @@ def _best_record_index_for_inventory_item(
             # If GPT omitted or invalidly cross-placed the Hub, keep fallback
             # Hub placement on the exact source Example's existing row.
             return example_matches[0]
+    mined_topic = _topic_comparison_key(
+        (mined_type or {}).get("topic_match_hint") or "")
+    placement_scope = (
+        _assignment_placement_scope(mined_type)
+        if mined_type is not None else "normal"
+    )
+    prefer_culmination = (
+        mined_type is not None
+        and not mined_type.get("is_activity")
+        and placement_scope in {"mixed_synthesis", "cross_topic_synthesis"}
+    )
+    if prefer_culmination:
+        allow_culmination = True
+    has_eligible_culmination = prefer_culmination and any(
+        cr.is_culmination(record.get("concept_title") or "")
+        and (
+            not mined_topic
+            or _mined_type_allows_record(records, mined_type, record)
+        )
+        for record in records
+    )
+    mined_title = concept_cleanup.strip_dangling_references(
+        (
+            (mined_type or {}).get("type_title")
+            or (mined_type or {}).get("task_pattern")
+            or ""
+        ).strip()
+    )
+    mined_title_key = bi.normalize_question_text(mined_title)
+    has_rendered_mined_type = bool(mined_title_key) and any(
+        (
+            not mined_topic
+            or _mined_type_allows_record(records, mined_type, record)
+        )
+        and mined_title_key in bi.normalize_question_text(
+            _types_body(record.get("concept_details") or ""))
+        for record in records
+    )
     topic_hint = _topic_comparison_key(item.get("topic_hint") or "")
     scored: list[tuple[int, int]] = []
     for index, record in enumerate(records):
+        if (
+            mined_topic
+            and not _mined_type_allows_record(records, mined_type, record)
+        ):
+            continue
         score = 0
         record_topic = _topic_comparison_key(record.get("topic") or "")
         if topic_hint and record_topic == topic_hint:
@@ -7169,10 +7247,25 @@ def _best_record_index_for_inventory_item(
         is_culmination = cr.is_culmination(title)
         if is_culmination and not allow_culmination:
             continue
+        record_has_mined_type = (
+            bool(mined_title_key)
+            and mined_title_key in bi.normalize_question_text(
+                _types_body(record.get("concept_details") or ""))
+        )
+        if has_rendered_mined_type and not record_has_mined_type:
+            continue
+        if (
+            not has_rendered_mined_type
+            and has_eligible_culmination
+            and not is_culmination
+        ):
+            continue
         if is_culmination:
             score -= 3
         if _has_meaningful_types(record.get("concept_details") or ""):
             score += 2
+        if record_has_mined_type:
+            score += 100
         scored.append((score, -index))
     if not scored:
         return -1
@@ -7399,6 +7492,7 @@ def _repair_rendered_inventory_coverage(
         for item in (inventory or {}).get("items") or []
         if isinstance(item, dict) and (item.get("qid") or "").strip()
     }
+    mined_by_qid = _mined_assignment_units_by_qid(mined_types)
     # Coverage is keyed by normalized prompt text. Multiple qids can share one
     # key; place each unique missing prompt once, then mark the key covered so
     # sibling qids do not double-append and trip the hard duplicate gate.
@@ -7422,7 +7516,7 @@ def _repair_rendered_inventory_coverage(
         if key in covered_keys:
             continue
         index = _best_record_index_for_inventory_item(
-            out, item, allow_culmination=False)
+            out, item, mined_type=mined_by_qid.get(qid))
         if index < 0 or index >= len(out):
             skipped_unplaceable += 1
             continue
@@ -7430,15 +7524,8 @@ def _repair_rendered_inventory_coverage(
         covered_keys.add(key)
         placed += 1
 
-    # Second pass: any placeable key still absent after the first append loop is
-    # force-attached to the first normal concept, never to Culmination.
-    first_normal = next(
-        (
-            index for index, row in enumerate(out)
-            if not cr.is_culmination(row.get("concept_title", ""))
-        ),
-        -1,
-    )
+    # Second pass: force-attach any placeable key still absent while preserving
+    # the same mined assignment scope used by the first pass.
     still_missing = _rendered_inventory_coverage_defects(out, inventory)["missing"]
     for qid in still_missing:
         item = items_by_qid.get(qid)
@@ -7448,10 +7535,12 @@ def _repair_rendered_inventory_coverage(
         key = bi.normalize_question_text(text)
         if not text or not key or key in covered_keys:
             continue
-        if first_normal < 0:
+        index = _best_record_index_for_inventory_item(
+            out, item, mined_type=mined_by_qid.get(qid))
+        if index < 0 or index >= len(out):
             continue
-        out[first_normal] = _append_inventory_example_to_record(
-            out[first_normal], text, item)
+        out[index] = _append_inventory_example_to_record(
+            out[index], text, item)
         covered_keys.add(key)
         placed += 1
 

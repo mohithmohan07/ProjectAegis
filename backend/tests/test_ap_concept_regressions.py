@@ -1452,9 +1452,11 @@ def test_cross_topic_mined_type_is_split_at_source_topic_boundary():
     types = [{
         "type_id": "TYPE-0001",
         "type_title": "Applying an AP Formula",
+        "placement_scope": "cross_topic_synthesis",
         "source_question_ids": ["QINV-0001", "QINV-0002"],
         "case_prompts": [{
             "case_title": "Use the appropriate AP formula",
+            "placement_scope": "cross_topic_synthesis",
             "examples": [
                 {
                     "source_question_id": "QINV-0001",
@@ -1476,6 +1478,12 @@ def test_cross_topic_mined_type_is_split_at_source_topic_boundary():
         "Sum of First n Terms of an AP",
     }
     assert all(len(item["source_question_ids"]) == 1 for item in out)
+    assert all(item["placement_scope"] == "mixed_synthesis" for item in out)
+    assert all(
+        case["placement_scope"] == "mixed_synthesis"
+        for item in out
+        for case in item["case_prompts"]
+    )
 
 
 def test_cross_topic_split_keeps_empty_topic_qids_on_first_dominant_topic():
