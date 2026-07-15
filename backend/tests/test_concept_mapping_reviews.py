@@ -2972,6 +2972,106 @@ def test_repair_rendered_inventory_coverage_removes_duplicates_and_fills_gaps():
     assert second in repaired[0]["concept_details"]
 
 
+def test_coverage_repair_preserves_synthesis_culmination_placement():
+    mixed_prompt = (
+        "Combine voltage, current, and resistance relationships to explain "
+        "the circuit behavior."
+    )
+    cross_prompt = (
+        "Compare electrical resistance with the heating effect produced by "
+        "the same conductor."
+    )
+    inventory = {"items": [
+        {
+            "qid": "Q-MIXED",
+            "raw_task": mixed_prompt,
+            "topic_hint": "Electric Current",
+        },
+        {
+            "qid": "Q-CROSS",
+            "raw_task": cross_prompt,
+            "topic_hint": "Electric Current",
+        },
+    ]}
+    records = [
+        {
+            "topic": "Electric Current",
+            "parent_concept": "Current",
+            "concept_title": "Voltage-current Relationship",
+            "concept_details": "Description: Current depends on voltage.",
+            "keywords": "",
+        },
+        {
+            "topic": "Electric Current",
+            "parent_concept": "Culmination",
+            "concept_title": "Culmination - Electric Current",
+            "concept_details": (
+                "Description: Recap current relationships. // Types: "
+                "Type 01: Combining Current Relationships "
+                "Case 01: Integrated relationships "
+                "Example: Combine the supplied circuit relationships."
+            ),
+            "keywords": "",
+        },
+        {
+            "topic": "Heating Effect",
+            "parent_concept": "Culmination",
+            "concept_title": "Culmination - Heating Effect",
+            "concept_details": (
+                "Description: Recap heating effects. // Types: "
+                "Type 01: Comparing Electrical and Heating Effects "
+                "Case 01: Integrated comparison "
+                "Example: Compare the two effects using supplied values."
+            ),
+            "keywords": "",
+        },
+    ]
+
+    def mined_type(type_id, title, scope, qid, prompt):
+        return {
+            "type_id": type_id,
+            "type_title": title,
+            "topic_match_hint": "Electric Current",
+            "placement_scope": scope,
+            "source_question_ids": [qid],
+            "case_prompts": [{
+                "case_id": f"CASE-{qid}",
+                "case_title": title,
+                "placement_scope": scope,
+                "examples": [{
+                    "source_question_id": qid,
+                    "example_prompt": prompt,
+                }],
+            }],
+        }
+
+    mined = {"types": [
+        mined_type(
+            "TYPE-MIXED",
+            "Combining Current Relationships",
+            "mixed_synthesis",
+            "Q-MIXED",
+            mixed_prompt,
+        ),
+        mined_type(
+            "TYPE-CROSS",
+            "Comparing Electrical and Heating Effects",
+            "cross_topic_synthesis",
+            "Q-CROSS",
+            cross_prompt,
+        ),
+    ]}
+
+    repaired = g._repair_rendered_inventory_coverage(
+        records, inventory, mined)
+
+    assert mixed_prompt not in repaired[0]["concept_details"]
+    assert mixed_prompt in repaired[1]["concept_details"]
+    assert cross_prompt not in repaired[0]["concept_details"]
+    assert cross_prompt not in repaired[1]["concept_details"]
+    assert cross_prompt in repaired[2]["concept_details"]
+
+
 def test_coverage_repair_groups_semantic_fallback_cases_on_normal_concept():
     first = "Explain how a shared identity was created by revolutionaries."
     second = "Interpret the symbols used in a national allegory."
