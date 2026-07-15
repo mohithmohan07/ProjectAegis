@@ -3627,9 +3627,19 @@ def _merge_source_task_anchors(items: list[dict], anchors: list[dict]) -> list[d
             not in split_parent_labels
         ]
     for anchor in anchors:
+        anchor_root = _inventory_question_label_root(
+            anchor.get("source_label") or "")
         match_index = next(
             (i for i, item in enumerate(merged)
-             if _inventory_items_match(item, anchor)),
+             if (
+                 _inventory_items_match(item, anchor)
+                 or (
+                     anchor_root in authoritative_parent_roots
+                     and _inventory_question_label_root(
+                         item.get("source_label") or "")
+                     == anchor_root
+                 )
+             )),
             None,
         )
         if match_index is None:

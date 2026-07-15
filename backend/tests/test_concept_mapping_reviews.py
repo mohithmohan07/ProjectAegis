@@ -615,6 +615,21 @@ def test_authoritative_parent_question_replaces_gpt_split_subparts():
     assert g._merge_source_task_anchors(items, anchors) == anchors
 
 
+def test_unique_question_label_root_merges_question_and_q_notation():
+    anchor = {
+        "source_kind": "exercise",
+        "source_label": "EXERCISE 5.3 Q4",
+        "parent_source_label": "EXERCISE 5.3",
+        "raw_task": "How many terms of the AP 9, 17, 25, ... give a sum of 636?",
+    }
+    gpt_item = {
+        "source_kind": "exercise",
+        "source_label": "Exercise 5.3 Question 4",
+        "raw_task": "How many terms give a sum of 636?",
+    }
+    assert g._merge_source_task_anchors([gpt_item], [anchor]) == [anchor]
+
+
 def test_uploaded_electricity_activities_feed_types_and_hubs_with_visuals():
     source = (
         Path(__file__).parents[1] / "data" / "Class 10 Chapter 5 Electricity.mmd"
