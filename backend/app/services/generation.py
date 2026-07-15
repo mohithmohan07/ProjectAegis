@@ -1363,6 +1363,8 @@ Rules:
   when/why it is used. Ground it in the source: name the key people, places,
   dates, formulas, quantities, conditions, and causal links that a teacher
   needs — do not stop at a vague one-sentence gloss.
+- Never cite textbook section numbers in Description (for example "Section
+  5.2" or "§2.1"). State the actual idea instead.
 - END every Description with a mastery statement on its OWN line — a literal
   line break (\\n) followed by exactly this format:
   Achieving Mastery: <one short sentence stating what the learner can do when this concept is mastered>
@@ -1434,7 +1436,7 @@ This is subject-agnostic and board-agnostic: Mathematics, Science, Social Scienc
 languages, literature, Computer Science, practical work, and any school subject.
 
 Return ONLY strict JSON:
-{"items":[{"qid":"QINV-0001","source_kind":"worked_example|solved_example|exercise|intext_question|checkpoint_question|activity|mcq|fill_blank|true_false|match|assertion_reason|diagram_task|map_task|table_task|graph_task|source_task|case_task|passage_task|grammar_task|writing_task|experiment_task|coding_task|long_answer|short_answer|other","source_label":"","parent_source_label":"","topic_hint":"","page_hint":"","block_ids":[],"raw_task":"","raw_solution_or_answer":"","normalized_task":"","shared_context":"","subpart_label":"","image_urls":[],"content_objects":{"numbers":[],"variables":[],"equations":[],"coordinates":[],"ratios":[],"diagrams":[],"graphs":[],"tables":[],"maps":[],"passages":[],"sources":[],"experiments":[],"observations":[],"characters":[],"events":[],"dates":[],"places":[],"terms":[],"definitions":[],"processes":[],"comparisons":[],"causes":[],"effects":[],"code_snippets":[],"grammar_items":[],"unknowns":[],"given_values":[],"conditions":[]},"requires_visual":false,"requires_context":false,"order_index":1}],"stats":{"worked_examples":0,"solved_examples":0,"exercise_questions":0,"checkpoint_questions":0,"activities":0,"objective_items":0,"subjective_items":0,"descriptive_items":0,"subparts":0,"visual_tasks":0,"table_or_graph_tasks":0,"source_or_passage_tasks":0,"total_inventory_items":0}}.
+{"items":[{"qid":"QINV-0001","source_kind":"worked_example|solved_example|exercise|intext_question|checkpoint_question|activity|mcq|fill_blank|true_false|match|assertion_reason|diagram_task|map_task|table_task|graph_task|source_task|case_task|passage_task|grammar_task|writing_task|experiment_task|coding_task|long_answer|short_answer|other","source_label":"","parent_source_label":"","topic_hint":"","page_hint":"","block_ids":[],"raw_task":"","raw_solution_or_answer":"","normalized_task":"","shared_context":"","subpart_label":"","options":[],"image_urls":[],"content_objects":{"numbers":[],"variables":[],"equations":[],"coordinates":[],"ratios":[],"diagrams":[],"graphs":[],"tables":[],"maps":[],"passages":[],"sources":[],"experiments":[],"observations":[],"characters":[],"events":[],"dates":[],"places":[],"terms":[],"definitions":[],"processes":[],"comparisons":[],"causes":[],"effects":[],"code_snippets":[],"grammar_items":[],"unknowns":[],"given_values":[],"conditions":[]},"requires_visual":false,"requires_context":false,"order_index":1}],"stats":{"worked_examples":0,"solved_examples":0,"exercise_questions":0,"checkpoint_questions":0,"activities":0,"objective_items":0,"subjective_items":0,"descriptive_items":0,"subparts":0,"visual_tasks":0,"table_or_graph_tasks":0,"source_or_passage_tasks":0,"total_inventory_items":0}}.
 
 COVERAGE IS MANDATORY (most important rule):
 - Extract EVERY assessable question/task from the first line to the last,
@@ -1447,6 +1449,9 @@ COVERAGE IS MANDATORY (most important rule):
   items when each asks about a different person, event, method, case, concept,
   or representation; prepend the complete shared stem/context to every split
   item so each remains self-contained and can be assigned to its own concept.
+- Treat independence as a semantic decision, not a numbering rule. A shared
+  data set, passage, diagram, assertion, MCQ stem/options, or multi-step
+  calculation remains ONE item even when its parts are lettered or roman.
 - In-text CHECKPOINT questions (boxed "?" questions, "Let's recall",
   "Check your progress", mid-section question boxes) are inventory items
   exactly like end-of-chapter exercises. Chapters typically carry a dozen or
@@ -1472,6 +1477,10 @@ Rules:
   application, project or activity prompts if assessable.
 - raw_task must carry the COMPLETE question wording verbatim — never truncate,
   paraphrase, or drop givens, data, sub-parts, quotations, or conditions.
+- For MCQ/objective items, raw_task MUST include the stem and every option in
+  the original order. Never borrow options from an adjacent question. Also
+  return options as an ordered list when the source exposes discrete choices;
+  the inventory sanitizer uses it to verify/rebuild the public prompt.
 - Inventory prompts only, never worked answers: stop each worked/solved example
   immediately before "Solution:" or "Answer:", and always return
   raw_solution_or_answer as an empty string. Types must expose questions, not
@@ -1917,6 +1926,12 @@ Rules:
 - Every misconception must name a REAL, specific learner error this exact
   concept triggers, grounded in the chapter material (wrong condition, sign,
   unit, cause-effect reversal, term confusion, misapplied formula, ...).
+- State the FALSE BELIEF in learner voice: "Students may believe/think/assume
+  ..." or "Students may confuse ...". Do not write the correction as if it
+  were the misconception. Avoid "should", "instead", "correctly", "remember
+  that", and declarative textbook corrections such as "A nation is not ...".
+  The Misconceptions section contains the mistaken belief; Description already
+  teaches the correct idea.
 - When the material triggers several distinct errors, list them all in the
   same Misconceptions section — one is the minimum, more are welcome.
 - NEVER write templated filler like "Students may apply X as a memorized rule
@@ -3089,13 +3104,29 @@ def _question_prompts_from_text(text: str) -> list[str]:
 
 
 def _independent_lettered_subtasks(text: str) -> list[tuple[str, str]]:
-    """Split a lettered task list while repeating its shared stem/context."""
+    """Split only explicitly independent lettered tasks.
+
+    Lettering alone does not prove independence: source-, table-, diagram-, MCQ-
+    and multi-step questions often use (a)/(b) for dependent parts.  Splitting
+    those creates repeated stems and lets one source question drift across
+    concepts.  Restrict the deterministic backstop to stems that explicitly
+    request separate mini-responses; GPT handles ambiguous groups as one item.
+    """
     raw = str(text or "")
     matches = list(_LETTERED_SUBTASK_START_RE.finditer(raw))
     if len(matches) < 2:
         return []
     stem = raw[:matches[0].start()].strip()
     if not stem:
+        return []
+    if not re.search(
+        r"\b(?:write\s+(?:a\s+)?(?:short\s+)?note(?:s)?\s+(?:on|about)|"
+        r"answer\s+(?:each|the\s+following)\s+separately|"
+        r"comment\s+(?:separately\s+)?on\s+each|"
+        r"describe\s+each|identify\s+each)\b",
+        stem,
+        re.IGNORECASE,
+    ):
         return []
     subtasks: list[tuple[str, str]] = []
     for index, match in enumerate(matches):
@@ -3309,6 +3340,30 @@ def _sanitize_inventory_item(
     cleaned["raw_task"] = raw_task
     cleaned["normalized_task"] = normalized or raw_task
     cleaned["raw_solution_or_answer"] = ""
+    options = cleaned.get("options") or []
+    if isinstance(options, list):
+        rendered_options: list[str] = []
+        for index, option in enumerate(options):
+            if isinstance(option, dict):
+                label = str(option.get("label") or chr(65 + index)).strip()
+                text = str(
+                    option.get("text") or option.get("option") or "").strip()
+            else:
+                label = chr(65 + index)
+                text = str(option or "").strip()
+            if text:
+                rendered_options.append(f"({label}) {text}")
+        # A structured options list is authoritative for MCQ fidelity. Append
+        # only options absent from the task, preserving source order.
+        for rendered in rendered_options:
+            option_text = rendered.split(") ", 1)[-1]
+            if bi.normalize_question_text(option_text) not in (
+                bi.normalize_question_text(raw_task)
+            ):
+                raw_task = f"{raw_task} {rendered}".strip()
+        cleaned["options"] = rendered_options
+        cleaned["raw_task"] = raw_task
+        cleaned["normalized_task"] = normalized or raw_task
     cleaned["topic_hint"] = (
         (cleaned.get("topic_hint") or "").strip()
         if chapter_wide
@@ -3386,14 +3441,30 @@ def _merge_source_task_anchors(items: list[dict], anchors: list[dict]) -> list[d
             merged.append(dict(anchor))
             continue
         existing = merged[match_index]
+        existing_task = str(
+            existing.get("raw_task") or existing.get("normalized_task") or "")
+        anchor_task = str(
+            anchor.get("raw_task") or anchor.get("normalized_task") or "")
+        # Deterministic anchors are coverage evidence, not permission to replace
+        # a fuller GPT extraction. Keeping the longer task preserves MCQ options,
+        # shared stems, conditions, and visual context.
+        authoritative_task = (
+            existing_task if len(existing_task) >= len(anchor_task)
+            else anchor_task
+        )
         for field in (
             "source_kind", "source_label", "parent_source_label", "topic_hint",
-            "raw_task", "normalized_task", "raw_solution_or_answer",
-            "_topic_scope",
+            "raw_solution_or_answer", "_topic_scope",
         ):
-            existing[field] = anchor.get(field, "")
+            if anchor.get(field) not in (None, ""):
+                existing[field] = anchor.get(field)
+        existing["raw_task"] = authoritative_task
+        existing["normalized_task"] = authoritative_task
         if anchor.get("image_urls"):
-            existing["image_urls"] = anchor["image_urls"]
+            existing["image_urls"] = list(dict.fromkeys(
+                list(existing.get("image_urls") or [])
+                + list(anchor.get("image_urls") or [])
+            ))
         existing["requires_visual"] = bool(
             existing.get("requires_visual") or anchor.get("requires_visual"))
 
@@ -3776,6 +3847,27 @@ _CASE_SOURCE_ARTIFACT_RE = re.compile(
 )
 
 
+_FIGURE_REFERENCE_RE = re.compile(
+    r"\b(?:refer(?:\s+to)?\s+)?fig(?:ure)?\.?\s*"
+    r"(?P<number>\d+(?:\.\d+)*)\b",
+    re.IGNORECASE,
+)
+
+
+def _visual_alt_text(item: dict, task: str, image_index: int = 0) -> str:
+    """Return a visible, source-grounded caption for a shipped image."""
+    match = _FIGURE_REFERENCE_RE.search(task or "")
+    if match:
+        base = f"Fig. {match.group('number')}"
+    else:
+        label = concept_cleanup.strip_dangling_references(
+            str(item.get("source_label") or "")).strip(" .:-")
+        base = label if label and len(label) <= 80 else "Source visual"
+    if image_index:
+        base = f"{base}, visual {image_index + 1}"
+    return re.sub(r"[\[\]]", "", base)
+
+
 def _inventory_task_text(item: dict) -> str:
     """Full source task text used for public example prompts.
 
@@ -3801,10 +3893,17 @@ def _inventory_task_text(item: dict) -> str:
     if context and item.get("requires_context") and context not in task:
         task = f"{context} {task}".strip()
     task = re.sub(r"\s+", " ", task)
-    for url in item.get("image_urls") or []:
+    for image_index, url in enumerate(item.get("image_urls") or []):
         url = str(url or "").strip()
-        if url and url not in task:
-            task = f"{task} ![]({url})"
+        if not url:
+            continue
+        alt = _visual_alt_text(item, task, image_index)
+        empty_image = re.compile(
+            r"!\[\s*\]\(" + re.escape(url) + r"\)", re.IGNORECASE)
+        if empty_image.search(task):
+            task = empty_image.sub(f"![{alt}]({url})", task)
+        elif url not in task:
+            task = f"{task} ![{alt}]({url})"
     return task.strip()
 
 
@@ -5184,8 +5283,7 @@ def _ensure_misconceptions_via_api(
         if not cr.is_culmination(rec.get("concept_title", ""))
         and (rec.get("concept_details") or "").strip()
         and (
-            not _misconception_body(rec.get("concept_details", ""))
-            or cr._is_generic_misconception(
+            cr._needs_misconception_rewrite(
                 _misconception_body(rec.get("concept_details", "")))
         )
     ]
@@ -5214,7 +5312,7 @@ def _ensure_misconceptions_via_api(
         data = _openai_json(system, user)
         for row in _concept_rows_to_records(data):
             body = _misconception_body(row.get("concept_details", ""))
-            if body and not cr._is_generic_misconception(body):
+            if body and not cr._needs_misconception_rewrite(body):
                 by_title[bi.normalize_question_text(row["concept_title"])] = body
     except Exception as exc:  # noqa: BLE001 — deterministic backstop follows later
         progress.log(
@@ -8845,6 +8943,42 @@ def _topic_headings(sections: list[dict]) -> list[str]:
     return _dedupe_topic_candidates(selected)
 
 
+def _reorder_records_by_source_topics(
+    records: list[dict], headings: list[str],
+) -> list[dict]:
+    """Restore textbook topic order without changing row content.
+
+    Recovery and GPT re-segregation can append an earlier source topic at the
+    end of the map.  The source heading sequence is authoritative; ordering is
+    therefore a safe structural operation, unlike semantic reassignment.
+    Within each topic the existing concept order is stable and Culmination is
+    always moved to the end.
+    """
+    order = {
+        _topic_comparison_key(heading): index
+        for index, heading in enumerate(headings or [])
+        if _topic_comparison_key(heading)
+    }
+    if not records or not order:
+        return records
+    unknown_order: dict[str, int] = {}
+    for rec in records:
+        key = _topic_comparison_key(rec.get("topic") or "")
+        if key not in order and key not in unknown_order:
+            unknown_order[key] = len(unknown_order)
+    indexed = list(enumerate(records))
+    indexed.sort(key=lambda pair: (
+        order.get(
+            _topic_comparison_key(pair[1].get("topic") or ""),
+            len(order) + unknown_order.get(
+                _topic_comparison_key(pair[1].get("topic") or ""), 0),
+        ),
+        1 if cr.is_culmination(pair[1].get("concept_title", "")) else 0,
+        pair[0],
+    ))
+    return [record for _, record in indexed]
+
+
 def _chapter_title_is_main_topic(
     sections: list[dict], chapter_title: str,
 ) -> bool:
@@ -9217,6 +9351,7 @@ def concepts_from_mmd(
             allow_chapter_title_topic=allow_chapter_title_topic)
         out = _recover_missing_topic_concepts_via_api(
             out, meta=meta, source_topic_excerpts=source_topic_excerpts)
+        out = _reorder_records_by_source_topics(out, headings)
         out = _restore_method_anchor_rows(
             out, skeleton_method_row_snapshot)
         out = _enforce_method_anchor_topics(out, method_anchors)
@@ -9388,6 +9523,7 @@ def concepts_from_mmd(
         out = cr.ensure_misconceptions(out)
         out = _enforce_method_anchor_topics(out, method_anchors)
         out = _enforce_culminations(out)
+        out = _reorder_records_by_source_topics(out, headings)
         missing_method_anchors = [
             anchor for anchor in method_anchors
             if (

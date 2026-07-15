@@ -196,6 +196,22 @@ _GENERIC_MISCONCEPTION_RE = re.compile(
     r"the conditions, context, or representation given in the problem\.?$",
     re.IGNORECASE,
 )
+_LEARNER_FALSE_BELIEF_RE = re.compile(
+    r"\b(?:students?|learners?|children)\s+"
+    r"(?:(?:may|might|often|sometimes|commonly)\s+[a-z]+|"
+    r"(?:believe|think|assume|expect|confuse|mistake|treat|interpret|"
+    r"overlook|ignore|apply|use|calculate|infer))\b",
+    re.IGNORECASE,
+)
+_CORRECTION_VOICE_RE = re.compile(
+    r"\b(?:should|must|instead|correct(?:ly)?|remember\s+that|"
+    r"in\s+fact|actually|the\s+correct\s+(?:idea|rule|answer|method))\b",
+    re.IGNORECASE,
+)
+_DECLARATIVE_NEGATION_RE = re.compile(
+    r"^\s*(?:a|an|the|this|that)\b.{0,120}\b(?:is|are|does|do|can)\s+not\b",
+    re.IGNORECASE,
+)
 
 
 def format_mastery_statement(details: str) -> str:
@@ -245,6 +261,24 @@ def _fallback_misconception(title: str) -> str:
 
 def _is_generic_misconception(text: str) -> bool:
     return bool(_GENERIC_MISCONCEPTION_RE.match((text or "").strip()))
+
+
+def _is_correction_shaped_misconception(text: str) -> bool:
+    """True when text teaches the correction instead of naming a false belief."""
+    value = (text or "").strip()
+    if not value:
+        return False
+    if _CORRECTION_VOICE_RE.search(value) or _DECLARATIVE_NEGATION_RE.search(value):
+        return True
+    return not bool(_LEARNER_FALSE_BELIEF_RE.search(value))
+
+
+def _needs_misconception_rewrite(text: str) -> bool:
+    return (
+        not (text or "").strip()
+        or _is_generic_misconception(text)
+        or _is_correction_shaped_misconception(text)
+    )
 
 
 def normalize_misconception_sections(details: str) -> str:
@@ -313,7 +347,12 @@ def normalize_misconception_sections(details: str) -> str:
     seen: set[str] = set()
     for text in misconception_texts:
         key = re.sub(r"\W+", " ", text.lower()).strip()
-        if key and key not in seen and not _is_generic_misconception(text):
+        if (
+            key
+            and key not in seen
+            and not _is_generic_misconception(text)
+            and not _is_correction_shaped_misconception(text)
+        ):
             seen.add(key)
             specific.append(text)
     if not specific and misconception_texts:

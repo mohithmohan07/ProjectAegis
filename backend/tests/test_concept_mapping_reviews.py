@@ -357,6 +357,30 @@ def test_generic_only_misconception_warns_for_review_quality():
     assert any(e["code"] == "generic_misconception" for e in report["errors"])
 
 
+def test_correction_shaped_misconception_is_rejected_as_review_input():
+    correction = (
+        "A nation is not simply a territory, dynasty, ethnic group, or people "
+        "sharing a common language."
+    )
+    assert cr._is_correction_shaped_misconception(correction)
+    assert not cr._is_correction_shaped_misconception(
+        "Students may believe that a nation has always existed with a fixed identity."
+    )
+    rows = [{
+        "topic": "Nation States",
+        "parent_concept": "National Identity",
+        "concept_title": "Historically Constructed National Identity",
+        "concept_details": (
+            "Description: National identity changes through historical processes. // "
+            f"Misconceptions: {correction}"
+        ),
+        "keywords": "",
+    }]
+    report = concept_validator.validate_concept_rows(rows, allow_types=True)
+    assert any(
+        e["code"] == "misconception_framing" for e in report["errors"])
+
+
 def test_metadata_has_no_subject_specific_prompt_supplements():
     meta = g._metadata(subject="Civics", board="CBSE", chapter_title="Power Sharing")
     block = g._metadata_block(meta)
@@ -411,7 +435,33 @@ def test_inventory_task_text_prefers_raw_task_and_ships_images():
     }
     text = g._inventory_task_text(item)
     assert text.startswith("Calculate the resistance for the given circuit.")
-    assert "![](https://cdn.mathpix.com/f11.jpg)" in text
+    assert "![Fig. 11.1](https://cdn.mathpix.com/f11.jpg)" in text
+
+
+def test_inventory_visual_without_pdf_figure_number_gets_descriptive_alt():
+    text = g._inventory_task_text({
+        "source_kind": "diagram_task",
+        "source_label": "Circuit comparison",
+        "raw_task": "Compare the two circuits.",
+        "image_urls": ["https://cdn.mathpix.com/circuits.jpg"],
+    })
+    assert "![Circuit comparison](https://cdn.mathpix.com/circuits.jpg)" in text
+
+
+def test_description_section_references_are_removed_without_touching_math():
+    row = {
+        "topic": "Sequences",
+        "parent_concept": "Terms",
+        "concept_title": "Nth Term",
+        "concept_details": (
+            "Description: Section 5.3 introduces a_n=a+(n-1)d and 1.25 as a "
+            "decimal value. // Misconceptions: Students may use n instead of n-1."
+        ),
+        "keywords": "",
+    }
+    cleaned = concept_cleanup.clean_concept_record(dict(row))
+    assert "Section 5.3" not in cleaned["concept_details"]
+    assert "1.25" in cleaned["concept_details"]
 
 
 def test_validator_allows_figure_reference_with_embedded_image():
@@ -1615,6 +1665,43 @@ def test_inventory_keeps_distinct_questions_with_shared_section_label():
     assert len(g._merge_source_task_anchors(items, [])) == 11
 
 
+def test_anchor_merge_preserves_full_mcq_stem_and_its_own_options():
+    model_item = {
+        "source_kind": "mcq",
+        "source_label": "Exercise 5.2 Q2(i)",
+        "raw_task": (
+            "Which term of the AP 3, 8, 13, ... is 78? "
+            "(A) 14 (B) 15 (C) 16 (D) 17"
+        ),
+        "normalized_task": "Which term of the AP 3, 8, 13, ... is 78?",
+    }
+    shorter_anchor = {
+        "source_kind": "exercise",
+        "source_label": "Exercise 5.2 Q2(i)",
+        "raw_task": "Which term of the AP 3, 8, 13, ... is 78?",
+        "normalized_task": "Which term of the AP 3, 8, 13, ... is 78?",
+    }
+    merged = g._merge_source_task_anchors([model_item], [shorter_anchor])
+    assert len(merged) == 1
+    assert "(A) 14 (B) 15 (C) 16 (D) 17" in merged[0]["raw_task"]
+
+
+def test_structured_mcq_options_rebuild_the_same_question_only():
+    item = g._sanitize_inventory_item({
+        "source_kind": "mcq",
+        "raw_task": "Which term has value 78?",
+        "options": [
+            {"label": "A", "text": "14"},
+            {"label": "B", "text": "15"},
+            {"label": "C", "text": "16"},
+            {"label": "D", "text": "17"},
+        ],
+    })
+    assert item["raw_task"] == (
+        "Which term has value 78? (A) 14 (B) 15 (C) 16 (D) 17"
+    )
+
+
 def test_independent_lettered_exercise_subparts_get_separate_anchors():
     source = r"""
 \section*{1 Revolutions}
@@ -1642,6 +1729,24 @@ e) The role of women in nationalist struggles
         for item in exercises[:5]
     )
     assert all(not item["topic_hint"] for item in exercises)
+
+
+def test_dependent_lettered_subquestions_remain_one_inventory_anchor():
+    source = r"""
+\section*{1 Source Analysis}
+Read the passage and use it for all parts.
+\section*{Questions}
+1. Using the passage above: (a) identify the speaker (b) explain the argument
+(c) infer why the audience responded.
+"""
+    anchors = g._source_task_anchors(g.parse_mmd_sections(source))
+    exercises = [
+        item for item in anchors if item["source_kind"] == "exercise"
+    ]
+    assert len(exercises) == 1
+    assert "(a)" in exercises[0]["raw_task"]
+    assert "(b)" in exercises[0]["raw_task"]
+    assert "(c)" in exercises[0]["raw_task"]
 
 
 def test_split_subpart_anchors_replace_compound_model_inventory_row():
@@ -1717,6 +1822,33 @@ def test_missing_source_topic_recovery_adds_visualising_the_nation(monkeypatch):
         "The Making of Germany and Italy",
         "Visualising the Nation",
     }
+
+
+def test_source_topic_order_is_restored_after_recovery_append():
+    records = [
+        {
+            "topic": "Nationalism and Imperialism",
+            "concept_title": "Imperialist Rivalries",
+            "concept_details": "Description: Rivalries intensified.",
+        },
+        {
+            "topic": "Visualising the Nation",
+            "concept_title": "National Allegories",
+            "concept_details": "Description: Nations were personified.",
+        },
+        {
+            "topic": "The French Revolution and the Idea of the Nation",
+            "concept_title": "Revolutionary Nation",
+            "concept_details": "Description: Sovereignty shifted to citizens.",
+        },
+    ]
+    headings = [
+        "The French Revolution and the Idea of the Nation",
+        "Visualising the Nation",
+        "Nationalism and Imperialism",
+    ]
+    out = g._reorder_records_by_source_topics(records, headings)
+    assert [row["topic"] for row in out] == headings
 
 
 def test_chapter_wide_tasks_are_semantically_distributed(monkeypatch):

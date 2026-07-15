@@ -478,6 +478,10 @@ _SECTION_SEP = " // "
 
 
 _MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(https?://[^)]+\)", re.IGNORECASE)
+_TEXTBOOK_SECTION_REF_RE = re.compile(
+    r"(?:\bsections?\s+|§\s*)\d+(?:\.\d+)+\b",
+    re.IGNORECASE,
+)
 
 
 def _strip_images_from_prose(text: str) -> str:
@@ -519,6 +523,8 @@ def _clean_details(details: str, *, neutralize: bool = True) -> str:
             cleaned = replace_mmd_references(part)
         else:
             cleaned = replace_mmd_references(strip_dangling_references(part))
+        if label.startswith("description") or label.startswith("misconception"):
+            cleaned = _TEXTBOOK_SECTION_REF_RE.sub("the chapter", cleaned)
         # Mathpix URLs are Types/Hub-only; strip them from Description and
         # Misconception even during reference-preserving pre-repair cleanup.
         if not is_types and not is_hub:
