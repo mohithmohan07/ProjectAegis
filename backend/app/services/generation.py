@@ -3360,7 +3360,12 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
                         task=task_text,
                         chapter_wide=chapter_wide,
                     )
-            if not task_matches and body.strip():
+            if (
+                not task_matches
+                and body.strip()
+                and _CHECKPOINT_CONTAINER_HEADING_RE.match(
+                    _strip_section_number(heading))
+            ):
                 append_anchor(
                     section_index=section_index,
                     position=0,
@@ -4004,7 +4009,7 @@ def _source_visual_captions(text: str) -> dict[str, str]:
         if include is None:
             continue
         caption_match = re.search(
-            r"\\caption\{(?P<caption>.*)\}\s*$",
+            r"\\caption\{(?P<caption>.*?)\}",
             body,
             re.IGNORECASE | re.DOTALL,
         )

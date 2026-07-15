@@ -459,6 +459,7 @@ def test_latex_figure_uses_adjacent_source_caption_in_public_markdown():
         f"\\includegraphics[alt={{}},max width=\\textwidth]{{{url}}}\n"
         "\\captionsetup{labelformat=empty}\n"
         "\\caption{Fig． 1 - A democratic republic print prepared in 1848.}\n"
+        "\\label{fig:democratic-republic}\n"
         "\\end{figure}"
     )
     text = g._inventory_task_text({
@@ -1908,6 +1909,20 @@ def test_structured_mcq_options_rebuild_the_same_question_only():
         "Which of 14, 15, 16, and 17 is prime? (A) 14 (B) 15 (C) 16 (D) 17"
     )
     assert item["normalized_task"] == item["raw_task"]
+
+
+def test_masked_exercise_table_does_not_become_checkpoint_anchor():
+    source = r"""
+\section*{Exercises}
+\begin{tabular}{|c|l|}
+\hline 1 & Explain the first result. \\
+\hline 2 & Explain the second result. \\
+\end{tabular}
+Solution: The first result follows from the second.
+"""
+    anchors = g._source_task_anchors(g.parse_mmd_sections(source))
+
+    assert anchors == []
 
 
 def test_independent_lettered_exercise_subparts_get_separate_anchors():
