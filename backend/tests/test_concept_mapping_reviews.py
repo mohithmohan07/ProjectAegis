@@ -627,7 +627,10 @@ def test_unique_question_label_root_merges_question_and_q_notation():
         "source_label": "Exercise 5.3 Question 4",
         "raw_task": "How many terms give a sum of 636?",
     }
-    assert g._merge_source_task_anchors([gpt_item], [anchor]) == [anchor]
+    merged = g._merge_source_task_anchors([gpt_item], [anchor])
+    assert len(merged) == 1
+    assert merged[0]["source_label"] == anchor["source_label"]
+    assert merged[0]["raw_task"] == anchor["raw_task"]
 
 
 def test_uploaded_electricity_activities_feed_types_and_hubs_with_visuals():

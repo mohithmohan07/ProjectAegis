@@ -3555,7 +3555,7 @@ def _inventory_question_label_root(label: str) -> str:
     """Normalize ``Question 2(ii)`` and ``Q2`` to one parent-question key."""
     value = _SOURCE_LABEL_SUBPART_SUFFIX_RE.sub("", str(label or "").strip())
     value = re.sub(r"\bquestion\s*(?=\d)", "q", value, flags=re.IGNORECASE)
-    return bi.normalize_question_text(value)
+    return _topic_comparison_key(value)
 
 
 def _inventory_items_match(item: dict, anchor: dict) -> bool:
