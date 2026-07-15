@@ -1689,7 +1689,7 @@ def test_anchor_merge_preserves_full_mcq_stem_and_its_own_options():
 def test_structured_mcq_options_rebuild_the_same_question_only():
     item = g._sanitize_inventory_item({
         "source_kind": "mcq",
-        "raw_task": "Which term has value 78?",
+        "raw_task": "Which of 14, 15, 16, and 17 is prime?",
         "options": [
             {"label": "A", "text": "14"},
             {"label": "B", "text": "15"},
@@ -1698,8 +1698,9 @@ def test_structured_mcq_options_rebuild_the_same_question_only():
         ],
     })
     assert item["raw_task"] == (
-        "Which term has value 78? (A) 14 (B) 15 (C) 16 (D) 17"
+        "Which of 14, 15, 16, and 17 is prime? (A) 14 (B) 15 (C) 16 (D) 17"
     )
+    assert item["normalized_task"] == item["raw_task"]
 
 
 def test_independent_lettered_exercise_subparts_get_separate_anchors():
