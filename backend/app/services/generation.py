@@ -2927,9 +2927,6 @@ def _populate_activity_hubs_via_api(
     """GPT-first Activity/Info Hub population; deterministic fallback for gaps."""
     import json as _json
 
-    # region agent log
-    _debug_inventory_placement_log("activity_hub_api_entry", records, inventory)
-    # endregion
     pending = [
         item for item in _hub_inventory_items(inventory)
         if not _inventory_item_already_in_hubs(records, item)
@@ -3042,20 +3039,7 @@ def _populate_activity_hubs_via_api(
             level="warning",
         )
         out = _place_activity_inventory_into_hubs(out, remaining)
-    # region agent log
-    _debug_inventory_placement_log(
-        "activity_hub_api_pre_alignment", out, inventory,
-        extra={"gpt_placed_qids": sorted(placed_qids),
-               "fallback_qids": sorted(
-                   (item.get("qid") or "").strip()
-                   for item in remaining["items"])},
-    )
-    # endregion
     out = _align_activity_examples_with_hubs(out, inventory)
-    # region agent log
-    _debug_inventory_placement_log(
-        "activity_hub_api_exit", out, inventory)
-    # endregion
     return out
 
 
@@ -7057,62 +7041,6 @@ def _activity_example_hub_alignment_violations(
     return violations
 
 
-# region agent log
-def _debug_inventory_placement_log(
-    stage: str, records: list[dict], inventory: dict | None,
-    *, mined_types: dict | None = None, extra: dict | None = None,
-) -> None:
-    """Temporary NDJSON instrumentation for exact inventory placement drift."""
-    activity_locations: list[dict] = []
-    for item in (inventory or {}).get("items") or []:
-        if not isinstance(item, dict) or not item.get("_activity_origin"):
-            continue
-        key = bi.normalize_question_text(_inventory_task_text(item))
-        examples = _rendered_inventory_example_locations(records, item)
-        hubs = [
-            index for index, record in enumerate(records)
-            if key and key in bi.normalize_question_text(
-                cr.activity_hub_body(record.get("concept_details") or ""))
-        ]
-        if examples or hubs:
-            activity_locations.append({
-                "qid": (item.get("qid") or "").strip(),
-                "expected_topic": item.get("topic_hint") or "",
-                "examples": [{
-                    "index": index,
-                    "topic": records[index].get("topic") or "",
-                    "concept": records[index].get("concept_title") or "",
-                    "culmination": cr.is_culmination(
-                        records[index].get("concept_title") or ""),
-                } for index in examples],
-                "hubs": [{
-                    "index": index,
-                    "topic": records[index].get("topic") or "",
-                    "concept": records[index].get("concept_title") or "",
-                } for index in hubs],
-            })
-    payload = {
-        "hypothesisId": "B",
-        "location": "generation.py:_debug_inventory_placement_log",
-        "message": stage,
-        "data": {
-            "row_count": len(records),
-            "coverage": _rendered_inventory_coverage_defects(records, inventory),
-            "topic_violations": _rendered_inventory_topic_violations(
-                records, inventory, mined_types),
-            "activity_alignment_violations":
-                _activity_example_hub_alignment_violations(records, inventory),
-            "activity_locations": activity_locations,
-            "extra": extra or {},
-        },
-        "timestamp": int(__import__("time").time() * 1000),
-    }
-    with open("/opt/cursor/logs/debug.log", "a", encoding="utf-8") as log_file:
-        log_file.write(
-            __import__("json").dumps(payload, ensure_ascii=False) + "\n")
-# endregion
-
-
 def _hub_inventory_examples_in_types(
     records: list[dict], inventory: dict | None,
 ) -> set[str]:
@@ -7461,10 +7389,6 @@ def _repair_rendered_inventory_coverage(
     if not records or not (inventory or {}).get("items"):
         return records
 
-    # region agent log
-    _debug_inventory_placement_log(
-        "coverage_repair_entry", records, inventory, mined_types=mined_types)
-    # endregion
     defects = _rendered_inventory_coverage_defects(records, inventory)
     if not defects["missing"] and not defects["duplicate"]:
         return records
@@ -10467,11 +10391,6 @@ def concepts_from_mmd(
         # Later chapter refiners may improve descriptions and misconceptions,
         # but must not move/drop these constrained assignments.
         coverage_safe_snapshot = copy.deepcopy(out)
-        # region agent log
-        _debug_inventory_placement_log(
-            "coverage_safe_snapshot", coverage_safe_snapshot,
-            question_task_inventory, mined_types=mined_types)
-        # endregion
         out = cr.refine_chapter(out)
         # The repair/cleanup passes may reorder, rename, or re-collide rows;
         # re-assert the duplicate-title, culmination, mastery-line, and
@@ -10489,11 +10408,6 @@ def concepts_from_mmd(
         # the hard final gate so deposit is never blocked by residual refs.
         out = _neutralize_unrepaired_rows(
             out, inventory=question_task_inventory)
-        # region agent log
-        _debug_inventory_placement_log(
-            "post_refiners_pre_snapshot_acceptance", out,
-            question_task_inventory, mined_types=mined_types)
-        # endregion
         out = _accept_topic_safe_type_review(
             coverage_safe_snapshot, out, mined_types)
         out = _accept_exact_inventory_type_review(
@@ -10511,11 +10425,6 @@ def concepts_from_mmd(
         # pre-refiner labels. Reapply the two independent chapter-wide
         # sequences without changing row membership or placement.
         out = cr.renumber_types_continuously(out)
-        # region agent log
-        _debug_inventory_placement_log(
-            "post_method_restore_and_reorder", out,
-            question_task_inventory, mined_types=mined_types)
-        # endregion
         missing_method_anchors = [
             anchor for anchor in method_anchors
             if (
@@ -10585,11 +10494,6 @@ def concepts_from_mmd(
         out = _enforce_rendered_inventory_coverage(
             out, question_task_inventory, mined_types)
         out = cr.renumber_types_continuously(out)
-        # region agent log
-        _debug_inventory_placement_log(
-            "final_pre_placement_gate", out, question_task_inventory,
-            mined_types=mined_types)
-        # endregion
         inventory_topic_violations = _rendered_inventory_topic_violations(
             out, question_task_inventory, mined_types)
         activity_alignment_violations = (
