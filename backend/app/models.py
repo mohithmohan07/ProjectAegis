@@ -249,4 +249,7 @@ class UploadJob(Base):
     # extraction-completeness auditing: {"items": [...], "stats": {...},
     # "mined_types": [...]}. Downloadable as CSV.
     question_inventory: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Durable pre-Type-assignment state. A failed generation can resume after
+    # expensive skeleton, description, inventory, and Type-mining API stages.
+    generation_checkpoint: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

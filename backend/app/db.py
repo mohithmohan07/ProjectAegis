@@ -48,6 +48,7 @@ def _ensure_columns() -> None:
         ("concepts", "sources", "TEXT DEFAULT ''"),
         ("upload_jobs", "source_book", "VARCHAR(128) DEFAULT ''"),
         ("upload_jobs", "question_inventory", "TEXT DEFAULT '{}'"),
+        ("upload_jobs", "generation_checkpoint", "TEXT DEFAULT '{}'"),
         ("questions", "question_text", "TEXT DEFAULT ''"),
         ("blueprint_batches", "appears_in", "TEXT DEFAULT '[]'"),
     ]

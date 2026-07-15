@@ -22,9 +22,13 @@ def test_upload_stages_without_processing(client, db):
     assert row.mmd_text == ""
 
 
-def test_replace_file_before_convert(client):
+def test_replace_file_before_convert(client, db):
     files = {"file": ("wrong.txt", io.BytesIO(b"# Wrong\n\nwrong content"), "text/plain")}
     job = client.post("/build-assessments/uploads?upload_type=questions", files=files).json()
+    row = db.get(models.UploadJob, job["id"])
+    row.generation_checkpoint = {"stage": "pre_type_assignment"}
+    row.question_inventory = {"items": [{"qid": "old"}]}
+    db.commit()
 
     # Swap in the correct file before converting.
     newfiles = {"file": ("right.txt", io.BytesIO(b"# Right\n\nright content here"), "text/plain")}
@@ -32,10 +36,21 @@ def test_replace_file_before_convert(client):
         f"/build-assessments/uploads/{job['id']}/file", files=newfiles).json()
     assert replaced["filename"] == "right.txt"
     assert replaced["status"] == "uploaded"
+    db.expire_all()
+    row = db.get(models.UploadJob, job["id"])
+    assert row.generation_checkpoint == {}
+    assert row.question_inventory == {}
 
+    row.generation_checkpoint = {"stage": "pre_type_assignment"}
+    row.question_inventory = {"items": [{"qid": "stale"}]}
+    db.commit()
     converted = convert_assessment_upload(client, job["id"])
     assert converted["status"] == "converted"
     assert "right content here" in converted["mmd_text"]
+    db.expire_all()
+    row = db.get(models.UploadJob, job["id"])
+    assert row.generation_checkpoint == {}
+    assert row.question_inventory == {}
 
 
 def test_convert_then_get_job(client):

@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 
@@ -298,6 +299,16 @@ def _store_inventory(job: models.UploadJob, artifacts: dict) -> None:
     }
 
 
+def _generation_checkpoint_fingerprint(
+    job: models.UploadJob, target_chapter_id: int,
+) -> str:
+    payload = (
+        f"post-learning-checkpoint-v1\0{target_chapter_id}\0"
+        f"{job.mmd_text or ''}"
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 _INVENTORY_CSV_COLUMNS = [
     "qid", "order_index", "source_kind", "source_label", "parent_source_label",
     "topic_hint", "page_hint", "subpart_label", "requires_visual",
@@ -394,6 +405,50 @@ def generate_post_learning(db: Session, job_id: int, target_chapter_id: int) -> 
         raise ValueError("convert the uploaded document to MMD before generating")
     progress.log(f"Post-learning generation into chapter '{chapter.chapter_title}'.")
     artifacts: dict = {}
+    fingerprint = _generation_checkpoint_fingerprint(job, target_chapter_id)
+    stored_checkpoint = job.generation_checkpoint or {}
+    resume_checkpoint = (
+        stored_checkpoint
+        if stored_checkpoint.get("fingerprint") == fingerprint
+        and stored_checkpoint.get("target_chapter_id") == target_chapter_id
+        else None
+    )
+    if stored_checkpoint and resume_checkpoint is None:
+        progress.log(
+            "Discarding a stale generation checkpoint because its source or "
+            "target chapter changed.",
+            level="warning",
+        )
+        job.generation_checkpoint = {}
+        db.commit()
+    if resume_checkpoint:
+        progress.log(
+            "Resuming from the saved pre-Type-assignment checkpoint; expensive "
+            "concept extraction, description, inventory, and Type-mining stages "
+            "will not run again.",
+            level="success",
+        )
+
+    def save_checkpoint(checkpoint: dict) -> None:
+        durable = dict(checkpoint)
+        durable["fingerprint"] = fingerprint
+        durable["target_chapter_id"] = target_chapter_id
+        job.generation_checkpoint = durable
+        _store_inventory(job, {
+            "question_task_inventory": durable.get(
+                "question_task_inventory") or {},
+            "mined_types": durable.get("mined_types") or {},
+        })
+        job.detail = (
+            "Generation checkpoint saved before Type assignment; retry resumes "
+            "from this stage."
+        )
+        db.commit()
+        progress.log(
+            "Saved durable checkpoint before Type assignment.",
+            level="success",
+        )
+
     records = generation.concepts_from_mmd(
         job.mmd_text,
         subject=chapter.subject,
@@ -405,6 +460,8 @@ def generate_post_learning(db: Session, job_id: int, target_chapter_id: int) -> 
         chapter_code=chapter.chapter_code,
         learning_kind="Post",
         artifacts=artifacts,
+        resume_checkpoint=resume_checkpoint,
+        checkpoint_callback=save_checkpoint,
     )
     _store_inventory(job, artifacts)
     created_ids, merged_ids = _deposit_concepts(
@@ -418,6 +475,7 @@ def generate_post_learning(db: Session, job_id: int, target_chapter_id: int) -> 
     job.deposit_scope_type = "chapter"
     job.deposit_scope_ids = [target_chapter_id]
     job.result_ids = created_ids
+    job.generation_checkpoint = {}
     job.detail = (
         f"created {len(created_ids)} post-learning concepts, "
         f"merged sources into {len(merged_ids)} existing"

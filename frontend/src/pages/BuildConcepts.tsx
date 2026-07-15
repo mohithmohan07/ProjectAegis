@@ -61,6 +61,9 @@ function PostLearningFlow({ bookSources }: { bookSources: string[] }) {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
   const [treeReload, setTreeReload] = useState(0);
+  const canResume = Boolean(
+    error && /type embedding failed|unassigned mined types/i.test(error),
+  );
 
   async function generate() {
     if (!job || !scope) return;
@@ -94,8 +97,16 @@ function PostLearningFlow({ bookSources }: { bookSources: string[] }) {
             <div className="row" style={{ marginTop: 12 }}>
               <span className="muted">{scope ? `Chapter: ${scope.label}` : "Pick a chapter"}</span>
               <div className="spacer" />
-              <button disabled={!scope || busy} onClick={generate}>Parse &amp; generate concepts</button>
+              <button disabled={!scope || busy} onClick={generate}>
+                {canResume ? "Resume failed Type assignment" : "Parse & generate concepts"}
+              </button>
             </div>
+            {canResume && (
+              <div className="muted" style={{ marginTop: 8 }}>
+                Earlier GPT stages are saved. Retrying resumes at Type assignment
+                instead of regenerating from the beginning.
+              </div>
+            )}
           </div>
         </>
       )}

@@ -38,6 +38,8 @@ def replace_file(db: Session, job_id: int, *, filename: str, raw_bytes: bytes) -
     save_upload_file(filename, raw_bytes)
     job.filename = Path(filename).name
     job.mmd_text = ""
+    job.question_inventory = {}
+    job.generation_checkpoint = {}
     job.status = "uploaded"
     db.commit()
     db.refresh(job)
@@ -63,6 +65,8 @@ def convert_job(db: Session, job_id: int) -> dict:
     progress.set_progress(0.3, label="Converting to MMD")
     mmd_text = mmd.to_mmd(path)
     job.mmd_text = mmd_text
+    job.question_inventory = {}
+    job.generation_checkpoint = {}
     job.status = "converted"
     db.commit()
     db.refresh(job)
