@@ -631,6 +631,9 @@ def test_unique_question_label_root_merges_question_and_q_notation():
     assert len(merged) == 1
     assert merged[0]["source_label"] == anchor["source_label"]
     assert merged[0]["raw_task"] == anchor["raw_task"]
+    assert g._inventory_question_label_root(
+        "EXERCISE 5.4 (Optional)* Q2"
+    ) == g._inventory_question_label_root("Exercise 5.4 Question 2")
 
 
 def test_uploaded_electricity_activities_feed_types_and_hubs_with_visuals():

@@ -3554,6 +3554,12 @@ def _source_label_is_generic(label: str) -> bool:
 def _inventory_question_label_root(label: str) -> str:
     """Normalize ``Question 2(ii)`` and ``Q2`` to one parent-question key."""
     value = _SOURCE_LABEL_SUBPART_SUFFIX_RE.sub("", str(label or "").strip())
+    value = re.sub(
+        r"\s*\(\s*optional\s*\)\s*\*?",
+        " ",
+        value,
+        flags=re.IGNORECASE,
+    )
     value = re.sub(r"\bquestion\s*(?=\d)", "q", value, flags=re.IGNORECASE)
     return _topic_comparison_key(value)
 
