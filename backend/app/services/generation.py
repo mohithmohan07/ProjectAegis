@@ -3215,6 +3215,22 @@ def _activity_has_assessable_response(text: str) -> bool:
     ))
 
 
+def _trim_activity_ocr_bleed(text: str) -> str:
+    """Stop an Activity at a figure when lowercase prose resumes after it.
+
+    Mathpix can insert an Activity in the middle of a surrounding paragraph.
+    The resumed prose then remains in the Activity section until the next
+    heading. A lowercase continuation immediately after ``\\end{figure}`` is
+    strong structural evidence of that OCR splice, not another instruction.
+    """
+    value = str(text or "")
+    for match in re.finditer(r"\\end\{figure\}", value, re.IGNORECASE):
+        suffix = value[match.end():].lstrip()
+        if suffix and suffix[0].islower():
+            return value[:match.end()].rstrip()
+    return value
+
+
 def _inventory_chunk_has_task_markers(chunk: dict) -> bool:
     """Whether source text explicitly signals an assessable inventory item."""
     for section in chunk.get("sections") or []:
@@ -3309,8 +3325,11 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
         ):
             is_project = bool(re.match(
                 r"^project\b", container_heading, re.IGNORECASE))
+            activity_body = _trim_activity_ocr_bleed(body)
             assessable_activity = (
-                not is_project and _activity_has_assessable_response(body))
+                not is_project
+                and _activity_has_assessable_response(activity_body)
+            )
             append_anchor(
                 section_index=section_index,
                 position=0,
@@ -3325,7 +3344,7 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
                 ),
                 label=heading or f"Activity {section_index + 1}",
                 parent_label=heading,
-                task=body,
+                task=activity_body,
                 chapter_wide=chapter_wide,
                 activity_origin=assessable_activity,
             )
@@ -3516,10 +3535,38 @@ def _inventory_task_match_key(item: dict) -> str:
     return _LEADING_INVENTORY_TASK_NUMBER_RE.sub("", task, count=1)
 
 
+_GENERIC_SOURCE_LABEL_RE = re.compile(
+    r"^(?:activity|discuss|discussion|project|questions?|checkpoint|"
+    r"think\s+about\s+it|let(?:'s|\s+us)\s+discuss)$",
+    re.IGNORECASE,
+)
+_SOURCE_LABEL_SUBPART_SUFFIX_RE = re.compile(
+    r"\s*\(\s*(?:[a-z]|[ivxlcdm]+|\d+)\s*\)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _source_label_is_generic(label: str) -> bool:
+    return bool(_GENERIC_SOURCE_LABEL_RE.fullmatch(
+        bi.normalize_question_text(label)))
+
+
+def _inventory_question_label_root(label: str) -> str:
+    """Normalize ``Question 2(ii)`` and ``Q2`` to one parent-question key."""
+    value = _SOURCE_LABEL_SUBPART_SUFFIX_RE.sub("", str(label or "").strip())
+    value = re.sub(r"\bquestion\s*(?=\d)", "q", value, flags=re.IGNORECASE)
+    return bi.normalize_question_text(value)
+
+
 def _inventory_items_match(item: dict, anchor: dict) -> bool:
     label = bi.normalize_question_text(item.get("source_label", ""))
     anchor_label = bi.normalize_question_text(anchor.get("source_label", ""))
-    if label and anchor_label and label == anchor_label:
+    if (
+        label
+        and anchor_label
+        and label == anchor_label
+        and not _source_label_is_generic(label)
+    ):
         return True
     task = _inventory_task_match_key(item)
     anchor_task = _inventory_task_match_key(anchor)
@@ -3534,6 +3581,32 @@ def _inventory_items_match(item: dict, anchor: dict) -> bool:
 def _merge_source_task_anchors(items: list[dict], anchors: list[dict]) -> list[dict]:
     """Backfill missing deterministic anchors and canonicalize matching rows."""
     merged = [dict(item) for item in items]
+    anchors_by_question_root: dict[str, list[dict]] = {}
+    for anchor in anchors:
+        root = _inventory_question_label_root(
+            anchor.get("source_label") or "")
+        if root:
+            anchors_by_question_root.setdefault(root, []).append(anchor)
+    authoritative_parent_roots = {
+        root
+        for root, candidates in anchors_by_question_root.items()
+        if len(candidates) == 1
+        and not (candidates[0].get("subpart_label") or "").strip()
+    }
+    if authoritative_parent_roots:
+        # GPT sometimes emits both an umbrella question and one row per
+        # subpart even though the source parser proves that the complete
+        # multi-part question is one assessable unit. Remove all GPT children;
+        # the full authoritative anchor is merged/appended below.
+        merged = [
+            item for item in merged
+            if not (
+                (item.get("subpart_label") or "").strip()
+                and _inventory_question_label_root(
+                    item.get("source_label") or "")
+                in authoritative_parent_roots
+            )
+        ]
     parent_counts: dict[str, int] = {}
     for anchor in anchors:
         parent = bi.normalize_question_text(
@@ -3570,9 +3643,19 @@ def _merge_source_task_anchors(items: list[dict], anchors: list[dict]) -> list[d
         # Deterministic anchors are coverage evidence, not permission to replace
         # a fuller GPT extraction. Keeping the longer task preserves MCQ options,
         # shared stems, conditions, and visual context.
+        anchor_is_activity = bool(
+            anchor.get("_activity_origin")
+            or (anchor.get("source_kind") or "").strip().lower()
+            in _HUB_INVENTORY_KINDS
+        )
         authoritative_task = (
-            existing_task if len(existing_task) >= len(anchor_task)
-            else anchor_task
+            anchor_task
+            if anchor_is_activity
+            else (
+                existing_task
+                if len(existing_task) >= len(anchor_task)
+                else anchor_task
+            )
         )
         for field in (
             "source_kind", "source_label", "parent_source_label", "topic_hint",
@@ -6827,6 +6910,19 @@ def _best_record_index_for_inventory_item(
     """Pick the concept row that should host a still-missing inventory Example."""
     if not records:
         return 0
+    if item.get("_activity_origin"):
+        task_key = bi.normalize_question_text(_inventory_task_text(item))
+        hub_matches = [
+            index for index, record in enumerate(records)
+            if task_key
+            and task_key in bi.normalize_question_text(
+                cr.activity_hub_body(record.get("concept_details") or ""))
+            and not cr.is_culmination(record.get("concept_title") or "")
+        ]
+        if len(hub_matches) == 1:
+            # The Hub was GPT-placed semantically. Keep the assessable Example
+            # on that same concept instead of independently guessing again.
+            return hub_matches[0]
     topic_hint = _topic_comparison_key(item.get("topic_hint") or "")
     scored: list[tuple[int, int]] = []
     for index, record in enumerate(records):

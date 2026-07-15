@@ -508,6 +508,37 @@ def test_uploaded_nationalism_fixture_recovers_all_checkpoint_containers():
         or "Is it not a disgrace" in item["raw_task"]
         for item in checkpoints
     )
+    italy_map_activity = next(
+        item for item in checkpoints
+        if "Look at Fig. 14(a)" in item["raw_task"]
+    )
+    assert "was not the result of a sudden upheaval" not in (
+        italy_map_activity["raw_task"])
+
+
+def test_repeated_generic_checkpoint_labels_preserve_distinct_tasks():
+    items = [{
+        "source_kind": "checkpoint_question",
+        "source_label": "Discuss",
+        "raw_task": "Explain how language contributed to national identity.",
+    }]
+    anchors = [
+        {
+            "source_kind": "checkpoint_question",
+            "source_label": "Discuss",
+            "raw_task": "Explain how language contributed to national identity.",
+        },
+        {
+            "source_kind": "checkpoint_question",
+            "source_label": "Discuss",
+            "raw_task": "Compare the political meanings of two allegories.",
+        },
+    ]
+    merged = g._merge_source_task_anchors(items, anchors)
+    assert [item["raw_task"] for item in merged] == [
+        "Explain how language contributed to national identity.",
+        "Compare the political meanings of two allegories.",
+    ]
 
 
 def test_uploaded_nationalism_fixture_exposes_sorrieu_opening_for_recovery():
@@ -550,6 +581,38 @@ def test_uploaded_ap_fixture_keeps_parent_questions_and_own_mcq_options():
     assert "(A) 97 (B) 77 (C) -77 (D) -87" in mcq["raw_task"]
     assert "11th term" in mcq["raw_task"]
     assert "(A) 28 (B) 22 (C) -38" in mcq["raw_task"]
+
+
+def test_authoritative_parent_question_replaces_gpt_split_subparts():
+    full = (
+        "Choose the correct choice and justify: "
+        "(i) Find the 30th term. (A) 97 (B) 77 "
+        "(ii) Find the 11th term. (A) 28 (B) 22"
+    )
+    anchors = [{
+        "source_kind": "exercise",
+        "source_label": "EXERCISE 5.2 Q2",
+        "parent_source_label": "EXERCISE 5.2",
+        "raw_task": full,
+        "normalized_task": full,
+    }]
+    items = [
+        {
+            "source_kind": "mcq",
+            "source_label": "Exercise 5.2 Question 2(i)",
+            "parent_source_label": "Exercise 5.2 Question 2",
+            "subpart_label": "(i)",
+            "raw_task": "Find the 30th term. (A) 97 (B) 77",
+        },
+        {
+            "source_kind": "mcq",
+            "source_label": "Exercise 5.2 Question 2(ii)",
+            "parent_source_label": "Exercise 5.2 Question 2",
+            "subpart_label": "(ii)",
+            "raw_task": "Find the 11th term. (A) 28 (B) 22",
+        },
+    ]
+    assert g._merge_source_task_anchors(items, anchors) == anchors
 
 
 def test_uploaded_electricity_activities_feed_types_and_hubs_with_visuals():
@@ -602,6 +665,32 @@ def test_assessable_activity_can_appear_once_in_types_and_in_hub():
         "duplicate": [],
     }
     assert g._hub_inventory_examples_in_types(rows, inventory) == set()
+
+
+def test_assessable_activity_coverage_repair_reuses_its_gpt_hub_concept():
+    prompt = "Measure current for each conductor and explain the differences."
+    item = {
+        "source_kind": "checkpoint_question",
+        "_activity_origin": True,
+        "topic_hint": "Resistance",
+        "raw_task": prompt,
+    }
+    rows = [
+        {
+            "topic": "Resistance",
+            "concept_title": "Material Resistivity",
+            "concept_details": "Description: Material affects resistance.",
+        },
+        {
+            "topic": "Resistance",
+            "concept_title": "Comparing Component Resistance",
+            "concept_details": (
+                "Description: Components oppose current differently. // "
+                f"Activity/Info Hub: Activity: {prompt}"
+            ),
+        },
+    ]
+    assert g._best_record_index_for_inventory_item(rows, item) == 1
 
 
 def test_opening_recovery_adds_only_model_identified_missing_rows(monkeypatch):
