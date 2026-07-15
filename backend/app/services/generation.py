@@ -3354,16 +3354,17 @@ def _sanitize_inventory_item(
             if text:
                 rendered_options.append(f"({label}) {text}")
         # A structured options list is authoritative for MCQ fidelity. Append
-        # only options absent from the task, preserving source order.
+        # only formatted options absent from the task, preserving source order.
         for rendered in rendered_options:
-            option_text = rendered.split(") ", 1)[-1]
-            if bi.normalize_question_text(option_text) not in (
+            if bi.normalize_question_text(rendered) not in (
                 bi.normalize_question_text(raw_task)
             ):
                 raw_task = f"{raw_task} {rendered}".strip()
         cleaned["options"] = rendered_options
         cleaned["raw_task"] = raw_task
-        cleaned["normalized_task"] = normalized or raw_task
+        cleaned["normalized_task"] = (
+            raw_task if rendered_options else (normalized or raw_task)
+        )
     cleaned["topic_hint"] = (
         (cleaned.get("topic_hint") or "").strip()
         if chapter_wide
