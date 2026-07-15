@@ -7527,6 +7527,25 @@ def _enforce_rendered_inventory_coverage(
     return _align_activity_examples_with_hubs(out, inventory)
 
 
+def _rebuild_types_after_final_placement_drift(
+    records: list[dict], inventory: dict | None, mined_types: dict | None,
+    *, meta: GenerationMetadata,
+) -> list[dict]:
+    """Re-run ID-constrained GPT assignment on the final concept rows.
+
+    Row merges and method-anchor restoration can preserve exact Example coverage
+    while moving a Type away from its source topic. Rebuilding only the Types
+    sections retains the final concept map and the mined taxonomy, while letting
+    the semantic assignment pass choose again from its proven topic-scoped IDs.
+    """
+    rebuilt = _strip_types_from_records(copy.deepcopy(records))
+    rebuilt = _assign_mined_types_via_api(
+        rebuilt, meta=meta, mined_types=mined_types)
+    rebuilt = _populate_activity_hubs_via_api(rebuilt, inventory, meta=meta)
+    return _enforce_rendered_inventory_coverage(
+        rebuilt, inventory, mined_types)
+
+
 def _match_inventory_for_short_example(
     stub: str, inventory_texts: list[str], *, used: set[str],
     context: str = "",
@@ -10503,6 +10522,25 @@ def concepts_from_mmd(
             _activity_example_hub_alignment_violations(
                 out, question_task_inventory)
         )
+        if inventory_topic_violations or activity_alignment_violations:
+            progress.log(
+                "Final cleanup moved source-owned Examples; rebuilding Types "
+                "with the ID-constrained GPT assignment pass.",
+                level="warning",
+            )
+            out = _rebuild_types_after_final_placement_drift(
+                out,
+                question_task_inventory,
+                mined_types,
+                meta=meta,
+            )
+            out = cr.renumber_types_continuously(out)
+            inventory_topic_violations = _rendered_inventory_topic_violations(
+                out, question_task_inventory, mined_types)
+            activity_alignment_violations = (
+                _activity_example_hub_alignment_violations(
+                    out, question_task_inventory)
+            )
         if inventory_topic_violations or activity_alignment_violations:
             raise RuntimeError(
                 "final inventory placement validation failed: "

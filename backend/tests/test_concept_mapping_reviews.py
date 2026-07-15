@@ -1408,6 +1408,68 @@ def test_terminal_coverage_repair_realigns_an_exact_activity_example():
     assert not g._activity_example_hub_alignment_violations(out, inventory)
 
 
+def test_final_placement_rebuild_reuses_gpt_assignment_on_final_rows(monkeypatch):
+    prompt = "Calculate the heat produced by a resistor carrying current."
+    inventory = {"items": [{
+        "qid": "QINV-0001",
+        "source_kind": "exercise",
+        "raw_task": prompt,
+        "topic_hint": "Heating Effect",
+    }]}
+    mined = {"types": [{
+        "type_id": "TYPE-0001",
+        "type_title": "Calculating Electrical Heating",
+        "topic_match_hint": "Heating Effect",
+        "source_question_ids": ["QINV-0001"],
+    }]}
+    records = [
+        {
+            "topic": "Electric Current",
+            "parent_concept": "Current",
+            "concept_title": "Current in a Conductor",
+            "concept_details": (
+                "Description: Current is charge flow. // Types: "
+                "Type 01: Calculating Electrical Heating "
+                f"Case 01: Find heat Example: {prompt}"
+            ),
+            "keywords": "",
+        },
+        {
+            "topic": "Heating Effect",
+            "parent_concept": "Heating",
+            "concept_title": "Joule Heating",
+            "concept_details": "Description: Electrical energy becomes heat.",
+            "keywords": "",
+        },
+    ]
+    calls = []
+
+    def fake_assign(candidate, *, meta, mined_types):
+        calls.append((meta, mined_types))
+        assert all(not g._types_body(row["concept_details"]) for row in candidate)
+        candidate[1] = dict(candidate[1])
+        candidate[1]["concept_details"] = g._inject_types(
+            candidate[1]["concept_details"],
+            "Type 01: Calculating Electrical Heating "
+            f"Case 01: Find heat Example: {prompt}",
+        )
+        return candidate
+
+    monkeypatch.setattr(g, "_assign_mined_types_via_api", fake_assign)
+    monkeypatch.setattr(
+        g, "_populate_activity_hubs_via_api",
+        lambda candidate, inventory, *, meta: candidate,
+    )
+
+    out = g._rebuild_types_after_final_placement_drift(
+        records, inventory, mined, meta=g._metadata(subject="Physics"))
+
+    assert len(calls) == 1
+    assert g._rendered_inventory_example_locations(
+        out, inventory["items"][0]) == [1]
+    assert not g._rendered_inventory_topic_violations(out, inventory, mined)
+
+
 def test_cross_topic_gpt_hub_choice_falls_back_to_exact_example_row(monkeypatch):
     prompt = "Compare the current through the wire for each applied voltage."
     item = {
