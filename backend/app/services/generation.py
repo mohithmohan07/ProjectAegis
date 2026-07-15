@@ -1541,7 +1541,7 @@ what is asked, with what constraint) — never a raw question. An Example is one
 concrete source question that instantiates a Case, copied in full.
 
 Return ONLY strict JSON:
-{"types":[{"type_id":"TYPE-0001","type_title":"","type_description":"","task_pattern":"","source_question_ids":["QINV-0001"],"case_prompts":[{"case_id":"CASE-0001","case_title":"","examples":[{"source_question_id":"QINV-0001","example_prompt":""}],"case_signature":""}],"concept_match_hint":"","parent_concept_match_hint":"","topic_match_hint":"","difficulty_hint":"Basic|Intermediate|Advanced","cognitive_skill_hint":"","subject_skill_hint":"","is_activity":false}]}.
+{"types":[{"type_id":"TYPE-0001","type_title":"","type_description":"","task_pattern":"","source_question_ids":["QINV-0001"],"case_prompts":[{"case_id":"CASE-0001","case_title":"","examples":[{"source_question_id":"QINV-0001","example_prompt":""}],"case_signature":"","placement_scope":"normal|mixed_synthesis|cross_topic_synthesis"}],"concept_match_hint":"","parent_concept_match_hint":"","topic_match_hint":"","difficulty_hint":"Basic|Intermediate|Advanced","cognitive_skill_hint":"","subject_skill_hint":"","is_activity":false,"placement_scope":"normal|mixed_synthesis|cross_topic_synthesis"}]}.
 
 COVERAGE IS MANDATORY (most important rule):
 - EVERY inventory item MUST appear in EXACTLY ONE Type's source_question_ids
@@ -1597,6 +1597,15 @@ CASE WORDING (each Case must be properly defined):
   Case unless the textbook numbers the subparts as separate standalone
   questions; do not split the same prompt across multiple Cases, and never
   invent multiple Cases that repeat the same stem with different subparts.
+- Set each Case's placement_scope to "normal" when it assesses one concept.
+  Use "mixed_synthesis" ONLY when that Case genuinely combines several concepts
+  from the same topic into synthesis/revision. A broad Type title does not make
+  every Case mixed. Type-level placement_scope is only a default; Case-level is
+  authoritative.
+- Use "cross_topic_synthesis" ONLY when the Case genuinely combines concepts
+  taught in two or more different source topics and fits neither one ordinary
+  concept nor a single-topic Culmination. Such a Case may be assigned only to
+  the Culmination of the later source topic, never to an earlier topic.
 
 EXAMPLES CARRY THE FULL SOURCE QUESTION (mandatory):
 - Every example_prompt must be fully self-contained: copy the ACTUAL numbers,
@@ -1673,7 +1682,7 @@ never return an already classified question, an existing Example, or a complete
 replacement Type list.
 
 Return ONLY strict JSON:
-{"types":[{"type_id":"TYPE-0001 or NEW-TYPE-0001","type_title":"","type_description":"","task_pattern":"","source_question_ids":["QINV-0001"],"case_prompts":[{"case_id":"existing CASE id or NEW-CASE-0001","case_title":"","examples":[{"source_question_id":"QINV-0001","example_prompt":""}],"case_signature":""}],"concept_match_hint":"","parent_concept_match_hint":"","topic_match_hint":"","difficulty_hint":"Basic|Intermediate|Advanced","cognitive_skill_hint":"","subject_skill_hint":"","is_activity":false}]}.
+{"types":[{"type_id":"TYPE-0001 or NEW-TYPE-0001","type_title":"","type_description":"","task_pattern":"","source_question_ids":["QINV-0001"],"case_prompts":[{"case_id":"existing CASE id or NEW-CASE-0001","case_title":"","examples":[{"source_question_id":"QINV-0001","example_prompt":""}],"case_signature":"","placement_scope":"normal|mixed_synthesis|cross_topic_synthesis"}],"concept_match_hint":"","parent_concept_match_hint":"","topic_match_hint":"","difficulty_hint":"Basic|Intermediate|Advanced","cognitive_skill_hint":"","subject_skill_hint":"","is_activity":false,"placement_scope":"normal|mixed_synthesis|cross_topic_synthesis"}]}.
 
 DELTA RULES:
 - Use an existing type_id (and optionally an existing case_id) to append only
@@ -1721,6 +1730,13 @@ Rules:
   concrete Examples determine the most specific concept.
 - When a mined Type includes allowed_concept_ids, its source topic is proven:
   assign it to exactly one of those concept IDs and never any other concept.
+- allowed_concept_ids are also placement-scope-safe: ordinary Cases never
+  include Culmination; mixed_synthesis Cases may include their source topic's
+  Culmination; cross_topic_synthesis Cases may additionally include only
+  later-topic Culminations. Never invent or reuse a concept ID excluded from
+  that list.
+- When previous_rejections is present on a Type unit, correct the stated error;
+  do not repeat the rejected concept_id or omit that type_id again.
 - A concept may receive multiple type_ids; a Type belongs to one concept.
 - Choose the concept that the Type most directly assesses from its actual
   source task, regardless of the subject label.
@@ -1748,6 +1764,11 @@ Rules:
   there when the Type combines/mixes several concepts of that topic (synthesis,
   mixed application, multi-step, cross-concept comparison). Single-concept
   Types go to the specific concept, not the culmination.
+- A cross_topic_synthesis Case genuinely spans concepts taught in different
+  source topics. First prefer an ordinary concept or its source topic's
+  Culmination when either is a truthful fit. Only when neither fits may it go
+  to the Culmination of the LATER source topic represented in the task. Never
+  send it to an earlier topic or to a later ordinary concept.
 - Types flagged "is_activity": true group textbook Activity / experiment /
   discussion tasks; assign them to the related NORMAL concept (for Activity/Info
   Hub), never to Culmination. Culmination only receives mixed multi-concept
@@ -1785,9 +1806,12 @@ Rules:
   concept_match_hint, parent_concept_match_hint, topic order, and the actual
   question wording. Do not attach a later-section question to an earlier
   concept just because formulas overlap.
-- If a question combines several concepts, place it on the topic's culmination
-  concept. Textbook Activity / experiment / discussion tasks belong in
-  Activity/Info Hub on the related normal concept — not as Culmination Cases.
+- If a question combines several concepts from one topic, place it on that
+  topic's culmination concept. If it genuinely spans concepts across different
+  source topics and fits neither an ordinary concept nor one topic's
+  Culmination, it may go to the later source topic's Culmination. Textbook
+  Activity / experiment / discussion tasks belong in Activity/Info Hub on the
+  related normal concept — not as Culmination Cases.
 - Cases are defined conceptual sub-types named by learning objective; Examples
   are full source questions. Do not turn a raw question or Activity title into
   a Case name (avoid "Definition of …").
@@ -2907,8 +2931,13 @@ def _populate_activity_hubs_via_api(
         item for item in _hub_inventory_items(inventory)
         if not _inventory_item_already_in_hubs(records, item)
     ]
-    if not pending or not records:
+    if not records:
         return records
+    if not pending:
+        # A Hub may have been populated by an earlier assignment pass. It is
+        # no longer pending, but its assessable exact Example must still be
+        # co-located before the snapshot/final placement guards run.
+        return _align_activity_examples_with_hubs(records, inventory)
 
     cid_map: dict[str, int] = {}
     concept_payload: list[dict] = []
@@ -2970,6 +2999,13 @@ def _populate_activity_hubs_via_api(
         )
         if item is None:
             continue
+        expected_topic = _topic_comparison_key(item.get("topic_hint") or "")
+        target_topic = _topic_comparison_key(out[index].get("topic") or "")
+        if expected_topic and target_topic != expected_topic:
+            # GPT owns the semantic concept choice only within the source
+            # item's authoritative topic. Leave an out-of-topic choice pending
+            # for deterministic exact-topic fallback.
+            continue
         text = _inventory_task_text(item)
         if not hub_note:
             label = (
@@ -3003,6 +3039,7 @@ def _populate_activity_hubs_via_api(
             level="warning",
         )
         out = _place_activity_inventory_into_hubs(out, remaining)
+    out = _align_activity_examples_with_hubs(out, inventory)
     return out
 
 
@@ -3205,6 +3242,22 @@ def _activity_has_assessable_response(text: str) -> bool:
     ))
 
 
+def _trim_activity_ocr_bleed(text: str) -> str:
+    """Stop an Activity at a figure when lowercase prose resumes after it.
+
+    Mathpix can insert an Activity in the middle of a surrounding paragraph.
+    The resumed prose then remains in the Activity section until the next
+    heading. A lowercase continuation immediately after ``\\end{figure}`` is
+    strong structural evidence of that OCR splice, not another instruction.
+    """
+    value = str(text or "")
+    for match in re.finditer(r"\\end\{figure\}", value, re.IGNORECASE):
+        suffix = value[match.end():].lstrip()
+        if suffix and suffix[0].islower():
+            return value[:match.end()].rstrip()
+    return value
+
+
 def _inventory_chunk_has_task_markers(chunk: dict) -> bool:
     """Whether source text explicitly signals an assessable inventory item."""
     for section in chunk.get("sections") or []:
@@ -3299,8 +3352,11 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
         ):
             is_project = bool(re.match(
                 r"^project\b", container_heading, re.IGNORECASE))
+            activity_body = _trim_activity_ocr_bleed(body)
             assessable_activity = (
-                not is_project and _activity_has_assessable_response(body))
+                not is_project
+                and _activity_has_assessable_response(activity_body)
+            )
             append_anchor(
                 section_index=section_index,
                 position=0,
@@ -3315,7 +3371,7 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
                 ),
                 label=heading or f"Activity {section_index + 1}",
                 parent_label=heading,
-                task=body,
+                task=activity_body,
                 chapter_wide=chapter_wide,
                 activity_origin=assessable_activity,
             )
@@ -3506,10 +3562,44 @@ def _inventory_task_match_key(item: dict) -> str:
     return _LEADING_INVENTORY_TASK_NUMBER_RE.sub("", task, count=1)
 
 
+_GENERIC_SOURCE_LABEL_RE = re.compile(
+    r"^(?:activity|discuss|discussion|project|questions?|checkpoint|"
+    r"think\s+about\s+it|let(?:'s|\s+us)\s+discuss)$",
+    re.IGNORECASE,
+)
+_SOURCE_LABEL_SUBPART_SUFFIX_RE = re.compile(
+    r"\s*\(\s*(?:[a-z]|[ivxlcdm]+|\d+)\s*\)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _source_label_is_generic(label: str) -> bool:
+    return bool(_GENERIC_SOURCE_LABEL_RE.fullmatch(
+        bi.normalize_question_text(label)))
+
+
+def _inventory_question_label_root(label: str) -> str:
+    """Normalize ``Question 2(ii)`` and ``Q2`` to one parent-question key."""
+    value = _SOURCE_LABEL_SUBPART_SUFFIX_RE.sub("", str(label or "").strip())
+    value = re.sub(
+        r"\s*\(\s*optional\s*\)\s*\*?",
+        " ",
+        value,
+        flags=re.IGNORECASE,
+    )
+    value = re.sub(r"\bquestion\s*(?=\d)", "q", value, flags=re.IGNORECASE)
+    return _topic_comparison_key(value)
+
+
 def _inventory_items_match(item: dict, anchor: dict) -> bool:
     label = bi.normalize_question_text(item.get("source_label", ""))
     anchor_label = bi.normalize_question_text(anchor.get("source_label", ""))
-    if label and anchor_label and label == anchor_label:
+    if (
+        label
+        and anchor_label
+        and label == anchor_label
+        and not _source_label_is_generic(label)
+    ):
         return True
     task = _inventory_task_match_key(item)
     anchor_task = _inventory_task_match_key(anchor)
@@ -3524,6 +3614,32 @@ def _inventory_items_match(item: dict, anchor: dict) -> bool:
 def _merge_source_task_anchors(items: list[dict], anchors: list[dict]) -> list[dict]:
     """Backfill missing deterministic anchors and canonicalize matching rows."""
     merged = [dict(item) for item in items]
+    anchors_by_question_root: dict[str, list[dict]] = {}
+    for anchor in anchors:
+        root = _inventory_question_label_root(
+            anchor.get("source_label") or "")
+        if root:
+            anchors_by_question_root.setdefault(root, []).append(anchor)
+    authoritative_parent_roots = {
+        root
+        for root, candidates in anchors_by_question_root.items()
+        if len(candidates) == 1
+        and not (candidates[0].get("subpart_label") or "").strip()
+    }
+    if authoritative_parent_roots:
+        # GPT sometimes emits both an umbrella question and one row per
+        # subpart even though the source parser proves that the complete
+        # multi-part question is one assessable unit. Remove all GPT children;
+        # the full authoritative anchor is merged/appended below.
+        merged = [
+            item for item in merged
+            if not (
+                (item.get("subpart_label") or "").strip()
+                and _inventory_question_label_root(
+                    item.get("source_label") or "")
+                in authoritative_parent_roots
+            )
+        ]
     parent_counts: dict[str, int] = {}
     for anchor in anchors:
         parent = bi.normalize_question_text(
@@ -3544,9 +3660,19 @@ def _merge_source_task_anchors(items: list[dict], anchors: list[dict]) -> list[d
             not in split_parent_labels
         ]
     for anchor in anchors:
+        anchor_root = _inventory_question_label_root(
+            anchor.get("source_label") or "")
         match_index = next(
             (i for i, item in enumerate(merged)
-             if _inventory_items_match(item, anchor)),
+             if (
+                 _inventory_items_match(item, anchor)
+                 or (
+                     anchor_root in authoritative_parent_roots
+                     and _inventory_question_label_root(
+                         item.get("source_label") or "")
+                     == anchor_root
+                 )
+             )),
             None,
         )
         if match_index is None:
@@ -3560,9 +3686,19 @@ def _merge_source_task_anchors(items: list[dict], anchors: list[dict]) -> list[d
         # Deterministic anchors are coverage evidence, not permission to replace
         # a fuller GPT extraction. Keeping the longer task preserves MCQ options,
         # shared stems, conditions, and visual context.
+        anchor_is_activity = bool(
+            anchor.get("_activity_origin")
+            or (anchor.get("source_kind") or "").strip().lower()
+            in _HUB_INVENTORY_KINDS
+        )
         authoritative_task = (
-            existing_task if len(existing_task) >= len(anchor_task)
-            else anchor_task
+            anchor_task
+            if anchor_is_activity
+            else (
+                existing_task
+                if len(existing_task) >= len(anchor_task)
+                else anchor_task
+            )
         )
         for field in (
             "source_kind", "source_label", "parent_source_label", "topic_hint",
@@ -4302,6 +4438,7 @@ def _merge_equivalent_mined_types(types: list[dict]) -> list[dict]:
             bi.normalize_question_text(
                 mtype.get("parent_concept_match_hint") or ""),
             bool(mtype.get("is_activity")),
+            (mtype.get("placement_scope") or "").strip().lower(),
         )
         # Empty/generic metadata is not enough evidence that two patterns are
         # equivalent; preserve those Types for semantic review.
@@ -4323,6 +4460,7 @@ def _merge_equivalent_mined_types(types: list[dict]) -> list[dict]:
             (
                 bi.normalize_question_text(case.get("case_title") or ""),
                 bi.normalize_question_text(case.get("case_signature") or ""),
+                (case.get("placement_scope") or "").strip().lower(),
             ): case
             for case in target_cases
             if isinstance(case, dict)
@@ -4335,6 +4473,7 @@ def _merge_equivalent_mined_types(types: list[dict]) -> list[dict]:
             case_key = (
                 bi.normalize_question_text(case.get("case_title") or ""),
                 bi.normalize_question_text(case.get("case_signature") or ""),
+                (case.get("placement_scope") or "").strip().lower(),
             )
             existing_case = case_by_key.get(case_key)
             if existing_case is None or not case_key[0]:
@@ -4373,9 +4512,10 @@ def _compact_mined_type_metadata(types: list[dict]) -> dict:
         "type_id", "type_title", "type_description", "task_pattern",
         "concept_match_hint", "parent_concept_match_hint", "topic_match_hint",
         "difficulty_hint", "cognitive_skill_hint", "subject_skill_hint",
-        "is_activity",
+        "is_activity", "placement_scope",
     )
-    case_fields = ("case_id", "case_title", "case_signature")
+    case_fields = (
+        "case_id", "case_title", "case_signature", "placement_scope")
     compact: list[dict] = []
     for mtype in types:
         if not isinstance(mtype, dict):
@@ -4446,7 +4586,7 @@ def _validate_focused_type_delta(
                 "type_title", "type_description", "task_pattern",
                 "concept_match_hint", "parent_concept_match_hint",
                 "topic_match_hint", "difficulty_hint", "cognitive_skill_hint",
-                "subject_skill_hint", "is_activity",
+                "subject_skill_hint", "is_activity", "placement_scope",
             ):
                 proposed = raw_type.get(field)
                 current = existing_type.get(field)
@@ -4853,6 +4993,7 @@ def _deterministic_fallback_type(item: dict) -> dict | None:
                 "example_prompt": source_task,
             }],
             "case_signature": source_kind,
+            "placement_scope": "normal",
         }],
         "concept_match_hint": "",
         "parent_concept_match_hint": "",
@@ -4861,6 +5002,7 @@ def _deterministic_fallback_type(item: dict) -> dict | None:
         "cognitive_skill_hint": "",
         "subject_skill_hint": "",
         "is_activity": source_kind in _HUB_INVENTORY_KINDS,
+        "placement_scope": "normal",
     }
 
 
@@ -5678,10 +5820,44 @@ _ASSIGNMENT_PREFIX_STOPWORDS = {
 }
 _MIXED_ASSIGNMENT_CUE_RE = re.compile(
     r"\b(?:any\s+two|two\s+(?:countries|cases|methods|concepts)|"
-    r"compare|comparison|across\s+(?:cases|concepts|topics)|"
+    r"compare|comparison|across\s+(?:cases|concepts)|"
     r"several|multiple|combine|synthesi[sz]e)\b",
     re.IGNORECASE,
 )
+_CROSS_TOPIC_ASSIGNMENT_CUE_RE = re.compile(
+    r"\b(?:across|between|combining)\s+(?:different\s+)?"
+    r"(?:source\s+)?(?:topics|sections)\b",
+    re.IGNORECASE,
+)
+_ASSIGNMENT_PLACEMENT_SCOPES = frozenset({
+    "normal", "mixed_synthesis", "cross_topic_synthesis",
+})
+
+
+def _assignment_placement_scope(mtype: dict) -> str:
+    """Resolve GPT-authored Case scope, with a safe legacy fallback."""
+    if mtype.get("is_activity"):
+        return "normal"
+    case_scopes = {
+        (case.get("placement_scope") or "").strip().lower()
+        for case in (mtype.get("case_prompts") or [])
+        if isinstance(case, dict)
+        and (case.get("placement_scope") or "").strip().lower()
+        in _ASSIGNMENT_PLACEMENT_SCOPES
+    }
+    if len(case_scopes) == 1:
+        return next(iter(case_scopes))
+    type_scope = (mtype.get("placement_scope") or "").strip().lower()
+    if type_scope in _ASSIGNMENT_PLACEMENT_SCOPES:
+        return type_scope
+    # Backward compatibility for persisted/fixture Types authored before
+    # placement_scope existed. New GPT output uses the explicit Case field.
+    evidence = _assignment_unit_text(mtype)
+    if _CROSS_TOPIC_ASSIGNMENT_CUE_RE.search(evidence):
+        return "cross_topic_synthesis"
+    if _MIXED_ASSIGNMENT_CUE_RE.search(evidence):
+        return "mixed_synthesis"
+    return "normal"
 
 
 def _assignment_prefixes(text: str) -> set[str]:
@@ -5739,9 +5915,15 @@ def _high_confidence_assignment_override(
     if (
         not is_activity
         and len(culminations) == 1
-        and _MIXED_ASSIGNMENT_CUE_RE.search(evidence)
+        and _assignment_placement_scope(mtype) == "mixed_synthesis"
     ):
         return culminations[0]
+    if _assignment_placement_scope(mtype) == "cross_topic_synthesis":
+        # The explicit classifier and ID-constrained GPT assignment must decide
+        # whether this genuinely needs a later Culmination. Prefix overlap with
+        # the source topic is expected and must not deterministically override
+        # that semantic decision.
+        return ""
 
     title_prefixes = {
         row["concept_id"]: _assignment_prefixes(row.get("concept") or "")
@@ -5778,8 +5960,9 @@ def _assign_mined_types_via_api(
     Exact inventory coverage belongs to the original mined Types. Multi-Case
     Types are expanded only for assignment into one internal unit per Case, with
     all Examples in that Case kept together. Source-topic-scoped units are
-    grouped by canonical topic and allowed concept IDs. Each group sees only
-    those concepts, including that topic's culmination, and omitted IDs are
+    grouped by canonical topic and allowed concept IDs. Ordinary and same-topic
+    synthesis units stay in that source topic. Explicit cross-topic synthesis
+    units additionally see only later-topic Culminations. Omitted IDs are
     retried against the same candidate list. Placement is joined by exact IDs
     only — no regex, token, or word matching.
     """
@@ -5830,13 +6013,15 @@ def _assign_mined_types_via_api(
             "type embedding failed: duplicate case-scoped assignment-unit ID")
 
     concept_ids_by_topic: dict[str, list[str]] = {}
+    topic_position: dict[str, int] = {}
     for row in concept_payload:
         topic_key = _topic_comparison_key(row.get("topic", ""))
         concept_ids_by_topic.setdefault(topic_key, []).append(row["concept_id"])
+        topic_position.setdefault(topic_key, row["chapter_position"])
 
     all_concept_ids = tuple(cid_map)
     topic_key_by_tid: dict[str, str] = {}
-    allowed_cids_by_tid: dict[str, set[str] | None] = {}
+    allowed_cids_by_tid: dict[str, set[str]] = {}
     candidate_cids_by_tid: dict[str, tuple[str, ...]] = {}
     missing_scopes: list[tuple[str, str, str]] = []
     for tid, mtype in types_by_id.items():
@@ -5844,15 +6029,38 @@ def _assign_mined_types_via_api(
         topic_key = _topic_comparison_key(source_topic)
         topic_key_by_tid[tid] = topic_key
         if topic_key:
-            allowed = set(concept_ids_by_topic.get(topic_key, []))
-            allowed_cids_by_tid[tid] = allowed
-            candidate_cids_by_tid[tid] = tuple(
-                cid for cid in all_concept_ids if cid in allowed)
-            if not allowed:
-                missing_scopes.append((tid, source_topic, topic_key))
+            topic_candidates = set(concept_ids_by_topic.get(topic_key, []))
         else:
-            allowed_cids_by_tid[tid] = None
-            candidate_cids_by_tid[tid] = all_concept_ids
+            topic_candidates = set(all_concept_ids)
+        normal_candidates = {
+            cid for cid in topic_candidates
+            if not cr.is_culmination(
+                cid_map[cid].get("concept_title", ""))
+        }
+        placement_scope = _assignment_placement_scope(mtype)
+        allowed = normal_candidates
+        if not mtype.get("is_activity") and placement_scope in {
+            "mixed_synthesis", "cross_topic_synthesis",
+        }:
+            allowed = set(topic_candidates)
+        if (
+            not mtype.get("is_activity")
+            and placement_scope == "cross_topic_synthesis"
+            and topic_key in topic_position
+        ):
+            source_position = topic_position[topic_key]
+            allowed.update(
+                row["concept_id"]
+                for row in concept_payload
+                if row["is_culmination"]
+                and row["chapter_position"] > source_position
+                and _topic_comparison_key(row.get("topic", "")) != topic_key
+            )
+        allowed_cids_by_tid[tid] = allowed
+        candidate_cids_by_tid[tid] = tuple(
+            cid for cid in all_concept_ids if cid in allowed)
+        if not allowed:
+            missing_scopes.append((tid, source_topic, topic_key))
 
     if missing_scopes:
         failures = "; ".join(
@@ -5872,7 +6080,7 @@ def _assign_mined_types_via_api(
             for topic, topic_key in available_topics
         ) or "(none)"
         raise RuntimeError(
-            "type embedding source-topic normalization failed: no allowed "
+            "type embedding eligibility failed: no allowed normal/mixed "
             f"concept candidates for {failures}; available normalized concept "
             f"topics: {available}"
         )
@@ -5894,6 +6102,7 @@ def _assign_mined_types_via_api(
 
     per_concept: dict[str, list[dict]] = {}
     unassigned: set[str] = set()
+    rejections_by_tid: dict[str, list[dict]] = {}
     for (_, candidate_cids), group_type_ids in groups.items():
         scoped_concepts = [
             concept_payload_by_id[cid] for cid in candidate_cids
@@ -5922,8 +6131,10 @@ def _assign_mined_types_via_api(
                     continue
                 item = dict(types_by_id[tid])
                 allowed = allowed_cids_by_tid[tid]
-                if allowed is not None:
-                    item["allowed_concept_ids"] = sorted(allowed)
+                item["allowed_concept_ids"] = sorted(allowed)
+                item["placement_scope"] = _assignment_placement_scope(item)
+                if rejections_by_tid.get(tid):
+                    item["previous_rejections"] = rejections_by_tid[tid][-3:]
                 pending.append(item)
             user = (
                 _metadata_block(meta)
@@ -5935,7 +6146,8 @@ def _assign_mined_types_via_api(
                 + _json.dumps({"types": pending}, ensure_ascii=False)
             )
             data = _openai_json(system, user)
-            rejected_wrong_topic = 0
+            rejected_counts: dict[str, int] = {}
+            responded_tids: set[str] = set()
             for assignment in data.get("assignments") or []:
                 if not isinstance(assignment, dict):
                     continue
@@ -5944,38 +6156,56 @@ def _assign_mined_types_via_api(
                     tid = (tid or "").strip()
                     if tid not in remaining_in_group:
                         continue
+                    responded_tids.add(tid)
                     allowed = allowed_cids_by_tid.get(tid)
                     effective_cid = override_by_tid.get(tid) or cid
                     target_is_culmination = concept_payload_by_id.get(
                         effective_cid, {}).get("is_culmination")
-                    type_allows_culmination = bool(
+                    type_allows_culmination = (
                         not types_by_id[tid].get("is_activity")
-                        and _MIXED_ASSIGNMENT_CUE_RE.search(
-                            _assignment_unit_text(types_by_id[tid]))
+                        and _assignment_placement_scope(types_by_id[tid])
+                        in {"mixed_synthesis", "cross_topic_synthesis"}
                     )
-                    if (
-                        effective_cid not in candidate_cid_set
-                        or (
-                            allowed is not None
-                            and effective_cid not in allowed
-                        )
-                        or (
-                            target_is_culmination
-                            and not type_allows_culmination
-                        )
-                    ):
-                        rejected_wrong_topic += 1
+                    reason = ""
+                    if effective_cid not in cid_map:
+                        reason = "unknown_concept_id"
+                    elif effective_cid not in candidate_cid_set:
+                        reason = "not_in_eligible_scope"
+                    elif effective_cid not in allowed:
+                        reason = "not_in_allowed_concept_ids"
+                    elif target_is_culmination and not type_allows_culmination:
+                        reason = "culmination_not_eligible"
+                    if reason:
+                        rejected_counts[reason] = (
+                            rejected_counts.get(reason, 0) + 1)
+                        rejections_by_tid.setdefault(tid, []).append({
+                            "attempt": attempt,
+                            "concept_id": cid,
+                            "reason": reason,
+                        })
                         continue
                     per_concept.setdefault(effective_cid, []).append(
                         types_by_id[tid])
                     if effective_cid != cid:
                         overridden.add(tid)
                     remaining_in_group.discard(tid)
-            if rejected_wrong_topic:
+            for tid in sorted(remaining_in_group - responded_tids):
+                rejected_counts["omitted_from_response"] = (
+                    rejected_counts.get("omitted_from_response", 0) + 1)
+                rejections_by_tid.setdefault(tid, []).append({
+                    "attempt": attempt,
+                    "concept_id": "",
+                    "reason": "omitted_from_response",
+                })
+            if rejected_counts:
+                summary = ", ".join(
+                    f"{reason}={count}"
+                    for reason, count in sorted(rejected_counts.items())
+                )
                 progress.log(
-                    f"Rejected {rejected_wrong_topic} mined Type assignment-unit "
-                    "placement(s) outside their source topic; retrying those "
-                    "type IDs.",
+                    "Rejected/unresolved mined Type assignment-unit "
+                    f"placement(s) ({summary}); retrying only those type IDs "
+                    "with rejection feedback.",
                     level="warning",
                 )
             placed = len(group_type_ids) - len(remaining_in_group)
@@ -6040,7 +6270,42 @@ def _assign_mined_types_via_api(
         for hub in hub_fragments:
             details = _append_activity_hub(details, hub)
         rec["concept_details"] = details
-    return records
+    return cr.renumber_types_continuously(records)
+
+
+def _topic_first_positions(records: list[dict]) -> dict[str, int]:
+    """Reading-order position of each canonical source topic."""
+    positions: dict[str, int] = {}
+    for index, record in enumerate(records):
+        key = _topic_comparison_key(record.get("topic") or "")
+        if key:
+            positions.setdefault(key, index)
+    return positions
+
+
+def _mined_type_allows_record(
+    records: list[dict], mtype: dict, record: dict,
+) -> bool:
+    """Whether a rendered target obeys the mined unit's source-topic scope."""
+    expected_key = _topic_comparison_key(
+        mtype.get("topic_match_hint") or "")
+    actual_key = _topic_comparison_key(record.get("topic") or "")
+    if expected_key and actual_key == expected_key:
+        return True
+    if (
+        not expected_key
+        or not actual_key
+        or mtype.get("is_activity")
+        or _assignment_placement_scope(mtype) != "cross_topic_synthesis"
+        or not cr.is_culmination(record.get("concept_title") or "")
+    ):
+        return False
+    positions = _topic_first_positions(records)
+    return (
+        expected_key in positions
+        and actual_key in positions
+        and positions[actual_key] > positions[expected_key]
+    )
 
 
 def _mined_type_topic_violations(
@@ -6093,19 +6358,30 @@ def _mined_type_topic_violations(
                 actual_by_title[title_key].append(rec)
 
     for title_key, expected in expected_by_title.items():
-        matches = actual_by_title[title_key]
-        remaining_by_topic: dict[str, int] = {}
-        for rec in matches:
-            actual_key = _topic_comparison_key((rec.get("topic") or "").strip())
-            remaining_by_topic[actual_key] = remaining_by_topic.get(actual_key, 0) + 1
-
-        for entry in expected:
+        remaining_matches = list(actual_by_title[title_key])
+        # Reserve exact-topic rows for ordinary/same-topic Types before a
+        # cross-topic Type is allowed to consume its optional source-topic
+        # placement. This makes repeated identical Type titles deterministic.
+        ordered_expected = sorted(
+            expected,
+            key=lambda entry: (
+                _assignment_placement_scope(entry["mtype"])
+                == "cross_topic_synthesis"
+            ),
+        )
+        for entry in ordered_expected:
             mtype = entry["mtype"]
             title = entry["title"]
             topic = entry["topic"]
-            topic_key = entry["topic_key"]
-            if remaining_by_topic.get(topic_key, 0):
-                remaining_by_topic[topic_key] -= 1
+            match_index = next(
+                (
+                    index for index, record in enumerate(remaining_matches)
+                    if _mined_type_allows_record(records, mtype, record)
+                ),
+                -1,
+            )
+            if match_index >= 0:
+                remaining_matches.pop(match_index)
                 continue
 
             violations.append({
@@ -6116,13 +6392,17 @@ def _mined_type_topic_violations(
                 "reason": "missing",
             })
 
-        expected_topic_keys = {entry["topic_key"] for entry in expected}
         representative = expected[0]
-        for rec in matches:
-            actual = (rec.get("topic") or "").strip()
-            actual_key = _topic_comparison_key(actual)
-            if actual_key in expected_topic_keys:
+        for rec in remaining_matches:
+            # One mined Type may render on several concepts after Case-scoped
+            # assignment. Additional rows are valid when each stays within an
+            # allowed topic target for that original Type.
+            if any(
+                _mined_type_allows_record(records, entry["mtype"], rec)
+                for entry in expected
+            ):
                 continue
+            actual = (rec.get("topic") or "").strip()
             mtype = representative["mtype"]
             title = representative["title"]
             topic = representative["topic"]
@@ -6678,6 +6958,89 @@ def _rendered_inventory_coverage_defects(
     return defects
 
 
+def _rendered_inventory_example_locations(
+    records: list[dict], item: dict,
+) -> list[int]:
+    key = bi.normalize_question_text(_inventory_task_text(item))
+    if not key:
+        return []
+    return [
+        index for index, record in enumerate(records)
+        if _rendered_inventory_example_counts([record], {key}).get(key, 0)
+    ]
+
+
+def _rendered_inventory_topic_violations(
+    records: list[dict], inventory: dict | None,
+    mined_types: dict | None = None,
+) -> list[dict]:
+    """Exact Examples rendered outside their authoritative inventory topic."""
+    violations: list[dict] = []
+    mined_by_qid: dict[str, list[dict]] = {}
+    for mtype in (mined_types or {}).get("types") or []:
+        if not isinstance(mtype, dict):
+            continue
+        for qid in _type_source_qids(mtype):
+            mined_by_qid.setdefault(qid, []).append(mtype)
+    for item in (inventory or {}).get("items") or []:
+        expected_topic = (item.get("topic_hint") or "").strip()
+        expected_key = _topic_comparison_key(expected_topic)
+        if not expected_key:
+            continue
+        for index in _rendered_inventory_example_locations(records, item):
+            actual_topic = (records[index].get("topic") or "").strip()
+            if _topic_comparison_key(actual_topic) == expected_key:
+                continue
+            qid = (item.get("qid") or "").strip()
+            if any(
+                _mined_type_allows_record(records, mtype, records[index])
+                for mtype in mined_by_qid.get(qid, [])
+            ):
+                continue
+            violations.append({
+                "qid": qid,
+                "expected_topic": expected_topic,
+                "actual_topic": actual_topic,
+                "concept": records[index].get("concept_title") or "",
+            })
+    return violations
+
+
+def _activity_example_hub_alignment_violations(
+    records: list[dict], inventory: dict | None,
+) -> list[dict]:
+    """Assessable Activity Examples and Hub copies must share one concept row."""
+    violations: list[dict] = []
+    for item in (inventory or {}).get("items") or []:
+        if not item.get("_activity_origin"):
+            continue
+        key = bi.normalize_question_text(_inventory_task_text(item))
+        if not key:
+            continue
+        example_locations = set(
+            _rendered_inventory_example_locations(records, item))
+        hub_locations = {
+            index for index, record in enumerate(records)
+            if key in bi.normalize_question_text(
+                cr.activity_hub_body(record.get("concept_details") or ""))
+        }
+        if example_locations and hub_locations and not (
+            example_locations & hub_locations
+        ):
+            violations.append({
+                "qid": (item.get("qid") or "").strip(),
+                "example_concepts": [
+                    records[index].get("concept_title") or ""
+                    for index in sorted(example_locations)
+                ],
+                "hub_concepts": [
+                    records[index].get("concept_title") or ""
+                    for index in sorted(hub_locations)
+                ],
+            })
+    return violations
+
+
 def _hub_inventory_examples_in_types(
     records: list[dict], inventory: dict | None,
 ) -> set[str]:
@@ -6697,6 +7060,7 @@ def _hub_inventory_examples_in_types(
 
 def _accept_exact_inventory_type_review(
     original: list[dict], candidate: list[dict], inventory: dict | None,
+    mined_types: dict | None = None,
 ) -> list[dict]:
     """Reject a Types rewrite that breaks inventory section or coverage rules."""
     defects = _rendered_inventory_coverage_defects(candidate, inventory)
@@ -6705,6 +7069,18 @@ def _accept_exact_inventory_type_review(
             "Rejected Types rewrite that changed exact inventory coverage: "
             f"{len(defects['missing'])} missing, "
             f"{len(defects['duplicate'])} duplicated Example(s).",
+            level="warning",
+        )
+        return original
+    topic_violations = _rendered_inventory_topic_violations(
+        candidate, inventory, mined_types)
+    activity_violations = _activity_example_hub_alignment_violations(
+        candidate, inventory)
+    if topic_violations or activity_violations:
+        progress.log(
+            "Rejected Types rewrite that moved exact inventory Examples: "
+            f"{len(topic_violations)} outside their source topic, "
+            f"{len(activity_violations)} away from their Activity/Info Hub.",
             level="warning",
         )
         return original
@@ -6753,6 +7129,35 @@ def _best_record_index_for_inventory_item(
     """Pick the concept row that should host a still-missing inventory Example."""
     if not records:
         return 0
+    if item.get("_activity_origin"):
+        task_key = bi.normalize_question_text(_inventory_task_text(item))
+        hub_matches = [
+            index for index, record in enumerate(records)
+            if task_key
+            and task_key in bi.normalize_question_text(
+                cr.activity_hub_body(record.get("concept_details") or ""))
+            and not cr.is_culmination(record.get("concept_title") or "")
+        ]
+        if len(hub_matches) == 1:
+            # The Hub was GPT-placed semantically. Keep the assessable Example
+            # on that same concept instead of independently guessing again.
+            return hub_matches[0]
+        expected_topic = _topic_comparison_key(item.get("topic_hint") or "")
+        example_matches = [
+            index for index in _rendered_inventory_example_locations(
+                records, item)
+            if not cr.is_culmination(
+                records[index].get("concept_title") or "")
+            and (
+                not expected_topic
+                or _topic_comparison_key(records[index].get("topic") or "")
+                == expected_topic
+            )
+        ]
+        if len(example_matches) == 1:
+            # If GPT omitted or invalidly cross-placed the Hub, keep fallback
+            # Hub placement on the exact source Example's existing row.
+            return example_matches[0]
     topic_hint = _topic_comparison_key(item.get("topic_hint") or "")
     scored: list[tuple[int, int]] = []
     for index, record in enumerate(records):
@@ -6911,8 +7316,74 @@ def _dedupe_rendered_inventory_examples(
     return out, removed
 
 
+def _align_activity_examples_with_hubs(
+    records: list[dict], inventory: dict | None,
+) -> list[dict]:
+    """Move each assessable Activity Example to its exact GPT-selected Hub row."""
+    out = [dict(record) for record in records]
+    moved = 0
+    for item in (inventory or {}).get("items") or []:
+        if not isinstance(item, dict) or not item.get("_activity_origin"):
+            continue
+        text = _inventory_task_text(item)
+        key = bi.normalize_question_text(text)
+        if not text or not key:
+            continue
+        example_locations = _rendered_inventory_example_locations(out, item)
+        hub_locations = [
+            index for index, record in enumerate(out)
+            if key in bi.normalize_question_text(
+                cr.activity_hub_body(record.get("concept_details") or ""))
+        ]
+        if len(hub_locations) != 1 or not example_locations:
+            continue
+        target = hub_locations[0]
+        if example_locations == [target]:
+            continue
+        if cr.is_culmination(out[target].get("concept_title") or ""):
+            continue
+        expected_topic = _topic_comparison_key(item.get("topic_hint") or "")
+        if (
+            expected_topic
+            and _topic_comparison_key(out[target].get("topic") or "")
+            != expected_topic
+        ):
+            continue
+
+        # Add the authoritative prompt to the selected row first, then run the
+        # exact-key duplicate remover with that row first. This preserves the
+        # GPT-selected Hub concept while removing only byte-equivalent inventory
+        # Examples from their old rows; no semantic/fuzzy matching is involved.
+        candidate = [dict(record) for record in out]
+        if target not in example_locations:
+            candidate[target] = _append_inventory_example_to_record(
+                candidate[target], text, item)
+        order = [target] + [
+            index for index in range(len(candidate)) if index != target
+        ]
+        ordered, _removed = _dedupe_rendered_inventory_examples(
+            [candidate[index] for index in order],
+            {"items": [item]},
+        )
+        rebuilt = [dict(record) for record in candidate]
+        for position, index in enumerate(order):
+            rebuilt[index] = ordered[position]
+        if _rendered_inventory_example_locations(rebuilt, item) != [target]:
+            continue
+        out = rebuilt
+        moved += 1
+    if moved:
+        progress.log(
+            f"Aligned {moved} assessable Activity Example(s) with their "
+            "GPT-selected Activity/Info Hub concept.",
+            level="success",
+        )
+    return cr.renumber_types_continuously(out)
+
+
 def _repair_rendered_inventory_coverage(
     records: list[dict], inventory: dict | None,
+    mined_types: dict | None = None,
 ) -> list[dict]:
     """Restore exact-once inventory Example coverage after salvage/API drift."""
     if not records or not (inventory or {}).get("items"):
@@ -7006,13 +7477,15 @@ def _repair_rendered_inventory_coverage(
 
 def _enforce_rendered_inventory_coverage(
     records: list[dict], inventory: dict | None,
+    mined_types: dict | None = None,
 ) -> list[dict]:
     """Repair coverage, hard-fail only on residual duplicates.
 
     Residual missing prompts after repair are logged and allowed through so one
     pathological inventory stub cannot wipe an otherwise complete chapter map.
     """
-    out = _repair_rendered_inventory_coverage(records, inventory)
+    out = _repair_rendered_inventory_coverage(
+        records, inventory, mined_types)
     defects = _rendered_inventory_coverage_defects(out, inventory)
     if defects["duplicate"]:
         out, _removed = _dedupe_rendered_inventory_examples(out, inventory)
@@ -7026,7 +7499,8 @@ def _enforce_rendered_inventory_coverage(
         )
     if defects["missing"]:
         # Last-chance force place, then warn rather than abort the chapter.
-        out = _repair_rendered_inventory_coverage(out, inventory)
+        out = _repair_rendered_inventory_coverage(
+            out, inventory, mined_types)
         defects = _rendered_inventory_coverage_defects(out, inventory)
         if defects["duplicate"]:
             out, _removed = _dedupe_rendered_inventory_examples(out, inventory)
@@ -7047,7 +7521,34 @@ def _enforce_rendered_inventory_coverage(
                 + ".",
                 level="warning",
             )
-    return out
+    # Coverage may already be exact while later merge/refinement passes have
+    # moved an assessable Activity Example away from its Hub. Reassert that
+    # identity-based placement invariant at this terminal repair boundary.
+    return _align_activity_examples_with_hubs(out, inventory)
+
+
+def _rebuild_types_after_final_placement_drift(
+    records: list[dict], inventory: dict | None, mined_types: dict | None,
+    *, meta: GenerationMetadata,
+) -> list[dict]:
+    """Re-run ID-constrained GPT assignment on the final concept rows.
+
+    Row merges and method-anchor restoration can preserve exact Example coverage
+    while moving a Type away from its source topic. Rebuilding only the Types
+    sections retains the final concept map and the mined taxonomy, while letting
+    the semantic assignment pass choose again from its proven topic-scoped IDs.
+    """
+    rebuilt = _strip_types_from_records(copy.deepcopy(records))
+    rebuilt = _assign_mined_types_via_api(
+        rebuilt, meta=meta, mined_types=mined_types)
+    rebuilt = _populate_activity_hubs_via_api(rebuilt, inventory, meta=meta)
+    # Reassignment re-renders the original mined wording after the ordinary
+    # terminal cleanup boundary. Apply the same source-artifact and short
+    # Example cleanup before rechecking coverage and placement.
+    rebuilt = _salvage_short_case_examples(rebuilt, inventory=inventory)
+    rebuilt = _neutralize_unrepaired_rows(rebuilt, inventory=inventory)
+    return _enforce_rendered_inventory_coverage(
+        rebuilt, inventory, mined_types)
 
 
 def _match_inventory_for_short_example(
@@ -7124,6 +7625,19 @@ def _salvage_short_case_examples(
     Example (and empty Cases) so the chapter can still deposit.
     """
     inventory_texts = _inventory_lookup_texts(inventory)
+    inventory_texts_by_topic: dict[str, list[str]] = {}
+    unscoped_inventory_texts: list[str] = []
+    for item in (inventory or {}).get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        text = _inventory_task_text(item)
+        if not text or text not in inventory_texts:
+            continue
+        topic_key = _topic_comparison_key(item.get("topic_hint") or "")
+        if topic_key:
+            inventory_texts_by_topic.setdefault(topic_key, []).append(text)
+        else:
+            unscoped_inventory_texts.append(text)
     # Never expand a stub into an inventory prompt already rendered elsewhere;
     # that creates the exact missing+duplicate coverage failure seen when
     # short Case Examples fuzzy-match already-placed source questions.
@@ -7133,6 +7647,14 @@ def _salvage_short_case_examples(
     out: list[dict] = []
     for rec in records:
         rec = dict(rec)
+        record_topic_key = _topic_comparison_key(rec.get("topic") or "")
+        topic_inventory_texts = inventory_texts_by_topic.get(record_topic_key)
+        scoped_inventory_texts = (
+            list(dict.fromkeys(
+                [*(topic_inventory_texts or []), *unscoped_inventory_texts]))
+            if topic_inventory_texts
+            else inventory_texts
+        )
         details = rec.get("concept_details") or ""
         sections = cr.split_sections(details)
         types_idx = next(
@@ -7176,7 +7698,7 @@ def _salvage_short_case_examples(
                 if not examples and case_title:
                     if cv._example_too_short(case_title):
                         replacement = _match_inventory_for_short_example(
-                            case_title, inventory_texts, used=used,
+                            case_title, scoped_inventory_texts, used=used,
                             context=match_context,
                         )
                         if replacement:
@@ -7207,7 +7729,8 @@ def _salvage_short_case_examples(
                         used.add(bi.normalize_question_text(ex))
                         continue
                     replacement = _match_inventory_for_short_example(
-                        ex, inventory_texts, used=used, context=match_context,
+                        ex, scoped_inventory_texts, used=used,
+                        context=match_context,
                     )
                     if replacement:
                         new_examples.append(replacement)
@@ -7363,7 +7886,7 @@ def _assign_types_via_api(
             source_context=mmd_text,
         )
         merged = _accept_exact_inventory_type_review(
-            before_alignment, aligned, question_task_inventory)
+            before_alignment, aligned, question_task_inventory, mined_types)
         before_repair = merged
         repaired = _repair_records_via_api(
             merged, meta=meta, stage="types", source_context=mmd_text,
@@ -7372,7 +7895,7 @@ def _assign_types_via_api(
         repaired = _accept_topic_safe_type_review(
             before_repair, repaired, mined_types)
         merged = _accept_exact_inventory_type_review(
-            before_repair, repaired, question_task_inventory)
+            before_repair, repaired, question_task_inventory, mined_types)
         with_types = sum(1 for r in merged if _has_meaningful_types(r.get("concept_details", "")))
         progress.log(
             f"Types assignment complete: {with_types}/{len(merged)} concepts have Types.",
@@ -9612,11 +10135,56 @@ def chapter_meta_via_api(
     return out
 
 
+_CONCEPT_CHECKPOINT_SCHEMA = 1
+_CONCEPT_CHECKPOINT_STAGE = "pre_type_assignment"
+
+
+def _serialize_method_row_snapshot(
+    snapshot: dict[tuple[str, str], dict],
+) -> list[dict]:
+    return [
+        {
+            "anchor_id": anchor_id,
+            "topic_key": topic_key,
+            "row": copy.deepcopy(row),
+        }
+        for (anchor_id, topic_key), row in snapshot.items()
+    ]
+
+
+def _deserialize_method_row_snapshot(
+    entries: list[dict] | None,
+) -> dict[tuple[str, str], dict]:
+    snapshot: dict[tuple[str, str], dict] = {}
+    for entry in entries or []:
+        if not isinstance(entry, dict) or not isinstance(entry.get("row"), dict):
+            continue
+        anchor_id = str(entry.get("anchor_id") or "").strip().upper()
+        topic_key = str(entry.get("topic_key") or "").strip()
+        if anchor_id and topic_key:
+            snapshot[(anchor_id, topic_key)] = copy.deepcopy(entry["row"])
+    return snapshot
+
+
+def _valid_concept_checkpoint(checkpoint: dict | None) -> bool:
+    return bool(
+        isinstance(checkpoint, dict)
+        and checkpoint.get("schema_version") == _CONCEPT_CHECKPOINT_SCHEMA
+        and checkpoint.get("stage") == _CONCEPT_CHECKPOINT_STAGE
+        and isinstance(checkpoint.get("records"), list)
+        and isinstance(checkpoint.get("question_task_inventory"), dict)
+        and isinstance(checkpoint.get("mined_types"), dict)
+        and isinstance(checkpoint.get("method_row_snapshot"), list)
+    )
+
+
 def concepts_from_mmd(
     mmd_text: str, *, subject: str = "", board: str = "", grade: str = "",
     unit: str = "", chapter_title: str = "", chapter_id: int | str | None = None,
     chapter_code: str = "", learning_kind: str = "Post",
     live: bool | None = None, artifacts: dict | None = None,
+    resume_checkpoint: dict | None = None,
+    checkpoint_callback=None,
 ) -> list[dict]:
     """Parse an MMD document into concept records (post-learning).
 
@@ -9638,143 +10206,166 @@ def concepts_from_mmd(
         chunks = _section_aware_chunks(mmd_text)
         sections = [s for c in chunks for s in c["sections"]]
         method_anchors = _method_coverage_anchors(sections)
+        headings = _topic_headings(sections)
+        source_topic_excerpts = _group_source_topic_excerpts(sections)
+        allow_chapter_title_topic = _chapter_title_is_main_topic(
+            sections, chapter_title)
         progress.log("Concept generation metadata received:\n" + _metadata_block(meta))
         progress.log(
             f"Extracting concepts from {len(mmd_text):,} chars "
             f"across {len(chunks)} section-aware chunk(s) "
             f"(subject: {subject or 'general'}).")
-        out = _extract_skeleton_via_api(chunks, meta=meta)
-        if not out:
-            raise RuntimeError("live concept extraction returned no rows")
-        out = _canonicalize_method_anchor_tags(
-            out, method_anchors, chunk_text=mmd_text, meta=meta)
-        # The full-chapter anchors provide the authoritative METHOD IDs and
-        # source topics.  Keep immutable skeleton rows before any chapter-wide
-        # canonicalization or topic pass can merge them away.
-        skeleton_method_row_snapshot = _snapshot_method_anchor_rows(
-            out, method_anchors)
-        progress.step("Concept extraction — canonicalizing skeleton", value=0.27)
-        # Structural OCR headings ("Solution", "Summary", "EXERCISE 6.1") must
-        # never become topics: merge their rows into the preceding real topic
-        # BEFORE any chapter-wide pass builds on the topic structure.
-        out = _scrub_section_numbers(out)
-        headings = _topic_headings(sections)
-        source_topic_excerpts = _group_source_topic_excerpts(sections)
-        allow_chapter_title_topic = _chapter_title_is_main_topic(
-            sections, chapter_title)
-        out = _snap_topics_to_headings(
-            out, headings, chapter_title=chapter_title,
-            allow_chapter_title_topic=allow_chapter_title_topic)
-        out = _consolidate_concepts_via_api(out, subject=subject, mmd_text=mmd_text, meta=meta)
-        progress.step("Concept extraction — aligning source topics", value=0.35)
-        # Topic names must follow the SOURCE file's own section headings.
-        # GPT re-segregates on EVERY run with a reliable heading list (not
-        # only when topics collapsed); the deterministic snap afterwards is
-        # only a straggler backstop.
-        if _topics_look_collapsed(out, headings):
+        if _valid_concept_checkpoint(resume_checkpoint):
+            progress.step(
+                "Concept extraction — resuming saved Type assignment",
+                value=0.84,
+            )
+            out = copy.deepcopy(resume_checkpoint["records"])
+            question_task_inventory = copy.deepcopy(
+                resume_checkpoint["question_task_inventory"])
+            mined_types = copy.deepcopy(resume_checkpoint["mined_types"])
+            method_row_snapshot = _deserialize_method_row_snapshot(
+                resume_checkpoint["method_row_snapshot"])
+            if not out:
+                raise RuntimeError(
+                    "saved concept checkpoint is incomplete; replace the file "
+                    "or clear the checkpoint before retrying")
             progress.log(
-                f"Topic segregation collapsed: {len(out)} concepts share almost "
-                f"one topic while the source has {len(headings)} section "
-                "headings — re-segregating topics via API.",
-                level="warning",
+                f"Restored {len(out)} concept rows, "
+                f"{len(question_task_inventory.get('items') or [])} inventory "
+                "items, and "
+                f"{len(mined_types.get('types') or [])} mined Types.",
+                level="success",
             )
-        if len(headings) >= 3 or (headings and _topics_look_collapsed(out, headings)):
-            out = _restructure_topics_via_api(
-                out,
-                meta=meta,
-                source_topic_excerpts=source_topic_excerpts,
-            )
+            if artifacts is not None:
+                artifacts["question_task_inventory"] = question_task_inventory
+                artifacts["mined_types"] = mined_types
         else:
-            out = _assign_topics_from_source_evidence(
-                out, source_topic_excerpts)
-        out = _snap_topics_to_headings(
-            out, headings, chapter_title=chapter_title,
-            allow_chapter_title_topic=allow_chapter_title_topic)
-        out = _recover_missing_topic_concepts_via_api(
-            out, meta=meta, source_topic_excerpts=source_topic_excerpts)
-        out = _reorder_records_by_source_topics(out, headings)
-        out = _restore_method_anchor_rows(
-            out, skeleton_method_row_snapshot)
-        out = _enforce_method_anchor_topics(out, method_anchors)
-        out = _canonicalize_method_anchor_tags(
-            out, method_anchors, chunk_text=mmd_text, meta=meta)
-        out = _consolidate_task_grounded_fragments_via_api(
-            out,
-            meta=meta,
-            source_topic_excerpts=source_topic_excerpts,
-            method_anchors=method_anchors,
-        )
-        out = _enforce_method_anchor_topics(out, method_anchors)
-        out = _canonicalize_method_anchor_tags(
-            out, method_anchors, chunk_text=mmd_text, meta=meta)
-        # Audit opening coverage after chapter-wide consolidation so a distinct
-        # pre-section idea cannot be dropped merely because the first topic
-        # already has other concepts.
-        out = _recover_chapter_opening_concepts_via_api(
-            out, meta=meta, sections=sections, headings=headings)
-        out = _reorder_records_by_source_topics(out, headings)
-        progress.step("Concept extraction — refining descriptions", value=0.42)
-        out = _refine_descriptions_via_api(
-            out, subject=subject, mmd_text=mmd_text, meta=meta, sections=sections)
-        out = _ensure_mastery_lines_via_api(out, meta=meta)
-        # Description refinement receives every restored skeleton row.  Restore
-        # once more before taking the richer authoritative snapshot in case a
-        # description repair omitted a tagged row.
-        out = _restore_method_anchor_rows(
-            out, skeleton_method_row_snapshot)
-        out = _enforce_method_anchor_topics(out, method_anchors)
-        # From this point onward, every whole-map/API cleanup is disposable:
-        # these immutable, source-topic-keyed rows are the authoritative method
-        # fallback immediately before the final gate.
-        method_row_snapshot = _snapshot_method_anchor_rows(
-            out, method_anchors)
-        unsnapshotted_anchors = [
-            anchor for anchor in method_anchors
-            if (
-                str(anchor.get("anchor_id") or "").upper(),
-                _topic_comparison_key(anchor.get("topic_hint", "")),
-            ) not in method_row_snapshot
-        ]
-        if unsnapshotted_anchors:
-            raise RuntimeError(
-                "post-description method-row restoration could not snapshot "
-                "mandatory full-chapter anchors: "
-                + ", ".join(
-                    anchor["anchor_id"] for anchor in unsnapshotted_anchors)
-            )
-        if method_row_snapshot:
-            snapshotted_rows = {
-                (
-                    _topic_comparison_key(row.get("topic", "")),
-                    bi.normalize_question_text(row.get("concept_title", "")),
+            out = _extract_skeleton_via_api(chunks, meta=meta)
+            if not out:
+                raise RuntimeError("live concept extraction returned no rows")
+            out = _canonicalize_method_anchor_tags(
+                out, method_anchors, chunk_text=mmd_text, meta=meta)
+            skeleton_method_row_snapshot = _snapshot_method_anchor_rows(
+                out, method_anchors)
+            progress.step("Concept extraction — canonicalizing skeleton", value=0.27)
+            out = _scrub_section_numbers(out)
+            out = _snap_topics_to_headings(
+                out, headings, chapter_title=chapter_title,
+                allow_chapter_title_topic=allow_chapter_title_topic)
+            out = _consolidate_concepts_via_api(
+                out, subject=subject, mmd_text=mmd_text, meta=meta)
+            progress.step("Concept extraction — aligning source topics", value=0.35)
+            if _topics_look_collapsed(out, headings):
+                progress.log(
+                    f"Topic segregation collapsed: {len(out)} concepts share "
+                    f"almost one topic while the source has {len(headings)} "
+                    "section headings — re-segregating topics via API.",
+                    level="warning",
                 )
-                for row in method_row_snapshot.values()
+            if len(headings) >= 3 or (
+                headings and _topics_look_collapsed(out, headings)
+            ):
+                out = _restructure_topics_via_api(
+                    out, meta=meta,
+                    source_topic_excerpts=source_topic_excerpts)
+            else:
+                out = _assign_topics_from_source_evidence(
+                    out, source_topic_excerpts)
+            out = _snap_topics_to_headings(
+                out, headings, chapter_title=chapter_title,
+                allow_chapter_title_topic=allow_chapter_title_topic)
+            out = _recover_missing_topic_concepts_via_api(
+                out, meta=meta, source_topic_excerpts=source_topic_excerpts)
+            out = _reorder_records_by_source_topics(out, headings)
+            out = _restore_method_anchor_rows(
+                out, skeleton_method_row_snapshot)
+            out = _enforce_method_anchor_topics(out, method_anchors)
+            out = _canonicalize_method_anchor_tags(
+                out, method_anchors, chunk_text=mmd_text, meta=meta)
+            out = _consolidate_task_grounded_fragments_via_api(
+                out, meta=meta,
+                source_topic_excerpts=source_topic_excerpts,
+                method_anchors=method_anchors)
+            out = _enforce_method_anchor_topics(out, method_anchors)
+            out = _canonicalize_method_anchor_tags(
+                out, method_anchors, chunk_text=mmd_text, meta=meta)
+            out = _recover_chapter_opening_concepts_via_api(
+                out, meta=meta, sections=sections, headings=headings)
+            out = _reorder_records_by_source_topics(out, headings)
+            progress.step(
+                "Concept extraction — refining descriptions", value=0.42)
+            out = _refine_descriptions_via_api(
+                out, subject=subject, mmd_text=mmd_text, meta=meta,
+                sections=sections)
+            out = _ensure_mastery_lines_via_api(out, meta=meta)
+            out = _restore_method_anchor_rows(
+                out, skeleton_method_row_snapshot)
+            out = _enforce_method_anchor_topics(out, method_anchors)
+            method_row_snapshot = _snapshot_method_anchor_rows(
+                out, method_anchors)
+            unsnapshotted_anchors = [
+                anchor for anchor in method_anchors
+                if (
+                    str(anchor.get("anchor_id") or "").upper(),
+                    _topic_comparison_key(anchor.get("topic_hint", "")),
+                ) not in method_row_snapshot
+            ]
+            if unsnapshotted_anchors:
+                raise RuntimeError(
+                    "post-description method-row restoration could not "
+                    "snapshot mandatory full-chapter anchors: "
+                    + ", ".join(
+                        anchor["anchor_id"]
+                        for anchor in unsnapshotted_anchors)
+                )
+            if method_row_snapshot:
+                snapshotted_rows = {
+                    (
+                        _topic_comparison_key(row.get("topic", "")),
+                        bi.normalize_question_text(
+                            row.get("concept_title", "")),
+                    )
+                    for row in method_row_snapshot.values()
+                }
+                progress.log(
+                    f"Snapshotted {len(snapshotted_rows)} refined method "
+                    f"row(s) covering {len(method_row_snapshot)} mandatory "
+                    "anchor(s).")
+            progress.set_progress(
+                0.55, label="Concept extraction — descriptions complete")
+            progress.step(
+                "Concept extraction — inventorying questions and worked examples",
+                value=0.58,
+            )
+            question_task_inventory = _extract_question_task_inventory_via_api(
+                meta=meta, sections=sections, records=out)
+            progress.set_progress(
+                0.70, label="Concept extraction — question inventory complete")
+            progress.step(
+                "Concept extraction — mining reusable Types", value=0.72)
+            mined_types = _mine_types_from_inventory_via_api(
+                meta=meta, inventory=question_task_inventory)
+            progress.set_progress(
+                0.79, label="Concept extraction — reusable Types mined")
+            if artifacts is not None:
+                artifacts["question_task_inventory"] = question_task_inventory
+                artifacts["mined_types"] = mined_types
+            progress.step(
+                "Concept extraction — building culminations", value=0.81)
+            out = _build_culminations_via_api(out, meta=meta)
+            checkpoint = {
+                "schema_version": _CONCEPT_CHECKPOINT_SCHEMA,
+                "stage": _CONCEPT_CHECKPOINT_STAGE,
+                "records": copy.deepcopy(out),
+                "question_task_inventory": copy.deepcopy(
+                    question_task_inventory),
+                "mined_types": copy.deepcopy(mined_types),
+                "method_row_snapshot": _serialize_method_row_snapshot(
+                    method_row_snapshot),
             }
-            progress.log(
-                f"Snapshotted {len(snapshotted_rows)} refined method row(s) "
-                f"covering {len(method_row_snapshot)} mandatory anchor(s).")
-        progress.set_progress(
-            0.55, label="Concept extraction — descriptions complete")
-        progress.step(
-            "Concept extraction — inventorying questions and worked examples",
-            value=0.58,
-        )
-        question_task_inventory = _extract_question_task_inventory_via_api(
-            meta=meta, sections=sections, records=out)
-        progress.set_progress(
-            0.70, label="Concept extraction — question inventory complete")
-        progress.step("Concept extraction — mining reusable Types", value=0.72)
-        mined_types = _mine_types_from_inventory_via_api(
-            meta=meta, inventory=question_task_inventory)
-        progress.set_progress(
-            0.79, label="Concept extraction — reusable Types mined")
-        if artifacts is not None:
-            artifacts["question_task_inventory"] = question_task_inventory
-            artifacts["mined_types"] = mined_types
-        # Culminations are built BEFORE Types assignment so mixed/synthesis
-        # Types mined from the source can be placed on culmination rows too.
-        progress.step("Concept extraction — building culminations", value=0.81)
-        out = _build_culminations_via_api(out, meta=meta)
+            if checkpoint_callback is not None:
+                checkpoint_callback(checkpoint)
         progress.step(
             "Concept extraction — assigning Types within source topics",
             value=0.85,
@@ -9828,7 +10419,7 @@ def concepts_from_mmd(
                 question_task_inventory))
         out = _preserve_required_method_rows(before_final_repair, out)
         out = _accept_exact_inventory_type_review(
-            before_final_repair, out, question_task_inventory)
+            before_final_repair, out, question_task_inventory, mined_types)
         # Post-repair: neutralize ONLY rows the repair pass could not fix —
         # rows that already validate cleanly keep their full GPT-authored
         # wording untouched (no blanket deterministic rewriting).
@@ -9844,7 +10435,11 @@ def concepts_from_mmd(
         out = _neutralize_unrepaired_rows(
             out, inventory=question_task_inventory)
         out = _repair_rendered_inventory_coverage(
-            out, question_task_inventory)
+            out, question_task_inventory, mined_types)
+        # This is the last known-good source-owned Type/Example placement.
+        # Later chapter refiners may improve descriptions and misconceptions,
+        # but must not move/drop these constrained assignments.
+        coverage_safe_snapshot = copy.deepcopy(out)
         out = cr.refine_chapter(out)
         # The repair/cleanup passes may reorder, rename, or re-collide rows;
         # re-assert the duplicate-title, culmination, mastery-line, and
@@ -9862,6 +10457,10 @@ def concepts_from_mmd(
         # the hard final gate so deposit is never blocked by residual refs.
         out = _neutralize_unrepaired_rows(
             out, inventory=question_task_inventory)
+        out = _accept_topic_safe_type_review(
+            coverage_safe_snapshot, out, mined_types)
+        out = _accept_exact_inventory_type_review(
+            coverage_safe_snapshot, out, question_task_inventory, mined_types)
         out = _restore_method_anchor_rows(out, method_row_snapshot)
         # Restoration is the terminal row-membership operation. Only
         # non-dropping field/ordering guarantees may run after this point.
@@ -9871,6 +10470,10 @@ def concepts_from_mmd(
         out = _enforce_method_anchor_topics(out, method_anchors)
         out = _enforce_culminations(out)
         out = _reorder_records_by_source_topics(out, headings)
+        # Snapshot restoration and culmination enforcement can restore
+        # pre-refiner labels. Reapply the two independent chapter-wide
+        # sequences without changing row membership or placement.
+        out = cr.renumber_types_continuously(out)
         missing_method_anchors = [
             anchor for anchor in method_anchors
             if (
@@ -9938,7 +10541,41 @@ def concepts_from_mmd(
         # restore exact-once inventory prompts. Residual missing after repair
         # warns; only unresolved duplicates still abort deposit.
         out = _enforce_rendered_inventory_coverage(
-            out, question_task_inventory)
+            out, question_task_inventory, mined_types)
+        out = cr.renumber_types_continuously(out)
+        inventory_topic_violations = _rendered_inventory_topic_violations(
+            out, question_task_inventory, mined_types)
+        activity_alignment_violations = (
+            _activity_example_hub_alignment_violations(
+                out, question_task_inventory)
+        )
+        if inventory_topic_violations or activity_alignment_violations:
+            progress.log(
+                "Final cleanup moved source-owned Examples; rebuilding Types "
+                "with the ID-constrained GPT assignment pass.",
+                level="warning",
+            )
+            out = _rebuild_types_after_final_placement_drift(
+                out,
+                question_task_inventory,
+                mined_types,
+                meta=meta,
+            )
+            out = cr.renumber_types_continuously(out)
+            inventory_topic_violations = _rendered_inventory_topic_violations(
+                out, question_task_inventory, mined_types)
+            activity_alignment_violations = (
+                _activity_example_hub_alignment_violations(
+                    out, question_task_inventory)
+            )
+        if inventory_topic_violations or activity_alignment_violations:
+            raise RuntimeError(
+                "final inventory placement validation failed: "
+                f"{len(inventory_topic_violations)} Example(s) outside their "
+                "source topic, "
+                f"{len(activity_alignment_violations)} assessable Activity "
+                "Example(s) separated from their Activity/Info Hub"
+            )
         _validate_final_or_raise(
             out, stage="final", inventory=question_task_inventory)
         missing = sum(

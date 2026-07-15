@@ -508,6 +508,37 @@ def test_uploaded_nationalism_fixture_recovers_all_checkpoint_containers():
         or "Is it not a disgrace" in item["raw_task"]
         for item in checkpoints
     )
+    italy_map_activity = next(
+        item for item in checkpoints
+        if "Look at Fig. 14(a)" in item["raw_task"]
+    )
+    assert "was not the result of a sudden upheaval" not in (
+        italy_map_activity["raw_task"])
+
+
+def test_repeated_generic_checkpoint_labels_preserve_distinct_tasks():
+    items = [{
+        "source_kind": "checkpoint_question",
+        "source_label": "Discuss",
+        "raw_task": "Explain how language contributed to national identity.",
+    }]
+    anchors = [
+        {
+            "source_kind": "checkpoint_question",
+            "source_label": "Discuss",
+            "raw_task": "Explain how language contributed to national identity.",
+        },
+        {
+            "source_kind": "checkpoint_question",
+            "source_label": "Discuss",
+            "raw_task": "Compare the political meanings of two allegories.",
+        },
+    ]
+    merged = g._merge_source_task_anchors(items, anchors)
+    assert [item["raw_task"] for item in merged] == [
+        "Explain how language contributed to national identity.",
+        "Compare the political meanings of two allegories.",
+    ]
 
 
 def test_uploaded_nationalism_fixture_exposes_sorrieu_opening_for_recovery():
@@ -550,6 +581,59 @@ def test_uploaded_ap_fixture_keeps_parent_questions_and_own_mcq_options():
     assert "(A) 97 (B) 77 (C) -77 (D) -87" in mcq["raw_task"]
     assert "11th term" in mcq["raw_task"]
     assert "(A) 28 (B) 22 (C) -38" in mcq["raw_task"]
+
+
+def test_authoritative_parent_question_replaces_gpt_split_subparts():
+    full = (
+        "Choose the correct choice and justify: "
+        "(i) Find the 30th term. (A) 97 (B) 77 "
+        "(ii) Find the 11th term. (A) 28 (B) 22"
+    )
+    anchors = [{
+        "source_kind": "exercise",
+        "source_label": "EXERCISE 5.2 Q2",
+        "parent_source_label": "EXERCISE 5.2",
+        "raw_task": full,
+        "normalized_task": full,
+    }]
+    items = [
+        {
+            "source_kind": "mcq",
+            "source_label": "Exercise 5.2 Question 2(i)",
+            "parent_source_label": "Exercise 5.2 Question 2",
+            "subpart_label": "(i)",
+            "raw_task": "Find the 30th term. (A) 97 (B) 77",
+        },
+        {
+            "source_kind": "mcq",
+            "source_label": "Exercise 5.2 Question 2(ii)",
+            "parent_source_label": "Exercise 5.2 Question 2",
+            "subpart_label": "(ii)",
+            "raw_task": "Find the 11th term. (A) 28 (B) 22",
+        },
+    ]
+    assert g._merge_source_task_anchors(items, anchors) == anchors
+
+
+def test_unique_question_label_root_merges_question_and_q_notation():
+    anchor = {
+        "source_kind": "exercise",
+        "source_label": "EXERCISE 5.3 Q4",
+        "parent_source_label": "EXERCISE 5.3",
+        "raw_task": "How many terms of the AP 9, 17, 25, ... give a sum of 636?",
+    }
+    gpt_item = {
+        "source_kind": "exercise",
+        "source_label": "Exercise 5.3 Question 4",
+        "raw_task": "How many terms give a sum of 636?",
+    }
+    merged = g._merge_source_task_anchors([gpt_item], [anchor])
+    assert len(merged) == 1
+    assert merged[0]["source_label"] == anchor["source_label"]
+    assert merged[0]["raw_task"] == anchor["raw_task"]
+    assert g._inventory_question_label_root(
+        "EXERCISE 5.4 (Optional)* Q2"
+    ) == g._inventory_question_label_root("Exercise 5.4 Question 2")
 
 
 def test_uploaded_electricity_activities_feed_types_and_hubs_with_visuals():
@@ -602,6 +686,32 @@ def test_assessable_activity_can_appear_once_in_types_and_in_hub():
         "duplicate": [],
     }
     assert g._hub_inventory_examples_in_types(rows, inventory) == set()
+
+
+def test_assessable_activity_coverage_repair_reuses_its_gpt_hub_concept():
+    prompt = "Measure current for each conductor and explain the differences."
+    item = {
+        "source_kind": "checkpoint_question",
+        "_activity_origin": True,
+        "topic_hint": "Resistance",
+        "raw_task": prompt,
+    }
+    rows = [
+        {
+            "topic": "Resistance",
+            "concept_title": "Material Resistivity",
+            "concept_details": "Description: Material affects resistance.",
+        },
+        {
+            "topic": "Resistance",
+            "concept_title": "Comparing Component Resistance",
+            "concept_details": (
+                "Description: Components oppose current differently. // "
+                f"Activity/Info Hub: Activity: {prompt}"
+            ),
+        },
+    ]
+    assert g._best_record_index_for_inventory_item(rows, item) == 1
 
 
 def test_opening_recovery_adds_only_model_identified_missing_rows(monkeypatch):
@@ -1081,6 +1191,348 @@ def test_activity_inventory_excluded_from_types_coverage_and_placed_in_hub():
     out = g._place_activity_inventory_into_hubs(records, inventory)
     assert "Activity 11.1" in cr.activity_hub_body(out[0]["concept_details"])
     assert "nichrome" in cr.activity_hub_body(out[0]["concept_details"])
+
+
+def test_gpt_selected_activity_hub_relocates_exact_assessable_example(monkeypatch):
+    prompt = "Record the current while increasing the number of cells."
+    inventory = {"items": [{
+        "qid": "QINV-0001",
+        "source_kind": "checkpoint_question",
+        "source_label": "Activity 11.1 question",
+        "raw_task": prompt,
+        "topic_hint": "Ohm's Law",
+        "_activity_origin": True,
+    }]}
+    records = [
+        {
+            "topic": "Ohm's Law",
+            "parent_concept": "Resistance",
+            "concept_title": "General Resistance",
+            "concept_details": (
+                "Description: Resistance opposes current. // Types: "
+                "Type 01: Experimental questions Case 01: Observe current "
+                f"Example: {prompt}"
+            ),
+            "keywords": "",
+        },
+        {
+            "topic": "Ohm's Law",
+            "parent_concept": "Experiments",
+            "concept_title": "Testing the Voltage-current Relationship",
+            "concept_details": (
+                "Description: Compare measured V and I. // Types: "
+                "Type 01: Conceptual checks Case 01: Proportionality "
+                "Example: Explain why voltage and current are proportional. "
+                "Type 02: Reading graphs Case 01: Slope "
+                "Example: Interpret the slope of a voltage-current graph."
+            ),
+            "keywords": "",
+        },
+    ]
+    monkeypatch.setattr(
+        g, "_openai_json",
+        lambda *args, **kwargs: {"placements": [{
+            "qid": "QINV-0001",
+            "concept_id": "CONCEPT-0002",
+            "hub_note": f"Activity: Measure V and I. {prompt}",
+        }]},
+    )
+
+    out = g._populate_activity_hubs_via_api(
+        records, inventory, meta=g._metadata(subject="Physics"))
+
+    assert prompt not in g._types_body(out[0]["concept_details"])
+    assert prompt in g._types_body(out[1]["concept_details"])
+    assert prompt in cr.activity_hub_body(out[1]["concept_details"])
+    assert re.findall(
+        r"\bType\s+(\d{2}):", g._types_body(out[1]["concept_details"])
+    ) == ["01", "02", "03"]
+    assert g._rendered_inventory_example_locations(
+        out, inventory["items"][0]) == [1]
+    assert g._rendered_inventory_coverage_defects(out, inventory) == {
+        "missing": [],
+        "duplicate": [],
+    }
+    assert not g._rendered_inventory_topic_violations(out, inventory)
+    assert not g._activity_example_hub_alignment_violations(out, inventory)
+
+
+def test_activity_alignment_keeps_hub_copy_when_exact_example_is_duplicated():
+    prompt = "Record the current while increasing the number of cells."
+    item = {
+        "qid": "QINV-0001",
+        "source_kind": "checkpoint_question",
+        "source_label": "Activity 11.1 question",
+        "raw_task": prompt,
+        "topic_hint": "Ohm's Law",
+        "_activity_origin": True,
+    }
+    inventory = {"items": [item]}
+    records = [
+        {
+            "topic": "Ohm's Law",
+            "parent_concept": "Resistance",
+            "concept_title": "General Resistance",
+            "concept_details": (
+                "Description: Resistance opposes current. // Types: "
+                "Type 01: Experimental questions Case 01: Observe current "
+                f"Example: {prompt} "
+                "Type 02: Direct calculations Case 01: Find resistance "
+                "Example: Calculate resistance from 12 V and 2 A."
+            ),
+            "keywords": "",
+        },
+        {
+            "topic": "Ohm's Law",
+            "parent_concept": "Experiments",
+            "concept_title": "Testing the Voltage-current Relationship",
+            "concept_details": (
+                f"Description: Compare measured V and I. // Activity/Info Hub: "
+                f"Activity: Measure V and I. {prompt} // Types: "
+                "Type 01: Experimental questions Case 01: Compare readings "
+                f"Example: {prompt}"
+            ),
+            "keywords": "",
+        },
+    ]
+
+    out = g._align_activity_examples_with_hubs(records, inventory)
+
+    assert g._rendered_inventory_example_locations(out, item) == [1]
+    assert g._rendered_inventory_coverage_defects(out, inventory) == {
+        "missing": [],
+        "duplicate": [],
+    }
+    assert not g._activity_example_hub_alignment_violations(out, inventory)
+    assert re.findall(
+        r"\bType\s+(\d{2}):", g._types_body(out[0]["concept_details"])
+    ) == ["01"]
+    assert re.findall(
+        r"\bType\s+(\d{2}):", g._types_body(out[1]["concept_details"])
+    ) == ["02"]
+
+
+def test_preexisting_activity_hub_is_aligned_without_an_api_call(monkeypatch):
+    prompt = "Record the current while increasing the number of cells."
+    inventory = {"items": [{
+        "qid": "QINV-0001",
+        "source_kind": "checkpoint_question",
+        "source_label": "Activity 11.1 question",
+        "raw_task": prompt,
+        "topic_hint": "Ohm's Law",
+        "_activity_origin": True,
+    }]}
+    records = [
+        {
+            "topic": "Ohm's Law",
+            "parent_concept": "Resistance",
+            "concept_title": "General Resistance",
+            "concept_details": (
+                "Description: Resistance opposes current. // Types: "
+                "Type 01: Experimental questions Case 01: Observe current "
+                f"Example: {prompt}"
+            ),
+            "keywords": "",
+        },
+        {
+            "topic": "Ohm's Law",
+            "parent_concept": "Experiments",
+            "concept_title": "Testing the Voltage-current Relationship",
+            "concept_details": (
+                "Description: Compare measured V and I. // Activity/Info Hub: "
+                f"Activity: Measure V and I. {prompt}"
+            ),
+            "keywords": "",
+        },
+    ]
+
+    monkeypatch.setattr(
+        g, "_openai_json",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("an existing Hub must not trigger an API call")),
+    )
+    out = g._populate_activity_hubs_via_api(
+        records, inventory, meta=g._metadata(subject="Physics"))
+
+    assert g._rendered_inventory_example_locations(
+        out, inventory["items"][0]) == [1]
+    assert g._rendered_inventory_coverage_defects(out, inventory) == {
+        "missing": [],
+        "duplicate": [],
+    }
+    assert not g._activity_example_hub_alignment_violations(out, inventory)
+
+
+def test_terminal_coverage_repair_realigns_an_exact_activity_example():
+    prompt = "Record the current while increasing the number of cells."
+    item = {
+        "qid": "QINV-0001",
+        "source_kind": "checkpoint_question",
+        "source_label": "Activity 11.1 question",
+        "raw_task": prompt,
+        "topic_hint": "Ohm's Law",
+        "_activity_origin": True,
+    }
+    inventory = {"items": [item]}
+    records = [
+        {
+            "topic": "Ohm's Law",
+            "parent_concept": "Resistance",
+            "concept_title": "General Resistance",
+            "concept_details": (
+                "Description: Resistance opposes current. // Types: "
+                "Type 01: Experimental questions Case 01: Observe current "
+                f"Example: {prompt}"
+            ),
+            "keywords": "",
+        },
+        {
+            "topic": "Ohm's Law",
+            "parent_concept": "Experiments",
+            "concept_title": "Testing the Voltage-current Relationship",
+            "concept_details": (
+                "Description: Compare measured V and I. // Activity/Info Hub: "
+                f"Activity: Measure V and I. {prompt}"
+            ),
+            "keywords": "",
+        },
+    ]
+    assert g._rendered_inventory_coverage_defects(records, inventory) == {
+        "missing": [],
+        "duplicate": [],
+    }
+
+    out = g._enforce_rendered_inventory_coverage(records, inventory)
+
+    assert g._rendered_inventory_example_locations(out, item) == [1]
+    assert not g._activity_example_hub_alignment_violations(out, inventory)
+
+
+def test_final_placement_rebuild_reuses_gpt_assignment_on_final_rows(monkeypatch):
+    prompt = "Calculate the heat produced by a resistor carrying current."
+    inventory = {"items": [{
+        "qid": "QINV-0001",
+        "source_kind": "exercise",
+        "raw_task": prompt,
+        "topic_hint": "Heating Effect",
+    }]}
+    mined = {"types": [{
+        "type_id": "TYPE-0001",
+        "type_title": "Calculating Electrical Heating",
+        "topic_match_hint": "Heating Effect",
+        "source_question_ids": ["QINV-0001"],
+    }]}
+    records = [
+        {
+            "topic": "Electric Current",
+            "parent_concept": "Current",
+            "concept_title": "Current in a Conductor",
+            "concept_details": (
+                "Description: Current is charge flow. // Types: "
+                "Type 01: Calculating Electrical Heating "
+                f"Case 01: Find heat Example: {prompt}"
+            ),
+            "keywords": "",
+        },
+        {
+            "topic": "Heating Effect",
+            "parent_concept": "Heating",
+            "concept_title": "Joule Heating",
+            "concept_details": "Description: Electrical energy becomes heat.",
+            "keywords": "",
+        },
+    ]
+    calls = []
+    cleanup_calls = []
+
+    def fake_assign(candidate, *, meta, mined_types):
+        calls.append((meta, mined_types))
+        assert all(not g._types_body(row["concept_details"]) for row in candidate)
+        candidate[1] = dict(candidate[1])
+        candidate[1]["concept_details"] = g._inject_types(
+            candidate[1]["concept_details"],
+            "Type 01: Calculating Electrical Heating "
+            f"Case 01: Find heat Example: {prompt}",
+        )
+        return candidate
+
+    monkeypatch.setattr(g, "_assign_mined_types_via_api", fake_assign)
+    monkeypatch.setattr(
+        g, "_populate_activity_hubs_via_api",
+        lambda candidate, inventory, *, meta: candidate,
+    )
+    original_salvage = g._salvage_short_case_examples
+    original_neutralize = g._neutralize_unrepaired_rows
+
+    def track_salvage(candidate, *, inventory):
+        cleanup_calls.append("salvage")
+        return original_salvage(candidate, inventory=inventory)
+
+    def track_neutralize(candidate, *, inventory):
+        cleanup_calls.append("neutralize")
+        return original_neutralize(candidate, inventory=inventory)
+
+    monkeypatch.setattr(g, "_salvage_short_case_examples", track_salvage)
+    monkeypatch.setattr(g, "_neutralize_unrepaired_rows", track_neutralize)
+
+    out = g._rebuild_types_after_final_placement_drift(
+        records, inventory, mined, meta=g._metadata(subject="Physics"))
+
+    assert len(calls) == 1
+    assert cleanup_calls == ["salvage", "neutralize"]
+    assert g._rendered_inventory_example_locations(
+        out, inventory["items"][0]) == [1]
+    assert not g._rendered_inventory_topic_violations(out, inventory, mined)
+
+
+def test_cross_topic_gpt_hub_choice_falls_back_to_exact_example_row(monkeypatch):
+    prompt = "Compare the current through the wire for each applied voltage."
+    item = {
+        "qid": "QINV-0001",
+        "source_kind": "checkpoint_question",
+        "source_label": "Activity 11.2 question",
+        "raw_task": prompt,
+        "topic_hint": "Ohm's Law",
+        "_activity_origin": True,
+    }
+    inventory = {"items": [item]}
+    records = [
+        {
+            "topic": "Ohm's Law",
+            "parent_concept": "Current",
+            "concept_title": "Ohm's Law Measurements",
+            "concept_details": (
+                "Description: Voltage and current are proportional. // Types: "
+                "Type 01: Experimental questions Case 01: Compare readings "
+                f"Example: {prompt}"
+            ),
+            "keywords": "",
+        },
+        {
+            "topic": "Resistance Factors",
+            "parent_concept": "Materials",
+            "concept_title": "Conductor Material",
+            "concept_details": "Description: Materials have different resistivity.",
+            "keywords": "",
+        },
+    ]
+    monkeypatch.setattr(
+        g, "_openai_json",
+        lambda *args, **kwargs: {"placements": [{
+            "qid": "QINV-0001",
+            "concept_id": "CONCEPT-0002",
+            "hub_note": f"Activity: Compare conductor materials. {prompt}",
+        }]},
+    )
+
+    out = g._populate_activity_hubs_via_api(
+        records, inventory, meta=g._metadata(subject="Physics"))
+
+    assert prompt in cr.activity_hub_body(out[0]["concept_details"])
+    assert not cr.activity_hub_body(out[1]["concept_details"])
+    assert g._rendered_inventory_example_locations(out, item) == [0]
+    assert not g._rendered_inventory_topic_violations(out, inventory)
+    assert not g._activity_example_hub_alignment_violations(out, inventory)
 
 
 def test_activity_hub_fallback_never_uses_culmination_without_topic_normal():
@@ -1666,6 +2118,45 @@ def test_salvage_short_case_examples_expands_from_inventory():
             and e["severity"] == "error"
             for e in report["errors"]
         )
+
+
+def test_short_example_salvage_never_borrows_from_another_source_topic():
+    own_topic_task = (
+        "Describe the symbols used in the national allegory print and explain "
+        "what each symbol represents."
+    )
+    other_topic_task = (
+        "Describe the print and explain how it portrays imperial rivalry."
+    )
+    records = [{
+        "topic": "Visualising the Nation",
+        "parent_concept": "Allegory",
+        "concept_title": "National Allegory",
+        "concept_details": (
+            "Description: Nations were represented as female figures. // "
+            "Types: Type 01: Visual source interpretation "
+            "Case 01: Allegorical symbols Example: Describe the print. // "
+            "Misconceptions: Students may treat allegory as literal history."
+        ),
+        "keywords": "",
+    }]
+    inventory = {"items": [
+        {
+            "qid": "QINV-0001",
+            "raw_task": own_topic_task,
+            "topic_hint": "Visualising the Nation",
+        },
+        {
+            "qid": "QINV-0002",
+            "raw_task": other_topic_task,
+            "topic_hint": "Nationalism and Imperialism",
+        },
+    ]}
+
+    out = g._salvage_short_case_examples(records, inventory=inventory)
+
+    assert own_topic_task in out[0]["concept_details"]
+    assert other_topic_task not in out[0]["concept_details"]
 
 
 def test_final_scrub_clears_page14_and_reintroduced_artifacts():
@@ -2288,6 +2779,49 @@ def test_type_review_cannot_drop_or_duplicate_inventory_examples():
         "missing": [],
         "duplicate": [],
     }
+
+
+def test_type_review_cannot_move_activity_example_away_from_its_hub():
+    prompt = "Interpret how the caricature represents parliamentary power."
+    inventory = {"items": [{
+        "qid": "QINV-0001",
+        "source_kind": "checkpoint_question",
+        "topic_hint": "German Unification",
+        "_activity_origin": True,
+        "raw_task": prompt,
+    }]}
+    original = [
+        {
+            "topic": "German Unification",
+            "concept_title": "Bismarck and Parliament",
+            "concept_details": (
+                "Description: The caricature contrasts executive and elected "
+                "power. // Activity/Info Hub: Activity: "
+                f"{prompt} // Types: Type 01: Interpreting political cartoons "
+                f"Case 01: Explain a power relationship Example: {prompt}"
+            ),
+        },
+        {
+            "topic": "Italian Unification",
+            "concept_title": "Garibaldi and Italy",
+            "concept_details": "Description: Garibaldi led a military campaign.",
+        },
+    ]
+    candidate = [dict(row) for row in original]
+    candidate[0]["concept_details"] = candidate[0]["concept_details"].replace(
+        " // Types: Type 01: Interpreting political cartoons "
+        f"Case 01: Explain a power relationship Example: {prompt}",
+        "",
+    )
+    candidate[1]["concept_details"] += (
+        " // Types: Type 01: Interpreting political cartoons "
+        f"Case 01: Explain a power relationship Example: {prompt}"
+    )
+
+    assert g._rendered_inventory_topic_violations(candidate, inventory)
+    assert g._activity_example_hub_alignment_violations(candidate, inventory)
+    assert g._accept_exact_inventory_type_review(
+        original, candidate, inventory) is original
 
 
 def test_rendered_inventory_coverage_handles_embedded_structure_tokens_exactly():

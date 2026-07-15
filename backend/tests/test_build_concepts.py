@@ -1,5 +1,9 @@
 import io
 
+import pytest
+
+from app import models
+from app.services import build_concepts
 from tests.conftest import convert_concept_upload, stream_result
 
 
@@ -42,6 +46,78 @@ def test_post_learning_groups_concepts_under_one_topic(client, db, first_chapter
     assert len(topics) == 1
     assert len(topics[0].concepts) == 4
     assert sum(c.concept_title.startswith("Culmination -") for c in topics[0].concepts) == 1
+
+
+def test_post_learning_failure_persists_and_resumes_type_checkpoint(
+    db, first_chapter, monkeypatch,
+):
+    job = models.UploadJob(
+        module="build_concepts",
+        upload_type="document",
+        learning_kind="post",
+        filename="checkpoint.mmd",
+        mmd_text="## Topic\nSource body",
+        status="converted",
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    checkpoint = {
+        "schema_version": 1,
+        "stage": "pre_type_assignment",
+        "records": [{"topic": "T", "concept_title": "C"}],
+        "question_task_inventory": {
+            "items": [{"qid": "QINV-0001", "raw_task": "Explain the source."}],
+            "stats": {"total_inventory_items": 1},
+        },
+        "mined_types": {"types": [{"type_id": "TYPE-0001"}]},
+        "method_row_snapshot": [],
+    }
+
+    def fail_after_checkpoint(*args, checkpoint_callback=None, **kwargs):
+        assert checkpoint_callback is not None
+        checkpoint_callback(checkpoint)
+        raise RuntimeError("type embedding failed: unassigned TYPE-0001")
+
+    monkeypatch.setattr(
+        build_concepts.generation, "concepts_from_mmd", fail_after_checkpoint)
+    with pytest.raises(RuntimeError, match="unassigned TYPE-0001"):
+        build_concepts.generate_post_learning(
+            db, job.id, first_chapter["id"])
+
+    db.expire_all()
+    saved = db.get(models.UploadJob, job.id)
+    assert saved.generation_checkpoint["stage"] == "pre_type_assignment"
+    assert saved.question_inventory["items"][0]["qid"] == "QINV-0001"
+
+    def resume_from_checkpoint(*args, resume_checkpoint=None, **kwargs):
+        assert resume_checkpoint["stage"] == "pre_type_assignment"
+        return [{
+            "topic": "T",
+            "parent_concept": "P",
+            "concept_title": "C",
+            "concept_details": "Description: complete",
+            "keywords": "",
+        }]
+
+    monkeypatch.setattr(
+        build_concepts.generation, "concepts_from_mmd",
+        resume_from_checkpoint,
+    )
+    monkeypatch.setattr(
+        build_concepts, "_deposit_concepts", lambda *a, **kw: ([], []))
+    monkeypatch.setattr(
+        build_concepts.writer,
+        "append_concepts",
+        lambda *a, **kw: {
+            "written": 0, "sources_updated": 0, "parent_column": True,
+        },
+    )
+    result = build_concepts.generate_post_learning(
+        db, job.id, first_chapter["id"])
+    assert result["concepts_created"] == 0
+    db.expire_all()
+    assert db.get(models.UploadJob, job.id).generation_checkpoint == {}
 
 
 def test_inventory_csv_download(client, db, first_chapter):

@@ -1,5 +1,6 @@
 """Concept-generation prompts must require rich Types classification."""
 import json
+import re
 
 import pytest
 
@@ -109,6 +110,8 @@ def test_universal_question_task_inventory_and_type_mining_prompts():
     assert "Formula overlap is not concept identity" in embedding_contract
     # Culmination rows are part of the assignment payload.
     assert "is_culmination" in embedding
+    assert "cross_topic_synthesis" in mining
+    assert "later source topic" in embedding.lower()
 
 
 def test_has_meaningful_types():
@@ -386,11 +389,10 @@ def test_case_scoped_activity_units_go_to_activity_info_hub(monkeypatch):
         concepts, units = _type_embedding_request(user)
         assert len(units) == 2
         assert all(unit["is_activity"] is True for unit in units)
-        # Even if the model wrongly targets Culmination, override routes
-        # activities to the normal concept for Activity/Info Hub.
-        culmination = next(row for row in concepts if row["is_culmination"])
+        assert all(not row["is_culmination"] for row in concepts)
+        normal = concepts[0]
         return {"assignments": [{
-            "concept_id": culmination["concept_id"],
+            "concept_id": normal["concept_id"],
             "type_ids": [unit["type_id"] for unit in units],
         }]}
 
@@ -515,8 +517,8 @@ def test_scoped_type_embedding_groups_topics_and_excludes_other_concepts(monkeyp
         assert len({row["topic"] for row in concepts}) == 1
         allowed = {row["concept_id"] for row in concepts}
         assert all(set(item["allowed_concept_ids"]) == allowed for item in types)
-        assert any(row["is_culmination"] for row in concepts)
-        target = next(row for row in concepts if not row["is_culmination"])
+        assert all(not row["is_culmination"] for row in concepts)
+        target = concepts[0]
         return {"assignments": [{
             "concept_id": target["concept_id"],
             "type_ids": [item["type_id"] for item in types],
@@ -550,9 +552,9 @@ def test_scoped_type_embedding_groups_topics_and_excludes_other_concepts(monkeyp
     assert len(calls) == 2
     payload_by_topic = {concepts[0]["topic"]: concepts for concepts, _ in calls}
     assert {row["concept_id"] for row in payload_by_topic["Topic A"]} == {
-        "CONCEPT-0001", "CONCEPT-0002"}
+        "CONCEPT-0001"}
     assert {row["concept_id"] for row in payload_by_topic["Topic B"]} == {
-        "CONCEPT-0003", "CONCEPT-0004"}
+        "CONCEPT-0003"}
     assert "Alpha Pattern" in out[0]["concept_details"]
     assert "Beta Pattern" in out[2]["concept_details"]
 
@@ -603,6 +605,8 @@ def test_scoped_type_embedding_retries_with_same_candidates_and_lands_ids_once(
     ] == [{"CONCEPT-0001", "CONCEPT-0002"}] * 2
     assert [[item["type_id"] for item in types] for _, types in calls] == [
         ["TYPE-0001", "TYPE-0002"], ["TYPE-0002"]]
+    assert calls[1][1][0]["previous_rejections"][-1]["reason"] == (
+        "omitted_from_response")
     details = " ".join(row["concept_details"] for row in out)
     assert details.count("First Alpha Pattern") == 1
     assert details.count("Second Alpha Pattern") == 1
@@ -1406,14 +1410,22 @@ def test_mine_types_uses_duplicate_backstop_only_after_repairs(monkeypatch):
 
 
 def test_assign_mined_types_can_place_types_on_culminations(monkeypatch):
-    captured = {}
+    captured = []
 
     def fake_openai(system, user, **kw):
-        captured["user"] = user
-        return {"assignments": [
-            {"concept_id": "CONCEPT-0001", "type_ids": ["TYPE-0001"]},
-            {"concept_id": "CONCEPT-0002", "type_ids": ["TYPE-0002"]},
-        ]}
+        concepts, types = _type_embedding_request(user)
+        captured.append((concepts, types))
+        target = next(
+            row for row in concepts
+            if (
+                row["is_culmination"]
+                == (types[0]["placement_scope"] == "mixed_synthesis")
+            )
+        )
+        return {"assignments": [{
+            "concept_id": target["concept_id"],
+            "type_ids": [types[0]["type_id"]],
+        }]}
 
     monkeypatch.setattr(g, "_openai_json", fake_openai)
     records = [
@@ -1425,17 +1437,155 @@ def test_assign_mined_types_can_place_types_on_culminations(monkeypatch):
     ]
     mined = {"types": [
         {"type_id": "TYPE-0001", "type_title": "Single Concept Pattern",
-         "case_prompts": [{"case_prompt": "do it"}]},
+         "placement_scope": "normal",
+         "case_prompts": [{"case_prompt": "do it",
+                           "placement_scope": "normal"}]},
         {"type_id": "TYPE-0002", "type_title": "Mixed Multi-Concept Pattern",
-         "case_prompts": [{"case_prompt": "combine ideas"}]},
+         "placement_scope": "mixed_synthesis",
+         "case_prompts": [{"case_prompt": "combine ideas",
+                           "placement_scope": "mixed_synthesis"}]},
     ]}
     out = g._assign_mined_types_via_api(
         records, meta=g._metadata(subject="Math"), mined_types=mined)
-    # Culmination rows are part of the assignment payload...
-    assert '"is_culmination": true' in captured["user"]
-    # ...and can receive mixed/synthesis Types.
+    assert len(captured) == 2
+    normal_payload = next(rows for rows, types in captured
+                          if types[0]["type_id"] == "TYPE-0001")
+    mixed_payload = next(rows for rows, types in captured
+                         if types[0]["type_id"] == "TYPE-0002")
+    assert all(not row["is_culmination"] for row in normal_payload)
+    assert any(row["is_culmination"] for row in mixed_payload)
     assert "Mixed Multi-Concept Pattern" in out[1]["concept_details"]
     assert "Single Concept Pattern" in out[0]["concept_details"]
+
+
+def test_cross_topic_synthesis_can_use_only_a_later_topic_culmination(
+    monkeypatch,
+):
+    prompt = (
+        "Compare resistance calculated from the voltage-current relationship "
+        "with the heating effect produced by the same conductor."
+    )
+    candidate_ids: dict[str, list[str]] = {}
+
+    def fake_openai(system, user, **kw):
+        concepts, types = _type_embedding_request(user)
+        unit = types[0]
+        type_id = unit["type_id"]
+        candidate_ids[type_id] = [
+            row["concept_id"] for row in concepts
+        ]
+        target_by_type = {
+            "TYPE-NORMAL-A": "CONCEPT-0001",
+            "TYPE-MIXED-A": "CONCEPT-0002",
+            "TYPE-NORMAL-B": "CONCEPT-0003",
+            "TYPE-CROSS": "CONCEPT-0004",
+        }
+        return {"assignments": [{
+            "concept_id": target_by_type[type_id],
+            "type_ids": [type_id],
+        }]}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    records = [
+        {
+            "topic": "Electric Current",
+            "parent_concept": "Current",
+            "concept_title": "Voltage-current Relationship",
+            "concept_details": "Description: Current depends on voltage.",
+            "keywords": "",
+        },
+        {
+            "topic": "Electric Current",
+            "parent_concept": "Culmination",
+            "concept_title": "Culmination - Electric Current",
+            "concept_details": "Description: Recap",
+            "keywords": "",
+        },
+        {
+            "topic": "Heating Effect",
+            "parent_concept": "Heating",
+            "concept_title": "Joule Heating",
+            "concept_details": "Description: Electrical energy becomes heat.",
+            "keywords": "",
+        },
+        {
+            "topic": "Heating Effect",
+            "parent_concept": "Culmination",
+            "concept_title": "Culmination - Heating Effect",
+            "concept_details": "Description: Recap",
+            "keywords": "",
+        },
+    ]
+
+    def mined_type(type_id, title, topic, scope, qid, example):
+        return {
+            "type_id": type_id,
+            "type_title": title,
+            "topic_match_hint": topic,
+            "placement_scope": scope,
+            "source_question_ids": [qid],
+            "case_prompts": [{
+                "case_id": f"CASE-{qid}",
+                "case_title": f"Case for {title}",
+                "placement_scope": scope,
+                "examples": [{
+                    "source_question_id": qid,
+                    "example_prompt": example,
+                }],
+            }],
+        }
+
+    mined = {"types": [
+        mined_type(
+            "TYPE-NORMAL-A", "Reading circuit values", "Electric Current",
+            "normal", "Q-A1", "Read the current shown by the ammeter."),
+        mined_type(
+            "TYPE-MIXED-A", "Combining current relationships",
+            "Electric Current", "mixed_synthesis", "Q-A2",
+            "Combine voltage, current, and resistance relationships."),
+        mined_type(
+            "TYPE-NORMAL-B", "Calculating Joule heating", "Heating Effect",
+            "normal", "Q-B1", "Calculate the heat produced in the conductor."),
+        mined_type(
+            "TYPE-CROSS", "Comparing electrical and heating effects",
+            "Electric Current", "cross_topic_synthesis", "Q-CROSS", prompt),
+    ]}
+
+    out = g._assign_mined_types_via_api(
+        records, meta=g._metadata(subject="Physics"), mined_types=mined)
+
+    # The GPT classifier sees the source topic's normal/culmination rows and
+    # later Culminations, but never a later ordinary concept.
+    assert candidate_ids["TYPE-CROSS"] == [
+        "CONCEPT-0001", "CONCEPT-0002", "CONCEPT-0004",
+    ]
+    assert prompt in out[3]["concept_details"]
+    assert prompt not in out[0]["concept_details"]
+    assert not g._mined_type_topic_violations(out, mined)
+
+    inventory = {"items": [{
+        "qid": "Q-CROSS",
+        "raw_task": prompt,
+        "topic_hint": "Electric Current",
+    }]}
+    assert g._rendered_inventory_coverage_defects(out, inventory) == {
+        "missing": [],
+        "duplicate": [],
+    }
+    assert not g._rendered_inventory_topic_violations(
+        out, inventory, mined)
+
+    regular = []
+    miscellaneous = []
+    for record in out:
+        labels = re.findall(
+            r"\b(?:(Miscellaneous)\s+)?Type\s+(\d{2}):",
+            g._types_body(record["concept_details"]),
+        )
+        for prefix, number in labels:
+            (miscellaneous if prefix else regular).append(number)
+    assert regular == ["01", "02"]
+    assert miscellaneous == ["01", "02"]
 
 
 def test_pipeline_builds_culminations_before_types(monkeypatch):
@@ -1471,8 +1621,77 @@ def test_pipeline_builds_culminations_before_types(monkeypatch):
     monkeypatch.setattr(
         g, "_validate_final_or_raise",
         lambda records, **kw: {"ok": True, "errors": [], "summary": {}})
-    g.concepts_from_mmd("## T\nbody", subject="Mathematics")
+    checkpoints = []
+    g.concepts_from_mmd(
+        "## T\nbody",
+        subject="Mathematics",
+        checkpoint_callback=checkpoints.append,
+    )
     assert order == ["culmination", "types"]
+    assert len(checkpoints) == 1
+    assert checkpoints[0]["stage"] == "pre_type_assignment"
+    assert any(
+        row["concept_title"].startswith("Culmination -")
+        for row in checkpoints[0]["records"]
+    )
+
+
+def test_pipeline_resume_checkpoint_skips_expensive_gpt_stages(monkeypatch):
+    monkeypatch.setattr(g.config, "use_live_generation", lambda: True)
+    monkeypatch.setattr(
+        g,
+        "_extract_skeleton_via_api",
+        lambda *a, **kw: (_ for _ in ()).throw(
+            AssertionError("skeleton extraction must not rerun")),
+    )
+    assigned = []
+
+    def fake_types(records, **kw):
+        assigned.append([dict(row) for row in records])
+        return records
+
+    monkeypatch.setattr(g, "_assign_types_via_api", fake_types)
+    monkeypatch.setattr(g, "_repair_records_via_api", lambda records, **kw: records)
+    monkeypatch.setattr(
+        g, "_validate_final_or_raise",
+        lambda records, **kw: {"ok": True, "errors": [], "summary": {}},
+    )
+    checkpoint = {
+        "schema_version": 1,
+        "stage": "pre_type_assignment",
+        "records": [
+            {
+                "topic": "T",
+                "parent_concept": "P",
+                "concept_title": "C",
+                "concept_details": "Description: d",
+                "keywords": "",
+            },
+            {
+                "topic": "T",
+                "parent_concept": "Culmination",
+                "concept_title": "Culmination - C",
+                "concept_details": "Description: Recap",
+                "keywords": "",
+            },
+        ],
+        "question_task_inventory": {
+            "items": [{"qid": "QINV-STUB", "raw_task": ""}],
+            "stats": {"total_inventory_items": 1},
+        },
+        "mined_types": {"types": []},
+        "method_row_snapshot": [],
+    }
+    callbacks = []
+    out = g.concepts_from_mmd(
+        "## T\nbody",
+        subject="Mathematics",
+        resume_checkpoint=checkpoint,
+        checkpoint_callback=callbacks.append,
+    )
+    assert assigned
+    assert out
+    assert callbacks == []
 
 
 def test_concepts_pipeline_runs_types_assign(monkeypatch):
