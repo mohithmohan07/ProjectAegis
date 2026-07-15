@@ -1,4 +1,7 @@
 """Regression tests for QA review feedback (Reviews 01–06)."""
+import re
+from pathlib import Path
+
 from app import models
 from app import bulk_import as bi
 from app.services import (
@@ -446,6 +449,210 @@ def test_inventory_visual_without_pdf_figure_number_gets_descriptive_alt():
         "image_urls": ["https://cdn.mathpix.com/circuits.jpg"],
     })
     assert "![Circuit comparison](https://cdn.mathpix.com/circuits.jpg)" in text
+
+
+def test_latex_figure_uses_adjacent_source_caption_in_public_markdown():
+    url = "https://cdn.mathpix.com/cropped/source.jpg?height=800&width=600"
+    raw = (
+        "Interpret the print. "
+        "\\begin{figure}\n"
+        f"\\includegraphics[alt={{}},max width=\\textwidth]{{{url}}}\n"
+        "\\captionsetup{labelformat=empty}\n"
+        "\\caption{Fig． 1 - A democratic republic print prepared in 1848.}\n"
+        "\\end{figure}"
+    )
+    text = g._inventory_task_text({
+        "source_kind": "source_task",
+        "source_label": "Opening print",
+        "raw_task": raw,
+        "image_urls": [],
+    })
+    assert "\\includegraphics" not in text
+    assert (
+        f"![Fig． 1 - A democratic republic print prepared in 1848]({url})"
+        in text
+    )
+
+
+def test_public_inventory_examples_remove_textbook_section_numbers():
+    text = g._inventory_task_text({
+        "source_kind": "exercise",
+        "raw_task": (
+            "Use the sequence introduced in Section 5.1 to find its twentieth term."
+        ),
+        "image_urls": [],
+    })
+    assert "Section 5.1" not in text
+    assert "earlier chapter discussion" in text
+
+
+def test_uploaded_nationalism_fixture_recovers_all_checkpoint_containers():
+    source = (
+        Path(__file__).parents[1] / "data" / "RNE.mmd"
+    ).read_text(encoding="utf-8")
+    sections = [
+        section
+        for chunk in g._section_aware_chunks(source)
+        for section in chunk["sections"]
+    ]
+    anchors = g._source_task_anchors(sections)
+    checkpoints = [
+        item for item in anchors
+        if item["source_kind"] == "checkpoint_question"
+    ]
+    assert len(checkpoints) == 14
+    assert sum(bool(item.get("_activity_origin")) for item in checkpoints) == 8
+    assert len(g._hub_inventory_items({"items": anchors})) == 10
+    assert not any(
+        "Do we require any further proof" in item["raw_task"]
+        or "Is it not a disgrace" in item["raw_task"]
+        for item in checkpoints
+    )
+
+
+def test_uploaded_nationalism_fixture_exposes_sorrieu_opening_for_recovery():
+    source = (
+        Path(__file__).parents[1] / "data" / "RNE.mmd"
+    ).read_text(encoding="utf-8")
+    sections = [
+        section
+        for chunk in g._section_aware_chunks(source)
+        for section in chunk["sections"]
+    ]
+    opening = g._chapter_opening_excerpt(sections, g._topic_headings(sections))
+    assert opening is not None
+    assert opening["topic"] == "The French Revolution and the Idea of the Nation"
+    assert "Frédéric Sorrieu" in opening["excerpt"]
+
+
+def test_uploaded_ap_fixture_keeps_parent_questions_and_own_mcq_options():
+    source = (
+        Path(__file__).parents[1] / "data" / "jemh105 (1).mmd"
+    ).read_text(encoding="utf-8")
+    sections = [
+        section
+        for chunk in g._section_aware_chunks(source)
+        for section in chunk["sections"]
+    ]
+    anchors = g._source_task_anchors(sections)
+    exercise_anchors = [
+        item for item in anchors if item["source_kind"] == "exercise"
+    ]
+    assert len(exercise_anchors) == 49
+    assert len({
+        item["source_label"] for item in exercise_anchors
+    }) == len(exercise_anchors)
+    mcq = next(
+        item for item in exercise_anchors
+        if item["source_label"] == "EXERCISE 5.2 Q2"
+    )
+    assert "30 th term" in mcq["raw_task"]
+    assert "(A) 97 (B) 77 (C) -77 (D) -87" in mcq["raw_task"]
+    assert "11th term" in mcq["raw_task"]
+    assert "(A) 28 (B) 22 (C) -38" in mcq["raw_task"]
+
+
+def test_uploaded_electricity_activities_feed_types_and_hubs_with_visuals():
+    source = (
+        Path(__file__).parents[1] / "data" / "Class 10 Chapter 5 Electricity.mmd"
+    ).read_text(encoding="utf-8")
+    sections = [
+        section
+        for chunk in g._section_aware_chunks(source)
+        for section in chunk["sections"]
+    ]
+    anchors = g._source_task_anchors(sections)
+    activities = [
+        item for item in anchors if item.get("_activity_origin")
+    ]
+    assert len(activities) == 6
+    assert all(
+        item["source_kind"] == "checkpoint_question" for item in activities)
+    assert len(g._hub_inventory_items({"items": anchors})) == 6
+    rendered_visuals = [
+        g._inventory_task_text(item)
+        for item in activities if item.get("image_urls")
+    ]
+    assert rendered_visuals
+    assert all("\\includegraphics" not in text for text in rendered_visuals)
+    assert all(re.search(r"!\[[^\]]+\]\(https://", text)
+               for text in rendered_visuals)
+
+
+def test_assessable_activity_can_appear_once_in_types_and_in_hub():
+    prompt = "Describe the observed current and explain why it changes."
+    inventory = {"items": [{
+        "qid": "QINV-0001",
+        "source_kind": "checkpoint_question",
+        "_activity_origin": True,
+        "raw_task": prompt,
+    }]}
+    rows = [{
+        "topic": "Current",
+        "concept_title": "Current in Conductors",
+        "concept_details": (
+            "Description: Current is measured in a closed circuit. // "
+            "Activity/Info Hub: Observe current while changing the conductor. // "
+            "Types: Type 01: Interpreting observations "
+            f"Case 01: Current changes Example: {prompt}"
+        ),
+    }]
+    assert g._rendered_inventory_coverage_defects(rows, inventory) == {
+        "missing": [],
+        "duplicate": [],
+    }
+    assert g._hub_inventory_examples_in_types(rows, inventory) == set()
+
+
+def test_opening_recovery_adds_only_model_identified_missing_rows(monkeypatch):
+    sections = [
+        {
+            "heading": "",
+            "body": (
+                "A distinctive artist prepared a series of prints showing a "
+                "democratic world of nation-states. The visual teaches liberty, "
+                "fraternity, and national identity through a long procession. "
+                "This substantive opening framing precedes the first main topic."
+            ),
+        },
+        {
+            "heading": "1 First Main Topic",
+            "body": "The first numbered topic begins here.",
+        },
+    ]
+    rows = [{
+        "topic": "First Main Topic",
+        "parent_concept": "Existing",
+        "concept_title": "Existing Main Idea",
+        "concept_details": "Description: Existing teaching content.",
+        "keywords": "existing",
+    }]
+
+    def fake_openai(system, user):
+        assert "chapter-opening material" in system
+        assert "distinctive artist" in user
+        return {"missing_rows": [{
+            "parent_concept": "Opening Visual",
+            "concept": "Democratic World in the Opening Print",
+            "concept_description": (
+                "Description: The opening print presents national liberty and "
+                "fraternity through a procession of peoples."
+            ),
+            "keywords": ["liberty", "fraternity", "nation"],
+        }]}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    out = g._recover_chapter_opening_concepts_via_api(
+        rows,
+        meta={},
+        sections=sections,
+        headings=["1 First Main Topic"],
+    )
+    assert [row["concept_title"] for row in out] == [
+        "Democratic World in the Opening Print",
+        "Existing Main Idea",
+    ]
+    assert all(row["topic"] == "First Main Topic" for row in out)
 
 
 def test_description_section_references_are_removed_without_touching_math():
@@ -2231,6 +2438,53 @@ def test_repair_rendered_inventory_coverage_removes_duplicates_and_fills_gaps():
     assert second in repaired[0]["concept_details"]
 
 
+def test_coverage_repair_groups_semantic_fallback_cases_on_normal_concept():
+    first = "Explain how a shared identity was created by revolutionaries."
+    second = "Interpret the symbols used in a national allegory."
+    inventory = {"items": [
+        {
+            "qid": "QINV-0001",
+            "source_kind": "checkpoint_question",
+            "raw_task": first,
+            "topic_hint": "Nation",
+        },
+        {
+            "qid": "QINV-0002",
+            "source_kind": "checkpoint_question",
+            "raw_task": second,
+            "topic_hint": "Nation",
+        },
+    ]}
+    records = [
+        {
+            "topic": "Nation",
+            "parent_concept": "Identity",
+            "concept_title": "National Identity",
+            "concept_details": (
+                "Description: Identity is constructed. Achieving Mastery: x. // "
+                "Misconceptions: Students may treat identity as timeless."
+            ),
+            "keywords": "",
+        },
+        {
+            "topic": "Nation",
+            "parent_concept": "Synthesis",
+            "concept_title": "Culmination - Identity and Allegory",
+            "concept_details": "Description: Recap",
+            "keywords": "",
+        },
+    ]
+    repaired = g._repair_rendered_inventory_coverage(records, inventory)
+    normal_details = repaired[0]["concept_details"]
+    assert "Source inventory task" not in normal_details
+    assert normal_details.count("Answering a Checkpoint Question") == 1
+    assert normal_details.count("Case 01:") == 1
+    assert normal_details.count("Case 02:") == 1
+    assert first in normal_details and second in normal_details
+    assert first not in repaired[1]["concept_details"]
+    assert second not in repaired[1]["concept_details"]
+
+
 def test_repair_does_not_double_append_shared_normalized_inventory_prompts():
     """Sibling qids with the same normalized text must place the prompt once."""
     shared = (
@@ -2328,7 +2582,7 @@ def test_enforce_coverage_does_not_abort_on_residual_missing(monkeypatch):
     # Force the repair placer to no-op so residual missing remains.
     monkeypatch.setattr(
         g, "_append_inventory_example_to_record",
-        lambda record, text: record,
+        lambda record, text, item=None: record,
     )
     out = g._enforce_rendered_inventory_coverage(records, inventory)
     assert out is not None

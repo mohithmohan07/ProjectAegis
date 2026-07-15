@@ -1505,6 +1505,32 @@ Rules:
 """)
 
 prompts.register(
+    "concepts.opening_recovery.system", category=_CONCEPTS_CAT,
+    label="Chapter-opening concept coverage audit prompt",
+    default="""\
+Audit whether substantive chapter-opening material is represented by the existing
+concept rows. The opening is source content that appears before the first numbered
+main topic; it is not a generic request to create an "Introduction" concept.
+
+Return ONLY strict JSON:
+{"missing_rows":[{"parent_concept":"","concept":"","concept_description":"","keywords":[]}]}
+
+Rules:
+- Return an empty missing_rows list when every durable teachable idea in the
+  opening is already represented by an existing row, even under different words.
+- Otherwise return only genuinely missing concepts grounded in the supplied
+  opening excerpt. A distinctive source, person, visual, event, worked idea, or
+  framing that the chapter explicitly teaches may be a concept.
+- Do not create rows for vocabulary lists, source labels, Activities, questions,
+  figure numbers, decorative visuals, previews, summaries, or editorial matter.
+- Do not duplicate or paraphrase an existing concept.
+- Each concept_description starts with "Description:" and explains the actual
+  source-grounded idea in 2-4 compact sentences. Do not cite section/figure/page
+  numbers or mention the upload format.
+- State keywords as 3-6 concise terms. Never create a Culmination row.
+""")
+
+prompts.register(
     "concepts.type_mining.system", category=_CONCEPTS_CAT,
     label="Universal Type Mining prompt",
     default="""\
@@ -2793,7 +2819,8 @@ def _append_activity_hub(details: str, hub_text: str) -> str:
     return cr.append_activity_hub(details, hub_text)
 
 
-# Inventory kinds that belong in Activity/Info Hub rather than Types Examples.
+# Inventory kinds that belong in Activity/Info Hub. Assessable prompts originating
+# in an Activity also appear in Types, while reusing the same inventory identity.
 _HUB_INVENTORY_KINDS = frozenset({"activity", "experiment_task"})
 
 
@@ -2801,7 +2828,11 @@ def _hub_inventory_items(inventory: dict | None) -> list[dict]:
     return [
         item for item in (inventory or {}).get("items") or []
         if isinstance(item, dict)
-        and (item.get("source_kind") or "").strip().lower() in _HUB_INVENTORY_KINDS
+        and (
+            (item.get("source_kind") or "").strip().lower()
+            in _HUB_INVENTORY_KINDS
+            or bool(item.get("_activity_origin"))
+        )
     ]
 
 
@@ -3054,6 +3085,10 @@ _INVENTORY_TASK_MARKER_RE = re.compile(
     r"\?"
     r")",
 )
+_NON_TASK_NUMBERED_BLOCK_RE = re.compile(
+    r"\\begin\{(?P<env>figure|tabular)\}.*?\\end\{(?P=env)\}",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 def _inventory_task_without_solution(text: str, *, aggressive: bool = False) -> str:
@@ -3070,6 +3105,14 @@ def _inventory_task_without_solution(text: str, *, aggressive: bool = False) -> 
 def _strip_leading_source_task_label(text: str) -> str:
     """Remove a textbook source label while preserving the actual task."""
     return _LEADING_SOURCE_TASK_LABEL_RE.sub("", str(text or ""), count=1).strip()
+
+
+def _mask_non_task_numbered_blocks(text: str) -> str:
+    """Hide numeric rows/captions while retaining source string offsets."""
+    return _NON_TASK_NUMBERED_BLOCK_RE.sub(
+        lambda match: re.sub(r"[^\n]", " ", match.group(0)),
+        str(text or ""),
+    )
 
 
 def _is_chapter_wide_task_section(
@@ -3093,13 +3136,25 @@ def _is_chapter_wide_task_section(
 
 
 def _question_prompts_from_text(text: str) -> list[str]:
-    """Extract explicit interrogative prompts without guessing from subject."""
-    normalized = re.sub(r"\s+", " ", str(text or "")).strip()
+    """Extract standalone interrogative prompts without treating prose as tasks.
+
+    A deterministic completeness anchor must be high precision.  Questions
+    embedded later in a quotation or explanatory paragraph are often rhetorical;
+    the semantic inventory pass can still classify ambiguous prose.
+    """
     prompts_out: list[str] = []
-    for match in _QUESTION_SENTENCE_RE.finditer(normalized):
-        prompt = match.group("question").strip()
-        if prompt and prompt not in prompts_out:
-            prompts_out.append(prompt)
+    source = str(text or "").translate(str.maketrans({"？": "?", "！": "!"}))
+    for source_line in source.splitlines():
+        normalized = re.sub(r"\s+", " ", source_line).strip()
+        if not normalized:
+            continue
+        for match in _QUESTION_SENTENCE_RE.finditer(normalized):
+            prefix = normalized[:match.start()].strip(" '\"“”‘’*-")
+            if prefix:
+                continue
+            prompt = match.group("question").strip()
+            if prompt and prompt not in prompts_out:
+                prompts_out.append(prompt)
     return prompts_out
 
 
@@ -3138,6 +3193,18 @@ def _independent_lettered_subtasks(text: str) -> list[tuple[str, str]]:
     return subtasks if len(subtasks) >= 2 else []
 
 
+def _activity_has_assessable_response(text: str) -> bool:
+    """Whether an Activity explicitly asks for a learner-produced response."""
+    value = str(text or "").translate(str.maketrans({"？": "?", "！": "!"}))
+    if "?" in value:
+        return True
+    return bool(re.search(
+        r"(?im)^\s*(?:[-*]\s*)?(?:describe|explain|write|discuss|compare|"
+        r"identify|interpret|analy[sz]e|justify|comment|imagine)\b",
+        value,
+    ))
+
+
 def _inventory_chunk_has_task_markers(chunk: dict) -> bool:
     """Whether source text explicitly signals an assessable inventory item."""
     for section in chunk.get("sections") or []:
@@ -3169,6 +3236,7 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
     def append_anchor(
         *, section_index: int, position: int, topic: str, kind: str,
         label: str, parent_label: str, task: str, chapter_wide: bool = False,
+        activity_origin: bool = False,
     ) -> None:
         task = _strip_leading_source_task_label(
             _inventory_task_without_solution(task, aggressive=(
@@ -3188,13 +3256,14 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
             "shared_context": "",
             "subpart_label": "",
             "image_urls": re.findall(
-                r"https?://cdn\.mathpix\.com/[^)\s]+", task),
+                r"https?://cdn\.mathpix\.com/[^)\s}\]]+", task),
             "content_objects": {},
             "requires_visual": bool(re.search(
                 r"\bfig(?:ure)?\.?\s*\d|!\[[^\]]*\]\(", task,
                 re.IGNORECASE)),
             "requires_context": False,
             "_topic_scope": "chapter" if chapter_wide else "topic",
+            "_activity_origin": activity_origin,
         }))
 
     for section_index, (topic, section) in enumerate(paired):
@@ -3228,15 +3297,27 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
                 re.IGNORECASE,
             )
         ):
+            is_project = bool(re.match(
+                r"^project\b", container_heading, re.IGNORECASE))
+            assessable_activity = (
+                not is_project and _activity_has_assessable_response(body))
             append_anchor(
                 section_index=section_index,
                 position=0,
                 topic=topic,
-                kind="activity",
+                # Activity prompts are assessable source tasks as well as
+                # Activity/Info Hub material. A single inventory item feeds both
+                # destinations, avoiding two qids for the same source wording.
+                kind=(
+                    "checkpoint_question"
+                    if assessable_activity
+                    else "activity"
+                ),
                 label=heading or f"Activity {section_index + 1}",
                 parent_label=heading,
                 task=body,
                 chapter_wide=chapter_wide,
+                activity_origin=assessable_activity,
             )
             continue
         is_task_list_heading = bool(
@@ -3245,7 +3326,8 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
                 _strip_section_number(heading).strip())
         )
         if is_task_list_heading:
-            task_matches = list(_NUMBERED_TASK_START_RE.finditer(body))
+            task_matches = list(_NUMBERED_TASK_START_RE.finditer(
+                _mask_non_task_numbered_blocks(body)))
             for i, match in enumerate(task_matches):
                 end = (
                     task_matches[i + 1].start()
@@ -3278,11 +3360,28 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
                         task=task_text,
                         chapter_wide=chapter_wide,
                     )
+            if not task_matches and body.strip():
+                append_anchor(
+                    section_index=section_index,
+                    position=0,
+                    topic=topic,
+                    kind="checkpoint_question",
+                    label=heading or f"Checkpoint {section_index + 1}",
+                    parent_label=heading,
+                    task=body,
+                    chapter_wide=chapter_wide,
+                )
 
         # Explicit checkpoint questions often live inside prose/boxed blocks
-        # rather than under a numbered exercise heading. Capture their literal
-        # asks as deterministic completeness evidence.
-        if not is_task_list_heading and not example_matches:
+        # rather than under a numbered exercise heading. Restrict the
+        # deterministic backstop to structurally named containers so rhetorical
+        # questions inside quotations/explanatory prose do not become tasks.
+        if (
+            not is_task_list_heading
+            and not example_matches
+            and _CHECKPOINT_CONTAINER_HEADING_RE.match(
+                _strip_section_number(heading))
+        ):
             question_prompts = _question_prompts_from_text(body)
             for question_index, task in enumerate(question_prompts, start=1):
                 append_anchor(
@@ -3294,26 +3393,34 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
                     parent_label=heading,
                     task=task,
                 )
-            if (
-                not question_prompts
-                and _CHECKPOINT_CONTAINER_HEADING_RE.match(
-                    _strip_section_number(heading))
-            ):
-                kind = (
-                    "activity"
-                    if re.match(r"^(?:activity|project)\b", heading,
-                                re.IGNORECASE)
-                    else "checkpoint_question"
-                )
+            if not question_prompts:
                 append_anchor(
                     section_index=section_index,
                     position=0,
                     topic=topic,
-                    kind=kind,
+                    kind="checkpoint_question",
                     label=heading or f"Checkpoint {section_index + 1}",
                     parent_label=heading,
                     task=body,
                 )
+        elif not is_task_list_heading and not example_matches:
+            # Multiple standalone interrogative paragraphs form an unlabelled
+            # checkpoint list. A lone question in exposition is ambiguous and
+            # remains a semantic-inventory decision.
+            question_prompts = _question_prompts_from_text(body)
+            if len(question_prompts) >= 2:
+                for question_index, task in enumerate(
+                    question_prompts, start=1
+                ):
+                    append_anchor(
+                        section_index=section_index,
+                        position=body.find(task),
+                        topic=topic,
+                        kind="checkpoint_question",
+                        label=f"Checkpoint {section_index + 1}.{question_index}",
+                        parent_label=heading,
+                        task=task,
+                    )
     return [
         item for _, _, item in sorted(ordered, key=lambda row: (row[0], row[1]))
     ]
@@ -3376,7 +3483,11 @@ def _sanitize_inventory_item(
     )
     cleaned["_topic_scope"] = "chapter" if chapter_wide else "topic"
     cleaned.setdefault("content_objects", {})
-    cleaned.setdefault("image_urls", [])
+    cleaned["image_urls"] = list(dict.fromkeys(
+        str(url or "").strip().rstrip("})]")
+        for url in (cleaned.get("image_urls") or [])
+        if str(url or "").strip()
+    ))
     cleaned.setdefault("requires_visual", False)
     cleaned.setdefault("requires_context", False)
     return cleaned
@@ -3455,7 +3566,7 @@ def _merge_source_task_anchors(items: list[dict], anchors: list[dict]) -> list[d
         )
         for field in (
             "source_kind", "source_label", "parent_source_label", "topic_hint",
-            "raw_solution_or_answer", "_topic_scope",
+            "raw_solution_or_answer", "_topic_scope", "_activity_origin",
         ):
             if anchor.get(field) not in (None, ""):
                 existing[field] = anchor.get(field)
@@ -3504,7 +3615,10 @@ def _inventory_stats(items: list[dict]) -> dict:
         "solved_examples": kinds.count("solved_example"),
         "exercise_questions": kinds.count("exercise"),
         "checkpoint_questions": kinds.count("checkpoint_question"),
-        "activities": kinds.count("activity"),
+        "activities": sum(
+            kind == "activity" or bool(item.get("_activity_origin"))
+            for kind, item in zip(kinds, items)
+        ),
         "objective_items": sum(kind in objective for kind in kinds),
         "subjective_items": sum(kind not in objective for kind in kinds),
         "descriptive_items": sum(kind in descriptive for kind in kinds),
@@ -3849,16 +3963,78 @@ _CASE_SOURCE_ARTIFACT_RE = re.compile(
 
 
 _FIGURE_REFERENCE_RE = re.compile(
-    r"\b(?:refer(?:\s+to)?\s+)?fig(?:ure)?\.?\s*"
+    r"\b(?:refer(?:\s+to)?\s+)?fig(?:ure)?[.．]?\s*"
     r"(?P<number>\d+(?:\.\d+)*)\b",
+    re.IGNORECASE,
+)
+_LATEX_FIGURE_BLOCK_RE = re.compile(
+    r"\\begin\{figure\}(?P<body>.*?)\\end\{figure\}",
+    re.IGNORECASE | re.DOTALL,
+)
+_LATEX_INCLUDEGRAPHICS_RE = re.compile(
+    r"\\includegraphics(?:\[[^\]]*\])?\{(?P<url>https?://[^}\s]+)\}",
+    re.IGNORECASE,
+)
+_MARKDOWN_IMAGE_RE = re.compile(
+    r"!\[(?P<alt>[^\]]*)\]\((?P<url>https?://[^)\s]+)\)",
+    re.IGNORECASE,
+)
+_PUBLIC_TASK_SECTION_REF_RE = re.compile(
+    r"\bsections?\s+\d+(?:\.\d+)+\b",
     re.IGNORECASE,
 )
 
 
-def _visual_alt_text(item: dict, task: str, image_index: int = 0) -> str:
+def _clean_visual_caption(value: str) -> str:
+    """Compact a source caption for safe Markdown alt text."""
+    value = re.sub(r"\\captionsetup\{.*?\}", " ", str(value or ""),
+                   flags=re.IGNORECASE | re.DOTALL)
+    value = value.replace("\\(", "").replace("\\)", "")
+    value = re.sub(r"\s+", " ", value).strip(" .")
+    return re.sub(r"[\[\]]", "", value)[:300]
+
+
+def _source_visual_captions(text: str) -> dict[str, str]:
+    """Map source image URLs to their adjacent LaTeX/Markdown captions."""
+    captions: dict[str, str] = {}
+    source = str(text or "")
+    for figure in _LATEX_FIGURE_BLOCK_RE.finditer(source):
+        body = figure.group("body")
+        include = _LATEX_INCLUDEGRAPHICS_RE.search(body)
+        if include is None:
+            continue
+        caption_match = re.search(
+            r"\\caption\{(?P<caption>.*)\}\s*$",
+            body,
+            re.IGNORECASE | re.DOTALL,
+        )
+        captions[include.group("url")] = _clean_visual_caption(
+            caption_match.group("caption") if caption_match else "")
+    for image in _MARKDOWN_IMAGE_RE.finditer(source):
+        captions.setdefault(
+            image.group("url"), _clean_visual_caption(image.group("alt")))
+    for include in _LATEX_INCLUDEGRAPHICS_RE.finditer(source):
+        captions.setdefault(include.group("url"), "")
+    return captions
+
+
+def _strip_source_visual_markup(text: str) -> str:
+    """Remove source visual wrappers; public Markdown is appended uniformly."""
+    value = _LATEX_FIGURE_BLOCK_RE.sub(" ", str(text or ""))
+    value = _LATEX_INCLUDEGRAPHICS_RE.sub(" ", value)
+    value = _MARKDOWN_IMAGE_RE.sub(" ", value)
+    return value
+
+
+def _visual_alt_text(
+    item: dict, task: str, image_index: int = 0, source_caption: str = "",
+) -> str:
     """Return a visible, source-grounded caption for a shipped image."""
-    match = _FIGURE_REFERENCE_RE.search(task or "")
-    if match:
+    caption = _clean_visual_caption(source_caption)
+    match = _FIGURE_REFERENCE_RE.search(caption or task or "")
+    if caption:
+        base = caption
+    elif match:
         base = f"Fig. {match.group('number')}"
     else:
         label = concept_cleanup.strip_dangling_references(
@@ -3883,22 +4059,30 @@ def _inventory_task_text(item: dict) -> str:
         or item.get("question")
         or ""
     )
+    visual_captions = _source_visual_captions(str(task))
     source_kind = (item.get("source_kind") or "").strip().lower()
     task = _inventory_task_without_solution(
         str(task),
         aggressive=source_kind in {"worked_example", "solved_example"},
     )
     task = _strip_leading_source_task_label(task)
+    task = _strip_source_visual_markup(task)
     task = bi.to_plain_text(str(task)).strip()
+    task = _PUBLIC_TASK_SECTION_REF_RE.sub("the earlier chapter discussion", task)
     context = bi.to_plain_text(str(item.get("shared_context") or "")).strip()
     if context and item.get("requires_context") and context not in task:
         task = f"{context} {task}".strip()
     task = re.sub(r"\s+", " ", task)
-    for image_index, url in enumerate(item.get("image_urls") or []):
+    image_urls = list(item.get("image_urls") or [])
+    for url in visual_captions:
+        if url not in image_urls:
+            image_urls.append(url)
+    for image_index, url in enumerate(image_urls):
         url = str(url or "").strip()
         if not url:
             continue
-        alt = _visual_alt_text(item, task, image_index)
+        alt = _visual_alt_text(
+            item, task, image_index, visual_captions.get(url, ""))
         empty_image = re.compile(
             r"!\[\s*\]\(" + re.escape(url) + r"\)", re.IGNORECASE)
         if empty_image.search(task):
@@ -5762,6 +5946,13 @@ def _assign_mined_types_via_api(
                         continue
                     allowed = allowed_cids_by_tid.get(tid)
                     effective_cid = override_by_tid.get(tid) or cid
+                    target_is_culmination = concept_payload_by_id.get(
+                        effective_cid, {}).get("is_culmination")
+                    type_allows_culmination = bool(
+                        not types_by_id[tid].get("is_activity")
+                        and _MIXED_ASSIGNMENT_CUE_RE.search(
+                            _assignment_unit_text(types_by_id[tid]))
+                    )
                     if (
                         effective_cid not in candidate_cid_set
                         or (
@@ -5769,9 +5960,8 @@ def _assign_mined_types_via_api(
                             and effective_cid not in allowed
                         )
                         or (
-                            types_by_id[tid].get("is_activity")
-                            and concept_payload_by_id.get(
-                                effective_cid, {}).get("is_culmination")
+                            target_is_culmination
+                            and not type_allows_culmination
                         )
                     ):
                         rejected_wrong_topic += 1
@@ -6491,10 +6681,14 @@ def _rendered_inventory_coverage_defects(
 def _hub_inventory_examples_in_types(
     records: list[dict], inventory: dict | None,
 ) -> set[str]:
-    """Hub inventory prompt keys incorrectly rendered as Types Examples."""
+    """Pure procedure/project Hub prompts incorrectly rendered as Examples."""
     expected_keys = {
         bi.normalize_question_text(_inventory_task_text(item))
-        for item in _hub_inventory_items(inventory)
+        for item in (inventory or {}).get("items") or []
+        if isinstance(item, dict)
+        and (item.get("source_kind") or "").strip().lower()
+        in _HUB_INVENTORY_KINDS
+        and not item.get("_activity_origin")
     }
     expected_keys.discard("")
     counts = _rendered_inventory_example_counts(records, expected_keys)
@@ -6554,7 +6748,7 @@ def _next_rendered_type_number(body: str) -> int:
 
 
 def _best_record_index_for_inventory_item(
-    records: list[dict], item: dict, *, allow_culmination: bool = True,
+    records: list[dict], item: dict, *, allow_culmination: bool = False,
 ) -> int:
     """Pick the concept row that should host a still-missing inventory Example."""
     if not records:
@@ -6581,17 +6775,45 @@ def _best_record_index_for_inventory_item(
     return -scored[0][1]
 
 
-def _append_inventory_example_to_record(record: dict, text: str) -> dict:
-    """Append one inventory Example under a new Type/Case on the record."""
+def _append_inventory_example_to_record(
+    record: dict, text: str, item: dict | None = None,
+) -> dict:
+    """Append a missing Example under a source-kind pattern, grouping Cases."""
     updated = dict(record)
     details = updated.get("concept_details") or ""
     body = _types_body(details)
-    type_no = _next_rendered_type_number(body)
-    addition = (
-        f"Type {type_no:02d}: Source inventory task "
-        f"Case 01: Source question Example: {text.strip()}"
+    source_kind = (
+        ((item or {}).get("source_kind") or "other").strip().lower()
     )
-    new_body = f"{body} {addition}".strip() if body.strip() else addition
+    title, case_title = _FALLBACK_TYPE_WORDING.get(
+        source_kind, _FALLBACK_TYPE_WORDING["other"])
+    existing = re.search(
+        r"(?is)(?P<header>\bType\s+\d{1,2}:\s*"
+        + re.escape(title)
+        + r")(?P<section>.*?)(?=\bType\s+\d{1,2}:|\Z)",
+        body,
+    )
+    if existing:
+        case_numbers = [
+            int(number)
+            for number in re.findall(
+                r"\bCase\s+(\d{1,2}):", existing.group("section"),
+                re.IGNORECASE,
+            )
+        ]
+        case_no = (max(case_numbers) if case_numbers else 0) + 1
+        addition = (
+            f" Case {case_no:02d}: {case_title} Example: {text.strip()}")
+        new_body = (
+            body[:existing.end()] + addition + body[existing.end():]
+        ).strip()
+    else:
+        type_no = _next_rendered_type_number(body)
+        addition = (
+            f"Type {type_no:02d}: {title} "
+            f"Case 01: {case_title} Example: {text.strip()}"
+        )
+        new_body = f"{body} {addition}".strip() if body.strip() else addition
     updated["concept_details"] = _inject_types(details, new_body)
     return updated
 
@@ -6728,15 +6950,24 @@ def _repair_rendered_inventory_coverage(
             continue
         if key in covered_keys:
             continue
-        index = _best_record_index_for_inventory_item(out, item)
+        index = _best_record_index_for_inventory_item(
+            out, item, allow_culmination=False)
         if index < 0 or index >= len(out):
-            index = 0
-        out[index] = _append_inventory_example_to_record(out[index], text)
+            skipped_unplaceable += 1
+            continue
+        out[index] = _append_inventory_example_to_record(out[index], text, item)
         covered_keys.add(key)
         placed += 1
 
-    # Second pass: any placeable key still absent after the first append loop
-    # (e.g. topic scoring edge cases) is force-attached to the first record.
+    # Second pass: any placeable key still absent after the first append loop is
+    # force-attached to the first normal concept, never to Culmination.
+    first_normal = next(
+        (
+            index for index, row in enumerate(out)
+            if not cr.is_culmination(row.get("concept_title", ""))
+        ),
+        -1,
+    )
     still_missing = _rendered_inventory_coverage_defects(out, inventory)["missing"]
     for qid in still_missing:
         item = items_by_qid.get(qid)
@@ -6746,7 +6977,10 @@ def _repair_rendered_inventory_coverage(
         key = bi.normalize_question_text(text)
         if not text or not key or key in covered_keys:
             continue
-        out[0] = _append_inventory_example_to_record(out[0], text)
+        if first_normal < 0:
+            continue
+        out[first_normal] = _append_inventory_example_to_record(
+            out[first_normal], text, item)
         covered_keys.add(key)
         placed += 1
 
@@ -9147,6 +9381,112 @@ def _recover_missing_topic_concepts_via_api(
     return out
 
 
+def _chapter_opening_excerpt(
+    sections: list[dict], headings: list[str],
+) -> dict[str, str] | None:
+    """Return substantive source material before the first main topic."""
+    if not sections or not headings:
+        return None
+    first_topic = _strip_section_number(headings[0]).strip()
+    first_key = _topic_comparison_key(first_topic)
+    opening_parts: list[str] = []
+    for section in sections:
+        heading = (section.get("heading") or "").strip()
+        if heading and _topic_comparison_key(heading) == first_key:
+            break
+        if _is_filler_source_topic(heading):
+            continue
+        body = (section.get("body") or "").strip()
+        if body:
+            opening_parts.append(
+                (f"{heading}\n" if heading else "") + body)
+    excerpt = "\n\n".join(opening_parts).strip()
+    # Avoid spending a semantic audit on a title page or a decorative image.
+    prose = re.sub(r"https?://\S+|\\[A-Za-z]+\{.*?\}", " ", excerpt)
+    if len(re.sub(r"\W+", "", prose, flags=re.UNICODE)) < 180:
+        return None
+    return {"topic": first_topic, "excerpt": excerpt}
+
+
+def _recover_chapter_opening_concepts_via_api(
+    records: list[dict], *, meta: dict, sections: list[dict],
+    headings: list[str],
+) -> list[dict]:
+    """Semantically audit and recover omitted pre-section teaching content."""
+    import json as _json
+
+    opening = _chapter_opening_excerpt(sections, headings)
+    if not opening or not records:
+        return records
+    topic_key = _topic_comparison_key(opening["topic"])
+    existing = [
+        row for row in records
+        if _topic_comparison_key(row.get("topic") or "") == topic_key
+        and not cr.is_culmination(row.get("concept_title", ""))
+    ]
+    payload = {
+        "opening_topic": opening["topic"],
+        "opening_excerpt": _trim(opening["excerpt"], 50_000),
+        "existing_rows": _records_to_api_rows(existing),
+    }
+    progress.log("Auditing substantive chapter-opening concept coverage via API.")
+    data = _openai_json(
+        prompts.get_text("concepts.opening_recovery.system"),
+        _metadata_block(meta) + "\n" + _json.dumps(payload, ensure_ascii=False),
+    )
+    raw_candidates = []
+    for raw in (data or {}).get("missing_rows") or []:
+        if not isinstance(raw, dict):
+            continue
+        normalized = dict(raw)
+        if isinstance(normalized.get("keywords"), list):
+            normalized["keywords"] = ", ".join(
+                str(value).strip()
+                for value in normalized["keywords"]
+                if str(value).strip()
+            )
+        raw_candidates.append(normalized)
+    candidates = _concept_rows_to_records({
+        "rows": raw_candidates,
+    })
+    existing_titles = {
+        bi.normalize_question_text(row.get("concept_title") or "")
+        for row in records
+    }
+    additions: list[dict] = []
+    for candidate in candidates:
+        title = (candidate.get("concept_title") or "").strip()
+        title_key = bi.normalize_question_text(title)
+        if (
+            not title_key
+            or title_key in existing_titles
+            or cr.is_culmination(title)
+            or _is_filler_source_topic(title)
+        ):
+            continue
+        candidate["topic"] = opening["topic"]
+        if not (candidate.get("parent_concept") or "").strip():
+            candidate["parent_concept"] = opening["topic"]
+        additions.append(candidate)
+        existing_titles.add(title_key)
+    if not additions:
+        return records
+    out = [dict(row) for row in records]
+    insert_at = next(
+        (
+            index for index, row in enumerate(out)
+            if _topic_comparison_key(row.get("topic") or "") == topic_key
+        ),
+        0,
+    )
+    out[insert_at:insert_at] = additions
+    progress.log(
+        f"Recovered {len(additions)} missing chapter-opening concept row(s).",
+        level="success",
+    )
+    return out
+
+
 def _restructure_topics_via_api(
     records: list[dict], *, meta: dict,
     source_topic_excerpts: list[dict] | None = None,
@@ -9367,6 +9707,12 @@ def concepts_from_mmd(
         out = _enforce_method_anchor_topics(out, method_anchors)
         out = _canonicalize_method_anchor_tags(
             out, method_anchors, chunk_text=mmd_text, meta=meta)
+        # Audit opening coverage after chapter-wide consolidation so a distinct
+        # pre-section idea cannot be dropped merely because the first topic
+        # already has other concepts.
+        out = _recover_chapter_opening_concepts_via_api(
+            out, meta=meta, sections=sections, headings=headings)
+        out = _reorder_records_by_source_topics(out, headings)
         progress.step("Concept extraction — refining descriptions", value=0.42)
         out = _refine_descriptions_via_api(
             out, subject=subject, mmd_text=mmd_text, meta=meta, sections=sections)
