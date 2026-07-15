@@ -6681,10 +6681,14 @@ def _rendered_inventory_coverage_defects(
 def _hub_inventory_examples_in_types(
     records: list[dict], inventory: dict | None,
 ) -> set[str]:
-    """Hub inventory prompt keys incorrectly rendered as Types Examples."""
+    """Pure procedure/project Hub prompts incorrectly rendered as Examples."""
     expected_keys = {
         bi.normalize_question_text(_inventory_task_text(item))
-        for item in _hub_inventory_items(inventory)
+        for item in (inventory or {}).get("items") or []
+        if isinstance(item, dict)
+        and (item.get("source_kind") or "").strip().lower()
+        in _HUB_INVENTORY_KINDS
+        and not item.get("_activity_origin")
     }
     expected_keys.discard("")
     counts = _rendered_inventory_example_counts(records, expected_keys)

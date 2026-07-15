@@ -579,6 +579,31 @@ def test_uploaded_electricity_activities_feed_types_and_hubs_with_visuals():
                for text in rendered_visuals)
 
 
+def test_assessable_activity_can_appear_once_in_types_and_in_hub():
+    prompt = "Describe the observed current and explain why it changes."
+    inventory = {"items": [{
+        "qid": "QINV-0001",
+        "source_kind": "checkpoint_question",
+        "_activity_origin": True,
+        "raw_task": prompt,
+    }]}
+    rows = [{
+        "topic": "Current",
+        "concept_title": "Current in Conductors",
+        "concept_details": (
+            "Description: Current is measured in a closed circuit. // "
+            "Activity/Info Hub: Observe current while changing the conductor. // "
+            "Types: Type 01: Interpreting observations "
+            f"Case 01: Current changes Example: {prompt}"
+        ),
+    }]
+    assert g._rendered_inventory_coverage_defects(rows, inventory) == {
+        "missing": [],
+        "duplicate": [],
+    }
+    assert g._hub_inventory_examples_in_types(rows, inventory) == set()
+
+
 def test_opening_recovery_adds_only_model_identified_missing_rows(monkeypatch):
     sections = [
         {
