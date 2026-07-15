@@ -2120,6 +2120,45 @@ def test_salvage_short_case_examples_expands_from_inventory():
         )
 
 
+def test_short_example_salvage_never_borrows_from_another_source_topic():
+    own_topic_task = (
+        "Describe the symbols used in the national allegory print and explain "
+        "what each symbol represents."
+    )
+    other_topic_task = (
+        "Describe the print and explain how it portrays imperial rivalry."
+    )
+    records = [{
+        "topic": "Visualising the Nation",
+        "parent_concept": "Allegory",
+        "concept_title": "National Allegory",
+        "concept_details": (
+            "Description: Nations were represented as female figures. // "
+            "Types: Type 01: Visual source interpretation "
+            "Case 01: Allegorical symbols Example: Describe the print. // "
+            "Misconceptions: Students may treat allegory as literal history."
+        ),
+        "keywords": "",
+    }]
+    inventory = {"items": [
+        {
+            "qid": "QINV-0001",
+            "raw_task": own_topic_task,
+            "topic_hint": "Visualising the Nation",
+        },
+        {
+            "qid": "QINV-0002",
+            "raw_task": other_topic_task,
+            "topic_hint": "Nationalism and Imperialism",
+        },
+    ]}
+
+    out = g._salvage_short_case_examples(records, inventory=inventory)
+
+    assert own_topic_task in out[0]["concept_details"]
+    assert other_topic_task not in out[0]["concept_details"]
+
+
 def test_final_scrub_clears_page14_and_reintroduced_artifacts():
     """Electricity deposit must not die on OCR page14 / post-mastery Example N."""
     rows = [

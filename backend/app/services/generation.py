@@ -7625,6 +7625,19 @@ def _salvage_short_case_examples(
     Example (and empty Cases) so the chapter can still deposit.
     """
     inventory_texts = _inventory_lookup_texts(inventory)
+    inventory_texts_by_topic: dict[str, list[str]] = {}
+    unscoped_inventory_texts: list[str] = []
+    for item in (inventory or {}).get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        text = _inventory_task_text(item)
+        if not text or text not in inventory_texts:
+            continue
+        topic_key = _topic_comparison_key(item.get("topic_hint") or "")
+        if topic_key:
+            inventory_texts_by_topic.setdefault(topic_key, []).append(text)
+        else:
+            unscoped_inventory_texts.append(text)
     # Never expand a stub into an inventory prompt already rendered elsewhere;
     # that creates the exact missing+duplicate coverage failure seen when
     # short Case Examples fuzzy-match already-placed source questions.
@@ -7634,6 +7647,14 @@ def _salvage_short_case_examples(
     out: list[dict] = []
     for rec in records:
         rec = dict(rec)
+        record_topic_key = _topic_comparison_key(rec.get("topic") or "")
+        topic_inventory_texts = inventory_texts_by_topic.get(record_topic_key)
+        scoped_inventory_texts = (
+            list(dict.fromkeys(
+                [*(topic_inventory_texts or []), *unscoped_inventory_texts]))
+            if topic_inventory_texts
+            else inventory_texts
+        )
         details = rec.get("concept_details") or ""
         sections = cr.split_sections(details)
         types_idx = next(
@@ -7677,7 +7698,7 @@ def _salvage_short_case_examples(
                 if not examples and case_title:
                     if cv._example_too_short(case_title):
                         replacement = _match_inventory_for_short_example(
-                            case_title, inventory_texts, used=used,
+                            case_title, scoped_inventory_texts, used=used,
                             context=match_context,
                         )
                         if replacement:
@@ -7708,7 +7729,8 @@ def _salvage_short_case_examples(
                         used.add(bi.normalize_question_text(ex))
                         continue
                     replacement = _match_inventory_for_short_example(
-                        ex, inventory_texts, used=used, context=match_context,
+                        ex, scoped_inventory_texts, used=used,
+                        context=match_context,
                     )
                     if replacement:
                         new_examples.append(replacement)
