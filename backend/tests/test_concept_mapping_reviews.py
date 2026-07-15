@@ -1,4 +1,5 @@
 """Regression tests for QA review feedback (Reviews 01–06)."""
+import re
 from pathlib import Path
 
 from app import models
@@ -500,8 +501,8 @@ def test_uploaded_nationalism_fixture_recovers_all_checkpoint_containers():
         if item["source_kind"] == "checkpoint_question"
     ]
     assert len(checkpoints) == 14
-    assert sum(bool(item.get("_activity_origin")) for item in checkpoints) == 9
-    assert len(g._hub_inventory_items({"items": checkpoints})) == 9
+    assert sum(bool(item.get("_activity_origin")) for item in checkpoints) == 8
+    assert len(g._hub_inventory_items({"items": anchors})) == 10
     assert not any(
         "Do we require any further proof" in item["raw_task"]
         or "Is it not a disgrace" in item["raw_task"]
@@ -522,6 +523,60 @@ def test_uploaded_nationalism_fixture_exposes_sorrieu_opening_for_recovery():
     assert opening is not None
     assert opening["topic"] == "The French Revolution and the Idea of the Nation"
     assert "Frédéric Sorrieu" in opening["excerpt"]
+
+
+def test_uploaded_ap_fixture_keeps_parent_questions_and_own_mcq_options():
+    source = (
+        Path(__file__).parents[1] / "data" / "jemh105 (1).mmd"
+    ).read_text(encoding="utf-8")
+    sections = [
+        section
+        for chunk in g._section_aware_chunks(source)
+        for section in chunk["sections"]
+    ]
+    anchors = g._source_task_anchors(sections)
+    exercise_anchors = [
+        item for item in anchors if item["source_kind"] == "exercise"
+    ]
+    assert len(exercise_anchors) == 49
+    assert len({
+        item["source_label"] for item in exercise_anchors
+    }) == len(exercise_anchors)
+    mcq = next(
+        item for item in exercise_anchors
+        if item["source_label"] == "EXERCISE 5.2 Q2"
+    )
+    assert "30 th term" in mcq["raw_task"]
+    assert "(A) 97 (B) 77 (C) -77 (D) -87" in mcq["raw_task"]
+    assert "11th term" in mcq["raw_task"]
+    assert "(A) 28 (B) 22 (C) -38" in mcq["raw_task"]
+
+
+def test_uploaded_electricity_activities_feed_types_and_hubs_with_visuals():
+    source = (
+        Path(__file__).parents[1] / "data" / "Class 10 Chapter 5 Electricity.mmd"
+    ).read_text(encoding="utf-8")
+    sections = [
+        section
+        for chunk in g._section_aware_chunks(source)
+        for section in chunk["sections"]
+    ]
+    anchors = g._source_task_anchors(sections)
+    activities = [
+        item for item in anchors if item.get("_activity_origin")
+    ]
+    assert len(activities) == 6
+    assert all(
+        item["source_kind"] == "checkpoint_question" for item in activities)
+    assert len(g._hub_inventory_items({"items": anchors})) == 6
+    rendered_visuals = [
+        g._inventory_task_text(item)
+        for item in activities if item.get("image_urls")
+    ]
+    assert rendered_visuals
+    assert all("\\includegraphics" not in text for text in rendered_visuals)
+    assert all(re.search(r"!\[[^\]]+\]\(https://", text)
+               for text in rendered_visuals)
 
 
 def test_opening_recovery_adds_only_model_identified_missing_rows(monkeypatch):

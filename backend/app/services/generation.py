@@ -3085,6 +3085,10 @@ _INVENTORY_TASK_MARKER_RE = re.compile(
     r"\?"
     r")",
 )
+_NON_TASK_NUMBERED_BLOCK_RE = re.compile(
+    r"\\begin\{(?P<env>figure|tabular)\}.*?\\end\{(?P=env)\}",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 def _inventory_task_without_solution(text: str, *, aggressive: bool = False) -> str:
@@ -3101,6 +3105,14 @@ def _inventory_task_without_solution(text: str, *, aggressive: bool = False) -> 
 def _strip_leading_source_task_label(text: str) -> str:
     """Remove a textbook source label while preserving the actual task."""
     return _LEADING_SOURCE_TASK_LABEL_RE.sub("", str(text or ""), count=1).strip()
+
+
+def _mask_non_task_numbered_blocks(text: str) -> str:
+    """Hide numeric rows/captions while retaining source string offsets."""
+    return _NON_TASK_NUMBERED_BLOCK_RE.sub(
+        lambda match: re.sub(r"[^\n]", " ", match.group(0)),
+        str(text or ""),
+    )
 
 
 def _is_chapter_wide_task_section(
@@ -3179,6 +3191,18 @@ def _independent_lettered_subtasks(text: str) -> list[tuple[str, str]]:
         if body:
             subtasks.append((label, f"{stem} {body}".strip()))
     return subtasks if len(subtasks) >= 2 else []
+
+
+def _activity_has_assessable_response(text: str) -> bool:
+    """Whether an Activity explicitly asks for a learner-produced response."""
+    value = str(text or "").translate(str.maketrans({"？": "?", "！": "!"}))
+    if "?" in value:
+        return True
+    return bool(re.search(
+        r"(?im)^\s*(?:[-*]\s*)?(?:describe|explain|write|discuss|compare|"
+        r"identify|interpret|analy[sz]e|justify|comment|imagine)\b",
+        value,
+    ))
 
 
 def _inventory_chunk_has_task_markers(chunk: dict) -> bool:
@@ -3275,6 +3299,8 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
         ):
             is_project = bool(re.match(
                 r"^project\b", container_heading, re.IGNORECASE))
+            assessable_activity = (
+                not is_project and _activity_has_assessable_response(body))
             append_anchor(
                 section_index=section_index,
                 position=0,
@@ -3282,12 +3308,16 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
                 # Activity prompts are assessable source tasks as well as
                 # Activity/Info Hub material. A single inventory item feeds both
                 # destinations, avoiding two qids for the same source wording.
-                kind="activity" if is_project else "checkpoint_question",
+                kind=(
+                    "checkpoint_question"
+                    if assessable_activity
+                    else "activity"
+                ),
                 label=heading or f"Activity {section_index + 1}",
                 parent_label=heading,
                 task=body,
                 chapter_wide=chapter_wide,
-                activity_origin=not is_project,
+                activity_origin=assessable_activity,
             )
             continue
         is_task_list_heading = bool(
@@ -3296,7 +3326,8 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
                 _strip_section_number(heading).strip())
         )
         if is_task_list_heading:
-            task_matches = list(_NUMBERED_TASK_START_RE.finditer(body))
+            task_matches = list(_NUMBERED_TASK_START_RE.finditer(
+                _mask_non_task_numbered_blocks(body)))
             for i, match in enumerate(task_matches):
                 end = (
                     task_matches[i + 1].start()
@@ -5812,27 +5843,16 @@ def _assign_mined_types_via_api(
         source_topic = (mtype.get("topic_match_hint") or "").strip()
         topic_key = _topic_comparison_key(source_topic)
         topic_key_by_tid[tid] = topic_key
-        allow_culmination = bool(
-            not mtype.get("is_activity")
-            and _MIXED_ASSIGNMENT_CUE_RE.search(
-                _assignment_unit_text(mtype))
-        )
-        eligible = {
-            cid for cid, row in cid_map.items()
-            if allow_culmination
-            or not cr.is_culmination(row.get("concept_title", ""))
-        }
         if topic_key:
-            allowed = set(concept_ids_by_topic.get(topic_key, [])) & eligible
+            allowed = set(concept_ids_by_topic.get(topic_key, []))
             allowed_cids_by_tid[tid] = allowed
             candidate_cids_by_tid[tid] = tuple(
                 cid for cid in all_concept_ids if cid in allowed)
             if not allowed:
                 missing_scopes.append((tid, source_topic, topic_key))
         else:
-            allowed_cids_by_tid[tid] = eligible
-            candidate_cids_by_tid[tid] = tuple(
-                cid for cid in all_concept_ids if cid in eligible)
+            allowed_cids_by_tid[tid] = None
+            candidate_cids_by_tid[tid] = all_concept_ids
 
     if missing_scopes:
         failures = "; ".join(
@@ -5926,6 +5946,13 @@ def _assign_mined_types_via_api(
                         continue
                     allowed = allowed_cids_by_tid.get(tid)
                     effective_cid = override_by_tid.get(tid) or cid
+                    target_is_culmination = concept_payload_by_id.get(
+                        effective_cid, {}).get("is_culmination")
+                    type_allows_culmination = bool(
+                        not types_by_id[tid].get("is_activity")
+                        and _MIXED_ASSIGNMENT_CUE_RE.search(
+                            _assignment_unit_text(types_by_id[tid]))
+                    )
                     if (
                         effective_cid not in candidate_cid_set
                         or (
@@ -5933,9 +5960,8 @@ def _assign_mined_types_via_api(
                             and effective_cid not in allowed
                         )
                         or (
-                            types_by_id[tid].get("is_activity")
-                            and concept_payload_by_id.get(
-                                effective_cid, {}).get("is_culmination")
+                            target_is_culmination
+                            and not type_allows_culmination
                         )
                     ):
                         rejected_wrong_topic += 1
@@ -9662,8 +9688,6 @@ def concepts_from_mmd(
             allow_chapter_title_topic=allow_chapter_title_topic)
         out = _recover_missing_topic_concepts_via_api(
             out, meta=meta, source_topic_excerpts=source_topic_excerpts)
-        out = _recover_chapter_opening_concepts_via_api(
-            out, meta=meta, sections=sections, headings=headings)
         out = _reorder_records_by_source_topics(out, headings)
         out = _restore_method_anchor_rows(
             out, skeleton_method_row_snapshot)
@@ -9679,6 +9703,12 @@ def concepts_from_mmd(
         out = _enforce_method_anchor_topics(out, method_anchors)
         out = _canonicalize_method_anchor_tags(
             out, method_anchors, chunk_text=mmd_text, meta=meta)
+        # Audit opening coverage after chapter-wide consolidation so a distinct
+        # pre-section idea cannot be dropped merely because the first topic
+        # already has other concepts.
+        out = _recover_chapter_opening_concepts_via_api(
+            out, meta=meta, sections=sections, headings=headings)
+        out = _reorder_records_by_source_topics(out, headings)
         progress.step("Concept extraction — refining descriptions", value=0.42)
         out = _refine_descriptions_via_api(
             out, subject=subject, mmd_text=mmd_text, meta=meta, sections=sections)
