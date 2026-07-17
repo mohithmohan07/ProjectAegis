@@ -3768,6 +3768,8 @@ def _merge_source_task_anchors(items: list[dict], anchors: list[dict]) -> list[d
         for root, candidates in anchors_by_question_root.items()
         if len(candidates) == 1
         and not (candidates[0].get("subpart_label") or "").strip()
+        and not _inventory_label_has_subpart(
+            candidates[0].get("source_label") or "")
     }
     if authoritative_parent_roots:
         # GPT sometimes emits both an umbrella question and one row per
