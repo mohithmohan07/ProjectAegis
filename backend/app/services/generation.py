@@ -9497,8 +9497,12 @@ def _method_coverage_anchors(sections: list[dict]) -> list[dict]:
             if normalized not in {
                     _normalize_math_evidence(existing) for existing in formulas}:
                 formulas.append(formula)
+        # "prove/proof" is often ordinary disciplinary prose ("history proves
+        # that...", "no further proof..."). Without a formula, only explicit
+        # derivation/procedure vocabulary is strong enough to create a durable
+        # method concept.
         has_method_word = bool(re.search(
-            r"\b(?:deriv|proof|prove|method|procedure|algorithm|technique)\w*\b",
+            r"\b(?:deriv|method|procedure|algorithm|technique)\w*\b",
             searchable, re.IGNORECASE))
         if not formulas and not has_method_word:
             continue

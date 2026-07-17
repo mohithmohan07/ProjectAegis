@@ -470,6 +470,15 @@ def test_derivation_concept_receives_a_relevant_worked_example(monkeypatch):
         "Achieving Mastery:")
 
 
+def test_incidental_historical_proof_language_is_not_a_method_anchor():
+    sections = g.parse_mmd_sections(
+        "## National Claims\n"
+        "The communities used history to prove that they had once been "
+        "independent. A critic asked whether any further proof was required."
+    )
+    assert not g._method_coverage_anchors(sections)
+
+
 def test_reusable_type_keeps_one_number_and_continues_cases_across_concepts():
     records = [
         {
