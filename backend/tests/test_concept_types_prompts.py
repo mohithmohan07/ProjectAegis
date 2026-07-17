@@ -1737,10 +1737,13 @@ def test_concepts_pipeline_runs_types_assign(monkeypatch):
                 "topic": "Algebra", "concept": "Linear equations",
                 "concept_description": (
                     "Description: altered by model // "
-                    "Types: Type 01: One-step Case 01: Solve x+2=5 by subtracting 2 from both sides. "
-                    "Case 02: Solve x-3=1 by adding 3 to both sides. "
-                    "Type 02: Two-step Case 01: Solve 2x+1=7 by undoing addition and multiplication. "
-                    "Case 02: Solve 3x-2=4 by undoing subtraction and multiplication. "
+                    "Types: Type 01: One-step Case 01: Solve "
+                    "[Katex] x+2=5 [/Katex] by subtracting 2 from both sides. "
+                    "Case 02: Solve [Katex] x-3=1 [/Katex] by adding 3 to both sides. "
+                    "Type 02: Two-step Case 01: Solve [Katex] 2x+1=7 [/Katex] "
+                    "by undoing addition and multiplication. "
+                    "Case 02: Solve [Katex] 3x-2=4 [/Katex] "
+                    "by undoing subtraction and multiplication. "
                     "// Misconception: wrong inverse op"
                 ),
                 "keywords": "linear",
@@ -1749,7 +1752,10 @@ def test_concepts_pipeline_runs_types_assign(monkeypatch):
             return {"rows": []}
         return {"rows": [{
             "topic": "Algebra", "concept": "Linear equations",
-            "concept_description": "Description: solve ax+b=c // Misconception: wrong inverse op",
+            "concept_description": (
+                "Description: solve [Katex] ax+b=c [/Katex] // "
+                "Misconception: wrong inverse op"
+            ),
             "keywords": "linear",
         }]}
 
