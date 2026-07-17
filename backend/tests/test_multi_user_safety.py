@@ -194,7 +194,7 @@ def test_culminations_are_enforced_mechanically():
     a_culms = [r for r in a_rows if r["concept_title"].startswith("Culmination")]
     b_culms = [r for r in b_rows if r["concept_title"].startswith("Culmination")]
     assert len(a_culms) == 1 and a_rows[-1] is a_culms[0]
-    assert a_culms[0]["concept_title"] == "Culmination - First"
+    assert a_culms[0]["concept_title"] == "Culmination - Concept A1"
     assert len(b_culms) == 1 and b_rows[-1] is b_culms[0]
     # Normal rows all survive.
     assert [r["concept_title"] for r in a_rows[:-1]] == ["Concept A1"]
