@@ -81,7 +81,8 @@ def test_universal_question_task_inventory_and_type_mining_prompts():
     assert "CASE WORDING" in mining
     assert "case_title DEFINES the sub-type" in mining
     assert "checkpoint" in mining.lower()
-    assert "cdn.mathpix.com" in mining
+    assert "[img src=" in mining
+    assert "![" not in mining
     # Types must be properly defined (precise wording + definition).
     assert "TYPE WORDING" in mining
     assert "precise, self-explanatory pattern name" in mining

@@ -1,0 +1,415 @@
+"""Universal quality contracts distilled from the three reviewed chapters."""
+from __future__ import annotations
+
+from app.services import concept_refiner as cr
+from app.services import concept_validator as cv
+from app.services import generation as g
+from app.services import katex_rules as kr
+
+
+def _inventory(*items: dict) -> dict:
+    return {"items": list(items), "stats": {"total_inventory_items": len(items)}}
+
+
+def _item(qid: str, task: str, *, topic: str = "Methods", **extra) -> dict:
+    return {
+        "qid": qid,
+        "source_kind": "exercise",
+        "source_label": f"Question {qid[-1]}",
+        "parent_source_label": "Exercises",
+        "topic_hint": topic,
+        "raw_task": task,
+        "normalized_task": task,
+        "image_urls": [],
+        **extra,
+    }
+
+
+def _type(
+    type_id: str,
+    qid: str,
+    task: str,
+    *,
+    title: str,
+    topic: str = "Methods",
+) -> dict:
+    return {
+        "type_id": type_id,
+        "type_title": title,
+        "type_description": f"Learners use the {title.lower()} method.",
+        "task_pattern": title,
+        "source_question_ids": [qid],
+        "case_prompts": [{
+            "case_id": f"CASE-{qid[-1]}",
+            "case_title": title,
+            "examples": [{
+                "source_question_id": qid,
+                "example_prompt": task,
+            }],
+            "placement_scope": "normal",
+        }],
+        "concept_match_hint": "Target Method",
+        "parent_concept_match_hint": "Methods",
+        "topic_match_hint": topic,
+        "is_activity": False,
+        "placement_scope": "normal",
+    }
+
+
+def test_rich_text_emits_uppercase_katex_and_canonical_images():
+    raw = (
+        "Use $\\frac{a}{b}=\\alpha$ and "
+        "![ratio diagram](https://images.example/ratio.png). "
+        "Legacy [katex] x^2 [/katex]."
+    )
+    rendered = kr.canonicalize_rich_text(raw)
+    assert "[Katex] \\frac{a}{b}=\\alpha [/Katex]" in rendered
+    assert "[Katex] x^2 [/Katex]" in rendered
+    assert (
+        '[img src="https://images.example/ratio.png" alt="ratio diagram"]'
+        in rendered
+    )
+    assert not kr.rich_text_issues(rendered)
+
+
+def test_inventory_examples_strip_headings_and_emit_canonical_media():
+    item = _item(
+        "QINV-0001",
+        "## Activity\nFind $x$ from the diagram. "
+        "![triangle](https://images.example/triangle.png)",
+        requires_visual=True,
+        image_urls=["https://images.example/triangle.png"],
+    )
+    rendered = g._inventory_task_text(item)
+    assert "## Activity" not in rendered
+    assert "[Katex] x [/Katex]" in rendered
+    assert '[img src="https://images.example/triangle.png"' in rendered
+    assert "![" not in rendered
+
+
+def test_semantic_type_consolidation_merges_paraphrases_exactly_once(monkeypatch):
+    first = _item("QINV-0001", "Determine the output using the stated rule.")
+    second = _item("QINV-0002", "Find the output by applying the given rule.")
+    inventory = _inventory(first, second)
+    original = {
+        "types": [
+            _type(
+                "TYPE-0001", first["qid"], first["raw_task"],
+                title="Determining an Output from a Rule",
+            ),
+            _type(
+                "TYPE-0002", second["qid"], second["raw_task"],
+                title="Finding an Output by Applying a Rule",
+            ),
+        ],
+    }
+    merged = _type(
+        "TYPE-0001",
+        first["qid"],
+        first["raw_task"],
+        title="Determining an Output by Applying a Rule",
+    )
+    merged["source_question_ids"].append(second["qid"])
+    merged["case_prompts"].append({
+        "case_id": "CASE-0002",
+        "case_title": "Rule supplied in symbolic form",
+        "examples": [{
+            "source_question_id": second["qid"],
+            "example_prompt": second["raw_task"],
+        }],
+        "placement_scope": "normal",
+    })
+    monkeypatch.setattr(g, "_openai_json", lambda *_a, **_k: {"types": [merged]})
+
+    result = g._consolidate_semantic_types_via_api(
+        original, inventory=inventory, meta={})
+    assert len(result["types"]) == 1
+    assert not g._uncovered_inventory_items(inventory, result["types"])
+    assert not g._duplicate_inventory_assignments(inventory, result["types"])
+
+
+def test_semantic_type_consolidation_rejects_topic_drift(monkeypatch):
+    first = _item("QINV-0001", "Determine the first output.", topic="Topic A")
+    second = _item("QINV-0002", "Determine the second output.", topic="Topic B")
+    inventory = _inventory(first, second)
+    original = {
+        "types": [
+            _type(
+                "TYPE-0001", first["qid"], first["raw_task"],
+                title="Determining an Output", topic="Topic A",
+            ),
+            _type(
+                "TYPE-0002", second["qid"], second["raw_task"],
+                title="Determining an Output", topic="Topic B",
+            ),
+        ],
+    }
+    invalid = _type(
+        "TYPE-0001", first["qid"], first["raw_task"],
+        title="Determining an Output", topic="Topic A",
+    )
+    invalid["source_question_ids"].append(second["qid"])
+    invalid["case_prompts"].append(original["types"][1]["case_prompts"][0])
+    monkeypatch.setattr(g, "_openai_json", lambda *_a, **_k: {"types": [invalid]})
+
+    result = g._consolidate_semantic_types_via_api(
+        original, inventory=inventory, meta={})
+    assert len(result["types"]) == 2
+
+
+def test_concept_sufficiency_adds_only_a_supported_same_topic_method(monkeypatch):
+    records = [{
+        "topic": "Methods",
+        "parent_concept": "Core",
+        "concept_title": "Applying a Direct Rule",
+        "concept_details": (
+            "Description: Substitute a supplied input directly into the rule "
+            "to calculate its output."
+        ),
+        "keywords": "rule",
+    }]
+    mined = {
+        "types": [_type(
+            "TYPE-0001",
+            "QINV-0001",
+            "Recover an input by reversing every operation in the rule.",
+            title="Recovering an Input by Reversing a Rule",
+        )],
+    }
+    monkeypatch.setattr(g, "_openai_json", lambda *_a, **_k: {
+        "additions": [{
+            "after_concept_id": "CONCEPT-0001",
+            "topic": "Methods",
+            "parent_concept": "Core",
+            "concept": "Reversing a Rule to Recover Its Input",
+            "concept_description": (
+                "Description: Start from the known output and undo each "
+                "operation in reverse order while preserving equality."
+            ),
+            "keywords": "inverse operations",
+            "supporting_type_ids": ["TYPE-0001"],
+        }],
+    })
+    result = g._add_missing_type_method_concepts_via_api(
+        records, mined_types=mined, meta={})
+    assert [row["concept_title"] for row in result] == [
+        "Applying a Direct Rule",
+        "Reversing a Rule to Recover Its Input",
+    ]
+
+
+def test_host_entailment_review_moves_case_to_supported_sibling(monkeypatch):
+    unit = _type(
+        "TYPE-0001",
+        "QINV-0001",
+        "Recover the input by reversing the supplied rule.",
+        title="Recovering an Input by Reversing a Rule",
+    )
+    concepts = [
+        {
+            "concept_id": "CONCEPT-0001",
+            "topic": "Methods",
+            "concept": "Applying a Direct Rule",
+            "concept_description": "Substitute an input to find an output.",
+            "is_culmination": False,
+        },
+        {
+            "concept_id": "CONCEPT-0002",
+            "topic": "Methods",
+            "concept": "Reversing a Rule",
+            "concept_description": "Undo operations to recover an input.",
+            "is_culmination": False,
+        },
+    ]
+    monkeypatch.setattr(g, "_openai_json", lambda *_a, **_k: {
+        "assignments": [{
+            "type_id": "TYPE-0001",
+            "concept_id": "CONCEPT-0002",
+            "reason": "The second Description teaches reversal.",
+        }],
+    })
+    result = g._review_case_unit_hosts_via_api(
+        assignment_units=[unit],
+        per_concept={"CONCEPT-0001": [unit]},
+        concept_payload=concepts,
+        allowed_cids_by_tid={
+            "TYPE-0001": {"CONCEPT-0001", "CONCEPT-0002"},
+        },
+        meta={},
+    )
+    assert not result.get("CONCEPT-0001")
+    assert result["CONCEPT-0002"][0]["type_id"] == "TYPE-0001"
+
+
+def test_derivation_concept_receives_a_relevant_worked_example(monkeypatch):
+    anchor_id = "METHOD-A1B2C3D4E5"
+    record = {
+        "topic": "Formula Building",
+        "parent_concept": "Derivations",
+        "concept_title": "Deriving a General Rule",
+        "concept_details": (
+            "Description: Repeated changes reveal the general symbolic rule.\n"
+            "Achieving Mastery: Deriving the rule from its repeated structure."
+        ),
+        "keywords": "derivation",
+        "source_evidence": anchor_id,
+    }
+    monkeypatch.setattr(g, "_openai_json", lambda *_a, **_k: {
+        "rows": [{
+            "topic": record["topic"],
+            "parent_concept": record["parent_concept"],
+            "concept": record["concept_title"],
+            "concept_description": (
+                "Description: Repeated changes reveal the general rule. "
+                "Worked Example: Write successive terms and factor their "
+                "shared change to obtain [Katex] u_n=u_1+(n-1)d [/Katex].\n"
+                "Achieving Mastery: Deriving the rule from repeated structure."
+            ),
+            "keywords": "derivation",
+        }],
+    })
+    result = g._ensure_method_worked_examples_via_api(
+        [record],
+        anchors=[{
+            "anchor_id": anchor_id,
+            "topic_hint": "Formula Building",
+            "source_evidence": "Write successive terms and generalise the change.",
+            "required_formulas": [r"u_n=u_1+(n-1)d"],
+        }],
+        meta={},
+    )
+    description = g._concept_description_only(result[0]["concept_details"])
+    assert "Worked Example:" in description
+    assert "[Katex]" in description
+    assert description.index("Worked Example:") < description.index(
+        "Achieving Mastery:")
+
+
+def test_reusable_type_keeps_one_number_and_continues_cases_across_concepts():
+    records = [
+        {
+            "topic": "Methods",
+            "concept_title": "Direct Context",
+            "concept_details": (
+                "Description: d // Types: Type 01: Interpreting a Supplied Rule "
+                "Case 01: Symbolic input Example: Find the output. // "
+                "Misconceptions: Students may confuse input and output."
+            ),
+        },
+        {
+            "topic": "Methods",
+            "concept_title": "Contextual Use",
+            "concept_details": (
+                "Description: d // Types: Type 01: Interpreting a Supplied Rule "
+                "Case 01: Verbal input Example: Explain the output. "
+                "Type 02: Reversing a Supplied Rule Case 01: Known output // "
+                "Misconceptions: Students may reverse operations incorrectly."
+            ),
+        },
+    ]
+    result = cr.renumber_types_continuously(records)
+    assert "Type 01: Interpreting a Supplied Rule Case 01:" in (
+        result[0]["concept_details"])
+    assert "Type 01: Interpreting a Supplied Rule Case 02:" in (
+        result[1]["concept_details"])
+    assert "Type 02: Reversing a Supplied Rule Case 01:" in (
+        result[1]["concept_details"])
+
+
+def test_culmination_title_uses_only_its_topic_and_has_no_synthetic_type():
+    normal = {
+        "topic": "Opening Patterns",
+        "parent_concept": "Patterns",
+        "concept_title": "Recognising Fixed Changes",
+        "concept_details": "Description: Identify a constant change.",
+        "keywords": "",
+    }
+    authored = {
+        "topic": "Opening Patterns",
+        "parent_concept": "Culmination",
+        "concept_title": "Culmination - Later Definition and Testing",
+        "concept_details": (
+            "Description: Recap // Types: Type 01: Synthetic Mixed Task "
+            "Case 01: Invent a task."
+        ),
+        "keywords": "",
+    }
+    result = g._merge_culmination_rows([normal], [authored])
+    culmination = result[-1]
+    assert culmination["concept_title"] == (
+        "Culmination - Recognising Fixed Changes")
+    assert "Types:" not in culmination["concept_details"]
+
+
+def test_parent_question_with_independent_looking_subparts_remains_atomic():
+    sections = g.parse_mmd_sections(
+        "## 1 Main Method\nTeaching prose.\n\n"
+        "## EXERCISES\n"
+        "1. Write a short note on each:\n"
+        "(a) The first application\n"
+        "(b) The second application\n"
+    )
+    anchors = g._source_task_anchors(sections)
+    exercise = [
+        item for item in anchors if item.get("source_kind") == "exercise"
+    ]
+    assert len(exercise) == 1
+    assert "(a)" in exercise[0]["raw_task"]
+    assert "(b)" in exercise[0]["raw_task"]
+
+
+def test_activity_hub_note_is_concise_and_heading_free():
+    long_task = (
+        "## Activity\nObserve the setup and record what changes. "
+        + "Repeat the full procedure carefully with every supplied material. " * 30
+    )
+    item = _item(
+        "QINV-0001",
+        long_task,
+        source_kind="activity",
+        source_label="Activity 1",
+    )
+    note = g._compact_activity_hub_note(item)
+    assert "## Activity" not in note
+    assert len(note.split()) <= g._ACTIVITY_PUBLIC_WORD_LIMIT + 6
+    assert len(note) <= g._ACTIVITY_PUBLIC_CHAR_LIMIT + 80
+
+
+def test_checkpoint_fallback_uses_task_semantics_not_source_category():
+    item = _item(
+        "QINV-0001",
+        "Compare the two supplied processes and justify the difference.",
+        source_kind="checkpoint_question",
+    )
+    fallback = g._deterministic_fallback_type(item)
+    assert fallback is not None
+    assert "Checkpoint" not in fallback["type_title"]
+    assert fallback["type_title"].startswith("Comparing")
+
+
+def test_validator_rejects_raw_rich_text_and_accepts_canonical_form():
+    base = {
+        "topic": "Methods",
+        "parent_concept": "Core",
+        "concept_title": "Applying a Ratio",
+        "keywords": "",
+    }
+    raw = {
+        **base,
+        "concept_details": (
+            "Description: Use $a/b$ for the ratio. // "
+            "Misconceptions: Students may invert the ratio."
+        ),
+    }
+    report = cv.validate_concept_rows(
+        [raw], require_culmination=False, allow_culmination=False)
+    assert any(
+        error["code"] == "rich_text_format" for error in report["errors"])
+
+    canonical = dict(raw)
+    canonical["concept_details"] = kr.canonicalize_rich_text(
+        raw["concept_details"])
+    report = cv.validate_concept_rows(
+        [canonical], require_culmination=False, allow_culmination=False)
+    assert not any(
+        error["code"] == "rich_text_format" for error in report["errors"])

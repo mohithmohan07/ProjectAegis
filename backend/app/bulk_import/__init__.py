@@ -336,12 +336,19 @@ def normalize_answer_type(value: str) -> str:
 def to_plain_text(text: str) -> str:
     """Rich-text bracket formats -> plain text (for question_text).
 
-    [katex] x [/katex] -> x ; [img src=.. alt="d"] -> (Image: d) ;
+    [Katex] x [/Katex] -> x ; [img src=.. alt="d"] -> (Image: d) ;
     [Text](url) -> Text. Newlines are preserved as content.
+
+    Lower-case legacy ``[katex]`` tags remain readable during migration.
     """
     import re as _re3
     s = text or ""
-    s = _re3.sub(r"\[katex\]\s*(.*?)\s*\[/katex\]", r"\1", s, flags=_re3.DOTALL)
+    s = _re3.sub(
+        r"\[katex\]\s*(.*?)\s*\[/katex\]",
+        r"\1",
+        s,
+        flags=_re3.DOTALL | _re3.IGNORECASE,
+    )
     s = _re3.sub(r'\[img[^\]]*alt="([^"]*)"[^\]]*\]', r"(Image: \1)", s)
     s = _re3.sub(r"\[img[^\]]*\]", "(Image)", s)
     s = _re3.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)", r"\1", s)

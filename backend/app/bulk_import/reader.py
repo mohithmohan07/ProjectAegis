@@ -21,7 +21,7 @@ from . import (
     split_multi, strip_title_tag, strip_topic_title, to_plain_text,
 )
 from .. import models
-from ..services import directory
+from ..services import directory, katex_rules
 
 # Front bands are identical across sheets.
 _CHAPTER_SLICE = slice(0, len(CHAPTER_FIELDS))
@@ -138,19 +138,25 @@ _MAX_ISSUES = 200
 
 def _format_issues(label: str, *texts: str) -> list[str]:
     """Content-format validation: katex/img/link rules (allowed CMS formats)."""
-    import re as _re
     issues: list[str] = []
     blob = "\n".join(t for t in texts if t)
-    if "$$" in blob:
-        issues.append(f"{label}: raw $$...$$ delimiters found — use [katex]...[/katex]")
-    if _re.search(r"\[katex\]\s*\[/katex\]", blob):
-        issues.append(f"{label}: empty [katex] tag")
-    for m in _re.finditer(r"\[img([^\]]*)\]", blob):
-        attrs = m.group(1)
-        if 'src="http' not in attrs:
-            issues.append(f"{label}: [img] without a full http(s) src URL")
-        elif 'alt="' not in attrs:
-            issues.append(f"{label}: [img] missing alt text")
+    messages = {
+        "unbalanced_katex": "unbalanced [Katex] tag",
+        "empty_katex": "empty [Katex] tag",
+        "markdown_image": "Markdown image found — use [img src=\"...\" alt=\"...\"]",
+        "raw_math_delimiter": "raw math delimiters found — use [Katex]...[/Katex]",
+        "raw_latex": "raw LaTeX found outside a [Katex] tag",
+        "invalid_image_src": "[img] without a full http(s) src URL",
+        "missing_image_alt": "[img] missing alt text",
+    }
+    # Import accepts legacy lower-case [katex] and canonicalizes it before
+    # persistence; all other syntax rules stay strict.
+    for code in katex_rules.rich_text_issues(
+        blob, require_canonical_case=False
+    ):
+        message = messages.get(code)
+        if message:
+            issues.append(f"{label}: {message}")
     return issues
 
 
@@ -295,11 +301,18 @@ def import_workbook(db: Session, path: Path) -> dict:
                 concept = db.query(models.Concept).filter_by(
                     topic_id=topic.id, concept_title=c_title).first()
             if concept is None:
+                concept_details = katex_rules.canonicalize_rich_text(
+                    con.get("concept_details", ""))
+                for issue in _format_issues(
+                    f"{sheet_name!r} row {row_i} concept_details",
+                    concept_details,
+                ):
+                    _flag(issue)
                 concept = models.Concept(
                     topic_id=topic.id, concept_title=c_title,
                     concept_display_name=con.get("concept_display_name", ""),
                     parent_concept=con.get("parent_concept", ""),
-                    concept_details=con.get("concept_details", ""),
+                    concept_details=concept_details,
                     keywords=con.get("keywords", ""),
                     digicards=con.get("digicards", ""),
                     related_concepts=con.get("related_concepts", ""),

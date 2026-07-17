@@ -4,9 +4,10 @@ Runs on the full, ordered list of concept records for a chapter right before
 they are deposited, so the stored Bulk Import rows carry the exact format the
 team requires regardless of which extractor produced them:
 
-1. **Continuous Type numbering.** Extractors restart ``Type 01`` inside every
-   concept. We renumber ``Type NN`` continuously across the whole chapter (in
-   textbook/topic order); ``Case NN`` restarts within each Type.
+1. **Stable reusable Type numbering.** Extractors restart ``Type 01`` inside
+   every concept. We allocate numbers in textbook/topic order, but semantically
+   consolidated Types rendered on more than one concept retain the SAME
+   ``Type NN``. Their ``Case NN`` sequence continues across those concepts.
 2. **Culmination concepts use a separate "Miscellaneous Type NN" sequence**
    that is ALSO continuous across the whole chapter, and never advances (or is
    advanced by) the regular Type counter.
@@ -34,7 +35,9 @@ import re
 _SECTION_SEP = " // "
 # Matches a Type/Case token, optionally already prefixed with "Miscellaneous "
 # (so re-runs never stack the prefix).
-_TYPE_CASE_RE = re.compile(r"(?:Miscellaneous\s+)?(Type|Case)\s*0*\d+", re.IGNORECASE)
+_TYPE_TOKEN_RE = re.compile(
+    r"(?:Miscellaneous\s+)?Type\s*0*\d+\s*:", re.IGNORECASE)
+_CASE_TOKEN_RE = re.compile(r"Case\s*0*\d+\s*:", re.IGNORECASE)
 _ACTIVITY_HUB_LABEL = "Activity/Info Hub"
 
 
@@ -76,20 +79,53 @@ def _find_types(sections: list[tuple[str, str]]) -> int:
     return -1
 
 
-def _renumber_block(text: str, start_type: int, *, type_label: str = "Type") -> tuple[str, int]:
-    """Renumber tokens; Type carries ``type_label``, Case restarts inside each Type."""
-    state = {"type": start_type, "case": 0}
+def _type_signature(segment: str) -> str:
+    """Normalized Type definition before its first Case token."""
+    match = _TYPE_TOKEN_RE.match(segment)
+    body = segment[match.end():] if match else segment
+    case = _CASE_TOKEN_RE.search(body)
+    header = body[:case.start()] if case else body
+    return re.sub(r"\W+", " ", header.lower()).strip()
 
-    def repl(m: re.Match) -> str:
-        kind = m.group(1).lower()
-        if kind == "type":
-            state["type"] += 1
-            state["case"] = 0
-            return f"{type_label} {state['type']:02d}"
-        state["case"] += 1
-        return f"Case {state['case']:02d}"
 
-    return _TYPE_CASE_RE.sub(repl, text), state["type"]
+def _renumber_reusable_block(
+    text: str,
+    *,
+    topic_key: str,
+    type_label: str,
+    number_by_signature: dict[tuple[str, str], int],
+    case_count_by_signature: dict[tuple[str, str], int],
+    next_number: int,
+) -> tuple[str, int]:
+    """Allocate stable Type numbers and continuous Cases by semantic header."""
+    matches = list(_TYPE_TOKEN_RE.finditer(text or ""))
+    if not matches:
+        return text, next_number
+    pieces: list[str] = [text[:matches[0].start()]]
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        segment = text[match.start():end]
+        signature = _type_signature(segment)
+        # A malformed/empty title must not accidentally share identity.
+        if not signature:
+            signature = f"__anonymous_{next_number + 1}_{index}"
+        key = (topic_key, signature)
+        number = number_by_signature.get(key)
+        if number is None:
+            next_number += 1
+            number = next_number
+            number_by_signature[key] = number
+        segment = _TYPE_TOKEN_RE.sub(
+            f"{type_label} {number:02d}:", segment, count=1)
+
+        def replace_case(_match: re.Match) -> str:
+            case_count_by_signature[key] = (
+                case_count_by_signature.get(key, 0) + 1)
+            return f"Case {case_count_by_signature[key]:02d}:"
+
+        segment = _CASE_TOKEN_RE.sub(replace_case, segment)
+        pieces.append(segment)
+    return "".join(pieces), next_number
 
 
 def reduce_type_sections(details: str) -> str:
@@ -110,15 +146,21 @@ def reduce_type_sections(details: str) -> str:
 
 
 def renumber_types_continuously(records: list[dict]) -> list[dict]:
-    """Renumber Types continuously across the chapter.
+    """Renumber Types continuously while preserving reusable Type identity.
 
     Two independent, chapter-wide continuous sequences:
       * regular concepts  -> "Type 01", "Type 02", ...
       * culmination rows  -> "Miscellaneous Type 01", "Miscellaneous Type 02", ...
-    Neither advances the other; Case restarts within each Type.
+    Neither advances the other. Within one source topic, repeated canonical
+    Type definitions retain one number across concept rows and their Cases
+    continue increasing instead of restarting.
     """
     counter = 0
     misc_counter = 0
+    regular_numbers: dict[tuple[str, str], int] = {}
+    regular_cases: dict[tuple[str, str], int] = {}
+    misc_numbers: dict[tuple[str, str], int] = {}
+    misc_cases: dict[tuple[str, str], int] = {}
     for rec in records:
         details = rec.get("concept_details") or ""
         sections = split_sections(details)
@@ -126,11 +168,26 @@ def renumber_types_continuously(records: list[dict]) -> list[dict]:
         if idx < 0:
             continue
         label, content = sections[idx]
+        topic_key = re.sub(
+            r"\W+", " ", str(rec.get("topic") or "").lower()).strip()
         if is_culmination(rec.get("concept_title", "")):
-            new_content, misc_counter = _renumber_block(
-                content, misc_counter, type_label="Miscellaneous Type")
+            new_content, misc_counter = _renumber_reusable_block(
+                content,
+                topic_key=topic_key,
+                type_label="Miscellaneous Type",
+                number_by_signature=misc_numbers,
+                case_count_by_signature=misc_cases,
+                next_number=misc_counter,
+            )
         else:
-            new_content, counter = _renumber_block(content, counter, type_label="Type")
+            new_content, counter = _renumber_reusable_block(
+                content,
+                topic_key=topic_key,
+                type_label="Type",
+                number_by_signature=regular_numbers,
+                case_count_by_signature=regular_cases,
+                next_number=counter,
+            )
         sections[idx] = (label, new_content)
         rec["concept_details"] = join_sections(sections)
     return records

@@ -488,7 +488,7 @@ def test_public_inventory_examples_remove_textbook_section_numbers():
 
 def test_uploaded_nationalism_fixture_recovers_all_checkpoint_containers():
     source = (
-        Path(__file__).parents[1] / "data" / "RNE.mmd"
+        Path(__file__).parents[1] / "data" / "Testing" / "RNE.mmd"
     ).read_text(encoding="utf-8")
     sections = [
         section
@@ -543,7 +543,7 @@ def test_repeated_generic_checkpoint_labels_preserve_distinct_tasks():
 
 def test_uploaded_nationalism_fixture_exposes_sorrieu_opening_for_recovery():
     source = (
-        Path(__file__).parents[1] / "data" / "RNE.mmd"
+        Path(__file__).parents[1] / "data" / "Testing" / "RNE.mmd"
     ).read_text(encoding="utf-8")
     sections = [
         section
@@ -558,7 +558,7 @@ def test_uploaded_nationalism_fixture_exposes_sorrieu_opening_for_recovery():
 
 def test_uploaded_ap_fixture_keeps_parent_questions_and_own_mcq_options():
     source = (
-        Path(__file__).parents[1] / "data" / "jemh105 (1).mmd"
+        Path(__file__).parents[1] / "data" / "Testing" / "jemh105 (1).mmd"
     ).read_text(encoding="utf-8")
     sections = [
         section
@@ -638,7 +638,7 @@ def test_unique_question_label_root_merges_question_and_q_notation():
 
 def test_uploaded_electricity_activities_feed_types_and_hubs_with_visuals():
     source = (
-        Path(__file__).parents[1] / "data" / "Class 10 Chapter 5 Electricity.mmd"
+        Path(__file__).parents[1] / "data" / "Testing" / "Class 10 Chapter 5 Electricity.mmd"
     ).read_text(encoding="utf-8")
     sections = [
         section
@@ -1949,7 +1949,7 @@ def test_chapter_opening_labelled_in_section_chunks():
     assert "Frédéric Sorrieu" in text
 
 
-def test_v5_prompts_require_opening_granularity_and_mathpix_policy():
+def test_prompts_require_opening_granularity_and_canonical_media_policy():
     skeleton = g.prompts.get_text("concepts.skeleton.system")
     assert "[Chapter opening]" in skeleton
     assert "lesson-plan" in skeleton and "apart" in skeleton
@@ -1960,12 +1960,12 @@ def test_v5_prompts_require_opening_granularity_and_mathpix_policy():
     assert "Belgium vs Sri Lanka" not in canonicalize
     assert "lesson-plan them apart" in canonicalize
     refine = g.prompts.get_text("concepts.description_refine.system")
-    assert "Do NOT embed Mathpix" in refine
+    assert "Do NOT embed image URLs in Description" in refine
     assert "truncated mid-sentence" in refine
     assert "Preserve any existing Activity/Info Hub" in refine
     inventory = g.prompts.get_text("concepts.question_task_inventory.system")
-    assert "dependent subquestions" in inventory
-    assert "independently assessable" in inventory
+    assert "numbered parent question" in inventory
+    assert "all of its lettered/roman subparts" in inventory
     assert "Missing even one" in inventory and "checkpoint is a defect" in inventory
     assert "Activity/Info Hub" in inventory
     assert "feed culmination" not in inventory.lower()
@@ -2401,7 +2401,7 @@ def test_structured_mcq_options_rebuild_the_same_question_only():
     assert item["normalized_task"] == item["raw_task"]
 
 
-def test_independent_lettered_exercise_subparts_get_separate_anchors():
+def test_lettered_exercise_subparts_keep_one_parent_anchor():
     source = r"""
 \section*{1 Revolutions}
 Historical movements developed across Europe.
@@ -2419,14 +2419,10 @@ e) The role of women in nationalist struggles
     exercises = [
         item for item in anchors if item["source_kind"] == "exercise"
     ]
-    assert len(exercises) == 6
-    assert [item["source_label"] for item in exercises[:5]] == [
-        f"Write in brief Q1({letter})" for letter in "abcde"
-    ]
-    assert all(
-        item["raw_task"].startswith("Write a note on:")
-        for item in exercises[:5]
-    )
+    assert len(exercises) == 2
+    assert exercises[0]["source_label"] == "Write in brief Q1"
+    assert exercises[0]["raw_task"].startswith("Write a note on:")
+    assert all(f"{letter})" in exercises[0]["raw_task"] for letter in "abcde")
     assert all(not item["topic_hint"] for item in exercises)
 
 

@@ -24,6 +24,7 @@ import string
 
 from .. import bulk_import as bi
 from . import concept_refiner as cr
+from . import katex_rules as kr
 
 # Topics that must never appear as standalone teaching topics in output.
 # Structural umbrellas only — never chapter- or subject-named content.
@@ -138,7 +139,10 @@ _INLINE_REF_NO_FIG_RE = re.compile(
 )
 # Markdown image or bare URL — presence means real source visuals are embedded.
 _IMAGE_URL_RE = re.compile(
-    r"!\[[^\]]*\]\(https?://[^)]+\)|https?://\S+", re.IGNORECASE,
+    r"!\[[^\]]*\]\(https?://[^)]+\)|"
+    r'\[img\s+src="https?://[^"]+"\s+alt="[^"]+"[^\]]*\]|'
+    r"https?://\S+",
+    re.IGNORECASE,
 )
 
 
@@ -478,6 +482,10 @@ _SECTION_SEP = " // "
 
 
 _MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(https?://[^)]+\)", re.IGNORECASE)
+_BRACKET_IMAGE_RE = re.compile(
+    r'\[img\s+src="https?://[^"]+"(?:\s+alt="[^"]*")?[^\]]*\]',
+    re.IGNORECASE,
+)
 _TEXTBOOK_SECTION_REF_RE = re.compile(
     r"(?:\bsections?\s+|§\s*)\d+(?:\.\d+)+\b",
     re.IGNORECASE,
@@ -485,14 +493,14 @@ _TEXTBOOK_SECTION_REF_RE = re.compile(
 
 
 def _strip_images_from_prose(text: str) -> str:
-    """Remove Mathpix/CDN markdown images from Description/Misconception prose.
+    """Remove shipped images from Description/Misconception prose.
 
     Image URLs are valid in Types Examples and Activity/Info Hub entries (with
     their figure reference); they are not acceptable in Description text.
     """
     if not text:
         return text
-    return _tidy(_MARKDOWN_IMAGE_RE.sub("", text))
+    return _tidy(_BRACKET_IMAGE_RE.sub("", _MARKDOWN_IMAGE_RE.sub("", text)))
 
 
 def _clean_details(details: str, *, neutralize: bool = True) -> str:
@@ -580,6 +588,8 @@ def clean_concept_record(rec: dict, *, neutralize_artifacts: bool = True) -> dic
             title = _neutralize_name_artifacts(title)
         rec["concept_title"] = to_title_case(replace_mmd_references(title))
     if rec.get("concept_details"):
+        rec["concept_details"] = kr.canonicalize_rich_text(
+            rec["concept_details"])
         rec["concept_details"] = _clean_details(
             rec["concept_details"], neutralize=neutralize_artifacts)
     if neutralize_artifacts:

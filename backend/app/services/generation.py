@@ -35,7 +35,7 @@ def _is_math(concept: models.Concept) -> bool:
 
 
 def _sample_equation(concept: models.Concept) -> str:
-    """A representative [katex] expression that references the concept."""
+    """A representative [Katex] expression that references the concept."""
     name = _slug(concept.concept_title, 16) or "X"
     return kr.katex(rf"\text{{{name}}} = f(x)")
 
@@ -835,7 +835,8 @@ prompts.register(
         "Example: <full source question verbatim> "
         "Case 02: <another conceptual sub-type for the same pattern> "
         "Example: <another full source question verbatim, with figure URL "
-        "when the ask is visual: (Refer fig. X) ![](https://cdn.mathpix.com/...)>"
+        "when the ask is visual: (Refer fig. X) "
+        "[img src=\"https://full-public-image-url\" alt=\"meaningful visual description\"]>"
     ))
 
 prompts.register(
@@ -914,8 +915,8 @@ OUTPUT CONTRACT for concept_description (ONE string, sections joined by " // "):
 - Example Types block:
   {{types_example}}
 - End with Misconceptions for normal concepts: name every REAL likely learner
-  error from the material — one is the minimum, and when the material triggers
-  several distinct errors, list them all in the same Misconceptions section.
+  error from the material. Prefer the 1-3 highest-value false beliefs; combine
+  overlapping errors instead of producing an exhaustive fragmented list.
   Do not invent filler misconceptions, and never write
   "N/A", "None", "Not applicable", or placeholder text.
 - Valid structures:
@@ -941,6 +942,11 @@ SOURCE HYGIENE:
 - NEVER reference source artifacts: no "Example 19", "Examples Type III",
   "Fig 2", "Table no. 1", "ex 1" - inline the actual worked content instead.
 - NEVER use the words "MMD" or "MMDs"; say "chapter", "section", "problem".
+- In every rich-text section, wrap ALL mathematics exactly as
+  [Katex] valid LaTeX [/Katex]. Render every image exactly as
+  [img src="https://full-public-image-url" alt="meaningful description"].
+  Never emit raw $, $$, \(...\), \[...\], TeX environments, footnote commands,
+  or Markdown image syntax.
 
 QUALITY RULES (universal — apply to ANY chapter/subject; never invent
 chapter-specific exceptions):
@@ -1107,8 +1113,9 @@ RULES:
 8. Example lines MUST quote the full source question/task verbatim — do not
    shorten, paraphrase, or abbreviate; teachers execute from these cells.
    When the question needs a figure/diagram, keep the figure reference AND
-   embed the Mathpix image URL from the source right after it, e.g.
-   "(Refer fig. 11.1) ![](https://cdn.mathpix.com/...)".
+   embed the source image in canonical rich text right after it, e.g.
+   "(Refer fig. 11.1) [img src=\"https://full-public-image-url\"
+   alt=\"Circuit in Fig. 11.1\"]".
 9. Mine ALL assessable problems from the source; skipping exercises, in-text
    checkpoint questions, or activities defeats homework / in-class /
    board-teaching categorisation downstream.
@@ -1371,6 +1378,10 @@ Rules:
   Example ending: "...\\nAchieving Mastery: Using the midpoint property to set up the smaller triangles correctly."
 - Use 45-90 words unless the concept is very simple. Never leave a Description
   truncated mid-sentence.
+- A derivation/proof/formula-building concept MUST include one compact,
+  source-grounded worked derivation cue introduced with "Worked Example:".
+  It must demonstrate that derivation's reasoning, not merely apply or verify
+  the finished result.
 - Do not include Types.
 - Include a Misconceptions section for every non-culmination concept. Make it
   specific to the learner error this concept usually triggers; list EVERY real
@@ -1382,9 +1393,11 @@ Rules:
   page references. When the source text cites one, substitute the full actual
   content it points to (the real numbers, expression, conditions, or task) —
   e.g. write "such as expressing 1.272727... as 14/11", never "as in Example 8".
-- Do NOT embed Mathpix / CDN image URLs in Description. Describe visual content
+- Do NOT embed image URLs in Description. Describe visual content
   in words here; image URLs belong only in Types Example lines (with their
   figure reference).
+- Wrap every mathematical expression exactly as [Katex] valid LaTeX [/Katex].
+  Never emit raw math delimiters or raw TeX outside those tags.
 """)
 
 prompts.register(
@@ -1444,14 +1457,11 @@ COVERAGE IS MANDATORY (most important rule):
 - Each numbered problem, intext question, think-and-reflect prompt, and worked
   example is its OWN item — never summarize an exercise set or question list
   into one item.
-- Keep dependent subquestions that share one stem/data/source as ONE inventory
-  item. Split independently assessable lettered/roman subparts into separate
-  items when each asks about a different person, event, method, case, concept,
-  or representation; prepend the complete shared stem/context to every split
-  item so each remains self-contained and can be assigned to its own concept.
-- Treat independence as a semantic decision, not a numbering rule. A shared
-  data set, passage, diagram, assertion, MCQ stem/options, or multi-step
-  calculation remains ONE item even when its parts are lettered or roman.
+- Keep every numbered parent question and all of its lettered/roman subparts
+  as ONE atomic inventory item. Preserve the complete shared stem, data,
+  passage, diagram, options, and every subpart in source order. If the parent
+  genuinely assesses several concepts, assign the intact task to a suitable
+  Culmination later; never duplicate or split its children across concepts.
 - In-text CHECKPOINT questions (boxed "?" questions, "Let's recall",
   "Check your progress", mid-section question boxes) are inventory items
   exactly like end-of-chapter exercises. Chapters typically carry a dozen or
@@ -1490,7 +1500,7 @@ Rules:
   including assessable prompts embedded in explanatory prose. Capture complete
   givens, context, quotations, representations, and asks, but never solutions.
 - When the question depends on a figure/diagram/table image, copy the Mathpix
-  image URL(s) from the source markdown (![](https://cdn.mathpix.com/...))
+  image URL(s) from the source
   into image_urls AND keep the figure reference in raw_task.
 - Set topic_hint to the nearest MAIN section heading (or "[Chapter opening]"
   for pre-section items) so later placement stays in reading order.
@@ -1593,10 +1603,9 @@ CASE WORDING (each Case must be properly defined):
   representation, never by a chapter-specific Activity title. A case_title is
   NEVER a raw question.
 - Create a separate Case for every distinct given/asked/constraint combination.
-- A multi-part source question with subquestions stays ONE Example under ONE
-  Case unless the textbook numbers the subparts as separate standalone
-  questions; do not split the same prompt across multiple Cases, and never
-  invent multiple Cases that repeat the same stem with different subparts.
+- A numbered parent question with subquestions stays ONE Example under ONE
+  Case. Do not split the same parent across Types, Cases, or concepts, and
+  never repeat its stem with different children.
 - Set each Case's placement_scope to "normal" when it assesses one concept.
   Use "mixed_synthesis" ONLY when that Case genuinely combines several concepts
   from the same topic into synthesis/revision. A broad Type title does not make
@@ -1617,10 +1626,10 @@ EXAMPLES CARRY THE FULL SOURCE QUESTION (mandatory):
 - Include EVERY inventory question that fits a Case as its own example_prompt —
   more examples per Case is always better; never keep just one representative.
 - When the source question relies on a figure/diagram/table image, KEEP the
-  figure reference and append the Mathpix image URL from the source markdown
-  immediately after it, e.g.
+  figure reference and append the source image URL immediately after it using
+  the canonical rich-text image tag, e.g.
   "Calculate the resistance for the given circuit. (Refer fig. 11.1)
-  ![](https://cdn.mathpix.com/cropped/...)".
+  [img src="https://full-public-image-url" alt="Circuit in Fig. 11.1"]".
 - Correct: "Rationalise the denominator of 1/(7 + 3*sqrt(2))".
 - WRONG: "Rationalise the expressions given in Exercise 1.5",
   "Solve the problem from Example 11".
@@ -1670,6 +1679,83 @@ Rules:
 - For a mixed task, choose the topic containing its final or dominant assessed
   objective. Never place all tasks on the last topic merely because the review
   block follows it.
+""")
+
+prompts.register(
+    "concepts.type_semantic_consolidation.system", category=_CONCEPTS_CAT,
+    label="Semantic Type consolidation prompt",
+    default="""\
+Consolidate semantically equivalent mined Types without changing source
+question coverage. Return ONLY strict JSON using the same complete schema:
+{"types":[{"type_id":"TYPE-0001","type_title":"","type_description":"","task_pattern":"","source_question_ids":[],"case_prompts":[{"case_id":"CASE-0001","case_title":"","examples":[{"source_question_id":"QINV-0001","example_prompt":""}],"case_signature":"","placement_scope":"normal|mixed_synthesis|cross_topic_synthesis"}],"concept_match_hint":"","parent_concept_match_hint":"","topic_match_hint":"","difficulty_hint":"","cognitive_skill_hint":"","subject_skill_hint":"","is_activity":false,"placement_scope":"normal|mixed_synthesis|cross_topic_synthesis"}]}.
+
+Rules:
+- Every supplied source_question_id must remain exactly once in exactly one
+  Example and one Type. Never add, remove, duplicate, paraphrase, or truncate
+  an Example.
+- Merge Types when their verb/action, assessed object, required method,
+  representation, constraints, and expected output describe the same reusable
+  assessment pattern, even when their titles are paraphrases.
+- Keep different methods or learning objectives separate. Shared notation,
+  formula, difficulty, context, person, country, or surface wording alone does
+  not prove equivalence.
+- Never merge across topic_match_hint, activity status, or incompatible
+  placement_scope. A Type remains source-topic scoped.
+- When merging, choose one precise action-object-method title and definition;
+  preserve all distinct Cases in source order.
+- Do not create generic fallback titles such as "Answering a Checkpoint
+  Question", "Direct Questions", "Word Problems", or "Miscellaneous".
+""")
+
+prompts.register(
+    "concepts.concept_type_sufficiency.system", category=_CONCEPTS_CAT,
+    label="Concept sufficiency for mined Types prompt",
+    default="""\
+Audit whether the supplied normal concept Descriptions teach every distinct
+method required by their source-topic mined Types. Return ONLY strict JSON:
+{"additions":[{"after_concept_id":"CONCEPT-0001","topic":"","parent_concept":"","concept":"","concept_description":"","keywords":"","supporting_type_ids":["TYPE-0001"]}]}.
+
+Rules:
+- Return an empty additions list when existing concepts already teach the
+  Type's action, inputs, method, conditions, and expected output.
+- Add a concept only when one or more Types require a genuinely distinct,
+  reusable method/objective that no existing Description in that exact topic
+  can teach. Different givens, context, wording, or difficulty are Cases, not
+  concepts.
+- Use only supplied topic strings, concept_id values, and type_id values.
+  Insert immediately after the closest prerequisite concept in the same topic.
+- Never add a Culmination, Overview, Summary, question label, example, person/
+  country micro-row, or one-concept-per-question fragment.
+- concept_description starts with "Description:", is 2-4 compact
+  source-grounded sentences, and fully explains the missing method. Include no
+  Types; a later ID assignment pass adds them.
+- Wrap mathematics as [Katex] valid LaTeX [/Katex]. Never emit raw math/TeX.
+""")
+
+prompts.register(
+    "concepts.type_host_review.system", category=_CONCEPTS_CAT,
+    label="Type host entailment review prompt",
+    default="""\
+Review every case-scoped Type assignment against the allowed concept
+Descriptions. Return ONLY strict JSON:
+{"assignments":[{"type_id":"TYPE-0001","concept_id":"CONCEPT-0001","reason":"host description teaches this exact method and output"}]}.
+
+Rules:
+- Return every supplied type_id exactly once and invent no IDs.
+- Choose only from that unit's allowed_concept_ids.
+- A host is valid only when its title and Description teach the concrete
+  Examples' assessed action, inputs, method/approach, constraints, and expected
+  output. Formula or keyword overlap alone is not entailment.
+- Prefer the most granular method/application/modeling concept. Do not file a
+  task under a nearby definition, broad formula, partial-sum relation, or
+  final concept merely for convenience.
+- Use actual Case/Example wording over a broad or misleading Type title.
+- Ordinary and activity units never go to Culmination. A mixed-synthesis unit
+  goes to Culmination only when it genuinely combines multiple taught
+  concepts; cross-topic synthesis may use only an allowed later Culmination.
+- Worked derivation tasks belong with the concept teaching that derivation;
+  merely applying or verifying the finished formula does not.
+- Keep parent questions and all of their dependent subparts together.
 """)
 
 prompts.register(
@@ -1816,7 +1902,7 @@ Rules:
   are full source questions. Do not turn a raw question or Activity title into
   a Case name (avoid "Definition of …").
 - Keep all full question wording, subquestions, values, units, conditions, and
-  Mathpix image URLs. Never truncate.
+  canonical [Katex]/[img] content. Never truncate.
 - If a source question already appears under the correct concept, preserve it.
 - Never drop a question to fix duplication; move the duplicate to its correct
   single home.
@@ -1837,13 +1923,13 @@ Rules:
   The normal concept rows are merged back programmatically; NEVER restate,
   rewrite, drop, or return them.
 - Name: "Culmination - <A>, <B> and <C>".
-- Use the main ideas in that topic.
+  - Use ONLY normal concept names from that exact topic; never leak a concept
+    from an earlier/later topic into the title or metadata.
 - Description must be exactly: "Description: Recap" (the final output expands
   it automatically to "Recap of <every merged concept in the topic>").
-- Give each culmination a starter Types section with mixed multi-concept
-  application / revision / synthesis formats only. Do NOT copy full textbook
-  activities, experiment procedures, or discussion cases into Culmination —
-  those belong in Activity/Info Hub on the relevant normal concept.
+- Do not invent starter Types. A later inventory-backed assignment pass adds
+  Culmination Types only when the source contains a genuine mixed
+  multi-concept application/revision/synthesis task.
 - parent_concept must be "Culmination".
 - Do not create culmination during chunk extraction; this pass runs only after the full topic map exists.
 """)
@@ -1872,8 +1958,11 @@ Rules:
 - Choose the NORMAL concept whose teaching content the activity or discussion
   practices or illustrates. Prefer topic_hint alignment when it is reliable.
 - Every supplied pending inventory qid MUST appear in exactly one placement.
-- hub_note is a compact teacher-facing note (label + essential task gist). Do
-  not dump full chapter prose; do not invent content absent from the inventory.
+- hub_note is a compact teacher-facing note: at most two short sentences and
+  55 words, retaining only the activity's purpose, essential setup/action, and
+  expected observation/discussion. Do not copy the full procedure, textbook
+  prose, source heading, or full assessable question; that remains in its Type
+  Example on the same concept when applicable.
 - Use only provided concept_id and qid values.
 - If several activities belong to one concept, return one placement per qid
   (same concept_id allowed).
@@ -1900,10 +1989,10 @@ Rules:
   actual content: the real numbers, expressions, equations, data, conditions,
   and task, e.g. "solve the problem in Exercise 1.5" becomes
   "rationalise the denominator of 1/(7 + 3*sqrt(2))".
-  A figure/table reference WITH its Mathpix image URL embedded right after it
+  A figure/table reference WITH its canonical [img] tag embedded right after it
   is valid content — keep it (in Types Example lines). Never leave a
   Description truncated mid-sentence while fixing artifacts.
-- Mathpix / CDN image URLs belong in Types Example lines next to the figure
+- Image URLs belong in canonical [img] tags on Types Example lines next to the figure
   reference. Do not put image URLs in the Description section; describe the
   visual in words there instead.
 - For merged_description issues (one cell carrying two or more concepts'
@@ -1961,6 +2050,27 @@ Rules:
 """)
 
 prompts.register(
+    "concepts.method_worked_example.system", category=_CONCEPTS_CAT,
+    label="Derivation/method worked-example prompt",
+    default="""\
+Add one compact source-grounded worked reasoning cue to each supplied
+derivation/proof/formula-building concept. Return ONLY strict JSON:
+{"rows":[{"topic":"","parent_concept":"","concept":"","concept_description":"","keywords":""}]}.
+
+Rules:
+- Return the same rows, names, topics, parent concepts, keywords, and order.
+- Rewrite only the Description body enough to add exactly one explicit
+  "Worked Example:" cue before the final Achieving Mastery line.
+- The cue must demonstrate the concept's own derivation or method step by
+  step from the supplied anchor evidence. Merely applying, checking, or naming
+  the finished formula does not count.
+- Keep it compact and source-grounded; never invent values or conditions.
+- Preserve the existing Achieving Mastery line at the end.
+- Wrap every expression exactly as [Katex] valid LaTeX [/Katex]. Never emit
+  raw math delimiters, source labels, figure/page references, or Types.
+""")
+
+prompts.register(
     "concepts.misconceptions.system", category=_CONCEPTS_CAT,
     label="Missing/generic misconception writer system prompt",
     default="""\
@@ -1982,8 +2092,9 @@ Rules:
   that", and declarative textbook corrections such as "A nation is not ...".
   The Misconceptions section contains the mistaken belief; Description already
   teaches the correct idea.
-- When the material triggers several distinct errors, list them all in the
-  same Misconceptions section — one is the minimum, more are welcome.
+- Return only the 1-3 highest-value, most likely learner false beliefs. Merge
+  overlapping variants into one concise misconception rather than producing
+  an exhaustive fragmented list.
 - NEVER write templated filler like "Students may apply X as a memorized rule
   without checking the conditions", and never "N/A"/"None"/placeholders.
 - No source artifacts (Example 3, Exercise 1.2, page numbers) and never the
@@ -2788,6 +2899,15 @@ def _has_meaningful_types(details: str) -> bool:
     return len(body) > 12 and re.search(r"\bCase\b", body, re.IGNORECASE) is not None
 
 
+def _canonicalize_concept_rich_text(records: list[dict]) -> list[dict]:
+    """Emit the exact rich-text wire format without changing row semantics."""
+    for record in records:
+        if record.get("concept_details"):
+            record["concept_details"] = kr.canonicalize_rich_text(
+                record["concept_details"])
+    return records
+
+
 def _inject_types(details: str, types_body: str) -> str:
     """Insert or replace the Types section in a concept_description string."""
     if not types_body.strip():
@@ -2846,6 +2966,73 @@ def _append_activity_hub(details: str, hub_text: str) -> str:
 # Inventory kinds that belong in Activity/Info Hub. Assessable prompts originating
 # in an Activity also appear in Types, while reusing the same inventory identity.
 _HUB_INVENTORY_KINDS = frozenset({"activity", "experiment_task"})
+_ACTIVITY_PUBLIC_WORD_LIMIT = 55
+_ACTIVITY_PUBLIC_CHAR_LIMIT = 420
+
+
+def _strip_public_source_heading(text: str) -> str:
+    """Remove Markdown/OCR block headings from public Hub/Example prose."""
+    value = re.sub(
+        r"(?im)^\s*#{1,6}\s*(?:activity|discuss|discussion|exercise|"
+        r"question|questions)\b[^\n]*\n?",
+        "",
+        str(text or ""),
+    )
+    value = re.sub(r"(?m)^\s*#{1,6}\s*", "", value)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _activity_hub_marker(item: dict) -> str:
+    label = _strip_public_source_heading(
+        str(item.get("source_label") or item.get("parent_source_label") or ""))
+    if label:
+        return label[:100].strip(" .:-")
+    plain = bi.to_plain_text(_inventory_task_text(item))
+    words = re.findall(r"\S+", _strip_public_source_heading(plain))
+    return " ".join(words[:8]).strip(" .:-") or "Classroom task"
+
+
+def _compact_activity_hub_note(item: dict, suggested: str = "") -> str:
+    """Teacher-facing Activity summary; never copy the full source dump."""
+    marker = _activity_hub_marker(item)
+    raw = _strip_public_source_heading(
+        bi.to_plain_text(suggested or _inventory_task_text(item)))
+    marker_key = bi.normalize_question_text(marker)
+    if marker_key and bi.normalize_question_text(raw).startswith(marker_key):
+        raw = raw[len(marker):].lstrip(" .:-")
+    sentences = re.split(r"(?<=[.!?])\s+", raw)
+    gist = " ".join(sentences[:2]).strip()
+    words = gist.split()
+    if len(words) > _ACTIVITY_PUBLIC_WORD_LIMIT:
+        gist = " ".join(words[:_ACTIVITY_PUBLIC_WORD_LIMIT]).rstrip(" ,;:") + "…"
+    if len(gist) > _ACTIVITY_PUBLIC_CHAR_LIMIT:
+        gist = gist[:_ACTIVITY_PUBLIC_CHAR_LIMIT].rsplit(" ", 1)[0].rstrip(
+            " ,;:") + "…"
+    prefix = "Activity"
+    if marker and bi.normalize_question_text(marker) not in {"activity", "classroom task"}:
+        prefix += f" — {marker}"
+    note = f"{prefix}: {gist}".strip()
+    if not gist:
+        note = f"{prefix}: Complete the source-grounded classroom task."
+
+    # A non-assessable visual activity may have no Type Example, so retain one
+    # canonical image tag in its concise Hub note.
+    task = _inventory_task_text(item)
+    image_match = _BRACKET_IMAGE_RE.search(task)
+    if image_match and image_match.group(0) not in note:
+        note = f"{note.rstrip('.')} {image_match.group(0)}"
+    return kr.canonicalize_rich_text(note.rstrip() + ".")
+
+
+def _activity_hub_locations(records: list[dict], item: dict) -> list[int]:
+    marker = bi.normalize_question_text(_activity_hub_marker(item))
+    if not marker:
+        return []
+    return [
+        index for index, record in enumerate(records)
+        if marker in bi.normalize_question_text(
+            cr.activity_hub_body(record.get("concept_details") or ""))
+    ]
 
 
 def _hub_inventory_items(inventory: dict | None) -> list[dict]:
@@ -2863,19 +3050,9 @@ def _hub_inventory_items(inventory: dict | None) -> list[dict]:
 def _inventory_item_already_in_hubs(
     records: list[dict], item: dict,
 ) -> bool:
-    text = _inventory_task_text(item)
-    key = bi.normalize_question_text(text)
-    if not key:
-        label = item.get("source_label") or item.get("parent_source_label") or ""
-        key = bi.normalize_question_text(str(label))
-    if not key:
-        return False
-    if any(
-        key in bi.normalize_question_text(
-            cr.activity_hub_body(rec.get("concept_details") or ""))
-        for rec in records
-    ):
+    if _activity_hub_locations(records, item):
         return True
+    key = bi.normalize_question_text(_inventory_task_text(item))
     source_kind = (item.get("source_kind") or "").strip().lower()
     return (
         source_kind in _HUB_INVENTORY_KINDS
@@ -2908,7 +3085,7 @@ def _place_activity_inventory_into_hubs(
             or item.get("parent_source_label")
             or "Activity"
         )
-        hub = f"Activity: {label}. {text}".strip()
+        hub = _compact_activity_hub_note(item)
         out[index]["concept_details"] = _append_activity_hub(
             out[index].get("concept_details") or "", hub)
         placed += 1
@@ -3007,17 +3184,7 @@ def _populate_activity_hubs_via_api(
             # for deterministic exact-topic fallback.
             continue
         text = _inventory_task_text(item)
-        if not hub_note:
-            label = (
-                item.get("source_label")
-                or item.get("parent_source_label")
-                or "Activity"
-            )
-            hub_note = f"Activity: {label}. {text}".strip()
-        if text and bi.normalize_question_text(text) not in bi.normalize_question_text(
-            hub_note
-        ):
-            hub_note = f"{hub_note.rstrip('.')} | {text}".strip()
+        hub_note = _compact_activity_hub_note(item, hub_note)
         out[index]["concept_details"] = _append_activity_hub(
             out[index].get("concept_details") or "", hub_note)
         placed_qids.add(qid)
@@ -3079,9 +3246,6 @@ _WORKED_EXAMPLE_START_RE = re.compile(
 _NUMBERED_TASK_START_RE = re.compile(
     r"(?im)^[ \t]*(?:q(?:uestion)?[ \t]*)?[\[(]?"
     r"(\d{1,3})[\])]?[ \t]*(?:[.):-][ \t]*|[ \t]+)"
-)
-_LETTERED_SUBTASK_START_RE = re.compile(
-    r"(?im)^[ \t]*(?:\(([a-z])\)|([a-z])[.)])[ \t]+"
 )
 _SOLUTION_START_RE = re.compile(
     r"(?im)^[ \t]*(?:solutions?|answers?)[ \t]*[:：][ \t]*",
@@ -3193,41 +3357,6 @@ def _question_prompts_from_text(text: str) -> list[str]:
             if prompt and prompt not in prompts_out:
                 prompts_out.append(prompt)
     return prompts_out
-
-
-def _independent_lettered_subtasks(text: str) -> list[tuple[str, str]]:
-    """Split only explicitly independent lettered tasks.
-
-    Lettering alone does not prove independence: source-, table-, diagram-, MCQ-
-    and multi-step questions often use (a)/(b) for dependent parts.  Splitting
-    those creates repeated stems and lets one source question drift across
-    concepts.  Restrict the deterministic backstop to stems that explicitly
-    request separate mini-responses; GPT handles ambiguous groups as one item.
-    """
-    raw = str(text or "")
-    matches = list(_LETTERED_SUBTASK_START_RE.finditer(raw))
-    if len(matches) < 2:
-        return []
-    stem = raw[:matches[0].start()].strip()
-    if not stem:
-        return []
-    if not re.search(
-        r"\b(?:write\s+(?:a\s+)?(?:short\s+)?note(?:s)?\s+(?:on|about)|"
-        r"answer\s+(?:each|the\s+following)\s+separately|"
-        r"comment\s+(?:separately\s+)?on\s+each|"
-        r"describe\s+each|identify\s+each)\b",
-        stem,
-        re.IGNORECASE,
-    ):
-        return []
-    subtasks: list[tuple[str, str]] = []
-    for index, match in enumerate(matches):
-        end = matches[index + 1].start() if index + 1 < len(matches) else len(raw)
-        label = (match.group(1) or match.group(2) or "").lower()
-        body = raw[match.end():end].strip()
-        if body:
-            subtasks.append((label, f"{stem} {body}".strip()))
-    return subtasks if len(subtasks) >= 2 else []
 
 
 def _activity_has_assessable_response(text: str) -> bool:
@@ -3392,30 +3521,16 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
                 )
                 question_label = f"{heading} Q{match.group(1)}".strip()
                 task_text = body[match.end():end]
-                subtasks = _independent_lettered_subtasks(task_text)
-                if subtasks:
-                    for sub_index, (sub_label, subtask) in enumerate(subtasks):
-                        append_anchor(
-                            section_index=section_index,
-                            position=match.start() + sub_index,
-                            topic=topic,
-                            kind="exercise",
-                            label=f"{question_label}({sub_label})",
-                            parent_label=question_label,
-                            task=subtask,
-                            chapter_wide=chapter_wide,
-                        )
-                else:
-                    append_anchor(
-                        section_index=section_index,
-                        position=match.start(),
-                        topic=topic,
-                        kind="exercise",
-                        label=question_label,
-                        parent_label=heading,
-                        task=task_text,
-                        chapter_wide=chapter_wide,
-                    )
+                append_anchor(
+                    section_index=section_index,
+                    position=match.start(),
+                    topic=topic,
+                    kind="exercise",
+                    label=question_label,
+                    parent_label=heading,
+                    task=task_text,
+                    chapter_wide=chapter_wide,
+                )
             if not task_matches and body.strip():
                 append_anchor(
                     section_index=section_index,
@@ -4115,6 +4230,10 @@ _MARKDOWN_IMAGE_RE = re.compile(
     r"!\[(?P<alt>[^\]]*)\]\((?P<url>https?://[^)\s]+)\)",
     re.IGNORECASE,
 )
+_BRACKET_IMAGE_RE = re.compile(
+    r'\[img\s+src="(?P<url>https?://[^"]+)"\s+alt="(?P<alt>[^"]*)"[^\]]*\]',
+    re.IGNORECASE,
+)
 _PUBLIC_TASK_SECTION_REF_RE = re.compile(
     r"\bsections?\s+\d+(?:\.\d+)+\b",
     re.IGNORECASE,
@@ -4149,6 +4268,9 @@ def _source_visual_captions(text: str) -> dict[str, str]:
     for image in _MARKDOWN_IMAGE_RE.finditer(source):
         captions.setdefault(
             image.group("url"), _clean_visual_caption(image.group("alt")))
+    for image in _BRACKET_IMAGE_RE.finditer(source):
+        captions.setdefault(
+            image.group("url"), _clean_visual_caption(image.group("alt")))
     for include in _LATEX_INCLUDEGRAPHICS_RE.finditer(source):
         captions.setdefault(include.group("url"), "")
     return captions
@@ -4159,6 +4281,7 @@ def _strip_source_visual_markup(text: str) -> str:
     value = _LATEX_FIGURE_BLOCK_RE.sub(" ", str(text or ""))
     value = _LATEX_INCLUDEGRAPHICS_RE.sub(" ", value)
     value = _MARKDOWN_IMAGE_RE.sub(" ", value)
+    value = _BRACKET_IMAGE_RE.sub(" ", value)
     return value
 
 
@@ -4186,8 +4309,8 @@ def _inventory_task_text(item: dict) -> str:
 
     ``raw_task`` is preferred over ``normalized_task`` — reviewers require the
     complete untruncated source wording, and normalization tends to compress.
-    Mathpix image URLs captured for the item are appended so figure-dependent
-    questions ship their visuals.
+    Source image URLs captured for the item are appended in canonical ``[img]``
+    tags so figure-dependent questions ship their visuals.
     """
     task = (
         item.get("raw_task")
@@ -4202,10 +4325,12 @@ def _inventory_task_text(item: dict) -> str:
         aggressive=source_kind in {"worked_example", "solved_example"},
     )
     task = _strip_leading_source_task_label(task)
+    task = _strip_public_source_heading(task)
     task = _strip_source_visual_markup(task)
-    task = bi.to_plain_text(str(task)).strip()
+    task = kr.canonicalize_rich_text(str(task)).strip()
     task = _PUBLIC_TASK_SECTION_REF_RE.sub("the earlier chapter discussion", task)
-    context = bi.to_plain_text(str(item.get("shared_context") or "")).strip()
+    context = kr.canonicalize_rich_text(
+        str(item.get("shared_context") or "")).strip()
     if context and item.get("requires_context") and context not in task:
         task = f"{context} {task}".strip()
     task = re.sub(r"\s+", " ", task)
@@ -4219,13 +4344,9 @@ def _inventory_task_text(item: dict) -> str:
             continue
         alt = _visual_alt_text(
             item, task, image_index, visual_captions.get(url, ""))
-        empty_image = re.compile(
-            r"!\[\s*\]\(" + re.escape(url) + r"\)", re.IGNORECASE)
-        if empty_image.search(task):
-            task = empty_image.sub(f"![{alt}]({url})", task)
-        elif url not in task:
-            task = f"{task} ![{alt}]({url})"
-    return task.strip()
+        if url not in task:
+            task = f"{task} {kr.image(url, alt)}"
+    return kr.canonicalize_rich_text(task.strip())
 
 
 def _case_prompt_needs_source(prompt: str, source_text: str) -> bool:
@@ -4962,6 +5083,63 @@ _FALLBACK_TYPE_WORDING = {
 }
 
 
+_FALLBACK_ACTION_GERUNDS = {
+    "analyse": "Analysing", "analyze": "Analysing",
+    "calculate": "Calculating", "classify": "Classifying",
+    "compare": "Comparing", "complete": "Completing",
+    "construct": "Constructing", "convert": "Converting",
+    "derive": "Deriving", "describe": "Describing",
+    "determine": "Determining", "discuss": "Discussing",
+    "distinguish": "Distinguishing", "draw": "Drawing",
+    "evaluate": "Evaluating", "examine": "Examining",
+    "explain": "Explaining", "express": "Expressing",
+    "find": "Finding", "identify": "Identifying",
+    "interpret": "Interpreting", "justify": "Justifying",
+    "list": "Listing", "prove": "Proving", "show": "Showing",
+    "simplify": "Simplifying", "solve": "Solving",
+    "state": "Stating", "trace": "Tracing", "write": "Writing",
+}
+
+
+def _semantic_fallback_wording(item: dict, source_task: str) -> tuple[str, str]:
+    """Derive an action/object Type name instead of a source-label fallback."""
+    plain = _strip_public_source_heading(bi.to_plain_text(source_task))
+    tokens = re.findall(r"[A-Za-z][A-Za-z'-]*|\d+(?:\.\d+)*", plain)
+    lowered = [token.lower() for token in tokens]
+    action_index = next(
+        (
+            index for index, token in enumerate(lowered)
+            if token in _FALLBACK_ACTION_GERUNDS
+        ),
+        None,
+    )
+    if action_index is not None:
+        gerund = _FALLBACK_ACTION_GERUNDS[lowered[action_index]]
+        object_tokens = tokens[action_index + 1:action_index + 10]
+    elif lowered and lowered[0] in {"what", "which", "who", "where", "when"}:
+        gerund = "Identifying"
+        object_tokens = tokens[1:10]
+    elif lowered and lowered[0] in {"why", "how"}:
+        gerund = "Explaining"
+        object_tokens = tokens[:9]
+    else:
+        gerund = "Completing"
+        object_tokens = tokens[:8]
+    while object_tokens and object_tokens[0].lower() in {
+        "a", "an", "the", "this", "that", "following",
+    }:
+        object_tokens.pop(0)
+    obj = " ".join(object_tokens).strip()
+    if not obj:
+        obj = str(item.get("subject_skill_hint") or "Source-defined Task")
+    title = concept_cleanup.to_title_case(f"{gerund} {obj}".strip())
+    case = (
+        f"Given the complete source context, "
+        f"{gerund.lower()} {obj.lower()} under its stated conditions"
+    )
+    return title, case
+
+
 def _deterministic_fallback_type(item: dict) -> dict | None:
     """Build one source-faithful, topic-scoped Type for one missed item."""
     qid = (item.get("qid") or "").strip()
@@ -4978,13 +5156,14 @@ def _deterministic_fallback_type(item: dict) -> dict | None:
     if not source_task:
         return None
     source_kind = (cleaned.get("source_kind") or "other").strip().lower()
-    title, case_title = _FALLBACK_TYPE_WORDING.get(
-        source_kind,
-        (
-            "Completing the Stated Source Task",
-            "Source task with all supplied context, conditions, and requested outputs",
-        ),
-    )
+    if source_kind in {
+        "worked_example", "solved_example", "exercise", "intext_question",
+        "checkpoint_question", "long_answer", "short_answer", "other",
+    }:
+        title, case_title = _semantic_fallback_wording(cleaned, source_task)
+    else:
+        title, case_title = _FALLBACK_TYPE_WORDING.get(
+            source_kind, _semantic_fallback_wording(cleaned, source_task))
     return {
         "type_id": f"FALLBACK-{qid}",
         "type_title": title,
@@ -5390,6 +5569,259 @@ def _mine_types_from_inventory_via_api(
     return {"types": types}
 
 
+def _type_qid_contracts(types: list[dict]) -> dict[str, tuple[str, bool, str]]:
+    """Authoritative topic/activity/scope contract for each mined qid."""
+    contracts: dict[str, tuple[str, bool, str]] = {}
+    for mtype in types:
+        if not isinstance(mtype, dict):
+            continue
+        topic = _topic_comparison_key(mtype.get("topic_match_hint") or "")
+        activity = bool(mtype.get("is_activity"))
+        type_scope = _assignment_placement_scope(mtype)
+        case_qids: set[str] = set()
+        for raw_case in mtype.get("case_prompts") or []:
+            if not isinstance(raw_case, dict):
+                continue
+            scope = (
+                (raw_case.get("placement_scope") or "").strip().lower()
+                or type_scope
+            )
+            if scope not in _ASSIGNMENT_PLACEMENT_SCOPES:
+                scope = type_scope
+            for qid in _assignment_case_qids(raw_case):
+                contracts[qid] = (topic, activity, scope)
+                case_qids.add(qid)
+        for qid in _type_source_qids(mtype):
+            contracts.setdefault(qid, (topic, activity, type_scope))
+    return contracts
+
+
+def _consolidate_semantic_types_via_api(
+    mined_types: dict, *, inventory: dict, meta: dict,
+) -> dict:
+    """Merge paraphrased Type definitions behind exact deterministic gates."""
+    import json as _json
+
+    original = copy.deepcopy((mined_types or {}).get("types") or [])
+    if len(original) < 2:
+        return {"types": original}
+    system = prompts.get_text("concepts.type_semantic_consolidation.system")
+    user = (
+        _metadata_block(meta)
+        + "\nMINED TYPES TO CONSOLIDATE:\n"
+        + _json.dumps({"types": original}, ensure_ascii=False)
+    )
+    progress.log(
+        f"Reviewing {len(original)} mined Types for semantic duplicates.")
+    try:
+        data = _openai_json(system, user)
+    except Exception as exc:  # noqa: BLE001 — exact mined set remains valid
+        progress.log(
+            f"Semantic Type consolidation failed ({exc}); keeping mined Types.",
+            level="warning",
+        )
+        return {"types": original}
+
+    candidate = _normalize_mined_type_candidate(
+        list((data or {}).get("types") or []), inventory)
+    for index, mtype in enumerate(candidate, start=1):
+        mtype["type_id"] = f"TYPE-{index:04d}"
+
+    missed = _uncovered_inventory_items(inventory, candidate)
+    duplicates = _duplicate_inventory_assignments(inventory, candidate)
+    original_contracts = _type_qid_contracts(original)
+    candidate_contracts = _type_qid_contracts(candidate)
+    contract_drift = {
+        qid: {
+            "expected": original_contracts.get(qid),
+            "candidate": candidate_contracts.get(qid),
+        }
+        for qid in set(original_contracts) | set(candidate_contracts)
+        if original_contracts.get(qid) != candidate_contracts.get(qid)
+    }
+    if (
+        not candidate
+        or len(candidate) > len(original)
+        or missed
+        or duplicates
+        or contract_drift
+    ):
+        progress.log(
+            "Rejected semantic Type consolidation: "
+            f"{len(missed)} missing, {len(duplicates)} duplicate, "
+            f"{len(contract_drift)} topic/activity/scope drift, "
+            f"{len(candidate)} candidate vs {len(original)} original Types.",
+            level="warning",
+        )
+        return {"types": original}
+
+    merged = len(original) - len(candidate)
+    progress.log(
+        f"Semantic Type consolidation accepted: {len(candidate)} Type(s)"
+        + (f" ({merged} paraphrased duplicate(s) merged)." if merged else "."),
+        level="success",
+    )
+    return {"types": candidate}
+
+
+def _type_sufficiency_payload(mtype: dict) -> dict:
+    """Compact semantic Type payload for the concept sufficiency audit."""
+    return {
+        "type_id": mtype.get("type_id", ""),
+        "type_title": mtype.get("type_title", ""),
+        "type_description": mtype.get("type_description", ""),
+        "task_pattern": mtype.get("task_pattern", ""),
+        "concept_match_hint": mtype.get("concept_match_hint", ""),
+        "parent_concept_match_hint": mtype.get(
+            "parent_concept_match_hint", ""),
+        "topic_match_hint": mtype.get("topic_match_hint", ""),
+        "cases": [
+            {
+                "case_title": (
+                    case.get("case_title") or ""
+                    if isinstance(case, dict) else str(case)
+                ),
+                "examples": [
+                    _trim(example.get("example_prompt") or "", 1800)
+                    for example in _case_examples(case)
+                ] if isinstance(case, dict) else [],
+            }
+            for case in (mtype.get("case_prompts") or [])
+        ],
+    }
+
+
+def _add_missing_type_method_concepts_via_api(
+    records: list[dict], *, mined_types: dict, meta: dict,
+) -> list[dict]:
+    """Add only genuinely missing method concepts identified from mined Types."""
+    import json as _json
+
+    types = [
+        mtype for mtype in (mined_types or {}).get("types") or []
+        if isinstance(mtype, dict) and not mtype.get("is_activity")
+    ]
+    if not records or not types:
+        return records
+    concepts: list[dict] = []
+    cid_to_index: dict[str, int] = {}
+    topic_by_cid: dict[str, str] = {}
+    for index, record in enumerate(records, start=1):
+        if cr.is_culmination(record.get("concept_title") or ""):
+            continue
+        cid = f"CONCEPT-{index:04d}"
+        cid_to_index[cid] = index - 1
+        topic_by_cid[cid] = record.get("topic") or ""
+        concepts.append({
+            "concept_id": cid,
+            "topic": record.get("topic", ""),
+            "parent_concept": record.get("parent_concept", ""),
+            "concept": record.get("concept_title", ""),
+            "description": _concept_description_only(
+                record.get("concept_details", "")),
+        })
+    type_by_id = {
+        (mtype.get("type_id") or "").strip(): mtype
+        for mtype in types
+        if (mtype.get("type_id") or "").strip()
+    }
+    user = (
+        _metadata_block(meta)
+        + "\nNORMAL CONCEPTS:\n"
+        + _json.dumps({"concepts": concepts}, ensure_ascii=False)
+        + "\n\nMINED TYPE METHODS TO SUPPORT:\n"
+        + _json.dumps({
+            "types": [_type_sufficiency_payload(mtype) for mtype in types],
+        }, ensure_ascii=False)
+    )
+    progress.log("Auditing concept granularity against mined Type methods.")
+    try:
+        data = _openai_json(
+            prompts.get_text("concepts.concept_type_sufficiency.system"), user)
+    except Exception as exc:  # noqa: BLE001 — existing map remains usable
+        progress.log(
+            f"Concept/Type sufficiency audit failed ({exc}); keeping concept map.",
+            level="warning",
+        )
+        return records
+
+    existing_titles = {
+        bi.normalize_question_text(record.get("concept_title", ""))
+        for record in records
+    }
+    accepted: list[tuple[int, dict]] = []
+    max_additions = min(8, max(1, len(records) // 2))
+    for addition in (data or {}).get("additions") or []:
+        if not isinstance(addition, dict) or len(accepted) >= max_additions:
+            continue
+        after_cid = (addition.get("after_concept_id") or "").strip()
+        topic = (addition.get("topic") or "").strip()
+        title = (addition.get("concept") or "").strip()
+        supporting = [
+            str(type_id or "").strip()
+            for type_id in addition.get("supporting_type_ids") or []
+            if str(type_id or "").strip() in type_by_id
+        ]
+        if (
+            after_cid not in cid_to_index
+            or not topic
+            or _topic_comparison_key(topic_by_cid[after_cid])
+            != _topic_comparison_key(topic)
+            or not title
+            or cr.is_culmination(title)
+            or bi.normalize_question_text(title) in existing_titles
+            or not supporting
+        ):
+            continue
+        if any(
+            _topic_comparison_key(type_by_id[type_id].get(
+                "topic_match_hint") or "")
+            not in {"", _topic_comparison_key(topic)}
+            for type_id in supporting
+        ):
+            continue
+        details = kr.canonicalize_rich_text(
+            str(addition.get("concept_description") or "").strip())
+        candidate = {
+            "topic": topic,
+            "parent_concept": (
+                addition.get("parent_concept")
+                or records[cid_to_index[after_cid]].get("parent_concept")
+                or topic
+            ),
+            "concept_title": title,
+            "concept_details": details,
+            "keywords": addition.get("keywords") or "",
+        }
+        report = cv.validate_concept_rows(
+            [candidate],
+            allow_types=False,
+            require_culmination=False,
+            allow_culmination=False,
+        )
+        if any(error["severity"] == "error" for error in report["errors"]):
+            continue
+        accepted.append((cid_to_index[after_cid], candidate))
+        existing_titles.add(bi.normalize_question_text(title))
+
+    if not accepted:
+        progress.log("Concept/Type sufficiency audit found no missing method concepts.")
+        return records
+    additions_by_index: dict[int, list[dict]] = {}
+    for index, candidate in accepted:
+        additions_by_index.setdefault(index, []).append(candidate)
+    out: list[dict] = []
+    for index, record in enumerate(records):
+        out.append(record)
+        out.extend(additions_by_index.get(index, []))
+    progress.log(
+        f"Added {len(accepted)} source-grounded concept(s) for distinct "
+        "previously unsupported Type methods.",
+        level="success",
+    )
+    return out
+
+
 def _mined_type_to_body(mtype: dict, start_type: int) -> tuple[str, int]:
     """Render one mined Type into a ``Type NN: ... Case NN: ...`` fragment.
 
@@ -5539,6 +5971,124 @@ def _ensure_mastery_lines_via_api(
         completed += 1
     progress.log(f"Mastery lines completed for {completed} concept(s).",
                  level="success")
+    return records
+
+
+_WORKED_METHOD_EXAMPLE_RE = re.compile(
+    r"\bWorked\s+Example\s*:", re.IGNORECASE)
+
+
+def _description_with_worked_example(description: str, cue: str) -> str:
+    """Insert a worked cue before the terminal mastery statement."""
+    description = (description or "").strip()
+    cue = kr.canonicalize_rich_text(
+        concept_cleanup.strip_dangling_references(cue or "")).strip()
+    cue = re.sub(r"\s+", " ", cue)
+    cue = _trim(cue, 420).strip().rstrip(".")
+    if not cue:
+        return description
+    mastery = cr._MASTERY_LABEL_RE.search(description)
+    if mastery:
+        body = description[:mastery.start()].rstrip()
+        statement = description[mastery.end():].strip()
+        return (
+            f"{body} Worked Example: {cue}.\n"
+            f"Achieving Mastery: {statement}"
+        )
+    return f"{description.rstrip()} Worked Example: {cue}.".strip()
+
+
+def _ensure_method_worked_examples_via_api(
+    records: list[dict], *, anchors: list[dict], meta: dict,
+) -> list[dict]:
+    """Ensure each tagged derivation/method row demonstrates its own method."""
+    import json as _json
+
+    anchors_by_id = {
+        str(anchor.get("anchor_id") or "").strip().upper(): anchor
+        for anchor in anchors
+        if str(anchor.get("anchor_id") or "").strip()
+    }
+    targets = [
+        index for index, record in enumerate(records)
+        if _method_anchor_ids(record)
+        and not _WORKED_METHOD_EXAMPLE_RE.search(
+            _concept_description_only(record.get("concept_details", "")))
+    ]
+    if not targets:
+        return records
+    payload_rows = [_records_to_api_rows([records[index]])[0] for index in targets]
+    relevant_anchors = [
+        anchors_by_id[anchor_id]
+        for index in targets
+        for anchor_id in _method_anchor_ids(records[index])
+        if anchor_id in anchors_by_id
+    ]
+    user = (
+        _metadata_block(meta)
+        + "\nMETHOD CONCEPT ROWS:\n"
+        + _json.dumps({"rows": payload_rows}, ensure_ascii=False)
+        + "\n\nSOURCE METHOD ANCHORS:\n"
+        + _json.dumps({"anchors": relevant_anchors}, ensure_ascii=False)
+    )
+    progress.log(
+        f"Adding relevant worked derivation cues to {len(targets)} "
+        "method concept(s).")
+    accepted: dict[tuple[str, str], str] = {}
+    try:
+        data = _openai_json(
+            prompts.get_text("concepts.method_worked_example.system"), user)
+        for row in _concept_rows_to_records(data):
+            description = kr.canonicalize_rich_text(
+                _concept_description_only(row.get("concept_details", "")))
+            if _WORKED_METHOD_EXAMPLE_RE.search(description):
+                accepted[_record_key(row)] = description
+    except Exception as exc:  # noqa: BLE001 — source-grounded fallback follows
+        progress.log(
+            f"Worked derivation cue pass failed ({exc}); using anchor evidence.",
+            level="warning",
+        )
+
+    fallback_count = 0
+    for index in targets:
+        record = records[index]
+        description = accepted.get(_record_key(record))
+        if not description:
+            anchor = next(
+                (
+                    anchors_by_id[anchor_id]
+                    for anchor_id in _method_anchor_ids(record)
+                    if anchor_id in anchors_by_id
+                ),
+                {},
+            )
+            evidence = str(anchor.get("source_evidence") or "").strip()
+            if not evidence:
+                formulas = anchor.get("required_formulas") or []
+                if formulas:
+                    formula = str(formulas[0]).strip()
+                    formula = re.sub(
+                        r"^(?:\$\$?|\\\[|\\\()|(?:\$\$?|\\\]|\\\))$",
+                        "",
+                        formula,
+                    ).strip()
+                    evidence = (
+                        "follow the source transformation to obtain "
+                        + kr.katex(formula)
+                    )
+            description = _description_with_worked_example(
+                _concept_description_only(
+                    record.get("concept_details", "")),
+                evidence,
+            )
+            fallback_count += 1
+        record["concept_details"] = _set_description(
+            record.get("concept_details", ""), description)
+    progress.log(
+        f"Worked derivation cues completed for {len(targets)} method concept(s)"
+        + (f" ({fallback_count} from deterministic anchor evidence)." if fallback_count else "."),
+        level="success",
+    )
     return records
 
 
@@ -5964,6 +6514,98 @@ def _high_confidence_assignment_override(
     return ""
 
 
+def _review_case_unit_hosts_via_api(
+    *,
+    assignment_units: list[dict],
+    per_concept: dict[str, list[dict]],
+    concept_payload: list[dict],
+    allowed_cids_by_tid: dict[str, set[str]],
+    meta: dict,
+) -> dict[str, list[dict]]:
+    """Second-pass semantic host review, constrained to proven concept IDs."""
+    import json as _json
+
+    current_by_tid: dict[str, str] = {}
+    for cid, units in per_concept.items():
+        for unit in units:
+            tid = (unit.get("type_id") or "").strip()
+            if tid:
+                current_by_tid[tid] = cid
+    review_units = [
+        unit for unit in assignment_units
+        if (unit.get("type_id") or "").strip() in current_by_tid
+        and not unit.get("is_activity")
+    ]
+    if not review_units:
+        return per_concept
+    payload = []
+    for unit in review_units:
+        tid = (unit.get("type_id") or "").strip()
+        item = copy.deepcopy(unit)
+        item["current_concept_id"] = current_by_tid[tid]
+        item["allowed_concept_ids"] = sorted(
+            allowed_cids_by_tid.get(tid) or set())
+        item["placement_scope"] = _assignment_placement_scope(unit)
+        payload.append(item)
+    user = (
+        _metadata_block(meta)
+        + "\nCONCEPT HOSTS:\n"
+        + _json.dumps({"concepts": concept_payload}, ensure_ascii=False)
+        + "\n\nCURRENT CASE-SCOPED ASSIGNMENTS TO REVIEW:\n"
+        + _json.dumps({"types": payload}, ensure_ascii=False)
+    )
+    progress.log(
+        f"Reviewing semantic host entailment for {len(review_units)} "
+        "Type/Case assignment unit(s).")
+    try:
+        data = _openai_json(
+            prompts.get_text("concepts.type_host_review.system"), user)
+    except Exception as exc:  # noqa: BLE001 — constrained first pass is valid
+        progress.log(
+            f"Type host entailment review failed ({exc}); keeping assignments.",
+            level="warning",
+        )
+        return per_concept
+
+    proposed: dict[str, str] = {}
+    invalid: set[str] = set()
+    known_tids = {str(unit.get("type_id") or "").strip() for unit in review_units}
+    for assignment in (data or {}).get("assignments") or []:
+        if not isinstance(assignment, dict):
+            continue
+        tid = (assignment.get("type_id") or "").strip()
+        cid = (assignment.get("concept_id") or "").strip()
+        if tid not in known_tids or tid in proposed:
+            if tid:
+                invalid.add(tid)
+            continue
+        if cid not in (allowed_cids_by_tid.get(tid) or set()):
+            invalid.add(tid)
+            continue
+        proposed[tid] = cid
+    for tid in invalid:
+        proposed.pop(tid, None)
+
+    rebuilt: dict[str, list[dict]] = {}
+    moved = 0
+    for unit in assignment_units:
+        tid = (unit.get("type_id") or "").strip()
+        current = current_by_tid.get(tid)
+        if not current:
+            continue
+        target = proposed.get(tid, current)
+        if target != current:
+            moved += 1
+        rebuilt.setdefault(target, []).append(unit)
+    progress.log(
+        f"Type host entailment review moved {moved} assignment unit(s); "
+        f"{len(known_tids) - len(proposed)} omitted/invalid verdict(s) "
+        "kept their constrained first-pass host.",
+        level="success" if not invalid else "warning",
+    )
+    return rebuilt
+
+
 def _assign_mined_types_via_api(
     records: list[dict], *, meta: dict, mined_types: dict, max_attempts: int = 4,
 ) -> list[dict]:
@@ -6260,6 +6902,14 @@ def _assign_mined_types_via_api(
             + ", ".join(sorted(unassigned))
         )
 
+    per_concept = _review_case_unit_hosts_via_api(
+        assignment_units=assignment_units,
+        per_concept=per_concept,
+        concept_payload=concept_payload,
+        allowed_cids_by_tid=allowed_cids_by_tid,
+        meta=meta,
+    )
+
     for cid, tlist in per_concept.items():
         rec = cid_map[cid]
         fragments: list[str] = []
@@ -6267,11 +6917,9 @@ def _assign_mined_types_via_api(
         counter = 0
         for mtype in _collapse_assignment_units_for_render(tlist):
             if mtype.get("is_activity"):
-                hub = _activity_hub_fragment(mtype)
-                if hub:
-                    hub_fragments.append(hub)
-                # Activity procedures sit in Activity/Info Hub. Do not also
-                # emit them as assessable Types/Cases on Culmination.
+                # Activity procedures are placed from their authoritative
+                # inventory item by the dedicated compact Hub pass. Do not
+                # duplicate the full source task here or emit it as a Type.
                 continue
             body, counter = _mined_type_to_body(mtype, counter)
             if body:
@@ -6620,7 +7268,7 @@ _FATAL_CODES = {
     "culmination_too_early", "types_format", "case_without_type",
     "type_without_case", "culmination_description", "culmination_count",
     "culmination_order", "section_number", "empty_types", "short_case_example",
-    "merged_description",
+    "merged_description", "rich_text_format",
 }
 
 
@@ -7026,16 +7674,9 @@ def _activity_example_hub_alignment_violations(
     for item in (inventory or {}).get("items") or []:
         if not item.get("_activity_origin"):
             continue
-        key = bi.normalize_question_text(_inventory_task_text(item))
-        if not key:
-            continue
         example_locations = set(
             _rendered_inventory_example_locations(records, item))
-        hub_locations = {
-            index for index, record in enumerate(records)
-            if key in bi.normalize_question_text(
-                cr.activity_hub_body(record.get("concept_details") or ""))
-        }
+        hub_locations = set(_activity_hub_locations(records, item))
         if example_locations and hub_locations and not (
             example_locations & hub_locations
         ):
@@ -7165,13 +7806,10 @@ def _best_record_index_for_inventory_item(
     if not records:
         return 0
     if item.get("_activity_origin"):
-        task_key = bi.normalize_question_text(_inventory_task_text(item))
         hub_matches = [
-            index for index, record in enumerate(records)
-            if task_key
-            and task_key in bi.normalize_question_text(
-                cr.activity_hub_body(record.get("concept_details") or ""))
-            and not cr.is_culmination(record.get("concept_title") or "")
+            index for index in _activity_hub_locations(records, item)
+            if not cr.is_culmination(
+                records[index].get("concept_title") or "")
         ]
         if len(hub_matches) == 1:
             # The Hub was GPT-placed semantically. Keep the assessable Example
@@ -7283,8 +7921,14 @@ def _append_inventory_example_to_record(
     source_kind = (
         ((item or {}).get("source_kind") or "other").strip().lower()
     )
-    title, case_title = _FALLBACK_TYPE_WORDING.get(
-        source_kind, _FALLBACK_TYPE_WORDING["other"])
+    if source_kind in {
+        "worked_example", "solved_example", "exercise", "intext_question",
+        "checkpoint_question", "long_answer", "short_answer", "other",
+    }:
+        title, case_title = _semantic_fallback_wording(item or {}, text)
+    else:
+        title, case_title = _FALLBACK_TYPE_WORDING.get(
+            source_kind, _semantic_fallback_wording(item or {}, text))
     existing = re.search(
         r"(?is)(?P<header>\bType\s+\d{1,2}:\s*"
         + re.escape(title)
@@ -7423,11 +8067,7 @@ def _align_activity_examples_with_hubs(
         if not text or not key:
             continue
         example_locations = _rendered_inventory_example_locations(out, item)
-        hub_locations = [
-            index for index, record in enumerate(out)
-            if key in bi.normalize_question_text(
-                cr.activity_hub_body(record.get("concept_details") or ""))
-        ]
+        hub_locations = _activity_hub_locations(out, item)
         if len(hub_locations) != 1 or not example_locations:
             continue
         target = hub_locations[0]
@@ -7966,16 +8606,6 @@ def _assign_types_via_api(
             f"Embedding {len(mined_types['types'])} mined Types into concepts "
             "via API ID assignment.")
         merged = _assign_mined_types_via_api(records, meta=meta, mined_types=mined_types)
-        before_alignment = merged
-        aligned = _review_type_concept_alignment_via_api(
-            merged,
-            meta=meta,
-            question_task_inventory=question_task_inventory,
-            mined_types=mined_types,
-            source_context=mmd_text,
-        )
-        merged = _accept_exact_inventory_type_review(
-            before_alignment, aligned, question_task_inventory, mined_types)
         before_repair = merged
         repaired = _repair_records_via_api(
             merged, meta=meta, stage="types", source_context=mmd_text,
@@ -9570,9 +10200,10 @@ def _enforce_culminations(records: list[dict]) -> list[dict]:
 
     Keeps the authored culmination (first one when the model produced
     duplicates), appends the deterministic fallback when a topic has none,
-    and always positions it last. A kept culmination that lost its Types gets
-    the deterministic mixed-application starter (Miscellaneous sequence).
-    Normal rows are never touched.
+    and always positions it last. Its title is rebuilt deterministically from
+    the normal concepts in that exact topic, so foreign-topic metadata cannot
+    survive. Inventory-backed Types already assigned to it are preserved;
+    synthetic starter Types are never invented. Normal rows are never touched.
     """
     normal: dict[str, list[dict]] = {}
     culms: dict[str, list[dict]] = {}
@@ -9592,10 +10223,7 @@ def _enforce_culminations(records: list[dict]) -> list[dict]:
         if topic_culms:
             keep = dict(topic_culms[0])
             keep["parent_concept"] = "Culmination"
-            if not _has_meaningful_types(keep.get("concept_details", "")):
-                keep["concept_details"] = _inject_types(
-                    keep.get("concept_details", ""),
-                    _culmination_starter_types(normal[topic]))
+            keep["concept_title"] = _culmination_title(normal[topic])
             out.append(keep)
             if len(topic_culms) > 1:
                 progress.log(
@@ -9632,10 +10260,7 @@ def _ensure_culmination_rows(records: list[dict]) -> list[dict]:
             "topic": topic,
             "parent_concept": "Culmination",
             "concept_title": _culmination_title(topic_records),
-            "concept_details": (
-                "Description: Recap // Types: Type 01: Mixed topic application "
-                "Case 01: Solve or explain a problem that combines the topic's main ideas"
-            ),
+            "concept_details": "Description: Recap",
             "keywords": "culmination, recap, mixed application",
         })
     return out
@@ -9672,6 +10297,8 @@ def _merge_culmination_rows(records: list[dict], culms: list[dict]) -> list[dict
             authored = dict(authored)
             authored["topic"] = topic
             authored["parent_concept"] = "Culmination"
+            authored["concept_title"] = _culmination_title(topic_records)
+            authored = _strip_types_from_records([authored])[0]
             out.append(authored)
         else:
             out.extend(
@@ -10224,7 +10851,7 @@ def chapter_meta_via_api(
     return out
 
 
-_CONCEPT_CHECKPOINT_SCHEMA = 1
+_CONCEPT_CHECKPOINT_SCHEMA = 2
 _CONCEPT_CHECKPOINT_STAGE = "pre_type_assignment"
 
 
@@ -10387,6 +11014,8 @@ def concepts_from_mmd(
             out = _refine_descriptions_via_api(
                 out, subject=subject, mmd_text=mmd_text, meta=meta,
                 sections=sections)
+            out = _ensure_method_worked_examples_via_api(
+                out, anchors=method_anchors, meta=meta)
             out = _ensure_mastery_lines_via_api(out, meta=meta)
             out = _restore_method_anchor_rows(
                 out, skeleton_method_row_snapshot)
@@ -10435,6 +11064,14 @@ def concepts_from_mmd(
                 "Concept extraction — mining reusable Types", value=0.72)
             mined_types = _mine_types_from_inventory_via_api(
                 meta=meta, inventory=question_task_inventory)
+            mined_types = _consolidate_semantic_types_via_api(
+                mined_types, inventory=question_task_inventory, meta=meta)
+            out = _add_missing_type_method_concepts_via_api(
+                out, mined_types=mined_types, meta=meta)
+            # A newly split method concept is authored after the main
+            # Description pass, so give it the same mastery guarantee before
+            # Culminations and Type assignment.
+            out = _ensure_mastery_lines_via_api(out, meta=meta)
             progress.set_progress(
                 0.79, label="Concept extraction — reusable Types mined")
             if artifacts is not None:
@@ -10614,6 +11251,7 @@ def concepts_from_mmd(
         # and full questions. Then neutralize artifacts exposed by replacement.
         out = _salvage_short_case_examples(
             out, inventory=question_task_inventory)
+        out = _canonicalize_concept_rich_text(out)
         boundary_report = cv.validate_concept_rows(
             out, allow_types=True, require_culmination=True,
             allow_culmination=True,
@@ -10665,6 +11303,7 @@ def concepts_from_mmd(
                 f"{len(activity_alignment_violations)} assessable Activity "
                 "Example(s) separated from their Activity/Info Hub"
             )
+        out = _canonicalize_concept_rich_text(out)
         _validate_final_or_raise(
             out, stage="final", inventory=question_task_inventory)
         missing = sum(
