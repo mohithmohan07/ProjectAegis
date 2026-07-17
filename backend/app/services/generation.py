@@ -3015,6 +3015,20 @@ def _mark_activity_hub_placement(record: dict, item: dict) -> None:
     record["_activity_hub_qids"] = qids
 
 
+def _merge_activity_hub_qids(record: dict, sources: list[dict]) -> dict:
+    """Carry exact Hub identities through row replacement and de-duplication."""
+    qids = list(record.get("_activity_hub_qids") or [])
+    for source in sources:
+        for qid in source.get("_activity_hub_qids") or []:
+            if qid not in qids:
+                qids.append(qid)
+    if qids == list(record.get("_activity_hub_qids") or []):
+        return record
+    merged = dict(record)
+    merged["_activity_hub_qids"] = qids
+    return merged
+
+
 def _compact_activity_hub_note(item: dict, suggested: str = "") -> str:
     """Teacher-facing Activity summary; never copy the full source dump."""
     marker = _activity_hub_marker(item)
@@ -4407,6 +4421,8 @@ def _inventory_task_text(item: dict) -> str:
             continue
         alt = _visual_alt_text(
             item, task, image_index, visual_captions.get(url, ""))
+        if url.lower().startswith("http://"):
+            url = "https://" + url[7:]
         if url not in task:
             task = f"{task} {kr.image(url, alt)}"
     return kr.canonicalize_rich_text(task.strip())
@@ -6287,7 +6303,8 @@ def _merge_similar_concepts_via_api(records: list[dict], *, meta: dict) -> list[
                 f"group of {len(group)} — keeping deterministic dedupe.",
                 level="warning")
             continue
-        merged_by_first[group[0]] = merged_rows[0]
+        merged_by_first[group[0]] = _merge_activity_hub_qids(
+            merged_rows[0], rows)
         drop.update(group[1:])
     if not merged_by_first:
         return records
@@ -7419,14 +7436,20 @@ def _validation_options(stage: str) -> dict:
 
 def _merge_repaired_rows(records: list[dict], repaired: list[dict]) -> list[dict]:
     if len(repaired) == len(records):
-        return repaired
+        return [
+            _merge_activity_hub_qids(new, [old])
+            for old, new in zip(records, repaired)
+        ]
     by_key = {_record_key(r): r for r in repaired}
     by_title = {bi.normalize_question_text(r.get("concept_title", "")): r for r in repaired}
     out: list[dict] = []
     for rec in records:
         replacement = by_key.get(_record_key(rec)) or by_title.get(
             bi.normalize_question_text(rec.get("concept_title", "")))
-        out.append(replacement or rec)
+        out.append(
+            _merge_activity_hub_qids(replacement, [rec])
+            if replacement is not None else rec
+        )
     return out
 
 
@@ -7510,7 +7533,8 @@ def _repair_records_via_api(
             next_records = list(records)
             for idx, repaired_row in zip(failed_indexes, repaired):
                 if idx < len(next_records):
-                    next_records[idx] = repaired_row
+                    next_records[idx] = _merge_activity_hub_qids(
+                        repaired_row, [next_records[idx]])
             records = next_records
         else:
             records = _merge_repaired_rows(records, repaired)
@@ -9341,11 +9365,14 @@ def _merge_concept_records(records: list[dict]) -> list[dict]:
                bi.normalize_question_text(rec["concept_title"]))
         if key in seen:
             kept_index = seen[key]
+            kept = out[kept_index]
             if (
                 _method_anchor_ids(rec)
-                and not _method_anchor_ids(out[kept_index])
+                and not _method_anchor_ids(kept)
             ):
-                out[kept_index] = rec
+                kept = rec
+            out[kept_index] = _merge_activity_hub_qids(
+                kept, [out[kept_index], rec])
             continue
         seen[key] = len(out)
         out.append(rec)
@@ -9369,11 +9396,14 @@ def _dedupe_titles_chapter_wide(records: list[dict]) -> list[dict]:
         key = bi.normalize_question_text(rec.get("concept_title", ""))
         if key and key in seen:
             kept_index = seen[key]
+            kept = out[kept_index]
             if (
                 _method_anchor_ids(rec)
-                and not _method_anchor_ids(out[kept_index])
+                and not _method_anchor_ids(kept)
             ):
-                out[kept_index] = rec
+                kept = rec
+            out[kept_index] = _merge_activity_hub_qids(
+                kept, [out[kept_index], rec])
             dropped += 1
             continue
         if key:

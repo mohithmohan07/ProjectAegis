@@ -303,18 +303,24 @@ def import_workbook(db: Session, path: Path) -> dict:
             c_title = c_title_clean or "Concept"
             c_source = con.get("concept_source", "")
             c_key = (topic.id, c_title)
+            concept_details = katex_rules.canonicalize_rich_text(
+                con.get("concept_details", ""))
             concept = concepts.get(c_key)
             if concept is None:
                 concept = db.query(models.Concept).filter_by(
                     topic_id=topic.id, concept_title=c_title).first()
+            stored_details = ""
+            if concept is not None:
+                stored_details = katex_rules.canonicalize_rich_text(
+                    concept.concept_details)
+                concept.concept_details = stored_details
+            for issue in _format_issues(
+                f"{sheet_name!r} row {row_i} concept_details",
+                concept_details,
+                stored_details,
+            ):
+                _flag(issue)
             if concept is None:
-                concept_details = katex_rules.canonicalize_rich_text(
-                    con.get("concept_details", ""))
-                for issue in _format_issues(
-                    f"{sheet_name!r} row {row_i} concept_details",
-                    concept_details,
-                ):
-                    _flag(issue)
                 concept = models.Concept(
                     topic_id=topic.id, concept_title=c_title,
                     concept_display_name=con.get("concept_display_name", ""),

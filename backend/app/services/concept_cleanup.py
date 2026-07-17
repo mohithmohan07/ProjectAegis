@@ -284,9 +284,19 @@ def dedupe_similar_titles_chapter_wide(records: list[dict]) -> list[dict]:
                     kept.append(title)
                     out.append(rec)
                     continue
+                previous = out[similar_index]
+                survivor = rec if required(rec) else previous
+                qids = list(survivor.get("_activity_hub_qids") or [])
+                for source in (previous, rec):
+                    for qid in source.get("_activity_hub_qids") or []:
+                        if qid not in qids:
+                            qids.append(qid)
+                if qids != list(survivor.get("_activity_hub_qids") or []):
+                    survivor = dict(survivor)
+                    survivor["_activity_hub_qids"] = qids
                 if required(rec):
                     kept[similar_index] = title
-                    out[similar_index] = rec
+                out[similar_index] = survivor
                 dropped += 1
                 continue
             kept.append(title)

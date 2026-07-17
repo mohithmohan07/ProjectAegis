@@ -63,12 +63,15 @@ def test_split_merged_description_blocks():
 def test_dedupe_similar_titles_drops_bpt_echo():
     records = [
         {"topic": "Similarity", "concept_title": "Basic Proportionality Theorem",
-         "concept_details": "Description: a", "keywords": ""},
+         "concept_details": "Description: a", "keywords": "",
+         "_activity_hub_qids": ["QINV-0001"]},
         {"topic": "Criteria", "concept_title": "The Basic Proportionality Theorem",
-         "concept_details": "Description: b", "keywords": ""},
+         "concept_details": "Description: b", "keywords": "",
+         "_activity_hub_qids": ["QINV-0002"]},
     ]
     out = concept_cleanup.dedupe_similar_titles_chapter_wide(records)
     assert len(out) == 1
+    assert out[0]["_activity_hub_qids"] == ["QINV-0001", "QINV-0002"]
 
 
 def test_dedupe_similar_titles_handles_bpt_abbreviation():
@@ -445,6 +448,21 @@ def test_inventory_task_text_prefers_raw_task_and_ships_images():
     assert (
         '[img src="https://cdn.mathpix.com/f11.jpg" alt="Fig. 11.1"]'
         in text
+    )
+
+
+def test_inventory_task_text_upgrades_http_images_to_https():
+    text = g._inventory_task_text({
+        "raw_task": (
+            "Compare the circuits. "
+            "![Circuit diagram](http://cdn.mathpix.com/circuits.jpg)"
+        ),
+        "image_urls": ["http://cdn.mathpix.com/circuits.jpg"],
+    })
+    assert "http://cdn.mathpix.com" not in text
+    assert (
+        '[img src="https://cdn.mathpix.com/circuits.jpg" '
+        'alt="Circuit diagram"]' in text
     )
 
 
@@ -989,10 +1007,11 @@ def test_merge_similar_concepts_via_api_merges_content(monkeypatch):
     records = [
         {"topic": "Similarity", "parent_concept": "Similarity",
          "concept_title": "Basic Proportionality Theorem",
-         "concept_details": "Description: a", "keywords": ""},
+         "concept_details": "Description: a", "keywords": "",
+         "_activity_hub_qids": ["QINV-0001"]},
         {"topic": "Criteria", "parent_concept": "Criteria",
          "concept_title": "BPT", "concept_details": "Description: b",
-         "keywords": ""},
+         "keywords": "", "_activity_hub_qids": ["QINV-0002"]},
         {"topic": "Criteria", "parent_concept": "Criteria",
          "concept_title": "Unrelated Concept",
          "concept_details": "Description: c", "keywords": ""},
@@ -1000,7 +1019,31 @@ def test_merge_similar_concepts_via_api_merges_content(monkeypatch):
     out = g._merge_similar_concepts_via_api(records, meta=g._metadata(subject="Math"))
     assert len(out) == 2
     assert out[0]["concept_details"] == "Description: merged body from both rows."
+    assert out[0]["_activity_hub_qids"] == ["QINV-0001", "QINV-0002"]
     assert out[1]["concept_title"] == "Unrelated Concept"
+
+
+def test_exact_concept_dedupes_merge_activity_hub_qids():
+    records = [
+        {
+            "topic": "Similarity",
+            "concept_title": "Ratio",
+            "concept_details": "Description: first",
+            "_activity_hub_qids": ["QINV-0001"],
+        },
+        {
+            "topic": "Similarity",
+            "concept_title": "Ratio",
+            "concept_details": "Description: second",
+            "_activity_hub_qids": ["QINV-0002"],
+        },
+    ]
+    merged = g._merge_concept_records(records)
+    assert merged[0]["_activity_hub_qids"] == ["QINV-0001", "QINV-0002"]
+
+    records[1]["topic"] = "Applications"
+    deduped = g._dedupe_titles_chapter_wide(records)
+    assert deduped[0]["_activity_hub_qids"] == ["QINV-0001", "QINV-0002"]
 
 
 def test_unassigned_mined_types_fail_instead_of_guessing(monkeypatch):

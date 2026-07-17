@@ -3,7 +3,7 @@ import io
 import openpyxl
 
 from app import bulk_import as bi
-from app import config
+from app import config, models
 
 
 def test_health(client):
@@ -142,3 +142,77 @@ def test_import_workbook_roundtrip(client):
     counts = client.post("/data/import", files=files).json()
     # Labels already present -> questions not re-created.
     assert counts["questions"] == 0
+
+
+def test_import_normalizes_and_checks_existing_concept(
+    db, tmp_path,
+):
+    from app.bulk_import import reader, writer
+    from app.services import directory
+
+    chapter_title = "94721 Rich Text Contract"
+    chapter = models.Chapter(
+        chapter_code=directory.make_chapter_code(
+            "CBSE", "12", "Physics", chapter_title),
+        board="CBSE",
+        grade="12",
+        subject="Physics",
+        unit="Physics Unit",
+        chapter_title=chapter_title,
+        chapter_display_name=chapter_title,
+    )
+    topic = models.Topic(
+        topic_title="Existing Rich Text Topic 94721",
+        topic_display_name="Existing Rich Text Topic 94721",
+        pre_post_learning="Post",
+    )
+    concept = models.Concept(
+        concept_title="Existing Rich Text Concept 94721",
+        concept_display_name="Existing Rich Text Concept 94721",
+        parent_concept="Rich Text",
+        concept_details="Description: Legacy [katex] x^2 [/katex] notation.",
+    )
+    concept.groups.append(models.Group(
+        group_type="Basic",
+        group_name="Existing Rich Text Basic 94721",
+        group_display_name="Existing Rich Text Basic 94721",
+    ))
+    topic.concepts.append(concept)
+    chapter.topics.append(topic)
+    db.add(chapter)
+    db.commit()
+    try:
+        path = tmp_path / "existing_concept.xlsx"
+        writer.append_concepts(db, path, [concept.id])
+        wb = openpyxl.load_workbook(path)
+        ws = wb[bi.SHEET_OBJECTIVE]
+        headers = [cell.value for cell in ws[2]]
+        ws.cell(
+            row=3,
+            column=headers.index("concept_details") + 1,
+            value=(
+                'Description: [img src="http://images.example/legacy.png" '
+                'alt="Legacy visual"]'
+            ),
+        )
+        group = concept.groups[0]
+        ws.cell(
+            row=3,
+            column=headers.index("group_name") + 1,
+            value=group.group_name,
+        )
+        ws.cell(
+            row=3,
+            column=headers.index("group_type") + 1,
+            value=group.group_type,
+        )
+        wb.save(path)
+
+        counts = reader.import_workbook(db, path)
+        db.refresh(concept)
+        assert "[Katex] x^2 [/Katex]" in concept.concept_details
+        assert any(
+            "full HTTPS src URL" in issue for issue in counts["issues"])
+    finally:
+        db.delete(chapter)
+        db.commit()
