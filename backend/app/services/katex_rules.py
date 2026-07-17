@@ -118,6 +118,17 @@ _MARKDOWN_LINK_RE = re.compile(
 _CURRENCY_TOKEN_RE = re.compile(
     r"(?<!\\)\$(?P<amount>\d+(?:[.,]\d+)?)\b"
 )
+_RAW_EQUATION_RE = re.compile(
+    r"(?<![\w])"
+    r"(?:[A-Za-z][A-Za-z0-9]*|\d+(?:\.\d+)?)"
+    r"(?:\s*[+\-*/×÷]\s*"
+    r"(?:[A-Za-z][A-Za-z0-9]*|\d+(?:\.\d+)?))*"
+    r"\s*(?<![=<>])=(?!=)\s*"
+    r"(?:[A-Za-z][A-Za-z0-9]*|\d+(?:\.\d+)?)"
+    r"(?:\s*[+\-*/×÷]\s*"
+    r"(?:[A-Za-z][A-Za-z0-9]*|\d+(?:\.\d+)?))*"
+    r"(?![\w])"
+)
 
 
 def _looks_like_currency_pair(match: re.Match) -> bool:
@@ -270,6 +281,8 @@ def rich_text_issues(
         re.IGNORECASE,
     ):
         issues.append("raw_latex")
+    if _RAW_EQUATION_RE.search(delimiter_masked):
+        issues.append("raw_math_expression")
     image_tags = list(_IMAGE_TAG_RE.finditer(value))
     if len(re.findall(r"\[img\b", value, re.IGNORECASE)) != len(image_tags):
         issues.append("unbalanced_image")

@@ -9498,12 +9498,20 @@ def _method_coverage_anchors(sections: list[dict]) -> list[dict]:
                     _normalize_math_evidence(existing) for existing in formulas}:
                 formulas.append(formula)
         # "prove/proof" is often ordinary disciplinary prose ("history proves
-        # that...", "no further proof..."). Without a formula, only explicit
-        # derivation/procedure vocabulary is strong enough to create a durable
-        # method concept.
+        # that...", "no further proof..."). Keep it only in formal contexts:
+        # a proof/prove heading or an imperative/theorem-shaped statement.
+        formal_proof_context = bool(re.search(
+            r"(?im)(?:^\s*(?:proof|proving)\b"
+            r"|^\s*prove\b.{0,120}\b(?:theorem|lemma|proposition|identity|that)\b"
+            r"|\b(?:proof|prove)\b.{0,80}\b"
+            r"(?:theorem|lemma|proposition|identity)\b"
+            r"|\b(?:theorem|lemma|proposition|identity)\b.{0,80}\b"
+            r"(?:proof|prove)\b)",
+            searchable,
+        ))
         has_method_word = bool(re.search(
             r"\b(?:deriv|method|procedure|algorithm|technique)\w*\b",
-            searchable, re.IGNORECASE))
+            searchable, re.IGNORECASE)) or formal_proof_context
         if not formulas and not has_method_word:
             continue
         start = max(0, cue.start() - 180)

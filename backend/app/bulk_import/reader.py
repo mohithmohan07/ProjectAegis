@@ -147,6 +147,8 @@ def _format_issues(label: str, *texts: str) -> list[str]:
         "empty_katex": "empty [Katex] tag",
         "markdown_image": "Markdown image found — use [img src=\"...\" alt=\"...\"]",
         "raw_math_delimiter": "raw math delimiters found — use [Katex]...[/Katex]",
+        "raw_math_expression": (
+            "raw equation found — use [Katex]...[/Katex]"),
         "raw_latex": "raw LaTeX found outside a [Katex] tag",
         "unbalanced_image": "unclosed [img] tag",
         "invalid_image_src": "[img] without a full HTTPS src URL",

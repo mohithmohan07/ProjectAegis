@@ -114,6 +114,14 @@ def test_markdown_images_handle_titles_parentheses_and_reject_relative_urls():
         '[img src="http://images.example/x.png" alt="graph"]')
 
 
+@pytest.mark.parametrize("expression", ["F = ma", "2 + 3 = 5", "a/b = c/d"])
+def test_plain_ascii_equations_require_katex(expression):
+    assert "raw_math_expression" in kr.rich_text_issues(
+        f"Description: Apply {expression} to solve the problem.")
+    assert not kr.rich_text_issues(
+        f"Description: Apply [Katex] {expression} [/Katex] to solve the problem.")
+
+
 def test_rich_text_registry_uses_student_facing_display_answer():
     assert "display_answer" in kr.RICH_TEXT_FIELDS
     assert "answer_display" not in kr.RICH_TEXT_FIELDS
@@ -477,6 +485,19 @@ def test_incidental_historical_proof_language_is_not_a_method_anchor():
         "independent. A critic asked whether any further proof was required."
     )
     assert not g._method_coverage_anchors(sections)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "## Proof of the Angle-Bisector Theorem\n"
+        "Construct the bisector and compare the resulting triangles.",
+        "## Angle-Bisector Theorem\n"
+        "Prove that the theorem follows by comparing the two triangles.",
+    ],
+)
+def test_formula_free_formal_proofs_remain_method_anchors(source):
+    assert len(g._method_coverage_anchors(g.parse_mmd_sections(source))) == 1
 
 
 def test_reusable_type_keeps_one_number_and_continues_cases_across_concepts():
