@@ -231,5 +231,6 @@ def test_import_validation_reports_issues(client, tmp_path):
     issues = "\n".join(counts["issues"])
     assert "unknown cognitive skill" in issues
     assert "unknown level_of_difficulty" in issues
-    assert "$$" in issues
+    assert "raw math delimiters" in issues
+    assert "[Katex]" in issues
     assert "marks not numeric" in issues

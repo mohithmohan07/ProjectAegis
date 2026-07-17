@@ -978,6 +978,9 @@ def test_pipeline_restores_skeleton_method_rows_before_description_and_cleanup(
         g, "_refine_descriptions_via_api",
         capture_and_refine_descriptions)
     monkeypatch.setattr(
+        g, "_ensure_method_worked_examples_via_api",
+        lambda records, **kwargs: records)
+    monkeypatch.setattr(
         g, "_ensure_mastery_lines_via_api",
         lambda records, **kwargs: records)
     monkeypatch.setattr(
@@ -1116,6 +1119,9 @@ def test_final_pipeline_restores_post_description_method_snapshot(monkeypatch):
         lambda records, **kwargs: records)
     monkeypatch.setattr(
         g, "_refine_descriptions_via_api",
+        lambda records, **kwargs: records)
+    monkeypatch.setattr(
+        g, "_ensure_method_worked_examples_via_api",
         lambda records, **kwargs: records)
     monkeypatch.setattr(
         g, "_extract_question_task_inventory_via_api",
@@ -1639,7 +1645,9 @@ def test_type_assignment_rejects_wrong_ap_source_topic(monkeypatch):
         records, meta=g._metadata(subject="Mathematics"),
         mined_types=mined, max_attempts=2)
 
-    assert calls["count"] == 2
+    # Two constrained embedding attempts plus one semantic host-entailment
+    # review of the accepted placement.
+    assert calls["count"] == 3
     assert "Finding a Finite AP Sum" not in out[0]["concept_details"]
     assert "Finding a Finite AP Sum" in out[1]["concept_details"]
     assert not g._mined_type_topic_violations(out, mined)

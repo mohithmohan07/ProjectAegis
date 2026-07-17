@@ -945,7 +945,7 @@ SOURCE HYGIENE:
 - In every rich-text section, wrap ALL mathematics exactly as
   [Katex] valid LaTeX [/Katex]. Render every image exactly as
   [img src="https://full-public-image-url" alt="meaningful description"].
-  Never emit raw $, $$, \(...\), \[...\], TeX environments, footnote commands,
+  Never emit raw $, $$, \\(...\\), \\[...\\], TeX environments, footnote commands,
   or Markdown image syntax.
 
 QUALITY RULES (universal — apply to ANY chapter/subject; never invent
@@ -2979,7 +2979,9 @@ def _strip_public_source_heading(text: str) -> str:
         str(text or ""),
     )
     value = re.sub(r"(?m)^\s*#{1,6}\s*", "", value)
-    return re.sub(r"\s+", " ", value).strip()
+    # Preserve line boundaries until solution/answer stripping has run; those
+    # markers are intentionally line-anchored in source MMD.
+    return re.sub(r"[ \t]+", " ", value).strip()
 
 
 def _activity_hub_marker(item: dict) -> str:
@@ -3026,11 +3028,19 @@ def _compact_activity_hub_note(item: dict, suggested: str = "") -> str:
 
 def _activity_hub_locations(records: list[dict], item: dict) -> list[int]:
     marker = bi.normalize_question_text(_activity_hub_marker(item))
-    if not marker:
-        return []
+    locations = [
+        index for index, record in enumerate(records)
+        if marker and marker in bi.normalize_question_text(
+            cr.activity_hub_body(record.get("concept_details") or ""))
+    ]
+    if locations:
+        return locations
+    # Backward compatibility for persisted Hubs created before compact notes
+    # carried a stable label marker.
+    task_key = bi.normalize_question_text(_inventory_task_text(item))
     return [
         index for index, record in enumerate(records)
-        if marker in bi.normalize_question_text(
+        if task_key and task_key in bi.normalize_question_text(
             cr.activity_hub_body(record.get("concept_details") or ""))
     ]
 
@@ -4320,12 +4330,12 @@ def _inventory_task_text(item: dict) -> str:
     )
     visual_captions = _source_visual_captions(str(task))
     source_kind = (item.get("source_kind") or "").strip().lower()
+    task = _strip_public_source_heading(str(task))
     task = _inventory_task_without_solution(
         str(task),
         aggressive=source_kind in {"worked_example", "solved_example"},
     )
     task = _strip_leading_source_task_label(task)
-    task = _strip_public_source_heading(task)
     task = _strip_source_visual_markup(task)
     task = kr.canonicalize_rich_text(str(task)).strip()
     task = _PUBLIC_TASK_SECTION_REF_RE.sub("the earlier chapter discussion", task)
@@ -5856,8 +5866,10 @@ def _mined_type_to_body(mtype: dict, start_type: int) -> tuple[str, int]:
             _strip_leading_source_task_label(
                 case.get("case_title") or "")).strip()
         examples = [
-            _strip_leading_source_task_label(
-                ex.get("example_prompt") or "").strip()
+            kr.canonicalize_rich_text(
+                _strip_leading_source_task_label(
+                    ex.get("example_prompt") or "").strip()
+            )
             for ex in _case_examples(case)
         ]
         examples = [ex for ex in examples if ex]
@@ -11066,12 +11078,14 @@ def concepts_from_mmd(
                 meta=meta, inventory=question_task_inventory)
             mined_types = _consolidate_semantic_types_via_api(
                 mined_types, inventory=question_task_inventory, meta=meta)
+            concept_count_before_sufficiency = len(out)
             out = _add_missing_type_method_concepts_via_api(
                 out, mined_types=mined_types, meta=meta)
             # A newly split method concept is authored after the main
             # Description pass, so give it the same mastery guarantee before
             # Culminations and Type assignment.
-            out = _ensure_mastery_lines_via_api(out, meta=meta)
+            if len(out) > concept_count_before_sufficiency:
+                out = _ensure_mastery_lines_via_api(out, meta=meta)
             progress.set_progress(
                 0.79, label="Concept extraction — reusable Types mined")
             if artifacts is not None:
