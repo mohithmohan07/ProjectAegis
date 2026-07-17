@@ -63,7 +63,8 @@ def test_post_learning_failure_persists_and_resumes_type_checkpoint(
     db.commit()
     db.refresh(job)
     checkpoint = {
-        "schema_version": 1,
+            "schema_version": (
+                build_concepts.generation._CONCEPT_CHECKPOINT_SCHEMA),
         "stage": "pre_type_assignment",
         "records": [{"topic": "T", "concept_title": "C"}],
         "question_task_inventory": {

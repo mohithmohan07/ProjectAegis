@@ -331,7 +331,7 @@ def test_scrub_merges_structural_topics_into_previous():
         "Meaning of Similarity", "Worked ratio problem", "Pythagoras statement"]
 
 
-def test_enforce_culminations_injects_starter_types():
+def test_enforce_culminations_never_invents_starter_types():
     records = [
         _rec("AA Criterion", "Description: a", topic="T1"),
         _rec("SSS Criterion", "Description: b", topic="T1"),
@@ -340,9 +340,9 @@ def test_enforce_culminations_injects_starter_types():
     ]
     out = g._enforce_culminations(records)
     culm = out[-1]["concept_details"]
-    assert "Types: Type 01: Mixed application combining the topic's concepts" in culm
-    assert "AA Criterion, SSS Criterion" in culm
-    # A culmination that already has meaningful Types is left alone.
+    assert "Types:" not in culm
+    assert "Recap of AA Criterion and SSS Criterion" in culm
+    # A culmination with an inventory-backed Type is preserved.
     records[2]["concept_details"] = (
         "Description: Recap // Types: Type 01: Real mined mix Case 01: combine x and y")
     out = g._enforce_culminations(records)

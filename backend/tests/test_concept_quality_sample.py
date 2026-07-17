@@ -45,7 +45,10 @@ def test_laws_of_exponents_final_quality_conditions():
     assert all(generation._has_meaningful_types(r["concept_details"]) for r in normal)
     artifact_re = re.compile(r"\b(MMD|Example\s+\d+|Fig(?:ure)?\s+\d+|Table\s+\d+|Exercise\s+\d+(?:\.\d+)?)\b", re.I)
     assert not any(artifact_re.search(r["concept_details"]) for r in final)
-    assert any("a ≠ 0" in r["concept_details"] for r in final)
+    assert any(
+        r"[Katex] a \ne 0 [/Katex]" in r["concept_details"]
+        for r in final
+    )
 
 
 def test_laws_of_exponents_type_numbering_is_continuous():

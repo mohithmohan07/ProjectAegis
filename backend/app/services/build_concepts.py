@@ -133,6 +133,7 @@ def _deposit_concepts(
             "types_format", "case_without_type", "type_without_case",
             "culmination_description", "culmination_count", "culmination_order",
             "section_number", "empty_types", "short_case_example",
+            "rich_text_format",
         }
     ]
     progress.log(

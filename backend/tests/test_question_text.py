@@ -23,11 +23,11 @@ def test_multi_value_comma_only():
 
 
 def test_newlines_preserved_in_plain_text():
-    s = "Line one.\nLine two with [katex] F = ma [/katex] kept."
+    s = "Line one.\nLine two with [Katex] F = ma [/Katex] kept."
     out = bi.to_plain_text(s)
     assert "\n" in out
     assert "F = ma" in out
-    assert "[katex]" not in out
+    assert "[katex]" not in out.lower()
 
 
 # ------------------------ cognitive skill normalization ----------------------- #
@@ -86,7 +86,7 @@ def test_generated_questions_populate_question_text(client, first_concept, db):
     for qid in ids:
         q = db.get(models.Question, qid)
         assert q.question_text, f"question_text empty for {q.sheet_kind}"
-        assert "[katex]" not in q.question_text  # plain text, not markup
+        assert "[katex]" not in q.question_text.lower()  # plain text, not markup
 
 
 def test_export_workbook_has_question_text_as_last_column(client):
@@ -231,5 +231,6 @@ def test_import_validation_reports_issues(client, tmp_path):
     issues = "\n".join(counts["issues"])
     assert "unknown cognitive skill" in issues
     assert "unknown level_of_difficulty" in issues
-    assert "$$" in issues
+    assert "raw math delimiters" in issues
+    assert "[Katex]" in issues
     assert "marks not numeric" in issues

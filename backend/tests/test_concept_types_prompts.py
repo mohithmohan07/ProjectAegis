@@ -81,7 +81,8 @@ def test_universal_question_task_inventory_and_type_mining_prompts():
     assert "CASE WORDING" in mining
     assert "case_title DEFINES the sub-type" in mining
     assert "checkpoint" in mining.lower()
-    assert "cdn.mathpix.com" in mining
+    assert "[img src=" in mining
+    assert "![" not in mining
     # Types must be properly defined (precise wording + definition).
     assert "TYPE WORDING" in mining
     assert "precise, self-explanatory pattern name" in mining
@@ -201,11 +202,11 @@ def test_refine_descriptions_via_api_strips_existing_types(monkeypatch):
 
 
 def test_assign_types_uses_pure_api_id_assignment(monkeypatch):
-    captured = {}
+    captured = {"systems": [], "users": []}
 
     def fake_openai(system, user, **kw):
-        captured["system"] = system
-        captured["user"] = user
+        captured["systems"].append(system)
+        captured["users"].append(user)
         # Pure-API assignment: map every type_id to a concept_id (exact IDs only).
         return {"assignments": [
             {"concept_id": "CONCEPT-0001", "type_ids": ["TYPE-0001"]},
@@ -233,8 +234,11 @@ def test_assign_types_uses_pure_api_id_assignment(monkeypatch):
     out = g._assign_types_via_api(
         records, subject="Math", mmd_text="# Chapter\nsrc",
         question_task_inventory={"items": []}, mined_types=mined)
-    assert "Assign every mined Type" in captured["system"]
-    assert "CONCEPT-0001" in captured["user"] and "TYPE-0002" in captured["user"]
+    assert any("Assign every mined Type" in system for system in captured["systems"])
+    assert any(
+        "CONCEPT-0001" in user and "TYPE-0002" in user
+        for user in captured["users"]
+    )
     # Every mined Type landed on its assigned concept (joined by exact IDs).
     assert g._has_meaningful_types(out[0]["concept_details"])
     assert "Adding Given Numbers" in out[0]["concept_details"]
@@ -384,7 +388,7 @@ def test_case_scoped_embedding_splits_formula_and_real_life_cases(monkeypatch):
     assert not g._mined_type_topic_violations(out, mined)
 
 
-def test_case_scoped_activity_units_go_to_activity_info_hub(monkeypatch):
+def test_case_scoped_activity_units_defer_to_inventory_hub_pass(monkeypatch):
     def fake_openai(system, user, **kw):
         concepts, units = _type_embedding_request(user)
         assert len(units) == 2
@@ -424,9 +428,9 @@ def test_case_scoped_activity_units_go_to_activity_info_hub(monkeypatch):
     out = g._assign_mined_types_via_api(
         records, meta=g._metadata(subject="Physics"), mined_types=mined)
 
-    hub = g.cr.activity_hub_body(out[0]["concept_details"])
-    assert "Measure current as cells are added." in hub
-    assert "Measure voltage across the wire." in hub
+    # The Type assignment pass never copies full activity procedures into the
+    # Hub. The following inventory-aware pass writes one concise note.
+    assert not g.cr.activity_hub_body(out[0]["concept_details"])
     assert "Types:" not in out[0]["concept_details"]
     assert "Types:" not in out[1]["concept_details"]
     assert "Measure current as cells are added." not in out[1]["concept_details"]
@@ -1128,7 +1132,9 @@ def test_single_item_fallback_preserves_source_image_topic_and_embeds(monkeypatc
     example = g._case_examples(fallback["case_prompts"][0])[0]
     assert example == {
         "source_question_id": "QINV-0042",
-        "example_prompt": f"{source_task} ![Fig. 4.2]({image_url})",
+        "example_prompt": (
+            f'{source_task} [img src="{image_url}" alt="Fig. 4.2"]'
+        ),
     }
     assert "The length is 8 cm." not in example["example_prompt"]
 
@@ -1600,6 +1606,10 @@ def test_pipeline_builds_culminations_before_types(monkeypatch):
     monkeypatch.setattr(g, "_refine_descriptions_via_api", lambda records, **kw: records)
     monkeypatch.setattr(g, "_ensure_mastery_lines_via_api", lambda records, **kw: records)
     monkeypatch.setattr(
+        g, "_ensure_misconceptions_via_api", lambda records, **kw: records)
+    monkeypatch.setattr(
+        g, "_merge_similar_concepts_via_api", lambda records, **kw: records)
+    monkeypatch.setattr(
         g, "_extract_question_task_inventory_via_api", lambda **kw: g._empty_inventory())
     monkeypatch.setattr(
         g, "_mine_types_from_inventory_via_api", lambda **kw: {"types": []})
@@ -1618,6 +1628,12 @@ def test_pipeline_builds_culminations_before_types(monkeypatch):
     monkeypatch.setattr(g, "_build_culminations_via_api", fake_culminations)
     monkeypatch.setattr(g, "_assign_types_via_api", fake_types)
     monkeypatch.setattr(g, "_repair_records_via_api", lambda records, **kw: records)
+    monkeypatch.setattr(
+        g, "_ensure_mastery_lines_via_api", lambda records, **kw: records)
+    monkeypatch.setattr(
+        g, "_ensure_misconceptions_via_api", lambda records, **kw: records)
+    monkeypatch.setattr(
+        g, "_merge_similar_concepts_via_api", lambda records, **kw: records)
     monkeypatch.setattr(
         g, "_validate_final_or_raise",
         lambda records, **kw: {"ok": True, "errors": [], "summary": {}})
@@ -1640,6 +1656,12 @@ def test_pipeline_resume_checkpoint_skips_expensive_gpt_stages(monkeypatch):
     monkeypatch.setattr(g.config, "use_live_generation", lambda: True)
     monkeypatch.setattr(
         g,
+        "_openai_json",
+        lambda *a, **kw: (_ for _ in ()).throw(
+            AssertionError("checkpoint resume must not invoke an unmocked API pass")),
+    )
+    monkeypatch.setattr(
+        g,
         "_extract_skeleton_via_api",
         lambda *a, **kw: (_ for _ in ()).throw(
             AssertionError("skeleton extraction must not rerun")),
@@ -1657,7 +1679,7 @@ def test_pipeline_resume_checkpoint_skips_expensive_gpt_stages(monkeypatch):
         lambda records, **kw: {"ok": True, "errors": [], "summary": {}},
     )
     checkpoint = {
-        "schema_version": 1,
+        "schema_version": g._CONCEPT_CHECKPOINT_SCHEMA,
         "stage": "pre_type_assignment",
         "records": [
             {
@@ -1715,10 +1737,13 @@ def test_concepts_pipeline_runs_types_assign(monkeypatch):
                 "topic": "Algebra", "concept": "Linear equations",
                 "concept_description": (
                     "Description: altered by model // "
-                    "Types: Type 01: One-step Case 01: Solve x+2=5 by subtracting 2 from both sides. "
-                    "Case 02: Solve x-3=1 by adding 3 to both sides. "
-                    "Type 02: Two-step Case 01: Solve 2x+1=7 by undoing addition and multiplication. "
-                    "Case 02: Solve 3x-2=4 by undoing subtraction and multiplication. "
+                    "Types: Type 01: One-step Case 01: Solve "
+                    "[Katex] x+2=5 [/Katex] by subtracting 2 from both sides. "
+                    "Case 02: Solve [Katex] x-3=1 [/Katex] by adding 3 to both sides. "
+                    "Type 02: Two-step Case 01: Solve [Katex] 2x+1=7 [/Katex] "
+                    "by undoing addition and multiplication. "
+                    "Case 02: Solve [Katex] 3x-2=4 [/Katex] "
+                    "by undoing subtraction and multiplication. "
                     "// Misconception: wrong inverse op"
                 ),
                 "keywords": "linear",
@@ -1727,7 +1752,10 @@ def test_concepts_pipeline_runs_types_assign(monkeypatch):
             return {"rows": []}
         return {"rows": [{
             "topic": "Algebra", "concept": "Linear equations",
-            "concept_description": "Description: solve ax+b=c // Misconception: wrong inverse op",
+            "concept_description": (
+                "Description: solve [Katex] ax+b=c [/Katex] // "
+                "Misconception: wrong inverse op"
+            ),
             "keywords": "linear",
         }]}
 

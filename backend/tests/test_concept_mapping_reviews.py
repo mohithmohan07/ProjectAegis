@@ -427,7 +427,11 @@ def test_mined_type_renders_case_subtypes_with_example_lines():
     assert "Case 01: Ohm's law formula-based question when V and I are given" in body
     assert "Example: Calculate the resistance of the circuit if V is 220 V" in body
     assert "Case 02: Ohm's law formula-based question when the circuit diagram" in body
-    assert "(Refer fig. 11.1) ![](https://cdn.mathpix.com/f11.jpg)" in body
+    assert (
+        '(Refer fig. 11.1) '
+        '[img src="https://cdn.mathpix.com/f11.jpg" alt="Source visual"]'
+        in body
+    )
 
 
 def test_inventory_task_text_prefers_raw_task_and_ships_images():
@@ -438,7 +442,10 @@ def test_inventory_task_text_prefers_raw_task_and_ships_images():
     }
     text = g._inventory_task_text(item)
     assert text.startswith("Calculate the resistance for the given circuit.")
-    assert "![Fig. 11.1](https://cdn.mathpix.com/f11.jpg)" in text
+    assert (
+        '[img src="https://cdn.mathpix.com/f11.jpg" alt="Fig. 11.1"]'
+        in text
+    )
 
 
 def test_inventory_visual_without_pdf_figure_number_gets_descriptive_alt():
@@ -448,7 +455,10 @@ def test_inventory_visual_without_pdf_figure_number_gets_descriptive_alt():
         "raw_task": "Compare the two circuits.",
         "image_urls": ["https://cdn.mathpix.com/circuits.jpg"],
     })
-    assert "![Circuit comparison](https://cdn.mathpix.com/circuits.jpg)" in text
+    assert (
+        '[img src="https://cdn.mathpix.com/circuits.jpg" '
+        'alt="Circuit comparison"]' in text
+    )
 
 
 def test_latex_figure_uses_adjacent_source_caption_in_public_markdown():
@@ -469,7 +479,8 @@ def test_latex_figure_uses_adjacent_source_caption_in_public_markdown():
     })
     assert "\\includegraphics" not in text
     assert (
-        f"![Fig． 1 - A democratic republic print prepared in 1848]({url})"
+        f'[img src="{url}" '
+        'alt="Fig． 1 - A democratic republic print prepared in 1848"]'
         in text
     )
 
@@ -488,7 +499,7 @@ def test_public_inventory_examples_remove_textbook_section_numbers():
 
 def test_uploaded_nationalism_fixture_recovers_all_checkpoint_containers():
     source = (
-        Path(__file__).parents[1] / "data" / "RNE.mmd"
+        Path(__file__).parents[1] / "data" / "Testing" / "RNE.mmd"
     ).read_text(encoding="utf-8")
     sections = [
         section
@@ -543,7 +554,7 @@ def test_repeated_generic_checkpoint_labels_preserve_distinct_tasks():
 
 def test_uploaded_nationalism_fixture_exposes_sorrieu_opening_for_recovery():
     source = (
-        Path(__file__).parents[1] / "data" / "RNE.mmd"
+        Path(__file__).parents[1] / "data" / "Testing" / "RNE.mmd"
     ).read_text(encoding="utf-8")
     sections = [
         section
@@ -558,7 +569,7 @@ def test_uploaded_nationalism_fixture_exposes_sorrieu_opening_for_recovery():
 
 def test_uploaded_ap_fixture_keeps_parent_questions_and_own_mcq_options():
     source = (
-        Path(__file__).parents[1] / "data" / "jemh105 (1).mmd"
+        Path(__file__).parents[1] / "data" / "Testing" / "jemh105 (1).mmd"
     ).read_text(encoding="utf-8")
     sections = [
         section
@@ -638,7 +649,7 @@ def test_unique_question_label_root_merges_question_and_q_notation():
 
 def test_uploaded_electricity_activities_feed_types_and_hubs_with_visuals():
     source = (
-        Path(__file__).parents[1] / "data" / "Class 10 Chapter 5 Electricity.mmd"
+        Path(__file__).parents[1] / "data" / "Testing" / "Class 10 Chapter 5 Electricity.mmd"
     ).read_text(encoding="utf-8")
     sections = [
         section
@@ -659,7 +670,8 @@ def test_uploaded_electricity_activities_feed_types_and_hubs_with_visuals():
     ]
     assert rendered_visuals
     assert all("\\includegraphics" not in text for text in rendered_visuals)
-    assert all(re.search(r"!\[[^\]]+\]\(https://", text)
+    assert all(re.search(
+        r'\[img\s+src="https://[^"]+"\s+alt="[^"]+"\]', text)
                for text in rendered_visuals)
 
 
@@ -1019,8 +1031,8 @@ def test_unassigned_mined_types_fail_instead_of_guessing(monkeypatch):
             max_attempts=1)
 
 
-def test_activity_types_go_to_info_hub_not_culmination_types(monkeypatch):
-    """is_activity mined Types land in Activity/Info Hub on a normal concept."""
+def test_activity_types_defer_to_compact_inventory_hub_not_culmination(monkeypatch):
+    """is_activity Types never render full procedures or Culmination Types."""
     monkeypatch.setattr(
         g, "_openai_json",
         lambda *a, **kw: {
@@ -1067,17 +1079,17 @@ def test_activity_types_go_to_info_hub_not_culmination_types(monkeypatch):
     ohms = next(r for r in out if r["concept_title"] == "Ohm's Law")
     culm = next(r for r in out if cr.is_culmination(r["concept_title"]))
     hub = cr.activity_hub_body(ohms["concept_details"])
-    assert "Activity 11.1" in hub or "nichrome" in hub
+    assert not hub
     assert "Type 01:" not in ohms["concept_details"]
     assert "Type 01:" not in culm["concept_details"]
     assert "Miscellaneous Type" not in culm["concept_details"]
     assert not g._mined_type_topic_violations(out, mined)
 
 
-def test_activity_types_use_normal_evidence_with_multiple_topic_concepts(
+def test_activity_types_do_not_dump_procedures_with_multiple_topic_concepts(
     monkeypatch,
 ):
-    """Activity assignment corrects Culmination guesses and defers ambiguity."""
+    """Activity units defer entirely to the inventory-aware compact Hub pass."""
     def fake_openai(system, user, **kw):
         return {"assignments": [{
             "concept_id": "CONCEPT-0003",
@@ -1139,8 +1151,7 @@ def test_activity_types_use_normal_evidence_with_multiple_topic_concepts(
         records, meta=g._metadata(subject="Physics"), mined_types=mined,
         max_attempts=1)
 
-    assert "Measure current as cells are added." in cr.activity_hub_body(
-        out[0]["concept_details"])
+    assert not cr.activity_hub_body(out[0]["concept_details"])
     assert not cr.activity_hub_body(out[1]["concept_details"])
     assert not cr.activity_hub_body(out[2]["concept_details"])
     assert "Complete the classroom investigation." not in str(out)
@@ -1902,7 +1913,7 @@ def test_inventory_prompt_requires_checkpoints_activities_and_images():
     assert "checkpoint_question" in inventory
     assert "activity" in inventory
     assert "image_urls" in inventory
-    assert "cdn.mathpix.com" in inventory
+    assert "image URL(s)" in inventory
     assert "never truncate" in inventory
     embedding = g.prompts.get_text("concepts.type_embedding.system")
     assert "is_activity" in embedding
@@ -1949,7 +1960,7 @@ def test_chapter_opening_labelled_in_section_chunks():
     assert "Frédéric Sorrieu" in text
 
 
-def test_v5_prompts_require_opening_granularity_and_mathpix_policy():
+def test_prompts_require_opening_granularity_and_canonical_media_policy():
     skeleton = g.prompts.get_text("concepts.skeleton.system")
     assert "[Chapter opening]" in skeleton
     assert "lesson-plan" in skeleton and "apart" in skeleton
@@ -1960,12 +1971,12 @@ def test_v5_prompts_require_opening_granularity_and_mathpix_policy():
     assert "Belgium vs Sri Lanka" not in canonicalize
     assert "lesson-plan them apart" in canonicalize
     refine = g.prompts.get_text("concepts.description_refine.system")
-    assert "Do NOT embed Mathpix" in refine
+    assert "Do NOT embed image URLs in Description" in refine
     assert "truncated mid-sentence" in refine
     assert "Preserve any existing Activity/Info Hub" in refine
     inventory = g.prompts.get_text("concepts.question_task_inventory.system")
-    assert "dependent subquestions" in inventory
-    assert "independently assessable" in inventory
+    assert "numbered parent question" in inventory
+    assert "all of its lettered/roman subparts" in inventory
     assert "Missing even one" in inventory and "checkpoint is a defect" in inventory
     assert "Activity/Info Hub" in inventory
     assert "feed culmination" not in inventory.lower()
@@ -2401,7 +2412,7 @@ def test_structured_mcq_options_rebuild_the_same_question_only():
     assert item["normalized_task"] == item["raw_task"]
 
 
-def test_independent_lettered_exercise_subparts_get_separate_anchors():
+def test_lettered_exercise_subparts_keep_one_parent_anchor():
     source = r"""
 \section*{1 Revolutions}
 Historical movements developed across Europe.
@@ -2419,14 +2430,10 @@ e) The role of women in nationalist struggles
     exercises = [
         item for item in anchors if item["source_kind"] == "exercise"
     ]
-    assert len(exercises) == 6
-    assert [item["source_label"] for item in exercises[:5]] == [
-        f"Write in brief Q1({letter})" for letter in "abcde"
-    ]
-    assert all(
-        item["raw_task"].startswith("Write a note on:")
-        for item in exercises[:5]
-    )
+    assert len(exercises) == 2
+    assert exercises[0]["source_label"] == "Write in brief Q1"
+    assert exercises[0]["raw_task"].startswith("Write a note on:")
+    assert all(f"{letter})" in exercises[0]["raw_task"] for letter in "abcde")
     assert all(not item["topic_hint"] for item in exercises)
 
 
@@ -3072,7 +3079,7 @@ def test_coverage_repair_preserves_synthesis_culmination_placement():
     assert cross_prompt in repaired[2]["concept_details"]
 
 
-def test_coverage_repair_groups_semantic_fallback_cases_on_normal_concept():
+def test_coverage_repair_uses_semantic_fallback_types_on_normal_concept():
     first = "Explain how a shared identity was created by revolutionaries."
     second = "Interpret the symbols used in a national allegory."
     inventory = {"items": [
@@ -3111,9 +3118,10 @@ def test_coverage_repair_groups_semantic_fallback_cases_on_normal_concept():
     repaired = g._repair_rendered_inventory_coverage(records, inventory)
     normal_details = repaired[0]["concept_details"]
     assert "Source inventory task" not in normal_details
-    assert normal_details.count("Answering a Checkpoint Question") == 1
-    assert normal_details.count("Case 01:") == 1
-    assert normal_details.count("Case 02:") == 1
+    assert "Checkpoint Question" not in normal_details
+    assert "Explaining How a Shared Identity" in normal_details
+    assert "Interpreting Symbols Used" in normal_details
+    assert normal_details.count("Case 01:") == 2
     assert first in normal_details and second in normal_details
     assert first not in repaired[1]["concept_details"]
     assert second not in repaired[1]["concept_details"]

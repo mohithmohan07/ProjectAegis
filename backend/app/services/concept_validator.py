@@ -9,7 +9,7 @@ import re
 from collections import Counter, defaultdict
 from typing import Any, Collection
 
-from . import concept_cleanup, concept_refiner
+from . import concept_cleanup, concept_refiner, katex_rules
 
 FORBIDDEN_NAMES = {
     "introduction", "overview", "basics", "misc", "miscellaneous",
@@ -61,8 +61,18 @@ _EXAMPLE_SEGMENT_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _DESCRIPTION_LABEL_RE = re.compile(r"\bDescription\s*:", re.IGNORECASE)
-_IMAGE_URL_RE = re.compile(r"!\[[^\]]*\]\(https?://[^)]+\)|https?://\S+", re.IGNORECASE)
-_EMPTY_IMAGE_ALT_RE = re.compile(r"!\[\s*\]\(https?://[^)]+\)", re.IGNORECASE)
+_IMAGE_URL_RE = re.compile(
+    r"!\[[^\]]*\]\(https?://[^)]+\)|"
+    r'\[img\s+src="https?://[^"]+"(?:\s+alt="[^"]*")?[^\]]*\]|'
+    r"https?://\S+",
+    re.IGNORECASE,
+)
+_EMPTY_IMAGE_ALT_RE = re.compile(
+    r"!\[\s*\]\(https?://[^)]+\)|"
+    r'\[img\s+src="https?://[^"]+"\s+alt="\s*"[^\]]*\]|'
+    r'\[img\s+src="https?://[^"]+"(?![^\]]*\balt=)[^\]]*\]',
+    re.IGNORECASE,
+)
 _DESCRIPTION_SECTION_REF_RE = re.compile(
     r"(?:\bsections?\s+|§\s*)\d+(?:\.\d+)+\b",
     re.IGNORECASE,
@@ -257,6 +267,16 @@ def validate_concept_rows(
         if details and not details.startswith("Description:"):
             _add(errors, i, "concept_details", "description_prefix",
                  "concept_details must start with 'Description:'")
+        rich_text_defects = katex_rules.rich_text_issues(details)
+        if rich_text_defects:
+            _add(
+                errors,
+                i,
+                "concept_details",
+                "rich_text_format",
+                "concept_details violates canonical [Katex]/[img] format: "
+                + ", ".join(rich_text_defects),
+            )
         if len(_DESCRIPTION_LABEL_RE.findall(details)) > 1:
             _add(errors, i, "concept_details", "merged_description",
                  "cell contains multiple concepts' Description blocks")
