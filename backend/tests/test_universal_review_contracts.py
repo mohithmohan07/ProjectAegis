@@ -122,6 +122,15 @@ def test_plain_ascii_equations_require_katex(expression):
         f"Description: Apply [Katex] {expression} [/Katex] to solve the problem.")
 
 
+def test_key_value_and_inline_code_are_not_misclassified_as_equations():
+    assert "raw_math_expression" not in kr.rich_text_issues(
+        "Description: Set mode=active before continuing.")
+    assert not kr.rich_text_issues(
+        "Description: Assign `x = 5` in the program.")
+    assert "raw_math_expression" in kr.rich_text_issues(
+        "Description: Solve x = 5.")
+
+
 def test_rich_text_registry_uses_student_facing_display_answer():
     assert "display_answer" in kr.RICH_TEXT_FIELDS
     assert "answer_display" not in kr.RICH_TEXT_FIELDS
@@ -132,6 +141,10 @@ def test_literal_trailing_newline_escape_is_normalized_outside_katex():
         r"Description: Explain the pattern.\n")
     assert rendered == "Description: Explain the pattern.\n"
     assert not kr.rich_text_issues(rendered)
+    instructional = (
+        r"Description: The escape sequence `\n` starts a new line.")
+    assert kr.canonicalize_rich_text(instructional) == instructional
+    assert not kr.rich_text_issues(instructional)
 
 
 def test_inventory_examples_strip_headings_and_emit_canonical_media():

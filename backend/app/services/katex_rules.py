@@ -120,15 +120,17 @@ _CURRENCY_TOKEN_RE = re.compile(
 )
 _RAW_EQUATION_RE = re.compile(
     r"(?<![\w])"
-    r"(?:[A-Za-z][A-Za-z0-9]*|\d+(?:\.\d+)?)"
+    r"(?P<left>(?:[A-Za-z][A-Za-z0-9]*|\d+(?:\.\d+)?)"
     r"(?:\s*[+\-*/×÷]\s*"
-    r"(?:[A-Za-z][A-Za-z0-9]*|\d+(?:\.\d+)?))*"
+    r"(?:[A-Za-z][A-Za-z0-9]*|\d+(?:\.\d+)?))*)"
     r"\s*(?<![=<>])=(?!=)\s*"
-    r"(?:[A-Za-z][A-Za-z0-9]*|\d+(?:\.\d+)?)"
+    r"(?P<right>(?:[A-Za-z][A-Za-z0-9]*|\d+(?:\.\d+)?)"
     r"(?:\s*[+\-*/×÷]\s*"
-    r"(?:[A-Za-z][A-Za-z0-9]*|\d+(?:\.\d+)?))*"
+    r"(?:[A-Za-z][A-Za-z0-9]*|\d+(?:\.\d+)?))*)"
     r"(?![\w])"
 )
+_CODE_FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
+_INLINE_CODE_RE = re.compile(r"`[^`\n]+`")
 
 
 def _looks_like_currency_pair(match: re.Match) -> bool:
@@ -147,6 +149,19 @@ def _has_raw_math(value: str) -> bool:
         not _looks_like_currency_pair(match)
         for match in _SINGLE_DOLLAR_MATH_RE.finditer(value)
     )
+
+
+def _has_raw_equation(value: str) -> bool:
+    for match in _RAW_EQUATION_RE.finditer(value):
+        left = re.sub(r"\s+", "", match.group("left"))
+        right = re.sub(r"\s+", "", match.group("right"))
+        if (
+            re.search(r"[+\-*/×÷]", left + right)
+            or re.fullmatch(r"[A-Za-z]", left)
+            or re.fullmatch(r"\d+(?:\.\d+)?", left)
+        ):
+            return True
+    return False
 
 
 def canonicalize_rich_text(text: str) -> str:
@@ -194,7 +209,7 @@ def canonicalize_rich_text(text: str) -> str:
     # Models occasionally emit a literal trailing ``\n`` escape in prose.
     # Convert only delimiter-shaped escapes; a TeX command such as ``\nu``
     # remains untouched and is rejected outside a canonical KaTeX span.
-    value = re.sub(r"\\n(?=\s|$)", "\n", value)
+    value = re.sub(r"\\n\s*$", "\n", value)
 
     for pattern in _RAW_BLOCK_MATH_PATTERNS:
         value = pattern.sub(
@@ -268,8 +283,14 @@ def rich_text_issues(
     masked = _KATEX_TAG_RE.sub("", value)
     if re.search(r"!\[", masked):
         issues.append("markdown_image")
-    math_masked = _IMAGE_TAG_RE.sub(
-        "", _MARKDOWN_LINK_RE.sub("", masked))
+    math_masked = _CODE_FENCE_RE.sub(
+        "",
+        _INLINE_CODE_RE.sub(
+            "",
+            _IMAGE_TAG_RE.sub(
+                "", _MARKDOWN_LINK_RE.sub("", masked)),
+        ),
+    )
     delimiter_masked = _CURRENCY_TOKEN_RE.sub("", math_masked)
     if (
         _has_raw_math(math_masked)
@@ -285,7 +306,7 @@ def rich_text_issues(
         re.IGNORECASE,
     ):
         issues.append("raw_latex")
-    if _RAW_EQUATION_RE.search(delimiter_masked):
+    if _has_raw_equation(delimiter_masked):
         issues.append("raw_math_expression")
     image_tags = list(_IMAGE_TAG_RE.finditer(value))
     if len(re.findall(r"\[img\b", value, re.IGNORECASE)) != len(image_tags):
