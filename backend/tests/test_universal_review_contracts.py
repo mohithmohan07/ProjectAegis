@@ -127,6 +127,13 @@ def test_rich_text_registry_uses_student_facing_display_answer():
     assert "answer_display" not in kr.RICH_TEXT_FIELDS
 
 
+def test_literal_trailing_newline_escape_is_normalized_outside_katex():
+    rendered = kr.canonicalize_rich_text(
+        r"Description: Explain the pattern.\n")
+    assert rendered == "Description: Explain the pattern.\n"
+    assert not kr.rich_text_issues(rendered)
+
+
 def test_inventory_examples_strip_headings_and_emit_canonical_media():
     item = _item(
         "QINV-0001",

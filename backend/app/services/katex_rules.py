@@ -191,6 +191,10 @@ def canonicalize_rich_text(text: str) -> str:
 
     value = _TABULAR_RE.sub(tabular, value)
     value = _FOOTNOTE_RE.sub(lambda match: match.group("body").strip(), value)
+    # Models occasionally emit a literal trailing ``\n`` escape in prose.
+    # Convert only delimiter-shaped escapes; a TeX command such as ``\nu``
+    # remains untouched and is rejected outside a canonical KaTeX span.
+    value = re.sub(r"\\n(?=\s|$)", "\n", value)
 
     for pattern in _RAW_BLOCK_MATH_PATTERNS:
         value = pattern.sub(
