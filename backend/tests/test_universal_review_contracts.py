@@ -1,6 +1,8 @@
 """Universal quality contracts distilled from the three reviewed chapters."""
 from __future__ import annotations
 
+import pytest
+
 from app.services import concept_refiner as cr
 from app.services import concept_validator as cv
 from app.services import generation as g
@@ -70,6 +72,30 @@ def test_rich_text_emits_uppercase_katex_and_canonical_images():
         in rendered
     )
     assert not kr.rich_text_issues(rendered)
+
+
+def test_rich_text_rejects_malformed_tags_without_treating_currency_as_math():
+    currency = "The price rose from $5 to $10 in one week."
+    assert kr.canonicalize_rich_text(currency) == currency
+    assert "raw_math_delimiter" not in kr.rich_text_issues(currency)
+
+    defects = kr.rich_text_issues(
+        '[KATEX] x [/KATEX] '
+        '[Katex] outer [Katex] inner [/Katex] [/Katex] '
+        '[img src="https://images.example/x.png" onerror="alert(1)" alt="x"] '
+        '[img src="https://images.example/y.png" alt="y"'
+    )
+    assert "noncanonical_katex_case" in defects
+    assert "nested_katex" in defects
+    assert "noncanonical_image" in defects
+    assert "unbalanced_image" in defects
+    with pytest.raises(ValueError):
+        kr.image('https://images.example/x.png" onerror="alert(1)', "x")
+
+
+def test_rich_text_registry_uses_student_facing_display_answer():
+    assert "display_answer" in kr.RICH_TEXT_FIELDS
+    assert "answer_display" not in kr.RICH_TEXT_FIELDS
 
 
 def test_inventory_examples_strip_headings_and_emit_canonical_media():
@@ -157,6 +183,49 @@ def test_semantic_type_consolidation_rejects_topic_drift(monkeypatch):
     assert len(result["types"]) == 2
 
 
+def test_semantic_consolidation_restores_qid_bearing_example_text(monkeypatch):
+    first = _item("QINV-0001", "Determine the first output from the full rule.")
+    second = _item(
+        "QINV-0002",
+        "Determine the second output using every condition in the stated rule.",
+    )
+    inventory = _inventory(first, second)
+    original = {
+        "types": [
+            _type(
+                "TYPE-0001", first["qid"], first["raw_task"],
+                title="Determining an Output",
+            ),
+            _type(
+                "TYPE-0002", second["qid"], second["raw_task"],
+                title="Finding an Output",
+            ),
+        ],
+    }
+    candidate = _type(
+        "TYPE-0001", first["qid"], first["raw_task"],
+        title="Determining an Output",
+    )
+    candidate["case_prompts"].append({
+        "case_id": "CASE-0002",
+        "case_title": "Conditional rule",
+        "examples": [{
+            "source_question_id": second["qid"],
+            "example_prompt": "Find the second output.",
+        }],
+        "placement_scope": "normal",
+    })
+    monkeypatch.setattr(
+        g, "_openai_json", lambda *_a, **_k: {"types": [candidate]})
+
+    result = g._consolidate_semantic_types_via_api(
+        original, inventory=inventory, meta={})
+    merged = result["types"][0]
+    restored = merged["case_prompts"][1]["examples"][0]
+    assert restored["example_prompt"] == g._inventory_task_text(second)
+    assert second["qid"] in merged["source_question_ids"]
+
+
 def test_concept_sufficiency_adds_only_a_supported_same_topic_method(monkeypatch):
     records = [{
         "topic": "Methods",
@@ -196,6 +265,60 @@ def test_concept_sufficiency_adds_only_a_supported_same_topic_method(monkeypatch
         "Applying a Direct Rule",
         "Reversing a Rule to Recover Its Input",
     ]
+
+
+def test_concept_sufficiency_does_not_cap_distinct_methods_by_row_count(
+    monkeypatch,
+):
+    records = [{
+        "topic": "Methods",
+        "parent_concept": "Core",
+        "concept_title": "Applying a Direct Rule",
+        "concept_details": "Description: Substitute the supplied input.",
+        "keywords": "rule",
+    }]
+    first = _type(
+        "TYPE-0001", "QINV-0001", "Reverse the rule.",
+        title="Reversing a Rule",
+    )
+    second = _type(
+        "TYPE-0002", "QINV-0002", "Compare two rules.",
+        title="Comparing Two Rules",
+    )
+    monkeypatch.setattr(g, "_openai_json", lambda *_a, **_k: {
+        "additions": [
+            {
+                "after_concept_id": "CONCEPT-0001",
+                "topic": "Methods",
+                "parent_concept": "Core",
+                "concept": "Reversing a Rule",
+                "concept_description": (
+                    "Description: Undo each operation in reverse order."
+                ),
+                "keywords": "inverse",
+                "supporting_type_ids": ["TYPE-0001"],
+            },
+            {
+                "after_concept_id": "CONCEPT-0001",
+                "topic": "Methods",
+                "parent_concept": "Core",
+                "concept": "Comparing Two Rules",
+                "concept_description": (
+                    "Description: Apply both rules to a shared input and "
+                    "compare their outputs."
+                ),
+                "keywords": "comparison",
+                "supporting_type_ids": ["TYPE-0002"],
+            },
+        ],
+    })
+    result = g._add_missing_type_method_concepts_via_api(
+        records, mined_types={"types": [first, second]}, meta={})
+    assert {row["concept_title"] for row in result} == {
+        "Applying a Direct Rule",
+        "Reversing a Rule",
+        "Comparing Two Rules",
+    }
 
 
 def test_host_entailment_review_moves_case_to_supported_sibling(monkeypatch):
@@ -316,6 +439,34 @@ def test_reusable_type_keeps_one_number_and_continues_cases_across_concepts():
         result[1]["concept_details"])
 
 
+def test_reusable_type_identity_preserves_mathematical_operators():
+    records = [
+        {
+            "topic": "Methods",
+            "concept_title": "Division",
+            "concept_details": (
+                "Description: d // Types: Type 01: Evaluate "
+                "[Katex] a/b [/Katex] Case 01: Divide. // "
+                "Misconceptions: Students may invert the quotient."
+            ),
+        },
+        {
+            "topic": "Methods",
+            "concept_title": "Subtraction",
+            "concept_details": (
+                "Description: d // Types: Type 01: Evaluate "
+                "[Katex] a-b [/Katex] Case 01: Subtract. // "
+                "Misconceptions: Students may reverse the terms."
+            ),
+        },
+    ]
+    result = cr.renumber_types_continuously(records)
+    assert "Type 01: Evaluate [Katex] a/b [/Katex]" in (
+        result[0]["concept_details"])
+    assert "Type 02: Evaluate [Katex] a-b [/Katex]" in (
+        result[1]["concept_details"])
+
+
 def test_culmination_title_uses_only_its_topic_and_has_no_synthetic_type():
     normal = {
         "topic": "Opening Patterns",
@@ -358,6 +509,29 @@ def test_parent_question_with_independent_looking_subparts_remains_atomic():
     assert "(b)" in exercise[0]["raw_task"]
 
 
+def test_parent_anchor_removes_model_children_without_subpart_metadata():
+    anchor = _item(
+        "QINV-0001",
+        "Write a note on each: (a) first application; (b) second application.",
+        source_label="Question 1",
+    )
+    children = [
+        _item(
+            "MODEL-0001", "Write a note on the first application.",
+            source_label="Q1(a)",
+        ),
+        _item(
+            "MODEL-0002", "Write a note on the second application.",
+            source_label="Q1(b)",
+        ),
+    ]
+    merged = g._merge_source_task_anchors(children, [anchor])
+    assert len(merged) == 1
+    assert merged[0]["source_label"] == "Question 1"
+    assert "(a)" in merged[0]["raw_task"]
+    assert "(b)" in merged[0]["raw_task"]
+
+
 def test_activity_hub_note_is_concise_and_heading_free():
     long_task = (
         "## Activity\nObserve the setup and record what changes. "
@@ -373,6 +547,60 @@ def test_activity_hub_note_is_concise_and_heading_free():
     assert "## Activity" not in note
     assert len(note.split()) <= g._ACTIVITY_PUBLIC_WORD_LIMIT + 6
     assert len(note) <= g._ACTIVITY_PUBLIC_CHAR_LIMIT + 80
+
+
+def test_activity_hub_matching_avoids_label_prefix_and_generic_collisions():
+    records = [{
+        "topic": "Methods",
+        "concept_title": "Hub",
+        "concept_details": (
+            "Description: d // Activity/Info Hub: Activity — Activity 10: "
+            "Observe the second setup."
+        ),
+    }]
+    activity_one = _item(
+        "QINV-0001", "Observe the first setup.",
+        source_kind="activity", source_label="Activity 1",
+    )
+    assert not g._activity_hub_locations(records, activity_one)
+
+    first_discussion = _item(
+        "QINV-0002", "Compare the two supplied processes.",
+        source_kind="activity", source_label="Discuss",
+    )
+    second_discussion = _item(
+        "QINV-0003", "Explain why the observed result changes.",
+        source_kind="activity", source_label="Discuss",
+    )
+    assert g._activity_hub_marker(first_discussion) != (
+        g._activity_hub_marker(second_discussion))
+
+
+def test_activity_only_topic_does_not_require_an_artificial_type():
+    records = [{
+        "topic": "Classroom Investigation",
+        "concept_title": "Observing Change",
+        "concept_details": (
+            "Description: Observe the change. // Activity/Info Hub: "
+            "Activity — Activity 1: Record the observation."
+        ),
+    }]
+    activity = _item(
+        "QINV-0001", "Record the observation.",
+        topic="Classroom Investigation",
+        source_kind="activity", source_label="Activity 1",
+    )
+    assert not g._inventory_topic_type_coverage_violations(
+        records, _inventory(activity))
+
+    assessable = _item(
+        "QINV-0002", "Explain the observation.",
+        topic="Classroom Investigation",
+        source_kind="checkpoint_question",
+        _activity_origin=True,
+    )
+    assert g._inventory_topic_type_coverage_violations(
+        records, _inventory(assessable))
 
 
 def test_checkpoint_fallback_uses_task_semantics_not_source_category():

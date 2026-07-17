@@ -2988,7 +2988,14 @@ def _activity_hub_marker(item: dict) -> str:
     label = _strip_public_source_heading(
         str(item.get("source_label") or item.get("parent_source_label") or ""))
     if label:
-        return label[:100].strip(" .:-")
+        label = label[:100].strip(" .:-")
+        if _source_label_is_generic(label):
+            plain = bi.to_plain_text(_inventory_task_text(item))
+            words = re.findall(r"\S+", _strip_public_source_heading(plain))
+            identity = " ".join(words[:6]).strip(" .:-")
+            if identity:
+                return f"{label} — {identity}"[:100].strip(" .:-")
+        return label
     plain = bi.to_plain_text(_inventory_task_text(item))
     words = re.findall(r"\S+", _strip_public_source_heading(plain))
     return " ".join(words[:8]).strip(" .:-") or "Classroom task"
@@ -3028,10 +3035,17 @@ def _compact_activity_hub_note(item: dict, suggested: str = "") -> str:
 
 def _activity_hub_locations(records: list[dict], item: dict) -> list[int]:
     marker = bi.normalize_question_text(_activity_hub_marker(item))
+
+    def contains_marker(details: str) -> bool:
+        hub = bi.normalize_question_text(cr.activity_hub_body(details))
+        return bool(
+            marker
+            and re.search(rf"(?<!\w){re.escape(marker)}(?!\w)", hub)
+        )
+
     locations = [
         index for index, record in enumerate(records)
-        if marker and marker in bi.normalize_question_text(
-            cr.activity_hub_body(record.get("concept_details") or ""))
+        if contains_marker(record.get("concept_details") or "")
     ]
     if locations:
         return locations
@@ -3716,6 +3730,10 @@ def _inventory_question_label_root(label: str) -> str:
     return _topic_comparison_key(value)
 
 
+def _inventory_label_has_subpart(label: str) -> bool:
+    return bool(_SOURCE_LABEL_SUBPART_SUFFIX_RE.search(str(label or "").strip()))
+
+
 def _inventory_items_match(item: dict, anchor: dict) -> bool:
     label = bi.normalize_question_text(item.get("source_label", ""))
     anchor_label = bi.normalize_question_text(anchor.get("source_label", ""))
@@ -3759,7 +3777,11 @@ def _merge_source_task_anchors(items: list[dict], anchors: list[dict]) -> list[d
         merged = [
             item for item in merged
             if not (
-                (item.get("subpart_label") or "").strip()
+                (
+                    (item.get("subpart_label") or "").strip()
+                    or _inventory_label_has_subpart(
+                        item.get("source_label") or "")
+                )
                 and _inventory_question_label_root(
                     item.get("source_label") or "")
                 in authoritative_parent_roots
@@ -4404,6 +4426,15 @@ def _backfill_type_cases_from_inventory(types: list[dict], inventory: dict) -> l
                 qid = (case.get("source_question_id") or "").strip()
                 if qid:
                     example_by_qid[qid] = case
+                    if qid not in source_ids:
+                        source_ids.append(qid)
+                    source_text = _inventory_task_text(by_qid.get(qid, {}))
+                    if (
+                        source_text
+                        and _case_prompt_needs_source(legacy, source_text)
+                    ):
+                        case["case_prompt"] = source_text
+                        legacy = source_text
                 seen_prompts.add(bi.normalize_question_text(legacy))
             for ex in case.get("examples") or []:
                 if not isinstance(ex, dict):
@@ -4411,6 +4442,15 @@ def _backfill_type_cases_from_inventory(types: list[dict], inventory: dict) -> l
                 qid = (ex.get("source_question_id") or "").strip()
                 if qid:
                     example_by_qid[qid] = ex
+                    if qid not in source_ids:
+                        source_ids.append(qid)
+                    source_text = _inventory_task_text(by_qid.get(qid, {}))
+                    if (
+                        source_text
+                        and _case_prompt_needs_source(
+                            ex.get("example_prompt", ""), source_text)
+                    ):
+                        ex["example_prompt"] = source_text
                 if ex.get("example_prompt"):
                     seen_prompts.add(bi.normalize_question_text(ex["example_prompt"]))
         for qid in source_ids:
@@ -4436,6 +4476,7 @@ def _backfill_type_cases_from_inventory(types: list[dict], inventory: dict) -> l
                 "case_signature": "",
             })
             seen_prompts.add(key)
+        mtype["source_question_ids"] = source_ids
         mtype["case_prompts"] = cases
     return types
 
@@ -5760,18 +5801,18 @@ def _add_missing_type_method_concepts_via_api(
         for record in records
     }
     accepted: list[tuple[int, dict]] = []
-    max_additions = min(8, max(1, len(records) // 2))
+    supported_by_addition: set[str] = set()
     for addition in (data or {}).get("additions") or []:
-        if not isinstance(addition, dict) or len(accepted) >= max_additions:
+        if not isinstance(addition, dict):
             continue
         after_cid = (addition.get("after_concept_id") or "").strip()
         topic = (addition.get("topic") or "").strip()
         title = (addition.get("concept") or "").strip()
-        supporting = [
+        supporting = list(dict.fromkeys(
             str(type_id or "").strip()
             for type_id in addition.get("supporting_type_ids") or []
             if str(type_id or "").strip() in type_by_id
-        ]
+        ))
         if (
             after_cid not in cid_to_index
             or not topic
@@ -5781,6 +5822,7 @@ def _add_missing_type_method_concepts_via_api(
             or cr.is_culmination(title)
             or bi.normalize_question_text(title) in existing_titles
             or not supporting
+            or all(type_id in supported_by_addition for type_id in supporting)
         ):
             continue
         if any(
@@ -5812,6 +5854,7 @@ def _add_missing_type_method_concepts_via_api(
         if any(error["severity"] == "error" for error in report["errors"]):
             continue
         accepted.append((cid_to_index[after_cid], candidate))
+        supported_by_addition.update(supporting)
         existing_titles.add(bi.normalize_question_text(title))
 
     if not accepted:
@@ -6613,7 +6656,11 @@ def _review_case_unit_hosts_via_api(
         f"Type host entailment review moved {moved} assignment unit(s); "
         f"{len(known_tids) - len(proposed)} omitted/invalid verdict(s) "
         "kept their constrained first-pass host.",
-        level="success" if not invalid else "warning",
+        level=(
+            "success"
+            if not invalid and len(proposed) == len(known_tids)
+            else "warning"
+        ),
     )
     return rebuilt
 
@@ -7091,9 +7138,18 @@ def _mined_type_topic_violations(
 def _inventory_topic_type_coverage_violations(
     records: list[dict], inventory: dict | None,
 ) -> list[dict]:
-    """Topics with inventoried tasks but no rendered Types on any concept."""
+    """Topics with assessable inventory but no rendered Types on any concept."""
     task_counts: dict[str, dict] = {}
     for item in (inventory or {}).get("items") or []:
+        if (
+            (item.get("source_kind") or "").strip().lower()
+            in _HUB_INVENTORY_KINDS
+        ):
+            # Pure classroom activities are represented in Activity/Info Hub,
+            # not as artificial assessment Types. Assessable questions that
+            # originated inside an activity carry a non-Hub source_kind and
+            # remain covered by this gate.
+            continue
         topic = (item.get("topic_hint") or "").strip()
         key = _topic_comparison_key(topic)
         if not key:

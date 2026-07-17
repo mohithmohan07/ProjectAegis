@@ -85,7 +85,11 @@ def _type_signature(segment: str) -> str:
     body = segment[match.end():] if match else segment
     case = _CASE_TOKEN_RE.search(body)
     header = body[:case.start()] if case else body
-    return re.sub(r"\W+", " ", header.lower()).strip()
+    # Repeated renderings of one consolidated Type carry the same header, so
+    # whitespace normalization is sufficient. Preserve operators and LaTeX:
+    # collapsing punctuation would conflate distinct methods such as a/b and
+    # a-b and incorrectly share their Type number and Case sequence.
+    return re.sub(r"\s+", " ", header.lower()).strip()
 
 
 def _renumber_reusable_block(

@@ -15,11 +15,13 @@ Keyword columns are NOT rich text; they hold direct KaTeX (no wrappers).
 """
 from __future__ import annotations
 
+import html
 import re
+from urllib.parse import urlsplit
 
 # Canonical Bulk Import field names that accept rich text.
 RICH_TEXT_FIELDS = frozenset({
-    "question", "answer_content", "answer", "answer_display", "answer_explanation",
+    "question", "answer_content", "answer", "display_answer", "answer_explanation",
     "concept_details",
 })
 # Sub-question keyword field; raw KaTeX, no [Katex] wrapper.
@@ -37,23 +39,42 @@ def is_block(latex: str) -> bool:
     return any(tok in latex for tok in _BLOCK_TRIGGERS)
 
 
+def _public_http_url(value: str, *, label: str) -> str:
+    value = str(value or "").strip()
+    parsed = urlsplit(value)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or re.search(r"""[\s"'<>[\]]""", value)
+    ):
+        raise ValueError(f"{label} must be a full public http(s):// URL")
+    return value
+
+
+def _image_dimension(value: str, *, label: str) -> str:
+    value = str(value or "").strip()
+    if not re.fullmatch(r"\d{1,4}%?", value):
+        raise ValueError(f"image {label} must be a number or percentage")
+    return value
+
+
 def image(src: str, alt: str, *, width: str | None = None, height: str | None = None) -> str:
-    if not (src.startswith("https://") or src.startswith("http://")):
-        raise ValueError("image src must be a full public http(s):// URL")
-    safe_alt = re.sub(r"\s+", " ", (alt or "").strip()).replace('"', "&quot;")
+    src = _public_http_url(src, label="image src")
+    safe_alt = html.escape(
+        re.sub(r"\s+", " ", (alt or "").strip()), quote=True
+    ).replace("[", "&#91;").replace("]", "&#93;")
     if not safe_alt:
         raise ValueError("image alt text is required")
     tag = f'[img src="{src}" alt="{safe_alt}"'
     if width:
-        tag += f' width="{width}"'
+        tag += f' width="{_image_dimension(width, label="width")}"'
     if height:
-        tag += f' height="{height}"'
+        tag += f' height="{_image_dimension(height, label="height")}"'
     return tag + "]"
 
 
 def link(text: str, url: str) -> str:
-    if not (url.startswith("https://") or url.startswith("http://")):
-        raise ValueError("link url must be absolute http(s)://")
+    url = _public_http_url(url, label="link url")
     return f"[{text}]({url})"
 
 
@@ -78,13 +99,46 @@ _FOOTNOTE_RE = re.compile(
     r"\\footnotetext\{(?P<body>[^{}]*(?:\{[^{}]*\}[^{}]*)*)\}",
     re.IGNORECASE | re.DOTALL,
 )
-_RAW_MATH_PATTERNS = (
+_RAW_BLOCK_MATH_PATTERNS = (
     re.compile(r"\$\$(?P<body>.+?)\$\$", re.DOTALL),
     re.compile(r"\\\[(?P<body>.+?)\\\]", re.DOTALL),
     re.compile(r"\\\((?P<body>.+?)\\\)", re.DOTALL),
-    # A paired single-dollar expression. Currency using ₹ is unaffected.
-    re.compile(r"(?<!\\)\$(?!\$)(?P<body>[^$\n]+?)(?<!\\)\$(?!\$)"),
 )
+_SINGLE_DOLLAR_MATH_RE = re.compile(
+    r"(?<!\\)\$(?!\$)(?P<body>[^$\n]+?)(?<!\\)\$(?!\$)"
+)
+_RAW_MATH_PATTERNS = (*_RAW_BLOCK_MATH_PATTERNS, _SINGLE_DOLLAR_MATH_RE)
+_KATEX_TOKEN_RE = re.compile(r"\[(?P<close>/)?katex\]", re.IGNORECASE)
+_KATEX_LIKE_TAG_RE = re.compile(r"\[/?katex\b[^\]]*\]", re.IGNORECASE)
+_IMAGE_TAG_RE = re.compile(r"\[img\b[^\]]*\]", re.IGNORECASE)
+_CANONICAL_IMAGE_TAG_RE = re.compile(
+    r'\[img src="(?P<src>https?://[^"]+)" alt="(?P<alt>[^"]+)"'
+    r'(?: width="(?P<width>\d{1,4}%?)")?'
+    r'(?: height="(?P<height>\d{1,4}%?)")?\]'
+)
+
+
+def _looks_like_currency_pair(match: re.Match) -> bool:
+    """Avoid interpreting ``$5 to $10`` as one inline equation."""
+    body = (match.group("body") or "").strip()
+    if not body or not body[0].isdigit():
+        return False
+    after = match.string[match.end():]
+    if after[:1].isdigit():
+        return True
+    return bool(
+        re.search(r"\s", body)
+        and not re.search(r"""[\\_^{}=+\-*/<>]""", body)
+    )
+
+
+def _has_raw_math(value: str) -> bool:
+    if any(pattern.search(value) for pattern in _RAW_BLOCK_MATH_PATTERNS):
+        return True
+    return any(
+        not _looks_like_currency_pair(match)
+        for match in _SINGLE_DOLLAR_MATH_RE.finditer(value)
+    )
 
 
 def canonicalize_rich_text(text: str) -> str:
@@ -130,11 +184,19 @@ def canonicalize_rich_text(text: str) -> str:
     value = _TABULAR_RE.sub(tabular, value)
     value = _FOOTNOTE_RE.sub(lambda match: match.group("body").strip(), value)
 
-    for pattern in _RAW_MATH_PATTERNS:
+    for pattern in _RAW_BLOCK_MATH_PATTERNS:
         value = pattern.sub(
             lambda match: stash(katex(match.group("body"))),
             value,
         )
+    value = _SINGLE_DOLLAR_MATH_RE.sub(
+        lambda match: (
+            match.group(0)
+            if _looks_like_currency_pair(match)
+            else stash(katex(match.group("body")))
+        ),
+        value,
+    )
 
     for index, rendered in enumerate(protected):
         value = value.replace(
@@ -153,21 +215,44 @@ def rich_text_issues(
     """
     value = str(text or "")
     issues: list[str] = []
-    opens = re.findall(r"\[katex\]", value, re.IGNORECASE)
-    closes = re.findall(r"\[/katex\]", value, re.IGNORECASE)
-    if len(opens) != len(closes):
+    tokens = list(_KATEX_TOKEN_RE.finditer(value))
+    depth = 0
+    malformed_order = False
+    nested = False
+    for token in tokens:
+        if token.group("close"):
+            if depth == 0:
+                malformed_order = True
+            else:
+                depth -= 1
+        else:
+            if depth:
+                nested = True
+            depth += 1
+    if depth or malformed_order:
         issues.append("unbalanced_katex")
+    if nested:
+        issues.append("nested_katex")
     if re.search(r"\[katex\]\s*\[/katex\]", value, re.IGNORECASE):
         issues.append("empty_katex")
-    if require_canonical_case and (
-        re.search(r"\[katex\]", value) or re.search(r"\[/katex\]", value)
+    malformed_katex = [
+        match.group(0)
+        for match in _KATEX_LIKE_TAG_RE.finditer(value)
+        if not _KATEX_TOKEN_RE.fullmatch(match.group(0))
+    ]
+    if malformed_katex:
+        issues.append("malformed_katex")
+    if require_canonical_case and any(
+        token.group(0)
+        != ("[/Katex]" if token.group("close") else "[Katex]")
+        for token in tokens
     ):
         issues.append("noncanonical_katex_case")
 
     masked = _KATEX_TAG_RE.sub("", value)
     if _MARKDOWN_IMAGE_RE.search(masked):
         issues.append("markdown_image")
-    if any(pattern.search(masked) for pattern in _RAW_MATH_PATTERNS):
+    if _has_raw_math(masked):
         issues.append("raw_math_delimiter")
     if re.search(
         r"\\(?:begin|end|footnotetext|frac|dfrac|tfrac|sum|sqrt|"
@@ -176,13 +261,27 @@ def rich_text_issues(
         re.IGNORECASE,
     ):
         issues.append("raw_latex")
-    for match in re.finditer(r"\[img(?P<attrs>[^\]]*)\]", value, re.IGNORECASE):
-        attrs = match.group("attrs")
-        if not re.search(r'\bsrc="https?://[^"]+"', attrs, re.IGNORECASE):
+    image_tags = list(_IMAGE_TAG_RE.finditer(value))
+    if len(re.findall(r"\[img\b", value, re.IGNORECASE)) != len(image_tags):
+        issues.append("unbalanced_image")
+    for match in image_tags:
+        tag = match.group(0)
+        canonical = _CANONICAL_IMAGE_TAG_RE.fullmatch(tag)
+        attrs_match = re.match(r"\[img(?P<attrs>.*)\]", tag, re.IGNORECASE)
+        attrs = attrs_match.group("attrs") if attrs_match else ""
+        src_match = re.search(r'\bsrc="([^"]+)"', attrs, re.IGNORECASE)
+        if src_match is None:
             issues.append("invalid_image_src")
+        else:
+            try:
+                _public_http_url(src_match.group(1), label="image src")
+            except ValueError:
+                issues.append("invalid_image_src")
         alt = re.search(r'\balt="([^"]*)"', attrs, re.IGNORECASE)
         if alt is None or not alt.group(1).strip():
             issues.append("missing_image_alt")
+        if canonical is None:
+            issues.append("noncanonical_image")
     return list(dict.fromkeys(issues))
 
 
@@ -192,7 +291,7 @@ def rich_text_issues(
 from . import prompts as _prompts  # noqa: E402
 
 _PROMPT_PREAMBLE_DEFAULT = """\
-Rich-text rules for the question, answer_content, answer_display, and
+Rich-text rules for the question, answer_content, display_answer, and
 answer_explanation columns:
   - Plain text is typed directly.
   - Equations MUST be wrapped: [Katex] LaTeX [/Katex]. Never use raw $, $$,
