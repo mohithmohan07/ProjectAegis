@@ -1729,6 +1729,9 @@ Rules:
 - concept_description starts with "Description:", is 2-4 compact
   source-grounded sentences, and fully explains the missing method. Include no
   Types; a later ID assignment pass adds them.
+- When the added concept derives, proves, or establishes a formula/rule,
+  include a compact source-grounded "Worked Example:" cue that demonstrates
+  the derivation before any "Achieving Mastery:" line.
 - Wrap mathematics as [Katex] valid LaTeX [/Katex]. Never emit raw math/TeX.
 """)
 
@@ -3001,6 +3004,17 @@ def _activity_hub_marker(item: dict) -> str:
     return " ".join(words[:8]).strip(" .:-") or "Classroom task"
 
 
+def _mark_activity_hub_placement(record: dict, item: dict) -> None:
+    """Retain exact qid identity while compact public Hub prose is ambiguous."""
+    qid = str(item.get("qid") or "").strip()
+    if not qid:
+        return
+    qids = list(record.get("_activity_hub_qids") or [])
+    if qid not in qids:
+        qids.append(qid)
+    record["_activity_hub_qids"] = qids
+
+
 def _compact_activity_hub_note(item: dict, suggested: str = "") -> str:
     """Teacher-facing Activity summary; never copy the full source dump."""
     marker = _activity_hub_marker(item)
@@ -3034,7 +3048,19 @@ def _compact_activity_hub_note(item: dict, suggested: str = "") -> str:
 
 
 def _activity_hub_locations(records: list[dict], item: dict) -> list[int]:
+    qid = str(item.get("qid") or "").strip()
+    tagged_locations = [
+        index for index, record in enumerate(records)
+        if qid and qid in (record.get("_activity_hub_qids") or [])
+    ]
+    if tagged_locations:
+        return tagged_locations
+
     marker = bi.normalize_question_text(_activity_hub_marker(item))
+    raw_label = str(
+        item.get("source_label") or item.get("parent_source_label") or "")
+    generic_label = _source_label_is_generic(
+        _strip_public_source_heading(raw_label))
 
     def contains_marker(details: str) -> bool:
         hub = bi.normalize_question_text(cr.activity_hub_body(details))
@@ -3045,7 +3071,8 @@ def _activity_hub_locations(records: list[dict], item: dict) -> list[int]:
 
     locations = [
         index for index, record in enumerate(records)
-        if contains_marker(record.get("concept_details") or "")
+        if not generic_label
+        and contains_marker(record.get("concept_details") or "")
     ]
     if locations:
         return locations
@@ -3112,6 +3139,7 @@ def _place_activity_inventory_into_hubs(
         hub = _compact_activity_hub_note(item)
         out[index]["concept_details"] = _append_activity_hub(
             out[index].get("concept_details") or "", hub)
+        _mark_activity_hub_placement(out[index], item)
         placed += 1
     if placed:
         progress.log(
@@ -3211,6 +3239,7 @@ def _populate_activity_hubs_via_api(
         hub_note = _compact_activity_hub_note(item, hub_note)
         out[index]["concept_details"] = _append_activity_hub(
             out[index].get("concept_details") or "", hub_note)
+        _mark_activity_hub_placement(out[index], item)
         placed_qids.add(qid)
     if placed_qids:
         progress.log(
@@ -5744,6 +5773,67 @@ def _type_sufficiency_payload(mtype: dict) -> dict:
     }
 
 
+_DERIVATION_ADDITION_RE = re.compile(
+    r"\b(?:deriv(?:e|es|ed|ing|ation)?|deduc(?:e|es|ed|ing|tion)|"
+    r"prov(?:e|es|ed|ing)|proof|establish(?:es|ed|ing)?|"
+    r"develop(?:s|ed|ing)?\s+(?:a\s+)?(?:formula|rule))\b",
+    re.IGNORECASE,
+)
+
+
+def _ensure_added_derivation_worked_example(
+    details: str,
+    *,
+    title: str,
+    parent: str,
+    supporting_type_ids: list[str],
+    type_by_id: dict[str, dict],
+) -> str:
+    """Give a newly split derivation concept a compact mined-Type cue."""
+    supporting_types = [
+        type_by_id[type_id]
+        for type_id in supporting_type_ids
+        if type_id in type_by_id
+    ]
+    context = " ".join([
+        title,
+        parent,
+        *[
+            " ".join([
+                str(mtype.get("type_title") or ""),
+                str(mtype.get("task_pattern") or ""),
+            ])
+            for mtype in supporting_types
+        ],
+    ])
+    if (
+        not _DERIVATION_ADDITION_RE.search(context)
+        or re.search(r"\bWorked\s+Example\s*:", details, re.IGNORECASE)
+    ):
+        return details
+
+    for mtype in supporting_types:
+        method = str(
+            mtype.get("type_description")
+            or mtype.get("task_pattern")
+            or mtype.get("type_title")
+            or ""
+        ).strip()
+        for case in mtype.get("case_prompts") or []:
+            if not isinstance(case, dict):
+                continue
+            for example in _case_examples(case):
+                prompt = str(example.get("example_prompt") or "").strip()
+                if prompt:
+                    cue = " ".join(
+                        part.rstrip(".") + "."
+                        for part in (method, prompt)
+                        if part
+                    )
+                    return _description_with_worked_example(details, cue)
+    return details
+
+
 def _add_missing_type_method_concepts_via_api(
     records: list[dict], *, mined_types: dict, meta: dict,
 ) -> list[dict]:
@@ -5836,13 +5926,21 @@ def _add_missing_type_method_concepts_via_api(
             continue
         details = kr.canonicalize_rich_text(
             str(addition.get("concept_description") or "").strip())
+        parent = (
+            addition.get("parent_concept")
+            or records[cid_to_index[after_cid]].get("parent_concept")
+            or topic
+        )
+        details = _ensure_added_derivation_worked_example(
+            details,
+            title=title,
+            parent=parent,
+            supporting_type_ids=supporting,
+            type_by_id=type_by_id,
+        )
         candidate = {
             "topic": topic,
-            "parent_concept": (
-                addition.get("parent_concept")
-                or records[cid_to_index[after_cid]].get("parent_concept")
-                or topic
-            ),
+            "parent_concept": parent,
             "concept_title": title,
             "concept_details": details,
             "keywords": addition.get("keywords") or "",

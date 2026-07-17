@@ -39,38 +39,33 @@ def is_block(latex: str) -> bool:
     return any(tok in latex for tok in _BLOCK_TRIGGERS)
 
 
-def _public_http_url(value: str, *, label: str) -> str:
+def _public_http_url(
+    value: str, *, label: str, require_https: bool = False,
+) -> str:
     value = str(value or "").strip()
     parsed = urlsplit(value)
     if (
         parsed.scheme not in {"http", "https"}
+        or (require_https and parsed.scheme != "https")
         or not parsed.netloc
         or re.search(r"""[\s"'<>[\]]""", value)
     ):
-        raise ValueError(f"{label} must be a full public http(s):// URL")
-    return value
-
-
-def _image_dimension(value: str, *, label: str) -> str:
-    value = str(value or "").strip()
-    if not re.fullmatch(r"\d{1,4}%?", value):
-        raise ValueError(f"image {label} must be a number or percentage")
+        scheme = "https://" if require_https else "http(s)://"
+        raise ValueError(f"{label} must be a full public {scheme} URL")
     return value
 
 
 def image(src: str, alt: str, *, width: str | None = None, height: str | None = None) -> str:
-    src = _public_http_url(src, label="image src")
+    if width or height:
+        raise ValueError(
+            "canonical image tags support only src and alt attributes")
+    src = _public_http_url(src, label="image src", require_https=True)
     safe_alt = html.escape(
         re.sub(r"\s+", " ", (alt or "").strip()), quote=True
     ).replace("[", "&#91;").replace("]", "&#93;")
     if not safe_alt:
         raise ValueError("image alt text is required")
-    tag = f'[img src="{src}" alt="{safe_alt}"'
-    if width:
-        tag += f' width="{_image_dimension(width, label="width")}"'
-    if height:
-        tag += f' height="{_image_dimension(height, label="height")}"'
-    return tag + "]"
+    return f'[img src="{src}" alt="{safe_alt}"]'
 
 
 def link(text: str, url: str) -> str:
@@ -83,11 +78,13 @@ _KATEX_TAG_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _MARKDOWN_IMAGE_RE = re.compile(
-    r"!\[(?P<alt>[^\]]*)\]\((?P<src>https?://[^)\s]+)\)",
+    r"!\[(?P<alt>[^\]]*)\]\(\s*"
+    r"(?P<src>https://(?:[^()\s]|(?:\([^()]*\)))+)"
+    r"(?:\s+(?:\"[^\"]*\"|'[^']*'))?\s*\)",
     re.IGNORECASE,
 )
 _INCLUDEGRAPHICS_RE = re.compile(
-    r"\\includegraphics(?:\[[^\]]*\])?\{(?P<src>https?://[^}\s]+)\}",
+    r"\\includegraphics(?:\[[^\]]*\])?\{(?P<src>https://[^}\s]+)\}",
     re.IGNORECASE,
 )
 _TABULAR_RE = re.compile(
@@ -112,9 +109,14 @@ _KATEX_TOKEN_RE = re.compile(r"\[(?P<close>/)?katex\]", re.IGNORECASE)
 _KATEX_LIKE_TAG_RE = re.compile(r"\[/?katex\b[^\]]*\]", re.IGNORECASE)
 _IMAGE_TAG_RE = re.compile(r"\[img\b[^\]]*\]", re.IGNORECASE)
 _CANONICAL_IMAGE_TAG_RE = re.compile(
-    r'\[img src="(?P<src>https?://[^"]+)" alt="(?P<alt>[^"]+)"'
-    r'(?: width="(?P<width>\d{1,4}%?)")?'
-    r'(?: height="(?P<height>\d{1,4}%?)")?\]'
+    r'\[img src="(?P<src>https://[^"]+)" alt="(?P<alt>[^"]+)"\]'
+)
+_MARKDOWN_LINK_RE = re.compile(
+    r"\[[^\]]+\]\(https?://(?:[^()\s]|(?:\([^()]*\)))+\)",
+    re.IGNORECASE,
+)
+_CURRENCY_TOKEN_RE = re.compile(
+    r"(?<!\\)\$(?P<amount>\d+(?:[.,]\d+)?)\b"
 )
 
 
@@ -124,12 +126,7 @@ def _looks_like_currency_pair(match: re.Match) -> bool:
     if not body or not body[0].isdigit():
         return False
     after = match.string[match.end():]
-    if after[:1].isdigit():
-        return True
-    return bool(
-        re.search(r"\s", body)
-        and not re.search(r"""[\\_^{}=+\-*/<>]""", body)
-    )
+    return bool(re.match(r"\s*\d", after))
 
 
 def _has_raw_math(value: str) -> bool:
@@ -240,7 +237,11 @@ def rich_text_issues(
         for match in _KATEX_LIKE_TAG_RE.finditer(value)
         if not _KATEX_TOKEN_RE.fullmatch(match.group(0))
     ]
-    if malformed_katex:
+    if (
+        malformed_katex
+        or len(re.findall(r"\[/?katex\b", value, re.IGNORECASE))
+        != len(list(_KATEX_LIKE_TAG_RE.finditer(value)))
+    ):
         issues.append("malformed_katex")
     if require_canonical_case and any(
         token.group(0)
@@ -250,14 +251,22 @@ def rich_text_issues(
         issues.append("noncanonical_katex_case")
 
     masked = _KATEX_TAG_RE.sub("", value)
-    if _MARKDOWN_IMAGE_RE.search(masked):
+    if re.search(r"!\[", masked):
         issues.append("markdown_image")
-    if _has_raw_math(masked):
+    math_masked = _IMAGE_TAG_RE.sub(
+        "", _MARKDOWN_LINK_RE.sub("", masked))
+    delimiter_masked = _CURRENCY_TOKEN_RE.sub("", math_masked)
+    if (
+        _has_raw_math(math_masked)
+        or re.search(r"(?<!\\)\$", delimiter_masked)
+        or re.search(r"\\[\[\]()]|(?<!\\)\$\$", delimiter_masked)
+    ):
         issues.append("raw_math_delimiter")
     if re.search(
-        r"\\(?:begin|end|footnotetext|frac|dfrac|tfrac|sum|sqrt|"
-        r"includegraphics)\b",
-        masked,
+        r"\\(?:[A-Za-z]+|[%_#{}])"
+        r"|(?<![\w])(?:[A-Za-z0-9)}]+)\s*[_^]\s*"
+        r"(?:\{[^}]*\}|[A-Za-z0-9])",
+        math_masked,
         re.IGNORECASE,
     ):
         issues.append("raw_latex")
@@ -274,7 +283,11 @@ def rich_text_issues(
             issues.append("invalid_image_src")
         else:
             try:
-                _public_http_url(src_match.group(1), label="image src")
+                _public_http_url(
+                    src_match.group(1),
+                    label="image src",
+                    require_https=True,
+                )
             except ValueError:
                 issues.append("invalid_image_src")
         alt = re.search(r'\balt="([^"]*)"', attrs, re.IGNORECASE)
@@ -299,8 +312,8 @@ answer_explanation columns:
     Inline vs. block mode is auto-detected from the content (presence of
     \\begin, \\array, \\frac, \\sum, \\int, \\prod, or \\oint triggers block).
   - Images: [img src="https://..." alt="..."]. Use double quotes only;
-    src must be a full public http(s) URL and must come before alt.
-    Optional: width="N" / width="N%" / height="N".
+    src must be a full public HTTPS URL and must come before alt. No other
+    attributes are allowed.
   - Links: [Display Text](https://full-url). Wrap raw URLs; never emit a
     bare URL on its own.
 

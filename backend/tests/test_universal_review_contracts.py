@@ -78,19 +78,40 @@ def test_rich_text_rejects_malformed_tags_without_treating_currency_as_math():
     currency = "The price rose from $5 to $10 in one week."
     assert kr.canonicalize_rich_text(currency) == currency
     assert "raw_math_delimiter" not in kr.rich_text_issues(currency)
+    assert kr.canonicalize_rich_text("$5 x 10$") == (
+        "[Katex] 5 x 10 [/Katex]")
 
     defects = kr.rich_text_issues(
         '[KATEX] x [/KATEX] '
         '[Katex] outer [Katex] inner [/Katex] [/Katex] '
         '[img src="https://images.example/x.png" onerror="alert(1)" alt="x"] '
-        '[img src="https://images.example/y.png" alt="y"'
+        '[img src="https://images.example/y.png" alt="y" '
+        r"\alpha + x^2 + $unclosed"
     )
     assert "noncanonical_katex_case" in defects
     assert "nested_katex" in defects
     assert "noncanonical_image" in defects
     assert "unbalanced_image" in defects
+    assert "raw_latex" in defects
+    assert "raw_math_delimiter" in defects
     with pytest.raises(ValueError):
         kr.image('https://images.example/x.png" onerror="alert(1)', "x")
+    with pytest.raises(ValueError):
+        kr.image("http://images.example/x.png", "x")
+    with pytest.raises(ValueError):
+        kr.image("https://images.example/x.png", "x", width="200")
+
+
+def test_markdown_images_handle_titles_parentheses_and_reject_relative_urls():
+    rendered = kr.canonicalize_rich_text(
+        '![graph](https://images.example/x_(1).png "source graph")')
+    assert rendered == (
+        '[img src="https://images.example/x_(1).png" alt="graph"]')
+    relative = "![graph](../images/x.png)"
+    assert kr.canonicalize_rich_text(relative) == relative
+    assert "markdown_image" in kr.rich_text_issues(relative)
+    assert "invalid_image_src" in kr.rich_text_issues(
+        '[img src="http://images.example/x.png" alt="graph"]')
 
 
 def test_rich_text_registry_uses_student_facing_display_answer():
@@ -319,6 +340,47 @@ def test_concept_sufficiency_does_not_cap_distinct_methods_by_row_count(
         "Reversing a Rule",
         "Comparing Two Rules",
     }
+
+
+def test_new_derivation_concept_receives_a_mined_type_worked_cue(monkeypatch):
+    records = [{
+        "topic": "Formula Building",
+        "parent_concept": "Core",
+        "concept_title": "Recognising a Pattern",
+        "concept_details": "Description: Identify the repeated change.",
+        "keywords": "pattern",
+    }]
+    derivation_type = _type(
+        "TYPE-0001",
+        "QINV-0001",
+        "Derive the general term by writing successive terms.",
+        title="Deriving the General-Term Rule",
+        topic="Formula Building",
+    )
+    derivation_type["type_description"] = (
+        "Write successive terms, isolate the repeated change, and generalise."
+    )
+    monkeypatch.setattr(g, "_openai_json", lambda *_a, **_k: {
+        "additions": [{
+            "after_concept_id": "CONCEPT-0001",
+            "topic": "Formula Building",
+            "parent_concept": "Derivations",
+            "concept": "Deriving the General-Term Rule",
+            "concept_description": (
+                "Description: Express each term through its repeated change "
+                "and generalise the position."
+            ),
+            "keywords": "derivation",
+            "supporting_type_ids": ["TYPE-0001"],
+        }],
+    })
+    result = g._add_missing_type_method_concepts_via_api(
+        records, mined_types={"types": [derivation_type]}, meta={})
+    added = next(
+        row for row in result
+        if row["concept_title"] == "Deriving the General-Term Rule")
+    assert "Worked Example:" in added["concept_details"]
+    assert "writing successive terms" in added["concept_details"]
 
 
 def test_host_entailment_review_moves_case_to_supported_sibling(monkeypatch):
@@ -574,6 +636,36 @@ def test_activity_hub_matching_avoids_label_prefix_and_generic_collisions():
     )
     assert g._activity_hub_marker(first_discussion) != (
         g._activity_hub_marker(second_discussion))
+
+    common = "Compare the two supplied processes and record"
+    same_prefix_first = _item(
+        "QINV-0004", f"{common} the first outcome.",
+        source_kind="activity", source_label="Discuss",
+    )
+    same_prefix_second = _item(
+        "QINV-0005", f"{common} the second outcome.",
+        source_kind="activity", source_label="Discuss",
+    )
+    assert g._activity_hub_marker(same_prefix_first) == (
+        g._activity_hub_marker(same_prefix_second))
+    tracked = [
+        {
+            "concept_details": (
+                "Description: d // Activity/Info Hub: "
+                + g._compact_activity_hub_note(same_prefix_first)
+            ),
+            "_activity_hub_qids": ["QINV-0004"],
+        },
+        {
+            "concept_details": (
+                "Description: d // Activity/Info Hub: "
+                + g._compact_activity_hub_note(same_prefix_second)
+            ),
+            "_activity_hub_qids": ["QINV-0005"],
+        },
+    ]
+    assert g._activity_hub_locations(tracked, same_prefix_first) == [0]
+    assert g._activity_hub_locations(tracked, same_prefix_second) == [1]
 
 
 def test_activity_only_topic_does_not_require_an_artificial_type():

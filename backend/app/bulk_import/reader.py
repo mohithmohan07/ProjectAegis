@@ -142,12 +142,17 @@ def _format_issues(label: str, *texts: str) -> list[str]:
     blob = "\n".join(t for t in texts if t)
     messages = {
         "unbalanced_katex": "unbalanced [Katex] tag",
+        "nested_katex": "nested [Katex] tag",
+        "malformed_katex": "malformed [Katex] tag",
         "empty_katex": "empty [Katex] tag",
         "markdown_image": "Markdown image found — use [img src=\"...\" alt=\"...\"]",
         "raw_math_delimiter": "raw math delimiters found — use [Katex]...[/Katex]",
         "raw_latex": "raw LaTeX found outside a [Katex] tag",
-        "invalid_image_src": "[img] without a full http(s) src URL",
+        "unbalanced_image": "unclosed [img] tag",
+        "invalid_image_src": "[img] without a full HTTPS src URL",
         "missing_image_alt": "[img] missing alt text",
+        "noncanonical_image": (
+            "[img] must contain only ordered src and alt attributes"),
     }
     # Import accepts legacy lower-case [katex] and canonicalizes it before
     # persistence; all other syntax rules stay strict.
