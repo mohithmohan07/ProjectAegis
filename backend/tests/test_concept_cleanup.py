@@ -47,6 +47,21 @@ def test_clean_record_preserves_numeric_types_section():
     assert "Type 01: Eval Case 01: 2^3" in rec["concept_details"]
 
 
+def test_clean_record_sanitizes_error_analysis_as_learner_prose():
+    rec = clean_concept_record({
+        "concept_title": "evaluating exponents",
+        "concept_details": (
+            "Description: Evaluate powers carefully. // "
+            "Error Analysis: A learner may copy the exponent from section 2.3 "
+            "and rely on [img src=\"https://example.test/error.png\" alt=\"work\"]."
+        ),
+    })
+
+    assert "section 2.3" not in rec["concept_details"]
+    assert "https://example.test/error.png" not in rec["concept_details"]
+    assert "Error Analysis:" in rec["concept_details"]
+
+
 # --------------------------- & collapse (Input 02a) --------------------------- #
 
 def test_multiple_ampersands_collapse_to_comma_and_and():

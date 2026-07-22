@@ -85,15 +85,75 @@ def test_records_without_types_are_untouched():
     assert out[0]["concept_details"] == "Description: only // Misconceptions: none"
 
 
-def test_refine_chapter_adds_missing_misconceptions_to_normal_concepts():
+def test_refine_chapter_adds_missing_learner_analysis_to_normal_concepts():
     records = [
         _rec("Basic Proportionality Theorem", "Description: relates side ratios."),
         _rec("Culmination - Topic 01", "Description: Recap"),
     ]
     out = cr.refine_chapter(records)
-    assert "Misconceptions:" in out[0]["concept_details"]
+    normal_details = out[0]["concept_details"]
+    assert "Misconceptions:" in normal_details or "Error Analysis:" in normal_details
     assert "Basic Proportionality Theorem" in out[0]["concept_details"]
     assert "Misconceptions:" not in out[1]["concept_details"]
+    assert "Error Analysis:" not in out[1]["concept_details"]
+
+
+def test_refine_chapter_accepts_either_analysis_section_or_both():
+    records = [
+        _rec(
+            "Scale Factors",
+            "Description: scale factors compare corresponding lengths. // "
+            "Misconceptions: Students may believe that scaling always enlarges a figure.",
+        ),
+        _rec(
+            "Signed Substitution",
+            "Description: signed values retain their signs during substitution. // "
+            "Error Analysis: Students may omit a negative sign while substituting.",
+        ),
+        _rec(
+            "Equivalent Fractions",
+            "Description: equivalent fractions name the same quantity. // "
+            "Error Analysis: Students may multiply only the numerator. // "
+            "Misconception: Students may think different denominators always mean different values.",
+        ),
+    ]
+
+    out = cr.refine_chapter(records)
+
+    assert "Misconceptions:" in out[0]["concept_details"]
+    assert "Error Analysis:" not in out[0]["concept_details"]
+    assert "Error Analysis:" in out[1]["concept_details"]
+    assert "Misconceptions:" not in out[1]["concept_details"]
+    both = out[2]["concept_details"]
+    assert both.index("Misconceptions:") < both.index("Error Analysis:")
+
+
+def test_normalization_collapses_duplicate_cross_category_analysis():
+    details = (
+        "Description: retain signs during substitution. // "
+        "Misconceptions: Students may omit the negative sign while substituting. // "
+        "Error Analysis: Students may omit the negative sign while substituting."
+    )
+
+    out = cr.normalize_analysis_sections(details)
+
+    assert out.count("Students may omit the negative sign") == 1
+    assert "Error Analysis:" in out
+    assert "Misconceptions:" not in out
+
+
+def test_normalization_reclassifies_separate_legacy_mistake_without_data_loss():
+    belief = "Students may believe that every scale factor enlarges a figure."
+    mistake = "Students may omit the negative sign during substitution."
+    details = (
+        "Description: scale and sign rules depend on context. // "
+        f"Misconceptions: {belief} // Misconceptions: {mistake}"
+    )
+
+    out = cr.normalize_analysis_sections(details)
+
+    assert f"Misconceptions: {belief}" in out
+    assert f"Error Analysis: {mistake}" in out
 
 
 def test_culmination_description_becomes_recap():

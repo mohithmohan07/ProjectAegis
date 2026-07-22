@@ -220,10 +220,10 @@ def _mock_stages() -> dict:
         "Type 01: Converting repeated multiplication to exponential form Case 01: Write 3 × 3 × 3 × 3 in exponential form Case 02: Write 5 × 5 × 5 using exponent notation",
         "Type 01: Identifying base and exponent Case 01: Identify the base and exponent in [Katex] 9^5 [/Katex] Case 02: Identify the base and exponent in [Katex] 7^3 [/Katex]",
         "Type 01: Expanding powers into repeated multiplication Case 01: Expand [Katex] 4^3 [/Katex] Case 02: Expand [Katex] 2^4 [/Katex] as repeated multiplication",
-        "Type 01: Multiplying powers with the same base Case 01: Simplify [Katex] x^4 \\times x^7 [/Katex] Case 02: Simplify [Katex] 2^3 \\times 2^5 [/Katex] // Misconception: Students may multiply the exponents instead of adding them.",
-        "Type 01: Dividing powers with the same base Case 01: Simplify [Katex] p^9 \\div p^3 [/Katex] Case 02: Simplify [Katex] 7^6 \\div 7^2 [/Katex] // Misconception: Students may subtract bases or ignore [Katex] a \\ne 0 [/Katex].",
+        "Type 01: Multiplying powers with the same base Case 01: Simplify [Katex] x^4 \\times x^7 [/Katex] Case 02: Simplify [Katex] 2^3 \\times 2^5 [/Katex] // Error Analysis: Students may multiply the exponents instead of adding them.",
+        "Type 01: Dividing powers with the same base Case 01: Simplify [Katex] p^9 \\div p^3 [/Katex] Case 02: Simplify [Katex] 7^6 \\div 7^2 [/Katex] // Error Analysis: Students may subtract bases or omit the condition [Katex] a \\ne 0 [/Katex].",
         "Type 01: Simplifying powers raised to powers Case 01: Simplify [Katex] (a^5)^2 [/Katex] Case 02: Simplify [Katex] (3^2)^4 [/Katex]",
-        "Type 01: Simplifying zero exponents Case 01: Simplify [Katex] 8^0 [/Katex] Case 02: Simplify [Katex] 5^0 [/Katex] // Misconception: Students may think [Katex] a^0 [/Katex] equals 0.",
+        "Type 01: Simplifying zero exponents Case 01: Simplify [Katex] 8^0 [/Katex] Case 02: Simplify [Katex] 5^0 [/Katex] // Misconceptions: Students may think [Katex] a^0 [/Katex] equals 0.",
         "Type 01: Converting negative exponents to reciprocal form Case 01: Write [Katex] 3^{-2} [/Katex] in reciprocal form Case 02: Express [Katex] 2^{-3} [/Katex] as a fraction",
         "Type 01: Comparing negative exponent values Case 01: Compare [Katex] 2^{-3} [/Katex] and [Katex] 3^{-2} [/Katex] Case 02: Order two reciprocal-form powers after conversion",
     ]

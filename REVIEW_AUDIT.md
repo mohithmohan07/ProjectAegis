@@ -29,7 +29,8 @@ a failing test before this record is marked complete for that review version.
 
 | Review concern | Production enforcement | Regression evidence | Repository status |
 | --- | --- | --- | --- |
-| Duplicate, generic, correction-shaped, or misplaced misconceptions and mastery text | `concept_refiner.py` and `concept_validator.py` | Misconception and mastery cases in `test_concept_mapping_reviews.py` | Covered |
+| Learner analysis distinguishes commonly held incorrect beliefs (`Misconceptions`) from plausible application mistakes (`Error Analysis`); every normal Pre/Post concept has at least one, and both may be retained when distinct | `generation.py`, `concept_refiner.py`, and `concept_validator.py` | Learner-analysis contract, normalization, validator, and review-regression cases | Covered |
+| Duplicate, generic, correction-shaped, or misplaced learner analysis and mastery text | `concept_refiner.py` and `concept_validator.py` | Learner-analysis and mastery cases in `test_concept_mapping_reviews.py` | Covered |
 | Duplicate concepts, aliases such as BPT, merged descriptions, and invented topics | `concept_cleanup.py` and generation repair passes | Cleanup, similar-title, merge, and topic-safety cases | Covered |
 | Overview/summary/editorial matter must not become topics or leak into adjacent topics | Section parsing in `generation.py` and final filtering in `concept_cleanup.py` | Overview/summary omission and source-topic recovery cases | Covered |
 | Type → Case → Example hierarchy must retain full source questions | Inventory mining, rendering, salvage, and alignment in `generation.py` | V3 hierarchy, short-example, raw-task, and exact-coverage cases | Covered |
@@ -59,7 +60,7 @@ The coverage is end to end rather than prompt-only:
 
 ## Verification result
 
-On 2026-07-22, the full backend suite completed with **458 passed**. This proves
+On 2026-07-22, the full backend suite completed with **491 passed**. This proves
 that all review requirements currently encoded in the repository remain
 enforced together. **The overall PDF audit remains unverified**, because neither
 passing tests nor commit messages prove that every item in an unavailable source

@@ -119,6 +119,11 @@ def _deposit_concepts(
         chapter_title=chapter.chapter_title)
     records = concept_cleanup.dedupe_similar_titles_chapter_wide(records)
     records = concept_refiner.refine_chapter(records)
+    # The final deposit boundary must be resilient when the API repair pass
+    # fails or returns generic/misclassified learner analysis. Preserve valid
+    # Misconceptions and/or Error Analysis, and add the deterministic fallback
+    # only when a normal concept has neither.
+    records = concept_validator.ensure_valid_learner_analysis(records)
     report = concept_validator.validate_concept_rows(
         records,
         allow_types=True,
@@ -133,7 +138,11 @@ def _deposit_concepts(
             "types_format", "case_without_type", "type_without_case",
             "culmination_description", "culmination_count", "culmination_order",
             "section_number", "empty_types", "short_case_example",
-            "rich_text_format",
+            "rich_text_format", "empty_misconception", "empty_error_analysis",
+            "duplicate_misconception", "duplicate_error_analysis",
+            "issue_section_order", "generic_misconception",
+            "misconception_framing", "generic_error_analysis",
+            "error_analysis_framing", "issue_section_overlap",
         }
     ]
     progress.log(

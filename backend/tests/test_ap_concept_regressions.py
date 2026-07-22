@@ -969,7 +969,7 @@ def test_pipeline_restores_skeleton_method_rows_before_description_and_cleanup(
                 f"{record['concept_title']}.\n"
                 f"Achieving Mastery: Explain {record['concept_title']} "
                 "independently. // "
-                "Misconceptions: Omitting a required derivation step."
+                "Error Analysis: Students may omit a required derivation step."
             )
             refined.append(record)
         return refined
@@ -1083,7 +1083,7 @@ def test_final_pipeline_restores_post_description_method_snapshot(monkeypatch):
         "Description: Build the general term from the first term and common "
         "difference.\n"
         "Achieving Mastery: Derive the general term independently. // "
-        "Misconceptions: Treating the term number as the value of the term."
+        "Misconceptions: Students may believe the term number is the term value."
     )
     dropped = _row(
         "Sum of First n Terms of an AP",
@@ -1094,7 +1094,7 @@ def test_final_pipeline_restores_post_description_method_snapshot(monkeypatch):
         "Description: Pair the forward and reversed finite progressions to "
         "derive their sum.\n"
         "Achieving Mastery: Derive the finite-sum rule independently. // "
-        "Misconceptions: Pairing terms without keeping the number of terms fixed."
+        "Error Analysis: Students may pair terms without keeping the term count fixed."
     )
 
     monkeypatch.setattr(
@@ -1203,7 +1203,10 @@ def test_final_pipeline_restores_post_description_method_snapshot(monkeypatch):
     assert g._method_anchor_ids(dropped_final) == {"METHOD-CCCCCCCCCC"}
     for restored in (shared_final, dropped_final):
         assert g._has_mastery_line(restored["concept_details"])
-        assert g._misconception_body(restored["concept_details"])
+        assert (
+            g._misconception_body(restored["concept_details"])
+            or g._error_analysis_body(restored["concept_details"])
+        )
     for topic in {record["topic"] for record in out}:
         topic_rows = [record for record in out if record["topic"] == topic]
         assert g.cr.is_culmination(topic_rows[-1]["concept_title"])
@@ -1235,7 +1238,7 @@ def test_final_boundary_salvages_short_case_reintroduced_by_later_pass(
         "Description: Everyday savings can grow by a fixed amount, producing "
         "an ordered sequence with a constant difference.\n"
         "Achieving Mastery: Recognizing constant-change patterns independently. "
-        "// Misconceptions: Students may compare the terms instead of their "
+        "// Error Analysis: Students may compare the terms instead of their "
         "consecutive differences."
     )
 
@@ -1915,7 +1918,7 @@ def test_concept_pipeline_reports_progress_after_skeleton(monkeypatch):
     normal["concept_details"] = (
         "Description: Consecutive terms have a fixed difference.\n"
         "Achieving Mastery: Identifying the common difference correctly. // "
-        "Misconceptions: Subtracting consecutive terms in the wrong order."
+        "Error Analysis: Students may subtract consecutive terms in the wrong order."
     )
     monkeypatch.setattr(g.progress, "step", capture_step)
     monkeypatch.setattr(g.progress, "set_progress", capture_progress)

@@ -14,19 +14,23 @@ team requires regardless of which extractor produced them:
 3. **Type reduction for theory.** Purely theoretical concepts should not carry
    a Types section; we drop any ``Types:`` block that has no concrete ``Case``.
 4. **Culmination description = detailed "Recap of ...".** Culmination rows keep
-   their Types and Misconception, but their Description section is replaced
+   their Types and any analysis sections, but their Description is replaced
    with "Recap of <A>, <B> and <C>" listing the topic's merged concepts.
 5. **"Achieving Mastery" statement on its own line.** A mastery statement at
    the end of a Description is normalized to a line-broken
    ``\\nAchieving Mastery: <statement>`` format.
-6. **Misconceptions are always present on normal concepts.** If the model omits
-   the section, a deterministic concept-specific fallback is appended.
+6. **Learner analysis is always present on normal concepts.** Each normal
+   concept ends with at least one of ``Misconceptions`` (a commonly held but
+   incorrect belief or interpretation) and ``Error Analysis`` (a plausible
+   procedural, computational, representational, or reasoning mistake). Either
+   section may appear alone, or both may appear when they add distinct value.
 
 ``concept_details`` is the canonical
-``Description: ... // Activity/Info Hub: ... // Types: ... // Misconception: ...``
-string (sections joined by " // "). Activity/Info Hub is optional and holds
-textbook activities, experiments, discussion cases, and other excess source
-material that must not overload Culmination or become vague Cases.
+``Description: ... // Activity/Info Hub: ... // Types: ... // Misconceptions:
+... // Error Analysis: ...`` string (sections joined by " // "). Optional
+sections are omitted. Activity/Info Hub holds textbook activities, experiments,
+discussion cases, and other excess source material that must not overload
+Culmination or become vague Cases.
 """
 from __future__ import annotations
 
@@ -39,6 +43,8 @@ _TYPE_TOKEN_RE = re.compile(
     r"(?:Miscellaneous\s+)?Type\s*0*\d+\s*:", re.IGNORECASE)
 _CASE_TOKEN_RE = re.compile(r"Case\s*0*\d+\s*:", re.IGNORECASE)
 _ACTIVITY_HUB_LABEL = "Activity/Info Hub"
+_MISCONCEPTIONS_LABEL = "Misconceptions"
+_ERROR_ANALYSIS_LABEL = "Error Analysis"
 
 
 def is_culmination(title: str) -> bool:
@@ -48,6 +54,34 @@ def is_culmination(title: str) -> bool:
 def is_activity_hub_label(label: str) -> bool:
     key = re.sub(r"[\s/]+", "", (label or "").strip().lower())
     return key.startswith("activityinfohub") or key.startswith("activityhub")
+
+
+def is_misconception_label(label: str) -> bool:
+    """Return True for canonical and legacy singular misconception labels."""
+    key = re.sub(r"[^a-z]", "", (label or "").strip().lower())
+    return key in {
+        "misconception",
+        "misconceptions",
+        "commonmisconception",
+        "commonmisconceptions",
+    }
+
+
+def is_error_analysis_label(label: str) -> bool:
+    """Return True for Error Analysis and common model-produced aliases."""
+    key = re.sub(r"[^a-z]", "", (label or "").strip().lower())
+    return key in {
+        "erroranalysis",
+        "erroranalyses",
+        "commonerror",
+        "commonerrors",
+        "possibleerror",
+        "possibleerrors",
+        "commonmistake",
+        "commonmistakes",
+        "possiblemistake",
+        "possiblemistakes",
+    }
 
 
 def split_sections(details: str) -> list[tuple[str, str]]:
@@ -136,7 +170,7 @@ def reduce_type_sections(details: str) -> str:
     """Drop a ``Types:`` block that declares types with NO concrete Case.
 
     Such blocks are low-value theory placeholders; purely theoretical concepts
-    keep only Description (+ Misconception).
+    keep Description and their applicable learner-analysis section(s).
     """
     sections = split_sections(details)
     idx = _find_types(sections)
@@ -213,8 +247,8 @@ def set_culmination_recap(records: list[dict]) -> list[dict]:
     """Give every culmination row a detailed "Recap of <A>, <B> and <C>."
     Description naming the topic's merged (non-culmination) concepts.
 
-    Types and Misconception are left untouched. A culmination with no
-    Description section gets one prepended.
+    Types, Misconceptions, and Error Analysis are left untouched. A culmination
+    with no Description section gets one prepended.
     """
     titles_by_topic: dict[str, list[str]] = {}
     for rec in records:
@@ -245,13 +279,18 @@ _MASTERY_LABEL_RE = re.compile(
     r"\s*(?:achieving\s+mastery|mastery(?:\s+indicators?)?)\s*[:\-]\s*",
     re.IGNORECASE,
 )
-# Inline misconception markers inside the Description body (before a separate section).
-_INLINE_MISCONCEPTION_RE = re.compile(
-    r"\s*(?://\s*)?(?:Misconception(?:s)?|Common (?:error|misconception))\s*[:\-]\s*",
+# Inline learner-analysis markers inside Description or another section. The
+# named group lets normalization keep beliefs separate from application errors.
+_INLINE_ANALYSIS_RE = re.compile(
+    r"\s*(?://\s*)?(?P<label>"
+    r"(?:Common\s+)?Misconception(?:s)?|"
+    r"Error\s+Analys(?:is|es)|"
+    r"(?:Common|Possible)\s+(?:Error|Mistake)s?"
+    r")\s*[:\-]\s*",
     re.IGNORECASE,
 )
-# Generic fallback text from ``_fallback_misconception`` — reviewers asked to drop
-# the second, post-mastery copy when the model duplicates it.
+# Generic legacy fallback text; normalization drops a duplicate copy when a
+# more specific learner misconception exists.
 _GENERIC_MISCONCEPTION_RE = re.compile(
     r"^Students may apply .+ as a memorized rule without checking "
     r"the conditions, context, or representation given in the problem\.?$",
@@ -259,18 +298,41 @@ _GENERIC_MISCONCEPTION_RE = re.compile(
 )
 _LEARNER_FALSE_BELIEF_RE = re.compile(
     r"\b(?:students?|learners?|children)\s+"
-    r"(?:(?:may|might|often|sometimes|commonly)\s+[a-z]+|"
+    r"(?:(?:may|might|often|sometimes|commonly)\s+)?"
+    r"(?:(?:incorrectly|wrongly|mistakenly)\s+)?"
     r"(?:believe|think|assume|expect|confuse|mistake|treat|interpret|"
-    r"overlook|ignore|apply|use|calculate|infer))\b",
-    re.IGNORECASE,
-)
-_CORRECTION_VOICE_RE = re.compile(
-    r"\b(?:should|must|instead|correct(?:ly)?|remember\s+that|"
-    r"in\s+fact|actually|the\s+correct\s+(?:idea|rule|answer|method))\b",
+    r"misunderstand|misinterpret|regard|consider)\b",
     re.IGNORECASE,
 )
 _DECLARATIVE_NEGATION_RE = re.compile(
     r"^\s*(?:a|an|the|this|that)\b.{0,120}\b(?:is|are|does|do|can)\s+not\b",
+    re.IGNORECASE,
+)
+_CORRECTION_AFTER_BELIEF_RE = re.compile(
+    r"(?:[.!?;,]\s*)(?:but\s+)?(?:"
+    r"in\s+fact\b|actually\b|instead\s*,|remember\s+that\b|"
+    r"the\s+correct\s+(?:idea|rule|answer|method)\b|"
+    r"(?:students?|learners?|children)\s+(?:should|must)\b|"
+    r"(?:a|an|the|this|that)\b.{0,120}\b"
+    r"(?:is|are|does|do|can)\s+not\b)",
+    re.IGNORECASE,
+)
+_EXPLICIT_BELIEF_CUE_RE = re.compile(
+    r"\b(?:believ\w*|think\w*|assum\w*|expect\w*|confus\w*|"
+    r"mistak\w*|interpret\w*|misunderstand\w*|misinterpret\w*|"
+    r"treat\w*|always|never|all|only)\b",
+    re.IGNORECASE,
+)
+_APPLICATION_ERROR_CUE_RE = re.compile(
+    r"\b(?:appl\w*|calculat\w*|comput\w*|substitut\w*|omit\w*|"
+    r"skip\w*|revers\w*|swap\w*|round\w*|invert\w*|misread\w*|"
+    r"cop\w*|draw\w*|label\w*|plot\w*|convert\w*|simplif\w*|"
+    r"solv\w*|add\w*|subtract\w*|multip\w*|divid\w*|use\w*)\b",
+    re.IGNORECASE,
+)
+_ANALYSIS_ERROR_ACTOR_RE = re.compile(
+    r"\b(?:students?|learners?|children)\b|"
+    r"\b(?:a\s+)?common\s+(?:error|mistake|misstep)\b",
     re.IGNORECASE,
 )
 
@@ -307,12 +369,24 @@ def format_mastery_statement(details: str) -> str:
 
 def _misconception_index(sections: list[tuple[str, str]]) -> int:
     for i, (label, _) in enumerate(sections):
-        if label.strip().lower().startswith("misconception"):
+        if is_misconception_label(label):
+            return i
+    return -1
+
+
+def _error_analysis_index(sections: list[tuple[str, str]]) -> int:
+    for i, (label, _) in enumerate(sections):
+        if is_error_analysis_label(label):
             return i
     return -1
 
 
 def _fallback_misconception(title: str) -> str:
+    """Legacy name retained for callers; the text describes an application error."""
+    return _fallback_error_analysis(title)
+
+
+def _fallback_error_analysis(title: str) -> str:
     concept = (title or "this concept").strip().rstrip(".")
     return (
         f"Students may apply {concept} as a memorized rule without checking "
@@ -329,9 +403,27 @@ def _is_correction_shaped_misconception(text: str) -> bool:
     value = (text or "").strip()
     if not value:
         return False
-    if _CORRECTION_VOICE_RE.search(value) or _DECLARATIVE_NEGATION_RE.search(value):
+    # Modal words such as "must" or "should" can be part of the false belief
+    # itself ("Students may believe the denominator must also be added"). Only
+    # correction language introduced after a clause/sentence boundary is
+    # treated as teacher-facing repair prose.
+    if not _LEARNER_FALSE_BELIEF_RE.search(value):
         return True
-    return not bool(_LEARNER_FALSE_BELIEF_RE.search(value))
+    return bool(_CORRECTION_AFTER_BELIEF_RE.search(value))
+
+
+def _strip_misconception_correction_tail(text: str) -> str:
+    """Keep the false belief while removing a following teacher correction."""
+    value = (text or "").strip()
+    if not _LEARNER_FALSE_BELIEF_RE.search(value):
+        return value
+    correction = _CORRECTION_AFTER_BELIEF_RE.search(value)
+    if not correction:
+        return value
+    belief = value[:correction.start()].rstrip()
+    if belief and not re.search(r"[.!?]\s*$", belief):
+        belief += "."
+    return belief
 
 
 def _needs_misconception_rewrite(text: str) -> bool:
@@ -342,26 +434,55 @@ def _needs_misconception_rewrite(text: str) -> bool:
     )
 
 
-def normalize_misconception_sections(details: str) -> str:
-    """Keep exactly one Misconceptions SECTION in canonical order.
+def _analysis_text_key(text: str) -> str:
+    """Case- and punctuation-insensitive identity for exact content dedupe."""
+    return re.sub(r"\W+", " ", (text or "").lower()).strip()
 
-    Review feedback: misconception text appeared twice — inline in Description
-    (sometimes after Achieving Mastery) AND as a separate section. We strip
-    inline copies from Description, merge every section into ONE Misconceptions
-    section, and enforce Description // Types // Misconceptions order.
 
-    A concept may legitimately carry MORE THAN ONE real misconception, so all
-    distinct specific misconception texts are kept (joined in one section);
-    only generic filler duplicates of a specific one are dropped.
+def _duplicate_belongs_to_misconceptions(text: str) -> bool:
+    """Choose the more appropriate section for an exact cross-section copy."""
+    # Explicit learner-belief syntax is the strongest signal. A broad word
+    # such as "mistake" is not enough on its own: "Students may make the
+    # mistake of dropping the sign" names an action and belongs in Error
+    # Analysis, while "Students may mistake the sign for ..." names a belief.
+    if _LEARNER_FALSE_BELIEF_RE.search(text or ""):
+        return True
+    if _APPLICATION_ERROR_CUE_RE.search(text or ""):
+        return False
+    if _EXPLICIT_BELIEF_CUE_RE.search(text or ""):
+        return True
+    return not _needs_misconception_rewrite(text)
+
+
+def normalize_analysis_sections(details: str) -> str:
+    """Normalize distinct Misconceptions and Error Analysis sections.
+
+    Learner-analysis text can appear inline in Description and in repeated
+    sections. Inline copies are removed, repeated sections of the same kind are
+    consolidated, and the two different meanings are never merged together.
+
+    Misconceptions are commonly held but incorrect beliefs or interpretations.
+    Error Analysis captures plausible procedural, computational,
+    representational, or reasoning mistakes made while applying the concept.
+    The meanings remain separate; either section may appear alone, or both may
+    appear in canonical order after Types.
     """
     sections = split_sections(details)
     if not sections:
         return details
 
     misconception_texts: list[str] = []
+    error_analysis_texts: list[str] = []
     stray_mastery = ""
 
-    def _collect(text: str) -> None:
+    def _kind_for_label(label: str) -> str | None:
+        if is_misconception_label(label):
+            return "misconception"
+        if is_error_analysis_label(label):
+            return "error_analysis"
+        return None
+
+    def _collect(kind: str, text: str) -> None:
         nonlocal stray_mastery
         text = (text or "").strip()
         if not text:
@@ -374,30 +495,48 @@ def normalize_misconception_sections(details: str) -> str:
             if tail:
                 stray_mastery = tail
             text = text[:m.start()].strip()
-        if text:
+        if text and kind == "misconception":
             misconception_texts.append(text)
+        elif text and kind == "error_analysis":
+            error_analysis_texts.append(text)
+
+    def _collect_inline(text: str, default_kind: str | None = None) -> None:
+        """Collect multiple inline labels without merging their meanings."""
+        value = (text or "").strip()
+        if not value:
+            return
+        matches = list(_INLINE_ANALYSIS_RE.finditer(value))
+        if not matches:
+            if default_kind:
+                _collect(default_kind, value)
+            return
+        prefix = value[:matches[0].start()].strip()
+        if prefix and default_kind:
+            _collect(default_kind, prefix)
+        for index, marker in enumerate(matches):
+            end = (
+                matches[index + 1].start()
+                if index + 1 < len(matches)
+                else len(value)
+            )
+            kind = _kind_for_label(marker.group("label"))
+            if kind:
+                _collect(kind, value[marker.end():end])
 
     cleaned: list[tuple[str, str]] = []
     for label, content in sections:
         lower = label.strip().lower()
-        if lower.startswith("misconception"):
-            _collect(content)
+        kind = _kind_for_label(label)
+        if kind:
+            _collect_inline(content, kind)
             continue
         if lower.startswith("description"):
             body = content
-            # Remove inline misconception before or after the mastery line.
-            m_mastery = _MASTERY_LABEL_RE.search(body)
-            if m_mastery:
-                post_mastery = body[m_mastery.end():]
-                inline = _INLINE_MISCONCEPTION_RE.search(post_mastery)
-                if inline:
-                    _collect(post_mastery[inline.end():])
-                    post_mastery = post_mastery[:inline.start()].rstrip()
-                body = body[:m_mastery.start()] + body[m_mastery.start():m_mastery.end()] + post_mastery
-            inline_pre = _INLINE_MISCONCEPTION_RE.search(body)
-            if inline_pre:
-                _collect(body[inline_pre.end():])
-                body = body[:inline_pre.start()].rstrip()
+            # Remove one or more inline analysis blocks before or after mastery.
+            inline = _INLINE_ANALYSIS_RE.search(body)
+            if inline:
+                _collect_inline(body[inline.start():])
+                body = body[:inline.start()].rstrip()
             cleaned.append((label, body))
             continue
         cleaned.append((label, content))
@@ -405,20 +544,77 @@ def normalize_misconception_sections(details: str) -> str:
     # Keep every distinct specific misconception; generic filler survives only
     # when no specific one exists.
     specific: list[str] = []
+    unclassified_misconceptions: list[str] = []
     seen: set[str] = set()
     for text in misconception_texts:
-        key = re.sub(r"\W+", " ", text.lower()).strip()
+        key = _analysis_text_key(text)
+        if not key or key in seen:
+            continue
+        seen.add(key)
         if (
-            key
-            and key not in seen
-            and not _is_generic_misconception(text)
+            not _is_generic_misconception(text)
             and not _is_correction_shaped_misconception(text)
         ):
-            seen.add(key)
             specific.append(text)
-    if not specific and misconception_texts:
-        specific = [misconception_texts[0]]
-    chosen = " ".join(specific)
+        elif _ANALYSIS_ERROR_ACTOR_RE.search(text):
+            # Preserve legacy procedural mistakes that were stored under the
+            # old Misconception-only contract. The final semantic boundary
+            # validates or reclassifies the content without losing it.
+            error_analysis_texts.append(text)
+        else:
+            unclassified_misconceptions.append(text)
+    if not specific and unclassified_misconceptions:
+        specific = [unclassified_misconceptions[0]]
+
+    # Error Analysis follows a different semantic contract, so retain concise
+    # mistake descriptions without requiring learner-belief phrasing.
+    distinct_errors: list[str] = []
+    seen_errors: set[str] = set()
+    for text in error_analysis_texts:
+        key = _analysis_text_key(text)
+        if key and key not in seen_errors:
+            seen_errors.add(key)
+            distinct_errors.append(text)
+    specific_errors = [
+        text for text in distinct_errors if not _is_generic_misconception(text)
+    ]
+    if specific_errors:
+        distinct_errors = specific_errors
+
+    # If the model copied the exact same statement into both sections, retain
+    # one copy under the category suggested by its wording. Do not deduplicate
+    # merely similar texts: a related belief and application error may both be
+    # instructionally useful.
+    duplicate_keys = (
+        {_analysis_text_key(text) for text in specific}
+        & {_analysis_text_key(text) for text in distinct_errors}
+    )
+    for key in duplicate_keys:
+        duplicate_text = next(
+            text for text in specific if _analysis_text_key(text) == key
+        )
+        if _duplicate_belongs_to_misconceptions(duplicate_text):
+            distinct_errors = [
+                text for text in distinct_errors
+                if _analysis_text_key(text) != key
+            ]
+        else:
+            specific = [
+                text for text in specific if _analysis_text_key(text) != key
+            ]
+
+    def _join_items(items: list[str]) -> str:
+        if not items:
+            return ""
+        joined = items[0].strip()
+        for item in items[1:]:
+            if joined and not re.search(r"[.!?;]\s*$", joined):
+                joined += "."
+            joined += f" {item.strip()}"
+        return joined
+
+    chosen_misconceptions = _join_items(specific)
+    chosen_errors = _join_items(distinct_errors)
 
     ordered: list[tuple[str, str]] = []
     hub_block: tuple[str, str] | None = None
@@ -432,7 +628,7 @@ def normalize_misconception_sections(details: str) -> str:
                 hub_block = (_ACTIVITY_HUB_LABEL, content.strip())
         else:
             ordered.append((label, content))
-    # A mastery statement extracted from the misconception text replaces the
+    # A mastery statement extracted from either analysis section replaces the
     # Description's existing one (the reviewers prefer the later statement).
     if stray_mastery:
         for i, (label, content) in enumerate(ordered):
@@ -442,15 +638,22 @@ def normalize_misconception_sections(details: str) -> str:
             body = content[:m.start()].rstrip() if m else content.rstrip()
             ordered[i] = (label, f"{body}\nAchieving Mastery: {stray_mastery}")
             break
-    # Canonical order: Description (+ mastery) → Activity/Info Hub → Types →
-    # Misconceptions. Hub sits before Types so assessable Cases stay conceptual.
+    # Canonical order: Description (+ mastery), Activity/Info Hub, Types,
+    # Misconceptions, Error Analysis. The hub stays before assessable Cases.
     if hub_block:
         ordered.append(hub_block)
     if types_block:
         ordered.append(types_block)
-    if chosen:
-        ordered.append(("Misconceptions", chosen))
+    if chosen_misconceptions:
+        ordered.append((_MISCONCEPTIONS_LABEL, chosen_misconceptions))
+    if chosen_errors:
+        ordered.append((_ERROR_ANALYSIS_LABEL, chosen_errors))
     return join_sections(ordered)
+
+
+def normalize_misconception_sections(details: str) -> str:
+    """Backward-compatible entry point for learner-analysis normalization."""
+    return normalize_analysis_sections(details)
 
 
 def append_activity_hub(details: str, hub_text: str) -> str:
@@ -471,9 +674,10 @@ def append_activity_hub(details: str, hub_text: str) -> str:
     out: list[tuple[str, str]] = []
     inserted = False
     for label, content in sections:
-        lower = label.strip().lower()
         if not inserted and (
-            lower.startswith("type") or lower.startswith("misconception")
+            label.strip().lower().startswith("type")
+            or is_misconception_label(label)
+            or is_error_analysis_label(label)
         ):
             out.append((_ACTIVITY_HUB_LABEL, text))
             inserted = True
@@ -502,25 +706,50 @@ def split_merged_description_blocks(details: str) -> str:
     return first if first.lower().startswith("description:") else raw
 
 
-def ensure_misconceptions(records: list[dict]) -> list[dict]:
-    """Append a Misconceptions section to every normal concept when missing."""
+def ensure_analysis_sections(records: list[dict]) -> list[dict]:
+    """Ensure every normal concept ends with Misconceptions or Error Analysis.
+
+    Either populated section satisfies the contract. When both are absent or
+    empty, a deterministic application mistake is added as Error Analysis;
+    culmination rows remain exempt.
+    """
     for rec in records:
         if is_culmination(rec.get("concept_title", "")):
             continue
         details = rec.get("concept_details") or ""
+        # Preserve the historical behavior for wholly empty rows; upstream
+        # validation is responsible for missing Description content.
         if not details.strip():
             continue
+        details = normalize_analysis_sections(details)
+        rec["concept_details"] = details
         sections = split_sections(details)
-        idx = _misconception_index(sections)
-        fallback = _fallback_misconception(rec.get("concept_title", ""))
-        if idx < 0:
-            sections.append(("Misconceptions", fallback))
-        elif not sections[idx][1].strip():
-            sections[idx] = (sections[idx][0] or "Misconceptions", fallback)
-        else:
+        misconception_idx = _misconception_index(sections)
+        error_idx = _error_analysis_index(sections)
+        has_misconception = (
+            misconception_idx >= 0
+            and bool(sections[misconception_idx][1].strip())
+        )
+        has_error_analysis = (
+            error_idx >= 0 and bool(sections[error_idx][1].strip())
+        )
+        if has_misconception or has_error_analysis:
             continue
+        sections = [
+            (label, content)
+            for label, content in sections
+            if not is_misconception_label(label)
+            and not is_error_analysis_label(label)
+        ]
+        fallback = _fallback_error_analysis(rec.get("concept_title", ""))
+        sections.append((_ERROR_ANALYSIS_LABEL, fallback))
         rec["concept_details"] = join_sections(sections)
     return records
+
+
+def ensure_misconceptions(records: list[dict]) -> list[dict]:
+    """Backward-compatible alias for ensuring learner-analysis coverage."""
+    return ensure_analysis_sections(records)
 
 
 def refine_chapter(records: list[dict]) -> list[dict]:
@@ -531,8 +760,8 @@ def refine_chapter(records: list[dict]) -> list[dict]:
             details = reduce_type_sections(details)
             if not is_culmination(rec.get("concept_title", "")):
                 details = format_mastery_statement(details)
-            details = normalize_misconception_sections(details)
+            details = normalize_analysis_sections(details)
             rec["concept_details"] = details
-    records = ensure_misconceptions(records)
+    records = ensure_analysis_sections(records)
     records = renumber_types_continuously(records)
     return set_culmination_recap(records)
