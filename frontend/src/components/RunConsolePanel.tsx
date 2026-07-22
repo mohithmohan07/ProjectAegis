@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useRunConsole } from "../RunConsole";
+import ApiUsageSummary from "./ApiUsageSummary";
 
 const LEVEL_CLASS: Record<string, string> = {
   info: "log-info",
@@ -58,6 +59,8 @@ export default function RunConsolePanel() {
           </div>
         </div>
       )}
+
+      <ApiUsageSummary usage={state.usage} compact />
 
       <div className="console-body" ref={bodyRef}>
         {state.lines.length === 0 && (

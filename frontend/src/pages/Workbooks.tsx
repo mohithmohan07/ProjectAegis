@@ -2,6 +2,10 @@ import { useState } from "react";
 import { api } from "../api/client";
 import { useAsync } from "../hooks";
 import { useRunConsole } from "../RunConsole";
+import ApiUsageSummary, {
+  formatEstimatedCost,
+  formatTokenCount,
+} from "../components/ApiUsageSummary";
 import type { WorkbookResult } from "../types";
 
 export default function Workbooks() {
@@ -99,6 +103,10 @@ export default function Workbooks() {
               <button className="ghost">Download PDF</button>
             </a>
           </div>
+          <ApiUsageSummary
+            usage={result.openai_usage}
+            filename={result.meta.stem ? `${result.meta.stem}.pdf` : undefined}
+          />
           {result.log && <pre className="mmd-preview">{result.log}</pre>}
         </div>
       )}
@@ -112,7 +120,8 @@ export default function Workbooks() {
           <table>
             <thead>
               <tr>
-                <th>Class</th><th>Subject</th><th>Workbook</th><th>Size</th><th></th>
+                <th>Class</th><th>Subject</th><th>Workbook</th><th>Size</th>
+                <th>API tokens</th><th>Est. OpenAI cost</th><th></th>
               </tr>
             </thead>
             <tbody>
@@ -122,6 +131,19 @@ export default function Workbooks() {
                   <td>{e.subject}</td>
                   <td className="mono">{e.name}</td>
                   <td>{(e.size / 1024).toFixed(0)} KB</td>
+                  <td
+                    className="mono"
+                    title={e.openai_usage
+                      ? `${formatTokenCount(e.openai_usage.input_tokens)} input + ${formatTokenCount(e.openai_usage.output_tokens)} output`
+                      : undefined}
+                  >
+                    {e.openai_usage ? formatTokenCount(e.openai_usage.total_tokens) : "—"}
+                  </td>
+                  <td className="mono">
+                    {e.openai_usage
+                      ? formatEstimatedCost(e.openai_usage.estimated_cost_usd)
+                      : "—"}
+                  </td>
                   <td>
                     <a href={api.workbookFileUrl(e.rel)}>
                       <button className="ghost">PDF</button>

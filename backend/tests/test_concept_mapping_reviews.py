@@ -3158,13 +3158,13 @@ def test_repair_does_not_double_append_shared_normalized_inventory_prompts():
     assert repaired[0]["concept_details"].count(shared) == 1
 
 
-def test_default_openai_model_is_gpt_56_luna():
+def test_default_openai_model_is_requested_gpt_54_mini_snapshot():
     from pathlib import Path
 
     from app import config
 
     source = Path(config.__file__).read_text()
-    assert 'os.environ.get("AEGIS_OPENAI_MODEL", "gpt-5.6-luna")' in source
+    assert '"AEGIS_OPENAI_MODEL", "gpt-5.4-mini-2026-03-17"' in source
 
 
 def test_coverage_defects_ignore_empty_or_stub_inventory_prompts():

@@ -50,6 +50,11 @@ def set_progress(value: float, *, label: str = "") -> None:
     _emit({"type": "progress", "value": v, "label": str(label)})
 
 
+def usage(data: dict) -> None:
+    """Emit the latest aggregate OpenAI usage for the active run."""
+    _emit({"type": "usage", "data": data})
+
+
 def stream(
     fn: Callable[[], Any],
     *,
@@ -69,19 +74,31 @@ def stream(
 
     def worker() -> None:
         token = _sink.set(sink)
+        from . import openai_usage
+
+        usage_token = openai_usage.start_tracking()
         try:
             if title:
                 log(title)
             result = fn()
+            summary = openai_usage.current_summary()
+            if (
+                summary["request_count"] > 0
+                and isinstance(result, dict)
+                and "openai_usage" not in result
+            ):
+                result = {**result, "openai_usage": summary}
             events.put({"type": "result", "data": result, "ts": time.time()})
         except Exception as exc:  # noqa: BLE001 — surface to the client stream
             events.put({
                 "type": "error",
                 "message": str(exc) or exc.__class__.__name__,
                 "trace": traceback.format_exc(limit=4),
+                "openai_usage": openai_usage.current_summary(),
                 "ts": time.time(),
             })
         finally:
+            openai_usage.stop_tracking(usage_token)
             _sink.reset(token)
             events.put(_SENTINEL)
 

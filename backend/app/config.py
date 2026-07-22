@@ -104,7 +104,9 @@ def require_workbooks_live() -> None:
 
 # OpenAI model for concept extraction / pre-learning derivation. The same
 # model family the Create Workbooks pipeline is validated with.
-OPENAI_MODEL = os.environ.get("AEGIS_OPENAI_MODEL", "gpt-5.6-luna")
+OPENAI_MODEL = os.environ.get(
+    "AEGIS_OPENAI_MODEL", "gpt-5.4-mini-2026-03-17"
+)
 # Large concept-map passes prefer complete JSON over speed or token economy;
 # keep the default within current model completion limits and allow env override.
 OPENAI_MAX_OUTPUT_TOKENS = int(

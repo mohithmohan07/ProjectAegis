@@ -172,6 +172,84 @@ input, select, textarea {
 .success-card { border-color: var(--green); }
 .success-card pre { font-size: 11px; max-height: 240px; overflow: auto; }
 
+/* ---------------------- API usage and estimated cost --------------------- */
+.api-usage {
+  margin-top: 14px;
+  padding: 14px;
+  background: rgba(91, 141, 239, .07);
+  border: 1px solid rgba(91, 141, 239, .35);
+  border-radius: 8px;
+}
+.api-usage-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.api-usage-head .badge {
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.api-usage-file { color: var(--muted); font-size: 11px; margin-top: 3px; }
+.api-usage-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+.api-usage-metric {
+  min-width: 0;
+  padding: 8px 9px;
+  background: rgba(15, 17, 21, .55);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.api-usage-metric dt {
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .035em;
+}
+.api-usage-metric dd {
+  margin: 4px 0 0;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 15px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.api-usage-metric small {
+  display: block;
+  color: var(--muted);
+  font-size: 9px;
+  margin-top: 2px;
+}
+.api-usage-cost { border-color: rgba(63, 185, 80, .45); }
+.api-usage-cost dd { color: var(--green); }
+.api-usage-note {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+  margin-top: 10px;
+}
+.api-usage-compact {
+  flex-shrink: 0;
+  margin: 0;
+  padding: 10px 12px;
+  border-width: 0 0 1px;
+  border-color: var(--border);
+  border-radius: 0;
+  background: rgba(91, 141, 239, .05);
+}
+.api-usage-compact .api-usage-head { margin-bottom: 8px; }
+.api-usage-compact .api-usage-grid { grid-template-columns: repeat(3, 1fr); gap: 5px; }
+.api-usage-compact .api-usage-metric { padding: 6px; }
+.api-usage-compact .api-usage-metric dt { font-size: 8px; }
+.api-usage-compact .api-usage-metric dd { font-size: 11px; }
+.api-usage-compact .api-usage-metric small { font-size: 8px; }
+
 .upload-label {
   background: var(--accent); color: #fff; padding: 7px 14px; border-radius: 6px;
   font-weight: 600; font-size: 13px; cursor: pointer;

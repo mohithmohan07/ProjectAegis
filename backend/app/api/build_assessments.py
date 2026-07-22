@@ -145,7 +145,11 @@ def generate_from_upload(job_id: int, req: schemas.GenerateFromUploadRequest):
     def work():
         db = SessionLocal()
         try:
-            return svc.generate_from_upload(db, job_id, req.question_type)
+            return uploads.run_with_openai_usage(
+                db,
+                job_id,
+                lambda: svc.generate_from_upload(db, job_id, req.question_type),
+            )
         finally:
             db.close()
     return progress.stream(work, title="Build Assessments — generating from upload")

@@ -2,6 +2,7 @@ import type {
   BlueprintBatch,
   BoardNode,
   ChapterDetail,
+  OpenAIUsage,
   PreviewResult,
   PromptInfo,
   Question,
@@ -41,8 +42,9 @@ export type StreamEvent =
   | { type: "log"; level?: string; message: string; ts?: number }
   | { type: "step"; label: string; ts?: number }
   | { type: "progress"; value: number; label?: string; ts?: number }
+  | { type: "usage"; data: OpenAIUsage; ts?: number }
   | { type: "result"; data: unknown; ts?: number }
-  | { type: "error"; message: string; trace?: string; ts?: number }
+  | { type: "error"; message: string; trace?: string; openai_usage?: OpenAIUsage; ts?: number }
   | { type: "heartbeat"; ts?: number };
 
 /**

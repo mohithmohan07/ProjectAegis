@@ -252,4 +252,7 @@ class UploadJob(Base):
     # Durable pre-Type-assignment state. A failed generation can resume after
     # expensive skeleton, description, inventory, and Type-mining API stages.
     generation_checkpoint: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Cumulative OpenAI billing-token usage for the currently staged physical
+    # file, including billable retries and resumed generation attempts.
+    openai_usage: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
