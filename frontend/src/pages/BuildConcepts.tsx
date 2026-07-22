@@ -5,7 +5,8 @@ import { useRunConsole } from "../RunConsole";
 import DirectoryPicker from "../components/DirectoryPicker";
 import DocumentUpload from "../components/DocumentUpload";
 import SyllabusUploader from "../components/SyllabusUploader";
-import type { Scope, UploadJob } from "../types";
+import ApiUsageSummary from "../components/ApiUsageSummary";
+import type { OpenAIUsage, Scope, UploadJob } from "../types";
 
 type Path = null | "post" | "pre";
 
@@ -101,7 +102,7 @@ function PostLearningFlow({ bookSources }: { bookSources: string[] }) {
       )}
 
       {error && <div className="error-box" style={{ marginTop: 16 }}>{error}</div>}
-      {result && <ConceptResult result={result} />}
+      {result && <ConceptResult result={result} filename={job?.filename} />}
     </>
   );
 }
@@ -177,7 +178,7 @@ function PreLearningUpload({ bookSources }: { bookSources: string[] }) {
         </>
       )}
       {error && <div className="error-box" style={{ marginTop: 16 }}>{error}</div>}
-      {result && <ConceptResult result={result} />}
+      {result && <ConceptResult result={result} filename={job?.filename} />}
     </>
   );
 }
@@ -243,13 +244,21 @@ function PreLearningExisting({ bookSources }: { bookSources: string[] }) {
   );
 }
 
-function ConceptResult({ result }: { result: Record<string, unknown> }) {
+function ConceptResult({
+  result,
+  filename,
+}: {
+  result: Record<string, unknown>;
+  filename?: string;
+}) {
   const ids = (result.concept_ids as number[] | undefined) ?? [];
   const jobId = result.job_id as number | undefined;
   const inventoryItems = (result.inventory_items as number | undefined) ?? 0;
+  const usage = result.openai_usage as OpenAIUsage | undefined;
   return (
     <div className="card success-card" style={{ marginTop: 16 }}>
       <strong>Concepts written to the Bulk Import workbook (append-only)</strong>
+      <ApiUsageSummary usage={usage} filename={filename} fileLabel="Source file" />
       <pre className="mono" style={{ marginTop: 8 }}>{JSON.stringify(result, null, 2)}</pre>
       <div className="row" style={{ marginTop: 12 }}>
         {ids.length > 0 && (

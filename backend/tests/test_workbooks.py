@@ -88,11 +88,14 @@ def test_api_generate_library_and_download(client, source_pdf):
         client.post("/workbooks/generate", files=files, data={"subject": "Mathematics"}))
     assert body["mode"] == "dry"
     assert "MODE: DRY" in body["log"]
+    assert body["openai_usage"]["request_count"] == 0
+    assert body["openai_usage"]["estimated_cost_usd"] == 0.0
 
     lib = client.get("/workbooks/library").json()
     entry = next(e for e in lib if e["name"] == f"{source_pdf.stem}.pdf")
     assert entry["class_folder"] == "Class 08"
     assert entry["subject"] == "Mathematics"
+    assert entry["openai_usage"] == body["openai_usage"]
 
     dl = client.get(f"/workbooks/file?rel={entry['rel']}")
     assert dl.status_code == 200

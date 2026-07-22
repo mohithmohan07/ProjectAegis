@@ -17,11 +17,13 @@ Dry vs live:
 """
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
 
 from .. import config
+from . import openai_usage
 
 VENDOR_SRC = (
     Path(__file__).resolve().parents[2] / "aegis_pipeline" / "create_workbooks" / "src"
@@ -75,6 +77,27 @@ def _output_paths(meta: dict) -> tuple[Path, Path]:
     out_dir = WORKBOOK_ROOT / meta["grade_folder"] / meta["subject"]
     out_dir.mkdir(parents=True, exist_ok=True)
     return out_dir / f"{meta['stem']}.pdf", out_dir / f"{meta['stem']}.build_log.txt"
+
+
+def _usage_path(pdf: Path) -> Path:
+    return pdf.with_suffix(".usage.json")
+
+
+def _persist_usage(pdf: Path) -> dict:
+    """Store usage beside the generated PDF so the library survives reloads."""
+    summary = openai_usage.current_summary()
+    _usage_path(pdf).write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return summary
+
+
+def _load_usage(pdf: Path) -> dict:
+    try:
+        value = json.loads(_usage_path(pdf).read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except (FileNotFoundError, OSError, ValueError):
+        return {}
 
 
 # --------------------------------------------------------------------------- #
@@ -170,6 +193,7 @@ def generate(source_pdf: Path, subject: str = "", live: bool | None = None) -> d
         })
         result["mode"] = "live"
         result["meta"] = meta
+        result["openai_usage"] = _persist_usage(out_pdf)
         progress.set_progress(1.0, label="Workbook PDF ready")
         progress.log("Workbook generated (live).", level="success")
         return result
@@ -199,10 +223,12 @@ def generate(source_pdf: Path, subject: str = "", live: bool | None = None) -> d
         "Live mode (GPT + Mathpix) requires OPENAI_API_KEY and MATHPIX_APP_ID/KEY.",
     ]
     validator.write_log(str(build_log), messages, issues)
-    return {
+    result = {
         "output_pdf": str(out_pdf), "build_log": str(build_log),
         "valid": valid, "issues": issues, "mode": "dry", "meta": meta,
     }
+    result["openai_usage"] = _persist_usage(out_pdf)
+    return result
 
 
 # --------------------------------------------------------------------------- #
@@ -219,7 +245,7 @@ def library() -> list[dict]:
         if rel.parts and rel.parts[0] == "_cache":
             continue
         parts = rel.parts
-        out.append({
+        entry = {
             "class_folder": parts[0] if len(parts) > 2 else "",
             "subject": parts[1] if len(parts) > 2 else "",
             "name": pdf.name,
@@ -227,7 +253,11 @@ def library() -> list[dict]:
             "size": pdf.stat().st_size,
             "has_log": pdf.with_suffix("").with_suffix(".build_log.txt").exists()
             or (pdf.parent / f"{pdf.stem}.build_log.txt").exists(),
-        })
+        }
+        saved_usage = _load_usage(pdf)
+        if saved_usage:
+            entry["openai_usage"] = saved_usage
+        out.append(entry)
     return out
 
 

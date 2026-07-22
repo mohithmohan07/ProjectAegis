@@ -2299,6 +2299,16 @@ def _openai_json(system: str, user: str, max_tokens: int | None = None,
                     response_format={"type": "json_object"},
                     max_completion_tokens=limit,
                 )
+            # Record before finish-reason/JSON validation: responses retried for
+            # truncation or malformed JSON are still billable.
+            try:
+                from . import openai_usage
+
+                openai_usage.record_response(
+                    resp, requested_model=config.OPENAI_MODEL
+                )
+            except Exception:  # accounting must never trigger another API call
+                pass
             choice = resp.choices[0]
             if getattr(choice, "finish_reason", None) == "length":
                 raise RuntimeError(

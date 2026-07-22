@@ -108,6 +108,7 @@ class UploadJobOut(BaseModel):
     status: str
     result_ids: list
     detail: str
+    openai_usage: dict = Field(default_factory=dict)
     created_at: datetime
 
 

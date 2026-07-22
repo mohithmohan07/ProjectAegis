@@ -77,6 +77,37 @@ export interface Stats {
   mathpix_live: boolean;
 }
 
+/**
+ * Billing-token usage returned by the backend for one generation run or file.
+ * `cached_input_tokens` is a subset of `input_tokens`, not an additional count.
+ */
+export interface OpenAIUsage {
+  model: string;
+  models?: Array<{
+    model: string;
+    request_count: number;
+    input_tokens: number;
+    cached_input_tokens: number;
+    uncached_input_tokens: number;
+    output_tokens: number;
+    reasoning_tokens: number;
+    total_tokens: number;
+    estimated_cost_usd: number | null;
+  }>;
+  request_count: number;
+  input_tokens: number;
+  cached_input_tokens: number;
+  uncached_input_tokens: number;
+  output_tokens: number;
+  reasoning_tokens: number;
+  total_tokens: number;
+  estimated_cost_usd: number | null;
+  currency?: "USD" | string;
+  pricing_source?: string;
+  pricing_as_of?: string;
+  pricing_complete?: boolean;
+}
+
 export interface BlueprintBatch {
   id: number;
   cognitive_skills: string[];
@@ -113,6 +144,7 @@ export interface UploadJob {
   result_ids: number[];
   detail: string;
   created_at: string;
+  openai_usage?: OpenAIUsage;
 }
 
 export interface Question {
@@ -173,6 +205,7 @@ export interface WorkbookResult {
   mode: "dry" | "live";
   meta: Record<string, string>;
   log: string;
+  openai_usage?: OpenAIUsage;
 }
 
 export interface PromptInfo {
@@ -193,4 +226,5 @@ export interface WorkbookEntry {
   rel: string;
   size: number;
   has_log: boolean;
+  openai_usage?: OpenAIUsage;
 }

@@ -90,7 +90,13 @@ def post_learning_generate(job_id: int, req: schemas.PostLearningGenerateRequest
     def work():
         db = SessionLocal()
         try:
-            return svc.generate_post_learning(db, job_id, req.target_chapter_id)
+            return uploads.run_with_openai_usage(
+                db,
+                job_id,
+                lambda: svc.generate_post_learning(
+                    db, job_id, req.target_chapter_id
+                ),
+            )
         finally:
             db.close()
     return progress.stream(work, title="Build Concepts — post-learning generation")
@@ -120,7 +126,13 @@ def pre_learning_generate_from_upload(job_id: int, req: schemas.PostLearningGene
     def work():
         db = SessionLocal()
         try:
-            return svc.generate_pre_learning_from_upload(db, job_id, req.target_chapter_id)
+            return uploads.run_with_openai_usage(
+                db,
+                job_id,
+                lambda: svc.generate_pre_learning_from_upload(
+                    db, job_id, req.target_chapter_id
+                ),
+            )
         finally:
             db.close()
     return progress.stream(work, title="Build Concepts — pre-learning generation")

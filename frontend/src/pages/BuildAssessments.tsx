@@ -4,7 +4,8 @@ import { useAsync } from "../hooks";
 import { useRunConsole } from "../RunConsole";
 import DirectoryPicker from "../components/DirectoryPicker";
 import DocumentUpload from "../components/DocumentUpload";
-import type { BlueprintBatch, Scope, Session, UploadJob, Vocab } from "../types";
+import ApiUsageSummary from "../components/ApiUsageSummary";
+import type { BlueprintBatch, OpenAIUsage, Scope, Session, UploadJob, Vocab } from "../types";
 
 type Path = null | "concept_mapping" | "upload";
 
@@ -358,18 +359,26 @@ function UploadFlow({ vocab }: { vocab: Vocab }) {
       )}
 
       {error && <div className="error-box" style={{ marginTop: 16 }}>{error}</div>}
-      {result && <ResultCard result={result} />}
+      {result && <ResultCard result={result} filename={job?.filename} />}
     </>
   );
 }
 
 /* ------------------------------- result ------------------------------- */
 
-function ResultCard({ result }: { result: Record<string, unknown> }) {
+function ResultCard({
+  result,
+  filename,
+}: {
+  result: Record<string, unknown>;
+  filename?: string;
+}) {
   const ids = (result.question_ids as number[] | undefined) ?? [];
+  const usage = result.openai_usage as OpenAIUsage | undefined;
   return (
     <div className="card success-card" style={{ marginTop: 16 }}>
       <strong>Generated · post-generation pipeline complete</strong>
+      <ApiUsageSummary usage={usage} filename={filename} fileLabel="Source file" />
       <pre className="mono" style={{ marginTop: 8 }}>{JSON.stringify(result, null, 2)}</pre>
       <div className="row" style={{ marginTop: 12 }}>
         {ids.length > 0 && (

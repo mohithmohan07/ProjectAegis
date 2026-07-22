@@ -377,6 +377,15 @@ class GPTWriter:
         except Exception:
             kwargs["max_tokens"] = max_tokens
             response = self._client.chat.completions.create(**kwargs)
+        # When embedded in the Aegis web app, include both planner and builder
+        # responses in the per-file usage total. Standalone vendor use remains
+        # independent of the app package.
+        try:
+            from app.services import openai_usage
+
+            openai_usage.record_response(response, requested_model=self.model)
+        except Exception:
+            pass
         choice = response.choices[0]
         if getattr(choice, "finish_reason", None) == "length":
             raise GPTTruncationError(
