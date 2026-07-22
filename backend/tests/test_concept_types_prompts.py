@@ -55,6 +55,21 @@ def test_split_prompt_contracts_are_separated():
     assert "Ohm's" not in hub and "Belgium" not in hub and "Vetal" not in hub
 
 
+def test_pre_and_post_prompts_distinguish_misconceptions_from_error_analysis():
+    post = g.prompts.get_text("concepts.description_refine.system")
+    pre = g._prelearning_system("Mathematics", "08", "CBSE")
+
+    for contract in (post, pre):
+        normalized = " ".join(contract.split())
+        assert "Misconceptions" in normalized
+        assert "Error Analysis" in normalized
+        assert "commonly held incorrect beliefs or interpretations" in normalized
+        assert "procedural, computational, representational, or reasoning mistakes" in normalized
+        assert "at least one" in normalized
+        assert "Either section may appear alone" in normalized
+        assert "name the learner explicitly" in normalized
+
+
 def test_universal_question_task_inventory_and_type_mining_prompts():
     inventory = g.prompts.get_text("concepts.question_task_inventory.system")
     mining = g.prompts.get_text("concepts.type_mining.system")
@@ -156,13 +171,22 @@ def test_canonicalize_uses_compact_skeleton_not_mmd(monkeypatch):
         return {"rows": [{
             "topic": "T", "concept": "C",
             "concept_description": (
-                "Description: d // Misconception: m"
+                "Description: d // Misconceptions: Students may believe every "
+                "equivalent representation must use identical notation."
             ),
             "keywords": "k",
         }]}
 
     monkeypatch.setattr(g, "_openai_json", fake_openai)
-    records = [{"topic": "T", "concept_title": "C", "concept_details": "Description: d // Misconception: m", "keywords": ""}]
+    records = [{
+        "topic": "T",
+        "concept_title": "C",
+        "concept_details": (
+            "Description: d // Misconceptions: Students may believe every "
+            "equivalent representation must use identical notation."
+        ),
+        "keywords": "",
+    }]
     g._consolidate_concepts_via_api(records, subject="Math", mmd_text="# Chapter\nExercise problems here.")
     assert "Draft skeleton map" in captured["user"]
     assert "Exercise problems here" not in captured["user"]
@@ -179,7 +203,7 @@ def test_refine_descriptions_via_api_strips_existing_types(monkeypatch):
             "concept_description": (
                 "Description: A clear source-grounded description for lesson planning. "
                 "It states what the concept means and when it is used. // "
-                "Misconception: Students may reverse the operation."
+                "Error Analysis: Students may reverse the operation."
             ),
             "keywords": "k",
         }]}
@@ -189,7 +213,7 @@ def test_refine_descriptions_via_api_strips_existing_types(monkeypatch):
         "topic": "T", "concept_title": "C",
         "concept_details": (
             "Description: weak // Types: Type 01: Evaluation Case 01: Find x Case 02: Find y "
-            "// Misconception: Students may reverse the operation."
+            "// Error Analysis: Students may reverse the operation."
         ),
         "keywords": "k",
     }]
@@ -1783,3 +1807,4 @@ def test_pre_learning_excludes_exact_current_concepts():
     titles = {r["concept_title"] for r in pre}
     assert "Solving One-Step Equations" not in titles
     assert all(r.get("parent_concept") for r in pre)
+    assert all("Error Analysis:" in r["concept_details"] for r in pre)

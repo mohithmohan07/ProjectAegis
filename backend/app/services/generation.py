@@ -914,18 +914,27 @@ OUTPUT CONTRACT for concept_description (ONE string, sections joined by " // "):
   across the whole chapter afterwards, so do NOT try to continue numbers yourself.
 - Example Types block:
   {{types_example}}
-- End with Misconceptions for normal concepts: name every REAL likely learner
-  error from the material. Prefer the 1-3 highest-value false beliefs; combine
-  overlapping errors instead of producing an exhaustive fragmented list.
-  Do not invent filler misconceptions, and never write
-  "N/A", "None", "Not applicable", or placeholder text.
+- Every normal (non-culmination) concept MUST end with at least one learner-
+  analysis section: Misconceptions, Error Analysis, or both.
+  Misconceptions: commonly held incorrect beliefs or interpretations about the
+  concept. Prefer the 1-3 highest-value false beliefs and state them as beliefs,
+  not as corrections or isolated slips.
+  Error Analysis: plausible procedural, computational, representational, or
+  reasoning mistakes students may make while applying the concept, even when
+  they understand the underlying idea. Name the learner explicitly (for
+  example, "Students may omit ...") and describe the actual mistaken step or
+  action, not merely that the answer may be wrong.
+  Use both sections only when they capture genuinely distinct, non-duplicative
+  issues. If both are present, Misconceptions MUST come before Error Analysis.
+  Never write "N/A", "None", "Not applicable", generic filler, or placeholders.
 - Valid structures:
-  Description: ...
-  Description: ... // Activity/Info Hub: ...
-  Description: ... // Types: ...
-  Description: ... // Activity/Info Hub: ... // Types: ...
-  Description: ... // Types: ... // Misconception: ...
-  Description: ... // Activity/Info Hub: ... // Types: ... // Misconception: ...
+  Description: ... // Misconceptions: ...
+  Description: ... // Error Analysis: ...
+  Description: ... // Types: ... // Misconceptions: ...
+  Description: ... // Types: ... // Error Analysis: ...
+  Description: ... // Activity/Info Hub: ... // Misconceptions: ...
+  Description: ... // Activity/Info Hub: ... // Error Analysis: ...
+  Description: ... // Activity/Info Hub: ... // Types: ... // Misconceptions: ... // Error Analysis: ...
 - Use " // " as the separator. Do NOT use newlines inside concept_description
   except the Achieving Mastery line inside Description.
 - Do NOT mention groups, group columns, or assessment labels — not required here.
@@ -967,7 +976,9 @@ prompts.register(
             "headings (strip section numbers like 1.2 from names). One "
             "culmination per topic. Write clear source-grounded Descriptions; "
             "add Types only when there are source question/task/"
-            "assessable formats; add Misconceptions for likely learner errors. "
+            "assessable formats; add Misconceptions for commonly held false "
+            "beliefs and/or Error Analysis for plausible application mistakes, "
+            "with at least one of those sections on every normal concept. "
             "Types use zero-padded 'Type 01:'/'Case 01:' labels:")
 
 
@@ -1013,10 +1024,15 @@ Your job (apply ALL of these intelligently — do not rely on downstream code):
 
 7. **No groups.** Do not mention groups, group columns, or assessment labels.
 
-8. **Hygiene.** Keep Description // Activity/Info Hub // Types // Misconception
-   structure; no source-artifact references ("Example 19", "Fig 2", "MMD").
-   Misconceptions should be present for normal concepts and must be specific and
-   useful; never write N/A/None/filler. Activity/Info Hub is optional and holds
+8. **Hygiene.** Keep Description // Activity/Info Hub // Types //
+   Misconceptions // Error Analysis order; no source-artifact references
+   ("Example 19", "Fig 2", "MMD"). Every normal concept must include at least
+   one of Misconceptions or Error Analysis. Misconceptions are commonly held
+   incorrect beliefs/interpretations; Error Analysis identifies plausible
+   procedural, computational, representational, or reasoning mistakes made
+   while applying the concept. Error Analysis must name the learner explicitly
+   and state the mistaken action. Include both only when distinct and
+   non-duplicative; never write N/A/None/filler. Activity/Info Hub is optional and holds
    activities / experiments / discussion cases — never Culmination dumps.
 
 9. **Chapter source.** When CHAPTER SOURCE text is provided, mine it for all
@@ -1043,14 +1059,22 @@ INPUT: a concept map plus CHAPTER SOURCE text.
 OUTPUT: Return ONLY JSON {"rows": [{"topic": "", "concept": "",
 "concept_description": "", "keywords": ""}, ...]} with the SAME rows.
 
-Your ONLY job is to make the Description section useful for lesson planning,
-assessment building, and downstream content.
+Your primary job is to make the Description section useful for lesson planning,
+assessment building, and downstream content. Your only additional responsibility
+is to keep the learner-analysis contract below valid.
 
 Rules:
 1. Keep topic names, concept names, keywords, and row order the same.
-2. Rewrite ONLY the Description section using the CHAPTER SOURCE.
-3. Preserve any Types section exactly if it already exists.
-4. Preserve Misconception only if it is specific and useful; otherwise omit it.
+2. Rewrite the Description section using the CHAPTER SOURCE. Add or repair only
+   learner-analysis content that is missing, generic, mislabeled, or duplicated.
+3. Do not include Types; the dedicated Types pass adds them later.
+4. Preserve any useful Misconceptions and Error Analysis sections. Every normal
+   concept must retain at least one of them. Misconceptions capture commonly
+   held incorrect beliefs or interpretations; Error Analysis captures plausible
+   procedural, computational, representational, or reasoning mistakes made
+   while applying the concept. Error Analysis must name the learner explicitly
+   (for example, "Students may omit ...") and state the mistaken action. Keep
+   both only when distinct and non-duplicative.
    Do not write "N/A", "None", "Not applicable", or generic filler.
 5. Description must be source-grounded, clear, and complete enough to teach from:
    include what the concept means, the key rule/process/relationship, important
@@ -1058,10 +1082,9 @@ Rules:
 6. Do NOT dump the full textbook. Target 2-4 compact sentences, roughly 45-90
    words. Avoid repetitive wording across sibling concepts.
 7. Valid concept_description forms:
-   Description: ...
-   Description: ... // Types: ...
-   Description: ... // Misconception: ...
-   Description: ... // Types: ... // Misconception: ...
+   Description: ... // Misconceptions: ...
+   Description: ... // Error Analysis: ...
+   Description: ... // Misconceptions: ... // Error Analysis: ...
 8. Do not mention groups, group columns, assessment labels, source artifacts, or
    the words "MMD"/"MMDs".""" )
 
@@ -1080,18 +1103,20 @@ how curriculum teams first generate a comprehensive types list, then manually
 keep what they need.
 
 INPUT: a draft concept map (Description is already refined; Types may or may
-not exist, and Misconceptions should already be present) plus CHAPTER SOURCE text.
+not exist, and at least one of Misconceptions or Error Analysis should already
+be present on every normal concept) plus CHAPTER SOURCE text.
 
 OUTPUT: Return ONLY JSON {"rows": [{"topic","concept","concept_description","keywords"}, ...]}
 with the SAME rows (same topics and concept names) but Types sections filled in.
 
 RULES:
-1. Keep each Description and any existing useful Misconception text UNCHANGED
-   (do not rewrite them).
+1. Keep each Description and any existing useful Misconceptions or Error
+   Analysis text UNCHANGED (do not rewrite them).
 2. Insert or replace ONLY the Types section. Place it after Description and
-   before Misconception if Misconception exists:
-   Description: ... // Types: ... // Misconception: ...
-   Description: ... // Types: ...
+   before Misconceptions or Error Analysis when either exists:
+   Description: ... // Types: ... // Misconceptions: ...
+   Description: ... // Types: ... // Error Analysis: ...
+   Description: ... // Types: ... // Misconceptions: ... // Error Analysis: ...
 3. {{types_guidance}}
 4. Format — zero-padded numeric labels exactly "Type 01:", "Case 01:", and an
    "Example:" line per concrete source question:
@@ -1249,7 +1274,8 @@ Rules:
 - Description must start with "Description:" and contain 2-4 source-grounded
   sentences. Include concise literal source_evidence that proves placement.
 - Do not repeat any supplied existing concept title.
-- Do not emit Types, Cases, Examples, or Misconceptions.
+- Do not emit Types, Cases, Examples, Misconceptions, or Error Analysis; the
+  dedicated refinement passes add those sections after recovery.
 """)
 
 prompts.register(
@@ -1357,15 +1383,20 @@ prompts.register(
     "concepts.description_refine.system", category=_CONCEPTS_CAT,
     label="Description-only concept refinement system prompt",
     default="""\
-You are a description-only editor. Rewrite only Description sections for a refined concept map.
+You are a description-only editor for a refined concept map, with one narrow
+learner-analysis repair responsibility.
 Return ONLY strict JSON:
 {"rows":[{"topic":"","parent_concept":"","concept":"","concept_description":"","keywords":""}]}.
 
 Rules:
 - Keep topic, parent_concept, concept name, keywords, and row order unchanged.
-- Rewrite only the Description section.
-- Preserve any existing Activity/Info Hub, Types, and Misconceptions sections
-  exactly — do not move activities into Description or Culmination.
+- Rewrite the Description section. You may also add or repair only the learner-
+  analysis tail needed to satisfy the contract below.
+- Preserve any existing Activity/Info Hub exactly. Do not include Types; the
+  dedicated Types pass adds them later. Preserve valid Misconceptions and Error
+  Analysis; repair only missing, generic,
+  mislabeled, overlapping, or misclassified learner-analysis content. Do not
+  move activities into Description or Culmination.
 - Description answers: what the concept is; what rule/process/relationship/method matters;
   when/why it is used. Ground it in the source: name the key people, places,
   dates, formulas, quantities, conditions, and causal links that a teacher
@@ -1382,12 +1413,18 @@ Rules:
   source-grounded worked derivation cue introduced with "Worked Example:".
   It must demonstrate that derivation's reasoning, not merely apply or verify
   the finished result.
-- Do not include Types.
-- Include a Misconceptions section for every non-culmination concept. Make it
-  specific to the learner error this concept usually triggers; list EVERY real
-  distinct misconception (one or more) in the same section; never use filler.
+- Do not include Types; the dedicated Types pass adds them later.
+- Every non-culmination concept must include at least one of Misconceptions or
+  Error Analysis. Misconceptions are commonly held incorrect beliefs or
+  interpretations about the concept. Error Analysis identifies plausible
+  procedural, computational, representational, or reasoning mistakes students
+  may make while applying it. Error Analysis must name the learner explicitly
+  (for example, "Students may omit ...") and state the mistaken action. Either
+  section may appear alone; include both only when their content is genuinely
+  distinct and non-duplicative. Keep canonical order, with Misconceptions before
+  Error Analysis, and never use filler.
 - Write the mastery statement exactly ONCE, at the end of the Description —
-  never repeat it inside or after the Misconceptions section.
+  never repeat it inside or after either learner-analysis section.
 - No N/A, None, Not applicable, or placeholder text.
 - No source artifacts such as MMD, Example 3, Fig 2, Table 1, Exercise 1.1, or
   page references. When the source text cites one, substitute the full actual
@@ -1436,7 +1473,8 @@ Rules:
 - Culmination rows may receive Types only for mixed multi-concept synthesis /
   revision / application; keep their Description ("Description: Recap") unchanged.
 - Use zero-padded labels exactly "Type 01:" and "Case 01:".
-- Do not rewrite Misconception except to keep an existing useful one in place.
+- Do not rewrite Misconceptions or Error Analysis except to keep existing useful
+  sections in place and in that canonical order.
 - Do not include source labels such as "Example 3" or "Exercise 1.2" in public concept_details.
 """)
 
@@ -1887,7 +1925,8 @@ Return ONLY strict JSON:
 Rules:
 - Return the SAME concept rows in the SAME order. You may only move/rewrite the
   Types section of each concept_description; keep Description, Achieving
-  Mastery, Misconceptions, topic, parent_concept, concept, and keywords intact.
+  Mastery, Misconceptions, Error Analysis, topic, parent_concept, concept, and
+  keywords intact.
 - Every inventory qid/question must appear exactly once as an Example under
   exactly one Case in exactly one concept. Missing qids are defects. Duplicate
   qids/questions are defects.
@@ -1982,7 +2021,16 @@ Return ONLY strict JSON:
 Rules:
 - Fix only the listed issues.
 - Preserve valid rows.
-- Preserve valid fields, including parent_concept, Types, and useful Misconception.
+- Preserve valid fields, including parent_concept, Types, and useful
+  Misconceptions or Error Analysis.
+- Every normal concept must finish with at least one of Misconceptions or Error
+  Analysis. Misconceptions are commonly held incorrect beliefs or
+  interpretations; Error Analysis describes plausible procedural,
+  computational, representational, or reasoning mistakes made while applying
+  the concept. Error Analysis must name the learner explicitly (for example,
+  "Students may omit ...") and state the mistaken action. Either may appear
+  alone; retain both only when distinct and non-duplicative, ordered
+  Misconceptions then Error Analysis. Culmination rows are exempt.
 - Do not rewrite the full chapter unnecessarily.
 - Never add filler.
 - Keep strict JSON.
@@ -2023,7 +2071,7 @@ Rules:
   Achieving Mastery: <one short sentence stating what the learner can do when this concept is mastered>
 - The sentence must be specific to the concept, e.g.
   "Achieving Mastery: Using the midpoint property to set up the smaller triangles correctly."
-- Do not add Types or Misconception sections. No source artifacts
+- Do not add Types, Misconceptions, or Error Analysis sections. No source artifacts
   (Example 3, Exercise 1.2, Fig 4, page numbers) and never the words
   "MMD"/"MMDs".
 """)
@@ -2046,9 +2094,11 @@ Rules:
   first row's topic in reading order).
 - MERGE the content — never discard it: combine the Descriptions into one
   coherent Description (no repetition), keep the union of all Types/Cases/
-  Examples, and the union of all specific Misconceptions.
-- Keep the "Description: ... // Types: ... // Misconceptions: ..." structure
-  and the single mastery line.
+  Examples, the union of all specific Misconceptions, and the union of all
+  specific Error Analysis items.
+- Keep canonical "Description: ... // Types: ... // Misconceptions: ... // Error Analysis: ..."
+  order and the single mastery line. Either learner-analysis section may appear
+  alone; keep both only when they are distinct and non-duplicative.
 - Never invent new content; only reorganize what the rows carry.
 """)
 
@@ -2075,29 +2125,36 @@ Rules:
 
 prompts.register(
     "concepts.misconceptions.system", category=_CONCEPTS_CAT,
-    label="Missing/generic misconception writer system prompt",
+    label="Missing/generic learner-analysis writer system prompt",
     default="""\
-Write the missing or too-generic Misconceptions for concept rows.
+Write or repair the learner-analysis section(s) for concept rows.
 Return ONLY strict JSON:
 {"rows":[{"topic":"","parent_concept":"","concept":"","concept_description":"","keywords":""}]}.
 
 Rules:
-- Each provided row is missing its Misconceptions section, or carries only a
-  generic filler one. Return the SAME rows: identical topic, parent_concept,
-  concept, keywords, Description, and Types — the ONLY change is a rewritten
-  "Misconceptions:" section at the end.
-- Every misconception must name a REAL, specific learner error this exact
-  concept triggers, grounded in the chapter material (wrong condition, sign,
-  unit, cause-effect reversal, term confusion, misapplied formula, ...).
-- State the FALSE BELIEF in learner voice: "Students may believe/think/assume
-  ..." or "Students may confuse ...". Do not write the correction as if it
-  were the misconception. Avoid "should", "instead", "correctly", "remember
-  that", and declarative textbook corrections such as "A nation is not ...".
-  The Misconceptions section contains the mistaken belief; Description already
-  teaches the correct idea.
-- Return only the 1-3 highest-value, most likely learner false beliefs. Merge
-  overlapping variants into one concise misconception rather than producing
-  an exhaustive fragmented list.
+- Each provided normal row is missing a usable learner-analysis section, carries
+  generic filler, or duplicates the same issue across two labels. Return the
+  SAME rows: identical topic, parent_concept, concept, keywords, Description,
+  Activity/Info Hub, and Types. Change only the learner-analysis tail.
+- Every row MUST finish with at least one of these sections:
+  * Misconceptions: commonly held incorrect beliefs or interpretations about
+    the concept. State each false belief in learner voice, such as "Students may
+    believe/think/assume ..." or "Students may confuse ...". Do not write the
+    correction as though it were the misconception.
+  * Error Analysis: plausible procedural, computational, representational, or
+    reasoning mistakes learners may make while applying the concept, even when
+    they understand the underlying idea. Name the learner explicitly and state
+    the actual mistaken step or action (for example, "Students may use the
+    wrong sign, unit, operation, representation, sequence, evidence, or
+    inference"), not merely that the result may be wrong.
+- Either section may appear alone. Include both only when they describe
+  genuinely distinct, non-duplicative issues. If both appear, order them exactly
+  "Misconceptions: ... // Error Analysis: ..." at the end.
+- Return only the 1-3 highest-value, likely items in each included section.
+  Merge overlapping variants instead of producing an exhaustive fragmented list.
+- For Misconceptions, avoid "should", "instead", "correctly", "remember that",
+  and declarative textbook corrections such as "A nation is not ...". The
+  Description already teaches the correct idea.
 - NEVER write templated filler like "Students may apply X as a memorized rule
   without checking the conditions", and never "N/A"/"None"/placeholders.
 - No source artifacts (Example 3, Exercise 1.2, page numbers) and never the
@@ -2938,7 +2995,10 @@ def _inject_types(details: str, types_body: str) -> str:
         inserted = False
         out = []
         for label, content in sections:
-            if not inserted and label.strip().lower().startswith("misconception"):
+            if not inserted and (
+                cr.is_misconception_label(label)
+                or cr.is_error_analysis_label(label)
+            ):
                 out.append(("Types", types_body.strip()))
                 inserted = True
             out.append((label, content))
@@ -6261,8 +6321,8 @@ def _merge_similar_concepts_via_api(records: list[dict], *, meta: dict) -> list[
     """Merge near-duplicate concept rows via GPT instead of dropping them.
 
     ``concept_cleanup.find_similar_title_groups`` only DETECTS suspects; the
-    content decision (which title/topic survives, how Descriptions, Types and
-    Misconceptions combine) is GPT's. On failure the deterministic drop is the
+    content decision (which title/topic survives, how Descriptions, Types,
+    Misconceptions, and Error Analysis combine) is GPT's. On failure the deterministic drop is the
     last resort so duplicates never ship.
     """
     import json as _json
@@ -6314,21 +6374,49 @@ def _merge_similar_concepts_via_api(records: list[dict], *, meta: dict) -> list[
 
 def _misconception_body(details: str) -> str:
     for label, content in cr.split_sections(details or ""):
-        if label.strip().lower().startswith("misconception"):
+        if cr.is_misconception_label(label):
             return content.strip()
     return ""
+
+
+def _error_analysis_body(details: str) -> str:
+    """Return the canonical Error Analysis body, accepting known label aliases."""
+    for label, content in cr.split_sections(details or ""):
+        if cr.is_error_analysis_label(label):
+            return content.strip()
+    return ""
+
+
+def _learner_analysis_needs_rewrite(details: str) -> bool:
+    """Whether a normal concept lacks a usable, non-duplicated analysis tail."""
+    misconception = _misconception_body(details)
+    error_analysis = _error_analysis_body(details)
+    misconception_ok = cv.is_valid_misconception(misconception)
+    error_analysis_ok = cv.is_valid_error_analysis(error_analysis)
+    if not (misconception_ok or error_analysis_ok):
+        return True
+    if misconception and not misconception_ok:
+        return True
+    if error_analysis and not error_analysis_ok:
+        return True
+    return bool(
+        misconception_ok
+        and error_analysis_ok
+        and cv.issue_sections_overlap(misconception, error_analysis)
+    )
 
 
 def _ensure_misconceptions_via_api(
     records: list[dict], *, meta: dict, use_api: bool = True,
 ) -> list[dict]:
-    """Have GPT write missing or generic-only Misconceptions sections.
+    """Have GPT write missing or generic learner-analysis sections.
 
-    Reviewers flagged the deterministic fallback text as too generic; concept
-    quality requires real, concept-specific learner errors. Only rows whose
-    Misconceptions are missing, empty, or generic are sent. The deterministic
-    template remains the dry-mode / API-failure last resort (added later by
-    ``concept_refiner.ensure_misconceptions``).
+    The legacy function name remains for callers and tests. A normal concept now
+    needs at least one of Misconceptions or Error Analysis, not necessarily both.
+    Misconceptions hold commonly held incorrect beliefs or interpretations;
+    Error Analysis holds plausible procedural, computational, representational,
+    or reasoning mistakes made while applying the concept and explicitly names
+    the learner and mistaken action.
     """
     import json as _json
 
@@ -6336,15 +6424,12 @@ def _ensure_misconceptions_via_api(
         i for i, rec in enumerate(records)
         if not cr.is_culmination(rec.get("concept_title", ""))
         and (rec.get("concept_details") or "").strip()
-        and (
-            cr._needs_misconception_rewrite(
-                _misconception_body(rec.get("concept_details", "")))
-        )
+        and _learner_analysis_needs_rewrite(rec.get("concept_details", ""))
     ]
     if not targets or not use_api:
         return records
     progress.log(
-        f"Writing specific Misconceptions for {len(targets)} concept(s) via API.")
+        f"Writing specific learner analysis for {len(targets)} concept(s) via API.")
     system = prompts.get_text("concepts.misconceptions.system")
     rows = [
         {
@@ -6358,36 +6443,56 @@ def _ensure_misconceptions_via_api(
     ]
     user = (
         _metadata_block(meta)
-        + "\nRows missing a specific Misconceptions section:\n"
+        + "\nRows missing usable Misconceptions and/or Error Analysis sections:\n"
         + _json.dumps({"rows": rows}, ensure_ascii=False)
     )
-    by_title: dict[str, str] = {}
+    by_title: dict[str, tuple[str, str]] = {}
     try:
         data = _openai_json(system, user)
         for row in _concept_rows_to_records(data):
-            body = _misconception_body(row.get("concept_details", ""))
-            if body and not cr._needs_misconception_rewrite(body):
-                by_title[bi.normalize_question_text(row["concept_title"])] = body
+            details = row.get("concept_details", "")
+            misconception = _misconception_body(details)
+            error_analysis = _error_analysis_body(details)
+            if not cv.is_valid_misconception(misconception):
+                misconception = ""
+            if not cv.is_valid_error_analysis(error_analysis):
+                error_analysis = ""
+            if (
+                misconception
+                and error_analysis
+                and cv.issue_sections_overlap(misconception, error_analysis)
+            ):
+                error_analysis = ""
+            if misconception or error_analysis:
+                by_title[bi.normalize_question_text(row["concept_title"])] = (
+                    misconception,
+                    error_analysis,
+                )
     except Exception as exc:  # noqa: BLE001 — deterministic backstop follows later
         progress.log(
-            f"Misconception pass failed ({exc}) — deterministic fallback will apply.",
+            f"Learner-analysis pass failed ({exc}) — deterministic fallback will apply.",
             level="warning")
         return records
     completed = 0
     for i in targets:
         rec = records[i]
-        body = by_title.get(bi.normalize_question_text(rec.get("concept_title", "")))
-        if not body:
+        analysis = by_title.get(bi.normalize_question_text(rec.get("concept_title", "")))
+        if not analysis:
             continue
+        misconception, error_analysis = analysis
         sections = [
             (label, content)
             for label, content in cr.split_sections(rec.get("concept_details", ""))
-            if not label.strip().lower().startswith("misconception")
+            if not cr.is_misconception_label(label)
+            and not cr.is_error_analysis_label(label)
         ]
-        sections.append(("Misconceptions", body))
+        if misconception:
+            sections.append(("Misconceptions", misconception))
+        if error_analysis:
+            sections.append(("Error Analysis", error_analysis))
         rec["concept_details"] = cr.join_sections(sections)
         completed += 1
-    progress.log(f"Specific Misconceptions written for {completed} concept(s).",
+    progress.log(f"Specific learner analysis written for {completed} concept(s).",
                  level="success")
     return records
 
@@ -7446,14 +7551,20 @@ _FATAL_CODES = {
     "culmination_too_early", "types_format", "case_without_type",
     "type_without_case", "culmination_description", "culmination_count",
     "culmination_order", "section_number", "empty_types", "short_case_example",
-    "merged_description", "rich_text_format",
+    "merged_description", "rich_text_format", "empty_misconception",
+    "empty_error_analysis", "duplicate_misconception",
+    "duplicate_error_analysis", "missing_misconception_or_error_analysis",
+    "issue_section_order", "noncanonical_issue_label",
+    "generic_misconception", "misconception_framing",
+    "generic_error_analysis", "error_analysis_framing",
+    "issue_section_overlap",
 }
 
 
 def _fatal_errors(report: dict) -> list[dict]:
     return [
         e for e in report.get("errors", [])
-        if e.get("severity") == "error" and e.get("code") in _FATAL_CODES
+        if e.get("code") in _FATAL_CODES
     ]
 
 
@@ -8837,8 +8948,8 @@ def _assign_types_via_api(
             merged.append(rec)
             continue
         # This pass is Types-only: keep the refined Description and any existing
-        # useful Misconception from the incoming record, and take only the Types
-        # body returned by the API.
+        # useful Misconceptions or Error Analysis from the incoming record, and
+        # take only the Types body returned by the API.
         types_body = _types_body(updated.get("concept_details", ""))
         if types_body:
             rec = dict(rec)
@@ -9631,7 +9742,7 @@ def _method_row_quality(rec: dict, *, source_topic: str) -> tuple:
         == _topic_comparison_key(source_topic),
         _has_meaningful_types(details),
         _has_mastery_line(details),
-        bool(_misconception_body(details)),
+        bool(_misconception_body(details) or _error_analysis_body(details)),
         len(details),
         len(rec.get("source_evidence", "")),
     )
@@ -11355,13 +11466,13 @@ def concepts_from_mmd(
         out = _repair_rendered_inventory_coverage(
             out, question_task_inventory, mined_types)
         # This is the last known-good source-owned Type/Example placement.
-        # Later chapter refiners may improve descriptions and misconceptions,
+        # Later chapter refiners may improve descriptions and learner analysis,
         # but must not move/drop these constrained assignments.
         coverage_safe_snapshot = copy.deepcopy(out)
         out = cr.refine_chapter(out)
         # The repair/cleanup passes may reorder, rename, or re-collide rows;
         # re-assert the duplicate-title, culmination, mastery-line, and
-        # misconception invariants before the final gate (rows the repair pass
+        # learner-analysis invariants before the final gate (rows the repair pass
         # rewrote may have lost them).
         out = _dedupe_titles_chapter_wide(out)
         out = concept_cleanup.dedupe_similar_titles_chapter_wide(out)
@@ -11370,7 +11481,7 @@ def concepts_from_mmd(
         out = _ensure_mastery_lines_via_api(out, meta=meta)
         out = _ensure_misconceptions_via_api(out, meta=meta)
         out = _enforce_culminations(out)
-        # Mastery/misconception GPT passes can reintroduce Example/Fig/page
+        # Mastery/learner-analysis GPT passes can reintroduce Example/Fig/page
         # pointers — scrub source_artifact one last time immediately before
         # the hard final gate so deposit is never blocked by residual refs.
         out = _neutralize_unrepaired_rows(
@@ -11384,7 +11495,15 @@ def concepts_from_mmd(
         # non-dropping field/ordering guarantees may run after this point.
         out = _ensure_mastery_lines_via_api(
             out, meta=meta, use_api=False)
-        out = cr.ensure_misconceptions(out)
+        # Restored snapshots were captured before the later learner-analysis
+        # repair pass. Repair only their analysis tail now; this helper never
+        # replaces Description, Types, row identity, or row membership.
+        out = _ensure_misconceptions_via_api(out, meta=meta)
+        # API repair can still fail or return an unusable category. At this
+        # terminal boundary, retain only semantically valid learner analysis
+        # and add the deterministic Error Analysis fallback when neither
+        # category survives.
+        out = cv.ensure_valid_learner_analysis(out)
         out = _enforce_method_anchor_topics(out, method_anchors)
         out = _enforce_culminations(out)
         out = _reorder_records_by_source_topics(out, headings)
@@ -11621,18 +11740,30 @@ RS=Real-world Sense | GR=Graphical Reasoning.
 COUNTS (STRICT): {{min_t}}-{{max_t}} topics; every topic has
 {{min_ct}}-{{max_ct}} concepts. Order by dependency. No duplicates.
 
-CONCEPT DESCRIPTION FORMAT (MANDATORY): one string, sections separated by " // ":
+CONCEPT DESCRIPTION FORMAT (MANDATORY): one string, sections separated by " // ".
+Use exactly one of these learner-analysis tails (Types may be inserted before
+the tail when the prerequisite has assessable check formats):
 Description: <what the student should already know; 2-4 short lines; must not
-teach the chapter> // Types: <classify ALL distinct prerequisite-check
-varieties for this skill using zero-padded numeric labels exactly "Type 01:",
-"Case 01:": Type 01: <variety title> Case 01: <example prompt> Case 02: ...
-Type 02: <variety> Case 01: ...> // Misconception: <typical prior-knowledge gaps>.
+teach the chapter> // Misconceptions: <commonly held incorrect beliefs or interpretations>
+Description: <...> // Error Analysis: <plausible mistaken action while applying the prerequisite skill>
+Description: <...> // Misconceptions: <incorrect belief> // Error Analysis: <distinct mistaken action>
+When Types are useful, classify ALL distinct prerequisite-check varieties using
+zero-padded labels exactly "Type 01:" and "Case 01:": Type 01: <variety title>
+Case 01: <example prompt> Case 02: ... Type 02: <variety> Case 01: ...
 Description is the important lesson-planning input: source/syllabus-grounded,
 clear, and concise (2-4 compact sentences, not a chapter dump). Include Types
 only when the prerequisite has assessable check formats; pure vocabulary recall
-may omit Types. Include Misconception only when there is a real likely
-prior-knowledge error; never write N/A/None/filler. Restart at Type 01 per
-concept; continuous renumbering happens downstream.
+may omit Types. Every concept MUST include at least one of Misconceptions or
+Error Analysis. Misconceptions are commonly held incorrect beliefs or
+interpretations about the prerequisite. Error Analysis describes plausible
+procedural, computational, representational, or reasoning mistakes learners may
+make while applying it. Error Analysis must name the learner explicitly (for
+example, "Students may omit ...") and state the mistaken action. Either section
+may appear alone; include both only when they are distinct and non-duplicative.
+Use canonical order Description,
+Activity/Info Hub when present, Types when present, Misconceptions, Error
+Analysis; never write N/A/None/filler. Restart at Type 01 per concept;
+continuous renumbering happens downstream.
 NEVER reference source artifacts and never the words "MMD".
 Do NOT mention groups or group columns.
 
@@ -11659,9 +11790,13 @@ fails "was this already expected knowledge before this grade?" (unsure or
 borderline -> REPLACE). Allow previous-grade ideas and foundational skills.
 STRUCTURE: output exactly the same number of topics, and per topic exactly
 the same number of concepts — substitute rejected rows, never delete slots.
-Keep the same schema and the Description: // Types: // Misconception format
-(Types and Misconception are optional when not useful), with zero-padded numeric
-labels (Type 01:, Case 01:) where Types exist, plus the tag (FL|NU|VC|RS|GR).
+Keep the same schema and canonical Description: // Types: // Misconceptions: //
+Error Analysis: order. Types is optional. Every concept must contain at least
+one of Misconceptions or Error Analysis; either may appear alone, and both may
+appear only when distinct and non-duplicative. Error Analysis must name the
+learner explicitly (for example, "Students may omit ...") and state the
+mistaken action. Use zero-padded numeric labels (Type 01:, Case 01:) where Types
+exist, plus the tag (FL|NU|VC|RS|GR).
 Rewrite repetitive sibling names to be distinct.
 Return ONLY JSON with one key "topics". No markdown, no commentary.""")
 
@@ -11733,7 +11868,8 @@ def pre_learning_from_rows(
             "concept_details": (
                 f"Description: foundational idea required before learning "
                 f"'{r['concept_title']}'. "
-                "// Misconception: assuming the prerequisite is already mastered."
+                "// Error Analysis: Students may skip verifying this prerequisite "
+                "before attempting a task that depends on it."
             ),
             "keywords": r.get("keywords", ""),
         } for r in rows if not cr.is_culmination(r.get("concept_title", ""))]
@@ -11770,6 +11906,16 @@ def pre_learning_from_rows(
     out = _exclude_current_chapter_concepts(_flatten_pre_topics(final), rows)
     if not out:
         raise RuntimeError("live pre-learning derivation returned no concepts")
+    pre_meta = _metadata(
+        subject=subject,
+        grade=grade,
+        board=board,
+        chapter_title=chapter_title,
+        unit=unit,
+        learning_kind="Pre",
+    )
+    out = _ensure_misconceptions_via_api(out, meta=pre_meta)
+    out = cv.ensure_valid_learner_analysis(out)
     return out
 
 
@@ -11804,7 +11950,8 @@ def pre_learning_from_concepts(concepts: list[models.Concept], *, live: bool | N
             "concept_details": (
                 f"Description: foundational idea required before learning "
                 f"'{c.concept_title}'. "
-                "// Misconception: assuming the prerequisite is already mastered."
+                "// Error Analysis: Students may skip verifying this prerequisite "
+                "before attempting a task that depends on it."
             ),
             "keywords": c.keywords,
         })

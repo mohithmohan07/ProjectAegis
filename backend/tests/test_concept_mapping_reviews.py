@@ -33,7 +33,7 @@ def test_misconception_strips_inline_after_mastery():
     )
     out = cr.normalize_misconception_sections(details)
     assert "// Misconception:" not in out.split("Misconceptions:")[0]
-    assert "Misconceptions: A common error." in out
+    assert "Error Analysis: A common error." in out
 
 
 def test_misconception_prefers_specific_over_generic_duplicate():
@@ -46,7 +46,7 @@ def test_misconception_prefers_specific_over_generic_duplicate():
         "representation given in the problem."
     )
     out = cr.normalize_misconception_sections(details)
-    assert out.count("Misconception") == 1
+    assert out.count("Error Analysis:") == 1
     assert "ignore the parallel-line condition" in out
     assert "memorized rule" not in out
 
@@ -880,7 +880,7 @@ def test_mastery_after_misconceptions_replaces_the_earlier_statement():
     out = cr.normalize_misconception_sections(details)
     assert out.count("Achieving Mastery:") == 1
     assert "Explaining resistance from V-I data" in out
-    assert "Misconceptions: A real learner error." in out
+    assert "Error Analysis: A real learner error." in out
 
 
 def test_topic_headings_prefer_main_sections_over_subtopics():
@@ -914,16 +914,16 @@ def test_topic_headings_prefer_main_sections_over_subtopics():
 # Full-GPT passes: misconceptions, duplicate merge, merged cells, no-loss types
 # --------------------------------------------------------------------------- #
 
-def test_misconceptions_via_api_replaces_generic_text(monkeypatch):
+def test_learner_analysis_via_api_replaces_generic_text(monkeypatch):
     def fake_openai(system, user, **kw):
-        assert "Misconceptions" in system
+        assert "Misconceptions" in system and "Error Analysis" in system
         return {"rows": [{
             "topic": "Triangles", "parent_concept": "Similarity",
             "concept": "Basic Proportionality Theorem",
             "concept_description": (
-                "Description: unchanged // Misconceptions: Students may apply "
-                "the ratio to non-parallel cutting lines, and may also assume "
-                "AD/DB equals AE/EC without checking DE parallel to BC."
+                "Description: unchanged // Error Analysis: Students may apply "
+                "the ratio to non-parallel cutting lines or form AD/DB and "
+                "AE/EC without first checking that DE is parallel to BC."
             ),
             "keywords": "",
         }]}
@@ -944,6 +944,7 @@ def test_misconceptions_via_api_replaces_generic_text(monkeypatch):
     details = out[0]["concept_details"]
     assert "memorized rule" not in details
     assert "non-parallel cutting lines" in details
+    assert "Error Analysis:" in details
     assert "Relates parallel lines and proportional segments." in details
 
 

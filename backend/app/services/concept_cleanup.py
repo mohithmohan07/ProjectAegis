@@ -477,7 +477,7 @@ def scrub_validator_artifacts(text: str) -> str:
     return _tidy(text)
 
 
-# Canonical separator between Description / Types / Misconception sections.
+# Canonical separator between Concept Description sections.
 _SECTION_SEP = " // "
 
 
@@ -493,7 +493,7 @@ _TEXTBOOK_SECTION_REF_RE = re.compile(
 
 
 def _strip_images_from_prose(text: str) -> str:
-    """Remove shipped images from Description/Misconception prose.
+    """Remove shipped images from Description/learner-analysis prose.
 
     Image URLs are valid in Types Examples and Activity/Info Hub entries (with
     their figure reference); they are not acceptable in Description text.
@@ -531,10 +531,14 @@ def _clean_details(details: str, *, neutralize: bool = True) -> str:
             cleaned = replace_mmd_references(part)
         else:
             cleaned = replace_mmd_references(strip_dangling_references(part))
-        if label.startswith("description") or label.startswith("misconception"):
+        if (
+            label.startswith("description")
+            or cr.is_misconception_label(label)
+            or cr.is_error_analysis_label(label)
+        ):
             cleaned = _TEXTBOOK_SECTION_REF_RE.sub("the chapter", cleaned)
         # Mathpix URLs are Types/Hub-only; strip them from Description and
-        # Misconception even during reference-preserving pre-repair cleanup.
+        # learner-analysis sections even during reference-preserving cleanup.
         if not is_types and not is_hub:
             cleaned = _strip_images_from_prose(cleaned)
         out.append(neutralize_source_artifacts(cleaned) if neutralize else cleaned)
@@ -643,7 +647,7 @@ def detect_repeated_leading_phrase(
 
 
 def description_length_report(details: str, *, max_words_per_section: int = 90) -> dict:
-    """Flag ``Description/Types/Misconception`` sections over a word budget."""
+    """Flag Concept Description sections that exceed a word budget."""
     sections = re.split(r"\s*//\s*|\n", details or "")
     over = []
     for sec in sections:

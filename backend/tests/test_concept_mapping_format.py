@@ -80,24 +80,24 @@ def test_deposit_applies_numbering_recap_titlecase_and_topic_columns(db):
              "Description: a // Types: Type 01: Direct "
              "Case 01: Add 2 and 3 using integer addition rules. "
              "Case 02: Add 5 and 9 using integer addition rules. // "
-             "Misconception: m"), "keywords": ""},
+             "Misconception: Students may believe adding integers always increases the value."), "keywords": ""},
         {"topic": "operations on numbers", "concept_title": "Culmination - Operations On Numbers",
          "parent_concept": "Culmination",
          "concept_details": ("Description: a long synthesis paragraph // "
                              "Types: Type 01: Mixed Case 01: Combine addition and subtraction steps in one integer problem. // "
-                             "Misconception: keep me"), "keywords": ""},
+                             "Misconception: Students may believe mixed review tasks use only one operation."), "keywords": ""},
         {"topic": "powers and roots", "concept_title": "squares of numbers",
          "parent_concept": "powers",
          "concept_details": (
              "Description: b // Types: Type 01: Compute "
              "Case 01: Calculate 4 squared and explain the multiplication. // "
-             "Misconception: m"), "keywords": ""},
+             "Misconception: Students may think squaring a number means doubling it."), "keywords": ""},
         {"topic": "powers and roots", "concept_title": "Culmination - Powers and Roots",
          "parent_concept": "Culmination",
          "concept_details": (
              "Description: recap // Types: Type 01: Mixed "
              "Case 01: Combine square and square-root facts in one review problem. // "
-             "Misconception: keep me"), "keywords": ""},
+             "Misconception: Students may believe roots and powers cannot appear together."), "keywords": ""},
     ]
     build_concepts._deposit_concepts(db, chapter, records, "Post", "")
     build_concepts._sync_chapter_topic_summary(chapter)
@@ -119,7 +119,7 @@ def test_deposit_applies_numbering_recap_titlecase_and_topic_columns(db):
     assert "Miscellaneous Type 01: Mixed" in culm
     assert "Description: Recap" in culm
     assert "long synthesis" not in culm
-    assert "Misconceptions: keep me" in culm
+    assert "Misconceptions: Students may believe mixed review tasks use only one operation." in culm
 
     # Column E (post_topics) lists tagged Topic Titles (with the code).
     assert "Topic 01:" in chapter.post_topics
