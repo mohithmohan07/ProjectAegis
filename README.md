@@ -62,7 +62,7 @@ backend/
   aegis_pipeline/     vendored prior scripts (live-mode reference impls)
   data/               user workbooks, uploads, and generated output
   scripts/            generate_dummy_data.py (optional dev fixture)
-  tests/              pytest suite (25 tests)
+  tests/              pytest suite (including review-feedback regressions)
 frontend/             React + Vite + TypeScript UI (the two modules + Database)
 ```
 
@@ -118,9 +118,13 @@ docker compose up --build
 ## Tests
 
 ```bash
-cd backend && pytest                 # 25 tests
+cd backend && pytest                 # full backend and review-regression suite
 cd frontend && npm test -- --run
 ```
+
+The review-to-implementation traceability assessment is maintained in
+[`REVIEW_AUDIT.md`](REVIEW_AUDIT.md). Update that assessment whenever a new
+review version changes the generation contract.
 
 ## Connecting the real workbook
 
