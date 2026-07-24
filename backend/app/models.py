@@ -252,7 +252,59 @@ class UploadJob(Base):
     # Durable pre-Type-assignment state. A failed generation can resume after
     # expensive skeleton, description, inventory, and Type-mining API stages.
     generation_checkpoint: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Browser-visible diagnostic events from the latest generation attempt.
+    # Keeping them with the upload means exact validator locations survive a
+    # page refresh and can travel with an exported checkpoint bundle.
+    generation_log: Mapped[list] = mapped_column(JSON, default=list)
     # Cumulative OpenAI billing-token usage for the currently staged physical
     # file, including billable retries and resumed generation attempts.
     openai_usage: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    @property
+    def checkpoint_available(self) -> bool:
+        return bool(
+            isinstance(self.generation_checkpoint, dict)
+            and self.generation_checkpoint.get("stage")
+        )
+
+    @property
+    def checkpoint_stage(self) -> str:
+        if not isinstance(self.generation_checkpoint, dict):
+            return ""
+        return str(self.generation_checkpoint.get("stage") or "")
+
+    @property
+    def checkpoint_saved_at(self) -> str:
+        if not isinstance(self.generation_checkpoint, dict):
+            return ""
+        return str(self.generation_checkpoint.get("saved_at") or "")
+
+    @property
+    def checkpoint_progress(self) -> float:
+        if not isinstance(self.generation_checkpoint, dict):
+            return 0.0
+        try:
+            return max(
+                0.0,
+                min(1.0, float(self.generation_checkpoint.get("progress") or 0.0)),
+            )
+        except (TypeError, ValueError):
+            return 0.0
+
+    @property
+    def checkpoint_target_identity(self) -> dict:
+        """Stable curriculum destination carried by a resumable checkpoint."""
+        if not isinstance(self.generation_checkpoint, dict):
+            return {}
+        identity = self.generation_checkpoint.get("target_identity")
+        if not isinstance(identity, dict):
+            return {}
+        fields = (
+            "board", "grade", "subject", "unit",
+            "chapter_title", "chapter_code",
+        )
+        return {
+            field: str(identity.get(field) or "")
+            for field in fields
+        }

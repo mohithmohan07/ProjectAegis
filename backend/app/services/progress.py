@@ -21,14 +21,20 @@ from typing import Any
 _sink: contextvars.ContextVar[Callable[[dict], None] | None] = contextvars.ContextVar(
     "aegis_progress_sink", default=None,
 )
+_history: contextvars.ContextVar[list[dict] | None] = contextvars.ContextVar(
+    "aegis_progress_history", default=None,
+)
 
 _SENTINEL = object()
 
 
 def _emit(event: dict) -> None:
+    event.setdefault("ts", time.time())
+    history = _history.get()
+    if history is not None:
+        history.append(dict(event))
     sink = _sink.get()
     if sink is not None:
-        event.setdefault("ts", time.time())
         sink(event)
 
 
@@ -55,6 +61,20 @@ def usage(data: dict) -> None:
     _emit({"type": "usage", "data": data})
 
 
+def current_events(*, limit: int | None = None) -> list[dict]:
+    """Return a copy of events emitted by the active streamed operation.
+
+    Upload-backed generation uses this to persist the same diagnostic log the
+    browser saw.  The history is scoped to one worker context, so concurrent
+    runs cannot leak messages into each other.
+    """
+    events = list(_history.get() or [])
+    if limit is not None:
+        bounded = max(0, int(limit))
+        events = [] if bounded == 0 else events[-bounded:]
+    return events
+
+
 def stream(
     fn: Callable[[], Any],
     *,
@@ -74,6 +94,7 @@ def stream(
 
     def worker() -> None:
         token = _sink.set(sink)
+        history_token = _history.set([])
         from . import openai_usage
 
         usage_token = openai_usage.start_tracking()
@@ -99,6 +120,7 @@ def stream(
             })
         finally:
             openai_usage.stop_tracking(usage_token)
+            _history.reset(history_token)
             _sink.reset(token)
             events.put(_SENTINEL)
 

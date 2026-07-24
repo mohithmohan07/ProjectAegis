@@ -14,8 +14,12 @@
 """
 from __future__ import annotations
 
+import copy
 import hashlib
+import os
 import re
+import shutil
+import tempfile
 from pathlib import Path
 
 from sqlalchemy.orm import Session
@@ -309,9 +313,25 @@ def _store_inventory(job: models.UploadJob, artifacts: dict) -> None:
     }
 
 
-def _generation_checkpoint_fingerprint(
+def _stable_checkpoint_value(value) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip().casefold()
+
+
+def _generation_target_identity(chapter: models.Chapter) -> dict[str, str]:
+    """Stable chapter identity that survives DB rebuilds and preview deploys."""
+    return {
+        field: _stable_checkpoint_value(getattr(chapter, field, ""))
+        for field in (
+            "board", "grade", "subject", "unit",
+            "chapter_title", "chapter_code",
+        )
+    }
+
+
+def _legacy_generation_checkpoint_fingerprint(
     job: models.UploadJob, chapter: models.Chapter,
 ) -> str:
+    """Fingerprint emitted by schema-v2 checkpoints before stable identities."""
     payload = (
         "post-learning-checkpoint-v1\0"
         + "\0".join(str(value or "") for value in (
@@ -326,6 +346,151 @@ def _generation_checkpoint_fingerprint(
         ))
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _generation_checkpoint_fingerprint(
+    job: models.UploadJob, chapter: models.Chapter,
+) -> str:
+    """Semantic input fingerprint, intentionally independent of DB/git IDs."""
+    identity = _generation_target_identity(chapter)
+    payload = (
+        "concept-generation-checkpoint-v2\0"
+        + "\0".join([
+            _stable_checkpoint_value(job.learning_kind or "post"),
+            *(identity[field] for field in (
+                "board", "grade", "subject", "unit",
+                "chapter_title", "chapter_code",
+            )),
+            str(job.mmd_text or ""),
+        ])
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _checkpoint_matches_generation(
+    checkpoint: dict, *,
+    job: models.UploadJob,
+    chapter: models.Chapter,
+) -> bool:
+    if not generation._valid_concept_checkpoint(checkpoint):
+        return False
+    stable_fingerprint = _generation_checkpoint_fingerprint(job, chapter)
+    target_identity = _generation_target_identity(chapter)
+    if checkpoint.get("checkpoint_format") == generation._CONCEPT_CHECKPOINT_FORMAT:
+        return bool(
+            checkpoint.get("fingerprint") == stable_fingerprint
+            and checkpoint.get("target_identity") == target_identity
+        )
+    if checkpoint.get("schema_version") == generation._LEGACY_CONCEPT_CHECKPOINT_SCHEMA:
+        return bool(
+            checkpoint.get("fingerprint")
+            == _legacy_generation_checkpoint_fingerprint(job, chapter)
+            and checkpoint.get("target_chapter_id") == chapter.id
+        )
+    # Direct schema-v3 entries were briefly supported before the history
+    # envelope.  Accept their stable fingerprint, retaining the old target-id
+    # check only when no stable identity was saved.
+    return bool(
+        checkpoint.get("fingerprint") == stable_fingerprint
+        and (
+            checkpoint.get("target_identity") == target_identity
+            or (
+                not checkpoint.get("target_identity")
+                and checkpoint.get("target_chapter_id") == chapter.id
+            )
+        )
+    )
+
+
+def _merge_generation_checkpoint_history(
+    stored: dict | None,
+    checkpoint: dict,
+    *,
+    fingerprint: str,
+    target_identity: dict[str, str],
+    target_chapter_id: int,
+) -> dict:
+    """Keep the newest completed artifact per stage in one portable envelope."""
+    history = [
+        copy.deepcopy(entry)
+        for entry in generation._concept_checkpoint_entries(stored)
+        if isinstance(entry, dict) and str(entry.get("stage") or "").strip()
+    ]
+    stage = str(checkpoint.get("stage") or "")
+    history = [
+        entry for entry in history
+        if str(entry.get("stage") or "") != stage
+    ]
+    history.append(copy.deepcopy(checkpoint))
+    return {
+        "schema_version": generation._CONCEPT_CHECKPOINT_SCHEMA,
+        "checkpoint_format": generation._CONCEPT_CHECKPOINT_FORMAT,
+        "fingerprint": fingerprint,
+        "target_identity": copy.deepcopy(target_identity),
+        # Informational only for schema v3; compatibility uses target_identity.
+        "target_chapter_id": target_chapter_id,
+        # Mirror newest metadata at the top level for the existing API/UI.
+        "stage": checkpoint.get("stage", ""),
+        "stage_order": checkpoint.get("stage_order", -1),
+        "stage_schema_version": checkpoint.get("stage_schema_version", 1),
+        "stage_label": checkpoint.get("stage_label", ""),
+        "saved_at": checkpoint.get("saved_at", ""),
+        "progress": checkpoint.get("progress", 0.0),
+        "checkpoints": history,
+    }
+
+
+def _checkpoint_mismatch_message(
+    checkpoint: dict,
+    *,
+    expected_fingerprint: str,
+    expected_target: dict[str, str],
+) -> str:
+    saved_target = checkpoint.get("target_identity")
+    saved_fingerprint = str(checkpoint.get("fingerprint") or "")
+    return (
+        "The saved generation checkpoint does not match the selected "
+        "chapter or converted source and has been preserved. "
+        f"Expected target={expected_target}, source={expected_fingerprint[:12]}; "
+        f"saved target={saved_target or '(legacy/unknown)'}, "
+        f"source={saved_fingerprint[:12] or '(unknown)'}. "
+        "Select the matching chapter/source, or explicitly start over to clear "
+        "the saved checkpoint."
+    )
+
+
+def _stage_concept_workbook(
+    db: Session,
+    target: Path,
+    concept_ids: list[int],
+) -> tuple[Path, dict[str, int]]:
+    """Write a sibling workbook copy before any concept transaction commits."""
+    target = Path(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, staged_name = tempfile.mkstemp(
+        prefix=f".{target.stem}-",
+        suffix=target.suffix,
+        dir=target.parent,
+    )
+    os.close(descriptor)
+    staged = Path(staged_name)
+    try:
+        if target.exists():
+            shutil.copy2(target, staged)
+        else:
+            # ``append_concepts`` creates a canonical workbook when the path
+            # does not exist.
+            staged.unlink()
+        written = writer.append_concepts(db, staged, concept_ids)
+        return staged, written
+    except Exception:
+        staged.unlink(missing_ok=True)
+        raise
+
+
+def _publish_staged_workbook(staged: Path, target: Path) -> None:
+    """Atomically replace the canonical workbook with its staged sibling."""
+    os.replace(staged, target)
 
 
 _INVENTORY_CSV_COLUMNS = [
@@ -425,47 +590,67 @@ def generate_post_learning(db: Session, job_id: int, target_chapter_id: int) -> 
     progress.log(f"Post-learning generation into chapter '{chapter.chapter_title}'.")
     artifacts: dict = {}
     fingerprint = _generation_checkpoint_fingerprint(job, chapter)
+    target_identity = _generation_target_identity(chapter)
     stored_checkpoint = job.generation_checkpoint or {}
     resume_checkpoint = (
         stored_checkpoint
-        if generation._valid_concept_checkpoint(stored_checkpoint)
-        and stored_checkpoint.get("fingerprint") == fingerprint
-        and stored_checkpoint.get("target_chapter_id") == target_chapter_id
+        if _checkpoint_matches_generation(
+            stored_checkpoint, job=job, chapter=chapter)
         else None
     )
     if stored_checkpoint and resume_checkpoint is None:
-        progress.log(
-            "Discarding an invalid or stale generation checkpoint because its "
-            "schema, source, or target chapter no longer matches.",
-            level="warning",
+        message = _checkpoint_mismatch_message(
+            stored_checkpoint,
+            expected_fingerprint=fingerprint,
+            expected_target=target_identity,
         )
-        job.generation_checkpoint = {}
-        db.commit()
+        progress.log(message, level="error")
+        raise ValueError(message)
     if resume_checkpoint:
+        resumed = generation._newest_compatible_concept_checkpoint(
+            resume_checkpoint) or {}
+        stage_label = (
+            resumed.get("stage_label")
+            or resumed.get("stage")
+            or "saved stage"
+        )
         progress.log(
-            "Resuming from the saved pre-Type-assignment checkpoint; expensive "
-            "concept extraction, description, inventory, and Type-mining stages "
-            "will not run again.",
+            f"Resuming from checkpoint '{stage_label}'; every earlier "
+            "compatible completed stage will be reused.",
             level="success",
         )
 
     def save_checkpoint(checkpoint: dict) -> None:
-        durable = dict(checkpoint)
-        durable["fingerprint"] = fingerprint
-        durable["target_chapter_id"] = target_chapter_id
+        durable = _merge_generation_checkpoint_history(
+            job.generation_checkpoint,
+            checkpoint,
+            fingerprint=fingerprint,
+            target_identity=target_identity,
+            target_chapter_id=target_chapter_id,
+        )
         job.generation_checkpoint = durable
-        _store_inventory(job, {
-            "question_task_inventory": durable.get(
-                "question_task_inventory") or {},
-            "mined_types": durable.get("mined_types") or {},
-        })
+        if (
+            "question_task_inventory" in checkpoint
+            or "mined_types" in checkpoint
+        ):
+            _store_inventory(job, {
+                "question_task_inventory": checkpoint.get(
+                    "question_task_inventory") or {},
+                "mined_types": checkpoint.get("mined_types") or {},
+            })
+        label = (
+            checkpoint.get("stage_label")
+            or checkpoint.get("stage")
+            or "completed stage"
+        )
         job.detail = (
-            "Generation checkpoint saved before Type assignment; retry resumes "
-            "from this stage."
+            f"Generation checkpoint saved at {label}; retry resumes from "
+            "the newest compatible stage."
         )
         db.commit()
         progress.log(
-            "Saved durable checkpoint before Type assignment.",
+            f"Saved durable checkpoint: {label} "
+            f"({float(checkpoint.get('progress') or 0.0):.0%}).",
             level="success",
         )
 
@@ -484,13 +669,22 @@ def generate_post_learning(db: Session, job_id: int, target_chapter_id: int) -> 
         checkpoint_callback=save_checkpoint,
     )
     _store_inventory(job, artifacts)
-    created_ids, merged_ids = _deposit_concepts(
-        db, chapter, records, "Post", job.source_book)
-    _sync_chapter_topic_summary(chapter, _chapter_meta_summary(chapter))
-    db.commit()
+    staged_workbook: Path | None = None
+    try:
+        created_ids, merged_ids = _deposit_concepts(
+            db, chapter, records, "Post", job.source_book)
+        _sync_chapter_topic_summary(chapter, _chapter_meta_summary(chapter))
+        staged_workbook, written = _stage_concept_workbook(
+            db, config.BULK_IMPORT_OUTPUT, created_ids + merged_ids)
+        db.commit()
+        _publish_staged_workbook(staged_workbook, config.BULK_IMPORT_OUTPUT)
+        staged_workbook = None
+    except Exception:
+        db.rollback()
+        if staged_workbook is not None:
+            staged_workbook.unlink(missing_ok=True)
+        raise
 
-    written = writer.append_concepts(
-        db, config.BULK_IMPORT_OUTPUT, created_ids + merged_ids)
     job.status = "generated"
     job.deposit_scope_type = "chapter"
     job.deposit_scope_ids = [target_chapter_id]
@@ -556,6 +750,71 @@ def generate_pre_learning_from_upload(db: Session, job_id: int, target_chapter_i
     # it. Live mode runs the full dependency-architecture derivation (syllabus
     # filter + auditor pass); dry mode keeps the deterministic framing.
     artifacts: dict = {}
+    fingerprint = _generation_checkpoint_fingerprint(job, chapter)
+    target_identity = _generation_target_identity(chapter)
+    stored_checkpoint = job.generation_checkpoint or {}
+    resume_checkpoint = (
+        stored_checkpoint
+        if _checkpoint_matches_generation(
+            stored_checkpoint, job=job, chapter=chapter)
+        else None
+    )
+    if stored_checkpoint and resume_checkpoint is None:
+        message = _checkpoint_mismatch_message(
+            stored_checkpoint,
+            expected_fingerprint=fingerprint,
+            expected_target=target_identity,
+        )
+        progress.log(message, level="error")
+        raise ValueError(message)
+    if resume_checkpoint:
+        resumed = generation._newest_compatible_concept_checkpoint(
+            resume_checkpoint) or {}
+        stage_label = (
+            resumed.get("stage_label")
+            or resumed.get("stage")
+            or "saved stage"
+        )
+        progress.log(
+            f"Resuming from checkpoint '{stage_label}'; every earlier "
+            "compatible completed stage will be reused.",
+            level="success",
+        )
+
+    def save_checkpoint(checkpoint: dict) -> None:
+        durable = _merge_generation_checkpoint_history(
+            job.generation_checkpoint,
+            checkpoint,
+            fingerprint=fingerprint,
+            target_identity=target_identity,
+            target_chapter_id=target_chapter_id,
+        )
+        job.generation_checkpoint = durable
+        if (
+            "question_task_inventory" in checkpoint
+            or "mined_types" in checkpoint
+        ):
+            _store_inventory(job, {
+                "question_task_inventory": checkpoint.get(
+                    "question_task_inventory") or {},
+                "mined_types": checkpoint.get("mined_types") or {},
+            })
+        label = (
+            checkpoint.get("stage_label")
+            or checkpoint.get("stage")
+            or "completed stage"
+        )
+        job.detail = (
+            f"Generation checkpoint saved at {label}; retry resumes from "
+            "the newest compatible stage."
+        )
+        db.commit()
+        progress.log(
+            f"Saved durable checkpoint: {label} "
+            f"({float(checkpoint.get('progress') or 0.0):.1%}).",
+            level="success",
+        )
+
     base = generation.concepts_from_mmd(
         job.mmd_text,
         subject=chapter.subject,
@@ -567,24 +826,39 @@ def generate_pre_learning_from_upload(db: Session, job_id: int, target_chapter_i
         chapter_code=chapter.chapter_code,
         learning_kind="Post",
         artifacts=artifacts,
+        resume_checkpoint=resume_checkpoint,
+        checkpoint_callback=save_checkpoint,
+        completion_progress=0.98,
     )
     _store_inventory(job, artifacts)
     pre_records = generation.pre_learning_from_rows(
         base,
         subject=chapter.subject, grade=chapter.grade, board=chapter.board,
         chapter_title=chapter.chapter_title, unit=chapter.unit,
+        resume_checkpoint=resume_checkpoint,
+        checkpoint_callback=save_checkpoint,
     )
-    created_ids, merged_ids = _deposit_concepts(
-        db, chapter, pre_records, "Pre", job.source_book)
-    _sync_chapter_topic_summary(chapter, _chapter_meta_summary(chapter))
-    db.commit()
+    staged_workbook: Path | None = None
+    try:
+        created_ids, merged_ids = _deposit_concepts(
+            db, chapter, pre_records, "Pre", job.source_book)
+        _sync_chapter_topic_summary(chapter, _chapter_meta_summary(chapter))
+        staged_workbook, written = _stage_concept_workbook(
+            db, config.BULK_IMPORT_OUTPUT, created_ids + merged_ids)
+        db.commit()
+        _publish_staged_workbook(staged_workbook, config.BULK_IMPORT_OUTPUT)
+        staged_workbook = None
+    except Exception:
+        db.rollback()
+        if staged_workbook is not None:
+            staged_workbook.unlink(missing_ok=True)
+        raise
 
-    written = writer.append_concepts(
-        db, config.BULK_IMPORT_OUTPUT, created_ids + merged_ids)
     job.status = "generated"
     job.deposit_scope_type = "chapter"
     job.deposit_scope_ids = [target_chapter_id]
     job.result_ids = created_ids
+    job.generation_checkpoint = {}
     job.detail = (
         f"created {len(created_ids)} pre-learning concepts from upload, "
         f"merged sources into {len(merged_ids)} existing"

@@ -108,6 +108,12 @@ class UploadJobOut(BaseModel):
     status: str
     result_ids: list
     detail: str
+    checkpoint_available: bool = False
+    checkpoint_stage: str = ""
+    checkpoint_saved_at: str = ""
+    checkpoint_progress: float = 0.0
+    checkpoint_target_identity: dict = Field(default_factory=dict)
+    generation_log: list = Field(default_factory=list)
     openai_usage: dict = Field(default_factory=dict)
     created_at: datetime
 

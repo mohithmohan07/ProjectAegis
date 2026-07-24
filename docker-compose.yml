@@ -9,6 +9,7 @@ services:
       - .env
     environment:
       AEGIS_DATA_DIR: /app/data
+      AEGIS_DB_URL: sqlite:////app/data/aegis.db
   frontend:
     build: ./frontend
     ports:

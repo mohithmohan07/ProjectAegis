@@ -7,6 +7,7 @@ const LEVEL_CLASS: Record<string, string> = {
   step: "log-step",
   success: "log-success",
   warn: "log-warn",
+  warning: "log-warn",
   error: "log-error",
   debug: "log-debug",
 };

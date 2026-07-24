@@ -74,8 +74,18 @@ function PostLearningFlow({ bookSources }: { bookSources: string[] }) {
         { body: JSON.stringify({ target_chapter_id: scope.ids[0] }) },
       );
       setResult(data);
+      try {
+        setJob(await api.getUploadJob("concepts", job.id));
+      } catch {
+        // The result remains usable even if refreshing the completed job fails.
+      }
     } catch (e) {
       setError(String(e));
+      try {
+        setJob(await api.getUploadJob("concepts", job.id));
+      } catch {
+        // Keep the generation error visible if refreshing job state also fails.
+      }
     } finally {
       setBusy(false);
     }
@@ -84,7 +94,13 @@ function PostLearningFlow({ bookSources }: { bookSources: string[] }) {
   return (
     <>
       <div className="section-title">1 · Upload document</div>
-      <DocumentUpload module="concepts" conceptKind="post" bookSources={bookSources} onJob={setJob} />
+      <DocumentUpload
+        module="concepts"
+        conceptKind="post"
+        bookSources={bookSources}
+        externalJob={job}
+        onJob={setJob}
+      />
 
       {job?.status === "converted" && (
         <>
@@ -95,7 +111,13 @@ function PostLearningFlow({ bookSources }: { bookSources: string[] }) {
             <div className="row" style={{ marginTop: 12 }}>
               <span className="muted">{scope ? `Chapter: ${scope.label}` : "Pick a chapter"}</span>
               <div className="spacer" />
-              <button disabled={!scope || busy} onClick={generate}>Parse &amp; generate concepts</button>
+              <button disabled={!scope || busy} onClick={generate}>
+                {job.checkpoint_available
+                  ? `Resume from ${Math.round(
+                    (job.checkpoint_progress ?? 0) * 100,
+                  )}% checkpoint`
+                  : "Parse & generate concepts"}
+              </button>
             </div>
           </div>
         </>
@@ -152,8 +174,18 @@ function PreLearningUpload({ bookSources }: { bookSources: string[] }) {
         { body: JSON.stringify({ target_chapter_id: scope.ids[0] }) },
       );
       setResult(data);
+      try {
+        setJob(await api.getUploadJob("concepts", job.id));
+      } catch {
+        // The result remains usable even if refreshing the completed job fails.
+      }
     } catch (e) {
       setError(String(e));
+      try {
+        setJob(await api.getUploadJob("concepts", job.id));
+      } catch {
+        // Keep the generation error visible if refreshing job state also fails.
+      }
     } finally {
       setBusy(false);
     }
@@ -162,7 +194,13 @@ function PreLearningUpload({ bookSources }: { bookSources: string[] }) {
   return (
     <>
       <div className="section-title">1 · Upload document</div>
-      <DocumentUpload module="concepts" conceptKind="pre" bookSources={bookSources} onJob={setJob} />
+      <DocumentUpload
+        module="concepts"
+        conceptKind="pre"
+        bookSources={bookSources}
+        externalJob={job}
+        onJob={setJob}
+      />
       {job?.status === "converted" && (
         <>
           <div className="section-title">2 · Deposit pre-learning concepts under a chapter</div>
@@ -172,7 +210,13 @@ function PreLearningUpload({ bookSources }: { bookSources: string[] }) {
             <div className="row" style={{ marginTop: 12 }}>
               <span className="muted">{scope ? `Chapter: ${scope.label}` : "Pick a chapter"}</span>
               <div className="spacer" />
-              <button disabled={!scope || busy} onClick={generate}>Generate pre-learning concepts</button>
+              <button disabled={!scope || busy} onClick={generate}>
+                {job.checkpoint_available
+                  ? `Resume from ${Math.round(
+                    (job.checkpoint_progress ?? 0) * 100,
+                  )}% checkpoint`
+                  : "Generate pre-learning concepts"}
+              </button>
             </div>
           </div>
         </>

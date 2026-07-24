@@ -9,11 +9,13 @@ exercised end to end.
 from __future__ import annotations
 
 import copy
+import hashlib
 import os
 import random
 import re
 import threading
 import unicodedata
+from datetime import datetime, timezone
 
 from .. import bulk_import as bi
 from .. import config, models
@@ -2969,12 +2971,123 @@ def _has_meaningful_types(details: str) -> bool:
     return len(body) > 12 and re.search(r"\bCase\b", body, re.IGNORECASE) is not None
 
 
+_MATHPIX_DISPLAY_ENV_RE = re.compile(
+    r"\\begin\{(?P<env>equation\*?|align\*?|aligned|gather\*?|"
+    r"gathered|multline\*?|array)\}"
+    r"(?P<body>.*?)"
+    r"\\end\{(?P=env)\}",
+    re.IGNORECASE | re.DOTALL,
+)
+_MATHPIX_STRUCTURAL_ENV_RE = re.compile(
+    r"\\(?:begin|end)\{(?:figure\*?|table\*?|center|flushleft|flushright|"
+    r"itemize|enumerate|description|quote)\}(?:\[[^\]]*\])?",
+    re.IGNORECASE,
+)
+_MATHPIX_HEADING_RE = re.compile(
+    r"\\(?:sub)*section\*?\{(?P<body>[^{}]*)\}",
+    re.IGNORECASE,
+)
+_MATHPIX_CAPTION_RE = re.compile(
+    r"\\caption(?:of\{(?:figure|table)\})?\{(?P<body>[^{}]*)\}",
+    re.IGNORECASE,
+)
+_MATHPIX_STYLE_RE = re.compile(
+    r"\\(?:textbf|textit|emph|underline|textrm|textsf|texttt)"
+    r"\{(?P<body>[^{}]*)\}",
+    re.IGNORECASE,
+)
+_MATHPIX_LABEL_RE = re.compile(
+    r"\\(?:label|vspace\*?|hspace\*?)\{[^{}]*\}",
+    re.IGNORECASE,
+)
+_MATHPIX_LAYOUT_COMMAND_RE = re.compile(
+    r"\\(?:centering|noindent|newpage|clearpage|pagebreak)\b",
+    re.IGNORECASE,
+)
+_MATHPIX_ITEM_RE = re.compile(
+    r"\\item(?:\[[^\]]*\])?\s*",
+    re.IGNORECASE,
+)
+_MATHPIX_SPACING_RE = re.compile(r"\\\\\s*\[[^\]]+\]")
+_CANONICAL_KATEX_SPAN_RE = re.compile(
+    r"\[katex\].*?\[/katex\]",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _normalize_common_mathpix_wrappers(text: str) -> str:
+    """Turn common document-layout LaTeX into supported rich text.
+
+    Mathpix source sometimes leaks figure, caption, list, or display-environment
+    wrappers into an otherwise useful generated description.  Those wrappers
+    are not mathematical content and are not supported by the Bulk Import
+    contract.  Normalize the known wrappers deterministically, while leaving
+    unknown TeX untouched so the strict validator can still report it.
+    """
+    value = str(text or "")
+    protected_math: list[str] = []
+
+    def protect_existing_math(match: re.Match) -> str:
+        token = f"@@AEGIS_EXISTING_KATEX_{len(protected_math):04d}@@"
+        protected_math.append(match.group(0))
+        return token
+
+    # Structural commands are valid *inside* a canonical KaTeX expression.
+    # Protect those expressions before stripping document-layout wrappers.
+    value = _CANONICAL_KATEX_SPAN_RE.sub(protect_existing_math, value)
+
+    def display_environment(match: re.Match) -> str:
+        env = (match.group("env") or "").lower()
+        body = (match.group("body") or "").strip()
+        if not body:
+            return ""
+        if env.startswith("array"):
+            expression = rf"\begin{{array}}{body}\end{{array}}"
+        elif env.startswith(("align", "gather", "multline")):
+            expression = rf"\begin{{aligned}}{body}\end{{aligned}}"
+        else:
+            expression = body
+        return kr.katex(expression)
+
+    value = _MATHPIX_DISPLAY_ENV_RE.sub(display_environment, value)
+    value = _MATHPIX_HEADING_RE.sub(
+        lambda match: (match.group("body") or "").strip(), value)
+    value = _MATHPIX_CAPTION_RE.sub(
+        lambda match: (
+            f"Caption: {(match.group('body') or '').strip()}"
+            if (match.group("body") or "").strip() else ""
+        ),
+        value,
+    )
+    # Style wrappers can be nested by Mathpix.  A few bounded passes unwrap the
+    # common cases without attempting to interpret arbitrary LaTeX.
+    for _ in range(4):
+        updated = _MATHPIX_STYLE_RE.sub(
+            lambda match: (match.group("body") or "").strip(), value)
+        if updated == value:
+            break
+        value = updated
+    value = _MATHPIX_STRUCTURAL_ENV_RE.sub("", value)
+    value = _MATHPIX_LABEL_RE.sub("", value)
+    value = _MATHPIX_LAYOUT_COMMAND_RE.sub("", value)
+    value = _MATHPIX_ITEM_RE.sub("• ", value)
+    value = _MATHPIX_SPACING_RE.sub("\n", value)
+    value = re.sub(r"[ \t]+\n", "\n", value)
+    value = re.sub(r"\n[ \t]+", "\n", value)
+    value = re.sub(r"\n{3,}", "\n\n", value)
+    for index, rendered in enumerate(protected_math):
+        value = value.replace(
+            f"@@AEGIS_EXISTING_KATEX_{index:04d}@@", rendered)
+    return value
+
+
 def _canonicalize_concept_rich_text(records: list[dict]) -> list[dict]:
     """Emit the exact rich-text wire format without changing row semantics."""
     for record in records:
         if record.get("concept_details"):
             record["concept_details"] = kr.canonicalize_rich_text(
-                record["concept_details"])
+                _normalize_common_mathpix_wrappers(
+                    record["concept_details"]))
     return records
 
 
@@ -7561,6 +7674,44 @@ _FATAL_CODES = {
 }
 
 
+_DIAGNOSTIC_SECRET_RE = re.compile(
+    r"\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{12,}|"
+    r"Bearer\s+[A-Za-z0-9._~+/=-]{12,})\b",
+    re.IGNORECASE,
+)
+
+
+def _diagnostic_snippet(value, *, limit: int = 180) -> str:
+    """Return one safe, bounded line for progress/error diagnostics."""
+    text = str(value or "")
+    text = "".join(
+        " " if unicodedata.category(char).startswith("C") else char
+        for char in text
+    )
+    text = _DIAGNOSTIC_SECRET_RE.sub("[REDACTED]", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) > limit:
+        text = text[:max(0, limit - 1)].rstrip() + "…"
+    return text
+
+
+def _validation_error_context(
+    records: list[dict], error: dict,
+) -> tuple[int, str, str, str]:
+    """Resolve the row/title/field/snippet represented by a validator error."""
+    row_index = error.get("row_index", -1)
+    if not isinstance(row_index, int):
+        row_index = -1
+    row = records[row_index] if 0 <= row_index < len(records) else {}
+    title = _diagnostic_snippet(
+        row.get("concept_title") or row.get("concept") or "<unknown>",
+        limit=80,
+    )
+    field = _diagnostic_snippet(error.get("field") or "<unknown>", limit=60)
+    snippet = _diagnostic_snippet(row.get(error.get("field", "")), limit=180)
+    return row_index, title, field, snippet
+
+
 def _fatal_errors(report: dict) -> list[dict]:
     return [
         e for e in report.get("errors", [])
@@ -8000,6 +8151,129 @@ def _hub_inventory_examples_in_types(
     return {key for key, count in counts.items() if count > 0}
 
 
+def _is_source_owned_type_section(label: str) -> bool:
+    return (
+        (label or "").strip().lower().startswith("type")
+        or cr.is_activity_hub_label(label)
+    )
+
+
+def _restore_source_owned_type_sections(
+    original: list[dict], candidate: list[dict],
+) -> tuple[list[dict], int]:
+    """Keep candidate repairs while restoring the known-good Type inventory.
+
+    A rejected repair used to roll every field back to ``original``.  This
+    rebuilds rows from the candidate's non-Type fields and sections, while
+    retaining the exact source-owned Types/Activity Hub sections and their
+    source topic from the known-good snapshot.
+    """
+    used_candidate_indexes: set[int] = set()
+    merged: list[dict] = []
+    preserved_repairs = 0
+
+    def find_candidate_index(original_index: int, row: dict) -> int | None:
+        exact = [
+            index for index, candidate_row in enumerate(candidate)
+            if index not in used_candidate_indexes
+            and _record_key(candidate_row) == _record_key(row)
+        ]
+        if len(exact) == 1:
+            return exact[0]
+        title_key = bi.normalize_question_text(row.get("concept_title", ""))
+        title_matches = [
+            index for index, candidate_row in enumerate(candidate)
+            if index not in used_candidate_indexes
+            and bi.normalize_question_text(
+                candidate_row.get("concept_title", "")) == title_key
+        ]
+        if title_key and len(title_matches) == 1:
+            return title_matches[0]
+        method_ids = _method_anchor_ids(row)
+        method_matches = [
+            index for index, candidate_row in enumerate(candidate)
+            if index not in used_candidate_indexes
+            and method_ids
+            and bool(method_ids.intersection(
+                _method_anchor_ids(candidate_row)))
+        ]
+        if len(method_matches) == 1:
+            return method_matches[0]
+        if (
+            len(candidate) == len(original)
+            and original_index not in used_candidate_indexes
+        ):
+            return original_index
+        return None
+
+    for original_index, original_row in enumerate(original):
+        candidate_index = find_candidate_index(original_index, original_row)
+        if candidate_index is None:
+            merged.append(copy.deepcopy(original_row))
+            continue
+        used_candidate_indexes.add(candidate_index)
+        candidate_row = copy.deepcopy(candidate[candidate_index])
+        original_sections = cr.split_sections(
+            original_row.get("concept_details", ""))
+        protected_sections = [
+            (label, content)
+            for label, content in original_sections
+            if _is_source_owned_type_section(label)
+        ]
+        candidate_sections = [
+            (label, content)
+            for label, content in cr.split_sections(
+                candidate_row.get("concept_details", ""))
+            if not _is_source_owned_type_section(label)
+        ]
+        if not candidate_sections:
+            candidate_sections = [
+                (label, content)
+                for label, content in original_sections
+                if not _is_source_owned_type_section(label)
+            ]
+        insert_at = next(
+            (
+                index for index, (label, _) in enumerate(candidate_sections)
+                if (
+                    cr.is_misconception_label(label)
+                    or cr.is_error_analysis_label(label)
+                )
+            ),
+            len(candidate_sections),
+        )
+        candidate_row["concept_details"] = cr.join_sections(
+            candidate_sections[:insert_at]
+            + protected_sections
+            + candidate_sections[insert_at:]
+        )
+        if protected_sections:
+            # Topic placement is part of the exact source-inventory contract.
+            candidate_row["topic"] = original_row.get("topic", "")
+        if candidate_row != original_row:
+            preserved_repairs += 1
+        merged.append(candidate_row)
+    if merged == original:
+        return original, 0
+    return merged, preserved_repairs
+
+
+def _exact_type_review_is_safe(
+    records: list[dict], inventory: dict | None,
+    mined_types: dict | None = None,
+) -> bool:
+    defects = _rendered_inventory_coverage_defects(records, inventory)
+    if defects["missing"] or defects["duplicate"]:
+        return False
+    if _rendered_inventory_topic_violations(
+        records, inventory, mined_types
+    ):
+        return False
+    if _activity_example_hub_alignment_violations(records, inventory):
+        return False
+    return not _hub_inventory_examples_in_types(records, inventory)
+
+
 def _accept_exact_inventory_type_review(
     original: list[dict], candidate: list[dict], inventory: dict | None,
     mined_types: dict | None = None,
@@ -8013,6 +8287,15 @@ def _accept_exact_inventory_type_review(
             f"{len(defects['duplicate'])} duplicated Example(s).",
             level="warning",
         )
+        restored, preserved = _restore_source_owned_type_sections(
+            original, candidate)
+        if _exact_type_review_is_safe(restored, inventory, mined_types):
+            progress.log(
+                "Restored the known-good Types/Activity inventory while "
+                f"retaining non-Type repairs on {preserved} row(s).",
+                level="warning",
+            )
+            return restored
         return original
     topic_violations = _rendered_inventory_topic_violations(
         candidate, inventory, mined_types)
@@ -8025,6 +8308,15 @@ def _accept_exact_inventory_type_review(
             f"{len(activity_violations)} away from their Activity/Info Hub.",
             level="warning",
         )
+        restored, preserved = _restore_source_owned_type_sections(
+            original, candidate)
+        if _exact_type_review_is_safe(restored, inventory, mined_types):
+            progress.log(
+                "Restored the known-good Types/Activity inventory while "
+                f"retaining non-Type repairs on {preserved} row(s).",
+                level="warning",
+            )
+            return restored
         return original
     misplaced_hub_items = _hub_inventory_examples_in_types(candidate, inventory)
     if misplaced_hub_items:
@@ -8033,6 +8325,15 @@ def _accept_exact_inventory_type_review(
             f"{len(misplaced_hub_items)} Activity/Info Hub item(s) in Examples.",
             level="warning",
         )
+        restored, preserved = _restore_source_owned_type_sections(
+            original, candidate)
+        if _exact_type_review_is_safe(restored, inventory, mined_types):
+            progress.log(
+                "Restored the known-good Types/Activity inventory while "
+                f"retaining non-Type repairs on {preserved} row(s).",
+                level="warning",
+            )
+            return restored
         return original
     return candidate
 
@@ -8804,8 +9105,25 @@ def _validate_final_or_raise(
         f"{stage}: final validation found {len(fatal)} fatal error(s), "
         f"{report['summary'].get('warnings', 0)} warning(s).")
     if fatal:
+        for error in fatal:
+            row_index, title, field, snippet = _validation_error_context(
+                records, error)
+            progress.log(
+                "  fatal validation error: "
+                f"row_index={row_index}; concept={title!r}; field={field!r}; "
+                f"code={_diagnostic_snippet(error.get('code'), limit=60)!r}; "
+                f"message={_diagnostic_snippet(error.get('message'))!r}; "
+                f"snippet={snippet!r}",
+                level="error",
+            )
         codes = ", ".join(sorted({e["code"] for e in fatal}))
-        raise RuntimeError(f"{stage} validation failed: {codes}")
+        first_index, first_title, first_field, _ = _validation_error_context(
+            records, fatal[0])
+        raise RuntimeError(
+            f"{stage} validation failed: {codes}; first at "
+            f"row_index={first_index}, concept={first_title!r}, "
+            f"field={first_field!r}"
+        )
     return report
 
 
@@ -10018,25 +10336,98 @@ def _recover_method_anchor_rows_via_api(
             + _trim(chunk_text, 120_000)
         )
         data = _openai_json(system, user)
-        raw_rows = data.get("rows") if isinstance(data, dict) else []
-        if not isinstance(raw_rows, list):
+        raw_rows_value = data.get("rows") if isinstance(data, dict) else None
+        response_issue = ""
+        if not isinstance(data, dict):
+            response_issue = (
+                f"response must be an object, received "
+                f"{type(data).__name__}"
+            )
+            raw_rows: list = []
+        elif not isinstance(raw_rows_value, list):
+            response_issue = (
+                "response field 'rows' must be a list, received "
+                f"{type(raw_rows_value).__name__}"
+            )
             raw_rows = []
+        else:
+            raw_rows = raw_rows_value
+        if response_issue:
+            progress.log(
+                f"  method-anchor recovery attempt={attempt} response rejected: "
+                f"{response_issue}.",
+                level="warning",
+            )
+        elif not raw_rows:
+            progress.log(
+                f"  method-anchor recovery attempt={attempt} returned no rows.",
+                level="warning",
+            )
 
         tagged_counts: dict[str, int] = {}
-        valid_by_anchor: dict[str, list[dict]] = {}
-        invalid_count = 0
-        for raw_row in raw_rows:
+        valid_by_anchor: dict[str, list[tuple[int, dict, dict]]] = {}
+        rejected_rows: set[int] = set()
+
+        def reject_row(
+            row_index: int, raw_row, reason: str, *,
+            anchor_id: str = "",
+        ) -> None:
+            rejected_rows.add(row_index)
+            row_dict = raw_row if isinstance(raw_row, dict) else {}
+            title = _diagnostic_snippet(
+                row_dict.get("concept")
+                or row_dict.get("concept_title")
+                or "<unknown>",
+                limit=80,
+            )
+            evidence = _diagnostic_snippet(
+                row_dict.get("source_evidence"), limit=100)
+            description = _diagnostic_snippet(
+                row_dict.get("concept_description")
+                or row_dict.get("concept_details"),
+                limit=140,
+            )
+            progress.log(
+                f"  method-anchor recovery attempt={attempt} "
+                f"row_index={row_index} rejected: "
+                f"anchor={anchor_id or '<unresolved>'!r}; "
+                f"concept={title!r}; reason={_diagnostic_snippet(reason)!r}; "
+                f"source_evidence={evidence!r}; snippet={description!r}",
+                level="warning",
+            )
+
+        for raw_index, raw_row in enumerate(raw_rows):
             if not isinstance(raw_row, dict):
-                invalid_count += 1
+                reject_row(
+                    raw_index,
+                    raw_row,
+                    f"row must be an object, received "
+                    f"{type(raw_row).__name__}",
+                )
                 continue
             raw_evidence = raw_row.get("source_evidence")
             if not isinstance(raw_evidence, str):
-                invalid_count += 1
+                reject_row(
+                    raw_index,
+                    raw_row,
+                    "source_evidence must be a non-empty string containing "
+                    "one pending METHOD ID",
+                )
                 continue
             exact_ids = set(_METHOD_ANCHOR_ID_RE.findall(raw_evidence))
             matching_ids = exact_ids.intersection(pending)
             if len(exact_ids) != 1 or len(matching_ids) != 1:
-                invalid_count += 1
+                found = ", ".join(sorted(exact_ids)) or "<none>"
+                expected = ", ".join(
+                    anchor_id for anchor_id in ordered_ids
+                    if anchor_id in pending
+                )
+                reject_row(
+                    raw_index,
+                    raw_row,
+                    "source_evidence must contain exactly one pending METHOD "
+                    f"ID; found {found}; pending {expected}",
+                )
                 continue
             anchor_id = next(iter(matching_ids))
             tagged_counts[anchor_id] = tagged_counts.get(anchor_id, 0) + 1
@@ -10045,23 +10436,43 @@ def _recover_method_anchor_rows_via_api(
                 "topic", "parent_concept", "concept",
                 "concept_description", "source_evidence",
             )
-            if any(
+            missing_fields = [
+                field for field in required_fields
+                if (
                 not isinstance(raw_row.get(field), str)
                 or not raw_row.get(field, "").strip()
-                for field in required_fields
-            ):
-                invalid_count += 1
+                )
+            ]
+            if missing_fields:
+                reject_row(
+                    raw_index,
+                    raw_row,
+                    "missing or non-string required field(s): "
+                    + ", ".join(missing_fields),
+                    anchor_id=anchor_id,
+                )
                 continue
             if (
                 raw_row.get("keywords") is not None
                 and not isinstance(raw_row.get("keywords"), str)
             ):
-                invalid_count += 1
+                reject_row(
+                    raw_index,
+                    raw_row,
+                    "keywords must be a string when present",
+                    anchor_id=anchor_id,
+                )
                 continue
 
             parsed = _concept_rows_to_records({"rows": [raw_row]})
             if len(parsed) != 1:
-                invalid_count += 1
+                reject_row(
+                    raw_index,
+                    raw_row,
+                    "row parser did not produce exactly one concept record "
+                    f"(produced {len(parsed)})",
+                    anchor_id=anchor_id,
+                )
                 continue
             record = parsed[0]
             anchor = pending[anchor_id]
@@ -10076,6 +10487,10 @@ def _recover_method_anchor_rows_via_api(
                 f"{anchor_id} | {source_evidence}"
                 if source_evidence else anchor_id
             )
+            # Recovery rows often repeat a source formula using raw $...$ or a
+            # Mathpix display wrapper.  Normalize the row before applying the
+            # same strict contract used by the final map.
+            record = _canonicalize_concept_rich_text([record])[0]
 
             report = cv.validate_concept_rows(
                 [record],
@@ -10084,24 +10499,56 @@ def _recover_method_anchor_rows_via_api(
                 allow_culmination=False,
             )
             if not report["ok"]:
-                invalid_count += 1
+                hard_errors = [
+                    error for error in report.get("errors", [])
+                    if error.get("severity") == "error"
+                ]
+                reason = "; ".join(
+                    f"{error.get('code')} field={error.get('field')}: "
+                    f"{error.get('message')}"
+                    for error in hard_errors
+                ) or "strict concept validation failed"
+                reject_row(
+                    raw_index,
+                    raw_row,
+                    reason,
+                    anchor_id=anchor_id,
+                )
                 continue
-            valid_by_anchor.setdefault(anchor_id, []).append(record)
+            valid_by_anchor.setdefault(anchor_id, []).append(
+                (raw_index, record, raw_row))
 
         accepted = 0
         for anchor_id in ordered_ids:
             if anchor_id not in pending:
                 continue
             candidates = valid_by_anchor.get(anchor_id, [])
-            if tagged_counts.get(anchor_id) != 1 or len(candidates) != 1:
+            tagged_count = tagged_counts.get(anchor_id, 0)
+            if tagged_count != 1:
+                for raw_index, _, raw_row in candidates:
+                    reject_row(
+                        raw_index,
+                        raw_row,
+                        "expected exactly one returned row with this METHOD "
+                        f"ID, received {tagged_count}",
+                        anchor_id=anchor_id,
+                    )
                 continue
-            record = candidates[0]
+            if len(candidates) != 1:
+                continue
+            raw_index, record, raw_row = candidates[0]
             key = (
                 _topic_comparison_key(record.get("topic", "")),
                 bi.normalize_question_text(record.get("concept_title", "")),
             )
             if key in recovered_keys:
-                invalid_count += 1
+                reject_row(
+                    raw_index,
+                    raw_row,
+                    "topic and concept title duplicate an already recovered "
+                    "method row",
+                    anchor_id=anchor_id,
+                )
                 continue
             recovered[anchor_id] = record
             recovered_keys.add(key)
@@ -10113,8 +10560,9 @@ def _recover_method_anchor_rows_via_api(
             f"{attempt_limit}: accepted {accepted} row(s), "
             f"{len(pending)} anchor(s) still missing"
             + (
-                f"; rejected {invalid_count} malformed row(s)."
-                if invalid_count else "."
+                f"; rejected {len(rejected_rows)} row(s) with detailed "
+                "reasons above."
+                if rejected_rows else "."
             ),
             level="warning" if pending else "success",
         )
@@ -10185,16 +10633,63 @@ def _canonicalize_method_anchor_tags(
 def _extract_skeleton_via_api(
     chunks: list[dict], *, meta: dict,
     progress_start: float = 0.03, progress_end: float = 0.24,
+    resume_chunks: list[dict] | None = None,
+    checkpoint_callback=None,
 ) -> list[dict]:
     system = prompts.get_text("concepts.skeleton.system")
     all_records: list[dict] = []
     progress.log(
         f"Section-aware skeleton extraction across {len(chunks)} chunk(s).")
+    completed_chunks: list[dict] = []
+    restored_by_index: dict[int, list[dict]] = {}
+    for expected_index, saved in enumerate(resume_chunks or [], start=1):
+        if expected_index > len(chunks) or not isinstance(saved, dict):
+            break
+        if (
+            saved.get("chunk_index") != expected_index
+            or (
+                saved.get("chunk_count") is not None
+                and saved.get("chunk_count") != len(chunks)
+            )
+            or saved.get("chunk_sha256") != _chunk_checkpoint_sha256(
+                chunks[expected_index - 1])
+            or not isinstance(saved.get("records"), list)
+        ):
+            break
+        durable_chunk = {
+            "chunk_index": expected_index,
+            "chunk_count": len(chunks),
+            "chunk_sha256": saved["chunk_sha256"],
+            "records": copy.deepcopy(saved["records"]),
+        }
+        completed_chunks.append(durable_chunk)
+        restored_by_index[expected_index] = durable_chunk["records"]
+    if restored_by_index:
+        progress.log(
+            f"Restored {len(restored_by_index)}/{len(chunks)} completed "
+            "skeleton chunk(s) from the saved checkpoint.",
+            level="success",
+        )
     for i, chunk in enumerate(chunks, start=1):
         fraction = (i - 1) / max(len(chunks), 1)
         progress.step(f"Concept skeleton — chunk {i}/{len(chunks)}",
                       value=progress_start
                       + (progress_end - progress_start) * fraction)
+        if i in restored_by_index:
+            chunk_records = copy.deepcopy(restored_by_index[i])
+            all_records.extend(chunk_records)
+            progress.log(
+                f"  chunk {i}/{len(chunks)} restored from checkpoint: "
+                f"{len(chunk_records)} skeleton row(s).",
+                level="success",
+            )
+            progress.set_progress(
+                progress_start
+                + (progress_end - progress_start)
+                * (i / max(len(chunks), 1)),
+                label=f"Concept skeleton chunk {i}/{len(chunks)} restored",
+            )
+            continue
         chunk_headings = _topic_headings(chunk.get("sections") or [])
         method_anchors = _method_coverage_anchors(
             chunk.get("sections") or [])
@@ -10330,10 +10825,27 @@ def _extract_skeleton_via_api(
         chunk_records = _ensure_parent_concepts(chunk_records)
         progress.log(f"  chunk {i}/{len(chunks)} skeleton rows: {len(chunk_records)}")
         all_records.extend(chunk_records)
-        progress.set_progress(
+        completed_chunks.append({
+            "chunk_index": i,
+            "chunk_count": len(chunks),
+            "chunk_sha256": _chunk_checkpoint_sha256(chunk),
+            "records": copy.deepcopy(chunk_records),
+        })
+        chunk_progress = (
             progress_start
             + (progress_end - progress_start)
-            * (i / max(len(chunks), 1)),
+            * (i / max(len(chunks), 1))
+        )
+        _emit_concept_checkpoint(
+            checkpoint_callback,
+            "skeleton_chunks",
+            progress_value=chunk_progress,
+            stage_label=f"Concept skeleton chunk {i}/{len(chunks)} complete",
+            completed_chunks=completed_chunks,
+            chunk_count=len(chunks),
+        )
+        progress.set_progress(
+            chunk_progress,
             label=f"Concept skeleton — chunk {i}/{len(chunks)} complete",
         )
     out = _merge_concept_records(all_records)
@@ -11152,8 +11664,98 @@ def chapter_meta_via_api(
     return out
 
 
-_CONCEPT_CHECKPOINT_SCHEMA = 2
+_LEGACY_CONCEPT_CHECKPOINT_SCHEMA = 2
+_CONCEPT_CHECKPOINT_SCHEMA = 3
+_CONCEPT_CHECKPOINT_FORMAT = "aegis-concept-stage-history"
 _CONCEPT_CHECKPOINT_STAGE = "pre_type_assignment"
+
+# Stage versions describe the serialized artifact contract, not the git
+# revision that produced it.  A later deployment may therefore reuse an older
+# checkpoint when its stage contract is still accepted.  Bump only the stage
+# whose payload or meaning becomes incompatible.
+_CONCEPT_CHECKPOINT_STAGES = {
+    "skeleton_chunks": {
+        "order": 10,
+        "version": 1,
+        "progress": 0.24,
+        "label": "Concept skeleton chunks",
+    },
+    "skeleton_complete": {
+        "order": 20,
+        "version": 1,
+        "progress": 0.24,
+        "label": "Concept skeleton complete",
+    },
+    "canonical_skeleton": {
+        "order": 30,
+        "version": 1,
+        "progress": 0.35,
+        "label": "Canonical skeleton and source topics complete",
+    },
+    "description_method_snapshot": {
+        "order": 40,
+        "version": 1,
+        "progress": 0.55,
+        "label": "Descriptions and method snapshot complete",
+    },
+    "question_inventory": {
+        "order": 50,
+        "version": 1,
+        "progress": 0.70,
+        "label": "Question and task inventory complete",
+    },
+    _CONCEPT_CHECKPOINT_STAGE: {
+        "order": 60,
+        "version": 1,
+        "progress": 0.81,
+        "label": "Reusable Types mined; ready for Type assignment",
+    },
+    "post_type_assignment": {
+        "order": 70,
+        "version": 1,
+        "progress": 0.91,
+        "label": "Type assignment and activity hubs complete",
+    },
+    "final_content_ready": {
+        "order": 80,
+        "version": 1,
+        "progress": 0.98,
+        "label": "Final content ready for deterministic validation",
+    },
+    "pre_derivation_draft": {
+        "order": 90,
+        "version": 1,
+        "progress": 0.985,
+        "label": "Pre-learning dependency draft complete",
+    },
+    "pre_derivation_audited": {
+        "order": 100,
+        "version": 1,
+        "progress": 0.992,
+        "label": "Pre-learning syllabus audit complete",
+    },
+    "pre_learner_analysis": {
+        "order": 110,
+        "version": 1,
+        "progress": 0.998,
+        "label": "Pre-learning learner analysis complete",
+    },
+}
+_POST_CONCEPT_CHECKPOINT_STAGES = {
+    "skeleton_chunks",
+    "skeleton_complete",
+    "canonical_skeleton",
+    "description_method_snapshot",
+    "question_inventory",
+    _CONCEPT_CHECKPOINT_STAGE,
+    "post_type_assignment",
+    "final_content_ready",
+}
+_PRE_DERIVATION_CHECKPOINT_STAGES = {
+    "pre_derivation_draft",
+    "pre_derivation_audited",
+    "pre_learner_analysis",
+}
 
 
 def _serialize_method_row_snapshot(
@@ -11183,16 +11785,627 @@ def _deserialize_method_row_snapshot(
     return snapshot
 
 
+def _concept_checkpoint_entries(checkpoint: dict | None) -> list[dict]:
+    """Return serialized stage entries from a v3 envelope or legacy entry."""
+    if not isinstance(checkpoint, dict):
+        return []
+    if not checkpoint:
+        return []
+    if checkpoint.get("checkpoint_format") == _CONCEPT_CHECKPOINT_FORMAT:
+        if checkpoint.get("schema_version") != _CONCEPT_CHECKPOINT_SCHEMA:
+            return []
+        history = checkpoint.get("checkpoints")
+        if not isinstance(history, list):
+            return []
+        return [entry for entry in history if isinstance(entry, dict)]
+    return [checkpoint]
+
+
+def _checkpoint_has_fields(checkpoint: dict, *requirements: tuple[str, type]) -> bool:
+    return all(isinstance(checkpoint.get(field), expected) for field, expected in requirements)
+
+
+def _valid_completed_skeleton_chunks(value) -> bool:
+    if not isinstance(value, list) or not value:
+        return False
+    expected_index = 1
+    for item in value:
+        if (
+            not isinstance(item, dict)
+            or item.get("chunk_index") != expected_index
+            or not isinstance(item.get("chunk_sha256"), str)
+            or not item.get("chunk_sha256")
+            or not isinstance(item.get("records"), list)
+        ):
+            return False
+        expected_index += 1
+    return True
+
+
+def _compatible_concept_checkpoint_entry(checkpoint: dict | None) -> bool:
+    """Whether this deployment can safely consume one serialized stage."""
+    if not isinstance(checkpoint, dict):
+        return False
+    schema = checkpoint.get("schema_version")
+    stage = checkpoint.get("stage")
+    if schema == _LEGACY_CONCEPT_CHECKPOINT_SCHEMA:
+        return bool(
+            stage == _CONCEPT_CHECKPOINT_STAGE
+            and _checkpoint_has_fields(
+                checkpoint,
+                ("records", list),
+                ("question_task_inventory", dict),
+                ("mined_types", dict),
+                ("method_row_snapshot", list),
+            )
+        )
+    spec = _CONCEPT_CHECKPOINT_STAGES.get(stage)
+    if schema != _CONCEPT_CHECKPOINT_SCHEMA or spec is None:
+        return False
+    if checkpoint.get("stage_schema_version", 1) != spec["version"]:
+        return False
+    if stage == "skeleton_chunks":
+        return _valid_completed_skeleton_chunks(
+            checkpoint.get("completed_chunks"))
+    if stage == "pre_derivation_draft":
+        return _checkpoint_has_fields(
+            checkpoint, ("records", list), ("pre_draft", dict))
+    if stage == "pre_derivation_audited":
+        return _checkpoint_has_fields(
+            checkpoint, ("records", list), ("pre_audited", dict))
+    if stage == "pre_learner_analysis":
+        return _checkpoint_has_fields(
+            checkpoint, ("records", list), ("base_records", list))
+    if not _checkpoint_has_fields(checkpoint, ("records", list)):
+        return False
+    if stage == "canonical_skeleton":
+        return _checkpoint_has_fields(
+            checkpoint, ("skeleton_method_row_snapshot", list))
+    if stage in {
+        "description_method_snapshot",
+        "question_inventory",
+        _CONCEPT_CHECKPOINT_STAGE,
+        "post_type_assignment",
+        "final_content_ready",
+    } and not _checkpoint_has_fields(
+        checkpoint, ("method_row_snapshot", list)
+    ):
+        return False
+    if stage in {
+        "question_inventory",
+        _CONCEPT_CHECKPOINT_STAGE,
+        "post_type_assignment",
+        "final_content_ready",
+    } and not _checkpoint_has_fields(
+        checkpoint, ("question_task_inventory", dict)
+    ):
+        return False
+    if stage in {
+        _CONCEPT_CHECKPOINT_STAGE,
+        "post_type_assignment",
+        "final_content_ready",
+    } and not _checkpoint_has_fields(checkpoint, ("mined_types", dict)):
+        return False
+    return True
+
+
+def _newest_compatible_concept_checkpoint(
+    checkpoint: dict | None,
+    *, allowed_stages: set[str] | None = None,
+) -> dict | None:
+    """Select the furthest compatible completed stage, ignoring newer unknowns."""
+    candidates: list[tuple[int, int, dict]] = []
+    for index, entry in enumerate(_concept_checkpoint_entries(checkpoint)):
+        if not _compatible_concept_checkpoint_entry(entry):
+            continue
+        stage = str(entry.get("stage") or "")
+        if allowed_stages is not None and stage not in allowed_stages:
+            continue
+        order = _CONCEPT_CHECKPOINT_STAGES.get(
+            stage, {"order": 60 if stage == _CONCEPT_CHECKPOINT_STAGE else -1}
+        )["order"]
+        candidates.append((int(order), index, entry))
+    if not candidates:
+        return None
+    return copy.deepcopy(max(candidates, key=lambda item: (item[0], item[1]))[2])
+
+
 def _valid_concept_checkpoint(checkpoint: dict | None) -> bool:
-    return bool(
-        isinstance(checkpoint, dict)
-        and checkpoint.get("schema_version") == _CONCEPT_CHECKPOINT_SCHEMA
-        and checkpoint.get("stage") == _CONCEPT_CHECKPOINT_STAGE
-        and isinstance(checkpoint.get("records"), list)
-        and isinstance(checkpoint.get("question_task_inventory"), dict)
-        and isinstance(checkpoint.get("mined_types"), dict)
-        and isinstance(checkpoint.get("method_row_snapshot"), list)
+    """Backward-compatible public predicate used by upload/bundle services."""
+    return _newest_compatible_concept_checkpoint(checkpoint) is not None
+
+
+def _checkpoint_order(stage: str) -> int:
+    return int(_CONCEPT_CHECKPOINT_STAGES.get(stage, {}).get("order", -1))
+
+
+def _make_concept_checkpoint(
+    stage: str, *, progress_value: float | None = None,
+    stage_label: str = "", **payload,
+) -> dict:
+    spec = _CONCEPT_CHECKPOINT_STAGES[stage]
+    value = spec["progress"] if progress_value is None else progress_value
+    return {
+        "schema_version": _CONCEPT_CHECKPOINT_SCHEMA,
+        "stage_schema_version": spec["version"],
+        "stage": stage,
+        "stage_order": spec["order"],
+        "saved_at": datetime.now(timezone.utc).isoformat(),
+        "progress": max(0.0, min(1.0, float(value))),
+        "stage_label": stage_label or spec["label"],
+        **copy.deepcopy(payload),
+    }
+
+
+def _emit_concept_checkpoint(
+    checkpoint_callback, stage: str, *, progress_value: float | None = None,
+    stage_label: str = "", **payload,
+) -> dict:
+    checkpoint = _make_concept_checkpoint(
+        stage,
+        progress_value=progress_value,
+        stage_label=stage_label,
+        **payload,
     )
+    if checkpoint_callback is not None:
+        checkpoint_callback(checkpoint)
+    return checkpoint
+
+
+def _chunk_checkpoint_sha256(chunk: dict) -> str:
+    return hashlib.sha256(
+        str(chunk.get("text") or "").encode("utf-8")
+    ).hexdigest()
+
+
+def _run_live_concept_pre_final_stages(
+    mmd_text: str, *,
+    subject: str,
+    board: str,
+    chapter_title: str,
+    chunks: list[dict],
+    sections: list[dict],
+    method_anchors: list[dict],
+    headings: list[str],
+    source_topic_excerpts: list[dict],
+    allow_chapter_title_topic: bool,
+    meta: dict,
+    artifacts: dict | None,
+    resume_checkpoint: dict | None,
+    checkpoint_callback,
+) -> tuple[list[dict], dict, dict, dict[tuple[str, str], dict]]:
+    """Run through Type/activity assignment from the newest compatible stage."""
+    saved = _newest_compatible_concept_checkpoint(
+        resume_checkpoint,
+        allowed_stages=_POST_CONCEPT_CHECKPOINT_STAGES,
+    )
+    saved_stage = str(saved.get("stage") or "") if saved else ""
+    saved_order = _checkpoint_order(saved_stage)
+    out: list[dict] = []
+    question_task_inventory: dict = {}
+    mined_types: dict = {}
+    method_row_snapshot: dict[tuple[str, str], dict] = {}
+    skeleton_method_row_snapshot: dict[tuple[str, str], dict] = {}
+
+    if saved:
+        label = str(saved.get("stage_label") or saved_stage).strip()
+        try:
+            saved_progress = float(saved.get("progress") or 0.0)
+        except (TypeError, ValueError):
+            saved_progress = 0.0
+        progress.step(
+            f"Concept extraction — resuming from {label}",
+            value=saved_progress,
+        )
+        if saved_stage != "skeleton_chunks":
+            out = copy.deepcopy(saved.get("records") or [])
+            if not out:
+                raise RuntimeError(
+                    "saved concept checkpoint is incomplete; replace the file "
+                    "or clear the checkpoint before retrying")
+        if saved_order >= _checkpoint_order("canonical_skeleton"):
+            skeleton_method_row_snapshot = _deserialize_method_row_snapshot(
+                saved.get("skeleton_method_row_snapshot"))
+        if saved_order >= _checkpoint_order("description_method_snapshot"):
+            method_row_snapshot = _deserialize_method_row_snapshot(
+                saved.get("method_row_snapshot"))
+        if saved_order >= _checkpoint_order("question_inventory"):
+            question_task_inventory = copy.deepcopy(
+                saved.get("question_task_inventory") or {})
+        if saved_order >= _checkpoint_order(_CONCEPT_CHECKPOINT_STAGE):
+            mined_types = copy.deepcopy(saved.get("mined_types") or {})
+        progress.log(
+            f"Restored checkpoint stage '{saved_stage}' "
+            f"({len(out)} materialized concept row(s)).",
+            level="success",
+        )
+
+    if saved_order < _checkpoint_order("skeleton_complete"):
+        out = _extract_skeleton_via_api(
+            chunks,
+            meta=meta,
+            resume_chunks=(
+                saved.get("completed_chunks") or []
+                if saved_stage == "skeleton_chunks" and saved else []
+            ),
+            checkpoint_callback=checkpoint_callback,
+        )
+        if not out:
+            raise RuntimeError("live concept extraction returned no rows")
+        _emit_concept_checkpoint(
+            checkpoint_callback,
+            "skeleton_complete",
+            records=out,
+        )
+
+    if saved_order < _checkpoint_order("canonical_skeleton"):
+        out = _canonicalize_method_anchor_tags(
+            out, method_anchors, chunk_text=mmd_text, meta=meta)
+        skeleton_method_row_snapshot = _snapshot_method_anchor_rows(
+            out, method_anchors)
+        progress.step("Concept extraction — canonicalizing skeleton", value=0.27)
+        out = _scrub_section_numbers(out)
+        out = _snap_topics_to_headings(
+            out, headings, chapter_title=chapter_title,
+            allow_chapter_title_topic=allow_chapter_title_topic)
+        out = _consolidate_concepts_via_api(
+            out, subject=subject, mmd_text=mmd_text, meta=meta)
+        progress.step("Concept extraction — aligning source topics", value=0.35)
+        if _topics_look_collapsed(out, headings):
+            progress.log(
+                f"Topic segregation collapsed: {len(out)} concepts share "
+                f"almost one topic while the source has {len(headings)} "
+                "section headings — re-segregating topics via API.",
+                level="warning",
+            )
+        if len(headings) >= 3 or (
+            headings and _topics_look_collapsed(out, headings)
+        ):
+            out = _restructure_topics_via_api(
+                out, meta=meta,
+                source_topic_excerpts=source_topic_excerpts)
+        else:
+            out = _assign_topics_from_source_evidence(
+                out, source_topic_excerpts)
+        out = _snap_topics_to_headings(
+            out, headings, chapter_title=chapter_title,
+            allow_chapter_title_topic=allow_chapter_title_topic)
+        out = _recover_missing_topic_concepts_via_api(
+            out, meta=meta, source_topic_excerpts=source_topic_excerpts)
+        out = _reorder_records_by_source_topics(out, headings)
+        out = _restore_method_anchor_rows(
+            out, skeleton_method_row_snapshot)
+        out = _enforce_method_anchor_topics(out, method_anchors)
+        out = _canonicalize_method_anchor_tags(
+            out, method_anchors, chunk_text=mmd_text, meta=meta)
+        out = _consolidate_task_grounded_fragments_via_api(
+            out, meta=meta,
+            source_topic_excerpts=source_topic_excerpts,
+            method_anchors=method_anchors)
+        out = _enforce_method_anchor_topics(out, method_anchors)
+        out = _canonicalize_method_anchor_tags(
+            out, method_anchors, chunk_text=mmd_text, meta=meta)
+        out = _recover_chapter_opening_concepts_via_api(
+            out, meta=meta, sections=sections, headings=headings)
+        out = _reorder_records_by_source_topics(out, headings)
+        _emit_concept_checkpoint(
+            checkpoint_callback,
+            "canonical_skeleton",
+            records=out,
+            skeleton_method_row_snapshot=_serialize_method_row_snapshot(
+                skeleton_method_row_snapshot),
+        )
+
+    if saved_order < _checkpoint_order("description_method_snapshot"):
+        progress.step(
+            "Concept extraction — refining descriptions", value=0.42)
+        out = _refine_descriptions_via_api(
+            out, subject=subject, mmd_text=mmd_text, meta=meta,
+            sections=sections)
+        out = _ensure_method_worked_examples_via_api(
+            out, anchors=method_anchors, meta=meta)
+        out = _ensure_mastery_lines_via_api(out, meta=meta)
+        out = _restore_method_anchor_rows(
+            out, skeleton_method_row_snapshot)
+        out = _enforce_method_anchor_topics(out, method_anchors)
+        method_row_snapshot = _snapshot_method_anchor_rows(
+            out, method_anchors)
+        unsnapshotted_anchors = [
+            anchor for anchor in method_anchors
+            if (
+                str(anchor.get("anchor_id") or "").upper(),
+                _topic_comparison_key(anchor.get("topic_hint", "")),
+            ) not in method_row_snapshot
+        ]
+        if unsnapshotted_anchors:
+            raise RuntimeError(
+                "post-description method-row restoration could not "
+                "snapshot mandatory full-chapter anchors: "
+                + ", ".join(
+                    anchor["anchor_id"] for anchor in unsnapshotted_anchors)
+            )
+        if method_row_snapshot:
+            snapshotted_rows = {
+                (
+                    _topic_comparison_key(row.get("topic", "")),
+                    bi.normalize_question_text(
+                        row.get("concept_title", "")),
+                )
+                for row in method_row_snapshot.values()
+            }
+            progress.log(
+                f"Snapshotted {len(snapshotted_rows)} refined method "
+                f"row(s) covering {len(method_row_snapshot)} mandatory "
+                "anchor(s).")
+        progress.set_progress(
+            0.55, label="Concept extraction — descriptions complete")
+        _emit_concept_checkpoint(
+            checkpoint_callback,
+            "description_method_snapshot",
+            records=out,
+            method_row_snapshot=_serialize_method_row_snapshot(
+                method_row_snapshot),
+        )
+
+    if saved_order < _checkpoint_order("question_inventory"):
+        progress.step(
+            "Concept extraction — inventorying questions and worked examples",
+            value=0.58,
+        )
+        question_task_inventory = _extract_question_task_inventory_via_api(
+            meta=meta, sections=sections, records=out)
+        progress.set_progress(
+            0.70, label="Concept extraction — question inventory complete")
+        _emit_concept_checkpoint(
+            checkpoint_callback,
+            "question_inventory",
+            records=out,
+            question_task_inventory=question_task_inventory,
+            method_row_snapshot=_serialize_method_row_snapshot(
+                method_row_snapshot),
+        )
+
+    if saved_order < _checkpoint_order(_CONCEPT_CHECKPOINT_STAGE):
+        progress.step(
+            "Concept extraction — mining reusable Types", value=0.72)
+        mined_types = _mine_types_from_inventory_via_api(
+            meta=meta, inventory=question_task_inventory)
+        mined_types = _consolidate_semantic_types_via_api(
+            mined_types, inventory=question_task_inventory, meta=meta)
+        concept_count_before_sufficiency = len(out)
+        out = _add_missing_type_method_concepts_via_api(
+            out, mined_types=mined_types, meta=meta)
+        if len(out) > concept_count_before_sufficiency:
+            out = _ensure_mastery_lines_via_api(out, meta=meta)
+        progress.set_progress(
+            0.79, label="Concept extraction — reusable Types mined")
+        progress.step(
+            "Concept extraction — building culminations", value=0.81)
+        out = _build_culminations_via_api(out, meta=meta)
+        _emit_concept_checkpoint(
+            checkpoint_callback,
+            _CONCEPT_CHECKPOINT_STAGE,
+            records=out,
+            question_task_inventory=question_task_inventory,
+            mined_types=mined_types,
+            method_row_snapshot=_serialize_method_row_snapshot(
+                method_row_snapshot),
+        )
+
+    if artifacts is not None:
+        artifacts["question_task_inventory"] = copy.deepcopy(
+            question_task_inventory)
+        artifacts["mined_types"] = copy.deepcopy(mined_types)
+
+    if saved_order < _checkpoint_order("post_type_assignment"):
+        progress.step(
+            "Concept extraction — assigning Types within source topics",
+            value=0.85,
+        )
+        out = _assign_types_via_api(
+            out,
+            subject=subject,
+            mmd_text=mmd_text,
+            meta=meta,
+            sections=sections,
+            question_task_inventory=question_task_inventory,
+            mined_types=mined_types,
+        )
+        out = _populate_activity_hubs_via_api(
+            out, question_task_inventory, meta=meta)
+        progress.set_progress(
+            0.91, label="Concept extraction — Type assignment complete")
+        _emit_concept_checkpoint(
+            checkpoint_callback,
+            "post_type_assignment",
+            records=out,
+            question_task_inventory=question_task_inventory,
+            mined_types=mined_types,
+            method_row_snapshot=_serialize_method_row_snapshot(
+                method_row_snapshot),
+        )
+    else:
+        progress.log(
+            "Type assignment and activity hubs restored from checkpoint; "
+            "continuing at final validation and repair.",
+            level="success",
+        )
+
+    return out, question_task_inventory, mined_types, method_row_snapshot
+
+
+def _prepare_final_concept_content(
+    out: list[dict], *,
+    subject: str,
+    board: str,
+    chapter_title: str,
+    meta: dict,
+    mmd_text: str,
+    question_task_inventory: dict,
+    mined_types: dict,
+    method_row_snapshot: dict[tuple[str, str], dict],
+    method_anchors: list[dict],
+    headings: list[str],
+    source_topic_excerpts: list[dict],
+) -> list[dict]:
+    """Run every semantic/API finalizer before the deterministic final gate."""
+    out = _scrub_section_numbers(out)
+    out = _merge_concept_records(out)
+    out = _dedupe_titles_chapter_wide(out)
+    progress.step(
+        "Concept extraction — validating and repairing final map",
+        value=0.93,
+    )
+    before_duplicate_merge = out
+    out = _merge_similar_concepts_via_api(out, meta=meta)
+    out = _preserve_required_method_rows(before_duplicate_merge, out)
+    out = concept_cleanup.dedupe_similar_titles_chapter_wide(out)
+    out = concept_cleanup.filter_review_violations(
+        out, subject=subject, board=board, chapter_title=chapter_title)
+    out = [
+        concept_cleanup.clean_concept_record(
+            dict(record), neutralize_artifacts=False)
+        for record in out
+    ]
+    out = _enforce_culminations(out)
+    out = _ensure_misconceptions_via_api(out, meta=meta)
+    before_final_repair = out
+    out = _repair_records_via_api(
+        out, meta=meta, stage="final", source_context=mmd_text, strict=False,
+        max_attempts=3,
+        allowed_source_examples=_inventory_source_examples(
+            question_task_inventory))
+    out = _preserve_required_method_rows(before_final_repair, out)
+    out = _accept_exact_inventory_type_review(
+        before_final_repair, out, question_task_inventory, mined_types)
+    out = _neutralize_unrepaired_rows(
+        out, inventory=question_task_inventory)
+    out = _salvage_short_case_examples(
+        out, inventory=question_task_inventory)
+    out = _neutralize_unrepaired_rows(
+        out, inventory=question_task_inventory)
+    out = _repair_rendered_inventory_coverage(
+        out, question_task_inventory, mined_types)
+    coverage_safe_snapshot = copy.deepcopy(out)
+    out = cr.refine_chapter(out)
+    out = _dedupe_titles_chapter_wide(out)
+    out = concept_cleanup.dedupe_similar_titles_chapter_wide(out)
+    out = concept_cleanup.filter_review_violations(
+        out, subject=subject, board=board, chapter_title=chapter_title)
+    out = _ensure_mastery_lines_via_api(out, meta=meta)
+    out = _ensure_misconceptions_via_api(out, meta=meta)
+    out = _enforce_culminations(out)
+    out = _neutralize_unrepaired_rows(
+        out, inventory=question_task_inventory)
+    out = _accept_topic_safe_type_review(
+        coverage_safe_snapshot, out, mined_types)
+    out = _accept_exact_inventory_type_review(
+        coverage_safe_snapshot, out, question_task_inventory, mined_types)
+    out = _restore_method_anchor_rows(out, method_row_snapshot)
+    out = _ensure_mastery_lines_via_api(
+        out, meta=meta, use_api=False)
+    out = _ensure_misconceptions_via_api(out, meta=meta)
+    out = cv.ensure_valid_learner_analysis(out)
+    out = _enforce_method_anchor_topics(out, method_anchors)
+    out = _enforce_culminations(out)
+    out = _reorder_records_by_source_topics(out, headings)
+    out = cr.renumber_types_continuously(out)
+    missing_method_anchors = [
+        anchor for anchor in method_anchors
+        if (
+            not _method_anchor_tagged_in_topic(
+                out,
+                str(anchor.get("anchor_id") or ""),
+                anchor.get("topic_hint", ""),
+            )
+            or not _method_anchor_covered(out, anchor)
+        )
+    ]
+    if missing_method_anchors:
+        raise RuntimeError(
+            "final concept map lost mandatory derivation/method anchors: "
+            + ", ".join(
+                anchor["anchor_id"] for anchor in missing_method_anchors)
+        )
+    missing_topics = _missing_source_topic_excerpts(
+        out, source_topic_excerpts)
+    if missing_topics:
+        raise RuntimeError(
+            "final concept map lost structurally proven source topics: "
+            + ", ".join(
+                (group.get("topic") or "").strip()
+                for group in missing_topics)
+        )
+    type_topic_violations = _mined_type_topic_violations(
+        out, mined_types)
+    if type_topic_violations:
+        summary = ", ".join(
+            f"{item['type_id']}:{item['reason']}"
+            for item in type_topic_violations[:10]
+        )
+        raise RuntimeError(
+            "mined Type source-topic validation failed: " + summary)
+    uncovered_type_topics = _inventory_topic_type_coverage_violations(
+        out, question_task_inventory)
+    if uncovered_type_topics:
+        raise RuntimeError(
+            "source topics with assessable inventory lost all Types: "
+            + ", ".join(
+                f"{item['topic']} ({item['inventory_items']} items)"
+                for item in uncovered_type_topics)
+        )
+    out = _salvage_short_case_examples(
+        out, inventory=question_task_inventory)
+    out = _canonicalize_concept_rich_text(out)
+    boundary_report = cv.validate_concept_rows(
+        out, allow_types=True, require_culmination=True,
+        allow_culmination=True,
+        allowed_source_examples=_inventory_source_examples(
+            question_task_inventory))
+    if any(
+        error.get("code") == "source_artifact"
+        and error.get("severity") == "error"
+        for error in boundary_report["errors"]
+    ):
+        out = _neutralize_unrepaired_rows(
+            out, inventory=question_task_inventory)
+    out = _enforce_rendered_inventory_coverage(
+        out, question_task_inventory, mined_types)
+    out = cr.renumber_types_continuously(out)
+    inventory_topic_violations = _rendered_inventory_topic_violations(
+        out, question_task_inventory, mined_types)
+    activity_alignment_violations = (
+        _activity_example_hub_alignment_violations(
+            out, question_task_inventory)
+    )
+    if inventory_topic_violations or activity_alignment_violations:
+        progress.log(
+            "Final cleanup moved source-owned Examples; rebuilding Types "
+            "with the ID-constrained GPT assignment pass.",
+            level="warning",
+        )
+        out = _rebuild_types_after_final_placement_drift(
+            out,
+            question_task_inventory,
+            mined_types,
+            meta=meta,
+        )
+        out = cr.renumber_types_continuously(out)
+        inventory_topic_violations = _rendered_inventory_topic_violations(
+            out, question_task_inventory, mined_types)
+        activity_alignment_violations = (
+            _activity_example_hub_alignment_violations(
+                out, question_task_inventory)
+        )
+    if inventory_topic_violations or activity_alignment_violations:
+        raise RuntimeError(
+            "final inventory placement validation failed: "
+            f"{len(inventory_topic_violations)} Example(s) outside their "
+            "source topic, "
+            f"{len(activity_alignment_violations)} assessable Activity "
+            "Example(s) separated from their Activity/Info Hub"
+        )
+    return out
 
 
 def concepts_from_mmd(
@@ -11202,6 +12415,7 @@ def concepts_from_mmd(
     live: bool | None = None, artifacts: dict | None = None,
     resume_checkpoint: dict | None = None,
     checkpoint_callback=None,
+    completion_progress: float = 1.0,
 ) -> list[dict]:
     """Parse an MMD document into concept records (post-learning).
 
@@ -11232,387 +12446,60 @@ def concepts_from_mmd(
             f"Extracting concepts from {len(mmd_text):,} chars "
             f"across {len(chunks)} section-aware chunk(s) "
             f"(subject: {subject or 'general'}).")
-        if _valid_concept_checkpoint(resume_checkpoint):
-            progress.step(
-                "Concept extraction — resuming saved Type assignment",
-                value=0.84,
-            )
-            out = copy.deepcopy(resume_checkpoint["records"])
-            question_task_inventory = copy.deepcopy(
-                resume_checkpoint["question_task_inventory"])
-            mined_types = copy.deepcopy(resume_checkpoint["mined_types"])
-            method_row_snapshot = _deserialize_method_row_snapshot(
-                resume_checkpoint["method_row_snapshot"])
-            if not out:
-                raise RuntimeError(
-                    "saved concept checkpoint is incomplete; replace the file "
-                    "or clear the checkpoint before retrying")
+        (
+            out,
+            question_task_inventory,
+            mined_types,
+            method_row_snapshot,
+        ) = _run_live_concept_pre_final_stages(
+            mmd_text,
+            subject=subject,
+            board=board,
+            chapter_title=chapter_title,
+            chunks=chunks,
+            sections=sections,
+            method_anchors=method_anchors,
+            headings=headings,
+            source_topic_excerpts=source_topic_excerpts,
+            allow_chapter_title_topic=allow_chapter_title_topic,
+            meta=meta,
+            artifacts=artifacts,
+            resume_checkpoint=resume_checkpoint,
+            checkpoint_callback=checkpoint_callback,
+        )
+        saved_final = _newest_compatible_concept_checkpoint(
+            resume_checkpoint,
+            allowed_stages={"final_content_ready"},
+        )
+        if saved_final:
             progress.log(
-                f"Restored {len(out)} concept rows, "
-                f"{len(question_task_inventory.get('items') or [])} inventory "
-                "items, and "
-                f"{len(mined_types.get('types') or [])} mined Types.",
+                "Restored final content checkpoint; semantic/API repair will "
+                "not run again.",
                 level="success",
             )
-            if artifacts is not None:
-                artifacts["question_task_inventory"] = question_task_inventory
-                artifacts["mined_types"] = mined_types
         else:
-            out = _extract_skeleton_via_api(chunks, meta=meta)
-            if not out:
-                raise RuntimeError("live concept extraction returned no rows")
-            out = _canonicalize_method_anchor_tags(
-                out, method_anchors, chunk_text=mmd_text, meta=meta)
-            skeleton_method_row_snapshot = _snapshot_method_anchor_rows(
-                out, method_anchors)
-            progress.step("Concept extraction — canonicalizing skeleton", value=0.27)
-            out = _scrub_section_numbers(out)
-            out = _snap_topics_to_headings(
-                out, headings, chapter_title=chapter_title,
-                allow_chapter_title_topic=allow_chapter_title_topic)
-            out = _consolidate_concepts_via_api(
-                out, subject=subject, mmd_text=mmd_text, meta=meta)
-            progress.step("Concept extraction — aligning source topics", value=0.35)
-            if _topics_look_collapsed(out, headings):
-                progress.log(
-                    f"Topic segregation collapsed: {len(out)} concepts share "
-                    f"almost one topic while the source has {len(headings)} "
-                    "section headings — re-segregating topics via API.",
-                    level="warning",
-                )
-            if len(headings) >= 3 or (
-                headings and _topics_look_collapsed(out, headings)
-            ):
-                out = _restructure_topics_via_api(
-                    out, meta=meta,
-                    source_topic_excerpts=source_topic_excerpts)
-            else:
-                out = _assign_topics_from_source_evidence(
-                    out, source_topic_excerpts)
-            out = _snap_topics_to_headings(
-                out, headings, chapter_title=chapter_title,
-                allow_chapter_title_topic=allow_chapter_title_topic)
-            out = _recover_missing_topic_concepts_via_api(
-                out, meta=meta, source_topic_excerpts=source_topic_excerpts)
-            out = _reorder_records_by_source_topics(out, headings)
-            out = _restore_method_anchor_rows(
-                out, skeleton_method_row_snapshot)
-            out = _enforce_method_anchor_topics(out, method_anchors)
-            out = _canonicalize_method_anchor_tags(
-                out, method_anchors, chunk_text=mmd_text, meta=meta)
-            out = _consolidate_task_grounded_fragments_via_api(
-                out, meta=meta,
-                source_topic_excerpts=source_topic_excerpts,
-                method_anchors=method_anchors)
-            out = _enforce_method_anchor_topics(out, method_anchors)
-            out = _canonicalize_method_anchor_tags(
-                out, method_anchors, chunk_text=mmd_text, meta=meta)
-            out = _recover_chapter_opening_concepts_via_api(
-                out, meta=meta, sections=sections, headings=headings)
-            out = _reorder_records_by_source_topics(out, headings)
-            progress.step(
-                "Concept extraction — refining descriptions", value=0.42)
-            out = _refine_descriptions_via_api(
-                out, subject=subject, mmd_text=mmd_text, meta=meta,
-                sections=sections)
-            out = _ensure_method_worked_examples_via_api(
-                out, anchors=method_anchors, meta=meta)
-            out = _ensure_mastery_lines_via_api(out, meta=meta)
-            out = _restore_method_anchor_rows(
-                out, skeleton_method_row_snapshot)
-            out = _enforce_method_anchor_topics(out, method_anchors)
-            method_row_snapshot = _snapshot_method_anchor_rows(
-                out, method_anchors)
-            unsnapshotted_anchors = [
-                anchor for anchor in method_anchors
-                if (
-                    str(anchor.get("anchor_id") or "").upper(),
-                    _topic_comparison_key(anchor.get("topic_hint", "")),
-                ) not in method_row_snapshot
-            ]
-            if unsnapshotted_anchors:
-                raise RuntimeError(
-                    "post-description method-row restoration could not "
-                    "snapshot mandatory full-chapter anchors: "
-                    + ", ".join(
-                        anchor["anchor_id"]
-                        for anchor in unsnapshotted_anchors)
-                )
-            if method_row_snapshot:
-                snapshotted_rows = {
-                    (
-                        _topic_comparison_key(row.get("topic", "")),
-                        bi.normalize_question_text(
-                            row.get("concept_title", "")),
-                    )
-                    for row in method_row_snapshot.values()
-                }
-                progress.log(
-                    f"Snapshotted {len(snapshotted_rows)} refined method "
-                    f"row(s) covering {len(method_row_snapshot)} mandatory "
-                    "anchor(s).")
-            progress.set_progress(
-                0.55, label="Concept extraction — descriptions complete")
-            progress.step(
-                "Concept extraction — inventorying questions and worked examples",
-                value=0.58,
-            )
-            question_task_inventory = _extract_question_task_inventory_via_api(
-                meta=meta, sections=sections, records=out)
-            progress.set_progress(
-                0.70, label="Concept extraction — question inventory complete")
-            progress.step(
-                "Concept extraction — mining reusable Types", value=0.72)
-            mined_types = _mine_types_from_inventory_via_api(
-                meta=meta, inventory=question_task_inventory)
-            mined_types = _consolidate_semantic_types_via_api(
-                mined_types, inventory=question_task_inventory, meta=meta)
-            concept_count_before_sufficiency = len(out)
-            out = _add_missing_type_method_concepts_via_api(
-                out, mined_types=mined_types, meta=meta)
-            # A newly split method concept is authored after the main
-            # Description pass, so give it the same mastery guarantee before
-            # Culminations and Type assignment.
-            if len(out) > concept_count_before_sufficiency:
-                out = _ensure_mastery_lines_via_api(out, meta=meta)
-            progress.set_progress(
-                0.79, label="Concept extraction — reusable Types mined")
-            if artifacts is not None:
-                artifacts["question_task_inventory"] = question_task_inventory
-                artifacts["mined_types"] = mined_types
-            progress.step(
-                "Concept extraction — building culminations", value=0.81)
-            out = _build_culminations_via_api(out, meta=meta)
-            checkpoint = {
-                "schema_version": _CONCEPT_CHECKPOINT_SCHEMA,
-                "stage": _CONCEPT_CHECKPOINT_STAGE,
-                "records": copy.deepcopy(out),
-                "question_task_inventory": copy.deepcopy(
-                    question_task_inventory),
-                "mined_types": copy.deepcopy(mined_types),
-                "method_row_snapshot": _serialize_method_row_snapshot(
-                    method_row_snapshot),
-            }
-            if checkpoint_callback is not None:
-                checkpoint_callback(checkpoint)
-        progress.step(
-            "Concept extraction — assigning Types within source topics",
-            value=0.85,
-        )
-        out = _assign_types_via_api(
-            out,
-            subject=subject,
-            mmd_text=mmd_text,
-            meta=meta,
-            sections=sections,
-            question_task_inventory=question_task_inventory,
-            mined_types=mined_types,
-        )
-        out = _populate_activity_hubs_via_api(
-            out, question_task_inventory, meta=meta)
-        progress.set_progress(
-            0.91, label="Concept extraction — Type assignment complete")
-        # Deterministic normalization BEFORE the strict repair: formatting
-        # failures the code can fix itself (section numbering in topics/titles,
-        # missing/duplicate culminations) must never fail a job or burn repair
-        # attempts needed for semantic issues. Source references ("Example 5",
-        # "Exercise 1.2") are deliberately KEPT here: the repair pass has the
-        # chapter source and substitutes the full actual problem content,
-        # which is preferred over neutral rewording.
-        out = _scrub_section_numbers(out)
-        out = _merge_concept_records(out)
-        out = _dedupe_titles_chapter_wide(out)
-        # Near-duplicate titles: GPT merges the rows' content; the
-        # deterministic drop only guards whatever the merge pass left behind.
-        progress.step(
-            "Concept extraction — validating and repairing final map",
-            value=0.93,
-        )
-        before_duplicate_merge = out
-        out = _merge_similar_concepts_via_api(out, meta=meta)
-        out = _preserve_required_method_rows(before_duplicate_merge, out)
-        out = concept_cleanup.dedupe_similar_titles_chapter_wide(out)
-        out = concept_cleanup.filter_review_violations(
-            out, subject=subject, board=board, chapter_title=chapter_title)
-        out = [
-            concept_cleanup.clean_concept_record(dict(r), neutralize_artifacts=False)
-            for r in out
-        ]
-        out = _enforce_culminations(out)
-        out = _ensure_misconceptions_via_api(out, meta=meta)
-        before_final_repair = out
-        out = _repair_records_via_api(
-            out, meta=meta, stage="final", source_context=mmd_text, strict=False,
-            max_attempts=3,
-            allowed_source_examples=_inventory_source_examples(
-                question_task_inventory))
-        out = _preserve_required_method_rows(before_final_repair, out)
-        out = _accept_exact_inventory_type_review(
-            before_final_repair, out, question_task_inventory, mined_types)
-        # Post-repair: neutralize ONLY rows the repair pass could not fix —
-        # rows that already validate cleanly keep their full GPT-authored
-        # wording untouched (no blanket deterministic rewriting).
-        out = _neutralize_unrepaired_rows(
-            out, inventory=question_task_inventory)
-        # Truncated Case Examples ("Example: q") that GPT repair could not
-        # expand are filled from the Question / Task Inventory, or dropped
-        # when no match exists — never leave short_case_example as a fatal.
-        out = _salvage_short_case_examples(
-            out, inventory=question_task_inventory)
-        # Salvage may leave a bare figure ref if inventory lacked the URL;
-        # re-neutralize any residual source_artifact rows only.
-        out = _neutralize_unrepaired_rows(
-            out, inventory=question_task_inventory)
-        out = _repair_rendered_inventory_coverage(
-            out, question_task_inventory, mined_types)
-        # This is the last known-good source-owned Type/Example placement.
-        # Later chapter refiners may improve descriptions and learner analysis,
-        # but must not move/drop these constrained assignments.
-        coverage_safe_snapshot = copy.deepcopy(out)
-        out = cr.refine_chapter(out)
-        # The repair/cleanup passes may reorder, rename, or re-collide rows;
-        # re-assert the duplicate-title, culmination, mastery-line, and
-        # learner-analysis invariants before the final gate (rows the repair pass
-        # rewrote may have lost them).
-        out = _dedupe_titles_chapter_wide(out)
-        out = concept_cleanup.dedupe_similar_titles_chapter_wide(out)
-        out = concept_cleanup.filter_review_violations(
-            out, subject=subject, board=board, chapter_title=chapter_title)
-        out = _ensure_mastery_lines_via_api(out, meta=meta)
-        out = _ensure_misconceptions_via_api(out, meta=meta)
-        out = _enforce_culminations(out)
-        # Mastery/learner-analysis GPT passes can reintroduce Example/Fig/page
-        # pointers — scrub source_artifact one last time immediately before
-        # the hard final gate so deposit is never blocked by residual refs.
-        out = _neutralize_unrepaired_rows(
-            out, inventory=question_task_inventory)
-        out = _accept_topic_safe_type_review(
-            coverage_safe_snapshot, out, mined_types)
-        out = _accept_exact_inventory_type_review(
-            coverage_safe_snapshot, out, question_task_inventory, mined_types)
-        out = _restore_method_anchor_rows(out, method_row_snapshot)
-        # Restoration is the terminal row-membership operation. Only
-        # non-dropping field/ordering guarantees may run after this point.
-        out = _ensure_mastery_lines_via_api(
-            out, meta=meta, use_api=False)
-        # Restored snapshots were captured before the later learner-analysis
-        # repair pass. Repair only their analysis tail now; this helper never
-        # replaces Description, Types, row identity, or row membership.
-        out = _ensure_misconceptions_via_api(out, meta=meta)
-        # API repair can still fail or return an unusable category. At this
-        # terminal boundary, retain only semantically valid learner analysis
-        # and add the deterministic Error Analysis fallback when neither
-        # category survives.
-        out = cv.ensure_valid_learner_analysis(out)
-        out = _enforce_method_anchor_topics(out, method_anchors)
-        out = _enforce_culminations(out)
-        out = _reorder_records_by_source_topics(out, headings)
-        # Snapshot restoration and culmination enforcement can restore
-        # pre-refiner labels. Reapply the two independent chapter-wide
-        # sequences without changing row membership or placement.
-        out = cr.renumber_types_continuously(out)
-        missing_method_anchors = [
-            anchor for anchor in method_anchors
-            if (
-                not _method_anchor_tagged_in_topic(
-                    out,
-                    str(anchor.get("anchor_id") or ""),
-                    anchor.get("topic_hint", ""),
-                )
-                or not _method_anchor_covered(out, anchor)
-            )
-        ]
-        if missing_method_anchors:
-            raise RuntimeError(
-                "final concept map lost mandatory derivation/method anchors: "
-                + ", ".join(
-                    anchor["anchor_id"] for anchor in missing_method_anchors)
-            )
-        missing_topics = _missing_source_topic_excerpts(
-            out, source_topic_excerpts)
-        if missing_topics:
-            raise RuntimeError(
-                "final concept map lost structurally proven source topics: "
-                + ", ".join(
-                    (group.get("topic") or "").strip()
-                    for group in missing_topics)
-            )
-        type_topic_violations = _mined_type_topic_violations(
-            out, mined_types)
-        if type_topic_violations:
-            summary = ", ".join(
-                f"{item['type_id']}:{item['reason']}"
-                for item in type_topic_violations[:10]
-            )
-            raise RuntimeError(
-                "mined Type source-topic validation failed: " + summary)
-        uncovered_type_topics = _inventory_topic_type_coverage_violations(
-            out, question_task_inventory)
-        if uncovered_type_topics:
-            raise RuntimeError(
-                "source topics with assessable inventory lost all Types: "
-                + ", ".join(
-                    f"{item['topic']} ({item['inventory_items']} items)"
-                    for item in uncovered_type_topics)
-            )
-        # This is the terminal content boundary: every API/refiner,
-        # method-snapshot restoration, and culmination pass has already run.
-        # Re-expand any short Example reintroduced by those passes, or remove
-        # only its irrecoverable stub/empty Case while retaining valid Types
-        # and full questions. Then neutralize artifacts exposed by replacement.
-        out = _salvage_short_case_examples(
-            out, inventory=question_task_inventory)
-        out = _canonicalize_concept_rich_text(out)
-        boundary_report = cv.validate_concept_rows(
-            out, allow_types=True, require_culmination=True,
-            allow_culmination=True,
-            allowed_source_examples=_inventory_source_examples(
-                question_task_inventory))
-        if any(
-            error.get("code") == "source_artifact"
-            and error.get("severity") == "error"
-            for error in boundary_report["errors"]
-        ):
-            out = _neutralize_unrepaired_rows(
-                out, inventory=question_task_inventory)
-        # Salvage / mastery / neutralize can still drift Example coverage;
-        # restore exact-once inventory prompts. Residual missing after repair
-        # warns; only unresolved duplicates still abort deposit.
-        out = _enforce_rendered_inventory_coverage(
-            out, question_task_inventory, mined_types)
-        out = cr.renumber_types_continuously(out)
-        inventory_topic_violations = _rendered_inventory_topic_violations(
-            out, question_task_inventory, mined_types)
-        activity_alignment_violations = (
-            _activity_example_hub_alignment_violations(
-                out, question_task_inventory)
-        )
-        if inventory_topic_violations or activity_alignment_violations:
-            progress.log(
-                "Final cleanup moved source-owned Examples; rebuilding Types "
-                "with the ID-constrained GPT assignment pass.",
-                level="warning",
-            )
-            out = _rebuild_types_after_final_placement_drift(
+            out = _prepare_final_concept_content(
                 out,
-                question_task_inventory,
-                mined_types,
+                subject=subject,
+                board=board,
+                chapter_title=chapter_title,
                 meta=meta,
+                mmd_text=mmd_text,
+                question_task_inventory=question_task_inventory,
+                mined_types=mined_types,
+                method_row_snapshot=method_row_snapshot,
+                method_anchors=method_anchors,
+                headings=headings,
+                source_topic_excerpts=source_topic_excerpts,
             )
-            out = cr.renumber_types_continuously(out)
-            inventory_topic_violations = _rendered_inventory_topic_violations(
-                out, question_task_inventory, mined_types)
-            activity_alignment_violations = (
-                _activity_example_hub_alignment_violations(
-                    out, question_task_inventory)
-            )
-        if inventory_topic_violations or activity_alignment_violations:
-            raise RuntimeError(
-                "final inventory placement validation failed: "
-                f"{len(inventory_topic_violations)} Example(s) outside their "
-                "source topic, "
-                f"{len(activity_alignment_violations)} assessable Activity "
-                "Example(s) separated from their Activity/Info Hub"
+            _emit_concept_checkpoint(
+                checkpoint_callback,
+                "final_content_ready",
+                records=out,
+                question_task_inventory=question_task_inventory,
+                mined_types=mined_types,
+                method_row_snapshot=_serialize_method_row_snapshot(
+                    method_row_snapshot),
             )
         out = _canonicalize_concept_rich_text(out)
         _validate_final_or_raise(
@@ -11638,7 +12525,10 @@ def concepts_from_mmd(
                 "row counts above to see which pass lost rows.",
                 level="warning",
             )
-        progress.set_progress(1.0, label="Concept extraction complete")
+        progress.set_progress(
+            max(0.0, min(1.0, float(completion_progress))),
+            label="Concept extraction complete",
+        )
         progress.log(f"Final concept count: {len(out)}.", level="success")
         return out
     config.require_generation_live()
@@ -11851,6 +12741,8 @@ def _exclude_current_chapter_concepts(pre_rows: list[dict], current_rows: list[d
 def pre_learning_from_rows(
     rows: list[dict], *, subject: str = "", grade: str = "", board: str = "",
     chapter_title: str = "", unit: str = "", live: bool | None = None,
+    resume_checkpoint: dict | None = None,
+    checkpoint_callback=None,
 ) -> list[dict]:
     """Derive pre-learning records from concept-mapping rows (dicts).
 
@@ -11875,6 +12767,32 @@ def pre_learning_from_rows(
         } for r in rows if not cr.is_culmination(r.get("concept_title", ""))]
         return _ensure_parent_concepts(_exclude_current_chapter_concepts(pre, rows))
 
+    saved = _newest_compatible_concept_checkpoint(
+        resume_checkpoint,
+        allowed_stages=_PRE_DERIVATION_CHECKPOINT_STAGES,
+    )
+    saved_stage = str(saved.get("stage") or "") if saved else ""
+    saved_order = _checkpoint_order(saved_stage)
+    if saved:
+        try:
+            restored_progress = float(saved.get("progress") or 0.0)
+        except (TypeError, ValueError):
+            restored_progress = 0.0
+        progress.set_progress(
+            restored_progress,
+            label=(
+                saved.get("stage_label")
+                or "Pre-learning checkpoint restored"
+            ),
+        )
+        progress.log(
+            "Restored pre-learning checkpoint "
+            f"'{saved.get('stage_label') or saved_stage}'.",
+            level="success",
+        )
+    if saved_stage == "pre_learner_analysis":
+        return copy.deepcopy(saved.get("records") or [])
+
     listing = "\n".join(
         f"- [{(r.get('topic') or '')[:60]} / {(r.get('parent_concept') or '')[:60]}] {r['concept_title']}: "
         f"{(r.get('concept_details') or '')[:260]}"
@@ -11890,18 +12808,54 @@ def pre_learning_from_rows(
         + _trim(listing, 400_000)
     )
     system = _prelearning_system(subject, grade, board)
-    draft = _openai_json(system, user)
-    if not draft.get("topics"):
-        raise RuntimeError("live pre-learning derivation returned no topics")
+    if saved_order >= _checkpoint_order("pre_derivation_audited"):
+        final = copy.deepcopy(saved.get("pre_audited") or {})
+    else:
+        if saved_order >= _checkpoint_order("pre_derivation_draft"):
+            draft = copy.deepcopy(saved.get("pre_draft") or {})
+        else:
+            progress.step(
+                "Pre-learning â€” deriving prerequisite map",
+                value=0.981,
+            )
+            draft = _openai_json(system, user)
+            if not draft.get("topics"):
+                raise RuntimeError(
+                    "live pre-learning derivation returned no topics")
+            _emit_concept_checkpoint(
+                checkpoint_callback,
+                "pre_derivation_draft",
+                records=rows,
+                pre_draft=draft,
+            )
+            progress.set_progress(
+                0.985,
+                label="Pre-learning dependency draft complete",
+            )
 
-    # Stage 2: syllabus boundary auditor (replaces violating rows in place).
-    import json as _json
-    audited = _openai_json(
-        prompts.get_text("prelearning.auditor"),
-        f"Chapter: {chapter_title} | Subject: {subject} | Grade: {grade} | "
-        f"Board: {board} | Unit: {unit}\n\nDRAFT:\n" + _json.dumps(draft)[:120_000],
-    )
-    final = audited if audited.get("topics") else draft
+        # Stage 2: syllabus boundary auditor (replaces violating rows in place).
+        import json as _json
+        progress.step(
+            "Pre-learning â€” auditing syllabus boundaries",
+            value=0.988,
+        )
+        audited = _openai_json(
+            prompts.get_text("prelearning.auditor"),
+            f"Chapter: {chapter_title} | Subject: {subject} | Grade: {grade} | "
+            f"Board: {board} | Unit: {unit}\n\nDRAFT:\n"
+            + _json.dumps(draft)[:120_000],
+        )
+        final = audited if audited.get("topics") else draft
+        _emit_concept_checkpoint(
+            checkpoint_callback,
+            "pre_derivation_audited",
+            records=rows,
+            pre_audited=final,
+        )
+        progress.set_progress(
+            0.992,
+            label="Pre-learning syllabus audit complete",
+        )
 
     out = _exclude_current_chapter_concepts(_flatten_pre_topics(final), rows)
     if not out:
@@ -11914,8 +12868,22 @@ def pre_learning_from_rows(
         unit=unit,
         learning_kind="Pre",
     )
+    progress.step(
+        "Pre-learning â€” writing learner analysis",
+        value=0.995,
+    )
     out = _ensure_misconceptions_via_api(out, meta=pre_meta)
     out = cv.ensure_valid_learner_analysis(out)
+    _emit_concept_checkpoint(
+        checkpoint_callback,
+        "pre_learner_analysis",
+        records=out,
+        base_records=rows,
+    )
+    progress.set_progress(
+        0.998,
+        label="Pre-learning learner analysis complete",
+    )
     return out
 
 

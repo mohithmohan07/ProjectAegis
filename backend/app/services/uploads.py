@@ -7,7 +7,10 @@ progress logs.
 """
 from __future__ import annotations
 
+import re
 import threading
+import time
+import traceback
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -20,6 +23,9 @@ from . import mmd, openai_usage, progress
 
 _usage_job_locks: dict[int, threading.Lock] = {}
 _usage_job_locks_guard = threading.Lock()
+_SECRET_PATTERN = re.compile(
+    r"(?i)\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{12,}|bearer\s+[A-Za-z0-9._~-]{12,})"
+)
 
 
 def _usage_job_lock(job_id: int) -> threading.Lock:
@@ -53,6 +59,7 @@ def replace_file(db: Session, job_id: int, *, filename: str, raw_bytes: bytes) -
     job.mmd_text = ""
     job.question_inventory = {}
     job.generation_checkpoint = {}
+    job.generation_log = []
     job.openai_usage = {}
     job.status = "uploaded"
     db.commit()
@@ -81,6 +88,7 @@ def convert_job(db: Session, job_id: int) -> dict:
     job.mmd_text = mmd_text
     job.question_inventory = {}
     job.generation_checkpoint = {}
+    job.generation_log = []
     job.status = "converted"
     db.commit()
     db.refresh(job)
@@ -107,6 +115,60 @@ def persist_current_openai_usage(db: Session, job_id: int) -> dict:
     return merged
 
 
+def persist_current_generation_log(
+    db: Session, job_id: int, *, error: Exception | None = None,
+) -> list[dict]:
+    """Persist the latest browser-visible run log for diagnostics and export."""
+    job = get_job(db, job_id)
+    events = [
+        event
+        for event in progress.current_events(limit=1200)
+        if event.get("type") in {"log", "step", "progress"}
+    ]
+    if error is not None:
+        frames: list[dict] = []
+        for frame in traceback.extract_tb(error.__traceback__)[-8:]:
+            path = Path(frame.filename)
+            try:
+                display_path = path.resolve().relative_to(config.ROOT.resolve())
+            except (OSError, ValueError):
+                display_path = Path(path.name)
+            frames.append({
+                "file": display_path.as_posix(),
+                "line": max(1, int(frame.lineno)),
+                "function": str(frame.name or "")[:160],
+            })
+        reason = _SECRET_PATTERN.sub("[REDACTED]", (
+            str(error) or error.__class__.__name__
+        ))[:4000]
+        location = frames[-1] if frames else {}
+        where = ""
+        if location:
+            where = (
+                f" at {location['file']}:{location['line']}"
+                f" in {location['function']}"
+            )
+        diagnostic = {
+            "type": "log",
+            "level": "error",
+            "message": (
+                f"{error.__class__.__name__}: {reason}{where}"
+            ),
+            "ts": time.time(),
+            "error": {
+                "exception_type": error.__class__.__name__,
+                "reason": reason,
+                "frames": frames,
+            },
+        }
+        events.append(diagnostic)
+        job.detail = f"Generation failed: {reason}{where}"
+    job.generation_log = events[-1200:]
+    db.commit()
+    db.refresh(job)
+    return list(job.generation_log or [])
+
+
 def run_with_openai_usage(
     db: Session, job_id: int, fn: Callable[[], Any]
 ) -> dict:
@@ -114,7 +176,7 @@ def run_with_openai_usage(
     with _usage_job_lock(job_id):
         try:
             result = fn()
-        except Exception:
+        except Exception as exc:
             # A failed generation transaction must not erase usage from provider
             # responses already received (and therefore potentially billed).
             db.rollback()
@@ -122,9 +184,14 @@ def run_with_openai_usage(
                 persist_current_openai_usage(db, job_id)
             except Exception:  # pragma: no cover - preserve the generation error
                 db.rollback()
+            try:
+                persist_current_generation_log(db, job_id, error=exc)
+            except Exception:  # pragma: no cover - preserve the generation error
+                db.rollback()
             raise
 
         summary = persist_current_openai_usage(db, job_id)
+        persist_current_generation_log(db, job_id)
         if isinstance(result, dict):
             result = {**result, "openai_usage": summary}
         return result
