@@ -77,4 +77,5 @@ workbook/
     └── validate.py       # PyMuPDF post-build checks
 ```
 
-Default model: `gpt-5.4-mini-2026-03-17`.
+Default model: `gpt-5.6-luna`. Aegis applies the shared purpose-based
+reasoning policy automatically (high for workbook planning and authoring).

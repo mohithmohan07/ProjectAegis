@@ -5,6 +5,7 @@ import { AuthProvider } from "../Auth";
 import type { UploadJob } from "../types";
 import DocumentUpload from "./DocumentUpload";
 
+const streamNdjsonMock = vi.hoisted(() => vi.fn());
 const apiMock = vi.hoisted(() => ({
   getUploadJob: vi.fn(),
   importConceptCheckpoint: vi.fn(),
@@ -15,11 +16,15 @@ const apiMock = vi.hoisted(() => ({
   authMe: vi.fn(),
   authGoogle: vi.fn(),
   authLogout: vi.fn(),
+  paths: {
+    assessmentConvert: vi.fn((id: number) => `/assessments/${id}/convert`),
+    conceptConvert: vi.fn((id: number) => `/concepts/${id}/convert`),
+  },
 }));
 
 vi.mock("../api/client", () => ({
   api: apiMock,
-  streamNdjson: vi.fn(),
+  streamNdjson: streamNdjsonMock,
 }));
 
 function restoredJob(): UploadJob {
@@ -68,6 +73,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   apiMock.getUploadJob.mockRejectedValue(new Error("no saved job"));
   apiMock.importConceptCheckpoint.mockResolvedValue(restoredJob());
+  streamNdjsonMock.mockResolvedValue({});
 });
 
 afterEach(() => {
@@ -263,4 +269,80 @@ test("shows configured automatic Drive backup status from auth config", async ()
   expect(screen.getByText(
     /Backups are restricted to the Aegis folder/i,
   )).toBeDefined();
+});
+
+test("locks file-changing controls while parent generation is active", () => {
+  const { container } = render(
+    <RunConsoleProvider>
+      <DocumentUpload
+        module="concepts"
+        conceptKind="post"
+        externalJob={restoredJob()}
+        disabled
+        onJob={vi.fn()}
+      />
+    </RunConsoleProvider>,
+  );
+
+  expect(screen.getByRole("button", { name: "Keep for later" }))
+    .toHaveProperty("disabled", true);
+  expect(screen.getByRole("button", { name: "Discard checkpoint" }))
+    .toHaveProperty("disabled", true);
+  const replaceInput = container.querySelector(
+    'label input[type="file"]:not([accept])',
+  ) as HTMLInputElement;
+  expect(replaceInput.disabled).toBe(true);
+});
+
+test("locks file-changing controls while conversion is active", async () => {
+  let resolveConversion!: (result: {
+    status: string;
+    mmd_text: string;
+    mmd_chars: number;
+  }) => void;
+  streamNdjsonMock.mockReturnValue(new Promise((resolve) => {
+    resolveConversion = resolve;
+  }));
+  const uploaded = {
+    ...restoredJob(),
+    status: "uploaded",
+    checkpoint_available: false,
+    mmd_text: "",
+  };
+  const onJob = vi.fn();
+  const { container } = render(
+    <RunConsoleProvider>
+      <DocumentUpload
+        module="concepts"
+        conceptKind="post"
+        externalJob={uploaded}
+        onJob={onJob}
+      />
+    </RunConsoleProvider>,
+  );
+
+  fireEvent.click(await screen.findByRole("button", {
+    name: "Convert to MMD",
+  }));
+
+  await waitFor(() => {
+    expect(screen.getByRole("button", { name: "Start over" }))
+      .toHaveProperty("disabled", true);
+  });
+  const replaceInput = container.querySelector(
+    'label input[type="file"]:not([accept])',
+  ) as HTMLInputElement;
+  expect(replaceInput.disabled).toBe(true);
+
+  resolveConversion({
+    status: "converted",
+    mmd_text: "## Electricity",
+    mmd_chars: 14,
+  });
+  await waitFor(() => {
+    expect(onJob).toHaveBeenCalledWith(expect.objectContaining({
+      id: uploaded.id,
+      status: "converted",
+    }));
+  });
 });

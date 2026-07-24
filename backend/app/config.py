@@ -1,6 +1,8 @@
 import os
 from pathlib import Path
 
+from aegis_pipeline.openai_policy import configured_openai_model
+
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.environ.get("AEGIS_DATA_DIR", ROOT / "data"))
 DB_URL = os.environ.get(
@@ -150,9 +152,7 @@ def require_workbooks_live() -> None:
 
 # OpenAI model for concept extraction / pre-learning derivation. The same
 # model family the Create Workbooks pipeline is validated with.
-OPENAI_MODEL = os.environ.get(
-    "AEGIS_OPENAI_MODEL", "gpt-5.4-mini-2026-03-17"
-)
+OPENAI_MODEL = configured_openai_model()
 # Large concept-map passes prefer complete JSON over speed or token economy;
 # keep the default within current model completion limits and allow env override.
 OPENAI_MAX_OUTPUT_TOKENS = int(

@@ -4,7 +4,7 @@ import io
 import pytest
 
 from app import models
-from app.services import build_concepts
+from app.services import build_concepts, openai_usage
 from tests.conftest import convert_concept_upload, stream_result
 
 
@@ -79,18 +79,30 @@ def test_post_learning_failure_persists_and_resumes_type_checkpoint(
     def fail_after_checkpoint(*args, checkpoint_callback=None, **kwargs):
         assert checkpoint_callback is not None
         checkpoint_callback(checkpoint)
+        # A later automatic checkpoint sees the same cumulative run tracker;
+        # it must update the checkpoint without billing these calls again.
+        checkpoint_callback(checkpoint)
         raise RuntimeError("type embedding failed: unassigned TYPE-0001")
 
     monkeypatch.setattr(
         build_concepts.generation, "concepts_from_mmd", fail_after_checkpoint)
-    with pytest.raises(RuntimeError, match="unassigned TYPE-0001"):
-        build_concepts.generate_post_learning(
-            db, job.id, first_chapter["id"])
+    with openai_usage.track() as run_usage:
+        run_usage.add(
+            model="gpt-5.4-mini-2026-03-17",
+            input_tokens=100,
+            cached_input_tokens=40,
+            output_tokens=20,
+        )
+        with pytest.raises(RuntimeError, match="unassigned TYPE-0001"):
+            build_concepts.generate_post_learning(
+                db, job.id, first_chapter["id"])
 
     db.expire_all()
     saved = db.get(models.UploadJob, job.id)
     assert saved.generation_checkpoint["stage"] == "pre_type_assignment"
     assert saved.question_inventory["items"][0]["qid"] == "QINV-0001"
+    assert saved.openai_usage["request_count"] == 1
+    assert saved.openai_usage["total_tokens"] == 120
 
     def resume_from_checkpoint(*args, resume_checkpoint=None, **kwargs):
         assert resume_checkpoint["stage"] == "pre_type_assignment"

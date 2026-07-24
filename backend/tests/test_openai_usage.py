@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import threading
-import time
 from types import SimpleNamespace
 
 import pytest
@@ -18,6 +17,7 @@ def _response(
     model: str = "gpt-5.4-mini-2026-03-17",
     input_tokens: int = 100,
     cached_tokens: int = 40,
+    cache_write_tokens: int = 0,
     output_tokens: int = 20,
     reasoning_tokens: int = 8,
     content: str = "{}",
@@ -27,7 +27,10 @@ def _response(
         prompt_tokens=input_tokens,
         completion_tokens=output_tokens,
         total_tokens=input_tokens + output_tokens,
-        prompt_tokens_details=SimpleNamespace(cached_tokens=cached_tokens),
+        prompt_tokens_details=SimpleNamespace(
+            cached_tokens=cached_tokens,
+            cache_write_tokens=cache_write_tokens,
+        ),
         completion_tokens_details=SimpleNamespace(
             reasoning_tokens=reasoning_tokens
         ),
@@ -59,6 +62,45 @@ def test_cached_tokens_and_reasoning_are_not_double_charged():
     assert summary["total_tokens"] == 1_200
     # 600*.75/M + 400*.075/M + 200*4.50/M = $0.00138.
     assert summary["estimated_cost_usd"] == pytest.approx(0.00138)
+
+
+def test_luna_pricing_matches_standard_text_token_rates():
+    with openai_usage.track():
+        openai_usage.record_response(
+            _response(
+                model="gpt-5.6-luna",
+                input_tokens=1_000,
+                cached_tokens=400,
+                cache_write_tokens=200,
+                output_tokens=200,
+                reasoning_tokens=80,
+            )
+        )
+        summary = openai_usage.current_summary()
+
+    # 400*$1/M + 400*$0.10/M + 200*$1.25/M + 200*$6/M
+    # = $0.00189. Cache-write tokens are a subset of input tokens.
+    assert summary["model"] == "gpt-5.6-luna"
+    assert summary["cache_write_tokens"] == 200
+    assert summary["reasoning_tokens"] == 80
+    assert summary["estimated_cost_usd"] == pytest.approx(0.00189)
+
+
+def test_luna_long_context_multiplier_is_applied_per_request():
+    with openai_usage.track():
+        openai_usage.record_response(
+            _response(
+                model="gpt-5.6-luna",
+                input_tokens=273_000,
+                cached_tokens=0,
+                output_tokens=1_000,
+                reasoning_tokens=500,
+            )
+        )
+        summary = openai_usage.current_summary()
+
+    # Inputs above 272K are 2x; output is 1.5x for the full request.
+    assert summary["estimated_cost_usd"] == pytest.approx(0.555)
 
 
 def test_multiple_responses_aggregate_and_unknown_pricing_is_not_zero():
@@ -227,6 +269,94 @@ def test_upload_job_usage_persists_and_resets_when_file_is_replaced(db):
     assert replaced.openai_usage == {}
 
 
+def test_repeated_checkpoint_persistence_adds_the_active_run_only_once(db):
+    prior = openai_usage.UsageAccumulator()
+    prior.add(
+        model="gpt-5.4-mini-2026-03-17",
+        input_tokens=200,
+        cached_input_tokens=80,
+        output_tokens=40,
+    )
+    job = models.UploadJob(
+        module="build_concepts",
+        filename="checkpointed.txt",
+        status="converted",
+        openai_usage=prior.summary(),
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    with openai_usage.track():
+        openai_usage.record_response(_response())
+        first = uploads.persist_current_openai_usage(db, job.id)
+        repeated = uploads.persist_current_openai_usage(db, job.id)
+        openai_usage.record_response(_response())
+        advanced = uploads.persist_current_openai_usage(db, job.id)
+
+    assert first["request_count"] == 2
+    assert repeated["request_count"] == 2
+    assert repeated["total_tokens"] == first["total_tokens"]
+    assert advanced["request_count"] == 3
+    assert advanced["total_tokens"] == 480
+
+
+def test_checkpointed_failure_and_refreshed_resume_add_only_new_usage(db):
+    job = models.UploadJob(
+        module="build_concepts",
+        filename="resume-usage.txt",
+        status="converted",
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    first_db = SessionLocal()
+    try:
+        with openai_usage.track():
+            def fail_after_checkpoints():
+                openai_usage.record_response(_response())
+                uploads.persist_current_openai_usage(first_db, job.id)
+                uploads.persist_current_openai_usage(first_db, job.id)
+                raise RuntimeError("resume after refresh")
+
+            with pytest.raises(RuntimeError, match="resume after refresh"):
+                uploads.run_with_openai_usage(
+                    first_db, job.id, fail_after_checkpoints
+                )
+    finally:
+        first_db.close()
+
+    db.expire_all()
+    after_failure = uploads.get_job(db, job.id).openai_usage
+    assert after_failure["request_count"] == 1
+    assert after_failure["total_tokens"] == 120
+
+    resumed_db = SessionLocal()
+    try:
+        with openai_usage.track():
+            def resume_after_refresh():
+                # ``run_with_openai_usage`` binds the durable first attempt
+                # before this new response is recorded.
+                assert openai_usage.visible_summary()["request_count"] == 1
+                openai_usage.record_response(_response())
+                uploads.persist_current_openai_usage(resumed_db, job.id)
+                return {"resumed": True}
+
+            result = uploads.run_with_openai_usage(
+                resumed_db, job.id, resume_after_refresh
+            )
+    finally:
+        resumed_db.close()
+
+    assert result["openai_usage"]["request_count"] == 2
+    assert result["openai_usage"]["total_tokens"] == 240
+    db.expire_all()
+    durable = uploads.get_job(db, job.id).openai_usage
+    assert durable["request_count"] == 2
+    assert durable["total_tokens"] == 240
+
+
 def test_failed_uploaded_run_still_persists_billable_usage(db):
     job = models.UploadJob(
         module="build_assessments", filename="questions.txt", status="deposited"
@@ -316,15 +446,18 @@ def test_concurrent_runs_for_one_upload_fail_fast_without_double_usage(db):
     db.commit()
     db.refresh(job)
     errors: list[Exception] = []
+    first_run_entered = threading.Event()
+    release_first_run = threading.Event()
 
-    def worker():
+    def first_worker():
         local = SessionLocal()
         try:
             with openai_usage.track():
                 def work():
                     uploads.get_job(local, job.id)
                     openai_usage.record_response(_response())
-                    time.sleep(0.03)
+                    first_run_entered.set()
+                    assert release_first_run.wait(timeout=5)
                     return {}
 
                 uploads.run_with_openai_usage(local, job.id, work)
@@ -333,14 +466,21 @@ def test_concurrent_runs_for_one_upload_fail_fast_without_double_usage(db):
         finally:
             local.close()
 
-    threads = [threading.Thread(target=worker) for _ in range(2)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
+    thread = threading.Thread(target=first_worker)
+    thread.start()
+    assert first_run_entered.wait(timeout=5)
+    second = SessionLocal()
+    try:
+        with openai_usage.track():
+            with pytest.raises(uploads.JobAlreadyRunningError):
+                uploads.run_with_openai_usage(second, job.id, lambda: {})
+    finally:
+        second.close()
+        release_first_run.set()
+    thread.join(timeout=5)
 
-    assert len(errors) == 1
-    assert isinstance(errors[0], uploads.JobAlreadyRunningError)
+    assert not thread.is_alive()
+    assert not errors
     db.expire_all()
     saved = uploads.get_job(db, job.id).openai_usage
     assert saved["request_count"] == 1
@@ -365,4 +505,4 @@ def test_workbook_library_recovers_usage_from_sidecar(tmp_path, monkeypatch):
 
 
 def test_requested_model_is_the_default():
-    assert config.OPENAI_MODEL == "gpt-5.4-mini-2026-03-17"
+    assert config.OPENAI_MODEL == "gpt-5.6-luna"

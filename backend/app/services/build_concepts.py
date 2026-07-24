@@ -729,7 +729,12 @@ def generate_post_learning(
             f"Generation checkpoint saved at {label}; retry resumes from "
             "the newest compatible stage."
         )
-        db.commit()
+        # Commit the checkpoint and cumulative billing usage atomically. The
+        # usage helper is idempotent within this run, so successive automatic
+        # checkpoints cannot count earlier responses again.
+        uploads.persist_current_openai_usage(
+            db, job.id, owner_sub=owner_sub
+        )
         drive_checkpoints.schedule_checkpoint_backup(job.id)
         progress.log(
             f"Saved durable checkpoint: {label} "
@@ -901,7 +906,11 @@ def generate_pre_learning_from_upload(
             f"Generation checkpoint saved at {label}; retry resumes from "
             "the newest compatible stage."
         )
-        db.commit()
+        # Keep the portable/Drive checkpoint's usage current without adding
+        # the active run's already-persisted responses a second time.
+        uploads.persist_current_openai_usage(
+            db, job.id, owner_sub=owner_sub
+        )
         drive_checkpoints.schedule_checkpoint_backup(job.id)
         progress.log(
             f"Saved durable checkpoint: {label} "

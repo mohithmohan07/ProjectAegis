@@ -17,6 +17,15 @@ export interface RunState {
   progressLabel: string;
   status: "idle" | "running" | "done" | "error";
   usage: OpenAIUsage | null;
+  usagePresentation: RunUsagePresentation | null;
+}
+
+export interface RunUsagePresentation {
+  cumulative?: boolean;
+  resumed?: boolean;
+  filename?: string;
+  fileLabel?: string;
+  initialUsage?: OpenAIUsage | null;
 }
 
 interface RunConsoleApi {
@@ -24,13 +33,18 @@ interface RunConsoleApi {
   setOpen: (open: boolean) => void;
   clear: () => void;
   /** POST a streaming endpoint, piping its events into the console. */
-  run: <T = unknown>(title: string, path: string, init?: RequestInit) => Promise<T>;
+  run: <T = unknown>(
+    title: string,
+    path: string,
+    init?: RequestInit,
+    usagePresentation?: RunUsagePresentation,
+  ) => Promise<T>;
 }
 
 const MAX_LINES = 800;
 const INITIAL: RunState = {
   active: false, open: true, title: "", lines: [], progress: 0,
-  progressLabel: "", status: "idle", usage: null,
+  progressLabel: "", status: "idle", usage: null, usagePresentation: null,
 };
 
 const RunConsoleContext = createContext<RunConsoleApi | null>(null);
@@ -53,22 +67,40 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
       } else if (evt.type === "log") {
         next.lines = [...s.lines, { level: evt.level ?? "info", message: evt.message, ts: evt.ts ?? Date.now() / 1000 }];
       } else if (evt.type === "usage") {
-        next.usage = evt.data;
+        next.usage = presentedUsage(s, evt.data);
       } else if (evt.type === "result") {
-        next.usage = usageFromResult(evt.data) ?? next.usage;
+        const resultUsage = usageFromResult(evt.data);
+        if (resultUsage) next.usage = presentedUsage(s, resultUsage);
       } else if (evt.type === "error") {
         next.lines = [...s.lines, { level: "error", message: evt.message, ts: evt.ts ?? Date.now() / 1000 }];
-        next.usage = evt.openai_usage ?? next.usage;
+        if (evt.openai_usage) {
+          next.usage = presentedUsage(s, evt.openai_usage);
+        }
       }
       if (next.lines.length > MAX_LINES) next.lines = next.lines.slice(-MAX_LINES);
       return next;
     });
   }, []);
 
-  const run = useCallback(<T,>(title: string, path: string, init: RequestInit = {}): Promise<T> => {
+  const run = useCallback(<T,>(
+    title: string,
+    path: string,
+    init: RequestInit = {},
+    usagePresentation?: RunUsagePresentation,
+  ): Promise<T> => {
     const runId = ++runIdRef.current;
+    const {
+      initialUsage = null,
+      ...presentation
+    } = usagePresentation ?? {};
     setState({
-      active: true, open: true, title, lines: [], progress: 0, usage: null,
+      active: true,
+      open: true,
+      title,
+      lines: [],
+      progress: 0,
+      usage: initialUsage,
+      usagePresentation: usagePresentation ? presentation : null,
       progressLabel: "Starting…", status: "running",
     });
     openRef.current = true;
@@ -125,4 +157,25 @@ function usageFromResult(data: unknown): OpenAIUsage | null {
   const totalTokens = (usage as Record<string, unknown>).total_tokens;
   if (typeof requestCount !== "number" || typeof totalTokens !== "number") return null;
   return usage as OpenAIUsage;
+}
+
+function presentedUsage(
+  state: RunState,
+  incoming: OpenAIUsage,
+): OpenAIUsage {
+  if (
+    state.usagePresentation?.cumulative
+    && state.usage
+    && numericUsage(incoming.total_tokens)
+      < numericUsage(state.usage.total_tokens)
+  ) {
+    // A file-scoped cumulative display must never visually reset to a smaller
+    // fresh-attempt subtotal while a checkpoint retry is starting.
+    return state.usage;
+  }
+  return incoming;
+}
+
+function numericUsage(value: number | null | undefined): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }

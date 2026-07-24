@@ -15,6 +15,11 @@ import re
 from pathlib import Path
 from typing import Any
 
+from aegis_pipeline.openai_policy import (
+    DEFAULT_OPENAI_MODEL,
+    OpenAIPurpose,
+    chat_request_policy,
+)
 from schema import (
     Activity,
     Block,
@@ -53,7 +58,7 @@ class GPTWriter:
     def __init__(self, cfg: dict) -> None:
         self.cfg = cfg
         self.api_key = os.getenv(cfg.get("openai_api_key_env", "OPENAI_API_KEY"))
-        self.model = cfg.get("openai_model", "gpt-5.4-mini-2026-03-17")
+        self.model = cfg.get("openai_model", DEFAULT_OPENAI_MODEL)
         self.base_url = cfg.get("openai_base_url")
         self.enabled = bool(self.api_key)
         self._client = None
@@ -95,7 +100,12 @@ class GPTWriter:
             f"Chapter number: {meta['chapter_number']}\n\n"
             "--- MMD START ---\n" + mmd + "\n--- MMD END ---"
         )
-        plan_raw = self._chat(planner_system(), user, max_tokens=self.MAX_PLANNER_OUTPUT_TOKENS)
+        plan_raw = self._chat(
+            planner_system(),
+            user,
+            max_tokens=self.MAX_PLANNER_OUTPUT_TOKENS,
+            purpose="workbook_planning",
+        )
         plan = _parse_json(plan_raw, "planner")
         if plan_cache_path:
             plan_cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -143,6 +153,7 @@ class GPTWriter:
             chapter_shell_system(meta["subject"], meta.get("discipline", "")),
             user,
             max_tokens=self.MAX_SHELL_OUTPUT_TOKENS,
+            purpose="workbook_authoring",
         )
         return _parse_json(raw, "chapter_shell")
 
@@ -179,13 +190,22 @@ class GPTWriter:
         )
         system = topic_builder_system(meta["subject"], meta.get("discipline", ""))
         try:
-            raw = self._chat(system, user, max_tokens=self.MAX_TOPIC_OUTPUT_TOKENS)
+            raw = self._chat(
+                system,
+                user,
+                max_tokens=self.MAX_TOPIC_OUTPUT_TOKENS,
+                purpose="workbook_authoring",
+            )
         except GPTTruncationError:
             # One topic ran away — retry once, asking for a compact response.
             print("    (topic output truncated; retrying concisely)", flush=True)
             try:
-                raw = self._chat(system, user + "\n\n" + _CONCISE_TOPIC_NOTE,
-                                 max_tokens=self.MAX_TOPIC_OUTPUT_TOKENS)
+                raw = self._chat(
+                    system,
+                    user + "\n\n" + _CONCISE_TOPIC_NOTE,
+                    max_tokens=self.MAX_TOPIC_OUTPUT_TOKENS,
+                    purpose="workbook_authoring",
+                )
             except GPTTruncationError:
                 print("    (still too long; using a minimal fallback for this topic)", flush=True)
                 return self._fallback_topic(topic_plan, excerpts)
@@ -344,6 +364,7 @@ class GPTWriter:
             builder_system(meta["subject"], meta.get("discipline", "")),
             user,
             max_tokens=self.MAX_BUILDER_OUTPUT_TOKENS,
+            purpose="workbook_authoring",
         )
         if raw_dump_path:
             raw_dump_path.parent.mkdir(parents=True, exist_ok=True)
@@ -360,21 +381,33 @@ class GPTWriter:
 
     # ---- low-level chat -------------------------------------------------
 
-    def _chat(self, system: str, user: str, *, max_tokens: int) -> str:
+    def _chat(
+        self,
+        system: str,
+        user: str,
+        *,
+        max_tokens: int,
+        purpose: OpenAIPurpose,
+    ) -> str:
         kwargs: dict[str, Any] = {
-            "model": self.model,
+            **chat_request_policy(purpose, model=self.model),
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
             "response_format": {"type": "json_object"},
         }
-        # gpt-5.x models use max_completion_tokens; older use max_tokens.
+        # GPT-5.x models use max_completion_tokens. Only retry with the legacy
+        # name when the provider explicitly rejects that parameter; auth,
+        # quota, rate-limit, timeout, and connection failures must not submit a
+        # second potentially billable request.
         try:
             kwargs_try = dict(kwargs)
             kwargs_try["max_completion_tokens"] = max_tokens
             response = self._client.chat.completions.create(**kwargs_try)
-        except Exception:
+        except Exception as exc:
+            if not _is_unsupported_completion_parameter(exc):
+                raise
             kwargs["max_tokens"] = max_tokens
             response = self._client.chat.completions.create(**kwargs)
         # When embedded in the Aegis web app, include both planner and builder
@@ -396,6 +429,20 @@ class GPTWriter:
 
 
 # ---------- helpers ------------------------------------------------------
+
+
+def _is_unsupported_completion_parameter(exc: Exception) -> bool:
+    """Recognize a provider's explicit legacy max-token parameter rejection."""
+    text = f"{exc} {getattr(exc, 'body', '')}".lower()
+    names_parameter = "max_completion_tokens" in text
+    if isinstance(exc, TypeError):
+        return names_parameter
+    if getattr(exc, "status_code", None) != 400:
+        return False
+    return names_parameter and any(
+        marker in text
+        for marker in ("unsupported", "unknown", "unrecognized", "not permitted")
+    )
 
 
 def _parse_json(text: str, label: str) -> dict:

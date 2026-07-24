@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { RunConsoleProvider } from "../RunConsole";
-import type { ResumableCheckpoint, UploadJob } from "../types";
+import type { OpenAIUsage, ResumableCheckpoint, Scope, UploadJob } from "../types";
 import BuildConcepts from "./BuildConcepts";
 
 const apiMock = vi.hoisted(() => ({
@@ -33,14 +33,28 @@ vi.mock("../components/DocumentUpload", () => ({
 vi.mock("../components/DirectoryPicker", () => ({
   default: ({
     initialChapterIdentity,
+    onScope,
   }: {
     initialChapterIdentity?: Record<string, string>;
+    onScope?: (scope: Scope) => void;
   }) => (
-    <div data-testid="directory-picker">
-      {initialChapterIdentity?.chapter_title
-        ? `Target ${initialChapterIdentity.chapter_title}`
-        : "Choose target"}
-    </div>
+    <>
+      <div data-testid="directory-picker">
+        {initialChapterIdentity?.chapter_title
+          ? `Target ${initialChapterIdentity.chapter_title}`
+          : "Choose target"}
+      </div>
+      <button
+        type="button"
+        onClick={() => onScope?.({
+          type: "chapter",
+          ids: [11],
+          label: "Electricity",
+        })}
+      >
+        Select Electricity target
+      </button>
+    </>
   ),
 }));
 
@@ -49,8 +63,38 @@ vi.mock("../components/SyllabusUploader", () => ({
 }));
 
 vi.mock("../components/ApiUsageSummary", () => ({
-  default: () => null,
+  default: ({
+    usage,
+    cumulative,
+    resumed,
+  }: {
+    usage?: OpenAIUsage;
+    cumulative?: boolean;
+    resumed?: boolean;
+  }) => usage
+    ? (
+      <div data-testid="usage-presentation">
+        {cumulative ? "Cumulative" : "Run"} usage
+        {resumed ? " · Resumed" : ""}
+        {` · ${usage.total_tokens} tokens`}
+      </div>
+    )
+    : null,
 }));
+
+function cumulativeUsage(totalTokens = 900): OpenAIUsage {
+  return {
+    model: "gpt-5.4-mini-2026-03-17",
+    request_count: 4,
+    input_tokens: totalTokens - 100,
+    cached_input_tokens: 100,
+    uncached_input_tokens: totalTokens - 200,
+    output_tokens: 100,
+    reasoning_tokens: 0,
+    total_tokens: totalTokens,
+    estimated_cost_usd: 0.01,
+  };
+}
 
 function savedJob(overrides: Partial<UploadJob> = {}): UploadJob {
   return {
@@ -106,6 +150,7 @@ function savedSummary(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  streamMock.mockReset();
   window.sessionStorage.clear();
   apiMock.vocab.mockResolvedValue({ book_sources: [] });
   apiMock.resumableConceptCheckpoints.mockImplementation(
@@ -201,4 +246,42 @@ test("polls an active run instead of offering a duplicate Resume action", async 
   });
   expect(apiMock.getUploadJob).toHaveBeenCalledWith("concepts", 42);
   expect(screen.getByRole("button", { name: "Resume" })).toBeDefined();
+});
+
+test("checkpoint recovery presents usage as one resumed cumulative file total", async () => {
+  const usage = cumulativeUsage();
+  apiMock.getUploadJob.mockImplementation(
+    async (_module: string, id: number) => savedJob({
+      id,
+      openai_usage: usage,
+    }),
+  );
+  streamMock.mockResolvedValue({
+    job_id: 42,
+    concept_ids: [],
+    inventory_items: 0,
+    openai_usage: cumulativeUsage(1250),
+  });
+  renderPage();
+
+  fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+  expect(await screen.findByText("Loaded electricity.pdf")).toBeDefined();
+  expect((await screen.findByTestId("usage-presentation")).textContent).toBe(
+    "Cumulative usage · Resumed · 900 tokens",
+  );
+
+  fireEvent.click(screen.getByRole("button", {
+    name: "Select Electricity target",
+  }));
+  fireEvent.click(screen.getByRole("button", {
+    name: "Resume from 91% checkpoint",
+  }));
+
+  expect(await screen.findByText(
+    "Concepts written to the Bulk Import workbook (append-only)",
+  )).toBeDefined();
+  expect(screen.getByTestId("usage-presentation").textContent).toBe(
+    "Cumulative usage · Resumed · 1250 tokens",
+  );
+  expect(streamMock).toHaveBeenCalledTimes(1);
 });

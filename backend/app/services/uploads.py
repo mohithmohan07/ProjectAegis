@@ -255,14 +255,22 @@ def persist_current_openai_usage(
     *,
     owner_sub: str | None = None,
 ) -> dict:
-    """Merge this run's usage into the durable total for the staged file."""
+    """Persist durable history plus the active run exactly once.
+
+    This function is safe to call after every automatic checkpoint and again
+    during terminal success/failure handling. The active run's immutable
+    baseline prevents its cumulative tracker from being added repeatedly.
+    """
     job = get_job(db, job_id, owner_sub=owner_sub)
-    current = openai_usage.current_summary()
     existing = job.openai_usage if isinstance(job.openai_usage, dict) else {}
-    merged = openai_usage.merge_summaries(existing, current)
+    merged = openai_usage.cumulative_summary(
+        existing,
+        persistence_key=f"upload-job:{job.id}",
+    )
     job.openai_usage = merged
     db.commit()
     db.refresh(job)
+    progress.usage(merged)
     return merged
 
 
@@ -341,6 +349,14 @@ def run_with_openai_usage(
         if job.status == "generated":
             raise ValueError(
                 "this upload has already been generated; start a new upload")
+        cumulative = openai_usage.bind_persisted_summary(
+            f"upload-job:{job.id}",
+            job.openai_usage if isinstance(job.openai_usage, dict) else {},
+        )
+        if cumulative.get("request_count"):
+            # A resumed/imported job exposes its durable history immediately,
+            # before the first new provider response arrives.
+            progress.usage(cumulative)
         try:
             result = fn()
         except Exception as exc:
