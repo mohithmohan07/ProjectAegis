@@ -1,4 +1,5 @@
 """Concept-generation prompts must require rich Types classification."""
+import copy
 import json
 import re
 
@@ -1668,11 +1669,23 @@ def test_pipeline_builds_culminations_before_types(monkeypatch):
         checkpoint_callback=checkpoints.append,
     )
     assert order == ["culmination", "types"]
-    assert len(checkpoints) == 1
-    assert checkpoints[0]["stage"] == "pre_type_assignment"
+    assert [checkpoint["stage"] for checkpoint in checkpoints] == [
+        "skeleton_complete",
+        "canonical_skeleton",
+        "description_method_snapshot",
+        "question_inventory",
+        "pre_type_assignment",
+        "post_type_assignment",
+        "final_content_ready",
+    ]
+    pre_type_checkpoint = next(
+        checkpoint
+        for checkpoint in checkpoints
+        if checkpoint["stage"] == "pre_type_assignment"
+    )
     assert any(
         row["concept_title"].startswith("Culmination -")
-        for row in checkpoints[0]["records"]
+        for row in pre_type_checkpoint["records"]
     )
 
 
@@ -1737,7 +1750,280 @@ def test_pipeline_resume_checkpoint_skips_expensive_gpt_stages(monkeypatch):
     )
     assert assigned
     assert out
+    assert [checkpoint["stage"] for checkpoint in callbacks] == [
+        "post_type_assignment",
+        "final_content_ready",
+    ]
+
+
+def test_skeleton_chunk_checkpoint_resumes_after_completed_chunks(monkeypatch):
+    chunks = [
+        {"text": "First chunk source.", "sections": []},
+        {"text": "Second chunk source.", "sections": []},
+        {"text": "Third chunk source.", "sections": []},
+    ]
+
+    def saved_chunk(index, title):
+        return {
+            "chunk_index": index,
+            "chunk_count": len(chunks),
+            "chunk_sha256": g._chunk_checkpoint_sha256(chunks[index - 1]),
+            "records": [{
+                "topic": "T",
+                "parent_concept": "P",
+                "concept_title": title,
+                "concept_details": f"Description: {title}",
+                "keywords": "",
+            }],
+        }
+
+    calls = []
+
+    def fake_openai(_system, user, **_kwargs):
+        calls.append(user)
+        assert "Chunk 3 of 3" in user
+        return {"rows": [{
+            "topic": "T",
+            "parent_concept": "P",
+            "concept": "Third",
+            "concept_description": "Description: Third",
+            "keywords": "",
+            "source_evidence": "",
+        }]}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    monkeypatch.setattr(
+        g, "_repair_records_via_api", lambda records, **kwargs: records)
+    checkpoints = []
+
+    records = g._extract_skeleton_via_api(
+        chunks,
+        meta=g._metadata(subject="Science"),
+        resume_chunks=[
+            saved_chunk(1, "First"),
+            saved_chunk(2, "Second"),
+        ],
+        checkpoint_callback=checkpoints.append,
+    )
+
+    assert len(calls) == 1
+    assert {record["concept_title"] for record in records} == {
+        "First", "Second", "Third",
+    }
+    assert checkpoints[-1]["stage"] == "skeleton_chunks"
+    assert len(checkpoints[-1]["completed_chunks"]) == 3
+
+
+def test_post_type_checkpoint_skips_type_assignment_and_activity_hubs(
+    monkeypatch,
+):
+    monkeypatch.setattr(g.config, "use_live_generation", lambda: True)
+    monkeypatch.setattr(
+        g, "_assign_types_via_api",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Type assignment must be restored")),
+    )
+    monkeypatch.setattr(
+        g, "_populate_activity_hubs_via_api",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Activity hubs must be restored")),
+    )
+    monkeypatch.setattr(
+        g, "_repair_records_via_api", lambda records, **kwargs: records)
+    monkeypatch.setattr(
+        g, "_merge_similar_concepts_via_api",
+        lambda records, **kwargs: records,
+    )
+    monkeypatch.setattr(
+        g, "_ensure_mastery_lines_via_api",
+        lambda records, **kwargs: records,
+    )
+    monkeypatch.setattr(
+        g, "_ensure_misconceptions_via_api",
+        lambda records, **kwargs: records,
+    )
+    monkeypatch.setattr(
+        g, "_validate_final_or_raise",
+        lambda records, **kwargs: {
+            "ok": True,
+            "errors": [],
+            "summary": {},
+        },
+    )
+    checkpoint = {
+        "schema_version": g._CONCEPT_CHECKPOINT_SCHEMA,
+        "stage_schema_version": 1,
+        "stage": "post_type_assignment",
+        "records": [
+            {
+                "topic": "T",
+                "parent_concept": "P",
+                "concept_title": "C",
+                "concept_details": (
+                    "Description: A complete concept description. // "
+                    "Error Analysis: Students may omit a required step."
+                ),
+                "keywords": "",
+            },
+            {
+                "topic": "T",
+                "parent_concept": "Culmination",
+                "concept_title": "Culmination - C",
+                "concept_details": "Description: Recap of C.",
+                "keywords": "",
+            },
+        ],
+        "question_task_inventory": {"items": [], "stats": {}},
+        "mined_types": {"types": []},
+        "method_row_snapshot": [],
+        "progress": 0.91,
+    }
+    callbacks = []
+
+    records = g.concepts_from_mmd(
+        "## T\nbody",
+        subject="Science",
+        resume_checkpoint=checkpoint,
+        checkpoint_callback=callbacks.append,
+    )
+
+    assert records
+    assert [item["stage"] for item in callbacks] == [
+        "final_content_ready",
+    ]
+
+
+def test_final_content_checkpoint_skips_semantic_api_repair(monkeypatch):
+    monkeypatch.setattr(g.config, "use_live_generation", lambda: True)
+    monkeypatch.setattr(
+        g,
+        "_prepare_final_concept_content",
+        lambda *a, **kw: (_ for _ in ()).throw(
+            AssertionError("final semantic/API repair must not rerun")),
+    )
+    monkeypatch.setattr(
+        g,
+        "_openai_json",
+        lambda *a, **kw: (_ for _ in ()).throw(
+            AssertionError("final checkpoint resume must not call the API")),
+    )
+    validated = []
+    monkeypatch.setattr(
+        g,
+        "_validate_final_or_raise",
+        lambda records, **kw: validated.append(records) or {
+            "ok": True,
+            "errors": [],
+            "summary": {},
+        },
+    )
+    checkpoint = g._make_concept_checkpoint(
+        "final_content_ready",
+        records=[{
+            "topic": "T",
+            "parent_concept": "P",
+            "concept_title": "C",
+            "concept_details": (
+                "Description: A complete concept description. // "
+                "Error Analysis: Students may omit a required step."
+            ),
+            "keywords": "",
+        }],
+        question_task_inventory={"items": [], "stats": {}},
+        mined_types={"types": []},
+        method_row_snapshot=[],
+    )
+    callbacks = []
+
+    records = g.concepts_from_mmd(
+        "## T\nbody",
+        subject="Science",
+        resume_checkpoint=checkpoint,
+        checkpoint_callback=callbacks.append,
+    )
+
+    assert records
+    assert validated
     assert callbacks == []
+
+
+def test_pre_learning_resume_after_audit_skips_draft_and_auditor(monkeypatch):
+    base_rows = [{
+        "topic": "Current Topic",
+        "parent_concept": "Current",
+        "concept_title": "Current Chapter Concept",
+        "concept_details": "Description: current chapter content",
+        "keywords": "",
+    }]
+    draft = {
+        "topics": [{
+            "topic_name": "Number Foundations",
+            "concepts": [{
+                "parent_concept": "Prior Number Sense",
+                "concept_name": "Whole Number Fluency",
+                "concept_description": (
+                    "Description: Learners fluently compare whole numbers. // "
+                    "Error Analysis: Students may reverse the comparison sign."
+                ),
+                "tag": "NU",
+            }],
+        }],
+    }
+    audited = copy.deepcopy(draft)
+    audited["topics"][0]["concepts"][0]["concept_name"] = (
+        "Audited Whole Number Fluency")
+    responses = iter([draft, audited])
+    monkeypatch.setattr(g, "_openai_json", lambda *a, **kw: next(responses))
+    monkeypatch.setattr(
+        g,
+        "_ensure_misconceptions_via_api",
+        lambda *a, **kw: (_ for _ in ()).throw(
+            RuntimeError("learner analysis failed")),
+    )
+    checkpoints = []
+
+    with pytest.raises(RuntimeError, match="learner analysis failed"):
+        g.pre_learning_from_rows(
+            base_rows,
+            subject="Mathematics",
+            grade="07",
+            board="CBSE",
+            chapter_title="Current Chapter",
+            live=True,
+            checkpoint_callback=checkpoints.append,
+        )
+
+    assert [item["stage"] for item in checkpoints] == [
+        "pre_derivation_draft",
+        "pre_derivation_audited",
+    ]
+    monkeypatch.setattr(
+        g,
+        "_openai_json",
+        lambda *a, **kw: (_ for _ in ()).throw(
+            AssertionError("draft and auditor API calls must be restored")),
+    )
+    monkeypatch.setattr(
+        g, "_ensure_misconceptions_via_api",
+        lambda records, **kw: records,
+    )
+    resumed_callbacks = []
+
+    records = g.pre_learning_from_rows(
+        base_rows,
+        subject="Mathematics",
+        grade="07",
+        board="CBSE",
+        chapter_title="Current Chapter",
+        live=True,
+        resume_checkpoint=checkpoints[-1],
+        checkpoint_callback=resumed_callbacks.append,
+    )
+
+    assert records[0]["concept_title"] == "Audited Whole Number Fluency"
+    assert [item["stage"] for item in resumed_callbacks] == [
+        "pre_learner_analysis",
+    ]
 
 
 def test_concepts_pipeline_runs_types_assign(monkeypatch):

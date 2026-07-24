@@ -128,6 +128,8 @@ export const api = {
     `${BASE}/data/export/concepts?ids=${ids.join(",")}`,
   inventoryCsvUrl: (jobId: number) =>
     `${BASE}/build-concepts/uploads/${jobId}/inventory.csv`,
+  checkpointUrl: (jobId: number) =>
+    `${BASE}/build-concepts/uploads/${jobId}/checkpoint`,
   createWorkbookUrl: (subject: string, board: string, grade: string, mode: "blank" | "content") =>
     `${BASE}/data/workbook/new?${new URLSearchParams({ subject, board, grade, mode })}`,
   importWorkbook: (file: File) => {
@@ -177,6 +179,21 @@ export const api = {
     return http<UploadJob>(`/build-concepts/uploads/${jobId}/file`,
       { method: "PUT", body: fd });
   },
+  importConceptCheckpoint: (file: File, learningKind: "post" | "pre") => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return http<UploadJob>(
+      `/build-concepts/checkpoints/import?learning_kind=${learningKind}`,
+      {
+        method: "POST",
+        body: fd,
+      },
+    );
+  },
+  clearConceptCheckpoint: (jobId: number) =>
+    http<UploadJob>(`/build-concepts/uploads/${jobId}/checkpoint`, {
+      method: "DELETE",
+    }),
 
   // Streaming endpoint paths (consumed via streamNdjson / RunConsole)
   paths: {

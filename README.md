@@ -82,6 +82,12 @@ The `_live_*` hooks in the service layer mark exactly where inputs must be wired
 
 ## Run locally
 
+On Windows, keep the Git checkout and its `.venv` / `node_modules` outside a
+OneDrive-synced folder (for example, `C:\Projects\ProjectAegis`). Git already
+provides source history, while OneDrive can interpret normal environment
+rebuilds as thousands of file deletions. If OneDrive presents a large,
+unexpected deletion prompt, keep the files and inspect the target folder first.
+
 ### Backend
 
 ```bash
@@ -114,6 +120,48 @@ UI: http://localhost:5173 — Home, Build Assessments, Build Concepts, Database.
 ```bash
 docker compose up --build
 ```
+
+## Durable generation checkpoints
+
+Build Concepts saves completed generation stages so a failed run can continue
+without repeating successful OpenAI work. The UI shows the newest checkpoint
+and automatically resumes it on the next Generate action.
+
+Each converted concept job can also be downloaded as an
+`*.aegis-checkpoint.json` bundle. The bundle contains the converted MMD,
+compatible pipeline state, inventory, usage totals, and the latest diagnostic
+log. Store this file in private durable storage such as Google Drive, then use
+**Restore checkpoint** after a deployment or in another compatible Aegis
+installation. Do not commit live checkpoint bundles, uploads, databases, or
+generated workbooks to Git; Git remains the source of truth for code,
+migrations, prompts, and sanitized regression fixtures.
+
+The UI links to the team's
+[Google Drive checkpoint folder](https://drive.google.com/drive/folders/1ZrgyXqB339m312XqhxLWMu5Z5H15Ggyo).
+To back up, download the checkpoint and upload it to that folder. To resume,
+download the JSON file from Drive and choose it with **Restore checkpoint**.
+This is an explicit backup/restore workflow; Aegis does not automatically sync
+files to Drive.
+Set `VITE_CHECKPOINT_DRIVE_FOLDER_URL` at frontend build time to use a
+different folder.
+
+The checked-in Fly configuration mounts the `aegis_data` volume at `/data` and
+stores both runtime files and SQLite there. Create the encrypted volume once in
+the app's primary region before deploying this configuration:
+
+```bash
+fly volumes create aegis_data --app projectaegis --region ams
+```
+
+A Fly volume is the practical single-machine bridge for this app. A multi-user
+or multi-machine production deployment should move run metadata and events to
+managed PostgreSQL and large checkpoint/upload artifacts to private object
+storage; the portable bundle remains the human-controlled backup.
+
+This repository does not yet implement per-user authentication or ownership.
+Checkpoint bundles contain source text, usage totals, and diagnostic logs, so
+keep the Fly app behind trusted access controls and keep the Drive folder
+restricted to the intended team before using real student or licensed content.
 
 ## Tests
 

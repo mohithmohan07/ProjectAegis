@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from .. import schemas
 from ..db import SessionLocal, get_db
 from ..services import build_concepts as svc
-from ..services import progress, uploads
+from ..services import checkpoints, progress, uploads
 
 router = APIRouter(prefix="/build-concepts", tags=["build-concepts"])
 
@@ -51,6 +51,59 @@ def download_inventory_csv(job_id: int, db: Session = Depends(get_db)):
                 f'attachment; filename="question_task_inventory_job_{job_id}.csv"',
         },
     )
+
+
+@router.get("/uploads/{job_id}/checkpoint")
+def download_checkpoint(job_id: int, db: Session = Depends(get_db)):
+    """Download a portable converted-source + generation checkpoint bundle."""
+    try:
+        filename, content = checkpoints.export_bundle(db, job_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return Response(
+        content=content,
+        media_type="application/json; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.post(
+    "/checkpoints/import",
+    response_model=schemas.UploadJobOut,
+)
+async def import_checkpoint(
+    file: UploadFile = File(...),
+    learning_kind: str = "",
+    db: Session = Depends(get_db),
+):
+    """Restore a portable checkpoint as a new converted Build Concepts job."""
+    try:
+        raw_bytes = await file.read(checkpoints.MAX_IMPORT_BYTES + 1)
+        if len(raw_bytes) > checkpoints.MAX_IMPORT_BYTES:
+            raise HTTPException(
+                413, "checkpoint file exceeds the 25 MB import limit")
+        return checkpoints.import_bundle(
+            db,
+            raw_bytes,
+            expected_learning_kind=learning_kind,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.delete(
+    "/uploads/{job_id}/checkpoint",
+    response_model=schemas.UploadJobOut,
+)
+def clear_checkpoint(job_id: int, db: Session = Depends(get_db)):
+    try:
+        return checkpoints.clear_checkpoint(db, job_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @router.post("/uploads/{job_id}/convert")

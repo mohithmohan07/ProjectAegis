@@ -30,9 +30,11 @@ dist/
 # Aegis runtime
 backend/aegis.db
 backend/aegis_test.db
+backend/data/aegis.db*
 backend/data/uploads/
 # The append-only generation output is runtime state, not source.
 backend/data/bulk_import_output.xlsx
+*.aegis-checkpoint.json
 *.xlsx~
 
 # Create Workbooks runtime state (generated PDFs + vendored tool caches)

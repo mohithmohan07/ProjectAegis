@@ -3,7 +3,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.environ.get("AEGIS_DATA_DIR", ROOT / "data"))
-DB_URL = os.environ.get("AEGIS_DB_URL", f"sqlite:///{ROOT / 'aegis.db'}")
+DB_URL = os.environ.get(
+    # Keep the historical local-development location so checking out this
+    # release never makes an existing database appear to disappear. Hosted
+    # deployments set AEGIS_DB_URL explicitly to their persistent volume.
+    "AEGIS_DB_URL", f"sqlite:///{ROOT / 'aegis.db'}")
 
 # The Bulk Import workbook IS the database — single source of truth.
 BULK_IMPORT_DB = DATA_DIR / "bulk_import_database.xlsx"

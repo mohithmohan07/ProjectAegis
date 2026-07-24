@@ -143,6 +143,19 @@ export interface UploadJob {
   status: string;
   result_ids: number[];
   detail: string;
+  checkpoint_available?: boolean;
+  checkpoint_stage?: string;
+  checkpoint_saved_at?: string;
+  checkpoint_progress?: number;
+  checkpoint_target_identity?: Record<string, string>;
+  generation_log?: Array<{
+    type: string;
+    level?: string;
+    message?: string;
+    label?: string;
+    value?: number;
+    ts?: number;
+  }>;
   created_at: string;
   openai_usage?: OpenAIUsage;
 }

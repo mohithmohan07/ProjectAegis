@@ -247,6 +247,67 @@ def test_failed_uploaded_run_still_persists_billable_usage(db):
     assert uploads.get_job(db, job.id).openai_usage["request_count"] == 1
 
 
+def test_failed_streamed_upload_persists_exact_generation_log(db):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    job = models.UploadJob(
+        module="build_concepts",
+        upload_type="document",
+        filename="diagnostics.txt",
+        status="converted",
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    app = FastAPI()
+
+    @app.post("/run")
+    def run():
+        def work():
+            local = SessionLocal()
+            try:
+                def fail():
+                    progress.log(
+                        "row_index=7; concept='Electric Power'; "
+                        "code='rich_text_format'",
+                        level="error",
+                    )
+                    raise RuntimeError(
+                        "final validation failed at row_index=7"
+                    )
+
+                return uploads.run_with_openai_usage(local, job.id, fail)
+            finally:
+                local.close()
+
+        return progress.stream(work)
+
+    response = TestClient(app).post("/run")
+
+    assert "row_index=7" in response.text
+    db.expire_all()
+    saved = uploads.get_job(db, job.id)
+    assert saved.generation_log[-1]["level"] == "error"
+    assert saved.generation_log[-1]["error"]["exception_type"] == "RuntimeError"
+    assert saved.generation_log[-1]["error"]["frames"][-1]["function"] == "fail"
+    assert any(
+        "Electric Power" in event.get("message", "")
+        for event in saved.generation_log
+    )
+    assert "row_index=7" in saved.detail
+    assert "test_openai_usage.py:" in saved.detail
+
+
+def test_progress_event_limit_zero_returns_no_events():
+    token = progress._history.set([{"type": "log", "message": "secret"}])
+    try:
+        assert progress.current_events(limit=0) == []
+    finally:
+        progress._history.reset(token)
+
+
 def test_concurrent_runs_for_one_upload_do_not_lose_usage(db):
     job = models.UploadJob(
         module="build_concepts", filename="same-file.txt", status="converted"
