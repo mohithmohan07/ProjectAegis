@@ -64,6 +64,7 @@ _USAGE_INTS = {
     "request_count": MAX_REQUEST_COUNT,
     "input_tokens": MAX_TOKEN_COUNT,
     "cached_input_tokens": MAX_TOKEN_COUNT,
+    "cache_write_tokens": MAX_TOKEN_COUNT,
     "uncached_input_tokens": MAX_TOKEN_COUNT,
     "output_tokens": MAX_TOKEN_COUNT,
     "reasoning_tokens": MAX_TOKEN_COUNT,
@@ -454,7 +455,14 @@ def _validate_usage_row(
         value,
         allowed,
         path,
-        required=allowed if model_row else set(),
+        # ``cache_write_tokens`` was added without changing the v1 bundle
+        # schema. Older exports remain valid and are interpreted as zero
+        # cache-write tokens by the usage merger.
+        required=(
+            allowed - {"cache_write_tokens"}
+            if model_row
+            else set()
+        ),
     )
     for field, maximum in _USAGE_INTS.items():
         if field in value:
@@ -485,9 +493,20 @@ def _validate_usage_row(
             _string(value["pricing_as_of"], f"{path}.pricing_as_of", 64)
 
     cached = value.get("cached_input_tokens")
+    cache_write = value.get("cache_write_tokens")
     input_tokens = value.get("input_tokens")
     if cached is not None and input_tokens is not None and cached > input_tokens:
         raise ValueError(f"{path}.cached_input_tokens exceeds input_tokens")
+    if (
+        cached is not None
+        and cache_write is not None
+        and input_tokens is not None
+        and cached + cache_write > input_tokens
+    ):
+        raise ValueError(
+            f"{path}.cached_input_tokens + cache_write_tokens exceeds "
+            "input_tokens"
+        )
     reasoning = value.get("reasoning_tokens")
     output = value.get("output_tokens")
     if reasoning is not None and output is not None and reasoning > output:

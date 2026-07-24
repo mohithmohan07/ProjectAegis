@@ -36,7 +36,26 @@ function Probe() {
     <>
       <button onClick={() => void run("First", "/first")}>First</button>
       <button onClick={() => void run("Second", "/second")}>Second</button>
+      <button
+        onClick={() => void run(
+          "Retry",
+          "/retry",
+          {},
+          {
+            cumulative: true,
+            resumed: true,
+            filename: "chapter.pdf",
+            initialUsage: usage(500),
+          },
+        )}
+      >
+        Retry
+      </button>
       <output data-testid="usage">{state.usage?.total_tokens ?? "none"}</output>
+      <output data-testid="usage-context">
+        {state.usagePresentation?.cumulative ? "cumulative" : "run"}
+        {state.usagePresentation?.resumed ? " resumed" : ""}
+      </output>
     </>
   );
 }
@@ -66,4 +85,27 @@ test("ignores late usage events from an older overlapping run", async () => {
     pending[0].resolve({});
     pending[1].resolve({});
   });
+});
+
+test("a checkpoint retry starts from and preserves the cumulative file total", () => {
+  pending.length = 0;
+  render(
+    <RunConsoleProvider>
+      <Probe />
+    </RunConsoleProvider>,
+  );
+
+  fireEvent.click(screen.getByText("Retry"));
+  expect(screen.getByTestId("usage").textContent).toBe("500");
+  expect(screen.getByTestId("usage-context").textContent).toBe(
+    "cumulative resumed",
+  );
+
+  // Even if a transient event contains only this attempt's subtotal, the
+  // cumulative presentation must not look like a fresh usage counter.
+  act(() => pending[0].onEvent({ type: "usage", data: usage(50) }));
+  expect(screen.getByTestId("usage").textContent).toBe("500");
+
+  act(() => pending[0].onEvent({ type: "usage", data: usage(550) }));
+  expect(screen.getByTestId("usage").textContent).toBe("550");
 });

@@ -55,6 +55,7 @@ export default function DocumentUpload({
   uploadType,
   bookSources = [],
   externalJob,
+  disabled = false,
   onJob,
 }: {
   module: Module;
@@ -62,6 +63,7 @@ export default function DocumentUpload({
   uploadType?: string;
   bookSources?: string[];
   externalJob?: UploadJob | null;
+  disabled?: boolean;
   onJob: (job: UploadJob | null) => void;
 }) {
   const { run } = useRunConsole();
@@ -72,6 +74,7 @@ export default function DocumentUpload({
   const [busy, setBusy] = useState(false);
   const [restoringSavedJob, setRestoringSavedJob] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const controlsDisabled = busy || disabled;
   const inputRef = useRef<HTMLInputElement>(null);
   const checkpointInputRef = useRef<HTMLInputElement>(null);
   const savedJobRequestGenerationRef = useRef(0);
@@ -191,7 +194,7 @@ export default function DocumentUpload({
   }, [externalJob, storageKey]);
 
   async function upload() {
-    if (!file) return;
+    if (!file || disabled) return;
     invalidateSavedJobRestore();
     setBusy(true);
     setError(null);
@@ -215,7 +218,7 @@ export default function DocumentUpload({
   }
 
   async function replace(newFile: File) {
-    if (!job) return;
+    if (!job || disabled) return;
     setBusy(true);
     setError(null);
     try {
@@ -231,7 +234,10 @@ export default function DocumentUpload({
   }
 
   async function convert() {
-    if (!job) return;
+    if (!job || disabled) return;
+    invalidateSavedJobRestore();
+    const requestGeneration = savedJobRequestGenerationRef.current;
+    setBusy(true);
     setError(null);
     const path = module === "assessments"
       ? api.paths.assessmentConvert(job.id)
@@ -239,14 +245,19 @@ export default function DocumentUpload({
     try {
       const result = await run<{ status: string; mmd_text: string; mmd_chars: number }>(
         `Converting ${job.filename} to MMD`, path);
+      if (savedJobRequestGenerationRef.current !== requestGeneration) return;
       emit({ ...job, status: "converted", mmd_text: result.mmd_text });
     } catch (e) {
-      setError(String(e));
+      if (savedJobRequestGenerationRef.current === requestGeneration) {
+        setError(String(e));
+      }
+    } finally {
+      setBusy(false);
     }
   }
 
   async function restoreCheckpoint(file: File) {
-    if (module !== "concepts" || !conceptKind) return;
+    if (disabled || module !== "concepts" || !conceptKind) return;
     invalidateSavedJobRestore();
     setBusy(true);
     setError(null);
@@ -261,7 +272,7 @@ export default function DocumentUpload({
   }
 
   async function clearSavedCheckpoint() {
-    if (!job || module !== "concepts") return;
+    if (!job || disabled || module !== "concepts") return;
     setBusy(true);
     setError(null);
     try {
@@ -274,6 +285,7 @@ export default function DocumentUpload({
   }
 
   function reset() {
+    if (disabled) return;
     invalidateSavedJobRestore();
     setFile(null);
     if (inputRef.current) inputRef.current.value = "";
@@ -284,14 +296,19 @@ export default function DocumentUpload({
   if (!job) {
     return (
       <div className="card">
-        <SourceBookInput value={source} onChange={setSource} options={bookSources} disabled={busy} />
+        <SourceBookInput
+          value={source}
+          onChange={setSource}
+          options={bookSources}
+          disabled={controlsDisabled}
+        />
         <div className="row" style={{ marginTop: 8 }}>
-          <input ref={inputRef} type="file" disabled={busy}
+          <input ref={inputRef} type="file" disabled={controlsDisabled}
             onChange={(e) => {
               invalidateSavedJobRestore();
               setFile(e.target.files?.[0] ?? null);
             }} />
-          <button disabled={!file || busy} onClick={upload}>
+          <button disabled={!file || controlsDisabled} onClick={upload}>
             {busy ? "Uploading…" : "Upload"}
           </button>
           {file && <span className="muted mono">{file.name}</span>}
@@ -318,13 +335,16 @@ export default function DocumentUpload({
                 a portable backup.
               </span>
             </div>
-            <label className="upload-label" style={{ opacity: busy ? 0.5 : 1 }}>
+            <label
+              className="upload-label"
+              style={{ opacity: controlsDisabled ? 0.5 : 1 }}
+            >
               Import checkpoint backup
               <input
                 ref={checkpointInputRef}
                 type="file"
                 accept=".json,.aegis-checkpoint.json,application/json"
-                disabled={busy}
+                disabled={controlsDisabled}
                 style={{ display: "none" }}
                 onChange={(e) => {
                   const selected = e.target.files?.[0];
@@ -367,15 +387,21 @@ export default function DocumentUpload({
         {job.source_book && <span className="badge accent">{job.source_book}</span>}
         <div className="spacer" />
         {!generated && (
-          <label className="upload-label" style={{ opacity: busy ? 0.5 : 1 }}>
+          <label
+            className="upload-label"
+            style={{ opacity: controlsDisabled ? 0.5 : 1 }}
+          >
             Replace file
-            <input type="file" disabled={busy} style={{ display: "none" }}
+            <input
+              type="file"
+              disabled={controlsDisabled}
+              style={{ display: "none" }}
               onChange={(e) => e.target.files?.[0] && replace(e.target.files[0])} />
           </label>
         )}
         <button
           className="ghost"
-          disabled={busy}
+          disabled={controlsDisabled}
           onClick={reset}
           title={
             job.checkpoint_available
@@ -389,7 +415,9 @@ export default function DocumentUpload({
 
       {!converted && (
         <div className="row" style={{ marginTop: 10 }}>
-          <button disabled={busy} onClick={convert}>Convert to MMD</button>
+          <button disabled={controlsDisabled} onClick={convert}>
+            Convert to MMD
+          </button>
           <span className="muted">Runs Mathpix/normalization — watch the Console for progress.</span>
         </div>
       )}
@@ -450,7 +478,7 @@ export default function DocumentUpload({
             {job.checkpoint_available && (
               <button
                 className="ghost"
-                disabled={busy}
+                disabled={controlsDisabled}
                 onClick={clearSavedCheckpoint}
               >
                 Discard checkpoint

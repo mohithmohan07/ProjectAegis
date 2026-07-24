@@ -6,6 +6,7 @@ without a response are deliberately not guessed.
 """
 from __future__ import annotations
 
+import copy
 import contextvars
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -23,6 +24,10 @@ class Pricing:
     cached_input_per_million: Decimal
     output_per_million: Decimal
     source: str = DEFAULT_PRICING_SOURCE
+    cache_write_multiplier: Decimal = Decimal("1")
+    long_context_threshold: int | None = None
+    long_input_multiplier: Decimal = Decimal("1")
+    long_output_multiplier: Decimal = Decimal("1")
 
 
 # Standard text-token prices, snapshotted on PRICING_AS_OF. Prefix matching
@@ -39,9 +44,20 @@ _PRICING: tuple[tuple[str, Pricing], ...] = (
     ),
     (
         "gpt-5.6-luna",
-        Pricing(Decimal("1.00"), Decimal("0.10"), Decimal("6.00")),
+        Pricing(
+            Decimal("1.00"),
+            Decimal("0.10"),
+            Decimal("6.00"),
+            "https://developers.openai.com/api/docs/models/gpt-5.6-luna",
+            cache_write_multiplier=Decimal("1.25"),
+            long_context_threshold=272_000,
+            long_input_multiplier=Decimal("2"),
+            long_output_multiplier=Decimal("1.5"),
+        ),
     ),
 )
+
+_COST_UNSET = object()
 
 
 @dataclass
@@ -50,9 +66,12 @@ class ModelUsage:
     request_count: int = 0
     input_tokens: int = 0
     cached_input_tokens: int = 0
+    cache_write_tokens: int = 0
     output_tokens: int = 0
     reasoning_tokens: int = 0
     total_tokens: int = 0
+    estimated_cost_usd: Decimal = Decimal("0")
+    pricing_complete: bool = True
 
     def add(
         self,
@@ -60,21 +79,36 @@ class ModelUsage:
         request_count: int,
         input_tokens: int,
         cached_input_tokens: int,
+        cache_write_tokens: int,
         output_tokens: int,
         reasoning_tokens: int,
         total_tokens: int,
+        estimated_cost_usd: Decimal | None,
     ) -> None:
         self.request_count += max(0, int(request_count))
         self.input_tokens += max(0, int(input_tokens))
         self.cached_input_tokens += max(0, int(cached_input_tokens))
+        self.cache_write_tokens += max(0, int(cache_write_tokens))
         self.output_tokens += max(0, int(output_tokens))
         self.reasoning_tokens += max(0, int(reasoning_tokens))
         self.total_tokens += max(0, int(total_tokens))
+        if estimated_cost_usd is None:
+            self.pricing_complete = False
+        elif self.pricing_complete:
+            self.estimated_cost_usd += estimated_cost_usd
 
 
 @dataclass
 class UsageAccumulator:
     models: dict[str, ModelUsage] = field(default_factory=dict)
+    # One immutable durable baseline per persisted artifact. Recomputing
+    # ``baseline + current run`` at every checkpoint makes repeated saves
+    # idempotent while still including newly billed responses.
+    persistence_baselines: dict[str, dict[str, Any]] = field(
+        default_factory=dict,
+        repr=False,
+    )
+    visible_persistence_key: str = field(default="", repr=False)
 
     def add(
         self,
@@ -83,26 +117,50 @@ class UsageAccumulator:
         request_count: int = 1,
         input_tokens: int = 0,
         cached_input_tokens: int = 0,
+        cache_write_tokens: int = 0,
         output_tokens: int = 0,
         reasoning_tokens: int = 0,
         total_tokens: int | None = None,
+        estimated_cost_usd: Decimal | float | str | None | object = _COST_UNSET,
     ) -> None:
         model = (model or "unknown").strip() or "unknown"
         input_tokens = max(0, int(input_tokens))
         cached_input_tokens = min(input_tokens, max(0, int(cached_input_tokens)))
+        cache_write_tokens = min(
+            max(input_tokens - cached_input_tokens, 0),
+            max(0, int(cache_write_tokens)),
+        )
         output_tokens = max(0, int(output_tokens))
         reasoning_tokens = min(output_tokens, max(0, int(reasoning_tokens)))
         total = input_tokens + output_tokens if total_tokens is None else max(
             0, int(total_tokens)
         )
+        request_cost: Decimal | None
+        if estimated_cost_usd is _COST_UNSET:
+            request_cost = _request_cost(
+                model=model,
+                input_tokens=input_tokens,
+                cached_input_tokens=cached_input_tokens,
+                cache_write_tokens=cache_write_tokens,
+                output_tokens=output_tokens,
+            )
+        elif estimated_cost_usd is None:
+            request_cost = None
+        else:
+            try:
+                request_cost = Decimal(str(estimated_cost_usd))
+            except (ValueError, TypeError):
+                request_cost = None
         item = self.models.setdefault(model, ModelUsage(model=model))
         item.add(
             request_count=request_count,
             input_tokens=input_tokens,
             cached_input_tokens=cached_input_tokens,
+            cache_write_tokens=cache_write_tokens,
             output_tokens=output_tokens,
             reasoning_tokens=reasoning_tokens,
             total_tokens=total,
+            estimated_cost_usd=request_cost,
         )
 
     def summary(self) -> dict[str, Any]:
@@ -111,6 +169,7 @@ class UsageAccumulator:
         request_count = sum(row["request_count"] for row in model_rows)
         input_tokens = sum(row["input_tokens"] for row in model_rows)
         cached_input_tokens = sum(row["cached_input_tokens"] for row in model_rows)
+        cache_write_tokens = sum(row["cache_write_tokens"] for row in model_rows)
         output_tokens = sum(row["output_tokens"] for row in model_rows)
         reasoning_tokens = sum(row["reasoning_tokens"] for row in model_rows)
         total_tokens = sum(row["total_tokens"] for row in model_rows)
@@ -134,6 +193,7 @@ class UsageAccumulator:
             "request_count": request_count,
             "input_tokens": input_tokens,
             "cached_input_tokens": cached_input_tokens,
+            "cache_write_tokens": cache_write_tokens,
             "uncached_input_tokens": max(input_tokens - cached_input_tokens, 0),
             "output_tokens": output_tokens,
             "reasoning_tokens": reasoning_tokens,
@@ -180,6 +240,55 @@ def current_summary() -> dict[str, Any]:
     return (accumulator or UsageAccumulator()).summary()
 
 
+def bind_persisted_summary(
+    persistence_key: str,
+    persisted_summary: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Bind one durable baseline to the active logical generation run.
+
+    The baseline is captured only once for a given artifact. Later checkpoint
+    writes recompute ``baseline + all usage observed in this run`` instead of
+    merging the same cumulative run summary into the database repeatedly.
+    """
+    accumulator = _active.get()
+    persisted = (
+        persisted_summary if isinstance(persisted_summary, dict) else {}
+    )
+    if accumulator is None:
+        return merge_summaries(persisted)
+    key = str(persistence_key)
+    if key not in accumulator.persistence_baselines:
+        accumulator.persistence_baselines[key] = copy.deepcopy(persisted)
+    accumulator.visible_persistence_key = key
+    return merge_summaries(
+        accumulator.persistence_baselines[key],
+        accumulator.summary(),
+    )
+
+
+def cumulative_summary(
+    persisted_summary: dict[str, Any] | None,
+    *,
+    persistence_key: str,
+) -> dict[str, Any]:
+    """Return durable history plus this run exactly once."""
+    return bind_persisted_summary(persistence_key, persisted_summary)
+
+
+def visible_summary() -> dict[str, Any]:
+    """Return the cumulative summary shown for the active persisted artifact."""
+    accumulator = _active.get()
+    if accumulator is None:
+        return UsageAccumulator().summary()
+    key = accumulator.visible_persistence_key
+    if key and key in accumulator.persistence_baselines:
+        return merge_summaries(
+            accumulator.persistence_baselines[key],
+            accumulator.summary(),
+        )
+    return accumulator.summary()
+
+
 def record_response(response: Any, *, requested_model: str = "") -> dict[str, Any]:
     """Record one billable Chat Completions response, if tracking is active.
 
@@ -202,6 +311,7 @@ def record_response(response: Any, *, requested_model: str = "") -> dict[str, An
         usage, "completion_tokens_details", _get(usage, "output_tokens_details")
     )
     cached_tokens = _int(_get(prompt_details, "cached_tokens"))
+    cache_write_tokens = _int(_get(prompt_details, "cache_write_tokens"))
     reasoning_tokens = _int(_get(completion_details, "reasoning_tokens"))
     raw_total = _get(usage, "total_tokens")
     total_tokens = None if raw_total is None else _int(raw_total)
@@ -210,6 +320,7 @@ def record_response(response: Any, *, requested_model: str = "") -> dict[str, An
         model=model,
         input_tokens=input_tokens,
         cached_input_tokens=cached_tokens,
+        cache_write_tokens=cache_write_tokens,
         output_tokens=output_tokens,
         reasoning_tokens=reasoning_tokens,
         total_tokens=total_tokens,
@@ -221,7 +332,7 @@ def record_response(response: Any, *, requested_model: str = "") -> dict[str, An
     try:
         from . import progress
 
-        progress.usage(summary)
+        progress.usage(visible_summary())
     except Exception:  # pragma: no cover - accounting must never break generation
         pass
     return summary
@@ -260,9 +371,15 @@ def merge_summaries(*summaries: dict[str, Any] | None) -> dict[str, Any]:
                 request_count=_int(row.get("request_count")),
                 input_tokens=_int(row.get("input_tokens")),
                 cached_input_tokens=_int(row.get("cached_input_tokens")),
+                cache_write_tokens=_int(row.get("cache_write_tokens")),
                 output_tokens=_int(row.get("output_tokens")),
                 reasoning_tokens=_int(row.get("reasoning_tokens")),
                 total_tokens=_int(row.get("total_tokens")),
+                estimated_cost_usd=(
+                    None
+                    if row.get("pricing_complete") is False
+                    else row.get("estimated_cost_usd", _COST_UNSET)
+                ),
             )
     merged = accumulator.summary()
     if saw_usage:
@@ -287,22 +404,52 @@ def _pricing_for(model: str) -> Pricing | None:
     return None
 
 
+def _request_cost(
+    *,
+    model: str,
+    input_tokens: int,
+    cached_input_tokens: int,
+    cache_write_tokens: int,
+    output_tokens: int,
+) -> Decimal | None:
+    """Price one response so per-request cache/long-context rules stay exact."""
+    pricing = _pricing_for(model)
+    if pricing is None:
+        return None
+    ordinary_input = max(
+        input_tokens - cached_input_tokens - cache_write_tokens,
+        0,
+    )
+    input_value = (
+        Decimal(ordinary_input) * pricing.input_per_million
+        + Decimal(cached_input_tokens) * pricing.cached_input_per_million
+        + Decimal(cache_write_tokens)
+        * pricing.input_per_million
+        * pricing.cache_write_multiplier
+    )
+    output_value = Decimal(output_tokens) * pricing.output_per_million
+    if (
+        pricing.long_context_threshold is not None
+        and input_tokens > pricing.long_context_threshold
+    ):
+        input_value *= pricing.long_input_multiplier
+        output_value *= pricing.long_output_multiplier
+    return (input_value + output_value) / Decimal(1_000_000)
+
+
 def _model_summary(item: ModelUsage) -> dict[str, Any]:
     pricing = _pricing_for(item.model)
-    cost: float | None = None
-    if pricing is not None:
-        uncached = max(item.input_tokens - item.cached_input_tokens, 0)
-        value = (
-            Decimal(uncached) * pricing.input_per_million
-            + Decimal(item.cached_input_tokens) * pricing.cached_input_per_million
-            + Decimal(item.output_tokens) * pricing.output_per_million
-        ) / Decimal(1_000_000)
-        cost = float(value.quantize(Decimal("0.000000000001")))
+    cost = (
+        float(item.estimated_cost_usd.quantize(Decimal("0.000000000001")))
+        if item.pricing_complete
+        else None
+    )
     return {
         "model": item.model,
         "request_count": item.request_count,
         "input_tokens": item.input_tokens,
         "cached_input_tokens": item.cached_input_tokens,
+        "cache_write_tokens": item.cache_write_tokens,
         "uncached_input_tokens": max(
             item.input_tokens - item.cached_input_tokens, 0
         ),
@@ -310,7 +457,7 @@ def _model_summary(item: ModelUsage) -> dict[str, Any]:
         "reasoning_tokens": item.reasoning_tokens,
         "total_tokens": item.total_tokens,
         "estimated_cost_usd": cost,
-        "pricing_complete": pricing is not None,
+        "pricing_complete": item.pricing_complete,
         "pricing_source": pricing.source if pricing else DEFAULT_PRICING_SOURCE,
     }
 

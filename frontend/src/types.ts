@@ -78,8 +78,12 @@ export interface Stats {
 }
 
 /**
- * Billing-token usage returned by the backend for one generation run or file.
- * `cached_input_tokens` is a subset of `input_tokens`, not an additional count.
+ * Billing-token usage returned by the backend.
+ *
+ * Uploaded-file jobs expose a durable cumulative total for that physical
+ * source/output across the original attempt and every checkpoint retry.
+ * Other endpoints may expose a single-run total. `cached_input_tokens` is a
+ * subset of `input_tokens`, not an additional count.
  */
 export interface OpenAIUsage {
   model: string;
@@ -88,6 +92,7 @@ export interface OpenAIUsage {
     request_count: number;
     input_tokens: number;
     cached_input_tokens: number;
+    cache_write_tokens?: number;
     uncached_input_tokens: number;
     output_tokens: number;
     reasoning_tokens: number;
@@ -97,6 +102,7 @@ export interface OpenAIUsage {
   request_count: number;
   input_tokens: number;
   cached_input_tokens: number;
+  cache_write_tokens?: number;
   uncached_input_tokens: number;
   output_tokens: number;
   reasoning_tokens: number;

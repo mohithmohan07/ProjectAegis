@@ -274,10 +274,26 @@ function UploadFlow({ vocab }: { vocab: Vocab }) {
         "Build Assessments — generating from upload",
         api.paths.assessmentGenerate(job.id),
         { body: JSON.stringify({ question_type: qType }) },
+        {
+          cumulative: true,
+          filename: job.filename,
+          fileLabel: "Source file",
+          initialUsage: job.openai_usage,
+        },
       );
       setResult(data);
+      try {
+        setJob(await api.getUploadJob("assessments", job.id));
+      } catch {
+        // The cumulative result remains usable if the job refresh fails.
+      }
     } catch (e) {
       setError(String(e));
+      try {
+        setJob(await api.getUploadJob("assessments", job.id));
+      } catch {
+        // Keep the generation error visible if refreshing usage also fails.
+      }
     } finally {
       setBusy(false);
     }
@@ -302,7 +318,15 @@ function UploadFlow({ vocab }: { vocab: Vocab }) {
         </div>
       </div>
       <DocumentUpload module="assessments" uploadType={uploadType}
-        bookSources={vocab.book_sources} onJob={setJob} />
+        bookSources={vocab.book_sources} disabled={busy} onJob={setJob} />
+      {!result && (
+        <ApiUsageSummary
+          usage={job?.openai_usage}
+          filename={job?.filename}
+          fileLabel="Source file"
+          cumulative
+        />
+      )}
 
       {needsTextbookMode && (
         <>
@@ -378,7 +402,12 @@ function ResultCard({
   return (
     <div className="card success-card" style={{ marginTop: 16 }}>
       <strong>Generated · post-generation pipeline complete</strong>
-      <ApiUsageSummary usage={usage} filename={filename} fileLabel="Source file" />
+      <ApiUsageSummary
+        usage={usage}
+        filename={filename}
+        fileLabel="Source file"
+        cumulative={Boolean(filename)}
+      />
       <pre className="mono" style={{ marginTop: 8 }}>{JSON.stringify(result, null, 2)}</pre>
       <div className="row" style={{ marginTop: 12 }}>
         {ids.length > 0 && (

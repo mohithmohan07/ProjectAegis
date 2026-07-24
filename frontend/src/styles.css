@@ -359,6 +359,15 @@ input, select, textarea {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.api-usage-badges {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+.api-usage-badges .badge { max-width: 100%; }
 .api-usage-file { color: var(--muted); font-size: 11px; margin-top: 3px; }
 .api-usage-grid {
   display: grid;

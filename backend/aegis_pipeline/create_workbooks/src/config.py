@@ -2,7 +2,14 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
+
+_BACKEND_ROOT = Path(__file__).resolve().parents[3]
+if str(_BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_ROOT))
+
+from aegis_pipeline.openai_policy import configured_openai_model
 
 ROOT = Path(__file__).resolve().parents[1]
 # OUTPUT_DIR is for SAMPLES only (e.g. `--sample`). Real workbook runs publish to
@@ -59,7 +66,7 @@ for _name in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "MATHPIX_APP_ID", "MATHPIX_AP
 
 
 DEFAULT_CONFIG: dict = {
-    "openai_model": "gpt-5.4-mini-2026-03-17",
+    "openai_model": configured_openai_model(),
     "openai_api_key_env": "OPENAI_API_KEY",
     "openai_base_url": os.getenv("OPENAI_BASE_URL"),
     "mathpix_app_id_env": "MATHPIX_APP_ID",

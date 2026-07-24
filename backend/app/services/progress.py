@@ -102,7 +102,7 @@ def stream(
             if title:
                 log(title)
             result = fn()
-            summary = openai_usage.current_summary()
+            summary = openai_usage.visible_summary()
             if (
                 summary["request_count"] > 0
                 and isinstance(result, dict)
@@ -115,7 +115,7 @@ def stream(
                 "type": "error",
                 "message": str(exc) or exc.__class__.__name__,
                 "trace": traceback.format_exc(limit=4),
-                "openai_usage": openai_usage.current_summary(),
+                "openai_usage": openai_usage.visible_summary(),
                 "ts": time.time(),
             })
         finally:

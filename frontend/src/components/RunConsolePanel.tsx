@@ -61,7 +61,14 @@ export default function RunConsolePanel() {
         </div>
       )}
 
-      <ApiUsageSummary usage={state.usage} compact />
+      <ApiUsageSummary
+        usage={state.usage}
+        compact
+        cumulative={state.usagePresentation?.cumulative}
+        resumed={state.usagePresentation?.resumed}
+        filename={state.usagePresentation?.filename}
+        fileLabel={state.usagePresentation?.fileLabel}
+      />
 
       <div className="console-body" ref={bodyRef}>
         {state.lines.length === 0 && (

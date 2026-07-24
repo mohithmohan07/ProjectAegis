@@ -17,6 +17,8 @@ import threading
 import unicodedata
 from datetime import datetime, timezone
 
+from aegis_pipeline.openai_policy import OpenAIPurpose, chat_request_policy
+
 from .. import bulk_import as bi
 from .. import config, models
 from . import concept_cleanup
@@ -409,7 +411,8 @@ def _live_questions_for_concept(
             records.append(rec)
         return records
 
-    records = _parse(_openai_json(system, user))
+    records = _parse(_openai_json(
+        system, user, purpose="assessment_generation"))
     # Deterministic review; one repair round for failing questions.
     failing = {i: ap.review_question(r) for i, r in enumerate(records)}
     failing = {i: p for i, p in failing.items() if p}
@@ -420,6 +423,7 @@ def _live_questions_for_concept(
             system,
             user + "\n\nREVIEW FEEDBACK — regenerate the FULL batch fixing these "
             f"problems and keep everything else compliant: {feedback or 'wrong count'}",
+            purpose="assessment_generation",
         )
         retry_records = _parse(retry)
         if retry_records:
@@ -436,6 +440,7 @@ def _live_questions_for_concept(
             user + "\n\nThe previous batch was too repetitive (opening "
             f"'{report['worst']}' used {report['worst_count']}x). Regenerate "
             "with clearly varied framings/patterns per question.",
+            purpose="assessment_generation",
         )
         varied_records = _parse(varied)
         if varied_records and not ap.stem_monotony_report(
@@ -731,7 +736,7 @@ def _live_identify_questions_from_mmd(
         progress.step(f"Question identification — chunk {i}/{len(chunks)}",
                       value=(i - 1) / max(len(chunks), 1))
         user = f"DOCUMENT (MMD) — section {i} of {len(chunks)}:\n{chunk}\n\n{tail}"
-        data = _openai_json(system, user)
+        data = _openai_json(system, user, purpose="source_extraction")
         added = 0
         for row in (data.get("questions") or []):
             rec = _identify_row_to_record(row, auto=auto, question_type=question_type)
@@ -2320,8 +2325,14 @@ def _transient_backoff(exc: Exception, attempt: int) -> float:
     return max(suggested or 0.0, backoff)
 
 
-def _openai_json(system: str, user: str, max_tokens: int | None = None,
-                 retries: int = 3) -> dict:
+def _openai_json(
+    system: str,
+    user: str,
+    max_tokens: int | None = None,
+    retries: int = 3,
+    *,
+    purpose: OpenAIPurpose = "source_extraction",
+) -> dict:
     """One JSON-mode chat call; returns the parsed object.
 
     Concurrency-safe for multiple simultaneous users on one shared API key:
@@ -2343,6 +2354,7 @@ def _openai_json(system: str, user: str, max_tokens: int | None = None,
     transient_errors = (
         RateLimitError, APIConnectionError, APITimeoutError, InternalServerError)
     limit = config.OPENAI_MAX_OUTPUT_TOKENS if max_tokens is None else max_tokens
+    request_policy = chat_request_policy(purpose, model=config.OPENAI_MODEL)
     client = OpenAI()
     gate = _get_openai_gate()
     last_err: Exception | None = None
@@ -2352,7 +2364,7 @@ def _openai_json(system: str, user: str, max_tokens: int | None = None,
         try:
             with gate:
                 resp = client.chat.completions.create(
-                    model=config.OPENAI_MODEL,
+                    **request_policy,
                     messages=[{"role": "system", "content": system},
                               {"role": "user", "content": user}],
                     response_format={"type": "json_object"},
@@ -2364,7 +2376,7 @@ def _openai_json(system: str, user: str, max_tokens: int | None = None,
                 from . import openai_usage
 
                 openai_usage.record_response(
-                    resp, requested_model=config.OPENAI_MODEL
+                    resp, requested_model=request_policy["model"]
                 )
             except Exception:  # accounting must never trigger another API call
                 pass
@@ -3391,7 +3403,7 @@ def _populate_activity_hubs_via_api(
     progress.log(
         f"Populating Activity/Info Hub via API for {len(inventory_payload)} "
         "inventory item(s).")
-    data = _openai_json(system, user)
+    data = _openai_json(system, user, purpose="concept_detailing")
     out = [dict(rec) for rec in records]
     placed_qids: set[str] = set()
     for placement in (data or {}).get("placements") or []:
@@ -4211,7 +4223,7 @@ def _assign_chapter_wide_inventory_topics_via_api(
                 "one exact topic string from source_topics. Your previous "
                 "answer omitted a qid or used an invalid topic."
             )
-        data = _openai_json(system, user)
+        data = _openai_json(system, user, purpose="concept_mapping")
         rejected = 0
         for row in data.get("assignments") or []:
             if not isinstance(row, dict):
@@ -4266,7 +4278,7 @@ def _extract_question_task_inventory_via_api(
             + f"\nQuestion / Task Inventory chunk {i} of {len(chunks)}:\n"
             + chunk["text"]
         )
-        data = _openai_json(system, user)
+        data = _openai_json(system, user, purpose="source_extraction")
         items = [
             _sanitize_inventory_item(
                 x,
@@ -4298,7 +4310,8 @@ def _extract_question_task_inventory_via_api(
                 "the full stem + all subparts. Never merge a question list into "
                 "one item, and never skip a checkpoint."
             )
-            retry_data = _openai_json(system, retry_user)
+            retry_data = _openai_json(
+                system, retry_user, purpose="source_extraction")
             retry_items = [
                 _sanitize_inventory_item(
                     x,
@@ -5192,7 +5205,8 @@ def _recover_missed_type_deltas_via_api(
                 _compact_mined_type_metadata(current), ensure_ascii=False)
         )
         try:
-            data = _openai_json(system, user)
+            data = _openai_json(
+                system, user, purpose="concept_validation")
             delta = _validate_focused_type_delta(
                 data, missed_items=missed, existing_types=current)
             candidate = _normalize_mined_type_candidate(
@@ -5715,7 +5729,7 @@ def _mine_types_from_inventory_via_api(
     )
     progress.log(
         f"Mining reusable Types from {len(inventory.get('items', []))} inventory item(s).")
-    data = _openai_json(system, user)
+    data = _openai_json(system, user, purpose="concept_mapping")
     types = _normalize_mined_type_candidate(
         list(data.get("types") or []), inventory)
     progress.log(f"Type Mining produced {len(types)} reusable Type(s).")
@@ -5752,7 +5766,8 @@ def _mine_types_from_inventory_via_api(
             "one Case in one Type. Remove duplicate placements; never drop the "
             "question entirely. Keep full source wording."
         )
-        corrected = _openai_json(system, follow_up)
+        corrected = _openai_json(
+            system, follow_up, purpose="concept_validation")
         corrected_types = corrected.get("types") or []
         candidate = _normalize_mined_type_candidate(
             list(corrected_types), inventory)
@@ -5879,7 +5894,7 @@ def _consolidate_semantic_types_via_api(
     progress.log(
         f"Reviewing {len(original)} mined Types for semantic duplicates.")
     try:
-        data = _openai_json(system, user)
+        data = _openai_json(system, user, purpose="concept_mapping")
     except Exception as exc:  # noqa: BLE001 — exact mined set remains valid
         progress.log(
             f"Semantic Type consolidation failed ({exc}); keeping mined Types.",
@@ -6063,7 +6078,10 @@ def _add_missing_type_method_concepts_via_api(
     progress.log("Auditing concept granularity against mined Type methods.")
     try:
         data = _openai_json(
-            prompts.get_text("concepts.concept_type_sufficiency.system"), user)
+            prompts.get_text("concepts.concept_type_sufficiency.system"),
+            user,
+            purpose="concept_validation",
+        )
     except Exception as exc:  # noqa: BLE001 — existing map remains usable
         progress.log(
             f"Concept/Type sufficiency audit failed ({exc}); keeping concept map.",
@@ -6286,7 +6304,8 @@ def _ensure_mastery_lines_via_api(
     by_title: dict[str, str] = {}
     if use_api:
         try:
-            data = _openai_json(system, user)
+            data = _openai_json(
+                system, user, purpose="concept_detailing")
             for row in _concept_rows_to_records(data):
                 desc = _concept_description_only(row.get("concept_details", ""))
                 if cr._MASTERY_LABEL_RE.search(desc):
@@ -6375,7 +6394,10 @@ def _ensure_method_worked_examples_via_api(
     accepted: dict[tuple[str, str], str] = {}
     try:
         data = _openai_json(
-            prompts.get_text("concepts.method_worked_example.system"), user)
+            prompts.get_text("concepts.method_worked_example.system"),
+            user,
+            purpose="concept_detailing",
+        )
         for row in _concept_rows_to_records(data):
             description = kr.canonicalize_rich_text(
                 _concept_description_only(row.get("concept_details", "")))
@@ -6456,7 +6478,7 @@ def _merge_similar_concepts_via_api(records: list[dict], *, meta: dict) -> list[
             + _json.dumps({"rows": _records_to_api_rows(rows)}, ensure_ascii=False)
         )
         try:
-            data = _openai_json(system, user)
+            data = _openai_json(system, user, purpose="concept_mapping")
             merged_rows = _concept_rows_to_records(data)
         except Exception as exc:  # noqa: BLE001 — deterministic drop still guards
             progress.log(
@@ -6561,7 +6583,8 @@ def _ensure_misconceptions_via_api(
     )
     by_title: dict[str, tuple[str, str]] = {}
     try:
-        data = _openai_json(system, user)
+        data = _openai_json(
+            system, user, purpose="concept_detailing")
         for row in _concept_rows_to_records(data):
             details = row.get("concept_details", "")
             misconception = _misconception_body(details)
@@ -6942,7 +6965,10 @@ def _review_case_unit_hosts_via_api(
         "Type/Case assignment unit(s).")
     try:
         data = _openai_json(
-            prompts.get_text("concepts.type_host_review.system"), user)
+            prompts.get_text("concepts.type_host_review.system"),
+            user,
+            purpose="concept_validation",
+        )
     except Exception as exc:  # noqa: BLE001 — constrained first pass is valid
         progress.log(
             f"Type host entailment review failed ({exc}); keeping assignments.",
@@ -7186,7 +7212,7 @@ def _assign_mined_types_via_api(
                 "(every type_id MUST be assigned):\n"
                 + _json.dumps({"types": pending}, ensure_ascii=False)
             )
-            data = _openai_json(system, user)
+            data = _openai_json(system, user, purpose="concept_mapping")
             rejected_counts: dict[str, int] = {}
             responded_tids: set[str] = set()
             for assignment in data.get("assignments") or []:
@@ -7570,7 +7596,8 @@ def _review_type_concept_alignment_via_api(
         user += "\n\nCHAPTER SOURCE CONTEXT:\n" + _trim(source_context, 160_000)
     progress.log("Reviewing Type/concept alignment via API.")
     try:
-        data = _openai_json(system, user)
+        data = _openai_json(
+            system, user, purpose="concept_validation")
     except Exception as exc:  # noqa: BLE001 — keep best output; validator follows
         progress.log(
             f"Type/concept alignment review failed ({exc}) — keeping best output.",
@@ -7773,7 +7800,11 @@ def _repair_records_via_api(
         )
         if source_context:
             user += "\nRelevant source context:\n" + _trim(source_context, 120_000)
-        data = _openai_json(prompts.get_text("concepts.repair.system"), user)
+        data = _openai_json(
+            prompts.get_text("concepts.repair.system"),
+            user,
+            purpose="concept_validation",
+        )
         repaired = _concept_rows_to_records(data)
         if not repaired:
             progress.log(f"{stage}: repair attempt returned no rows.", level="warning")
@@ -9158,7 +9189,7 @@ def _refine_descriptions_via_api(
             + "\n\nRELEVANT SOURCE TEXT:\n"
             + _trim(source, 220_000)
         )
-        data = _openai_json(system, user)
+        data = _openai_json(system, user, purpose="concept_detailing")
         refined_rows.extend(_concept_rows_to_records(data))
     if not refined_rows:
         raise RuntimeError("description refinement returned no rows")
@@ -9253,7 +9284,7 @@ def _assign_types_via_api(
             + "\n\nRELEVANT TOPIC SOURCE + EXERCISE BLOCKS:\n"
             + _trim(source, 220_000)
         )
-        data = _openai_json(system, user)
+        data = _openai_json(system, user, purpose="concept_mapping")
         out.extend(_concept_rows_to_records(data))
     if not out:
         raise RuntimeError("Types assignment returned no rows")
@@ -9375,7 +9406,7 @@ def _consolidate_concepts_via_api(
         + payload
     )
     progress.log(f"Canonicalizing {len(records)} skeleton concepts via API pass.")
-    data = _openai_json(system, user)
+    data = _openai_json(system, user, purpose="concept_mapping")
     out = _concept_rows_to_records(data)
     min_keep, max_keep = _canonicalize_target_bounds(records)
     if out and len(out) < min_keep:
@@ -9392,7 +9423,8 @@ def _consolidate_concepts_via_api(
             "topic, but still merge duplicates, examples, cases, and narrow "
             f"fragments. Return roughly {min_keep}-{max_keep} rows."
         )
-        retry_data = _openai_json(system, retry_user)
+        retry_data = _openai_json(
+            system, retry_user, purpose="concept_validation")
         retry_out = _concept_rows_to_records(retry_data)
         if len(retry_out) > len(out):
             out = retry_out
@@ -9412,7 +9444,8 @@ def _consolidate_concepts_via_api(
             f"topic order. Return at most {max_keep} rows and at least "
             f"{min_keep} rows."
         )
-        retry_data = _openai_json(system, retry_user)
+        retry_data = _openai_json(
+            system, retry_user, purpose="concept_validation")
         retry_out = _concept_rows_to_records(retry_data)
         if retry_out and min_keep <= len(retry_out) < len(out):
             out = retry_out
@@ -9660,7 +9693,8 @@ def _consolidate_task_grounded_fragments_via_api(
                     "into direct/contextual application objectives, and obey "
                     "the row bound."
                 )
-            data = _openai_json(system, attempt_user)
+            data = _openai_json(
+                system, attempt_user, purpose="concept_validation")
             candidate = [
                 row for row in _concept_rows_to_records(data)
                 if _topic_comparison_key(row.get("topic") or "") == topic_key
@@ -10335,7 +10369,8 @@ def _recover_method_anchor_rows_via_api(
             + "\n\nRELEVANT CHUNK TEXT:\n"
             + _trim(chunk_text, 120_000)
         )
-        data = _openai_json(system, user)
+        data = _openai_json(
+            system, user, purpose="concept_validation")
         raw_rows_value = data.get("rows") if isinstance(data, dict) else None
         response_issue = ""
         if not isinstance(data, dict):
@@ -10715,7 +10750,7 @@ def _extract_skeleton_via_api(
             + f"\nChunk {i} of {len(chunks)}:\n"
             + chunk["text"]
         )
-        data = _openai_json(system, user)
+        data = _openai_json(system, user, purpose="source_extraction")
         chunk_records = _strip_types_from_records(_concept_rows_to_records(data))
         chunk_records = [
             r for r in chunk_records
@@ -10740,7 +10775,8 @@ def _extract_skeleton_via_api(
                 "umbrella concepts (e.g. Germany+Italy as one row) into "
                 "smaller mastery units."
             )
-            retry_data = _openai_json(system, retry_user)
+            retry_data = _openai_json(
+                system, retry_user, purpose="concept_validation")
             retry_records = _strip_types_from_records(_concept_rows_to_records(retry_data))
             retry_records = [
                 r for r in retry_records
@@ -10765,7 +10801,8 @@ def _extract_skeleton_via_api(
                 "lose main coverage. Return no more than "
                 f"{expected_max} concepts for this chunk."
             )
-            retry_data = _openai_json(system, retry_user)
+            retry_data = _openai_json(
+                system, retry_user, purpose="concept_validation")
             retry_records = _strip_types_from_records(_concept_rows_to_records(retry_data))
             retry_records = [
                 r for r in retry_records
@@ -10792,7 +10829,8 @@ def _extract_skeleton_via_api(
                 "concept for every missing anchor and copy each anchor_id "
                 "verbatim into source_evidence. Preserve all prior concepts."
             )
-            retry_data = _openai_json(system, retry_user)
+            retry_data = _openai_json(
+                system, retry_user, purpose="concept_validation")
             retry_records = _strip_types_from_records(
                 _concept_rows_to_records(retry_data))
             retry_records = [
@@ -11132,7 +11170,7 @@ def _build_culminations_via_api(records: list[dict], *, meta: dict) -> list[dict
         + payload
     )
     progress.log("Building topic culmination rows.")
-    data = _openai_json(system, user)
+    data = _openai_json(system, user, purpose="concept_detailing")
     authored = _concept_rows_to_records(data)
     # The model authors ONLY the culmination rows; the normal rows are merged
     # back programmatically so this pass can never drop chapter content.
@@ -11395,7 +11433,8 @@ def _recover_missing_topic_concepts_via_api(
         progress.log(
             f"Topic coverage recovery attempt {attempt}: "
             f"{len(missing)} source topic(s) have no concept.")
-        data = _openai_json(system, user)
+        data = _openai_json(
+            system, user, purpose="concept_validation")
         allowed = {
             _topic_comparison_key(group.get("topic") or ""):
             (group.get("topic") or "").strip()
@@ -11485,6 +11524,7 @@ def _recover_chapter_opening_concepts_via_api(
     data = _openai_json(
         prompts.get_text("concepts.opening_recovery.system"),
         _metadata_block(meta) + "\n" + _json.dumps(payload, ensure_ascii=False),
+        purpose="concept_validation",
     )
     raw_candidates = []
     for raw in (data or {}).get("missing_rows") or []:
@@ -11586,7 +11626,7 @@ def _restructure_topics_via_api(
         + f"\n\nConcept map with collapsed topics ({len(records)} rows):\n"
         + payload
     )
-    data = _openai_json(system, user)
+    data = _openai_json(system, user, purpose="concept_mapping")
     topic_by_title = {
         bi.normalize_question_text(r["concept_title"]): r["topic"].strip()
         for r in _concept_rows_to_records(data)
@@ -11637,7 +11677,7 @@ def chapter_meta_via_api(
     progress.log(
         "Writing chapter/topic metadata (chapter description, duration, "
         "topic descriptions) via API pass.")
-    data = _openai_json(system, user)
+    data = _openai_json(system, user, purpose="metadata")
     out: dict = {}
     description = (data.get("chapter_description") or "").strip()
     if description:
@@ -12818,7 +12858,8 @@ def pre_learning_from_rows(
                 "Pre-learning â€” deriving prerequisite map",
                 value=0.981,
             )
-            draft = _openai_json(system, user)
+            draft = _openai_json(
+                system, user, purpose="pre_learning")
             if not draft.get("topics"):
                 raise RuntimeError(
                     "live pre-learning derivation returned no topics")
@@ -12844,6 +12885,7 @@ def pre_learning_from_rows(
             f"Chapter: {chapter_title} | Subject: {subject} | Grade: {grade} | "
             f"Board: {board} | Unit: {unit}\n\nDRAFT:\n"
             + _json.dumps(draft)[:120_000],
+            purpose="pre_learning",
         )
         final = audited if audited.get("topics") else draft
         _emit_concept_checkpoint(

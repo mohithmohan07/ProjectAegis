@@ -6,7 +6,13 @@ import json
 import pytest
 
 from app import models
-from app.services import build_concepts, checkpoints, generation, openai_usage
+from app.services import (
+    build_concepts,
+    checkpoints,
+    generation,
+    openai_usage,
+    uploads,
+)
 
 
 def _checkpoint_stage():
@@ -319,6 +325,77 @@ def test_complete_usage_and_historical_cost_round_trip_unchanged(client, db):
         historical["estimated_cost_usd"]
     )
     assert restored.openai_usage["models"][0]["cached_input_tokens"] == 2_345
+
+
+def test_legacy_v1_usage_without_cache_write_tokens_still_imports(db):
+    original = _job(db)
+    accumulator = openai_usage.UsageAccumulator()
+    accumulator.add(
+        model="gpt-5.4-mini-2026-03-17",
+        request_count=3,
+        input_tokens=12_345,
+        cached_input_tokens=2_345,
+        output_tokens=6_789,
+        reasoning_tokens=1_234,
+        total_tokens=19_134,
+    )
+    original.openai_usage = accumulator.summary()
+    db.commit()
+    _, raw_bytes = checkpoints.export_bundle(db, original.id)
+    legacy = json.loads(raw_bytes)
+    legacy["payload"]["openai_usage"].pop("cache_write_tokens")
+    for row in legacy["payload"]["openai_usage"]["models"]:
+        row.pop("cache_write_tokens")
+    _resign(legacy)
+
+    restored = checkpoints.import_bundle(
+        db, checkpoints._json_bytes(legacy, pretty=True)
+    )
+
+    assert restored.openai_usage["request_count"] == 3
+    assert "cache_write_tokens" not in restored.openai_usage
+    assert "cache_write_tokens" not in restored.openai_usage["models"][0]
+
+
+def test_imported_usage_is_the_baseline_for_resumed_checkpoint_runs(db):
+    original = _job(db)
+    historical_accumulator = openai_usage.UsageAccumulator()
+    historical_accumulator.add(
+        model="gpt-5.4-mini-2026-03-17",
+        request_count=3,
+        input_tokens=12_345,
+        cached_input_tokens=2_345,
+        output_tokens=6_789,
+        reasoning_tokens=1_234,
+        total_tokens=19_134,
+    )
+    original.openai_usage = historical_accumulator.summary()
+    db.commit()
+    _, raw_bytes = checkpoints.export_bundle(db, original.id)
+    restored = checkpoints.import_bundle(db, raw_bytes)
+
+    with openai_usage.track() as resumed_usage:
+        def resume():
+            resumed_usage.add(
+                model="gpt-5.4-mini-2026-03-17",
+                input_tokens=100,
+                cached_input_tokens=40,
+                output_tokens=20,
+                total_tokens=120,
+            )
+            # Multiple automatic saves and terminal persistence must all
+            # rewrite baseline + current run, not add current repeatedly.
+            uploads.persist_current_openai_usage(db, restored.id)
+            uploads.persist_current_openai_usage(db, restored.id)
+            return {"resumed": True}
+
+        result = uploads.run_with_openai_usage(db, restored.id, resume)
+
+    assert result["openai_usage"]["request_count"] == 4
+    assert result["openai_usage"]["total_tokens"] == 19_254
+    db.refresh(restored)
+    assert restored.openai_usage["request_count"] == 4
+    assert restored.openai_usage["total_tokens"] == 19_254
 
 
 def test_structured_terminal_error_round_trips_with_bounded_frames(db):

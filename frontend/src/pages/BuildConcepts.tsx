@@ -246,6 +246,7 @@ function PostLearningFlow({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
+  const [resultResumed, setResultResumed] = useState(false);
   const [treeReload, setTreeReload] = useState(0);
 
   useEffect(() => {
@@ -254,13 +255,23 @@ function PostLearningFlow({
 
   async function generate() {
     if (!job || !scope) return;
+    const resumedFromCheckpoint = Boolean(job.checkpoint_available);
     setBusy(true);
     setError(null);
+    setResult(null);
+    setResultResumed(resumedFromCheckpoint);
     try {
       const data = await run<Record<string, unknown>>(
         "Post Learning — generating concepts",
         api.paths.postLearningGenerate(job.id),
         { body: JSON.stringify({ target_chapter_id: scope.ids[0] }) },
+        {
+          cumulative: true,
+          resumed: resumedFromCheckpoint,
+          filename: job.filename,
+          fileLabel: "Source file",
+          initialUsage: job.openai_usage,
+        },
       );
       setResult(data);
       try {
@@ -288,8 +299,18 @@ function PostLearningFlow({
         conceptKind="post"
         bookSources={bookSources}
         externalJob={job}
+        disabled={busy}
         onJob={setJob}
       />
+      {!result && (
+        <ApiUsageSummary
+          usage={job?.openai_usage}
+          filename={job?.filename}
+          fileLabel="Source file"
+          cumulative
+          resumed={Boolean(job?.checkpoint_available)}
+        />
+      )}
 
       {job?.status === "converted" && (
         <>
@@ -318,7 +339,13 @@ function PostLearningFlow({
       )}
 
       {error && <div className="error-box" style={{ marginTop: 16 }}>{error}</div>}
-      {result && <ConceptResult result={result} filename={job?.filename} />}
+      {result && (
+        <ConceptResult
+          result={result}
+          filename={job?.filename}
+          resumed={resultResumed}
+        />
+      )}
     </>
   );
 }
@@ -372,6 +399,7 @@ function PreLearningUpload({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
+  const [resultResumed, setResultResumed] = useState(false);
   const [treeReload, setTreeReload] = useState(0);
 
   useEffect(() => {
@@ -380,13 +408,23 @@ function PreLearningUpload({
 
   async function generate() {
     if (!job || !scope) return;
+    const resumedFromCheckpoint = Boolean(job.checkpoint_available);
     setBusy(true);
     setError(null);
+    setResult(null);
+    setResultResumed(resumedFromCheckpoint);
     try {
       const data = await run<Record<string, unknown>>(
         "Pre Learning — generating concepts",
         api.paths.preLearningGenerate(job.id),
         { body: JSON.stringify({ target_chapter_id: scope.ids[0] }) },
+        {
+          cumulative: true,
+          resumed: resumedFromCheckpoint,
+          filename: job.filename,
+          fileLabel: "Source file",
+          initialUsage: job.openai_usage,
+        },
       );
       setResult(data);
       try {
@@ -414,8 +452,18 @@ function PreLearningUpload({
         conceptKind="pre"
         bookSources={bookSources}
         externalJob={job}
+        disabled={busy}
         onJob={setJob}
       />
+      {!result && (
+        <ApiUsageSummary
+          usage={job?.openai_usage}
+          filename={job?.filename}
+          fileLabel="Source file"
+          cumulative
+          resumed={Boolean(job?.checkpoint_available)}
+        />
+      )}
       {job?.status === "converted" && (
         <>
           <div className="section-title">2 · Deposit pre-learning concepts under a chapter</div>
@@ -442,7 +490,13 @@ function PreLearningUpload({
         </>
       )}
       {error && <div className="error-box" style={{ marginTop: 16 }}>{error}</div>}
-      {result && <ConceptResult result={result} filename={job?.filename} />}
+      {result && (
+        <ConceptResult
+          result={result}
+          filename={job?.filename}
+          resumed={resultResumed}
+        />
+      )}
     </>
   );
 }
@@ -730,9 +784,11 @@ function formatGenerationError(error: unknown): string {
 function ConceptResult({
   result,
   filename,
+  resumed = false,
 }: {
   result: Record<string, unknown>;
   filename?: string;
+  resumed?: boolean;
 }) {
   const ids = (result.concept_ids as number[] | undefined) ?? [];
   const jobId = result.job_id as number | undefined;
@@ -741,7 +797,13 @@ function ConceptResult({
   return (
     <div className="card success-card" style={{ marginTop: 16 }}>
       <strong>Concepts written to the Bulk Import workbook (append-only)</strong>
-      <ApiUsageSummary usage={usage} filename={filename} fileLabel="Source file" />
+      <ApiUsageSummary
+        usage={usage}
+        filename={filename}
+        fileLabel="Source file"
+        cumulative={jobId != null || Boolean(filename)}
+        resumed={resumed}
+      />
       <pre className="mono" style={{ marginTop: 8 }}>{JSON.stringify(result, null, 2)}</pre>
       <div className="row" style={{ marginTop: 12 }}>
         {ids.length > 0 && (

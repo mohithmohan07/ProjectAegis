@@ -7,6 +7,7 @@ const USAGE: OpenAIUsage = {
   request_count: 3,
   input_tokens: 1234,
   cached_input_tokens: 234,
+  cache_write_tokens: 12,
   uncached_input_tokens: 1000,
   output_tokens: 456,
   reasoning_tokens: 120,
@@ -24,7 +25,9 @@ test("shows token counts, model, generated file and estimated cost", () => {
   expect(screen.getByText("gpt-5.4-mini-2026-03-17")).toBeDefined();
   expect(screen.getByText("1,234")).toBeDefined();
   expect(screen.getByText("234")).toBeDefined();
-  expect(screen.getByText("Included in input")).toBeDefined();
+  expect(screen.getAllByText("Included in input")).toHaveLength(2);
+  expect(screen.getByText("Cache writes")).toBeDefined();
+  expect(screen.getByText("12")).toBeDefined();
   expect(screen.getByText("120 reasoning included")).toBeDefined();
   expect(screen.getByText("1,690")).toBeDefined();
   expect(screen.getByText("$0.007654")).toBeDefined();
@@ -53,6 +56,29 @@ test("can distinguish an uploaded source from a generated artifact", () => {
   expect(screen.getByText("Source file: source-chapter.pdf")).toBeDefined();
 });
 
+test("labels checkpoint-recovered file usage as resumed and cumulative", () => {
+  render(
+    <ApiUsageSummary
+      usage={USAGE}
+      filename="source-chapter.pdf"
+      fileLabel="Source file"
+      cumulative
+      resumed
+    />,
+  );
+
+  expect(
+    screen.getByText("Cumulative API usage & estimated cost"),
+  ).toBeDefined();
+  expect(screen.getByText("Resumed")).toBeDefined();
+  expect(screen.getByText(
+    /resumed from a saved checkpoint/i,
+  )).toBeDefined();
+  expect(screen.getByText(
+    /retrying does not reset them/i,
+  )).toBeDefined();
+});
+
 test("does not render an empty usage record", () => {
   render(
     <ApiUsageSummary
@@ -70,5 +96,10 @@ test("does not render an empty usage record", () => {
     />,
   );
 
+  expect(screen.queryByTestId("api-usage-summary")).toBeNull();
+});
+
+test("does not render a sparse empty API usage object", () => {
+  render(<ApiUsageSummary usage={{} as OpenAIUsage} cumulative />);
   expect(screen.queryByTestId("api-usage-summary")).toBeNull();
 });

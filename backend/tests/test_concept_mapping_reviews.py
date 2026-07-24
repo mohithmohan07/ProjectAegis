@@ -750,7 +750,7 @@ def test_opening_recovery_adds_only_model_identified_missing_rows(monkeypatch):
         "keywords": "existing",
     }]
 
-    def fake_openai(system, user):
+    def fake_openai(system, user, **_kwargs):
         assert "chapter-opening material" in system
         assert "distinctive artist" in user
         return {"missing_rows": [{
@@ -2505,7 +2505,7 @@ def test_missing_source_topic_recovery_adds_visualising_the_nation(monkeypatch):
         },
     ]
 
-    def fake_api(system, user):
+    def fake_api(system, user, **_kwargs):
         assert "Visualising the Nation" in user
         return {"rows": [{
             "topic": "Visualising the Nation",
@@ -2588,7 +2588,7 @@ def test_chapter_wide_tasks_are_semantically_distributed(monkeypatch):
         },
     ]}
 
-    def fake_api(system, user):
+    def fake_api(system, user, **_kwargs):
         assert "physical location" in system
         return {"assignments": [
             {"qid": "QINV-0001", "topic": "Visualising the Nation"},
@@ -2627,7 +2627,7 @@ def test_chapter_wide_task_placement_retries_invalid_topic(monkeypatch):
         "_topic_scope": "chapter",
     }]}
 
-    def fake_api(system, user):
+    def fake_api(system, user, **_kwargs):
         calls["count"] += 1
         topic = "Invented Review Topic" if calls["count"] == 1 else (
             "Visualising the Nation")
@@ -3159,13 +3159,10 @@ def test_repair_does_not_double_append_shared_normalized_inventory_prompts():
     assert repaired[0]["concept_details"].count(shared) == 1
 
 
-def test_default_openai_model_is_requested_gpt_54_mini_snapshot():
-    from pathlib import Path
+def test_default_openai_model_is_gpt_56_luna():
+    from aegis_pipeline.openai_policy import DEFAULT_OPENAI_MODEL
 
-    from app import config
-
-    source = Path(config.__file__).read_text()
-    assert '"AEGIS_OPENAI_MODEL", "gpt-5.4-mini-2026-03-17"' in source
+    assert DEFAULT_OPENAI_MODEL == "gpt-5.6-luna"
 
 
 def test_coverage_defects_ignore_empty_or_stub_inventory_prompts():

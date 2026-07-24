@@ -5,6 +5,8 @@ interface ApiUsageSummaryProps {
   compact?: boolean;
   filename?: string;
   fileLabel?: string;
+  cumulative?: boolean;
+  resumed?: boolean;
 }
 
 const TOKEN_FORMATTER = new Intl.NumberFormat("en-US", {
@@ -37,11 +39,20 @@ export default function ApiUsageSummary({
   compact = false,
   filename,
   fileLabel = "Generated file",
+  cumulative = false,
+  resumed = false,
 }: ApiUsageSummaryProps) {
-  if (!usage || (usage.request_count <= 0 && usage.total_tokens <= 0)) return null;
+  const requestCount = finiteNumber(usage?.request_count);
+  const totalTokens = finiteNumber(usage?.total_tokens);
+  if (!usage || (requestCount <= 0 && totalTokens <= 0)) return null;
 
   const costAvailable = usage.estimated_cost_usd != null;
   const model = usage.model || "Unknown model";
+  const heading = compact
+    ? cumulative ? "Cumulative OpenAI usage" : "OpenAI usage"
+    : cumulative
+      ? "Cumulative API usage & estimated cost"
+      : "API usage & estimated cost";
 
   return (
     <section
@@ -51,18 +62,26 @@ export default function ApiUsageSummary({
     >
       <div className="api-usage-head">
         <div>
-          <strong>{compact ? "OpenAI usage" : "API usage & estimated cost"}</strong>
+          <strong>{heading}</strong>
           {filename && <div className="api-usage-file">{fileLabel}: {filename}</div>}
         </div>
-        <span className="badge accent mono">{model}</span>
+        <div className="api-usage-badges">
+          {resumed && <span className="badge green">Resumed</span>}
+          <span className="badge accent mono">{model}</span>
+        </div>
       </div>
 
       <dl className="api-usage-grid">
-        <UsageMetric label="Requests" value={formatTokenCount(usage.request_count)} />
+        <UsageMetric label="Requests" value={formatTokenCount(requestCount)} />
         <UsageMetric label="Input tokens" value={formatTokenCount(usage.input_tokens)} />
         <UsageMetric
           label="Cached input"
           value={formatTokenCount(usage.cached_input_tokens)}
+          hint="Included in input"
+        />
+        <UsageMetric
+          label="Cache writes"
+          value={formatTokenCount(usage.cache_write_tokens ?? 0)}
           hint="Included in input"
         />
         <UsageMetric
@@ -82,13 +101,30 @@ export default function ApiUsageSummary({
 
       {!compact && (
         <div className="api-usage-note">
-          {costAvailable
-            ? "Estimate uses standard text-token rates. Cached input is already included in input tokens; non-OpenAI services and custom or regional pricing are excluded."
-            : "Token counts are available, but a cost estimate is unavailable because pricing is not configured for every model used."}
+          {cumulative
+            ? (
+              <>
+                {resumed
+                  ? "Resumed from a saved checkpoint. "
+                  : ""}
+                Totals are cumulative for this file across the original
+                attempt and every retry; retrying does not reset them.{" "}
+                {costAvailable
+                  ? "The estimate includes standard text-token rates, cache-write charges, and GPT-5.6 long-context multipliers; cached input and cache writes are already included in input tokens."
+                  : "A cost estimate is unavailable because pricing is not configured for every model used."}
+              </>
+            )
+            : costAvailable
+              ? "Estimate includes standard text-token rates, cache-write charges, and GPT-5.6 long-context multipliers. Cached input and cache writes are already included in input tokens; non-OpenAI services and custom or regional pricing are excluded."
+              : "Token counts are available, but a cost estimate is unavailable because pricing is not configured for every model used."}
         </div>
       )}
     </section>
   );
+}
+
+function finiteNumber(value: number | null | undefined): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
 function UsageMetric({
