@@ -26,15 +26,17 @@ from sqlalchemy.orm import Session
 
 from .. import config, models
 from .. import bulk_import as bi
-from ..bulk_import import writer
+from ..bulk_import import workbook_sync, writer
 from . import (
     chapter_durations,
     concept_cleanup,
     concept_refiner,
     concept_validator,
+    drive_checkpoints,
     generation,
     mmd,
     progress,
+    uploads,
 )
 
 
@@ -490,7 +492,58 @@ def _stage_concept_workbook(
 
 def _publish_staged_workbook(staged: Path, target: Path) -> None:
     """Atomically replace the canonical workbook with its staged sibling."""
-    os.replace(staged, target)
+    workbook_sync.atomic_publish(staged, target)
+
+
+def _commit_and_publish_concept_workbook(
+    db: Session,
+    target: Path,
+    concept_ids: list[int],
+) -> dict[str, int]:
+    """Stage, commit, and publish while holding the shared workbook lock."""
+    staged_workbook: Path | None = None
+    with workbook_sync.output_workbook_lock():
+        try:
+            staged_workbook, written = _stage_concept_workbook(
+                db,
+                target,
+                concept_ids,
+            )
+            db.commit()
+            _publish_staged_workbook(staged_workbook, target)
+            staged_workbook = None
+            return written
+        except Exception:
+            db.rollback()
+            if staged_workbook is not None:
+                staged_workbook.unlink(missing_ok=True)
+            raise
+
+
+def _deposit_and_publish_concepts(
+    db: Session,
+    *,
+    chapter_id: int,
+    records: list[dict],
+    pre_post: str,
+    source_book: str,
+) -> tuple[list[int], list[int], dict[str, int]]:
+    """Serialize final dedupe, DB commit, and shared workbook publication."""
+    with workbook_sync.output_workbook_lock():
+        db.expire_all()
+        chapter = db.get(models.Chapter, chapter_id)
+        if chapter is None:
+            raise ValueError("target chapter not found")
+        created_ids, merged_ids = _deposit_concepts(
+            db, chapter, records, pre_post, source_book)
+        _sync_chapter_topic_summary(
+            chapter, _chapter_meta_summary(chapter))
+        written = _commit_and_publish_concept_workbook(
+            db,
+            config.BULK_IMPORT_OUTPUT,
+            created_ids + merged_ids,
+        )
+        return created_ids, merged_ids, written
 
 
 _INVENTORY_CSV_COLUMNS = [
@@ -500,9 +553,22 @@ _INVENTORY_CSV_COLUMNS = [
     "raw_solution_or_answer", "shared_context", "image_urls", "content_objects",
     "classified", "mined_type_ids", "mined_type_titles",
 ]
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@")
 
 
-def inventory_csv(db: Session, job_id: int) -> str:
+def _csv_safe_cell(value):
+    """Prevent spreadsheet formula execution when a CSV is opened directly."""
+    if isinstance(value, str) and value.startswith(_CSV_FORMULA_PREFIXES):
+        return f"'{value}"
+    return value
+
+
+def inventory_csv(
+    db: Session,
+    job_id: int,
+    *,
+    owner_sub: str | None = None,
+) -> str:
     """Render the stored Question / Task Inventory as CSV.
 
     One row per extracted question/task, with the mined Type(s) each item was
@@ -513,9 +579,8 @@ def inventory_csv(db: Session, job_id: int) -> str:
     import io
     import json
 
-    job = db.get(models.UploadJob, job_id)
-    if not job:
-        raise ValueError("upload job not found")
+    job = uploads.get_job(
+        db, job_id, owner_sub=owner_sub, module="build_concepts")
     data = job.question_inventory or {}
     items = data.get("items", [])
     if not items:
@@ -555,7 +620,10 @@ def inventory_csv(db: Session, job_id: int) -> str:
         row["classified"] = "yes" if assigned else "no"
         row["mined_type_ids"] = ", ".join(tid for tid, _ in assigned if tid)
         row["mined_type_titles"] = "; ".join(title for _, title in assigned if title)
-        writer_.writerow(row)
+        writer_.writerow({
+            column: _csv_safe_cell(value)
+            for column, value in row.items()
+        })
     return buf.getvalue()
 
 
@@ -565,25 +633,39 @@ def inventory_csv(db: Session, job_id: int) -> str:
 
 def create_post_learning_job(
     db: Session, *, filename: str, raw_bytes: bytes, source_book: str = "",
+    owner_sub: str | None = None,
 ) -> models.UploadJob:
     """Stage the file only — conversion to MMD is a separate explicit step."""
-    from . import uploads
-    uploads.save_upload_file(filename, raw_bytes)
     job = models.UploadJob(
+        owner_sub=uploads.normalize_owner_sub(owner_sub),
         module="build_concepts", upload_type="document", learning_kind="post",
         filename=Path(filename).name, mmd_text="", status="uploaded",
         source_book=source_book.strip(),
     )
-    db.add(job)
-    db.commit()
-    db.refresh(job)
-    return job
+    return uploads.persist_new_job(db, job, raw_bytes)
 
 
-def generate_post_learning(db: Session, job_id: int, target_chapter_id: int) -> dict:
-    job = db.get(models.UploadJob, job_id)
+def generate_post_learning(
+    db: Session,
+    job_id: int,
+    target_chapter_id: int,
+    *,
+    owner_sub: str | None = None,
+) -> dict:
+    job = uploads.get_job(
+        db,
+        job_id,
+        owner_sub=owner_sub,
+        module="build_concepts",
+        learning_kind="post",
+    )
+    if job.status != "converted":
+        if job.status == "generated":
+            raise ValueError(
+                "this upload has already been generated; start a new upload")
+        raise ValueError("convert the uploaded document to MMD before generating")
     chapter = db.get(models.Chapter, target_chapter_id)
-    if not job or not chapter:
+    if not chapter:
         raise ValueError("upload job or target chapter not found")
     if not job.mmd_text:
         raise ValueError("convert the uploaded document to MMD before generating")
@@ -648,6 +730,7 @@ def generate_post_learning(db: Session, job_id: int, target_chapter_id: int) -> 
             "the newest compatible stage."
         )
         db.commit()
+        drive_checkpoints.schedule_checkpoint_backup(job.id)
         progress.log(
             f"Saved durable checkpoint: {label} "
             f"({float(checkpoint.get('progress') or 0.0):.0%}).",
@@ -669,20 +752,16 @@ def generate_post_learning(db: Session, job_id: int, target_chapter_id: int) -> 
         checkpoint_callback=save_checkpoint,
     )
     _store_inventory(job, artifacts)
-    staged_workbook: Path | None = None
     try:
-        created_ids, merged_ids = _deposit_concepts(
-            db, chapter, records, "Post", job.source_book)
-        _sync_chapter_topic_summary(chapter, _chapter_meta_summary(chapter))
-        staged_workbook, written = _stage_concept_workbook(
-            db, config.BULK_IMPORT_OUTPUT, created_ids + merged_ids)
-        db.commit()
-        _publish_staged_workbook(staged_workbook, config.BULK_IMPORT_OUTPUT)
-        staged_workbook = None
+        created_ids, merged_ids, written = _deposit_and_publish_concepts(
+            db,
+            chapter_id=target_chapter_id,
+            records=records,
+            pre_post="Post",
+            source_book=job.source_book,
+        )
     except Exception:
         db.rollback()
-        if staged_workbook is not None:
-            staged_workbook.unlink(missing_ok=True)
         raise
 
     job.status = "generated"
@@ -722,25 +801,39 @@ def generate_post_learning(db: Session, job_id: int, target_chapter_id: int) -> 
 
 def create_pre_learning_upload_job(
     db: Session, *, filename: str, raw_bytes: bytes, source_book: str = "",
+    owner_sub: str | None = None,
 ) -> models.UploadJob:
     """Stage the file only — conversion to MMD is a separate explicit step."""
-    from . import uploads
-    uploads.save_upload_file(filename, raw_bytes)
     job = models.UploadJob(
+        owner_sub=uploads.normalize_owner_sub(owner_sub),
         module="build_concepts", upload_type="document", learning_kind="pre",
         filename=Path(filename).name, mmd_text="", status="uploaded",
         source_book=source_book.strip(),
     )
-    db.add(job)
-    db.commit()
-    db.refresh(job)
-    return job
+    return uploads.persist_new_job(db, job, raw_bytes)
 
 
-def generate_pre_learning_from_upload(db: Session, job_id: int, target_chapter_id: int) -> dict:
-    job = db.get(models.UploadJob, job_id)
+def generate_pre_learning_from_upload(
+    db: Session,
+    job_id: int,
+    target_chapter_id: int,
+    *,
+    owner_sub: str | None = None,
+) -> dict:
+    job = uploads.get_job(
+        db,
+        job_id,
+        owner_sub=owner_sub,
+        module="build_concepts",
+        learning_kind="pre",
+    )
+    if job.status != "converted":
+        if job.status == "generated":
+            raise ValueError(
+                "this upload has already been generated; start a new upload")
+        raise ValueError("convert the uploaded document to MMD before generating")
     chapter = db.get(models.Chapter, target_chapter_id)
-    if not job or not chapter:
+    if not chapter:
         raise ValueError("upload job or target chapter not found")
     if not job.mmd_text:
         raise ValueError("convert the uploaded document to MMD before generating")
@@ -809,6 +902,7 @@ def generate_pre_learning_from_upload(db: Session, job_id: int, target_chapter_i
             "the newest compatible stage."
         )
         db.commit()
+        drive_checkpoints.schedule_checkpoint_backup(job.id)
         progress.log(
             f"Saved durable checkpoint: {label} "
             f"({float(checkpoint.get('progress') or 0.0):.1%}).",
@@ -838,20 +932,16 @@ def generate_pre_learning_from_upload(db: Session, job_id: int, target_chapter_i
         resume_checkpoint=resume_checkpoint,
         checkpoint_callback=save_checkpoint,
     )
-    staged_workbook: Path | None = None
     try:
-        created_ids, merged_ids = _deposit_concepts(
-            db, chapter, pre_records, "Pre", job.source_book)
-        _sync_chapter_topic_summary(chapter, _chapter_meta_summary(chapter))
-        staged_workbook, written = _stage_concept_workbook(
-            db, config.BULK_IMPORT_OUTPUT, created_ids + merged_ids)
-        db.commit()
-        _publish_staged_workbook(staged_workbook, config.BULK_IMPORT_OUTPUT)
-        staged_workbook = None
+        created_ids, merged_ids, written = _deposit_and_publish_concepts(
+            db,
+            chapter_id=target_chapter_id,
+            records=pre_records,
+            pre_post="Pre",
+            source_book=job.source_book,
+        )
     except Exception:
         db.rollback()
-        if staged_workbook is not None:
-            staged_workbook.unlink(missing_ok=True)
         raise
 
     job.status = "generated"
@@ -893,8 +983,7 @@ def generate_pre_learning_from_existing(
     if not chapters:
         raise ValueError("no chapters selected")
 
-    created_ids: list[int] = []
-    merged_ids: list[int] = []
+    planned: list[tuple[int, list[dict]]] = []
     per_chapter: dict[int, int] = {}
     for chapter in chapters:
         post_concepts = [
@@ -904,7 +993,7 @@ def generate_pre_learning_from_existing(
             per_chapter[chapter.id] = 0
             continue
         pre_records = generation.pre_learning_from_concepts(post_concepts)
-        created, merged = _deposit_concepts(db, chapter, [
+        planned.append((chapter.id, [
             {
                 "topic": rec["topic"],
                 "concept_title": rec["concept_title"],
@@ -913,15 +1002,32 @@ def generate_pre_learning_from_existing(
                 "keywords": rec.get("keywords", ""),
             }
             for rec in pre_records
-        ], "Pre", source_book)
-        created_ids += created
-        merged_ids += merged
-        _sync_chapter_topic_summary(chapter, _chapter_meta_summary(chapter))
-        per_chapter[chapter.id] = len(created)
-    db.commit()
+        ]))
 
-    written = writer.append_concepts(
-        db, config.BULK_IMPORT_OUTPUT, created_ids + merged_ids)
+    created_ids: list[int] = []
+    merged_ids: list[int] = []
+    try:
+        with workbook_sync.output_workbook_lock():
+            db.expire_all()
+            for chapter_id, pre_records in planned:
+                chapter = db.get(models.Chapter, chapter_id)
+                if chapter is None:
+                    raise ValueError("target chapter not found")
+                created, merged = _deposit_concepts(
+                    db, chapter, pre_records, "Pre", source_book)
+                created_ids += created
+                merged_ids += merged
+                _sync_chapter_topic_summary(
+                    chapter, _chapter_meta_summary(chapter))
+                per_chapter[chapter.id] = len(created)
+            written = _commit_and_publish_concept_workbook(
+                db,
+                config.BULK_IMPORT_OUTPUT,
+                created_ids + merged_ids,
+            )
+    except Exception:
+        db.rollback()
+        raise
     return {
         "chapters": len(chapters),
         "concepts_created": len(created_ids),

@@ -2,7 +2,15 @@
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Header,
+    HTTPException,
+    Query,
+    UploadFile,
+)
 from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session
 
@@ -10,6 +18,8 @@ from .. import config, models, schemas
 from ..bulk_import import reader, writer
 from ..db import get_db
 from ..services import data_reset as reset_svc
+from . import admin as admin_api
+from .upload_limits import read_limited_upload
 
 router = APIRouter(prefix="/data", tags=["data"])
 
@@ -19,8 +29,10 @@ async def import_workbook(file: UploadFile = File(...), db: Session = Depends(ge
     """Load a canonical Bulk Import workbook into the normalized DB (append-only)."""
     if not file.filename or not file.filename.lower().endswith((".xlsx", ".xls")):
         raise HTTPException(400, "expected a .xlsx Bulk Import workbook")
+    raw_bytes = await read_limited_upload(
+        file, description="Bulk Import workbook")
     with NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
-        tmp.write(await file.read())
+        tmp.write(raw_bytes)
         tmp_path = Path(tmp.name)
     try:
         counts = reader.import_workbook(db, tmp_path)
@@ -140,8 +152,12 @@ def create_subject_workbook(
 
 
 @router.post("/reset")
-def reset_data(db: Session = Depends(get_db)):
+def reset_data(
+    db: Session = Depends(get_db),
+    x_admin_token: str | None = Header(default=None),
+):
     """Wipe the DB, output workbook, uploads, and generated PDFs for a fresh start."""
+    admin_api.require_admin(x_admin_token)
     return reset_svc.reset_all(db=db)
 
 
@@ -164,14 +180,25 @@ async def upload_syllabus(
     if not files:
         raise HTTPException(400, "upload at least one .xlsx syllabus file")
 
-    saved: list[str] = []
-    paths: list[Path] = []
+    pending: list[tuple[str, bytes]] = []
+    total_bytes = 0
     for file in files:
         if not file.filename or not file.filename.lower().endswith((".xlsx", ".xls")):
             raise HTTPException(400, f"expected .xlsx files, got {file.filename!r}")
-        dest = config.SYLLABUS_DIR / Path(file.filename).name
-        dest.write_bytes(await file.read())
-        saved.append(dest.name)
+        raw_bytes = await read_limited_upload(
+            file,
+            max_bytes=int(config.MAX_UPLOAD_BYTES) - total_bytes,
+            description="combined syllabus upload",
+        )
+        total_bytes += len(raw_bytes)
+        pending.append((Path(file.filename).name, raw_bytes))
+
+    saved: list[str] = []
+    paths: list[Path] = []
+    for filename, raw_bytes in pending:
+        dest = config.SYLLABUS_DIR / filename
+        dest.write_bytes(raw_bytes)
+        saved.append(filename)
         paths.append(dest)
 
     result = syllabus_svc.import_syllabus_paths(db, paths)

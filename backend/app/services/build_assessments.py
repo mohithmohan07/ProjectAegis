@@ -16,6 +16,8 @@ mapping -> append-only write).
 """
 from __future__ import annotations
 
+import threading
+from contextlib import contextmanager
 from itertools import product
 from pathlib import Path
 
@@ -23,7 +25,8 @@ from sqlalchemy.orm import Session
 
 from .. import bulk_import as bi
 from .. import config, models
-from . import directory, generation, mmd, post_generation, progress
+from ..bulk_import import workbook_sync
+from . import auth, directory, generation, mmd, post_generation, progress, uploads
 
 # A blueprint's difficulty selects which concept group a question lands in.
 DIFFICULTY_TO_GROUP = {"Less": "Basic", "Moderate": "Intermediate", "High": "Advanced"}
@@ -33,13 +36,74 @@ DIFFICULTY_TO_GROUP = {"Less": "Basic", "Moderate": "Intermediate", "High": "Adv
 # Path A — From Concept Mapping
 # --------------------------------------------------------------------------- #
 
-def create_session(db: Session, scope_type: str, scope_ids: list[int]) -> models.AssessmentSession:
+class AssessmentSessionNotFound(ValueError):
+    """Raised when a session is absent or belongs to another principal."""
+
+
+class AssessmentSessionAlreadyRunning(RuntimeError):
+    """Raised when a second mutation targets an actively generating session."""
+
+
+_session_locks: dict[int, threading.Lock] = {}
+_session_locks_guard = threading.Lock()
+
+
+def is_session_running(session_id: int | None) -> bool:
+    if not session_id:
+        return False
+    with _session_locks_guard:
+        lock = _session_locks.get(int(session_id))
+        return bool(lock and lock.locked())
+
+
+@contextmanager
+def _exclusive_session_generation(session_id: int):
+    with _session_locks_guard:
+        lock = _session_locks.setdefault(int(session_id), threading.Lock())
+    if not lock.acquire(blocking=False):
+        raise AssessmentSessionAlreadyRunning(
+            "generation is already running for this assessment session"
+        )
+    try:
+        yield
+    finally:
+        lock.release()
+
+
+def get_session(
+    db: Session,
+    session_id: int,
+    *,
+    owner_sub: str = auth.LOCAL_OWNER_SUB,
+) -> models.AssessmentSession:
+    session = db.query(models.AssessmentSession).filter(
+        models.AssessmentSession.id == session_id,
+        models.AssessmentSession.owner_sub == owner_sub,
+        models.AssessmentSession.source == "concept_mapping",
+    ).one_or_none()
+    if session is None:
+        # Missing and foreign rows intentionally look identical so session IDs
+        # cannot be used to discover another user's private work.
+        raise AssessmentSessionNotFound("session not found")
+    return session
+
+
+def create_session(
+    db: Session,
+    scope_type: str,
+    scope_ids: list[int],
+    *,
+    owner_sub: str = auth.LOCAL_OWNER_SUB,
+) -> models.AssessmentSession:
     if scope_type not in {"chapter", "topic", "concept"}:
         raise ValueError("scope_type must be chapter | topic | concept")
     if not directory.resolve_scope_concepts(db, scope_type, scope_ids):
         raise ValueError("scope selection resolves to no concepts")
     session = models.AssessmentSession(
-        source="concept_mapping", scope_type=scope_type, scope_ids=scope_ids,
+        owner_sub=owner_sub,
+        source="concept_mapping",
+        scope_type=scope_type,
+        scope_ids=scope_ids,
     )
     db.add(session)
     db.commit()
@@ -52,32 +116,38 @@ def add_batch(
     cognitive_skills: list[str], difficulty_levels: list[str],
     categories: list[str], question_type: str, num_questions: int,
     appears_in: list[str] | None = None,
+    owner_sub: str = auth.LOCAL_OWNER_SUB,
 ) -> models.BlueprintBatch:
-    session = db.get(models.AssessmentSession, session_id)
-    if not session:
-        raise ValueError("session not found")
-    if question_type not in {"objective", "subjective", "descriptive"}:
-        raise ValueError("question_type must be objective | subjective | descriptive")
-    purposes = [p for p in (appears_in or []) if p in bi.APPEARS_IN]
-    batch = models.BlueprintBatch(
-        session_id=session_id,
-        # Old gerund forms (Remembering, Understanding...) normalize to the
-        # standard action-verb values instead of failing.
-        cognitive_skills=[
-            bi.normalize_cognitive_skills(s) for s in cognitive_skills
-        ] or ["Understand"],
-        difficulty_levels=[
-            bi.normalize_difficulty(d) for d in difficulty_levels
-        ] or ["Moderate"],
-        categories=categories or ["Multiple Choice Question"],
-        question_type=question_type,
-        num_questions=max(int(num_questions), 1),
-        appears_in=purposes,
-    )
-    db.add(batch)
-    db.commit()
-    db.refresh(batch)
-    return batch
+    session = get_session(db, session_id, owner_sub=owner_sub)
+    with _exclusive_session_generation(session.id):
+        db.refresh(session)
+        if session.status == "generated":
+            raise ValueError(
+                "this assessment session has already been generated; "
+                "create a new session"
+            )
+        if question_type not in {"objective", "subjective", "descriptive"}:
+            raise ValueError(
+                "question_type must be objective | subjective | descriptive")
+        purposes = [p for p in (appears_in or []) if p in bi.APPEARS_IN]
+        batch = models.BlueprintBatch(
+            session_id=session_id,
+            # Old gerund forms normalize to standard action-verb values.
+            cognitive_skills=[
+                bi.normalize_cognitive_skills(s) for s in cognitive_skills
+            ] or ["Understand"],
+            difficulty_levels=[
+                bi.normalize_difficulty(d) for d in difficulty_levels
+            ] or ["Moderate"],
+            categories=categories or ["Multiple Choice Question"],
+            question_type=question_type,
+            num_questions=max(int(num_questions), 1),
+            appears_in=purposes,
+        )
+        db.add(batch)
+        db.commit()
+        db.refresh(batch)
+        return batch
 
 
 def _group_for(db: Session, concept: models.Concept, difficulty: str) -> models.Group:
@@ -98,22 +168,40 @@ def _group_for(db: Session, concept: models.Concept, difficulty: str) -> models.
     return group
 
 
-def generate(db: Session, session_id: int) -> dict:
+def generate(
+    db: Session,
+    session_id: int,
+    *,
+    owner_sub: str = auth.LOCAL_OWNER_SUB,
+) -> dict:
     """Generate questions for every concept x batch x (skill,difficulty,category) cell."""
-    session = db.get(models.AssessmentSession, session_id)
-    if not session:
-        raise ValueError("session not found")
+    session = get_session(db, session_id, owner_sub=owner_sub)
+    with _exclusive_session_generation(session.id):
+        db.refresh(session)
+        if session.status == "generated":
+            raise ValueError(
+                "this assessment session has already been generated; "
+                "create a new session"
+            )
+        return _generate_session(db, session)
+
+
+def _generate_session(
+    db: Session,
+    session: models.AssessmentSession,
+) -> dict:
+    session_id = session.id
+    owner_sub = session.owner_sub
     if not session.batches:
         raise ValueError("add at least one blueprint batch before generating")
 
     concepts = directory.resolve_scope_concepts(db, session.scope_type, session.scope_ids)
-    created_ids: list[int] = []
-    # Per-concept running index keeps question labels unique & ordered —
-    # continuing AFTER existing questions so labels never collide across
-    # generation sessions.
-    counters: dict[int, int] = {
-        c.id: sum(len(g.questions) for g in c.groups) + 1 for c in concepts
-    }
+    # Generation can call an external model and therefore stays outside the
+    # process-wide workbook lock. These indices are prompt seeds only; final
+    # labels are reserved from freshly loaded database state under the shared
+    # finalization lock below.
+    prompt_indices: dict[int, int] = {c.id: 1 for c in concepts}
+    generated_batches: list[tuple[int, str, list[dict]]] = []
 
     total_cells = sum(
         len(batch.cognitive_skills) * len(batch.difficulty_levels) * len(batch.categories)
@@ -135,24 +223,71 @@ def generate(db: Session, session_id: int) -> dict:
                     concept,
                     question_type=batch.question_type,
                     cognitive_skill=skill, difficulty=difficulty, category=category,
-                    count=batch.num_questions, start_index=counters[concept.id],
+                    count=batch.num_questions,
+                    start_index=prompt_indices[concept.id],
                     appears_in=", ".join(batch.appears_in or []),
                 )
-                counters[concept.id] += len(records)
-                group = _group_for(db, concept, difficulty)
-                for rec in records:
-                    q = models.Question(group_id=group.id, **_question_kwargs(rec))
-                    db.add(q)
-                    db.flush()
-                    created_ids.append(q.id)
+                prompt_indices[concept.id] += len(records)
+                generated_batches.append((concept.id, difficulty, records))
                 done += 1
-    db.commit()
 
     progress.step("Tagging & column mapping", value=0.9)
-    pipeline = post_generation.run(db, created_ids)
-    session.status = "generated"
-    session.generated_question_ids = created_ids
-    db.commit()
+    # Refresh counter state and reserve final labels while holding the same
+    # re-entrant lock used by the workbook writer. This keeps concurrent
+    # sessions from allocating the same labels and prevents a database/workbook
+    # divergence where the second workbook row would otherwise be skipped.
+    with workbook_sync.output_workbook_lock():
+        # End the read transaction used for prompt generation so this session
+        # observes labels committed by an earlier finalizer before allocating.
+        db.rollback()
+        db.expire_all()
+        session = get_session(db, session_id, owner_sub=owner_sub)
+        if session.status == "generated":
+            raise ValueError(
+                "this assessment session has already been generated; "
+                "create a new session"
+            )
+        refreshed_concepts = directory.resolve_scope_concepts(
+            db, session.scope_type, session.scope_ids
+        )
+        concepts_by_id = {concept.id: concept for concept in refreshed_concepts}
+        if any(
+            concept_id not in concepts_by_id
+            for concept_id, _difficulty, _records in generated_batches
+        ):
+            raise ValueError(
+                "scope selection changed while questions were generated"
+            )
+
+        # Per-concept running index keeps question labels unique and ordered,
+        # continuing after every question committed by earlier sessions.
+        counters: dict[int, int] = {
+            concept.id:
+                sum(len(group.questions) for group in concept.groups) + 1
+            for concept in refreshed_concepts
+        }
+        created_ids: list[int] = []
+        for concept_id, difficulty, records in generated_batches:
+            concept = concepts_by_id[concept_id]
+            group = _group_for(db, concept, difficulty)
+            for generated_record in records:
+                record = dict(generated_record)
+                record["question_label"] = generation.question_label(
+                    concept, counters[concept_id]
+                )
+                counters[concept_id] += 1
+                question = models.Question(
+                    group_id=group.id, **_question_kwargs(record)
+                )
+                db.add(question)
+                db.flush()
+                created_ids.append(question.id)
+        db.commit()
+
+        pipeline = post_generation.run(db, created_ids)
+        session.status = "generated"
+        session.generated_question_ids = created_ids
+        db.commit()
 
     # Quality review summary: deterministic checks + anti-monotony report.
     from . import assessment_prompts as ap
@@ -207,56 +342,84 @@ def _question_kwargs(rec: dict) -> dict:
 def create_upload_job(
     db: Session, *, upload_type: str, filename: str, raw_bytes: bytes,
     source_book: str = "",
+    owner_sub: str | None = None,
 ) -> models.UploadJob:
     """Stage an uploaded file ONLY. Conversion to MMD is a separate step
     (``uploads.convert_job``) so a mistakenly-chosen file can be replaced first.
     """
     if upload_type not in mmd.UPLOAD_TYPES:
         raise ValueError(f"upload_type must be one of {mmd.UPLOAD_TYPES}")
-    from . import uploads
-    uploads.save_upload_file(filename, raw_bytes)
     job = models.UploadJob(
+        owner_sub=uploads.normalize_owner_sub(owner_sub),
         module="build_assessments", upload_type=upload_type,
         filename=Path(filename).name, mmd_text="", status="uploaded",
         source_book=source_book.strip(),
     )
-    db.add(job)
-    db.commit()
-    db.refresh(job)
-    return job
+    return uploads.persist_new_job(db, job, raw_bytes)
 
 
-def set_textbook_mode(db: Session, job_id: int, mode: str) -> models.UploadJob:
+def set_textbook_mode(
+    db: Session, job_id: int, mode: str, *,
+    owner_sub: str | None = None,
+) -> models.UploadJob:
     """For upload_type='textbook': extract existing Q&A, or create new questions."""
-    job = db.get(models.UploadJob, job_id)
-    if not job:
-        raise ValueError("upload job not found")
+    job = uploads.get_job(
+        db, job_id, owner_sub=owner_sub, module="build_assessments")
     if mode not in {"extract", "create"}:
         raise ValueError("textbook mode must be extract | create")
-    job.textbook_mode = mode
-    db.commit()
-    db.refresh(job)
+    with uploads.exclusive_job_operation(job.id):
+        db.refresh(job)
+        if job.upload_type != "textbook":
+            raise ValueError("textbook mode is only valid for textbook uploads")
+        if job.status not in {"uploaded", "converted", "deposited"}:
+            raise ValueError(
+                "cannot change textbook mode after generation; "
+                "start a new upload"
+            )
+        job.textbook_mode = mode
+        db.commit()
+        db.refresh(job)
     return job
 
 
-def set_deposit(db: Session, job_id: int, scope_type: str, scope_ids: list[int]) -> models.UploadJob:
+def set_deposit(
+    db: Session, job_id: int, scope_type: str, scope_ids: list[int], *,
+    owner_sub: str | None = None,
+) -> models.UploadJob:
     """Choose where uploaded questions are deposited (chapter / topics / concepts)."""
-    job = db.get(models.UploadJob, job_id)
-    if not job:
-        raise ValueError("upload job not found")
-    if scope_type not in {"chapter", "topic", "concept"}:
-        raise ValueError("scope_type must be chapter | topic | concept")
-    if not directory.resolve_scope_concepts(db, scope_type, scope_ids):
-        raise ValueError("deposit selection resolves to no concepts")
-    job.deposit_scope_type = scope_type
-    job.deposit_scope_ids = scope_ids
-    job.status = "deposited"
-    db.commit()
-    db.refresh(job)
+    job = uploads.get_job(
+        db, job_id, owner_sub=owner_sub, module="build_assessments")
+    with uploads.exclusive_job_operation(job.id):
+        db.refresh(job)
+        if job.status not in {"converted", "deposited"} or not job.mmd_text:
+            if job.status == "generated":
+                raise ValueError(
+                    "cannot change the deposit scope after generation; "
+                    "start a new upload"
+                )
+            raise ValueError(
+                "convert the uploaded document to MMD before setting a "
+                "deposit scope"
+            )
+        if scope_type not in {"chapter", "topic", "concept"}:
+            raise ValueError("scope_type must be chapter | topic | concept")
+        if not directory.resolve_scope_concepts(db, scope_type, scope_ids):
+            raise ValueError("deposit selection resolves to no concepts")
+        job.deposit_scope_type = scope_type
+        job.deposit_scope_ids = scope_ids
+        job.status = "deposited"
+        db.commit()
+        db.refresh(job)
     return job
 
 
-def generate_from_upload(db: Session, job_id: int, question_type: str = "auto") -> dict:
+def generate_from_upload(
+    db: Session,
+    job_id: int,
+    question_type: str = "auto",
+    *,
+    owner_sub: str | None = None,
+) -> dict:
     """Identify questions from the uploaded MMD and deposit them in the chosen scope.
 
     ``question_type`` is ``auto`` (detect & absorb a mix of objective /
@@ -265,9 +428,8 @@ def generate_from_upload(db: Session, job_id: int, question_type: str = "auto") 
     if question_type not in {"auto", "objective", "subjective", "descriptive"}:
         raise ValueError(
             "question_type must be auto | objective | subjective | descriptive")
-    job = db.get(models.UploadJob, job_id)
-    if not job:
-        raise ValueError("upload job not found")
+    job = uploads.get_job(
+        db, job_id, owner_sub=owner_sub, module="build_assessments")
     if not job.mmd_text:
         raise ValueError("convert the uploaded document to MMD before generating")
     if job.status != "deposited":
@@ -282,57 +444,82 @@ def generate_from_upload(db: Session, job_id: int, question_type: str = "auto") 
     )
     progress.step("Depositing & tagging questions", value=0.85)
 
-    # Cross-book duplicate check: existing question texts in the deposit
-    # chapters. A duplicate is not re-added; its sources are merged instead.
-    chapter_ids = {c.topic.chapter_id for c in concepts}
-    existing_by_text: dict[str, models.Question] = {}
-    for qq in (
-        db.query(models.Question)
-        .join(models.Group).join(models.Concept).join(models.Topic)
-        .filter(models.Topic.chapter_id.in_(chapter_ids))
-    ):
-        norm = bi.normalize_question_text(qq.question)
-        if norm:
-            existing_by_text.setdefault(norm, qq)
+    # The duplicate query, database writes, and workbook publication are one
+    # serialized transaction boundary.  Without this lock, two uploads can both
+    # observe a question as absent and append duplicate rows to the database and
+    # shared workbook.
+    with workbook_sync.output_workbook_lock():
+        db.expire_all()
+        job = uploads.get_job(
+            db, job_id, owner_sub=owner_sub, module="build_assessments"
+        )
+        if job.status != "deposited":
+            raise ValueError("set a deposit scope before generating")
+        concepts = directory.resolve_scope_concepts(
+            db, job.deposit_scope_type, job.deposit_scope_ids
+        )
+        if not concepts:
+            raise ValueError("deposit selection resolves to no concepts")
 
-    created_ids: list[int] = []
-    merged_ids: list[int] = []
-    counters: dict[int, int] = {
-        c.id: sum(len(g.questions) for g in c.groups) + 1 for c in concepts
-    }
-    # Round-robin the identified questions across the deposit concepts.
-    for i, rec in enumerate(records):
-        if job.source_book:
-            rec["question_source"] = job.source_book
-        norm = bi.normalize_question_text(rec.get("question", ""))
-        dup = existing_by_text.get(norm) if norm else None
-        if dup is not None:
-            dup.question_source = bi.merge_sources(
-                dup.question_source, rec.get("question_source", ""))
-            merged_ids.append(dup.id)
-            continue
-        concept = concepts[i % len(concepts)]
-        rec.setdefault("question_label", generation.question_label(concept, counters[concept.id]))
-        counters[concept.id] += 1
-        group = _group_for(db, concept, rec.get("level_of_difficulty", "Moderate"))
-        q = models.Question(group_id=group.id, **_question_kwargs(rec))
-        db.add(q)
-        db.flush()
-        if norm:
-            existing_by_text[norm] = q
-        created_ids.append(q.id)
-    db.commit()
+        # Cross-book duplicate check: existing question texts in the deposit
+        # chapters. A duplicate is not re-added; its sources are merged instead.
+        chapter_ids = {c.topic.chapter_id for c in concepts}
+        existing_by_text: dict[str, models.Question] = {}
+        for qq in (
+            db.query(models.Question)
+            .join(models.Group).join(models.Concept).join(models.Topic)
+            .filter(models.Topic.chapter_id.in_(chapter_ids))
+        ):
+            norm = bi.normalize_question_text(qq.question)
+            if norm:
+                existing_by_text.setdefault(norm, qq)
 
-    # Run the pipeline over new questions AND source-merged duplicates so the
-    # output workbook's question_source cells refresh in place.
-    pipeline = post_generation.run(db, created_ids + merged_ids)
-    job.status = "generated"
-    job.result_ids = created_ids
-    job.detail = (
-        f"identified {len(records)} questions from {job.upload_type} upload "
-        f"({len(created_ids)} new, {len(merged_ids)} duplicates source-merged)"
-    )
-    db.commit()
+        created_ids: list[int] = []
+        merged_ids: list[int] = []
+        counters: dict[int, int] = {
+            c.id: sum(len(g.questions) for g in c.groups) + 1 for c in concepts
+        }
+        # Round-robin the identified questions across the deposit concepts.
+        for i, rec in enumerate(records):
+            if job.source_book:
+                rec["question_source"] = job.source_book
+            norm = bi.normalize_question_text(rec.get("question", ""))
+            dup = existing_by_text.get(norm) if norm else None
+            if dup is not None:
+                dup.question_source = bi.merge_sources(
+                    dup.question_source, rec.get("question_source", "")
+                )
+                merged_ids.append(dup.id)
+                continue
+            concept = concepts[i % len(concepts)]
+            rec.setdefault(
+                "question_label",
+                generation.question_label(concept, counters[concept.id]),
+            )
+            counters[concept.id] += 1
+            group = _group_for(
+                db, concept, rec.get("level_of_difficulty", "Moderate")
+            )
+            q = models.Question(group_id=group.id, **_question_kwargs(rec))
+            db.add(q)
+            db.flush()
+            if norm:
+                existing_by_text[norm] = q
+            created_ids.append(q.id)
+        db.commit()
+
+        # Run the pipeline over new questions AND source-merged duplicates so
+        # the output workbook's question_source cells refresh in place.
+        pipeline = post_generation.run(db, created_ids + merged_ids)
+        job.status = "generated"
+        job.result_ids = created_ids
+        job.detail = (
+            f"identified {len(records)} questions from {job.upload_type} upload "
+            f"({len(created_ids)} new, {len(merged_ids)} duplicates "
+            "source-merged)"
+        )
+        db.commit()
+
     progress.set_progress(1.0, label="Done")
     progress.log(
         f"Created {len(created_ids)} new questions "

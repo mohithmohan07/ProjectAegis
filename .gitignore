@@ -26,6 +26,9 @@ dist/
 .env
 .env.local
 .env.*.local
+service-account.json
+*.service-account.json
+google-drive-credentials.json
 
 # Aegis runtime
 backend/aegis.db

@@ -21,6 +21,7 @@ from . import (
     SHEET_DOC_LINK, SECTION_BANDS, OBJECTIVE_GROUP_FIELDS, DESCRIPTIVE_GROUP_FIELDS,
     merge_sources, strip_title_tag, strip_topic_title,
 )
+from . import workbook_sync
 from .. import models
 from ..services import directory
 
@@ -79,12 +80,30 @@ def _cell_str(row: tuple, idx: int) -> str:
 # content occasionally smuggles one in (e.g. a mangled degree sign). openpyxl
 # raises IllegalCharacterError on write, so every outgoing value is sanitized.
 _ILLEGAL_XLSX_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+_FORMULA_PREFIXES = ("=", "+", "-", "@")
 
 
 def _safe_cell(value):
     if isinstance(value, str):
         return _ILLEGAL_XLSX_RE.sub("", value)
     return value
+
+
+def _set_cell_value(cell, value) -> None:
+    """Write untrusted text without allowing Excel formula interpretation.
+
+    Setting ``data_type`` explicitly preserves the exact displayed and
+    round-tripped value. Prefixing an apostrophe is intentionally avoided for
+    XLSX because it would change the stored content.
+    """
+    safe = _safe_cell(value)
+    cell.value = safe
+    if isinstance(safe, str) and safe.startswith(_FORMULA_PREFIXES):
+        cell.data_type = "s"
+
+
+def _write_cell(ws, *, row: int, column: int, value) -> None:
+    _set_cell_value(ws.cell(row=row, column=column), value)
 
 
 def question_placement_key(label: str, group: models.Group) -> tuple:
@@ -484,11 +503,12 @@ def _refresh_concept_sources(wb, index: WorkbookIndex, concept: models.Concept,
         cell = wb[sheet_name].cell(row=row_i, column=col + 1)
         merged = merge_sources(str(cell.value or ""), concept.sources)
         if merged != str(cell.value or ""):
-            cell.value = merged
+            _set_cell_value(cell, merged)
             updated += 1
     return updated
 
 
+@workbook_sync.synchronized_output_workbook
 def append_concepts(db: Session, path: Path, concept_ids: list[int]) -> dict[str, int]:
     """Append concept-catalog rows (no questions) to the Objective sheet.
 
@@ -525,9 +545,9 @@ def append_concepts(db: Session, path: Path, concept_ids: list[int]) -> dict[str
                 _concept_to_row(c, "objective", topic, concept_fields=concept_fields),
                 start=1,
             ):
-                ws.cell(row=target, column=i, value=_safe_cell(value))
+                _write_cell(ws, row=target, column=i, value=value)
             result["written"] += 1
-    wb.save(path)
+    workbook_sync.atomic_save_workbook(wb, path)
     return result
 
 
@@ -588,7 +608,12 @@ def write_workbook(db: Session, dest: Path | None = None,
         ws = wb[SHEET_BY_KIND[q.sheet_kind]]
         for group in _question_placements(q):
             for i, value in enumerate(_question_to_row(q, q.sheet_kind, group), start=1):
-                ws.cell(row=next_row[q.sheet_kind], column=i, value=_safe_cell(value))
+                _write_cell(
+                    ws,
+                    row=next_row[q.sheet_kind],
+                    column=i,
+                    value=value,
+                )
             next_row[q.sheet_kind] += 1
             concepts_with_rows.add(group.concept_id)
     if question_ids is None:
@@ -600,8 +625,12 @@ def write_workbook(db: Session, dest: Path | None = None,
                 for i, value in enumerate(
                     _concept_to_row(concept, "objective", topic), start=1
                 ):
-                    ws_obj.cell(row=next_row["objective"], column=i,
-                                value=_safe_cell(value))
+                    _write_cell(
+                        ws_obj,
+                        row=next_row["objective"],
+                        column=i,
+                        value=value,
+                    )
                 next_row["objective"] += 1
     buf = io.BytesIO()
     wb.save(buf)
@@ -631,7 +660,7 @@ def write_concepts_workbook(db: Session, concept_ids: list[int]) -> bytes:
     for c in concepts:
         for topic in _concept_placements(c):
             for i, value in enumerate(_concept_to_row(c, "objective", topic), start=1):
-                ws.cell(row=next_row, column=i, value=_safe_cell(value))
+                _write_cell(ws, row=next_row, column=i, value=value)
             next_row += 1
     buf = io.BytesIO()
     wb.save(buf)
@@ -669,7 +698,12 @@ def write_subject_workbook(
                 for i, value in enumerate(
                     _question_to_row(question, question.sheet_kind, group), start=1
                 ):
-                    ws.cell(row=next_row[question.sheet_kind], column=i, value=_safe_cell(value))
+                    _write_cell(
+                        ws,
+                        row=next_row[question.sheet_kind],
+                        column=i,
+                        value=value,
+                    )
                 next_row[question.sheet_kind] += 1
                 concepts_with_rows.add(group.concept_id)
 
@@ -693,7 +727,12 @@ def write_subject_workbook(
                 if topic.chapter_id not in chapter_ids:
                     continue
                 for i, value in enumerate(_concept_to_row(concept, "objective", topic), start=1):
-                    ws_obj.cell(row=next_row["objective"], column=i, value=_safe_cell(value))
+                    _write_cell(
+                        ws_obj,
+                        row=next_row["objective"],
+                        column=i,
+                        value=value,
+                    )
                 next_row["objective"] += 1
 
     buf = io.BytesIO()
@@ -701,6 +740,7 @@ def write_subject_workbook(
     return buf.getvalue()
 
 
+@workbook_sync.synchronized_output_workbook
 def append_questions(db: Session, path: Path, question_ids: list[int]) -> dict[str, int]:
     """Append-only write, placement-aware.
 
@@ -731,7 +771,7 @@ def append_questions(db: Session, path: Path, question_ids: list[int]) -> dict[s
                     cell = wb[sheet_name].cell(row=row_i, column=col + 1)
                     merged = merge_sources(str(cell.value or ""), q.question_source)
                     if merged != str(cell.value or ""):
-                        cell.value = merged
+                        _set_cell_value(cell, merged)
                         appended["sources_updated"] += 1
                 continue
             is_tag = q.question_label in index.labels
@@ -748,10 +788,10 @@ def append_questions(db: Session, path: Path, question_ids: list[int]) -> dict[s
                 _question_to_row(q, q.sheet_kind, group, concept_fields=concept_fields),
                 start=1,
             ):
-                ws.cell(row=target, column=i, value=_safe_cell(value))
+                _write_cell(ws, row=target, column=i, value=value)
             appended[q.sheet_kind] += 1
             if is_tag:
                 appended["tagged"] += 1
 
-    wb.save(path)
+    workbook_sync.atomic_save_workbook(wb, path)
     return appended

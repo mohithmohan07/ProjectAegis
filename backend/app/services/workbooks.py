@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+import uuid
 from pathlib import Path
 
 from .. import config
@@ -73,8 +74,14 @@ def infer_workbook_metadata(filename: str, subject: str = "") -> dict:
     }
 
 
-def _output_paths(meta: dict) -> tuple[Path, Path]:
-    out_dir = WORKBOOK_ROOT / meta["grade_folder"] / meta["subject"]
+def _output_paths(meta: dict, run_id: str) -> tuple[Path, Path]:
+    out_dir = (
+        WORKBOOK_ROOT
+        / meta["grade_folder"]
+        / meta["subject"]
+        / meta["stem"]
+        / run_id
+    )
     out_dir.mkdir(parents=True, exist_ok=True)
     return out_dir / f"{meta['stem']}.pdf", out_dir / f"{meta['stem']}.build_log.txt"
 
@@ -170,14 +177,16 @@ def generate(source_pdf: Path, subject: str = "", live: bool | None = None) -> d
     if not go_live:
         config.require_workbooks_live()
     meta = infer_workbook_metadata(source_pdf.name, subject)
-    out_pdf, build_log = _output_paths(meta)
+    run_id = uuid.uuid4().hex
+    out_pdf, build_log = _output_paths(meta, run_id)
+    run_cache = CACHE_ROOT / "runs" / run_id
     progress.log(
         f"{meta['subject']} · {meta['grade']} · Chapter {meta['chapter_number']}: "
         f"{meta['chapter_title']}")
 
     if go_live:
         from pipeline import run as pipeline_run  # vendored (needs keys)
-        CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+        run_cache.mkdir(parents=True, exist_ok=True)
         progress.step("Mathpix → MMD, GPT plan/build, render PDF…", value=0.1)
         result = pipeline_run({
             "source_pdf": str(source_pdf),
@@ -188,8 +197,8 @@ def generate(source_pdf: Path, subject: str = "", live: bool | None = None) -> d
             "discipline": meta["discipline"],
             "output_pdf": str(out_pdf),
             "build_log": str(build_log),
-            "mmd_cache_dir": str(CACHE_ROOT / "mmd"),
-            "plan_cache_dir": str(CACHE_ROOT / "plan"),
+            "mmd_cache_dir": str(run_cache / "mmd"),
+            "plan_cache_dir": str(run_cache / "plan"),
         })
         result["mode"] = "live"
         result["meta"] = meta
@@ -263,9 +272,21 @@ def library() -> list[dict]:
 
 def resolve_library_file(rel: str) -> Path:
     """Safe path resolution inside the workbook library (no traversal)."""
-    target = (WORKBOOK_ROOT / rel).resolve()
-    if not str(target).startswith(str(WORKBOOK_ROOT.resolve())):
+    root = WORKBOOK_ROOT.resolve()
+    target = (root / rel).resolve()
+    if target == root or root not in target.parents:
         raise ValueError("invalid path")
+    relative = target.relative_to(root)
+    if (
+        not relative.parts
+        or relative.parts[0] == "_cache"
+        or any(part.startswith(".") for part in relative.parts)
+        or not (
+            target.name.lower().endswith(".pdf")
+            or target.name.lower().endswith(".build_log.txt")
+        )
+    ):
+        raise ValueError("invalid library file")
     if not target.is_file():
         raise FileNotFoundError(rel)
     return target

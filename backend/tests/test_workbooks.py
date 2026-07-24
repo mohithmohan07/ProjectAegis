@@ -1,12 +1,16 @@
 """Create Workbooks (revision-PDF generator): metadata, dry generation, API."""
 import io
+import threading
 from pathlib import Path
 
 import fitz
 import pytest
+from fastapi.testclient import TestClient
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 
+from app import config
+from app.main import app
 from app.services import workbooks
 
 
@@ -104,3 +108,88 @@ def test_api_generate_library_and_download(client, source_pdf):
 
 def test_library_file_traversal_blocked(client):
     assert client.get("/workbooks/file?rel=../../app/main.py").status_code == 404
+
+
+def test_library_resolver_rejects_cache_siblings_and_nonpublic_files(
+    tmp_path, monkeypatch,
+):
+    root = tmp_path / "workbooks"
+    public = root / "Class 08" / "Mathematics" / "run" / "book.pdf"
+    cached = root / "_cache" / "runs" / "secret" / "source.pdf"
+    usage = public.with_suffix(".usage.json")
+    sibling = tmp_path / "workbooks_evil" / "outside.pdf"
+    for path in (public, cached, usage, sibling):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"content")
+    monkeypatch.setattr(workbooks, "WORKBOOK_ROOT", root)
+
+    assert workbooks.resolve_library_file(
+        "Class 08/Mathematics/run/book.pdf",
+    ) == public.resolve()
+    with pytest.raises(ValueError):
+        workbooks.resolve_library_file("_cache/runs/secret/source.pdf")
+    with pytest.raises(ValueError):
+        workbooks.resolve_library_file(
+            "Class 08/Mathematics/run/book.usage.json")
+    with pytest.raises(ValueError):
+        workbooks.resolve_library_file("../workbooks_evil/outside.pdf")
+
+
+def test_same_named_concurrent_sources_use_isolated_run_directories(
+    tmp_path, monkeypatch,
+):
+    upload_root = tmp_path / "uploads"
+    upload_root.mkdir()
+    monkeypatch.setattr(config, "UPLOAD_DIR", upload_root)
+    barrier = threading.Barrier(2)
+    observed: list[tuple[Path, bytes]] = []
+    observed_lock = threading.Lock()
+    errors: list[Exception] = []
+
+    def fake_generate(source: Path, _subject: str):
+        with observed_lock:
+            observed.append((source, source.read_bytes()))
+        barrier.wait(timeout=3)
+        return {"mode": "dry", "build_log": "", "output_pdf": ""}
+
+    monkeypatch.setattr(workbooks, "generate", fake_generate)
+
+    def request(content: bytes):
+        request_client = TestClient(app)
+        try:
+            response = request_client.post(
+                "/workbooks/generate",
+                files={
+                    "file": (
+                        "CBSE_NCERT_G08_CH04_QUADRILATERALS.pdf",
+                        content,
+                        "application/pdf",
+                    )
+                },
+                data={"subject": "Mathematics"},
+            )
+            assert response.status_code == 200
+            assert '"type": "result"' in response.text
+        except Exception as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+        finally:
+            request_client.close()
+
+    threads = [
+        threading.Thread(target=request, args=(b"first-source",)),
+        threading.Thread(target=request, args=(b"second-source",)),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=8)
+
+    assert not errors
+    assert len(observed) == 2
+    assert observed[0][0] != observed[1][0]
+    assert {content for _, content in observed} == {
+        b"first-source",
+        b"second-source",
+    }
+    assert all(path.parent.parent == upload_root / "workbooks"
+               for path, _ in observed)

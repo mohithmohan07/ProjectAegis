@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import type { BoardNode, ChapterDetail, ChapterRef, Scope } from "../types";
 
@@ -13,12 +13,15 @@ export default function DirectoryPicker({
   allowConceptScope = true,
   chapterOnly = false,
   reloadSignal = 0,
+  initialChapterIdentity,
 }: {
   onScope: (scope: Scope | null) => void;
   allowConceptScope?: boolean;
   chapterOnly?: boolean;
   /** Increment to refetch the directory tree (e.g. after syllabus upload). */
   reloadSignal?: number;
+  /** Stable checkpoint destination to select after the tree has loaded. */
+  initialChapterIdentity?: Record<string, string>;
 }) {
   const [tree, setTree] = useState<BoardNode[]>([]);
   const [loading, setLoading] = useState(true);
@@ -31,6 +34,8 @@ export default function DirectoryPicker({
   const [detail, setDetail] = useState<ChapterDetail | null>(null);
   const [scopeType, setScopeType] = useState<"chapter" | "topic" | "concept">("chapter");
   const [picked, setPicked] = useState<number[]>([]);
+  const [initialSelectionMessage, setInitialSelectionMessage] = useState("");
+  const appliedInitialIdentityRef = useRef("");
 
   useEffect(() => {
     setLoading(true);
@@ -43,6 +48,67 @@ export default function DirectoryPicker({
       })
       .finally(() => setLoading(false));
   }, [reloadSignal]);
+
+  useEffect(() => {
+    if (loading || !initialChapterIdentity) return;
+    const identityKey = JSON.stringify(initialChapterIdentity);
+    const applicationKey = `${reloadSignal}:${identityKey}`;
+    if (appliedInitialIdentityRef.current === applicationKey) return;
+    appliedInitialIdentityRef.current = applicationKey;
+
+    const requested = Object.fromEntries(
+      Object.entries(initialChapterIdentity).map(([key, value]) => [
+        key,
+        normalizeIdentity(value),
+      ]),
+    );
+    const matchedBoard = tree.find(
+      (item) => normalizeIdentity(item.board) === requested.board,
+    );
+    const matchedGrade = matchedBoard?.grades.find(
+      (item) => normalizeIdentity(item.grade) === requested.grade,
+    );
+    const matchedSubject = matchedGrade?.subjects.find(
+      (item) => normalizeIdentity(item.subject) === requested.subject,
+    );
+    const matchedUnit = matchedSubject?.units.find(
+      (item) => normalizeIdentity(item.unit) === requested.unit,
+    );
+    const matchedChapter = matchedUnit?.chapters.find((item) => {
+      const hasCode = Boolean(requested.chapter_code);
+      const hasTitle = Boolean(requested.chapter_title);
+      const codeMatches = hasCode
+        && normalizeIdentity(item.chapter_code) === requested.chapter_code;
+      const titleMatches = hasTitle
+        && normalizeIdentity(item.chapter_title) === requested.chapter_title;
+      if (hasCode && hasTitle) return codeMatches && titleMatches;
+      return codeMatches || titleMatches;
+    });
+
+    if (
+      !matchedBoard
+      || !matchedGrade
+      || !matchedSubject
+      || !matchedUnit
+      || !matchedChapter
+    ) {
+      setInitialSelectionMessage(
+        "The saved destination is not in the current directory. Select the "
+        + "matching chapter manually; generation will remain disabled until then.",
+      );
+      return;
+    }
+    setBoard(matchedBoard.board);
+    setGrade(matchedGrade.grade);
+    setSubject(matchedSubject.subject);
+    setUnit(matchedUnit.unit);
+    setChapter(matchedChapter);
+    setScopeType("chapter");
+    setPicked([]);
+    setInitialSelectionMessage(
+      `Saved checkpoint target selected: ${matchedChapter.chapter_title}.`,
+    );
+  }, [initialChapterIdentity, loading, reloadSignal, tree]);
 
   useEffect(() => {
     if (!chapter) {
@@ -78,6 +144,7 @@ export default function DirectoryPicker({
   const unitNode = subjectNode?.units.find((u) => u.unit === unit);
 
   function reset(level: "board" | "grade" | "subject" | "unit") {
+    setInitialSelectionMessage("");
     if (level === "board") {
       setGrade(""); setSubject(""); setUnit(""); setChapter(null);
     } else if (level === "grade") {
@@ -107,6 +174,19 @@ export default function DirectoryPicker({
           manually. The PDF is never auto-matched to a chapter.
         </div>
       )}
+      {initialSelectionMessage && (
+        <div
+          className={
+            initialSelectionMessage.startsWith("Saved checkpoint")
+              ? "resume-target-ok"
+              : "error-box"
+          }
+          role="status"
+          style={{ marginBottom: 8 }}
+        >
+          {initialSelectionMessage}
+        </div>
+      )}
       <div className="row">
         <select value={board} onChange={(e) => { setBoard(e.target.value); reset("board"); }}
           disabled={loading || tree.length === 0}>
@@ -134,6 +214,7 @@ export default function DirectoryPicker({
             setChapter(unitNode?.chapters.find((c) => c.id === id) ?? null);
             setScopeType("chapter");
             setPicked([]);
+            setInitialSelectionMessage("");
           }}>
           <option value="">Chapter…</option>
           {unitNode?.chapters.map((c) => (
@@ -183,4 +264,8 @@ export default function DirectoryPicker({
       )}
     </div>
   );
+}
+
+function normalizeIdentity(value: unknown): string {
+  return String(value ?? "").trim().replace(/\s+/g, " ").toLocaleLowerCase();
 }

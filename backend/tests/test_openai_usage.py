@@ -308,7 +308,7 @@ def test_progress_event_limit_zero_returns_no_events():
         progress._history.reset(token)
 
 
-def test_concurrent_runs_for_one_upload_do_not_lose_usage(db):
+def test_concurrent_runs_for_one_upload_fail_fast_without_double_usage(db):
     job = models.UploadJob(
         module="build_concepts", filename="same-file.txt", status="converted"
     )
@@ -339,11 +339,12 @@ def test_concurrent_runs_for_one_upload_do_not_lose_usage(db):
     for thread in threads:
         thread.join()
 
-    assert not errors
+    assert len(errors) == 1
+    assert isinstance(errors[0], uploads.JobAlreadyRunningError)
     db.expire_all()
     saved = uploads.get_job(db, job.id).openai_usage
-    assert saved["request_count"] == 2
-    assert saved["total_tokens"] == 240
+    assert saved["request_count"] == 1
+    assert saved["total_tokens"] == 120
 
 
 def test_workbook_library_recovers_usage_from_sidecar(tmp_path, monkeypatch):

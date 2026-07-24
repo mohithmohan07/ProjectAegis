@@ -17,7 +17,7 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from .. import config, models
-from ..bulk_import import writer
+from ..bulk_import import workbook_sync, writer
 
 
 # --------------------------------------------------------------------------- #
@@ -147,6 +147,7 @@ def _classify_concept(c: models.Concept, index: writer.WorkbookIndex) -> list[di
     return rows
 
 
+@workbook_sync.synchronized_output_workbook
 def preview(
     db: Session,
     *,

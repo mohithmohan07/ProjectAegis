@@ -114,6 +114,8 @@ npm run dev
 ```
 
 UI: http://localhost:5173 — Home, Build Assessments, Build Concepts, Database.
+The development server forwards Aegis API requests to the local backend on
+port 8000, so local mode needs no hosted service or Google/Drive connection.
 
 ### Docker
 
@@ -123,9 +125,16 @@ docker compose up --build
 
 ## Durable generation checkpoints
 
-Build Concepts saves completed generation stages so a failed run can continue
-without repeating successful OpenAI work. The UI shows the newest checkpoint
-and automatically resumes it on the next Generate action.
+Build Concepts automatically commits each completed generation stage to the
+server before continuing. After a refresh or sign-in from another laptop, Aegis
+offers the signed-in user the newest compatible unfinished run with three
+choices: **Resume**, **Keep for later**, or **Discard**. Resume restores the
+document and exact directory target; the user still confirms the destination
+and starts the billable generation request explicitly. A second request for a
+job that is already running is rejected instead of duplicating OpenAI work.
+Discard removes the resumable stage from the server and overwrites the Drive
+mirror with a non-resumable bundle; the converted source remains in that
+administrator-only backup for disaster recovery.
 
 Each converted concept job can also be downloaded as an
 `*.aegis-checkpoint.json` bundle. The bundle contains the converted MMD,
@@ -136,14 +145,85 @@ installation. Do not commit live checkpoint bundles, uploads, databases, or
 generated workbooks to Git; Git remains the source of truth for code,
 migrations, prompts, and sanitized regression fixtures.
 
-The UI links to the team's
-[Google Drive checkpoint folder](https://drive.google.com/drive/folders/1ZrgyXqB339m312XqhxLWMu5Z5H15Ggyo).
-To back up, download the checkpoint and upload it to that folder. To resume,
-download the JSON file from Drive and choose it with **Restore checkpoint**.
-This is an explicit backup/restore workflow; Aegis does not automatically sync
-files to Drive.
-Set `VITE_CHECKPOINT_DRIVE_FOLDER_URL` at frontend build time to use a
-different folder.
+### Hosted access for UpSchool
+
+The checked-in Fly configuration enables Google sign-in and limits hosted
+access to verified `@up.school` Google Workspace accounts. The backend verifies
+the Google ID token, its audience, the hosted-domain claim, and the verified
+email domain, then isolates uploads and resumable jobs by Google's stable user
+ID. It fails closed if hosted authentication is incomplete.
+
+Create an **Internal** OAuth consent screen and a Web application OAuth client
+in Google Cloud. Add `https://projectaegis.fly.dev` as an authorized JavaScript
+origin; add `http://localhost:5173` only if Google sign-in is also needed during
+local development. Store these values as Fly secrets:
+
+```powershell
+$sessionSecret = python -c "import secrets; print(secrets.token_urlsafe(48))"
+$adminPassword = python -c "import secrets; print(secrets.token_urlsafe(32))"
+fly secrets set AEGIS_GOOGLE_CLIENT_ID="CLIENT_ID.apps.googleusercontent.com" `
+  AEGIS_SESSION_SECRET="$sessionSecret" `
+  AEGIS_ADMIN_PASSWORD="$adminPassword" --app projectaegis
+```
+
+Save the generated admin password in the team's password manager. It protects
+global prompt editing and the irreversible **Clear all data** action.
+
+If the Fly volume already contains runs created before authentication was
+added, explicitly name the one verified user who may adopt those legacy runs:
+
+```powershell
+fly secrets set AEGIS_LEGACY_OWNER_EMAIL="owner@up.school" --app projectaegis
+```
+
+On that user's first successful Google sign-in, Aegis assigns legacy uploads,
+saved checkpoints, and assessment sessions to their stable Google identity.
+Remove the
+bridge afterward with
+`fly secrets unset AEGIS_LEGACY_OWNER_EMAIL --app projectaegis`. If the value
+is omitted or another user signs in, legacy runs remain inaccessible rather
+than being exposed to the domain.
+
+Do not deploy the Google-authenticated configuration until all three values are
+set. Local development remains fully usable without Google or Fly: leave
+`AEGIS_AUTH_MODE=local` (the default in `.env.example`) and run the normal
+backend and frontend processes. This local mode is intentionally a
+single-user, offline-capable workspace.
+
+### Optional automatic Google Drive mirror
+
+The Fly volume remains the primary checkpoint store. Aegis can additionally
+queue a background Drive backup after every successful server checkpoint; a
+Drive failure is logged but never interrupts generation. The manual
+**Download checkpoint** and **Restore checkpoint** controls remain available
+as portable fallback.
+
+For unattended service-account uploads, use a folder inside a Google
+**Shared Drive**. A service account has no personal Drive storage quota and
+cannot own files in a normal My Drive folder. Create a dedicated Shared Drive
+folder, add the service account only to that location, enable the Drive API,
+and configure:
+
+```powershell
+$driveJsonB64 = [Convert]::ToBase64String(
+  [IO.File]::ReadAllBytes("C:\secure\aegis-drive.service-account.json")
+)
+fly secrets set AEGIS_DRIVE_SERVICE_ACCOUNT_JSON_B64="$driveJsonB64" `
+  --app projectaegis
+fly secrets set AEGIS_DRIVE_CHECKPOINT_BACKUP_ENABLED=1 `
+  AEGIS_DRIVE_CHECKPOINT_FOLDER_ID="SHARED_DRIVE_FOLDER_ID" `
+  --app projectaegis
+```
+
+Workspace administrators may instead configure domain-wide delegation and
+`AEGIS_DRIVE_IMPERSONATE_USER` for a dedicated human backup account. Keep the
+automatic-backup location limited to the service account and designated
+administrators; sharing it with the whole domain would let users inspect one
+another's source bundles. Do not use “Anyone with the link can edit.” A normal
+My Drive folder can still be used for deliberate manual bundle
+upload/download, but not for plain service-account backup.
+Set `VITE_CHECKPOINT_DRIVE_FOLDER_URL` at frontend build time if the UI should
+link to a different backup folder.
 
 The checked-in Fly configuration mounts the `aegis_data` volume at `/data` and
 stores both runtime files and SQLite there. Create the encrypted volume once in
@@ -151,17 +231,20 @@ the app's primary region before deploying this configuration:
 
 ```bash
 fly volumes create aegis_data --app projectaegis --region ams
+fly deploy --app projectaegis --ha=false
 ```
 
-A Fly volume is the practical single-machine bridge for this app. A multi-user
-or multi-machine production deployment should move run metadata and events to
+A Fly volume is the practical **single-machine** bridge for this app. Keep
+exactly one active Aegis machine while SQLite and checkpoints live on that
+volume; two volumes are independent and do not replicate one another. Fly's
+generic high-availability volume recommendation assumes the application has a
+replicated data layer, which this version intentionally does not. Before
+removing a machine or volume from an existing multi-volume app, first identify
+and back up the volume containing the current `/data` directory.
+
+A multi-machine production deployment should move run metadata and events to
 managed PostgreSQL and large checkpoint/upload artifacts to private object
 storage; the portable bundle remains the human-controlled backup.
-
-This repository does not yet implement per-user authentication or ownership.
-Checkpoint bundles contain source text, usage totals, and diagnostic logs, so
-keep the Fly app behind trusted access controls and keep the Drive folder
-restricted to the intended team before using real student or licensed content.
 
 ## Tests
 
