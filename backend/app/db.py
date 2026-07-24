@@ -46,6 +46,10 @@ def _ensure_columns() -> None:
     additions = [
         ("concepts", "parent_concept", "VARCHAR(255) DEFAULT ''"),
         ("concepts", "sources", "TEXT DEFAULT ''"),
+        ("assessment_sessions", "owner_sub",
+         "VARCHAR(255) DEFAULT 'local:default'"),
+        ("upload_jobs", "owner_sub", "VARCHAR(255) DEFAULT 'local:default'"),
+        ("upload_jobs", "upload_storage_key", "VARCHAR(512) DEFAULT ''"),
         ("upload_jobs", "source_book", "VARCHAR(128) DEFAULT ''"),
         ("upload_jobs", "question_inventory", "TEXT DEFAULT '{}'"),
         ("upload_jobs", "generation_checkpoint", "TEXT DEFAULT '{}'"),
@@ -59,6 +63,31 @@ def _ensure_columns() -> None:
             cols = [r[1] for r in conn.exec_driver_sql(f"PRAGMA table_info({table})")]
             if cols and column not in cols:
                 conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+        tables = {
+            row[0]
+            for row in conn.exec_driver_sql(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        if "upload_jobs" in tables:
+            conn.exec_driver_sql(
+                "UPDATE upload_jobs SET owner_sub = 'local:default' "
+                "WHERE owner_sub IS NULL OR TRIM(owner_sub) = ''"
+            )
+            conn.exec_driver_sql(
+                "CREATE INDEX IF NOT EXISTS ix_upload_jobs_owner_sub "
+                "ON upload_jobs(owner_sub)"
+            )
+        if "assessment_sessions" in tables:
+            conn.exec_driver_sql(
+                "UPDATE assessment_sessions SET owner_sub = 'local:default' "
+                "WHERE owner_sub IS NULL OR TRIM(owner_sub) = ''"
+            )
+            conn.exec_driver_sql(
+                "CREATE INDEX IF NOT EXISTS "
+                "ix_assessment_sessions_owner_sub "
+                "ON assessment_sessions(owner_sub)"
+            )
         conn.commit()
 
 

@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { RunConsoleProvider } from "../RunConsole";
+import { AuthProvider } from "../Auth";
 import type { UploadJob } from "../types";
 import DocumentUpload from "./DocumentUpload";
 
@@ -10,6 +11,10 @@ const apiMock = vi.hoisted(() => ({
   checkpointUrl: vi.fn((id: number) => `/checkpoint/${id}`),
   clearConceptCheckpoint: vi.fn(),
   postLearningUpload: vi.fn(),
+  authConfig: vi.fn(),
+  authMe: vi.fn(),
+  authGoogle: vi.fn(),
+  authLogout: vi.fn(),
 }));
 
 vi.mock("../api/client", () => ({
@@ -99,13 +104,9 @@ test("restores and displays a portable checkpoint with saved diagnostics", async
   expect(await screen.findByText("Saved checkpoint at 91%")).toBeDefined();
   expect(screen.getByText(/next run resumes automatically/i)).toBeDefined();
   expect(screen.getByText(/Target: cbse \/ 10 \/ science/i)).toBeDefined();
-  const driveLink = screen.getByRole("link", {
+  expect(screen.queryByRole("link", {
     name: "Open Google Drive backup folder",
-  });
-  expect(driveLink.getAttribute("href")).toBe(
-    "https://drive.google.com/drive/folders/1ZrgyXqB339m312XqhxLWMu5Z5H15Ggyo",
-  );
-  expect(driveLink.querySelector("button")).toBeNull();
+  })).toBeNull();
   fireEvent.click(screen.getByText("Last saved error details"));
   expect(screen.getByText(/concept='Electric Power'/)).toBeDefined();
   await waitFor(() => {
@@ -218,4 +219,48 @@ test("a slow saved-job lookup cannot overwrite a new upload", async () => {
 
   expect(screen.queryByText("stale.mmd")).toBeNull();
   expect(onJob).toHaveBeenLastCalledWith(expect.objectContaining({ id: 99 }));
+});
+
+test("shows configured automatic Drive backup status from auth config", async () => {
+  apiMock.authConfig.mockResolvedValue({
+    mode: "local",
+    google_client_id: "",
+    allowed_google_domain: "",
+    csrf_token: "csrf",
+    drive_checkpoint_backup: {
+      enabled: true,
+      configured: true,
+      auth_mode: "service_account_shared_drive",
+      notice: "Backups are restricted to the Aegis folder.",
+      state: "succeeded",
+      verified: true,
+    },
+  });
+  apiMock.authMe.mockResolvedValue({
+    authenticated: true,
+    user: {
+      sub: "local",
+      email: "local@localhost",
+      name: "Local mode",
+    },
+  });
+  render(
+    <AuthProvider>
+      <RunConsoleProvider>
+        <DocumentUpload
+          module="concepts"
+          conceptKind="post"
+          externalJob={restoredJob()}
+          onJob={vi.fn()}
+        />
+      </RunConsoleProvider>
+    </AuthProvider>,
+  );
+
+  expect(await screen.findByText(
+    /Automatic Drive backup has been verified; each completed stage is queued/i,
+  )).toBeDefined();
+  expect(screen.getByText(
+    /Backups are restricted to the Aegis folder/i,
+  )).toBeDefined();
 });

@@ -5,6 +5,7 @@ import SyllabusUploader from "../components/SyllabusUploader";
 import type { BoardNode } from "../types";
 
 const SHEETS = ["objective", "subjective", "descriptive"];
+const ADMIN_TOKEN_KEY = "aegis_admin_token";
 
 export default function Database() {
   const [sheet, setSheet] = useState("objective");
@@ -37,10 +38,23 @@ export default function Database() {
       "Clear everything? This removes all chapters, concepts, questions, uploads, "
       + "output workbook, and generated PDFs. This cannot be undone.",
     )) return;
+    let token = "";
+    try {
+      token = window.sessionStorage.getItem(ADMIN_TOKEN_KEY) || "";
+    } catch {
+      // Treat blocked browser storage as an unauthenticated admin session.
+    }
+    if (!token) {
+      setResetMsg(
+        "Admin authentication required. Sign in on the Admin page, then "
+        + "return here to clear shared data.",
+      );
+      return;
+    }
     setBusy(true);
     setResetMsg(null);
     try {
-      const result = await api.resetData();
+      const result = await api.resetData(token);
       setResetMsg(`Cleared: ${JSON.stringify(result)}`);
       stats.reload();
       questions.reload();

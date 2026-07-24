@@ -9,11 +9,53 @@ DB_URL = os.environ.get(
     # deployments set AEGIS_DB_URL explicitly to their persistent volume.
     "AEGIS_DB_URL", f"sqlite:///{ROOT / 'aegis.db'}")
 
+# Authentication is deliberately local/offline by default so a developer can
+# run Aegis without network access or identity-provider credentials. Hosted
+# deployments opt into Google Identity explicitly.
+AUTH_MODE = os.environ.get("AEGIS_AUTH_MODE", "local").strip().lower()
+GOOGLE_CLIENT_ID = os.environ.get("AEGIS_GOOGLE_CLIENT_ID", "").strip()
+ALLOWED_GOOGLE_DOMAIN = (
+    os.environ.get("AEGIS_ALLOWED_GOOGLE_DOMAIN", "up.school")
+    .strip()
+    .lower()
+)
+# One-time, explicit upgrade bridge for rows created before owner identities
+# existed. Only this verified Google email may claim ``local:default`` rows.
+LEGACY_OWNER_EMAIL = (
+    os.environ.get("AEGIS_LEGACY_OWNER_EMAIL", "").strip().lower()
+)
+ADMIN_PASSWORD = os.environ.get("AEGIS_ADMIN_PASSWORD", "admin")
+SESSION_SECRET = os.environ.get("AEGIS_SESSION_SECRET", "")
+SESSION_COOKIE_NAME = "aegis_session"
+AUTH_CSRF_COOKIE_NAME = "aegis_auth_csrf"
+SESSION_TTL_SECONDS = 12 * 60 * 60
+_secure_cookie_setting = os.environ.get("AEGIS_SECURE_COOKIES", "").strip().lower()
+SECURE_COOKIES = (
+    _secure_cookie_setting not in {"0", "false", "no", "off"}
+    if _secure_cookie_setting
+    else AUTH_MODE == "google"
+)
+CORS_ORIGINS = [
+    value.strip()
+    for value in os.environ.get(
+        "AEGIS_CORS_ORIGINS",
+        os.environ.get(
+            "AEGIS_ALLOWED_ORIGINS",
+            "http://localhost:5173,http://127.0.0.1:5173",
+        ),
+    ).split(",")
+    if value.strip()
+]
+
 # The Bulk Import workbook IS the database — single source of truth.
 BULK_IMPORT_DB = DATA_DIR / "bulk_import_database.xlsx"
 # Every generation appends here (append-only, never overwritten).
 BULK_IMPORT_OUTPUT = DATA_DIR / "bulk_import_output.xlsx"
 UPLOAD_DIR = DATA_DIR / "uploads"
+MAX_UPLOAD_BYTES = max(
+    1,
+    int(os.environ.get("AEGIS_MAX_UPLOAD_BYTES", str(128 * 1024 * 1024))),
+)
 # Bundled syllabus workbooks committed in git (shipped in the Docker image).
 BUNDLED_SYLLABUS_DIR = Path(
     os.environ.get("AEGIS_BUNDLED_SYLLABUS_DIR", ROOT / "data" / "syllabus"),

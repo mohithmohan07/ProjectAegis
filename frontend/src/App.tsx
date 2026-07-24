@@ -8,6 +8,7 @@ import Database from "./pages/Database";
 import Admin from "./pages/Admin";
 import { RunConsoleProvider } from "./RunConsole";
 import RunConsolePanel from "./components/RunConsolePanel";
+import { AuthAccount, AuthGate, AuthProvider } from "./Auth";
 
 const NAV = [
   { to: "/home", label: "Home" },
@@ -21,39 +22,44 @@ const NAV = [
 
 export default function App() {
   return (
-    <RunConsoleProvider>
-      <div className="layout">
-        <aside className="sidebar">
-          <div className="brand">
-            Aegis
-            <small>Integrated Content Tool</small>
+    <AuthProvider>
+      <AuthGate>
+        <RunConsoleProvider>
+          <div className="layout">
+            <aside className="sidebar">
+              <div className="brand">
+                Aegis
+                <small>Integrated Content Tool</small>
+              </div>
+              <nav className="nav">
+                {NAV.map((n) => (
+                  <NavLink key={n.to} to={n.to} className={({ isActive }) => (isActive ? "active" : "")}>
+                    {n.label}
+                  </NavLink>
+                ))}
+              </nav>
+              <div className="sidebar-note">
+                The Bulk Import workbook is the single source of truth. Every
+                generation is written back to it — append-only.
+              </div>
+              <AuthAccount />
+            </aside>
+            <main className="main">
+              <Routes>
+                <Route path="/" element={<Navigate to="/home" replace />} />
+                <Route path="/home" element={<Home />} />
+                <Route path="/build-assessments" element={<BuildAssessments />} />
+                <Route path="/build-concepts" element={<BuildConcepts />} />
+                <Route path="/tagging" element={<Tagging />} />
+                <Route path="/workbooks" element={<Workbooks />} />
+                <Route path="/database" element={<Database />} />
+                <Route path="/admin" element={<Admin />} />
+              </Routes>
+            </main>
+            <RunConsolePanel />
           </div>
-          <nav className="nav">
-            {NAV.map((n) => (
-              <NavLink key={n.to} to={n.to} className={({ isActive }) => (isActive ? "active" : "")}>
-                {n.label}
-              </NavLink>
-            ))}
-          </nav>
-          <div className="sidebar-note">
-            The Bulk Import workbook is the single source of truth. Every
-            generation is written back to it — append-only.
-          </div>
-        </aside>
-        <main className="main">
-          <Routes>
-            <Route path="/" element={<Navigate to="/home" replace />} />
-            <Route path="/home" element={<Home />} />
-            <Route path="/build-assessments" element={<BuildAssessments />} />
-            <Route path="/build-concepts" element={<BuildConcepts />} />
-            <Route path="/tagging" element={<Tagging />} />
-            <Route path="/workbooks" element={<Workbooks />} />
-            <Route path="/database" element={<Database />} />
-            <Route path="/admin" element={<Admin />} />
-          </Routes>
-        </main>
-        <RunConsolePanel />
-      </div>
-    </RunConsoleProvider>
+        </RunConsoleProvider>
+      </AuthGate>
+    </AuthProvider>
   );
 }

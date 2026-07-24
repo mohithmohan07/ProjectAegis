@@ -2,12 +2,15 @@ import type {
   BlueprintBatch,
   BoardNode,
   ChapterDetail,
+  AuthConfig,
+  AuthSession,
   OpenAIUsage,
   PreviewResult,
   PromptInfo,
   Question,
   Session,
   Stats,
+  ResumableCheckpoints,
   TagResult,
   UploadJob,
   Vocab,
@@ -22,6 +25,7 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
     init?.body instanceof FormData ? {} : { "Content-Type": "application/json" };
   const res = await fetch(`${BASE}${path}`, {
     ...init,
+    credentials: "include",
     headers: { ...baseHeaders, ...(init?.headers as Record<string, string> | undefined) },
   });
   if (!res.ok) {
@@ -61,6 +65,7 @@ export async function streamNdjson<T = unknown>(
     init.body instanceof FormData ? {} : { "Content-Type": "application/json" };
   const res = await fetch(`${BASE}${path}`, {
     ...init,
+    credentials: "include",
     headers: { ...baseHeaders, ...(init.headers as Record<string, string> | undefined) },
   });
   if (!res.ok || !res.body) {
@@ -113,6 +118,18 @@ export async function streamNdjson<T = unknown>(
 export const api = {
   base: BASE,
   health: () => http<{ status: string }>("/health"),
+  authConfig: () => http<AuthConfig>("/auth/config"),
+  authMe: () => http<AuthSession>("/auth/me"),
+  authGoogle: (credential: string, csrfToken: string) =>
+    http<AuthSession>("/auth/google", {
+      method: "POST",
+      body: JSON.stringify({
+        credential,
+        csrf_token: csrfToken,
+      }),
+    }),
+  authLogout: () =>
+    http<{ ok: boolean }>("/auth/logout", { method: "POST" }),
 
   // Directory / database
   tree: () => http<BoardNode[]>("/directory/tree"),
@@ -137,10 +154,13 @@ export const api = {
     fd.append("file", file);
     return http<Record<string, number>>("/data/import", { method: "POST", body: fd });
   },
-  resetData: () =>
+  resetData: (adminToken: string) =>
     http<{ status: string; chapters: number; questions: number }>(
       "/data/reset",
-      { method: "POST" },
+      {
+        method: "POST",
+        headers: { "X-Admin-Token": adminToken },
+      },
     ),
   // Admin — editable prompts (password-gated)
   adminLogin: (password: string) =>
@@ -194,6 +214,10 @@ export const api = {
     http<UploadJob>(`/build-concepts/uploads/${jobId}/checkpoint`, {
       method: "DELETE",
     }),
+  resumableConceptCheckpoints: (learningKind: "post" | "pre") =>
+    http<ResumableCheckpoints>(
+      `/build-concepts/checkpoints/resumable?learning_kind=${learningKind}`,
+    ),
 
   // Streaming endpoint paths (consumed via streamNdjson / RunConsole)
   paths: {

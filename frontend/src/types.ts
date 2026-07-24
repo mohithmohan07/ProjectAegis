@@ -148,6 +148,7 @@ export interface UploadJob {
   checkpoint_saved_at?: string;
   checkpoint_progress?: number;
   checkpoint_target_identity?: Record<string, string>;
+  generation_running?: boolean;
   generation_log?: Array<{
     type: string;
     level?: string;
@@ -158,6 +159,54 @@ export interface UploadJob {
   }>;
   created_at: string;
   openai_usage?: OpenAIUsage;
+}
+
+export interface AuthConfig {
+  mode: "local" | "google";
+  google_client_id: string;
+  allowed_google_domain: string;
+  csrf_token: string;
+  drive_checkpoint_backup?: {
+    enabled: boolean;
+    configured: boolean;
+    auth_mode: string;
+    notice: string;
+    state?: string;
+    verified?: boolean;
+  };
+}
+
+export interface AuthUser {
+  sub: string;
+  email: string;
+  name: string;
+  picture?: string;
+  hd?: string;
+}
+
+export interface AuthSession {
+  authenticated: boolean;
+  user: AuthUser | null;
+}
+
+export interface ResumableCheckpoint {
+  id: number;
+  module: string;
+  learning_kind: string;
+  filename: string;
+  status: string;
+  checkpoint_available: boolean;
+  checkpoint_stage?: string;
+  checkpoint_saved_at?: string;
+  checkpoint_progress?: number;
+  checkpoint_target_identity?: Record<string, string>;
+  generation_running?: boolean;
+  created_at: string;
+}
+
+export interface ResumableCheckpoints {
+  items: ResumableCheckpoint[];
+  total: number;
 }
 
 export interface Question {

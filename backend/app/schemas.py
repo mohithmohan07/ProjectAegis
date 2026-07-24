@@ -113,9 +113,30 @@ class UploadJobOut(BaseModel):
     checkpoint_saved_at: str = ""
     checkpoint_progress: float = 0.0
     checkpoint_target_identity: dict = Field(default_factory=dict)
+    generation_running: bool = False
     generation_log: list = Field(default_factory=list)
     openai_usage: dict = Field(default_factory=dict)
     created_at: datetime
+
+
+class ResumableCheckpointSummary(BaseModel):
+    id: int
+    module: str
+    learning_kind: str
+    filename: str
+    status: str
+    checkpoint_available: bool = True
+    checkpoint_stage: str = ""
+    checkpoint_saved_at: str = ""
+    checkpoint_progress: float = 0.0
+    checkpoint_target_identity: dict = Field(default_factory=dict)
+    generation_running: bool = False
+    created_at: datetime
+
+
+class ResumableCheckpointJobs(BaseModel):
+    items: list[ResumableCheckpointSummary] = Field(default_factory=list)
+    total: int = 0
 
 
 class TextbookModeRequest(BaseModel):

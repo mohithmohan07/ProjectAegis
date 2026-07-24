@@ -9,11 +9,12 @@ subsequent generation reads — no restart needed.
 from __future__ import annotations
 
 import hashlib
-import os
+import hmac
 
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
+from .. import config
 from ..services import prompts
 from ..services import workbook_prompts
 
@@ -23,7 +24,7 @@ _SALT = "aegis-admin-v1"
 
 
 def _password() -> str:
-    return os.environ.get("AEGIS_ADMIN_PASSWORD", "admin")
+    return str(config.ADMIN_PASSWORD)
 
 
 def _token_for(password: str) -> str:
@@ -34,8 +35,8 @@ def _expected_token() -> str:
     return _token_for(_password())
 
 
-def _require(token: str | None) -> None:
-    if not token or token != _expected_token():
+def require_admin(token: str | None) -> None:
+    if not token or not hmac.compare_digest(token, _expected_token()):
         raise HTTPException(401, "admin authentication required")
 
 
@@ -56,7 +57,7 @@ def login(req: LoginRequest):
 
 @router.get("/prompts")
 def list_prompts(x_admin_token: str | None = Header(default=None)):
-    _require(x_admin_token)
+    require_admin(x_admin_token)
     workbook_prompts.ensure_registered()
     return {
         "categories": prompts.categories(),
@@ -66,7 +67,7 @@ def list_prompts(x_admin_token: str | None = Header(default=None)):
 
 @router.put("/prompts/{key:path}")
 def update_prompt(key: str, req: PromptUpdate, x_admin_token: str | None = Header(default=None)):
-    _require(x_admin_token)
+    require_admin(x_admin_token)
     workbook_prompts.ensure_registered()
     try:
         prompts.set_override(key, req.text)
@@ -77,7 +78,7 @@ def update_prompt(key: str, req: PromptUpdate, x_admin_token: str | None = Heade
 
 @router.post("/prompts/{key:path}/reset")
 def reset_prompt(key: str, x_admin_token: str | None = Header(default=None)):
-    _require(x_admin_token)
+    require_admin(x_admin_token)
     workbook_prompts.ensure_registered()
     try:
         prompts.reset(key)

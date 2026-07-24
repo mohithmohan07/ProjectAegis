@@ -1,16 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
+import { useOptionalAuth } from "../Auth";
 import { useRunConsole } from "../RunConsole";
 import type { UploadJob } from "../types";
 import SourceBookInput from "./SourceBookInput";
 
 type Module = "assessments" | "concepts";
 
-const DEFAULT_DRIVE_BACKUP_FOLDER_URL =
-  "https://drive.google.com/drive/folders/1ZrgyXqB339m312XqhxLWMu5Z5H15Ggyo";
 const DRIVE_BACKUP_FOLDER_URL =
-  import.meta.env.VITE_CHECKPOINT_DRIVE_FOLDER_URL?.trim()
-  || DEFAULT_DRIVE_BACKUP_FOLDER_URL;
+  import.meta.env.VITE_CHECKPOINT_DRIVE_FOLDER_URL?.trim() || "";
 
 type SavedJobMarker = {
   id: number;
@@ -67,6 +65,7 @@ export default function DocumentUpload({
   onJob: (job: UploadJob | null) => void;
 }) {
   const { run } = useRunConsole();
+  const auth = useOptionalAuth();
   const [source, setSource] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [job, setJob] = useState<UploadJob | null>(null);
@@ -76,8 +75,28 @@ export default function DocumentUpload({
   const inputRef = useRef<HTMLInputElement>(null);
   const checkpointInputRef = useRef<HTMLInputElement>(null);
   const savedJobRequestGenerationRef = useRef(0);
+  const ownerSuffix = auth?.config?.mode === "google" && auth.user?.sub
+    ? `:${encodeURIComponent(auth.user.sub)}`
+    : "";
   const storageKey =
-    `aegis-upload-job:${module}:${conceptKind ?? uploadType ?? "default"}`;
+    `aegis-upload-job:${module}:${conceptKind ?? uploadType ?? "default"}${ownerSuffix}`;
+  const automaticDriveBackup = Boolean(
+    auth?.config?.drive_checkpoint_backup?.enabled
+    && auth.config.drive_checkpoint_backup.configured,
+  );
+  const driveStatus = auth?.config?.drive_checkpoint_backup;
+  const backupStatusCopy = automaticDriveBackup
+    ? driveStatus?.state === "failed"
+      ? "Automatic Drive backup is configured, but its latest background "
+        + "attempt failed. Your server checkpoint is safe; ask an administrator "
+        + "to check the Fly logs."
+      : driveStatus?.verified
+        ? "Automatic Drive backup has been verified; each completed stage is "
+          + "queued in the background after the server save."
+        : "Automatic Drive backup is configured and awaiting verification; "
+          + "each completed stage is queued after the server save."
+    : "Server checkpoints are automatic; Download checkpoint remains an "
+      + "optional portable backup.";
 
   function invalidateSavedJobRestore() {
     savedJobRequestGenerationRef.current += 1;
@@ -158,10 +177,18 @@ export default function DocumentUpload({
   }, [module, onJob, storageKey]);
 
   useEffect(() => {
-    if (externalJob && externalJob.id === job?.id) {
-      setJob(externalJob);
-    }
-  }, [externalJob, job?.id]);
+    if (!externalJob) return;
+    savedJobRequestGenerationRef.current += 1;
+    setRestoringSavedJob(false);
+    setJob(externalJob);
+    safeStorageSetItem(storageKey, JSON.stringify({
+      id: externalJob.id,
+      module: externalJob.module,
+      learning_kind: externalJob.learning_kind,
+      filename: externalJob.filename,
+      created_at: externalJob.created_at,
+    }));
+  }, [externalJob, storageKey]);
 
   async function upload() {
     if (!file) return;
@@ -281,18 +308,18 @@ export default function DocumentUpload({
         {module === "concepts" && (
           <div className="checkpoint-restore">
             <div className="checkpoint-copy">
-              <strong>Continue a saved run</strong>
+              <strong>Restore an optional backup</strong>
               <span className="muted">
-                Restore an Aegis checkpoint file from this computer or Google Drive.
+                Signed-in runs are checkpointed automatically on this server and
+                offered when you open Build Concepts.
               </span>
               <span className="muted">
-                Back up: download a checkpoint and upload it to Drive. Resume:
-                download the JSON from Drive, then choose Restore checkpoint.
-                Aegis does not sync with Drive automatically.
+                {backupStatusCopy} Import a JSON file here only when restoring
+                a portable backup.
               </span>
             </div>
             <label className="upload-label" style={{ opacity: busy ? 0.5 : 1 }}>
-              Restore checkpoint
+              Import checkpoint backup
               <input
                 ref={checkpointInputRef}
                 type="file"
@@ -305,14 +332,16 @@ export default function DocumentUpload({
                 }}
               />
             </label>
-            <a
-              className="button-link ghost"
-              href={DRIVE_BACKUP_FOLDER_URL}
-              target="_blank"
-              rel="noreferrer"
-            >
-              Open Google Drive backup folder
-            </a>
+            {DRIVE_BACKUP_FOLDER_URL && (
+              <a
+                className="button-link ghost"
+                href={DRIVE_BACKUP_FOLDER_URL}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Open Google Drive backup folder
+              </a>
+            )}
           </div>
         )}
         {error && <div className="error-box" style={{ marginTop: 8 }}>{error}</div>}
@@ -344,7 +373,18 @@ export default function DocumentUpload({
               onChange={(e) => e.target.files?.[0] && replace(e.target.files[0])} />
           </label>
         )}
-        <button className="ghost" disabled={busy} onClick={reset}>Start over</button>
+        <button
+          className="ghost"
+          disabled={busy}
+          onClick={reset}
+          title={
+            job.checkpoint_available
+              ? "Leave this run in the saved-runs list without deleting its checkpoint"
+              : "Clear this upload from this browser"
+          }
+        >
+          {job.checkpoint_available ? "Keep for later" : "Start over"}
+        </button>
       </div>
 
       {!converted && (
@@ -376,15 +416,17 @@ export default function DocumentUpload({
                 )}. The next run resumes automatically.`
                 : "Download this to preserve the converted MMD across deployments."}
             </div>
-            {job.checkpoint_target_identity && (
+            {job.checkpoint_target_identity
+              && Object.keys(job.checkpoint_target_identity).length > 0 && (
               <div className="muted checkpoint-target">
                 Target: {formatCheckpointTarget(job.checkpoint_target_identity)}
               </div>
             )}
             <div className="muted">
-              Back up: download this file and upload it to Drive. Resume:
-              download the JSON from Drive, then choose Restore checkpoint.
-              Aegis does not sync with Drive automatically.
+              {backupStatusCopy}
+              {auth?.config?.drive_checkpoint_backup?.notice
+                ? ` ${auth.config.drive_checkpoint_backup.notice}`
+                : ""}
             </div>
           </div>
           <div className="row">
@@ -395,14 +437,16 @@ export default function DocumentUpload({
             >
               Download checkpoint
             </a>
-            <a
-              className="button-link ghost"
-              href={DRIVE_BACKUP_FOLDER_URL}
-              target="_blank"
-              rel="noreferrer"
-            >
-              Open Google Drive backup folder
-            </a>
+            {DRIVE_BACKUP_FOLDER_URL && (
+              <a
+                className="button-link ghost"
+                href={DRIVE_BACKUP_FOLDER_URL}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Open Google Drive backup folder
+              </a>
+            )}
             {job.checkpoint_available && (
               <button
                 className="ghost"

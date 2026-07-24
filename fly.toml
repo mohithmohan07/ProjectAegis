@@ -13,6 +13,8 @@ primary_region = 'ams'
   PORT = '8000'
   AEGIS_DATA_DIR = '/data'
   AEGIS_DB_URL = 'sqlite:////data/aegis.db'
+  AEGIS_AUTH_MODE = 'google'
+  AEGIS_ALLOWED_GOOGLE_DOMAIN = 'up.school'
 
 [[mounts]]
   source = 'aegis_data'

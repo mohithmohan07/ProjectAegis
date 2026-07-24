@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from .. import models
@@ -36,6 +37,7 @@ MAX_LOG_MESSAGE_CHARS = 32_000
 MAX_TOKEN_COUNT = 10**15
 MAX_REQUEST_COUNT = 10**9
 MAX_ESTIMATED_COST_USD = 10**9
+MAX_RESUMABLE_JOBS = 20
 
 _TARGET_FIELDS = (
     "board",
@@ -664,10 +666,8 @@ def _portable_payload(job: models.UploadJob) -> dict:
     }
 
 
-def export_bundle(db: Session, job_id: int) -> tuple[str, bytes]:
-    job = uploads.get_job(db, job_id)
-    if job.module != "build_concepts":
-        raise ValueError("only Build Concepts uploads support checkpoint export")
+def _export_bundle_for_job(job: models.UploadJob) -> tuple[str, bytes]:
+    """Serialize a job already authorized by its caller."""
     if not (job.mmd_text or "").strip():
         raise ValueError("convert the upload to MMD before exporting a checkpoint")
 
@@ -688,6 +688,31 @@ def export_bundle(db: Session, job_id: int) -> tuple[str, bytes]:
     ).strip("-") or f"job-{job.id}"
     filename = f"{safe_stem}.aegis-checkpoint.json"
     return filename, _json_bytes(bundle, pretty=True)
+
+
+def export_bundle(
+    db: Session,
+    job_id: int,
+    *,
+    owner_sub: str | None = None,
+) -> tuple[str, bytes]:
+    job = uploads.get_job(
+        db, job_id, owner_sub=owner_sub, module="build_concepts")
+    return _export_bundle_for_job(job)
+
+
+def export_bundle_for_internal_backup(
+    db: Session,
+    job_id: int,
+) -> tuple[str, bytes]:
+    """Trusted worker-only export; public API paths must use ``export_bundle``."""
+    job = db.query(models.UploadJob).filter(
+        models.UploadJob.id == job_id,
+        models.UploadJob.module == "build_concepts",
+    ).one_or_none()
+    if job is None:
+        raise uploads.UploadJobNotFound("upload job not found")
+    return _export_bundle_for_job(job)
 
 
 def _read_bundle(raw_bytes: bytes) -> dict:
@@ -752,6 +777,7 @@ def import_bundle(
     raw_bytes: bytes,
     *,
     expected_learning_kind: str = "",
+    owner_sub: str | None = None,
 ) -> models.UploadJob:
     payload = _read_bundle(raw_bytes)
     job_data, learning_kind, mmd_text = _validate_payload(payload)
@@ -765,6 +791,7 @@ def import_bundle(
         )
 
     imported = models.UploadJob(
+        owner_sub=uploads.normalize_owner_sub(owner_sub),
         module="build_concepts",
         upload_type=job_data["upload_type"],
         learning_kind=learning_kind,
@@ -795,16 +822,95 @@ def import_bundle(
     return imported
 
 
-def clear_checkpoint(db: Session, job_id: int) -> models.UploadJob:
-    job = uploads.get_job(db, job_id)
-    if job.module != "build_concepts":
-        raise ValueError("only Build Concepts uploads support checkpoints")
-    job.generation_checkpoint = {}
-    job.detail = "Saved generation checkpoint cleared."
-    try:
-        db.commit()
+def clear_checkpoint(
+    db: Session,
+    job_id: int,
+    *,
+    owner_sub: str | None = None,
+) -> models.UploadJob:
+    job = uploads.get_job(
+        db, job_id, owner_sub=owner_sub, module="build_concepts")
+    with uploads.exclusive_job_operation(job.id):
         db.refresh(job)
-    except Exception:
-        db.rollback()
-        raise
+        job.generation_checkpoint = {}
+        job.detail = "Saved generation checkpoint cleared."
+        try:
+            db.commit()
+            db.refresh(job)
+        except Exception:
+            db.rollback()
+            raise
+        # Local import avoids the checkpoints <-> Drive module import cycle.
+        from . import drive_checkpoints
+        drive_checkpoints.schedule_checkpoint_backup(job.id)
     return job
+
+
+def resumable_jobs(
+    db: Session,
+    *,
+    owner_sub: str | None = None,
+    learning_kind: str,
+) -> tuple[list[dict], int]:
+    kind = str(learning_kind or "").strip().lower()
+    if kind not in {"post", "pre"}:
+        raise ValueError("learning_kind must be post or pre")
+    checkpoint = models.UploadJob.generation_checkpoint
+    stage = checkpoint["stage"].as_string()
+    saved_at = checkpoint["saved_at"].as_string()
+    progress_value = checkpoint["progress"].as_float()
+    target_identity = checkpoint["target_identity"]
+    filters = (
+        models.UploadJob.owner_sub == uploads.normalize_owner_sub(owner_sub),
+        models.UploadJob.module == "build_concepts",
+        models.UploadJob.learning_kind == kind,
+        stage.is_not(None),
+        stage != "",
+    )
+    total = int(
+        db.query(func.count(models.UploadJob.id)).filter(*filters).scalar() or 0
+    )
+    rows = (
+        db.query(
+            models.UploadJob.id,
+            models.UploadJob.module,
+            models.UploadJob.learning_kind,
+            models.UploadJob.filename,
+            models.UploadJob.status,
+            stage.label("checkpoint_stage"),
+            saved_at.label("checkpoint_saved_at"),
+            progress_value.label("checkpoint_progress"),
+            target_identity.label("checkpoint_target_identity"),
+            models.UploadJob.created_at,
+        )
+        .filter(*filters)
+        .order_by(
+            saved_at.desc(),
+            models.UploadJob.created_at.desc(),
+            models.UploadJob.id.desc(),
+        )
+        .limit(MAX_RESUMABLE_JOBS)
+        .all()
+    )
+    items = [
+        {
+            "id": row.id,
+            "module": row.module,
+            "learning_kind": row.learning_kind,
+            "filename": row.filename,
+            "status": row.status,
+            "checkpoint_available": True,
+            "checkpoint_stage": row.checkpoint_stage or "",
+            "checkpoint_saved_at": row.checkpoint_saved_at or "",
+            "checkpoint_progress": float(row.checkpoint_progress or 0.0),
+            "checkpoint_target_identity": (
+                row.checkpoint_target_identity
+                if isinstance(row.checkpoint_target_identity, dict)
+                else {}
+            ),
+            "generation_running": uploads.is_job_running(row.id),
+            "created_at": row.created_at,
+        }
+        for row in rows
+    ]
+    return items, total

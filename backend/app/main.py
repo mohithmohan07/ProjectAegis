@@ -2,15 +2,19 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from . import config
 from .db import SessionLocal, init_db
 from .services import syllabus_import as syllabus_svc
+from .services import auth as auth_svc
+from .services import drive_checkpoints
 from .api import (
     admin as admin_api,
+    auth as auth_api,
     directory as directory_api,
     build_assessments as build_assessments_api,
     build_concepts as build_concepts_api,
@@ -22,6 +26,7 @@ from .api import (
 
 def bootstrap() -> None:
     """Initialize the database schema and preload syllabus structure if empty."""
+    auth_svc.validate_configuration()
     init_db()
     db = SessionLocal()
     try:
@@ -33,7 +38,11 @@ def bootstrap() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     bootstrap()
-    yield
+    drive_checkpoints.initialize_checkpoint_backup(SessionLocal)
+    try:
+        yield
+    finally:
+        drive_checkpoints.shutdown_checkpoint_backup()
 
 
 app = FastAPI(
@@ -49,7 +58,8 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=config.CORS_ORIGINS,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -60,19 +70,34 @@ def health():
     return {"status": "ok"}
 
 
-app.include_router(directory_api.router)
-app.include_router(build_assessments_api.router)
-app.include_router(build_concepts_api.router)
-app.include_router(data_api.router)
-app.include_router(tagging_api.router)
-app.include_router(workbooks_api.router)
-app.include_router(admin_api.router)
+app.include_router(auth_api.router)
+_authenticated = [Depends(auth_svc.require_user)]
+app.include_router(directory_api.router, dependencies=_authenticated)
+app.include_router(build_assessments_api.router, dependencies=_authenticated)
+app.include_router(build_concepts_api.router, dependencies=_authenticated)
+app.include_router(data_api.router, dependencies=_authenticated)
+app.include_router(tagging_api.router, dependencies=_authenticated)
+app.include_router(workbooks_api.router, dependencies=_authenticated)
+app.include_router(admin_api.router, dependencies=_authenticated)
 
 
 # Serve the built frontend from the same origin when available. In dev
 # (uvicorn --reload, no `npm run build`) this directory won't exist and
 # the block is skipped — Vite's dev server handles the UI on :5173.
 FRONTEND_DIST = Path(os.environ.get("FRONTEND_DIST_DIR", "/app/frontend_dist"))
+
+
+def _safe_frontend_file(root: Path, request_path: str) -> Path | None:
+    """Resolve a SPA asset path without allowing traversal outside ``root``."""
+    resolved_root = root.resolve()
+    candidate = (resolved_root / request_path).resolve()
+    if (
+        candidate != resolved_root
+        and resolved_root not in candidate.parents
+    ):
+        return None
+    return candidate if request_path and candidate.is_file() else None
+
 
 if FRONTEND_DIST.is_dir():
     assets_dir = FRONTEND_DIST / "assets"
@@ -81,7 +106,7 @@ if FRONTEND_DIST.is_dir():
 
     @app.get("/{full_path:path}", include_in_schema=False)
     async def spa(full_path: str):
-        candidate = FRONTEND_DIST / full_path
-        if full_path and candidate.is_file():
+        candidate = _safe_frontend_file(FRONTEND_DIST, full_path)
+        if candidate is not None:
             return FileResponse(candidate)
         return FileResponse(FRONTEND_DIST / "index.html")

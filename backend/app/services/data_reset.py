@@ -7,6 +7,7 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from .. import config, models
+from ..bulk_import import workbook_sync
 from ..db import Base, SessionLocal, engine, init_db
 
 
@@ -20,6 +21,7 @@ def _clear_dir(path: Path) -> None:
             child.unlink()
 
 
+@workbook_sync.synchronized_output_workbook
 def reset_all(*, db: Session | None = None) -> dict:
     """Drop the normalized DB and remove generated files."""
     if db is not None:

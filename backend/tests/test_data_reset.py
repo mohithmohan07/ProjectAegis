@@ -22,7 +22,15 @@ def test_reset_clears_database(client, db):
         reader.import_workbook(db, config.BULK_IMPORT_DB)
     assert db.query(models.Chapter).count() > 0
 
-    r = client.post("/data/reset")
+    assert client.post("/data/reset").status_code == 401
+    token = client.post(
+        "/admin/login",
+        json={"password": "admin"},
+    ).json()["token"]
+    r = client.post(
+        "/data/reset",
+        headers={"X-Admin-Token": token},
+    )
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "reset"

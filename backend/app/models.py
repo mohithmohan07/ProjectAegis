@@ -214,6 +214,10 @@ class AssessmentSession(Base):
     __tablename__ = "assessment_sessions"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    # Stable Google ``sub`` (or the explicit offline principal) that owns this
+    # session. Email addresses are mutable and must not be authorization keys.
+    owner_sub: Mapped[str] = mapped_column(
+        String(255), default="local:default", index=True)
     source: Mapped[str] = mapped_column(String(32), default="concept_mapping")  # concept_mapping|upload
     scope_type: Mapped[str] = mapped_column(String(16), default="chapter")  # chapter|topic|concept
     scope_ids: Mapped[list] = mapped_column(JSON, default=list)  # ids of chapters/topics/concepts
@@ -230,6 +234,10 @@ class UploadJob(Base):
     __tablename__ = "upload_jobs"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    # Stable Google ``sub`` (or the explicit offline principal) that owns this
+    # upload. Never use mutable email addresses as the authorization key.
+    owner_sub: Mapped[str] = mapped_column(
+        String(255), default="local:default", index=True)
     module: Mapped[str] = mapped_column(String(32))  # build_assessments|build_concepts
     upload_type: Mapped[str] = mapped_column(String(32), default="textbook")
     # textbook|questions|questions_and_answers|handwritten|document
@@ -238,6 +246,9 @@ class UploadJob(Base):
     # Book this upload came from (e.g. "RD Sharma"); drives multi-source tagging.
     source_book: Mapped[str] = mapped_column(String(128), default="")
     filename: Mapped[str] = mapped_column(String(255), default="")
+    # Private path relative to UPLOAD_DIR. Legacy rows with an empty key fall
+    # back to the historical filename-only location.
+    upload_storage_key: Mapped[str] = mapped_column(String(512), default="")
     mmd_text: Mapped[str] = mapped_column(Text, default="")
     deposit_scope_type: Mapped[str] = mapped_column(String(16), default="chapter")
     deposit_scope_ids: Mapped[list] = mapped_column(JSON, default=list)
@@ -308,3 +319,10 @@ class UploadJob(Base):
             field: str(identity.get(field) or "")
             for field in fields
         }
+
+    @property
+    def generation_running(self) -> bool:
+        """Current single-process run state for duplicate-resume prevention."""
+        from .services import uploads
+
+        return uploads.is_job_running(self.id)
