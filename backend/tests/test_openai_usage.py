@@ -226,7 +226,7 @@ def test_invalid_json_retry_counts_both_billable_responses(monkeypatch):
     ]
 
     class FakeClient:
-        def __init__(self):
+        def __init__(self, *a, **kw):
             create = lambda **_kwargs: responses.pop(0)  # noqa: E731
             self.chat = SimpleNamespace(
                 completions=SimpleNamespace(create=create)
