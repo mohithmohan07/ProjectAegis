@@ -139,6 +139,17 @@ def _deposit_concepts(
     # only when a normal concept has neither.
     records = concept_validator.ensure_valid_learner_analysis(records)
     if pre_post == "Post" and inventory:
+        # A final-content checkpoint is intentionally restored without another
+        # model call.  The deposit-only formatting pass above can still remove
+        # or reshape an Example from that otherwise-valid checkpoint, though.
+        # Reapply the source-owned exact-once coverage contract at this last
+        # deterministic boundary, before deciding whether deposit may proceed.
+        # This uses the persisted inventory and mined placement hints only; it
+        # never spends an API request or invents a question.
+        records = generation._enforce_rendered_inventory_coverage(
+            records, inventory, mined_types)
+        records = concept_refiner.renumber_types_continuously(records)
+        records = concept_validator.ensure_valid_learner_analysis(records)
         coverage = generation._rendered_inventory_coverage_defects(
             records, inventory)
         if coverage["missing"] or coverage["duplicate"]:
