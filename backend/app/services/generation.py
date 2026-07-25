@@ -2068,6 +2068,11 @@ Rules:
   long contiguous sentence or paragraph from the supplied source. This rule
   applies only to Description; full source questions remain allowed in Types
   Examples.
+- For rich_text_format issues: preserve the mathematical expression exactly,
+  but wrap every bare equation or LaTeX fragment as
+  ``[Katex] valid LaTeX [/Katex]``. Never leave raw ``$``/``$$`` delimiters,
+  ``\\(...\\)``/``\\[...\\]`` delimiters, TeX commands, subscripts, or
+  superscripts outside a canonical Katex span.
 - For short_case_example issues: replace the truncated Example with the FULL
   source question wording (and Mathpix URL when the question is visual).
 """)
@@ -8473,8 +8478,14 @@ def _repair_records_via_api(
         )
         if source_context:
             user += "\nRelevant source context:\n" + _trim(source_context, 120_000)
+        repair_system = prompts.get_text("concepts.repair.system")
+        if any(
+            error.get("code") == "rich_text_format"
+            for error in hard
+        ):
+            repair_system += "\n\n" + kr.PROMPT_PREAMBLE
         data = _openai_json(
-            prompts.get_text("concepts.repair.system"),
+            repair_system,
             user,
             purpose="concept_validation",
         )
@@ -8693,7 +8704,12 @@ def _rendered_type_examples(records: list[dict]) -> list[str]:
 
 def _inventory_coverage_key(text: str) -> str:
     """Normalize only cosmetic cleaner changes for source-Example coverage."""
-    value = bi.normalize_question_text(_inventory_comparison_text(text))
+    value = _inventory_comparison_text(text)
+    # Adding the required wire-format wrapper around an otherwise identical
+    # source formula is a formatting repair, not a change to the source task.
+    # Compare the LaTeX body while retaining image tags/URLs and all wording.
+    value = re.sub(r"\[/?katex\]", " ", value, flags=re.IGNORECASE)
+    value = bi.normalize_question_text(value)
     # ``clean_concept_record`` tidies OCR spacing such as ``21 ,`` and
     # ``. . .``. That must not make an otherwise identical source Example look
     # missing at the deposit boundary.
@@ -12722,6 +12738,43 @@ def _newest_compatible_concept_checkpoint(
     return copy.deepcopy(max(candidates, key=lambda item: (item[0], item[1]))[2])
 
 
+def _without_concept_checkpoint_stage(
+    checkpoint: dict | None, stage: str,
+) -> dict | None:
+    """Return checkpoint history without one stage.
+
+    This is used when a legacy final checkpoint fails today's strict gate. The
+    preceding durable stage remains reusable, while the rejected final payload
+    cannot be selected again during the same recovery attempt.
+    """
+    if not isinstance(checkpoint, dict):
+        return None
+    if checkpoint.get("checkpoint_format") != _CONCEPT_CHECKPOINT_FORMAT:
+        if str(checkpoint.get("stage") or "") == stage:
+            return None
+        return copy.deepcopy(checkpoint)
+
+    filtered = copy.deepcopy(checkpoint)
+    filtered["checkpoints"] = [
+        copy.deepcopy(entry)
+        for entry in _concept_checkpoint_entries(checkpoint)
+        if str(entry.get("stage") or "") != stage
+    ]
+    newest = _newest_compatible_concept_checkpoint(filtered)
+    if newest is None:
+        return None
+    for field in (
+        "stage",
+        "stage_order",
+        "stage_schema_version",
+        "stage_label",
+        "saved_at",
+        "progress",
+    ):
+        filtered[field] = copy.deepcopy(newest.get(field))
+    return filtered
+
+
 def _final_checkpoint_refresh_reasons(
     checkpoint: dict | None, *, sections: list[dict],
     source_topic_excerpts: list[dict],
@@ -13417,6 +13470,207 @@ def _prepare_final_concept_content(
     return _reconcile_explicit_figure_images(out, source_sections)[0]
 
 
+def _repair_final_rich_text_via_api(
+    records: list[dict], *, meta: dict, inventory: dict | None = None,
+    mined_types: dict | None = None,
+) -> tuple[list[dict], bool]:
+    """Repair late rich-text defects without replaying every semantic stage.
+
+    Older ``final_content_ready`` checkpoints can contain bare TeX because that
+    stage used to be persisted before the strict final gate.  Canonicalization
+    intentionally cannot infer the boundary of arbitrary bare TeX, so ask the
+    existing validation repair pass to wrap only the affected rows.  Exact
+    source-Example coverage remains protected while Katex wrapper-only changes
+    compare as the same source task.
+    """
+    def wrapper_only_key(value: str) -> str:
+        without_tags = re.sub(
+            r"\[/?katex\]", " ", str(value or ""), flags=re.IGNORECASE)
+        normalized = re.sub(r"\s+", " ", without_tags).strip()
+        # A closing wrapper immediately before punctuation necessarily leaves
+        # a removable spacer when the tag itself is stripped.
+        return re.sub(r"\s+([,.;:!?])", r"\1", normalized)
+
+    validation_args = {
+        "allow_types": True,
+        "require_culmination": True,
+        "allow_culmination": True,
+        "allowed_source_examples": _inventory_source_examples(inventory),
+    }
+    original = copy.deepcopy(records)
+    repaired = copy.deepcopy(records)
+    initial_error_count = 0
+    for attempt in range(1, 3):
+        report = cv.validate_concept_rows(repaired, **validation_args)
+        rich_text_errors = [
+            error for error in report["errors"]
+            if (
+                error.get("severity") == "error"
+                and error.get("code") == "rich_text_format"
+            )
+        ]
+        if not rich_text_errors:
+            break
+        if not initial_error_count:
+            initial_error_count = len(rich_text_errors)
+            progress.log(
+                "Final rich-text validation found "
+                f"{initial_error_count} malformed row(s); repairing only "
+                "their rich-text fields before deposit.",
+                level="warning",
+            )
+
+        failed_indexes = sorted({
+            error["row_index"] for error in rich_text_errors
+            if isinstance(error.get("row_index"), int)
+            and error["row_index"] >= 0
+        })
+        failed_rows = [
+            repaired[index] for index in failed_indexes
+            if index < len(repaired)
+        ]
+        if not failed_rows:
+            break
+
+        import json as _json
+
+        user = (
+            _metadata_block(meta)
+            + "\nStage: final rich-text formatting\nValidation errors:\n"
+            + _json.dumps(rich_text_errors, ensure_ascii=False)
+            + "\nFailed rows:\n"
+            + _json.dumps(
+                {"rows": _records_to_api_rows(failed_rows)},
+                ensure_ascii=False,
+            )
+        )
+        data = _openai_json(
+            prompts.get_text("concepts.repair.system")
+            + "\n\n"
+            + kr.PROMPT_PREAMBLE,
+            user,
+            purpose="concept_validation",
+        )
+        candidates = _concept_rows_to_records(data)
+        if not candidates:
+            progress.log(
+                "Final rich-text repair returned no rows.",
+                level="warning",
+            )
+            break
+
+        candidate_by_key = {
+            _record_key(candidate): candidate
+            for candidate in candidates
+        }
+        candidate_by_title = {
+            bi.normalize_question_text(
+                candidate.get("concept_title", "")
+            ): candidate
+            for candidate in candidates
+        }
+        next_records = copy.deepcopy(repaired)
+        applied = 0
+        for position, row_index in enumerate(failed_indexes):
+            if row_index >= len(next_records):
+                continue
+            current = repaired[row_index]
+            candidate = None
+            if len(candidates) == len(failed_indexes):
+                positional = candidates[position]
+                if (
+                    _record_key(positional) == _record_key(current)
+                    or bi.normalize_question_text(
+                        positional.get("concept_title", "")
+                    )
+                    == bi.normalize_question_text(
+                        current.get("concept_title", "")
+                    )
+                ):
+                    candidate = positional
+            if candidate is None:
+                candidate = (
+                    candidate_by_key.get(_record_key(current))
+                    or candidate_by_title.get(
+                        bi.normalize_question_text(
+                            current.get("concept_title", "")
+                        )
+                    )
+                )
+            details = (
+                candidate.get("concept_details", "")
+                if isinstance(candidate, dict)
+                else ""
+            )
+            if not str(details or "").strip():
+                continue
+            candidate_row = copy.deepcopy(current)
+            candidate_row["concept_details"] = details
+            candidate_row = _canonicalize_concept_rich_text(
+                [candidate_row])[0]
+            details = candidate_row["concept_details"]
+            if wrapper_only_key(details) != wrapper_only_key(
+                current.get("concept_details", "")
+            ):
+                progress.log(
+                    "Rejected final rich-text repair for "
+                    f"row_index={row_index}: response changed content beyond "
+                    "Katex wrappers.",
+                    level="warning",
+                )
+                continue
+            # Rich-text repair is not a semantic edit: keep topic, title,
+            # parent, keywords, evidence, prose, formulas, and every other row
+            # field immutable.
+            next_records[row_index]["concept_details"] = details
+            applied += 1
+        if not applied:
+            progress.log(
+                "Final rich-text repair returned no matching row details.",
+                level="warning",
+            )
+            break
+
+        next_records = _canonicalize_concept_rich_text(next_records)
+        next_records = _accept_exact_inventory_type_review(
+            repaired, next_records, inventory, mined_types)
+        if next_records == repaired:
+            progress.log(
+                "Final rich-text repair made no safe formatting change.",
+                level="warning",
+            )
+            break
+        repaired = next_records
+        progress.log(
+            f"Final rich-text repair updated {applied} row(s) on "
+            f"attempt {attempt}.",
+        )
+
+    if not initial_error_count:
+        return records, False
+    remaining_report = cv.validate_concept_rows(repaired, **validation_args)
+    remaining = [
+        error for error in remaining_report["errors"]
+        if (
+            error.get("severity") == "error"
+            and error.get("code") == "rich_text_format"
+        )
+    ]
+    if remaining:
+        progress.log(
+            "Final rich-text repair left "
+            f"{len(remaining)} malformed row(s); strict validation will "
+            "report their exact locations.",
+            level="warning",
+        )
+    else:
+        progress.log(
+            "Final rich-text repair cleared all malformed rows.",
+            level="success",
+        )
+    return repaired, repaired != original
+
+
 def concepts_from_mmd(
     mmd_text: str, *, subject: str = "", board: str = "", grade: str = "",
     unit: str = "", chapter_title: str = "", chapter_id: int | str | None = None,
@@ -13500,10 +13754,11 @@ def concepts_from_mmd(
             if artifacts is not None:
                 artifacts["question_task_inventory"] = copy.deepcopy(
                     question_task_inventory)
+        final_checkpoint_changed = not bool(saved_final)
         if saved_final:
             progress.log(
-                "Restored final content checkpoint; semantic/API repair will "
-                "not run again.",
+                "Restored final content checkpoint; semantic/API repair stays "
+                "skipped unless strict formatting finds a targeted repair.",
                 level="success",
             )
         else:
@@ -13524,23 +13779,16 @@ def concepts_from_mmd(
                 refresh_chapter_wide_assignments=bool(
                     final_checkpoint_refresh_reasons),
             )
-            _emit_concept_checkpoint(
-                checkpoint_callback,
-                "final_content_ready",
-                records=out,
-                question_task_inventory=question_task_inventory,
-                mined_types=mined_types,
-                method_row_snapshot=_serialize_method_row_snapshot(
-                    method_row_snapshot),
-            )
+        before_final_normalization = copy.deepcopy(out)
         out = _canonicalize_concept_rich_text(out)
+        if out != before_final_normalization:
+            final_checkpoint_changed = True
         # A saved final checkpoint bypasses the semantic finalizer.  Its source
         # inventory remains authoritative, so restore any source Example that
         # an older finalizer/checkpoint omitted before declaring the resumed map
         # valid.  This is a deterministic placement repair only: no API call is
-        # made and no question wording is invented.  Fresh maps have already
-        # passed through this exact repair before their final checkpoint is
-        # emitted above, so limiting it here avoids making that checkpoint stale.
+        # made and no question wording is invented.  Fresh maps already pass
+        # through this exact repair in their finalizer.
         resumed_coverage_repaired = False
         if saved_final:
             pre_resume_repair = copy.deepcopy(out)
@@ -13560,11 +13808,10 @@ def concepts_from_mmd(
                 out = cr.renumber_types_continuously(out)
                 out = cv.ensure_valid_learner_analysis(out)
                 out = _canonicalize_concept_rich_text(out)
+                final_checkpoint_changed = True
         # A saved final checkpoint bypasses the finalizer above.  Correct any
         # stale Figure tag from the source registry immediately before the
-        # outer final gate, without spending another API request.  Persist the
-        # repaired final stage when a callback is available so another resume
-        # starts from the corrected checkpoint.
+        # outer final gate, without spending another API request.
         out, reconciled_figure_examples = _reconcile_explicit_figure_images(
             out, sections)
         if reconciled_figure_examples or resumed_coverage_repaired:
@@ -13574,26 +13821,83 @@ def concepts_from_mmd(
                     f"{reconciled_figure_examples} rendered Figure Example(s) "
                     "against the source registry."
                     if reconciled_figure_examples
-                    else "Persisting repaired saved final checkpoint coverage."
+                    else "Repaired saved final checkpoint coverage."
                 ),
                 level="success",
             )
-            if saved_final:
-                _emit_concept_checkpoint(
-                    checkpoint_callback,
-                    "final_content_ready",
-                    records=out,
-                    question_task_inventory=question_task_inventory,
-                    mined_types=mined_types,
-                    method_row_snapshot=_serialize_method_row_snapshot(
-                        method_row_snapshot),
-                )
-        _validate_final_or_raise(
+            final_checkpoint_changed = True
+
+        out, rich_text_repaired = _repair_final_rich_text_via_api(
             out,
-            stage="final",
+            meta=meta,
             inventory=question_task_inventory,
-            source_text=mmd_text,
+            mined_types=mined_types,
         )
+        if rich_text_repaired:
+            final_checkpoint_changed = True
+            # The helper preserves row identity and rejects any Types rewrite
+            # that changes exact source coverage. Reconcile canonical Figure
+            # tags once more, then send these exact rows to the strict gate.
+            out, repaired_figure_examples = (
+                _reconcile_explicit_figure_images(out, sections)
+            )
+            if repaired_figure_examples:
+                progress.log(
+                    "Reconciled "
+                    f"{repaired_figure_examples} Figure Example(s) after "
+                    "rich-text repair.",
+                    level="success",
+                )
+        try:
+            _validate_final_or_raise(
+                out,
+                stage="final",
+                inventory=question_task_inventory,
+                source_text=mmd_text,
+            )
+        except RuntimeError:
+            if not saved_final:
+                raise
+            # A final checkpoint produced by an older deployment may violate a
+            # rule that cannot be repaired safely in place. Reuse the stage
+            # immediately before it (or regenerate when no prior stage exists)
+            # instead of reloading the same rejected 98% payload forever.
+            progress.log(
+                "Saved final checkpoint did not pass strict validation; "
+                "resuming from the preceding checkpoint instead of retrying "
+                "the same 98% content.",
+                level="warning",
+            )
+            return concepts_from_mmd(
+                mmd_text,
+                subject=subject,
+                board=board,
+                grade=grade,
+                unit=unit,
+                chapter_title=chapter_title,
+                chapter_id=chapter_id,
+                chapter_code=chapter_code,
+                learning_kind=learning_kind,
+                live=True,
+                artifacts=artifacts,
+                resume_checkpoint=_without_concept_checkpoint_stage(
+                    resume_checkpoint, "final_content_ready"),
+                checkpoint_callback=checkpoint_callback,
+                completion_progress=completion_progress,
+            )
+        # ``final_content_ready`` is a promise that the exact materialized rows
+        # passed the strict outer gate.  Persist only after that promise is true
+        # so a retry cannot loop forever on the same invalid 98% checkpoint.
+        if final_checkpoint_changed:
+            _emit_concept_checkpoint(
+                checkpoint_callback,
+                "final_content_ready",
+                records=out,
+                question_task_inventory=question_task_inventory,
+                mined_types=mined_types,
+                method_row_snapshot=_serialize_method_row_snapshot(
+                    method_row_snapshot),
+            )
         missing = sum(
             1 for r in out
             if not _has_meaningful_types(r.get("concept_details", ""))

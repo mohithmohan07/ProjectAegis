@@ -128,6 +128,328 @@ def test_mathpix_normalization_does_not_nest_existing_katex():
     assert g.kr.rich_text_issues(normalized) == []
 
 
+def test_inventory_coverage_ignores_katex_wrapper_only_repairs():
+    raw = r"Calculate \frac{a}{b}+\frac{c}{d} and explain each step."
+    canonical = (
+        r"Calculate [Katex] \frac{a}{b}+\frac{c}{d} [/Katex] "
+        "and explain each step."
+    )
+
+    assert g._inventory_coverage_key(raw) == (
+        g._inventory_coverage_key(canonical)
+    )
+
+
+def test_final_rich_text_repair_rejects_non_formatting_changes(monkeypatch):
+    details = (
+        r"Description: Compare the quantities using \frac{a}{b}."
+        "\nAchieving Mastery: Explaining the comparison correctly. // "
+        "Misconception/ Error Analysis: Misconceptions: Students may believe "
+        "the denominator is irrelevant.; Error Analysis: Students may omit "
+        "the denominator."
+    )
+    records = [
+        _row("Compare fractions", details, topic="T", parent="P"),
+        _culmination(topic="T"),
+    ]
+    calls = 0
+
+    def changed_api(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return {"rows": [{
+            "topic": "T",
+            "parent_concept": "P",
+            "concept": "Compare fractions",
+            "concept_description": (
+                details.replace(
+                    r"Compare the quantities using \frac{a}{b}.",
+                    (
+                        r"Replace the quantities using "
+                        r"[Katex] \frac{a}{b} [/Katex]."
+                    ),
+                )
+            ),
+            "keywords": "sequence, term",
+        }]}
+
+    monkeypatch.setattr(g, "_openai_json", changed_api)
+
+    repaired, changed = g._repair_final_rich_text_via_api(
+        records,
+        meta=g._metadata(subject="Mathematics"),
+        inventory={"items": [], "stats": {}},
+        mined_types={"types": []},
+    )
+
+    assert calls == 1
+    assert changed is False
+    assert repaired == records
+
+
+def test_saved_final_checkpoint_repairs_rich_text_once_and_persists(
+    monkeypatch,
+):
+    source = "# T\nA short source-grounded discussion of a numerical pattern."
+    raw_title = r"Use the Finite-sum Formula S_n = \frac{n}{2}(a+l)"
+    analysis = (
+        "Misconception/ Error Analysis: Misconceptions: Students may believe "
+        "unlike denominators can be added directly.; Error Analysis: Students "
+        "may add denominators without first finding a common denominator."
+    )
+    raw_records = [
+        _row(
+            raw_title,
+            (
+                r"Description: Compare two fractional quantities using "
+                r"\frac{a}{b} before combining them."
+                "\nAchieving Mastery: Explaining why a common denominator is "
+                "needed before adding fractions. // Types: Type 01: Add unlike "
+                "fractions Case 01: Build equivalent fractional quantities "
+                r"Example 01: Calculate \frac{1}{2}+\frac{1}{3} and explain "
+                "each transformation. // " + analysis
+            ),
+            topic="T",
+            parent="P",
+        ),
+        _row(
+            f"Culmination - {raw_title}",
+            (
+                "Description: Recap of Use the Finite-sum Formula "
+                r"S_n = \frac{n}{2}(a+l)."
+            ),
+            topic="T",
+            parent="Culmination",
+        ),
+    ]
+    raw_records[0]["source_evidence"] = "SRC-LOCKED-01"
+    raw_records[0]["review_metadata"] = {"locked": True}
+    checkpoint = g._make_concept_checkpoint(
+        "final_content_ready",
+        records=raw_records,
+        question_task_inventory={"items": [], "stats": {}},
+        mined_types={"types": []},
+        method_row_snapshot=[],
+    )
+    repaired_records = [
+        _row(
+            raw_title,
+            (
+                "Description: Compare two fractional quantities using "
+                r"[Katex] \frac{a}{b} [/Katex] before combining them."
+                "\nAchieving Mastery: Explaining why a common denominator is "
+                "needed before adding fractions. // Types: Type 01: Add unlike "
+                "fractions Case 01: Build equivalent fractional quantities "
+                "Example 01: Calculate "
+                r"[Katex] \frac{1}{2}+\frac{1}{3} [/Katex] and explain each "
+                "transformation. // " + analysis
+            ),
+            topic="T",
+            parent="P",
+        ),
+        _row(
+            f"Culmination - {raw_title}",
+            (
+                "Description: Recap of Use the Finite-sum Formula "
+                r"[Katex] S_n = \frac{n}{2}(a+l) [/Katex]."
+            ),
+            topic="T",
+            parent="Culmination",
+        ),
+    ]
+    calls: list[tuple[str, str]] = []
+
+    def repair_api(system, user, **_kwargs):
+        calls.append((system, user))
+        return {
+            "rows": [{
+                "topic": row["topic"],
+                "parent_concept": row["parent_concept"],
+                "concept": row["concept_title"],
+                "concept_description": row["concept_details"],
+                "keywords": "model attempted to replace keywords",
+                "source_evidence": "MODEL-REWRITE",
+            } for row in repaired_records],
+        }
+
+    monkeypatch.setattr(g, "_openai_json", repair_api)
+    emitted: list[dict] = []
+
+    repaired = g.concepts_from_mmd(
+        source,
+        subject="Mathematics",
+        live=True,
+        resume_checkpoint=checkpoint,
+        checkpoint_callback=emitted.append,
+    )
+
+    assert len(calls) == 1
+    assert "rich_text_format" in calls[0][1]
+    assert "Equations MUST be wrapped" in calls[0][0]
+    assert all(
+        g.kr.rich_text_issues(row["concept_details"]) == []
+        for row in repaired
+    )
+    assert repaired[0]["keywords"] == "sequence, term"
+    assert repaired[0]["source_evidence"] == "SRC-LOCKED-01"
+    assert repaired[0]["review_metadata"] == {"locked": True}
+    assert emitted[-1]["stage"] == "final_content_ready"
+    assert emitted[-1]["records"] == repaired
+
+    monkeypatch.setattr(
+        g,
+        "_openai_json",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("the repaired final checkpoint must not call the API")
+        ),
+    )
+    second_emitted: list[dict] = []
+    resumed = g.concepts_from_mmd(
+        source,
+        subject="Mathematics",
+        live=True,
+        resume_checkpoint=emitted[-1],
+        checkpoint_callback=second_emitted.append,
+    )
+
+    assert resumed == repaired
+    assert second_emitted == []
+
+
+def test_final_checkpoint_is_emitted_only_after_validation(monkeypatch):
+    records = [
+        _row(
+            "C",
+            (
+                "Description: A complete concept description."
+                "\nAchieving Mastery: Applying the concept correctly. // "
+                "Misconception/ Error Analysis: Misconceptions: Students may "
+                "believe every condition is optional.; Error Analysis: "
+                "Students may omit a required condition."
+            ),
+            topic="T",
+            parent="P",
+        ),
+        _culmination(topic="T"),
+    ]
+    checkpoint = g._make_concept_checkpoint(
+        "post_type_assignment",
+        records=records,
+        question_task_inventory={"items": [], "stats": {}},
+        mined_types={"types": []},
+        method_row_snapshot=[],
+    )
+    monkeypatch.setattr(
+        g,
+        "_prepare_final_concept_content",
+        lambda current, **_kwargs: current,
+    )
+    monkeypatch.setattr(
+        g,
+        "_validate_final_or_raise",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("final gate rejected rows")
+        ),
+    )
+    emitted: list[dict] = []
+
+    with pytest.raises(RuntimeError, match="final gate rejected rows"):
+        g.concepts_from_mmd(
+            "# T\nA short source section.",
+            subject="Mathematics",
+            live=True,
+            resume_checkpoint=checkpoint,
+            checkpoint_callback=emitted.append,
+        )
+
+    assert not any(
+        item.get("stage") == "final_content_ready"
+        for item in emitted
+    )
+
+
+def test_rejected_saved_final_falls_back_to_preceding_checkpoint(monkeypatch):
+    details = (
+        "Description: A complete concept description."
+        "\nAchieving Mastery: Applying the concept correctly. // "
+        "Misconception/ Error Analysis: Misconceptions: Students may believe "
+        "every condition is optional.; Error Analysis: Students may omit a "
+        "required condition."
+    )
+    prior_records = [
+        _row("Prior-stage concept", details, topic="T", parent="P"),
+        _culmination(topic="T"),
+    ]
+    stale_final_records = [
+        _row("Rejected final concept", details, topic="T", parent="P"),
+        _culmination(topic="T"),
+    ]
+    inventory = {"items": [], "stats": {}}
+    mined_types = {"types": []}
+    prior = g._make_concept_checkpoint(
+        "post_type_assignment",
+        records=prior_records,
+        question_task_inventory=inventory,
+        mined_types=mined_types,
+        method_row_snapshot=[],
+    )
+    stale_final = g._make_concept_checkpoint(
+        "final_content_ready",
+        records=stale_final_records,
+        question_task_inventory=inventory,
+        mined_types=mined_types,
+        method_row_snapshot=[],
+    )
+    history = {
+        "checkpoint_format": g._CONCEPT_CHECKPOINT_FORMAT,
+        "schema_version": g._CONCEPT_CHECKPOINT_SCHEMA,
+        "stage": "final_content_ready",
+        "checkpoints": [prior, stale_final],
+    }
+    finalized: list[list[str]] = []
+
+    def finalize(current, **_kwargs):
+        finalized.append([row["concept_title"] for row in current])
+        return current
+
+    validations: list[list[str]] = []
+
+    def validate(current, **_kwargs):
+        validations.append([row["concept_title"] for row in current])
+        if len(validations) == 1:
+            raise RuntimeError("legacy final rejected")
+        return {"ok": True, "errors": [], "summary": {}}
+
+    monkeypatch.setattr(g, "_prepare_final_concept_content", finalize)
+    monkeypatch.setattr(g, "_validate_final_or_raise", validate)
+    monkeypatch.setattr(
+        g,
+        "_openai_json",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("fallback should reuse the preceding checkpoint")
+        ),
+    )
+    emitted: list[dict] = []
+
+    out = g.concepts_from_mmd(
+        "# T\nA short source section.",
+        subject="Mathematics",
+        live=True,
+        resume_checkpoint=history,
+        checkpoint_callback=emitted.append,
+    )
+
+    assert validations[0][0] == "Rejected final concept"
+    assert validations[1][0] == "Prior-stage concept"
+    assert finalized == [[
+        "Prior-stage concept",
+        "Culmination - General Term",
+    ]]
+    assert out[0]["concept_title"] == "Prior-stage concept"
+    assert [item["stage"] for item in emitted] == ["final_content_ready"]
+    assert emitted[0]["records"] == out
+
+
 def test_method_recovery_canonicalizes_raw_math_before_strict_validation(
     monkeypatch,
 ):
