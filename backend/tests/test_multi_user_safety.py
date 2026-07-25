@@ -34,8 +34,10 @@ class _FakeClient:
     in_flight = 0
     max_in_flight = 0
     plan: list = []  # each entry: exception to raise, or None to succeed
+    init_kwargs: list[dict] = []
 
     def __init__(self, *a, **kw):
+        type(self).init_kwargs.append(dict(kw))
         completions = type("Completions", (), {"create": self._create})()
         self.chat = type("Chat", (), {"completions": completions})()
 
@@ -62,6 +64,7 @@ def fake_openai(monkeypatch):
     _FakeClient.plan = []
     _FakeClient.in_flight = 0
     _FakeClient.max_in_flight = 0
+    _FakeClient.init_kwargs = []
     monkeypatch.setattr(openai, "OpenAI", _FakeClient)
     # Fresh gate per test so config changes take effect.
     g._openai_gate = None
@@ -133,6 +136,43 @@ def test_timeouts_are_transient_too(fake_openai, monkeypatch):
     monkeypatch.setattr(time, "sleep", lambda s: None)
     fake_openai.plan = [APITimeoutError(request=httpx.Request("POST", "https://x")), None]
     assert g._openai_json("s", "u") == {"rows": []}
+
+
+def test_openai_client_uses_the_configured_request_timeout(
+    fake_openai, monkeypatch,
+):
+    monkeypatch.setattr(config, "OPENAI_REQUEST_TIMEOUT_SECONDS", 123.0)
+
+    assert g._openai_json("s", "u") == {"rows": []}
+
+    assert fake_openai.init_kwargs == [{
+        "timeout": 123.0,
+        "max_retries": 0,
+    }]
+
+
+def test_busy_openai_slot_fails_after_the_configured_wait(
+    fake_openai, monkeypatch,
+):
+    gate = threading.BoundedSemaphore(1)
+    assert gate.acquire(blocking=False)
+    g._openai_gate = gate
+    monkeypatch.setattr(config, "OPENAI_SLOT_WAIT_TIMEOUT_SECONDS", 0.0)
+    logs: list[str] = []
+    monkeypatch.setattr(
+        g.progress,
+        "log",
+        lambda message, **_kwargs: logs.append(str(message)),
+    )
+
+    try:
+        with pytest.raises(g.OpenAIQueueTimeoutError, match="capacity is busy"):
+            g._openai_json("s", "u")
+    finally:
+        gate.release()
+
+    assert any("waiting for a free" in message for message in logs)
+    assert fake_openai.plan == []
 
 
 def test_persistent_rate_limit_eventually_fails_clearly(fake_openai, monkeypatch):

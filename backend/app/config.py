@@ -171,6 +171,23 @@ OPENAI_MAX_OUTPUT_TOKENS = int(
 #     A job only fails after the API has been unavailable for several minutes.
 OPENAI_MAX_CONCURRENCY = max(
     1, int(os.environ.get("AEGIS_OPENAI_MAX_CONCURRENCY", "3")))
+# Keep each provider request finite.  The generation layer owns retries so it
+# can report them to the live console and retain a resumable checkpoint.
+OPENAI_REQUEST_TIMEOUT_SECONDS = max(
+    1.0,
+    float(os.environ.get("AEGIS_OPENAI_REQUEST_TIMEOUT_SECONDS", "600")),
+)
+# A queued request used to wait forever if an in-flight provider call never
+# released its shared slot.  A timeout turns that state into a clear,
+# resumable failure instead of a permanently running job.
+OPENAI_SLOT_WAIT_TIMEOUT_SECONDS = max(
+    0.0,
+    float(os.environ.get("AEGIS_OPENAI_SLOT_WAIT_TIMEOUT_SECONDS", "900")),
+)
+OPENAI_SLOT_WAIT_LOG_SECONDS = max(
+    1.0,
+    float(os.environ.get("AEGIS_OPENAI_SLOT_WAIT_LOG_SECONDS", "20")),
+)
 OPENAI_TRANSIENT_RETRIES = max(
     0, int(os.environ.get("AEGIS_OPENAI_TRANSIENT_RETRIES", "10")))
 OPENAI_BACKOFF_MAX_SECONDS = max(

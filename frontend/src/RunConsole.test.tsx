@@ -56,6 +56,7 @@ function Probe() {
         {state.usagePresentation?.cumulative ? "cumulative" : "run"}
         {state.usagePresentation?.resumed ? " resumed" : ""}
       </output>
+      <output data-testid="progress-label">{state.progressLabel}</output>
     </>
   );
 }
@@ -108,4 +109,24 @@ test("a checkpoint retry starts from and preserves the cumulative file total", (
 
   act(() => pending[0].onEvent({ type: "usage", data: usage(550) }));
   expect(screen.getByTestId("usage").textContent).toBe("550");
+});
+
+test("a stream heartbeat makes a long final step visibly active", () => {
+  pending.length = 0;
+  render(
+    <RunConsoleProvider>
+      <Probe />
+    </RunConsoleProvider>,
+  );
+
+  fireEvent.click(screen.getByText("First"));
+  act(() => pending[0].onEvent({
+    type: "step",
+    label: "Pre-learning — deriving prerequisite map",
+  }));
+  act(() => pending[0].onEvent({ type: "heartbeat" }));
+
+  expect(screen.getByTestId("progress-label").textContent).toBe(
+    "Pre-learning — deriving prerequisite map (still working...)",
+  );
 });
