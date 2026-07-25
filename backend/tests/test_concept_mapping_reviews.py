@@ -2963,6 +2963,98 @@ def test_final_checkpoint_with_orphan_analysis_prefix_forces_final_repair():
     assert any("learner-analysis" in reason for reason in reasons)
 
 
+def test_saved_final_checkpoint_reconciles_wrong_figure_tag_without_api(
+    monkeypatch,
+):
+    source = (
+        "# Visual Symbols\n"
+        "\\begin{figure}\n"
+        "\\includegraphics{https://example.test/fig-17.png}\n"
+        "\\caption{Fig. 17 - Germania}\n"
+        "\\end{figure}\n"
+        "\\begin{figure}\n"
+        "\\includegraphics{https://example.test/fig-18.png}\n"
+        "\\caption{Fig. 18 - Marianne}\n"
+        "\\end{figure}\n"
+    )
+    analysis = (
+        "Misconception/ Error Analysis: Misconceptions: Students may treat "
+        "every national allegory as the same person.; Error Analysis: Students "
+        "may identify the symbol without linking it to the named nation."
+    )
+    records = [
+        {
+            "topic": "Visual Symbols",
+            "parent_concept": "National Allegory",
+            "concept_title": "Marianne and Germania",
+            "concept_details": (
+                "Description: National allegories make an abstract nation "
+                "visible through a named symbolic figure. // "
+                "Types: Type 01: Interpret a named national allegory. "
+                "Case 01: Read a symbol in its stated historical setting. "
+                "Example 01: Refer to Fig. 18 and identify the national "
+                "symbol. [img src=\"https://example.test/fig-17.png\" "
+                "alt=\"Fig. 17 - Germania\"] // "
+                + analysis
+            ),
+            "keywords": "Marianne, Germania, allegory",
+        },
+        {
+            "topic": "Visual Symbols",
+            "parent_concept": "Culmination",
+            "concept_title": "Culmination - Marianne and Germania",
+            "concept_details": (
+                "Description: Recap of the visual language of nationalism. // "
+                "Types: Miscellaneous Type 01: Compare national symbols. "
+                "Case 01: Connect two visual representations. "
+                "Example 01: Compare the national symbols shown in the chapter."
+            ),
+            "keywords": "culmination, allegory",
+        },
+    ]
+    checkpoint = g._make_concept_checkpoint(
+        "final_content_ready",
+        records=records,
+        question_task_inventory={"items": [], "stats": {}},
+        mined_types={"types": []},
+        method_row_snapshot=[],
+    )
+    emitted = []
+
+    def no_api(*_args, **_kwargs):
+        raise AssertionError("a saved final checkpoint should not call the API")
+
+    monkeypatch.setattr(g, "_openai_json", no_api)
+    out = g.concepts_from_mmd(
+        source,
+        subject="Social Science",
+        chapter_title="Visual Symbols",
+        live=True,
+        resume_checkpoint=checkpoint,
+        checkpoint_callback=emitted.append,
+    )
+
+    repaired = out[0]["concept_details"]
+    assert '[img src="https://example.test/fig-18.png" ' in repaired
+    assert 'alt="Fig. 18 - Marianne"]' in repaired
+    assert "fig-17.png" not in repaired
+    report = concept_validator.validate_concept_rows(
+        out,
+        allow_types=True,
+        require_culmination=True,
+        allow_culmination=True,
+        strict_type_hierarchy=True,
+        strict_analysis_section=True,
+    )
+    assert not {
+        "figure_reference_without_image", "figure_reference_image_mismatch",
+    } & {error["code"] for error in report["errors"]}
+    assert emitted
+    persisted = emitted[-1]
+    assert persisted["stage"] == "final_content_ready"
+    assert "fig-18.png" in persisted["records"][0]["concept_details"]
+
+
 def test_source_topic_order_is_restored_after_recovery_append():
     records = [
         {

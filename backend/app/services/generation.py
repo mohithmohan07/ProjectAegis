@@ -4846,6 +4846,119 @@ def _source_figure_registry(sections: list[dict]) -> dict[str, list[dict]]:
     return registry
 
 
+_RENDERED_IMAGE_TAG_RE = re.compile(r"\[img\b[^\]]*\]", re.IGNORECASE)
+_RENDERED_EXAMPLE_SEGMENT_RE = re.compile(
+    r"(?P<marker>\bExamples?(?:\s+0*\d+)?\s*:\s*)"
+    r"(?P<body>.*?)"
+    r"(?=(?:\s+(?:Miscellaneous\s+)?Type\s+\d{1,2}:|"
+    r"\s+Case\s+\d{1,2}:|"
+    r"\s+Examples?(?:\s+0*\d+)?\s*:)|\Z)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _source_figure_tags_for_example(
+    example: str, registry: dict[str, list[dict]],
+) -> list[str]:
+    """Return the source-authoritative image tags for a rendered Example.
+
+    The figure IDs must come from the question itself, never from a preexisting
+    image caption.  A stale checkpoint can pair ``Fig. 18`` with a perfectly
+    well-formed Fig. 17 tag, and looking at the whole Example would otherwise
+    treat Fig. 17 as an additional requested visual.  Strip all rendered tags
+    before reading explicit references, then resolve those references solely
+    through the current chapter's source registry.
+    """
+    prompt = _RENDERED_IMAGE_TAG_RE.sub(" ", str(example or ""))
+    figure_ids = _figure_reference_ids(prompt)
+    if not figure_ids:
+        return []
+
+    entries: list[dict] = []
+    for figure_id in figure_ids:
+        matches = registry.get(figure_id) or []
+        # An unresolved source reference must remain visible for strict final
+        # validation rather than deleting a possibly useful existing tag.
+        if not matches:
+            return []
+        for entry in matches:
+            if not any(existing.get("url") == entry.get("url") for existing in entries):
+                entries.append(entry)
+    tags: list[str] = []
+    for entry in entries:
+        url = str(entry.get("url") or "").strip()
+        # Existing inventory rendering requires public HTTPS image URLs.  Do
+        # not turn an old checkpoint into a new runtime error when a malformed
+        # source figure cannot meet that wire contract.
+        if not url.startswith("https://"):
+            return []
+        alt = _clean_visual_caption(entry.get("caption") or "")
+        if not alt:
+            alt = f"Fig. {entry.get('figure_id') or ''}".strip()
+        try:
+            tags.append(kr.image(url, alt))
+        except ValueError:
+            return []
+    return tags
+
+
+def _reconcile_explicit_figure_images(
+    records: list[dict], sections: list[dict],
+) -> tuple[list[dict], int]:
+    """Replace stale Type Example images with exact source-registry tags.
+
+    This is intentionally a deterministic final-boundary repair.  It handles
+    saved final checkpoints without re-running semantic/API stages, but only
+    when every Figure named by an Example resolves in the current source.  A
+    question with an unresolved figure is left unchanged so strict validation
+    can still stop it rather than silently attaching a nearby image.
+    """
+    registry = _source_figure_registry(sections)
+    if not registry:
+        return records, 0
+
+    repaired_examples = 0
+    out: list[dict] = []
+    for record in records:
+        updated = dict(record)
+        details = str(updated.get("concept_details") or "")
+        split = cr.split_sections(details)
+        changed = False
+        rebuilt_sections: list[tuple[str, str]] = []
+        for label, content in split:
+            if not label.strip().lower().startswith("type"):
+                rebuilt_sections.append((label, content))
+                continue
+
+            def reconcile_example(match: re.Match) -> str:
+                nonlocal repaired_examples, changed
+                original = match.group("body") or ""
+                tags = _source_figure_tags_for_example(original, registry)
+                if not tags:
+                    return match.group(0)
+                # Keep the authored question wording, but discard every
+                # preexisting image tag in this Example.  The tags appended
+                # below are the exact URLs/captions for the named Figures.
+                prompt = _RENDERED_IMAGE_TAG_RE.sub(" ", original)
+                prompt = re.sub(r"\s+", " ", prompt).strip()
+                reconciled = " ".join(
+                    part for part in (prompt, *tags) if part).strip()
+                if reconciled == original.strip():
+                    return match.group(0)
+                changed = True
+                repaired_examples += 1
+                return match.group("marker") + reconciled
+
+            rebuilt_sections.append((
+                label,
+                _RENDERED_EXAMPLE_SEGMENT_RE.sub(reconcile_example, content),
+            ))
+        if changed:
+            updated["concept_details"] = cr.join_sections(rebuilt_sections)
+        out.append(updated)
+    return out, repaired_examples
+
+
 def _attach_explicit_figure_images(
     items: list[dict], sections: list[dict],
 ) -> list[dict]:
@@ -13017,6 +13130,7 @@ def _prepare_final_concept_content(
     chapter_title: str,
     meta: dict,
     mmd_text: str,
+    source_sections: list[dict],
     question_task_inventory: dict,
     mined_types: dict,
     method_row_snapshot: dict[tuple[str, str], dict],
@@ -13230,7 +13344,10 @@ def _prepare_final_concept_content(
             f"{len(activity_alignment_violations)} assessable Activity "
             "Example(s) separated from their Activity/Info Hub"
         )
-    return out
+    # Semantic repair can preserve a stale but syntactically valid image tag.
+    # Reconcile the final public Examples to the source registry before this
+    # exact map is checkpointed, so a later resume does not reintroduce it.
+    return _reconcile_explicit_figure_images(out, source_sections)[0]
 
 
 def concepts_from_mmd(
@@ -13330,6 +13447,7 @@ def concepts_from_mmd(
                 chapter_title=chapter_title,
                 meta=meta,
                 mmd_text=mmd_text,
+                source_sections=sections,
                 question_task_inventory=question_task_inventory,
                 mined_types=mined_types,
                 method_row_snapshot=method_row_snapshot,
@@ -13349,6 +13467,30 @@ def concepts_from_mmd(
                     method_row_snapshot),
             )
         out = _canonicalize_concept_rich_text(out)
+        # A saved final checkpoint bypasses the finalizer above.  Correct any
+        # stale Figure tag from the source registry immediately before the
+        # outer final gate, without spending another API request.  Persist the
+        # repaired final stage when a callback is available so another resume
+        # starts from the corrected checkpoint.
+        out, reconciled_figure_examples = _reconcile_explicit_figure_images(
+            out, sections)
+        if reconciled_figure_examples:
+            progress.log(
+                "Reconciled "
+                f"{reconciled_figure_examples} rendered Figure Example(s) "
+                "against the source registry.",
+                level="success",
+            )
+            if saved_final:
+                _emit_concept_checkpoint(
+                    checkpoint_callback,
+                    "final_content_ready",
+                    records=out,
+                    question_task_inventory=question_task_inventory,
+                    mined_types=mined_types,
+                    method_row_snapshot=_serialize_method_row_snapshot(
+                        method_row_snapshot),
+                )
         _validate_final_or_raise(
             out,
             stage="final",
