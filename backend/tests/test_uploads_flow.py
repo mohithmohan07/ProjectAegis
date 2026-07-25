@@ -63,6 +63,27 @@ def test_convert_then_get_job(client):
     assert fetched["mmd_text"].startswith("#")
 
 
+def test_convert_text_upload_preserves_utf8_source(client):
+    text = "Frédéric Sorrieu’s vision — ₹500"
+    files = {
+        "file": (
+            "nationalism.mmd",
+            io.BytesIO(text.encode("utf-8")),
+            "text/plain",
+        )
+    }
+    job = client.post(
+        "/build-concepts/post-learning/uploads",
+        files=files,
+    ).json()
+
+    converted = convert_concept_upload(client, job["id"])
+
+    assert text in converted["mmd_text"]
+    assert "FrÃ" not in converted["mmd_text"]
+    assert "â€" not in converted["mmd_text"]
+
+
 def test_generate_requires_conversion(client, first_chapter):
     files = {"file": ("doc.txt", io.BytesIO(b"# Doc\n\nbody"), "text/plain")}
     job = client.post("/build-concepts/post-learning/uploads", files=files).json()

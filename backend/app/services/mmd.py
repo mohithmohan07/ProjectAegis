@@ -35,7 +35,24 @@ class ConversionError(ValueError):
 
 def _read_text(path: Path) -> str:
     if path.suffix.lower() in {".txt", ".md", ".mmd"}:
-        return path.read_text(errors="ignore")
+        raw = path.read_bytes()
+        try:
+            # Textbook MMD is UTF-8.  Never let the host's locale (notably
+            # Windows cp1252) reinterpret valid UTF-8 punctuation, maths, or
+            # non-ASCII names into mojibake before concept generation.
+            text = raw.decode("utf-8-sig")
+        except UnicodeDecodeError as exc:
+            if path.suffix.lower() != ".txt":
+                # Markdown formats have a UTF-8 contract.  Falling back after
+                # one bad byte would reinterpret the *entire* otherwise-UTF-8
+                # chapter as cp1252 and silently poison a saved checkpoint.
+                raise ConversionError(
+                    f"{path.name!r} is not valid UTF-8. Re-save the "
+                    "Markdown file as UTF-8 and upload it again."
+                ) from exc
+            # Keep explicit legacy ANSI support for plain-text uploads.
+            text = raw.decode("cp1252", errors="replace")
+        return text.replace("\r\n", "\n").replace("\r", "\n")
     if path.suffix.lower() == ".pdf":
         # Dry mode: we don't OCR; emit a placeholder body keyed to the filename.
         return f"(binary PDF: {path.name} — Mathpix OCR required for live extraction)"
