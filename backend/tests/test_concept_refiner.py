@@ -22,6 +22,31 @@ def test_continuous_type_numbering_across_concepts():
     assert "Type 03: Z Case 01: q4" in out[1]["concept_details"]
 
 
+def test_type_refinement_numbers_examples_within_each_case():
+    records = [
+        _rec(
+            "Linear Equations",
+            "Description: d // Types: Type 01: Solve equations "
+            "Case 01: Given a linear equation, isolate the unknown "
+            "Example: Solve 3x + 2 = 14. "
+            "Example 09: Solve 5y - 7 = 18. "
+            "Case 02: Given a word problem, form and solve an equation "
+            "Examples: A number increased by 5 is 12. Find the number. "
+            "// Misconception: m",
+        ),
+    ]
+
+    out = cr.renumber_types_continuously(records)
+    details = out[0]["concept_details"]
+    assert "Case 01: Given a linear equation" in details
+    assert "Example 01: Solve 3x + 2 = 14." in details
+    assert "Example 02: Solve 5y - 7 = 18." in details
+    assert "Case 02: Given a word problem" in details
+    assert "Example 01: A number increased by 5 is 12." in details
+    assert "Example 09:" not in details
+    assert "Examples:" not in details
+
+
 def test_culmination_uses_separate_miscellaneous_sequence():
     records = [
         _rec("A", "Description: a // Types: Type 01: X Case 01: q1 // Misconception: m"),
@@ -79,10 +104,17 @@ def test_refine_chapter_reduces_then_numbers_continuously():
     assert "Type 03: R" in out[2]["concept_details"]
 
 
-def test_records_without_types_are_untouched():
+def test_records_without_types_are_normalized_to_one_analysis_section():
     records = [_rec("X", "Description: only // Misconception: none")]
     out = cr.refine_chapter(records)
-    assert out[0]["concept_details"] == "Description: only // Misconceptions: none"
+    sections = cr.split_sections(out[0]["concept_details"])
+    assert [label for label, _ in sections if cr.is_learner_analysis_label(label)] == [
+        "Misconception/ Error Analysis",
+    ]
+    misconception, error_analysis = cr.analysis_components(
+        out[0]["concept_details"])
+    assert misconception == "none"
+    assert error_analysis
 
 
 def test_refine_chapter_adds_missing_learner_analysis_to_normal_concepts():
@@ -92,10 +124,11 @@ def test_refine_chapter_adds_missing_learner_analysis_to_normal_concepts():
     ]
     out = cr.refine_chapter(records)
     normal_details = out[0]["concept_details"]
-    assert "Misconceptions:" in normal_details or "Error Analysis:" in normal_details
+    assert "Misconception/ Error Analysis:" in normal_details
+    misconception, error_analysis = cr.analysis_components(normal_details)
+    assert misconception and error_analysis
     assert "Basic Proportionality Theorem" in out[0]["concept_details"]
-    assert "Misconceptions:" not in out[1]["concept_details"]
-    assert "Error Analysis:" not in out[1]["concept_details"]
+    assert "Misconception/ Error Analysis:" not in out[1]["concept_details"]
 
 
 def test_refine_chapter_accepts_either_analysis_section_or_both():
@@ -120,12 +153,15 @@ def test_refine_chapter_accepts_either_analysis_section_or_both():
 
     out = cr.refine_chapter(records)
 
-    assert "Misconceptions:" in out[0]["concept_details"]
-    assert "Error Analysis:" not in out[0]["concept_details"]
-    assert "Error Analysis:" in out[1]["concept_details"]
-    assert "Misconceptions:" not in out[1]["concept_details"]
-    both = out[2]["concept_details"]
-    assert both.index("Misconceptions:") < both.index("Error Analysis:")
+    for record in out:
+        details = record["concept_details"]
+        sections = cr.split_sections(details)
+        assert [
+            label for label, _ in sections
+            if cr.is_learner_analysis_label(label)
+        ] == ["Misconception/ Error Analysis"]
+        misconception, error_analysis = cr.analysis_components(details)
+        assert misconception and error_analysis
 
 
 def test_normalization_collapses_duplicate_cross_category_analysis():
@@ -138,8 +174,9 @@ def test_normalization_collapses_duplicate_cross_category_analysis():
     out = cr.normalize_analysis_sections(details)
 
     assert out.count("Students may omit the negative sign") == 1
+    assert "Misconception/ Error Analysis:" in out
     assert "Error Analysis:" in out
-    assert "Misconceptions:" not in out
+    assert not cr.analysis_components(out)[0]
 
 
 def test_normalization_reclassifies_separate_legacy_mistake_without_data_loss():
@@ -152,8 +189,52 @@ def test_normalization_reclassifies_separate_legacy_mistake_without_data_loss():
 
     out = cr.normalize_analysis_sections(details)
 
+    assert "Misconception/ Error Analysis:" in out
     assert f"Misconceptions: {belief}" in out
     assert f"Error Analysis: {mistake}" in out
+
+
+def test_normalization_extracts_newline_combined_analysis_without_orphan_prefix():
+    details = (
+        "Description: Signed values retain their signs during substitution.\n"
+        "Misconception/ Error Analysis: Misconceptions: Students may believe "
+        "a negative input always makes the result negative.; Error Analysis: "
+        "Students may omit the negative sign while substituting a value."
+    )
+
+    out = cr.normalize_analysis_sections(details)
+
+    assert out.count("Misconception/ Error Analysis:") == 1
+    assert "Misconception/ //" not in out
+    assert "Signed values retain their signs during substitution." in out
+    misconception, error_analysis = cr.analysis_components(out)
+    assert misconception and error_analysis
+
+
+def test_normalization_drops_a_standalone_orphan_analysis_prefix():
+    details = (
+        "Description: Signed values retain their signs during substitution.\n"
+        "Misconception/ // Activity/Info Hub: Practice the sign check. // "
+        "Misconception/ Error Analysis: Misconceptions: Students may believe "
+        "a negative input always makes the result negative.; Error Analysis: "
+        "Students may omit the negative sign while substituting a value."
+    )
+
+    out = cr.normalize_analysis_sections(details)
+
+    assert "Misconception/ //" not in out
+    assert out.count("Misconception/ Error Analysis:") == 1
+
+    before_mastery = (
+        "Description: Signed values retain their signs during substitution.\n"
+        "Misconception/\n"
+        "Achieving Mastery: Applying the sign rule consistently. // "
+        "Misconception/ Error Analysis: Misconceptions: Students may believe "
+        "a negative input always makes the result negative.; Error Analysis: "
+        "Students may omit the negative sign while substituting a value."
+    )
+    before_mastery_out = cr.normalize_analysis_sections(before_mastery)
+    assert "\nMisconception/\n" not in before_mastery_out
 
 
 def test_culmination_description_becomes_recap():
@@ -202,6 +283,7 @@ def test_activity_info_hub_section_order_and_append():
     normalized = cr.normalize_misconception_sections(with_hub)
     labels2 = [label for label, _ in cr.split_sections(normalized)]
     assert labels2 == [
-        "Description", "Activity/Info Hub", "Types", "Misconceptions",
+        "Description", "Activity/Info Hub", "Types",
+        "Misconception/ Error Analysis",
     ]
     assert "Activity 11.1" in cr.activity_hub_body(normalized)

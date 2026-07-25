@@ -406,7 +406,13 @@ def replace_mmd_references(text: str) -> str:
 _ARTIFACT_NEUTRALIZATIONS = [
     (re.compile(r"\b(?:exercises?|ex)\.?\s*\d+(?:\.\d+)*\b", re.IGNORECASE),
      "the exercises"),
-    (re.compile(r"\bexamples?\.?\s*\d+(?:\.\d+)*\b", re.IGNORECASE),
+    # ``Example NN:`` is the public Type -> Case -> Example hierarchy, not a
+    # dangling source-book pointer.  Keep the numbered marker while still
+    # neutralizing prose references such as "see Example 11".
+    (re.compile(
+        r"\bexamples?\.?\s*\d+(?:\.\d+)*\b(?![\d.]|\s*:)",
+        re.IGNORECASE,
+    ),
      "a worked example"),
     (re.compile(r"\b(?:on\s+)?pages?\.?\s*(?:no\.?\s*)?\d+\b", re.IGNORECASE),
      "in the chapter"),
@@ -414,12 +420,9 @@ _ARTIFACT_NEUTRALIZATIONS = [
     (re.compile(r"\bp\.?\s*\d+\b", re.IGNORECASE),
      "in the chapter"),
 ]
-# Figure/table references are only neutralized when the row ships NO image —
-# with an embedded Mathpix URL they point at real, visible content.
-# Optional whitespace covers OCR forms like "fig.11.1" and "Fig.11.2".
-_FIG_TABLE_NEUTRALIZATIONS = [
-    (re.compile(r"\bfig(?:ure)?s?\.?\s*\d+(?:\.\d+)*\b", re.IGNORECASE),
-     "the figure"),
+# Table references are neutralized before deposit. Figure references are kept
+# so strict validation can require the matching canonical image tag.
+_TABLE_NEUTRALIZATIONS = [
     (re.compile(r"\btables?\.?\s*\d+(?:\.\d+)*\b", re.IGNORECASE),
      "the given table"),
 ]
@@ -431,9 +434,8 @@ def neutralize_source_artifacts(text: str) -> str:
         return text
     for pat, repl in _ARTIFACT_NEUTRALIZATIONS:
         text = pat.sub(repl, text)
-    if not _IMAGE_URL_RE.search(text):
-        for pat, repl in _FIG_TABLE_NEUTRALIZATIONS:
-            text = pat.sub(repl, text)
+    for pat, repl in _TABLE_NEUTRALIZATIONS:
+        text = pat.sub(repl, text)
     return _tidy(text)
 
 
@@ -443,7 +445,9 @@ def neutralize_source_artifacts(text: str) -> str:
 _VALIDATOR_ALIGNED_SCRUBS = [
     (re.compile(r"\bMMDs?\b", re.IGNORECASE), "chapter"),
     (re.compile(
-        r"\bExamples?\.?\s*\d+(?:\.\d+)*\b", re.IGNORECASE), "a worked example"),
+        r"\bExamples?\.?\s*\d+(?:\.\d+)*\b(?![\d.]|\s*:)",
+        re.IGNORECASE,
+    ), "a worked example"),
     (re.compile(
         r"\b(?:Exercises?|Ex)\.?\s*\d+(?:\.\d+)*\b", re.IGNORECASE),
      "the exercises"),
@@ -452,9 +456,7 @@ _VALIDATOR_ALIGNED_SCRUBS = [
      "in the chapter"),
     (re.compile(r"\bp\.?\s*\d+\b", re.IGNORECASE), "in the chapter"),
 ]
-_VALIDATOR_ALIGNED_FIG_SCRUBS = [
-    (re.compile(
-        r"\bFig(?:ure)?s?\.?\s*\d+(?:\.\d+)*\b", re.IGNORECASE), "the figure"),
+_VALIDATOR_ALIGNED_TABLE_SCRUBS = [
     (re.compile(
         r"\bTables?\.?\s*\d+(?:\.\d+)*\b", re.IGNORECASE), "the given table"),
 ]
@@ -463,17 +465,17 @@ _VALIDATOR_ALIGNED_FIG_SCRUBS = [
 def scrub_validator_artifacts(text: str) -> str:
     """Force-clear any token the concept validator treats as source_artifact.
 
-    Used as a final deposit guarantee after named neutralization. Figure/table
-    refs are kept when a Mathpix/CDN image URL is already embedded.
+    Used as a final deposit guarantee after named neutralization. Figure
+    references remain so strict validation can require the matching canonical
+    image tag; table references are scrubbed.
     """
     if not text:
         return text
     text = replace_mmd_references(text)
     for pat, repl in _VALIDATOR_ALIGNED_SCRUBS:
         text = pat.sub(repl, text)
-    if not _IMAGE_URL_RE.search(text):
-        for pat, repl in _VALIDATOR_ALIGNED_FIG_SCRUBS:
-            text = pat.sub(repl, text)
+    for pat, repl in _VALIDATOR_ALIGNED_TABLE_SCRUBS:
+        text = pat.sub(repl, text)
     return _tidy(text)
 
 
@@ -533,8 +535,7 @@ def _clean_details(details: str, *, neutralize: bool = True) -> str:
             cleaned = replace_mmd_references(strip_dangling_references(part))
         if (
             label.startswith("description")
-            or cr.is_misconception_label(label)
-            or cr.is_error_analysis_label(label)
+            or cr.is_learner_analysis_label(label)
         ):
             cleaned = _TEXTBOOK_SECTION_REF_RE.sub("the chapter", cleaned)
         # Mathpix URLs are Types/Hub-only; strip them from Description and

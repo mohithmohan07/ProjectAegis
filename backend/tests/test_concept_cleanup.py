@@ -47,6 +47,42 @@ def test_clean_record_preserves_numeric_types_section():
     assert "Type 01: Eval Case 01: 2^3" in rec["concept_details"]
 
 
+def test_clean_record_preserves_structural_examples_and_is_idempotent():
+    source = {
+        "topic": "electric circuits",
+        "parent_concept": "circuit interpretation",
+        "concept_title": "reading circuit diagrams",
+        "concept_details": (
+            "Description: Interpret current paths and compare circuit states. // "
+            "Types: Type 01: Diagram interpretation "
+            "Case 01: Questions that compare visible circuit configurations. "
+            "Example 01: Compare the circuits in Fig. 11.1 and state which lamp "
+            "glows. [img src=\"https://example.test/figure-11-1.png\" "
+            "alt=\"Fig. 11.1 Circuit configurations\"] "
+            "Example 02: Explain how the current changes when the switch opens. // "
+            "Misconception/ Error Analysis: Misconceptions: Students may believe "
+            "that an open switch increases current; Error Analysis: A learner may "
+            "trace current through the broken branch and reach the wrong result."
+        ),
+        "keywords": "",
+    }
+
+    once = clean_concept_record(dict(source))
+    twice = clean_concept_record(dict(once))
+
+    assert once == twice
+    assert "Case 01:" in once["concept_details"]
+    assert "Example 01:" in once["concept_details"]
+    assert "Example 02:" in once["concept_details"]
+    assert (
+        '[img src="https://example.test/figure-11-1.png" '
+        'alt="Fig. 11.1 Circuit configurations"]'
+    ) in once["concept_details"]
+    assert once["concept_details"].count(
+        "Misconception/ Error Analysis:"
+    ) == 1
+
+
 def test_clean_record_sanitizes_error_analysis_as_learner_prose():
     rec = clean_concept_record({
         "concept_title": "evaluating exponents",
@@ -114,13 +150,12 @@ def test_inline_figure_table_example_references_removed():
     assert out == "for details"
 
 
-def test_compact_fig_refs_without_space_are_stripped_and_neutralized():
+def test_compact_fig_refs_without_space_are_preserved_for_strict_image_validation():
     from app.services.concept_cleanup import neutralize_source_artifacts
 
     assert "fig.11" not in strip_dangling_references("Use fig.11.1 to find R.").lower()
-    assert "fig.11" not in neutralize_source_artifacts("Use fig.11.1 to find R.").lower()
     assert neutralize_source_artifacts("Use fig.11.1 to find R.") == (
-        "Use the figure to find R."
+        "Use fig.11.1 to find R."
     )
 
 

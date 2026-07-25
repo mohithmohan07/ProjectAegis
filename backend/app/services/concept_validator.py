@@ -6,6 +6,7 @@ precise row/field/code feedback instead of a vague "quality is poor" message.
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections import Counter, defaultdict
 from typing import Any, Collection
 
@@ -25,7 +26,8 @@ _SECTION_NUMBER_RE = re.compile(r"\b(?:exercise|ex)?\s*\d+(?:\.\d+)+\b", re.IGNO
 # page14 / p14 (no space) are included — keep in sync with concept_cleanup
 # neutralize/scrub patterns.
 _SOURCE_ARTIFACT_RE = re.compile(
-    r"\b(?:MMDs?|Examples?\.?\s*\d+(?:\.\d+)*|Fig(?:ure)?s?\.?\s*\d+(?:\.\d+)*|"
+    r"\b(?:MMDs?|Examples?\.?\s*\d+(?:\.\d+)*(?![\d.]|\s*:)|"
+    r"Fig(?:ure)?s?\.?\s*\d+(?:\.\d+)*|"
     r"Tables?\.?\s*\d+(?:\.\d+)*|"
     r"Exercises?\.?\s*\d+(?:\.\d+)*|Ex\.?\s*\d+(?:\.\d+)*|"
     r"pages?\.?\s*(?:no\.?\s*)?\d+|p\.?\s*\d+)\b",
@@ -54,11 +56,60 @@ _CASE_SPECIFIC_DETAIL_RE = re.compile(
     r"[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+|"
     r"['\"][^'\"]{3,}['\"])"
 )
-_EXAMPLE_SPLIT_RE = re.compile(r"\bExamples?\s*:\s*", re.IGNORECASE)
+_EXAMPLE_SPLIT_RE = re.compile(
+    r"\bExamples?(?:\s+0*\d+)?\s*:\s*", re.IGNORECASE)
+_EXAMPLE_MARKER_RE = re.compile(
+    r"\b(?P<label>Examples?)(?:\s+(?P<number>0*\d+))?\s*:",
+    re.IGNORECASE,
+)
+_CASE_RAW_QUESTION_RE = re.compile(
+    r"^(?:solve|simplify|find|write|identify|expand|compare|calculate|"
+    r"rationalise|express|evaluate|convert|draw|label|explain|prove|"
+    r"describe|discuss|analyse|analyze|examine|interpret|outline|assess|"
+    r"state|list|mention|account|justify|trace|distinguish|define|"
+    r"what|why|how|who|when|where|which)\b",
+    re.IGNORECASE,
+)
 _EXAMPLE_SEGMENT_RE = re.compile(
-    r"(\bExamples?\s*:\s*)(.*?)"
-    r"(?=\bExamples?\s*:|\b(?:Case|Type)\s+\d{1,2}:|\s+//\s+|$)",
+    r"(\bExamples?(?:\s+0*\d+)?\s*:\s*)(.*?)"
+    r"(?=\bExamples?(?:\s+0*\d+)?\s*:|"
+    r"\b(?:Case|Type)\s+\d{1,2}:|\s+//\s+|$)",
     re.IGNORECASE | re.DOTALL,
+)
+_TYPE_SEGMENT_RE = re.compile(
+    r"\b(?:Miscellaneous\s+)?Type\s+\d{1,2}:\s*(?P<body>.*?)"
+    r"(?=\b(?:Miscellaneous\s+)?Type\s+\d{1,2}:|\Z)",
+    re.IGNORECASE | re.DOTALL,
+)
+# A figure-dependent source question must carry the corresponding image in the
+# same rendered Example.  Keep suffixes such as ``Fig. 14(a)`` and decimal
+# identifiers such as ``Fig. 11.10`` intact.
+_EXPLICIT_FIGURE_REFERENCE_RE = re.compile(
+    r"\b(?:fig(?:ure)?s?\.?\s*)(?P<number>\d+(?:\.\d+)*"
+    r"(?:\s*\([a-z]\))?)(?!\w)",
+    re.IGNORECASE,
+)
+_CANONICAL_IMAGE_TAG_RE = re.compile(
+    r'\[img\s+src="(?P<src>https?://[^"]+)"\s+'
+    r'alt="(?P<alt>[^"]+)"[^\]]*\]',
+    re.IGNORECASE,
+)
+_CANONICAL_ANALYSIS_LABEL = "Misconception/ Error Analysis"
+_CANONICAL_ANALYSIS_CONTENT_RE = re.compile(
+    r"^\s*Misconceptions:\s*(?P<misconception>.+?)\s*;\s*"
+    r"Error Analysis:\s*(?P<error_analysis>.+?)\s*$",
+    re.DOTALL,
+)
+# A malformed newline-boundary combined label can leave ``Misconception/`` at
+# the end of Description even while a later canonical section exists. Treat
+# that residual prefix as a strict-format error.
+_ORPHAN_ANALYSIS_PREFIX_RE = re.compile(
+    r"(?im)^[ \t]*Misconceptions?[ \t]*/[ \t]*(?=\r?$|\r?\n|//)",
+)
+_GENERIC_CASE_DEFINITION_RE = re.compile(
+    r"^(?:practice(?:\s+set)?|questions?|problems?|examples?|"
+    r"applications?|exercise(?:\s+set)?|case\s+study)\.?$",
+    re.IGNORECASE,
 )
 _DESCRIPTION_LABEL_RE = re.compile(r"\bDescription\s*:", re.IGNORECASE)
 _IMAGE_URL_RE = re.compile(
@@ -81,7 +132,19 @@ _DESCRIPTION_SECTION_REF_RE = re.compile(
 # ("Refer fig. 11.1" next to its image URL); only textual pointers to unshipped
 # source artifacts (Example 5, Exercise 1.2, page 14, MMD) stay forbidden.
 _SOURCE_ARTIFACT_NO_FIG_RE = re.compile(
-    r"\b(?:MMDs?|Examples?\.?\s*\d+(?:\.\d+)*|"
+    r"\b(?:MMDs?|Examples?\.?\s*\d+(?:\.\d+)*(?![\d.]|\s*:)|"
+    r"Exercises?\.?\s*\d+(?:\.\d+)*|Ex\.?\s*\d+(?:\.\d+)*|"
+    r"pages?\.?\s*(?:no\.?\s*)?\d+|p\.?\s*\d+)\b",
+    re.IGNORECASE,
+)
+# A Figure reference in a rendered Example has its own strict contract below:
+# it must carry the matching canonical image tag.  Do not classify it as a
+# generic source artifact first, otherwise cleanup can hide the missing-image
+# defect by rewriting ``Fig. N`` to "the figure".  Table references retain the
+# ordinary source-artifact behaviour until an image is present.
+_SOURCE_ARTIFACT_NO_FIGURE_RE = re.compile(
+    r"\b(?:MMDs?|Examples?\.?\s*\d+(?:\.\d+)*(?![\d.]|\s*:)|"
+    r"Tables?\.?\s*\d+(?:\.\d+)*|"
     r"Exercises?\.?\s*\d+(?:\.\d+)*|Ex\.?\s*\d+(?:\.\d+)*|"
     r"pages?\.?\s*(?:no\.?\s*)?\d+|p\.?\s*\d+)\b",
     re.IGNORECASE,
@@ -235,6 +298,32 @@ def _norm(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").strip().lower())
 
 
+def _normalized_figure_id(value: str) -> str:
+    """Normalize a Figure identifier while retaining decimal/suffix meaning."""
+    return re.sub(
+        r"\s+", "", (value or "").translate(str.maketrans("．（）", ".()"))
+    ).lower()
+
+
+def _example_figure_ids(text: str) -> list[str]:
+    """Return source-order explicit Figure IDs used by one rendered Example."""
+    ids: list[str] = []
+    source = unicodedata.normalize("NFKC", text or "")
+    for match in _EXPLICIT_FIGURE_REFERENCE_RE.finditer(source):
+        figure_id = _normalized_figure_id(match.group("number"))
+        if figure_id and figure_id not in ids:
+            ids.append(figure_id)
+    return ids
+
+
+def _example_image_figure_ids(text: str) -> set[str]:
+    """Return Figure IDs named in canonical image-tag captions in one Example."""
+    ids: set[str] = set()
+    for image in _CANONICAL_IMAGE_TAG_RE.finditer(text or ""):
+        ids.update(_example_figure_ids(image.group("alt")))
+    return ids
+
+
 def _mask_allowed_source_examples(
     details: str, allowed_source_examples: Collection[str],
 ) -> str:
@@ -289,14 +378,55 @@ def _description_text(details: str) -> str:
             return content.strip()
     return ""
 
+
+def _source_word_windows(source_text: str, *, width: int = 18) -> set[str]:
+    """Return normalized contiguous source spans used to catch copied prose."""
+    words = re.findall(r"\w+", (source_text or "").casefold())
+    if len(words) < width:
+        return set()
+    return {
+        " ".join(words[index:index + width])
+        for index in range(len(words) - width + 1)
+    }
+
+
+def _verbatim_source_description_snippet(
+    description: str, source_windows: Collection[str], *, width: int = 18,
+) -> str:
+    """Return a copied Description span, excluding Types/Examples by design."""
+    if not source_windows:
+        return ""
+    words = re.findall(r"\w+", (description or "").casefold())
+    for index in range(max(0, len(words) - width + 1)):
+        candidate = " ".join(words[index:index + width])
+        if candidate in source_windows:
+            return candidate
+    return ""
+
+
 def _issue_sections(
     details: str, label_name: str,
 ) -> list[tuple[int, str, str]]:
-    """Return ordered sections matching a misconception/error-analysis label."""
+    """Return ordered learner-analysis components from canonical or legacy input.
+
+    The public contract stores both meanings under one top-level
+    ``Misconception/ Error Analysis`` section.  Intermediate and older records
+    may still use separate sections, so validation deliberately accepts both
+    shapes unless its strict final-boundary option is requested.
+    """
     matches: list[tuple[int, str, str]] = []
     for index, (label, content) in enumerate(
         concept_refiner.split_sections(details)
     ):
+        if concept_refiner.is_combined_analysis_label(label):
+            misconception, error_analysis = concept_refiner.analysis_components(
+                concept_refiner.join_sections([(label, content)])
+            )
+            if label_name == "misconception" and misconception:
+                matches.append((index, "Misconceptions", misconception))
+            elif label_name != "misconception" and error_analysis:
+                matches.append((index, "Error Analysis", error_analysis))
+            continue
         if label_name == "misconception":
             matched = concept_refiner.is_misconception_label(label)
         else:
@@ -474,16 +604,17 @@ def ensure_valid_learner_analysis(records: list[dict]) -> list[dict]:
             continue
         normalized = concept_refiner.normalize_analysis_sections(details)
         sections = concept_refiner.split_sections(normalized)
+        misconception_body, error_analysis_body = (
+            concept_refiner.analysis_components(normalized)
+        )
         misconceptions: list[str] = []
         errors: list[str] = []
         seen_misconceptions: set[str] = set()
         seen_errors: set[str] = set()
-        for label, content in sections:
-            if (
-                not concept_refiner.is_misconception_label(label)
-                and not concept_refiner.is_error_analysis_label(label)
-            ):
-                continue
+        for content, preferred_kind in (
+            (misconception_body, "misconception"),
+            (error_analysis_body, "error_analysis"),
+        ):
             for value in _learner_analysis_statements(content):
                 belief_value = concept_refiner._strip_misconception_correction_tail(
                     value
@@ -517,13 +648,18 @@ def ensure_valid_learner_analysis(records: list[dict]) -> list[dict]:
         kept = [
             (label, content)
             for label, content in sections
-            if not concept_refiner.is_misconception_label(label)
-            and not concept_refiner.is_error_analysis_label(label)
+            if not concept_refiner.is_learner_analysis_label(label)
         ]
-        if misconception:
-            kept.append(("Misconceptions", misconception))
-        if error_analysis:
-            kept.append(("Error Analysis", error_analysis))
+        if misconception or error_analysis:
+            combined: list[str] = []
+            if misconception:
+                combined.append(f"Misconceptions: {misconception}")
+            if error_analysis:
+                combined.append(f"Error Analysis: {error_analysis}")
+            kept.append((
+                "Misconception/ Error Analysis",
+                "; ".join(combined),
+            ))
         rec["concept_details"] = concept_refiner.join_sections(kept)
 
     return concept_refiner.ensure_analysis_sections(records)
@@ -577,12 +713,16 @@ def validate_concept_rows(
     require_culmination: bool = False,
     allow_culmination: bool = True,
     allowed_source_examples: Collection[str] = (),
+    strict_type_hierarchy: bool = False,
+    strict_analysis_section: bool = False,
+    source_text: str = "",
 ) -> dict:
     """Return a structured validation report for concept-map records."""
     errors: list[dict] = []
     topic_title_counts: Counter[tuple[str, str]] = Counter()
     title_counts: Counter[str] = Counter()
     topic_rows: defaultdict[str, list[tuple[int, dict]]] = defaultdict(list)
+    source_windows = _source_word_windows(source_text)
 
     for i, row in enumerate(rows):
         topic = (row.get("topic") or "").strip()
@@ -623,11 +763,12 @@ def validate_concept_rows(
         artifact_details = _mask_allowed_source_examples(
             details, allowed_source_examples)
         row_text = " ".join([topic, parent, title, artifact_details])
-        # Figure/table references are allowed once the actual image URL is
-        # embedded (reviewers want "(Refer fig. 11.1)" + the Mathpix image).
+        # Explicit figure references remain visible until strict Type
+        # validation verifies their same-Example image tag.  Other source
+        # artifacts (and unshipped table references) remain invalid.
         artifact_re = (
             _SOURCE_ARTIFACT_NO_FIG_RE if _IMAGE_URL_RE.search(details)
-            else _SOURCE_ARTIFACT_RE
+            else _SOURCE_ARTIFACT_NO_FIGURE_RE
         )
         if artifact_re.search(row_text):
             _add(errors, i, "concept_details", "source_artifact",
@@ -670,6 +811,47 @@ def validate_concept_rows(
         if len(error_analysis_sections) > 1:
             _add(errors, i, "concept_details", "duplicate_error_analysis",
                  "only one Error Analysis section is allowed")
+
+        analysis_sections = [
+            (label, content)
+            for label, content in concept_refiner.split_sections(details)
+            if concept_refiner.is_learner_analysis_label(label)
+        ]
+        if strict_analysis_section and not is_culm:
+            canonical_match = None
+            orphan_analysis_prefix = bool(
+                _ORPHAN_ANALYSIS_PREFIX_RE.search(details))
+            if (
+                len(analysis_sections) == 1
+                and analysis_sections[0][0] == _CANONICAL_ANALYSIS_LABEL
+            ):
+                canonical_match = _CANONICAL_ANALYSIS_CONTENT_RE.fullmatch(
+                    analysis_sections[0][1] or "")
+            if canonical_match is None or orphan_analysis_prefix:
+                _add(
+                    errors, i, "concept_details", "analysis_section_format",
+                    "normal concepts require exactly one canonical "
+                    "'Misconception/ Error Analysis: Misconceptions: ...; "
+                    "Error Analysis: ...' section",
+                )
+            combined_misconception = (
+                canonical_match.group("misconception").strip()
+                if canonical_match else ""
+            )
+            combined_error_analysis = (
+                canonical_match.group("error_analysis").strip()
+                if canonical_match else ""
+            )
+            if not combined_misconception:
+                _add(
+                    errors, i, "concept_details", "missing_misconception",
+                    "combined learner analysis must include 'Misconceptions:'",
+                )
+            if not combined_error_analysis:
+                _add(
+                    errors, i, "concept_details", "missing_error_analysis",
+                    "combined learner analysis must include 'Error Analysis:'",
+                )
 
         if not is_culm:
             if not misconception_sections and not error_analysis_sections:
@@ -776,6 +958,15 @@ def validate_concept_rows(
                     "Description cites a textbook section number instead of the idea",
                     "warning",
                 )
+            copied_source = _verbatim_source_description_snippet(
+                desc, source_windows)
+            if not is_culm and copied_source:
+                _add(
+                    errors, i, "concept_details",
+                    "verbatim_source_description",
+                    "Description repeats a long contiguous source passage; "
+                    "rewrite it in original teaching language",
+                )
             if _EMPTY_IMAGE_ALT_RE.search(details):
                 _add(
                     errors, i, "concept_details", "empty_image_alt",
@@ -800,9 +991,13 @@ def validate_concept_rows(
             if type_body and _CASE_ANY_RE.search(type_body) and not _TYPE_ANY_RE.search(type_body):
                 _add(errors, i, "concept_details", "case_without_type",
                      "Case labels require a Type label")
-            if type_body and _TYPE_ANY_RE.search(type_body) and not _CASE_ANY_RE.search(type_body):
-                _add(errors, i, "concept_details", "type_without_case",
-                     "Type labels require at least one Case")
+            if type_body and _TYPE_ANY_RE.search(type_body):
+                for type_match in _TYPE_SEGMENT_RE.finditer(type_body):
+                    if not _CASE_ANY_RE.search(type_match.group("body") or ""):
+                        _add(
+                            errors, i, "concept_details", "type_without_case",
+                            "Every Type must contain at least one Case",
+                        )
             if type_body and (not _TYPE_RE.search(type_body) or not _CASE_RE.search(type_body)):
                 _add(errors, i, "concept_details", "types_format",
                      "Types must use zero-padded Type NN and Case NN labels")
@@ -811,6 +1006,98 @@ def validate_concept_rows(
                 if _case_example_too_short(case_text):
                     _add(errors, i, "concept_details", "short_case_example",
                          "Case examples should include the full source question/task")
+                if strict_type_hierarchy:
+                    markers = list(_EXAMPLE_MARKER_RE.finditer(case_text))
+                    case_title = (
+                        case_text[:markers[0].start()].strip()
+                        if markers else case_text.strip()
+                    )
+                    examples = [
+                        value.strip()
+                        for value in _EXAMPLE_SPLIT_RE.split(case_text)[1:]
+                        if value.strip()
+                    ]
+                    if not case_title:
+                        _add(
+                            errors, i, "concept_details",
+                            "missing_case_definition",
+                            "Each Case must define the sub-type before its Examples",
+                        )
+                    if not markers or not examples:
+                        _add(
+                            errors, i, "concept_details",
+                            "case_without_example",
+                            "Each Case must contain at least one numbered Example",
+                        )
+                    for example_index, example in enumerate(examples, start=1):
+                        figure_ids = _example_figure_ids(example)
+                        if not figure_ids:
+                            continue
+                        image_figure_ids = _example_image_figure_ids(example)
+                        missing_figure_ids = [
+                            figure_id for figure_id in figure_ids
+                            if figure_id not in image_figure_ids
+                        ]
+                        if not missing_figure_ids:
+                            continue
+                        if not image_figure_ids:
+                            _add(
+                                errors, i, "concept_details",
+                                "figure_reference_without_image",
+                                "Every Example that refers to a figure must embed "
+                                "a canonical [img] tag with that figure's caption "
+                                f"in the same Example (Case Example {example_index}; "
+                                f"missing Fig. {', Fig. '.join(missing_figure_ids)})",
+                            )
+                        else:
+                            _add(
+                                errors, i, "concept_details",
+                                "figure_reference_image_mismatch",
+                                "Every Figure reference must match a canonical [img] "
+                                "tag caption in the same Example "
+                                f"(Case Example {example_index}; missing Fig. "
+                                f"{', Fig. '.join(missing_figure_ids)})",
+                            )
+                    title_key = _norm(case_title)
+                    if case_title and (
+                        case_title.endswith("?")
+                        or _CASE_RAW_QUESTION_RE.match(case_title)
+                        or any(title_key == _norm(example) for example in examples)
+                    ):
+                        _add(
+                            errors, i, "concept_details",
+                            "case_question_not_definition",
+                            "Case text must define a reusable variation; the "
+                            "complete question belongs in a numbered Example",
+                        )
+                    elif case_title and _GENERIC_CASE_DEFINITION_RE.fullmatch(
+                            case_title):
+                        _add(
+                            errors, i, "concept_details",
+                            "generic_case_definition",
+                            "Case text must define a meaningful reusable "
+                            "variation, not a generic practice label",
+                        )
+                    numbers = [
+                        marker.group("number") or ""
+                        for marker in markers
+                    ]
+                    if (
+                        any(
+                            marker.group("label").lower() != "example"
+                            for marker in markers
+                        )
+                        or numbers != [
+                            f"{number:02d}"
+                            for number in range(1, len(markers) + 1)
+                        ]
+                    ):
+                        _add(
+                            errors, i, "concept_details",
+                            "example_numbering",
+                            "Examples must use contiguous zero-padded labels "
+                            "starting at Example 01 within every Case",
+                        )
         if is_culm and details and not details.split(" // ", 1)[0].startswith(
                 "Description: Recap"):
             _add(errors, i, "concept_details", "culmination_description",

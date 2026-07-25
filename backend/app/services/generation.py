@@ -807,8 +807,9 @@ prompts.register(
    "Definition of …", never a raw question, and never a textbook Activity title.
    Textbook activities, experiments, and discussion cases belong in
    Activity/Info Hub, not as Cases.
-   Every concrete source question goes on its own "Example:" line under the Case
-   it instantiates, copied in FULL without truncation. Include EVERY source
+   Every concrete source question goes on its own numbered "Example 01:" line
+   under the Case it instantiates, copied in FULL without truncation. Restart
+   Example numbering at 01 for each Case. Include EVERY source
    example available for each Case; only skip Types when a concept has zero
    meaningful assessable task varieties.""")
 
@@ -828,8 +829,9 @@ prompts.register(
    and never a textbook Activity / discussion-case title. Activities,
    experiments, and classroom discussion cases belong in Activity/Info Hub, not
    as Cases.
-   Every concrete source question goes on its own "Example:" line under the Case
-   it instantiates, copied in FULL without truncation. Include EVERY source
+   Every concrete source question goes on its own numbered "Example 01:" line
+   under the Case it instantiates, copied in FULL without truncation. Restart
+   Example numbering at 01 for each Case. Include EVERY source
    example available for each Case; only skip Types when the concept has zero
    meaningful assessable varieties.""")
 
@@ -839,9 +841,10 @@ prompts.register(
     default=(
         "Types: Type 01: <reusable assessable pattern> "
         "Case 01: <conceptual sub-type named by givens/ask/constraint> "
-        "Example: <full source question verbatim> "
+        "Example 01: <full source question verbatim> "
+        "Example 02: <another source question for the same Case> "
         "Case 02: <another conceptual sub-type for the same pattern> "
-        "Example: <another full source question verbatim, with figure URL "
+        "Example 01: <another full source question verbatim, with figure URL "
         "when the ask is visual: (Refer fig. X) "
         "[img src=\"https://full-public-image-url\" alt=\"meaningful visual description\"]>"
     ))
@@ -913,35 +916,26 @@ OUTPUT CONTRACT for concept_description (ONE string, sections joined by " // "):
 - Then include Types ONLY IF the concept has assessable question/problem
   varieties. {{types_guidance}}
   Format — use zero-padded numeric labels exactly "Type 01:", "Case 01:", and
-  an "Example:" line for every concrete source question:
+  a numbered "Example 01:" line for every concrete source question; restart
+  Example numbering at 01 for every Case:
   Types: Type 01: <pattern definition> Case 01: <defined sub-type>
-  Example: <full source question> Example: <another full source question>
-  Case 02: <defined sub-type> Example: <...> Type 02: <next pattern> ...
+  Example 01: <full source question> Example 02: <another full source question>
+  Case 02: <defined sub-type> Example 01: <...> Type 02: <next pattern> ...
   Restart at Type 01 within each concept — they are renumbered continuously
   across the whole chapter afterwards, so do NOT try to continue numbers yourself.
 - Example Types block:
   {{types_example}}
-- Every normal (non-culmination) concept MUST end with at least one learner-
-  analysis section: Misconceptions, Error Analysis, or both.
-  Misconceptions: commonly held incorrect beliefs or interpretations about the
-  concept. Prefer the 1-3 highest-value false beliefs and state them as beliefs,
-  not as corrections or isolated slips.
-  Error Analysis: plausible procedural, computational, representational, or
-  reasoning mistakes students may make while applying the concept, even when
-  they understand the underlying idea. Name the learner explicitly (for
-  example, "Students may omit ...") and describe the actual mistaken step or
-  action, not merely that the answer may be wrong.
-  Use both sections only when they capture genuinely distinct, non-duplicative
-  issues. If both are present, Misconceptions MUST come before Error Analysis.
-  Never write "N/A", "None", "Not applicable", generic filler, or placeholders.
+- Every normal (non-culmination) concept MUST end with exactly one top-level
+  learner-analysis section in this exact shape:
+  Misconception/ Error Analysis: Misconceptions: <commonly held incorrect
+  belief>; Error Analysis: <distinct plausible application/reasoning mistake>
+  Both labelled parts are required and non-duplicative. Name the learner
+  explicitly and describe the actual belief/action. Never emit separate
+  top-level Misconceptions or Error Analysis sections, and never write filler.
 - Valid structures:
-  Description: ... // Misconceptions: ...
-  Description: ... // Error Analysis: ...
-  Description: ... // Types: ... // Misconceptions: ...
-  Description: ... // Types: ... // Error Analysis: ...
-  Description: ... // Activity/Info Hub: ... // Misconceptions: ...
-  Description: ... // Activity/Info Hub: ... // Error Analysis: ...
-  Description: ... // Activity/Info Hub: ... // Types: ... // Misconceptions: ... // Error Analysis: ...
+  Description: ... // Misconception/ Error Analysis: Misconceptions: ...; Error Analysis: ...
+  Description: ... // Types: ... // Misconception/ Error Analysis: Misconceptions: ...; Error Analysis: ...
+  Description: ... // Activity/Info Hub: ... // Types: ... // Misconception/ Error Analysis: Misconceptions: ...; Error Analysis: ...
 - Use " // " as the separator. Do NOT use newlines inside concept_description
   except the Achieving Mastery line inside Description.
 - Do NOT mention groups, group columns, or assessment labels — not required here.
@@ -983,9 +977,9 @@ prompts.register(
             "headings (strip section numbers like 1.2 from names). One "
             "culmination per topic. Write clear source-grounded Descriptions; "
             "add Types only when there are source question/task/"
-            "assessable formats; add Misconceptions for commonly held false "
-            "beliefs and/or Error Analysis for plausible application mistakes, "
-            "with at least one of those sections on every normal concept. "
+            "assessable formats; end each normal concept with exactly one "
+            "Misconception/ Error Analysis section containing both labelled "
+            "Misconceptions and Error Analysis meanings. "
             "Types use zero-padded 'Type 01:'/'Case 01:' labels:")
 
 
@@ -1018,8 +1012,12 @@ Your job (apply ALL of these intelligently — do not rely on downstream code):
    problem-solving, application, diagrams, or exercises, it MUST have a rich
    Types section classifying ALL distinct question/task patterns (including
    exercise, source, diagram, data, language, coding, practical, or numerical
-   items folded into the concept they test). Use zero-padded
-   numeric labels: Type 01: <name> Case 01: <prompt> Case 02: ... Type 02: ...
+   items folded into the concept they test). Use zero-padded labels:
+   Type 01: <pattern> Case 01: <declarative sub-type definition>
+   Example 01: <full question> Example 02: <another question for that Case>
+   Case 02: <definition> Example 01: <full question> Type 02: ...
+   Cases are definitions, never questions; questions appear only as numbered
+   Examples and numbering restarts at 01 for every Case.
    (restart at Type 01 per concept; continuous renumbering happens downstream).
    Only omit Types for concepts that are purely definitional with zero assessable
    formats. If the draft omitted Types where they belong, ADD them.
@@ -1032,14 +1030,12 @@ Your job (apply ALL of these intelligently — do not rely on downstream code):
 7. **No groups.** Do not mention groups, group columns, or assessment labels.
 
 8. **Hygiene.** Keep Description // Activity/Info Hub // Types //
-   Misconceptions // Error Analysis order; no source-artifact references
-   ("Example 19", "Fig 2", "MMD"). Every normal concept must include at least
-   one of Misconceptions or Error Analysis. Misconceptions are commonly held
-   incorrect beliefs/interpretations; Error Analysis identifies plausible
-   procedural, computational, representational, or reasoning mistakes made
-   while applying the concept. Error Analysis must name the learner explicitly
-   and state the mistaken action. Include both only when distinct and
-   non-duplicative; never write N/A/None/filler. Activity/Info Hub is optional and holds
+   Misconception/ Error Analysis order; no source-artifact references
+   ("Example 19", "Fig 2", "MMD"). Every normal concept must end with exactly
+   one ``Misconception/ Error Analysis`` section containing both labelled
+   ``Misconceptions:`` and ``Error Analysis:`` meanings. They must be distinct,
+   learner-specific, and non-duplicative; never emit either as a separate
+   top-level section and never write N/A/None/filler. Activity/Info Hub is optional and holds
    activities / experiments / discussion cases — never Culmination dumps.
 
 9. **Chapter source.** When CHAPTER SOURCE text is provided, mine it for all
@@ -1075,23 +1071,22 @@ Rules:
 2. Rewrite the Description section using the CHAPTER SOURCE. Add or repair only
    learner-analysis content that is missing, generic, mislabeled, or duplicated.
 3. Do not include Types; the dedicated Types pass adds them later.
-4. Preserve any useful Misconceptions and Error Analysis sections. Every normal
-   concept must retain at least one of them. Misconceptions capture commonly
-   held incorrect beliefs or interpretations; Error Analysis captures plausible
-   procedural, computational, representational, or reasoning mistakes made
-   while applying the concept. Error Analysis must name the learner explicitly
-   (for example, "Students may omit ...") and state the mistaken action. Keep
-   both only when distinct and non-duplicative.
-   Do not write "N/A", "None", "Not applicable", or generic filler.
+4. Preserve useful learner analysis but normalize it so every normal concept
+   ends with exactly one top-level section:
+   ``Misconception/ Error Analysis: Misconceptions: <incorrect belief>;
+   Error Analysis: <distinct application/reasoning mistake>``.
+   Both labelled parts are required and learner-specific. Never emit separate
+   top-level Misconceptions or Error Analysis sections. Do not write "N/A",
+   "None", "Not applicable", or generic filler.
 5. Description must be source-grounded, clear, and complete enough to teach from:
    include what the concept means, the key rule/process/relationship, important
    conditions, and one compact example only when it helps.
 6. Do NOT dump the full textbook. Target 2-4 compact sentences, roughly 45-90
    words. Avoid repetitive wording across sibling concepts.
-7. Valid concept_description forms:
-   Description: ... // Misconceptions: ...
-   Description: ... // Error Analysis: ...
-   Description: ... // Misconceptions: ... // Error Analysis: ...
+   Explain the source in original teacher-facing language: do not copy a long
+   contiguous sentence or paragraph from the textbook into Description.
+7. Valid concept_description form:
+   Description: ... // Misconception/ Error Analysis: Misconceptions: ...; Error Analysis: ...
 8. Do not mention groups, group columns, assessment labels, source artifacts, or
    the words "MMD"/"MMDs".""" )
 
@@ -1110,26 +1105,26 @@ how curriculum teams first generate a comprehensive types list, then manually
 keep what they need.
 
 INPUT: a draft concept map (Description is already refined; Types may or may
-not exist, and at least one of Misconceptions or Error Analysis should already
-be present on every normal concept) plus CHAPTER SOURCE text.
+not exist, and one combined Misconception/ Error Analysis section should
+already be present on every normal concept) plus CHAPTER SOURCE text.
 
 OUTPUT: Return ONLY JSON {"rows": [{"topic","concept","concept_description","keywords"}, ...]}
 with the SAME rows (same topics and concept names) but Types sections filled in.
 
 RULES:
-1. Keep each Description and any existing useful Misconceptions or Error
-   Analysis text UNCHANGED (do not rewrite them).
+1. Keep each Description and the existing combined learner-analysis text
+   UNCHANGED (do not rewrite it).
 2. Insert or replace ONLY the Types section. Place it after Description and
-   before Misconceptions or Error Analysis when either exists:
-   Description: ... // Types: ... // Misconceptions: ...
-   Description: ... // Types: ... // Error Analysis: ...
-   Description: ... // Types: ... // Misconceptions: ... // Error Analysis: ...
+   before the combined learner-analysis section:
+   Description: ... // Types: ... // Misconception/ Error Analysis:
+   Misconceptions: ...; Error Analysis: ...
 3. {{types_guidance}}
 4. Format — zero-padded numeric labels exactly "Type 01:", "Case 01:", and an
-   "Example:" line per concrete source question:
+   "Example 01:" line per concrete source question; restart Example numbering
+   at 01 for every Case:
    Types: Type 01: <pattern definition> Case 01: <defined sub-type>
-   Example: <full source question> Example: <another full source question>
-   Case 02: <defined sub-type> Example: <...> Type 02: <next pattern> ...
+   Example 01: <full source question> Example 02: <another full source question>
+   Case 02: <defined sub-type> Example 01: <...> Type 02: <next pattern> ...
    (restart at Type 01 per concept; continuous renumbering across the chapter
    happens downstream).
 5. Example:
@@ -1281,8 +1276,8 @@ Rules:
 - Description must start with "Description:" and contain 2-4 source-grounded
   sentences. Include concise literal source_evidence that proves placement.
 - Do not repeat any supplied existing concept title.
-- Do not emit Types, Cases, Examples, Misconceptions, or Error Analysis; the
-  dedicated refinement passes add those sections after recovery.
+- Do not emit Types, Cases, Examples, or learner analysis; the dedicated
+  refinement passes add those sections after recovery.
 """)
 
 prompts.register(
@@ -1400,10 +1395,10 @@ Rules:
 - Rewrite the Description section. You may also add or repair only the learner-
   analysis tail needed to satisfy the contract below.
 - Preserve any existing Activity/Info Hub exactly. Do not include Types; the
-  dedicated Types pass adds them later. Preserve valid Misconceptions and Error
-  Analysis; repair only missing, generic,
-  mislabeled, overlapping, or misclassified learner-analysis content. Do not
-  move activities into Description or Culmination.
+  dedicated Types pass adds them later. Preserve valid learner analysis, but
+  normalize its public shape to the single combined section required below;
+  repair only missing, generic, mislabeled, overlapping, or misclassified
+  content. Do not move activities into Description or Culmination.
 - Description answers: what the concept is; what rule/process/relationship/method matters;
   when/why it is used. Ground it in the source: name the key people, places,
   dates, formulas, quantities, conditions, and causal links that a teacher
@@ -1416,20 +1411,22 @@ Rules:
   Example ending: "...\\nAchieving Mastery: Using the midpoint property to set up the smaller triangles correctly."
 - Use 45-90 words unless the concept is very simple. Never leave a Description
   truncated mid-sentence.
+- Paraphrase source prose into original teacher-facing language. Do not copy a
+  long contiguous sentence or paragraph from the textbook into Description.
 - A derivation/proof/formula-building concept MUST include one compact,
   source-grounded worked derivation cue introduced with "Worked Example:".
   It must demonstrate that derivation's reasoning, not merely apply or verify
   the finished result.
 - Do not include Types; the dedicated Types pass adds them later.
-- Every non-culmination concept must include at least one of Misconceptions or
-  Error Analysis. Misconceptions are commonly held incorrect beliefs or
-  interpretations about the concept. Error Analysis identifies plausible
-  procedural, computational, representational, or reasoning mistakes students
-  may make while applying it. Error Analysis must name the learner explicitly
-  (for example, "Students may omit ...") and state the mistaken action. Either
-  section may appear alone; include both only when their content is genuinely
-  distinct and non-duplicative. Keep canonical order, with Misconceptions before
-  Error Analysis, and never use filler.
+- Every non-culmination concept must end with exactly one top-level section in
+  this exact form:
+  Misconception/ Error Analysis: Misconceptions: <commonly held incorrect
+  belief or interpretation>; Error Analysis: <plausible procedural,
+  computational, representational, or reasoning mistake while applying it>
+  Both labelled parts are required, must be distinct and non-duplicative, and
+  must name the learner explicitly (for example, "Students may assume ..." /
+  "Students may omit ..."). Never emit separate top-level "Misconceptions:" or
+  "Error Analysis:" sections, and never use filler.
 - Write the mastery statement exactly ONCE, at the end of the Description —
   never repeat it inside or after either learner-analysis section.
 - No N/A, None, Not applicable, or placeholder text.
@@ -1471,18 +1468,25 @@ Rules:
 - Textbook Activity / experiment / discussion tasks belong in Activity/Info Hub,
   not as Types/Cases.
 - Omit Types only for concepts with zero meaningful assessable question/task varieties.
-- If a Type is present, every Case must include a full self-contained example
-  question from the source. Do not shorten source questions; preserve all
+- If a Type is present, every Case must include a full self-contained numbered
+  "Example 01:" question from the source. Restart Example numbering at 01 for
+  each Case. Do not shorten source questions; preserve all
   given values, conditions, data, quotations, and the exact ask needed for a
   teacher to execute the example.
 - Include as many source examples as are available for each Type. Skip only
   purely introductory or rhetorical prompts with no expected student response.
 - Culmination rows may receive Types only for mixed multi-concept synthesis /
   revision / application; keep their Description ("Description: Recap") unchanged.
-- Use zero-padded labels exactly "Type 01:" and "Case 01:".
-- Do not rewrite Misconceptions or Error Analysis except to keep existing useful
-  sections in place and in that canonical order.
+- Use zero-padded labels exactly "Type 01:", "Case 01:", and "Example 01:".
+- Do not rewrite the existing canonical ``Misconception/ Error Analysis``
+  section except to keep it after Types. Never split it into separate top-level
+  Misconceptions and Error Analysis sections.
 - Do not include source labels such as "Example 3" or "Exercise 1.2" in public concept_details.
+- When an Example refers to one or more figures, preserve every figure
+  reference and place the matching source image tag directly in that same
+  Example, using exactly [img src="https://..." alt="..."]. Never attach an
+  adjacent but unreferenced figure, and never place the URL only elsewhere in
+  the concept.
 """)
 
 prompts.register(
@@ -1932,8 +1936,8 @@ Return ONLY strict JSON:
 Rules:
 - Return the SAME concept rows in the SAME order. You may only move/rewrite the
   Types section of each concept_description; keep Description, Achieving
-  Mastery, Misconceptions, Error Analysis, topic, parent_concept, concept, and
-  keywords intact.
+  Mastery, the single ``Misconception/ Error Analysis`` section, topic,
+  parent_concept, concept, and keywords intact.
 - Every inventory qid/question must appear exactly once as an Example under
   exactly one Case in exactly one concept. Missing qids are defects. Duplicate
   qids/questions are defects.
@@ -1952,6 +1956,9 @@ Rules:
   a Case name (avoid "Definition of …").
 - Keep all full question wording, subquestions, values, units, conditions, and
   canonical [Katex]/[img] content. Never truncate.
+- When a question names one or more figures, every matching source image URL
+  must remain embedded in that same Example as a canonical
+  [img src="https://..." alt="..."] tag. Do not substitute a nearby figure.
 - If a source question already appears under the correct concept, preserve it.
 - Never drop a question to fix duplication; move the duplicate to its correct
   single home.
@@ -2028,16 +2035,14 @@ Return ONLY strict JSON:
 Rules:
 - Fix only the listed issues.
 - Preserve valid rows.
-- Preserve valid fields, including parent_concept, Types, and useful
-  Misconceptions or Error Analysis.
-- Every normal concept must finish with at least one of Misconceptions or Error
-  Analysis. Misconceptions are commonly held incorrect beliefs or
-  interpretations; Error Analysis describes plausible procedural,
-  computational, representational, or reasoning mistakes made while applying
-  the concept. Error Analysis must name the learner explicitly (for example,
-  "Students may omit ...") and state the mistaken action. Either may appear
-  alone; retain both only when distinct and non-duplicative, ordered
-  Misconceptions then Error Analysis. Culmination rows are exempt.
+- Preserve valid fields, including parent_concept, Types, and useful learner
+  analysis.
+- Every normal concept must finish with exactly one top-level section:
+  ``Misconception/ Error Analysis: Misconceptions: <incorrect belief>;
+  Error Analysis: <distinct mistaken action>``. Both labelled parts are
+  required, learner-specific, and non-duplicative. Never emit separate
+  top-level Misconceptions or Error Analysis sections. Culmination rows are
+  exempt.
 - Do not rewrite the full chapter unnecessarily.
 - Never add filler.
 - Keep strict JSON.
@@ -2058,6 +2063,11 @@ Rules:
   concept — rewrite the cell so it describes exactly one concept. NEVER
   delete the other concept's material blindly; if it clearly belongs to a
   different provided row, move it there.
+- For verbatim_source_description issues: retain the same facts but rewrite
+  the Description in original teacher-facing language. Do not reproduce a
+  long contiguous sentence or paragraph from the supplied source. This rule
+  applies only to Description; full source questions remain allowed in Types
+  Examples.
 - For short_case_example issues: replace the truncated Example with the FULL
   source question wording (and Mathpix URL when the question is visual).
 """)
@@ -2078,9 +2088,9 @@ Rules:
   Achieving Mastery: <one short sentence stating what the learner can do when this concept is mastered>
 - The sentence must be specific to the concept, e.g.
   "Achieving Mastery: Using the midpoint property to set up the smaller triangles correctly."
-- Do not add Types, Misconceptions, or Error Analysis sections. No source artifacts
-  (Example 3, Exercise 1.2, Fig 4, page numbers) and never the words
-  "MMD"/"MMDs".
+- Do not add Types or alter the existing single ``Misconception/ Error
+  Analysis`` section. No source artifacts (Example 3, Exercise 1.2, Fig 4,
+  page numbers) and never the words "MMD"/"MMDs".
 """)
 
 prompts.register(
@@ -2101,11 +2111,11 @@ Rules:
   first row's topic in reading order).
 - MERGE the content — never discard it: combine the Descriptions into one
   coherent Description (no repetition), keep the union of all Types/Cases/
-  Examples, the union of all specific Misconceptions, and the union of all
-  specific Error Analysis items.
-- Keep canonical "Description: ... // Types: ... // Misconceptions: ... // Error Analysis: ..."
-  order and the single mastery line. Either learner-analysis section may appear
-  alone; keep both only when they are distinct and non-duplicative.
+  Examples, and retain all specific learner-analysis items.
+- Keep the single mastery line and canonical order:
+  ``Description: ... // Types: ... // Misconception/ Error Analysis:
+  Misconceptions: ...; Error Analysis: ...``. Both distinct labelled parts are
+  required inside that one top-level section.
 - Never invent new content; only reorganize what the rows carry.
 """)
 
@@ -2134,30 +2144,26 @@ prompts.register(
     "concepts.misconceptions.system", category=_CONCEPTS_CAT,
     label="Missing/generic learner-analysis writer system prompt",
     default="""\
-Write or repair the learner-analysis section(s) for concept rows.
+Write or repair the single learner-analysis section for concept rows.
 Return ONLY strict JSON:
 {"rows":[{"topic":"","parent_concept":"","concept":"","concept_description":"","keywords":""}]}.
 
 Rules:
-- Each provided normal row is missing a usable learner-analysis section, carries
-  generic filler, or duplicates the same issue across two labels. Return the
+- Each provided normal row is missing usable learner analysis, carries generic
+  filler, or duplicates the same issue across labels. Return the
   SAME rows: identical topic, parent_concept, concept, keywords, Description,
   Activity/Info Hub, and Types. Change only the learner-analysis tail.
-- Every row MUST finish with at least one of these sections:
-  * Misconceptions: commonly held incorrect beliefs or interpretations about
-    the concept. State each false belief in learner voice, such as "Students may
-    believe/think/assume ..." or "Students may confuse ...". Do not write the
-    correction as though it were the misconception.
-  * Error Analysis: plausible procedural, computational, representational, or
-    reasoning mistakes learners may make while applying the concept, even when
-    they understand the underlying idea. Name the learner explicitly and state
-    the actual mistaken step or action (for example, "Students may use the
-    wrong sign, unit, operation, representation, sequence, evidence, or
-    inference"), not merely that the result may be wrong.
-- Either section may appear alone. Include both only when they describe
-  genuinely distinct, non-duplicative issues. If both appear, order them exactly
-  "Misconceptions: ... // Error Analysis: ..." at the end.
-- Return only the 1-3 highest-value, likely items in each included section.
+- Every row MUST finish with exactly:
+  ``Misconception/ Error Analysis: Misconceptions: <beliefs>; Error Analysis:
+  <mistakes>``.
+  ``Misconceptions`` states commonly held incorrect beliefs or interpretations
+  in learner voice, such as "Students may believe/think/assume ..." or
+  "Students may confuse ..."; do not write the correction as the belief.
+  ``Error Analysis`` states plausible procedural, computational,
+  representational, or reasoning mistakes while applying the concept, naming
+  the learner and the actual mistaken step or action. Both labelled parts are
+  required and must be distinct. Never emit them as separate top-level sections.
+- Return only the 1-3 highest-value, likely items in each labelled part.
   Merge overlapping variants instead of producing an exhaustive fragmented list.
 - For Misconceptions, avoid "should", "instead", "correctly", "remember that",
   and declarative textbook corrections such as "A nation is not ...". The
@@ -3099,7 +3105,7 @@ def _canonicalize_concept_rich_text(records: list[dict]) -> list[dict]:
         if record.get("concept_details"):
             record["concept_details"] = kr.canonicalize_rich_text(
                 _normalize_common_mathpix_wrappers(
-                    record["concept_details"]))
+                    _inventory_comparison_text(record["concept_details"])))
     return records
 
 
@@ -3121,8 +3127,7 @@ def _inject_types(details: str, types_body: str) -> str:
         out = []
         for label, content in sections:
             if not inserted and (
-                cr.is_misconception_label(label)
-                or cr.is_error_analysis_label(label)
+                cr.is_learner_analysis_label(label)
             ):
                 out.append(("Types", types_body.strip()))
                 inserted = True
@@ -3172,9 +3177,19 @@ def _strip_public_source_heading(text: str) -> str:
     """Remove Markdown/OCR block headings from public Hub/Example prose."""
     value = re.sub(
         r"(?im)^\s*#{1,6}\s*(?:activity|discuss|discussion|exercise|"
-        r"question|questions)\b[^\n]*\n?",
+        r"question|questions)\b(?:\s+\d+(?:\.\d+)*)?\s*[:.)-]?\s*"
+        r"(?:\n|$)",
         "",
         str(text or ""),
+    )
+    # Inventory sanitation intentionally collapses whitespace. Preserve the
+    # prompt when a former heading and its first sentence now share one line
+    # (for example ``## Activity Imagine you are a weaver ...``).
+    value = re.sub(
+        r"(?im)^\s*#{1,6}\s*(?:activity|discuss|discussion|exercise|"
+        r"question|questions)\b\s*[:.)-]?\s*",
+        "",
+        value,
     )
     value = re.sub(r"(?m)^\s*#{1,6}\s*", "", value)
     # Preserve line boundaries until solution/answer stripping has run; those
@@ -3233,12 +3248,14 @@ def _compact_activity_hub_note(item: dict, suggested: str = "") -> str:
     if not gist:
         note = f"{prefix}: Complete the source-grounded classroom task."
 
-    # A non-assessable visual activity may have no Type Example, so retain one
-    # canonical image tag in its concise Hub note.
+    # A non-assessable visual activity may have no Type Example, so retain all
+    # of its referenced canonical image tags in the concise Hub note.
     task = _inventory_task_text(item)
-    image_match = _BRACKET_IMAGE_RE.search(task)
-    if image_match and image_match.group(0) not in note:
-        note = f"{note.rstrip('.')} {image_match.group(0)}"
+    image_tags = list(dict.fromkeys(
+        match.group(0) for match in _BRACKET_IMAGE_RE.finditer(task)))
+    for image_tag in image_tags:
+        if image_tag not in note:
+            note = f"{note.rstrip('.')} {image_tag}"
     return kr.canonicalize_rich_text(note.rstrip() + ".")
 
 
@@ -3273,10 +3290,10 @@ def _activity_hub_locations(records: list[dict], item: dict) -> list[int]:
         return locations
     # Backward compatibility for persisted Hubs created before compact notes
     # carried a stable label marker.
-    task_key = bi.normalize_question_text(_inventory_task_text(item))
+    task_key = _inventory_coverage_key(_inventory_task_text(item))
     return [
         index for index, record in enumerate(records)
-        if task_key and task_key in bi.normalize_question_text(
+        if task_key and task_key in _inventory_coverage_key(
             cr.activity_hub_body(record.get("concept_details") or ""))
     ]
 
@@ -3298,7 +3315,7 @@ def _inventory_item_already_in_hubs(
 ) -> bool:
     if _activity_hub_locations(records, item):
         return True
-    key = bi.normalize_question_text(_inventory_task_text(item))
+    key = _inventory_coverage_key(_inventory_task_text(item))
     source_kind = (item.get("source_kind") or "").strip().lower()
     return (
         source_kind in _HUB_INVENTORY_KINDS
@@ -3488,8 +3505,8 @@ def _empty_inventory() -> dict:
 
 
 _WORKED_EXAMPLE_START_RE = re.compile(
-    r"(?im)^[ \t]*(?:worked[ \t]+)?example[ \t]+"
-    r"([A-Za-z0-9]+)[ \t]*[:：.)-][ \t]*",
+    r"(?im)^[ \t]*(?:#{1,6}[ \t]*)?(?:worked[ \t]+)?example[ \t]+"
+    r"([A-Za-z0-9]+(?:\.[A-Za-z0-9]+)*)[ \t]*[:：.)-]?[ \t]*",
 )
 _NUMBERED_TASK_START_RE = re.compile(
     r"(?im)^[ \t]*(?:q(?:uestion)?[ \t]*)?[\[(]?"
@@ -3534,10 +3551,31 @@ _INVENTORY_TASK_MARKER_RE = re.compile(
     r"\?"
     r")",
 )
+_STANDALONE_CHECKPOINT_DIRECTIVE_RE = re.compile(
+    r"^(?:summari[sz]e|describe|discuss|explain|compare|comment|"
+    r"analy[sz]e|interpret|identify|write|list|state|trace|justify|"
+    r"assess|evaluate|find|choose|show|why|how|what|which|who)\b",
+    re.IGNORECASE,
+)
 _NON_TASK_NUMBERED_BLOCK_RE = re.compile(
     r"\\begin\{(?P<env>figure|tabular)\}.*?\\end\{(?P=env)\}",
     re.IGNORECASE | re.DOTALL,
 )
+
+
+def _normalized_inventory_heading(heading: str) -> str:
+    """Normalize structural task headings, including OCR-spaced words."""
+    value = _strip_section_number(str(heading or "")).strip()
+    # ``_collapse_spaced_heading_word`` is defined with the source-topic
+    # helpers below. Runtime lookup is intentional: this parser runs only after
+    # the module is fully loaded.
+    value = _collapse_spaced_heading_word(value)
+    return re.sub(r"\s+", " ", value).strip().lower()
+
+
+def _is_question_list_heading(heading: str) -> bool:
+    """True for in-text QUESTION(S) blocks, never final exercises."""
+    return _normalized_inventory_heading(heading) in {"question", "questions"}
 
 
 def _inventory_task_without_solution(text: str, *, aggressive: bool = False) -> str:
@@ -3569,7 +3607,7 @@ def _is_chapter_wide_task_section(
     paired_sections: list[tuple[str, dict]],
 ) -> bool:
     """Whether a final generic review block semantically spans the chapter."""
-    heading = _strip_section_number(section.get("heading") or "").strip()
+    heading = _normalized_inventory_heading(section.get("heading") or "")
     if (
         not _CHAPTER_WIDE_TASK_HEADING_RE.match(heading)
         or section.get("heading_number_prefix")
@@ -3592,6 +3630,7 @@ def _question_prompts_from_text(text: str) -> list[str]:
     the semantic inventory pass can still classify ambiguous prose.
     """
     prompts_out: list[str] = []
+    text = _inventory_comparison_text(str(text or ""))
     source = str(text or "").translate(str.maketrans({"？": "?", "！": "!"}))
     for source_line in source.splitlines():
         normalized = re.sub(r"\s+", " ", source_line).strip()
@@ -3609,6 +3648,7 @@ def _question_prompts_from_text(text: str) -> list[str]:
 
 def _activity_has_assessable_response(text: str) -> bool:
     """Whether an Activity explicitly asks for a learner-produced response."""
+    text = _inventory_comparison_text(str(text or ""))
     value = str(text or "").translate(str.maketrans({"？": "?", "！": "!"}))
     if "?" in value:
         return True
@@ -3620,18 +3660,78 @@ def _activity_has_assessable_response(text: str) -> bool:
 
 
 def _trim_activity_ocr_bleed(text: str) -> str:
-    """Stop an Activity at a figure when lowercase prose resumes after it.
+    """Stop an Activity when OCR has joined following textbook prose.
 
     Mathpix can insert an Activity in the middle of a surrounding paragraph.
     The resumed prose then remains in the Activity section until the next
-    heading. A lowercase continuation immediately after ``\\end{figure}`` is
+    heading.  A lowercase continuation immediately after ``\\end{figure}`` is
     strong structural evidence of that OCR splice, not another instruction.
+    The same defect can appear before a figure: a one-line question followed
+    by a lowercase fragment, or an instruction paragraph followed by a blank
+    line and unrelated exposition.  Keep only that first task paragraph in
+    those high-confidence forms; multi-step procedure activities remain whole.
     """
     value = str(text or "")
+    lines = value.splitlines()
+    first_task_line = next(
+        (
+            index for index, line in enumerate(lines)
+            if line.strip() and not line.lstrip().startswith("#")
+        ),
+        None,
+    )
+    if first_task_line is not None:
+        first_line = _inventory_comparison_text(lines[first_task_line].strip())
+        next_nonempty = next(
+            (
+                line.strip() for line in lines[first_task_line + 1:]
+                if line.strip()
+            ),
+            "",
+        )
+        if first_line.endswith(("?", "？")) and next_nonempty[:1].islower():
+            return "\n".join(lines[:first_task_line + 1]).rstrip()
+
+        paragraph_end = first_task_line + 1
+        while paragraph_end < len(lines) and lines[paragraph_end].strip():
+            paragraph_end += 1
+        first_paragraph = " ".join(
+            line.strip() for line in lines[first_task_line:paragraph_end]
+        )
+        first_paragraph = _inventory_comparison_text(first_paragraph)
+        if ("?" in first_paragraph or "？" in first_paragraph) and paragraph_end < len(lines):
+            return "\n".join(lines[:paragraph_end]).rstrip()
     for match in re.finditer(r"\\end\{figure\}", value, re.IGNORECASE):
         suffix = value[match.end():].lstrip()
         if suffix and suffix[0].islower():
             return value[:match.end()].rstrip()
+    return value
+
+
+def _trim_standalone_checkpoint_ocr_bleed(text: str) -> str:
+    """Trim a direct checkpoint prompt before adjacent resumed source prose."""
+    value = _strip_public_source_heading(str(text or ""))
+    lines = value.splitlines()
+    first_index = next(
+        (index for index, line in enumerate(lines) if line.strip()), None)
+    if first_index is None:
+        return value
+    first_line = _inventory_comparison_text(lines[first_index].strip())
+    if (
+        not _STANDALONE_CHECKPOINT_DIRECTIVE_RE.match(first_line)
+        or not first_line.endswith((".", "?", "!", "…", "？", "！"))
+    ):
+        return value
+    next_nonempty = next(
+        (line.strip() for line in lines[first_index + 1:] if line.strip()),
+        "",
+    )
+    if (
+        next_nonempty[:1].islower()
+        or re.match(r"\\begin\{(?:figure|table)\}", next_nonempty,
+                    re.IGNORECASE)
+    ):
+        return first_line
     return value
 
 
@@ -3644,8 +3744,9 @@ def _inventory_chunk_has_task_markers(chunk: dict) -> bool:
         heading = str(section.get("heading") or "")
         if (
             _EXERCISE_RE.search(heading)
+            or _is_question_list_heading(heading)
             or _CHAPTER_WIDE_TASK_HEADING_RE.match(
-                _strip_section_number(heading).strip())
+                _normalized_inventory_heading(heading))
         ):
             return True
         if _INVENTORY_TASK_MARKER_RE.search(body):
@@ -3666,7 +3767,7 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
     def append_anchor(
         *, section_index: int, position: int, topic: str, kind: str,
         label: str, parent_label: str, task: str, chapter_wide: bool = False,
-        activity_origin: bool = False,
+        activity_origin: bool = False, prefer_task_boundary: bool = False,
     ) -> None:
         task = _strip_leading_source_task_label(
             _inventory_task_without_solution(task, aggressive=(
@@ -3694,6 +3795,10 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
             "requires_context": False,
             "_topic_scope": "chapter" if chapter_wide else "topic",
             "_activity_origin": activity_origin,
+            "_source_section_index": section_index,
+            "_source_position": position,
+            "_source_task_boundary": (
+                "direct_prompt" if prefer_task_boundary else ""),
         }))
 
     for section_index, (topic, section) in enumerate(paired):
@@ -3719,7 +3824,7 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
             )
 
         heading = section.get("heading") or ""
-        container_heading = _strip_section_number(heading).strip()
+        container_heading = _normalized_inventory_heading(heading)
         if (
             not example_matches
             and re.match(
@@ -3753,11 +3858,19 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
                 activity_origin=assessable_activity,
             )
             continue
-        is_task_list_heading = bool(
-            _EXERCISE_RE.search(heading)
-            or _CHAPTER_WIDE_TASK_HEADING_RE.match(
-                _strip_section_number(heading).strip())
+        is_question_list_heading = _is_question_list_heading(heading)
+        is_exercise_list_heading = bool(
+            re.search(
+                r"\b(?:exercises?|ex\.|review|practice|problems?)\b",
+                f"{heading} {container_heading}",
+                re.IGNORECASE,
+            )
+            or (chapter_wide and not is_question_list_heading)
         )
+        is_task_list_heading = (
+            is_exercise_list_heading or is_question_list_heading)
+        list_item_kind = (
+            "exercise" if is_exercise_list_heading else "intext_question")
         if is_task_list_heading:
             task_matches = list(_NUMBERED_TASK_START_RE.finditer(
                 _mask_non_task_numbered_blocks(body)))
@@ -3773,7 +3886,7 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
                     section_index=section_index,
                     position=match.start(),
                     topic=topic,
-                    kind="exercise",
+                    kind=list_item_kind,
                     label=question_label,
                     parent_label=heading,
                     task=task_text,
@@ -3813,6 +3926,7 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
                     task=task,
                 )
             if not question_prompts:
+                checkpoint_task = _trim_standalone_checkpoint_ocr_bleed(body)
                 append_anchor(
                     section_index=section_index,
                     position=0,
@@ -3820,7 +3934,9 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
                     kind="checkpoint_question",
                     label=heading or f"Checkpoint {section_index + 1}",
                     parent_label=heading,
-                    task=body,
+                    task=checkpoint_task,
+                    prefer_task_boundary=(
+                        checkpoint_task != _strip_public_source_heading(body)),
                 )
         elif not is_task_list_heading and not example_matches:
             # Multiple standalone interrogative paragraphs form an unlabelled
@@ -3918,10 +4034,85 @@ _LEADING_INVENTORY_TASK_NUMBER_RE = re.compile(
 )
 
 
+_INVENTORY_MOJIBAKE_RE = re.compile(r"(?:Ã.|Â.|â.|ï¼)")
+
+# The upload path can discard one CP1252 control byte from a full-width
+# punctuation sequence. Repair intact forms directly before attempting a
+# generic UTF-8 round-trip, then handle the incomplete prefix conservatively.
+_FULLWIDTH_MOJIBAKE_REPAIRS = {
+    "\u00ef\u00bc\u017d": ".",
+    "\u00ef\u00bc\u02c6": "(",
+    "\u00ef\u00bc\u2030": ")",
+    "\u00ef\u00bc\u0178": "?",
+    "\u00ef\u00bc\u0152": ",",
+}
+_MOJIBAKE_UTF8_FRAGMENT_RE = re.compile(
+    r"(?:[\u00c2\u00c3](?:[\u0080-\u00ff]|[\u0192\u0152\u017d\u0178"
+    r"\u02c6\u02dc\u20ac\u201a\u201e\u2026\u2020\u2021\u2030\u0160"
+    r"\u2039\u2018\u2019\u201c\u201d\u2022\u2013\u2014\u2122\u0161"
+    r"\u203a\u0153\u017e]))|(?:\u00e2(?:[\u0080-\u00ff]|[\u20ac\u201a"
+    r"\u0192\u201e\u2026\u2020\u2021\u02c6\u2030\u0160\u2039\u0152"
+    r"\u017d\u2018\u2019\u201c\u201d\u2022\u2013\u2014\u02dc\u2122"
+    r"\u0161\u203a\u0153\u017e\u0178])(?:[\u0080-\u00ff]|[\u20ac\u201a"
+    r"\u0192\u201e\u2026\u2020\u2021\u02c6\u2030\u0160\u2039\u0152"
+    r"\u017d\u2018\u2019\u201c\u201d\u2022\u2013\u2014\u02dc\u2122"
+    r"\u0161\u203a\u0153\u017e\u0178]))",
+)
+
+
+def _inventory_comparison_text(value: str) -> str:
+    """Repair common UTF-8 decoding damage for comparison and public text.
+
+    Resumed inventories can predate the current UTF-8 source parser.  Keep
+    their teacher-facing text untouched, but make ``HÃ¼bner`` match
+    ``Hübner`` and the CP1252 rendering of full-width Figure punctuation match
+    the current source anchor.  Re-encode only strings that carry a familiar
+    mojibake signature and only when the round trip is valid UTF-8.
+    """
+    text = str(value or "")
+    for _ in range(2):
+        if not _INVENTORY_MOJIBAKE_RE.search(text):
+            break
+        repaired = ""
+        # Most damaged checkpoint strings are a Latin-1 rendering of UTF-8.
+        # Full-width punctuation is often rendered through CP1252 instead.
+        for encoding in ("latin-1", "cp1252"):
+            try:
+                candidate = text.encode(encoding).decode("utf-8")
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                continue
+            if candidate != text:
+                repaired = candidate
+                break
+        if not repaired:
+            break
+        text = repaired
+
+    for damaged, replacement in _FULLWIDTH_MOJIBAKE_REPAIRS.items():
+        text = text.replace(damaged, replacement)
+    text = re.sub(r"\u00ef\u00bc(?=[A-Za-z])", " - ", text)
+
+    def repair_fragment(match: re.Match) -> str:
+        fragment = match.group(0)
+        for encoding in ("cp1252", "latin-1"):
+            try:
+                return fragment.encode(encoding).decode("utf-8")
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                continue
+        return fragment
+
+    for _ in range(2):
+        repaired = _MOJIBAKE_UTF8_FRAGMENT_RE.sub(repair_fragment, text)
+        if repaired == text:
+            break
+        text = repaired
+    return unicodedata.normalize("NFKC", text)
+
+
 def _inventory_task_match_key(item: dict) -> str:
     """Task text normalized for GPT-row/deterministic-anchor matching."""
-    task = bi.normalize_question_text(
-        item.get("raw_task") or item.get("normalized_task") or "")
+    task = bi.normalize_question_text(_inventory_comparison_text(
+        item.get("raw_task") or item.get("normalized_task") or ""))
     return _LEADING_INVENTORY_TASK_NUMBER_RE.sub("", task, count=1)
 
 
@@ -3959,8 +4150,10 @@ def _inventory_label_has_subpart(label: str) -> bool:
 
 
 def _inventory_items_match(item: dict, anchor: dict) -> bool:
-    label = bi.normalize_question_text(item.get("source_label", ""))
-    anchor_label = bi.normalize_question_text(anchor.get("source_label", ""))
+    label = bi.normalize_question_text(_inventory_comparison_text(
+        item.get("source_label", "")))
+    anchor_label = bi.normalize_question_text(_inventory_comparison_text(
+        anchor.get("source_label", "")))
     if (
         label
         and anchor_label
@@ -3991,6 +4184,8 @@ def _merge_source_task_anchors(items: list[dict], anchors: list[dict]) -> list[d
         root
         for root, candidates in anchors_by_question_root.items()
         if len(candidates) == 1
+        and not _source_label_is_generic(
+            candidates[0].get("source_label") or "")
         and not (candidates[0].get("subpart_label") or "").strip()
         and not _inventory_label_has_subpart(
             candidates[0].get("source_label") or "")
@@ -4017,7 +4212,7 @@ def _merge_source_task_anchors(items: list[dict], anchors: list[dict]) -> list[d
     for anchor in anchors:
         parent = bi.normalize_question_text(
             anchor.get("parent_source_label", ""))
-        if parent:
+        if parent and not _source_label_is_generic(parent):
             parent_counts[parent] = parent_counts.get(parent, 0) + 1
     split_parent_labels = {
         parent for parent, count in parent_counts.items() if count > 1
@@ -4066,7 +4261,10 @@ def _merge_source_task_anchors(items: list[dict], anchors: list[dict]) -> list[d
         )
         authoritative_task = (
             anchor_task
-            if anchor_is_activity
+            if (
+                anchor_is_activity
+                or anchor.get("_source_task_boundary") == "direct_prompt"
+            )
             else (
                 existing_task
                 if len(existing_task) >= len(anchor_task)
@@ -4076,18 +4274,27 @@ def _merge_source_task_anchors(items: list[dict], anchors: list[dict]) -> list[d
         for field in (
             "source_kind", "source_label", "parent_source_label", "topic_hint",
             "raw_solution_or_answer", "_topic_scope", "_activity_origin",
+            "_source_section_index", "_source_position", "_source_task_boundary",
         ):
             if anchor.get(field) not in (None, ""):
                 existing[field] = anchor.get(field)
         existing["raw_task"] = authoritative_task
         existing["normalized_task"] = authoritative_task
-        if anchor.get("image_urls"):
+        if anchor.get("_source_task_boundary") == "direct_prompt":
+            # The discarded GPT tail may have carried a nearby but unrelated
+            # Figure. Start visual resolution again from the exact prompt.
+            existing["image_urls"] = list(anchor.get("image_urls") or [])
+            existing.pop("_image_captions", None)
+            existing.pop("_figure_images_resolved", None)
+            existing["requires_visual"] = bool(anchor.get("requires_visual"))
+        elif anchor.get("image_urls"):
             existing["image_urls"] = list(dict.fromkeys(
                 list(existing.get("image_urls") or [])
                 + list(anchor.get("image_urls") or [])
             ))
-        existing["requires_visual"] = bool(
-            existing.get("requires_visual") or anchor.get("requires_visual"))
+        if anchor.get("_source_task_boundary") != "direct_prompt":
+            existing["requires_visual"] = bool(
+                existing.get("requires_visual") or anchor.get("requires_visual"))
 
     deduped: list[dict] = []
     seen_label_tasks: set[tuple[str, str]] = set()
@@ -4138,6 +4345,19 @@ def _inventory_stats(items: list[dict]) -> dict:
         "source_or_passage_tasks": sum(
             kind in {"source_task", "case_task", "passage_task"}
             for kind in kinds),
+        "chapter_final_tasks": sum(
+            bool(item.get("_chapter_wide_task"))
+            or item.get("_topic_scope") == "chapter"
+            for item in items
+        ),
+        "chapter_final_exercises": sum(
+            (item.get("source_kind") or "").strip().lower() == "exercise"
+            and (
+                bool(item.get("_chapter_wide_task"))
+                or item.get("_topic_scope") == "chapter"
+            )
+            for item in items
+        ),
         "total_inventory_items": len(items),
     }
 
@@ -4329,6 +4549,8 @@ def _extract_question_task_inventory_via_api(
     anchors = _source_task_anchors(sections)
     inventory["items"] = _merge_source_task_anchors(
         inventory["items"], anchors)
+    inventory["items"] = _attach_explicit_figure_images(
+        inventory["items"], sections)
     for i, item in enumerate(inventory["items"], start=1):
         item["qid"] = f"QINV-{i:04d}"
         item["order_index"] = i
@@ -4340,6 +4562,8 @@ def _extract_question_task_inventory_via_api(
             source_topic_excerpts=_group_source_topic_excerpts(sections),
         )
     for item in inventory["items"]:
+        if item.get("_topic_scope") == "chapter":
+            item["_chapter_wide_task"] = True
         item.pop("_topic_scope", None)
     inventory["stats"] = _inventory_stats(inventory["items"])
     if anchors:
@@ -4473,8 +4697,8 @@ _CASE_SOURCE_ARTIFACT_RE = re.compile(
 
 
 _FIGURE_REFERENCE_RE = re.compile(
-    r"\b(?:refer(?:\s+to)?\s+)?fig(?:ure)?[.．]?\s*"
-    r"(?P<number>\d+(?:\.\d+)*)\b",
+    r"\b(?:refer(?:\s+to)?\s+)?fig(?:ure)?s?[.．]?\s*"
+    r"(?P<number>\d+(?:[.．]\d+)*(?:\s*\([a-z]\))?)(?![\w．])",
     re.IGNORECASE,
 )
 _LATEX_FIGURE_BLOCK_RE = re.compile(
@@ -4501,6 +4725,7 @@ _PUBLIC_TASK_SECTION_REF_RE = re.compile(
 
 def _clean_visual_caption(value: str) -> str:
     """Compact a source caption for safe Markdown alt text."""
+    value = _inventory_comparison_text(str(value or ""))
     value = re.sub(r"\\captionsetup\{.*?\}", " ", str(value or ""),
                    flags=re.IGNORECASE | re.DOTALL)
     value = value.replace("\\(", "").replace("\\)", "")
@@ -4533,6 +4758,182 @@ def _source_visual_captions(text: str) -> dict[str, str]:
     for include in _LATEX_INCLUDEGRAPHICS_RE.finditer(source):
         captions.setdefault(include.group("url"), "")
     return captions
+
+
+def _normalized_figure_id(value: str) -> str:
+    """Return a stable figure identifier such as ``11.2`` or ``14(a)``."""
+    text = unicodedata.normalize("NFKC", str(value or "")).lower()
+    text = re.sub(r"\s+", "", text)
+    match = re.search(r"\d+(?:\.\d+)*(?:\([a-z]\))?", text)
+    return match.group(0) if match else ""
+
+
+def _figure_reference_ids(text: str) -> list[str]:
+    """Read explicit figure references in source/question order.
+
+    This is deliberately reference-led rather than adjacency-led: a question
+    saying ``Fig. 14(a)`` receives that image even when a different figure is
+    physically closer in the MMD.  A trailing ``and (b)`` inherits the same
+    base number, covering common map-panel wording.
+    """
+    source = _inventory_comparison_text(str(text or ""))
+    found: list[str] = []
+    for match in _FIGURE_REFERENCE_RE.finditer(source):
+        figure_id = _normalized_figure_id(match.group("number"))
+        if figure_id and figure_id not in found:
+            found.append(figure_id)
+        base = re.sub(r"\([a-z]\)$", "", figure_id)
+        suffix_window = source[match.end():match.end() + 80]
+        for suffix in re.finditer(
+            r"(?:,|and)\s*\(([a-z])\)", suffix_window, re.IGNORECASE,
+        ):
+            panel = f"{base}({suffix.group(1).lower()})" if base else ""
+            if panel and panel not in found:
+                found.append(panel)
+    return found
+
+
+def _source_figure_layout(sections: list[dict]) -> list[dict]:
+    """Return labelled source figures with stable document offsets."""
+    figures: list[dict] = []
+    offset = 0
+    for section_index, section in enumerate(sections):
+        body = str(section.get("body") or "")
+        for figure in _LATEX_FIGURE_BLOCK_RE.finditer(body):
+            figure_body = figure.group("body") or ""
+            include = _LATEX_INCLUDEGRAPHICS_RE.search(figure_body)
+            if include is None:
+                continue
+            caption_match = re.search(
+                r"\\caption\{(?P<caption>.*)\}\s*$",
+                figure_body,
+                re.IGNORECASE | re.DOTALL,
+            )
+            caption = _clean_visual_caption(
+                caption_match.group("caption") if caption_match else "")
+            for figure_id in _figure_reference_ids(caption):
+                figures.append({
+                    "figure_id": figure_id,
+                    "url": include.group("url"),
+                    "caption": caption,
+                    "section_index": section_index,
+                    "position": figure.start(),
+                    "offset": offset + figure.start(),
+                })
+        for image in _MARKDOWN_IMAGE_RE.finditer(body):
+            caption = _clean_visual_caption(image.group("alt"))
+            for figure_id in _figure_reference_ids(caption):
+                figures.append({
+                    "figure_id": figure_id,
+                    "url": image.group("url"),
+                    "caption": caption,
+                    "section_index": section_index,
+                    "position": image.start(),
+                    "offset": offset + image.start(),
+                })
+        offset += len(body) + 1
+    return figures
+
+
+def _source_figure_registry(sections: list[dict]) -> dict[str, list[dict]]:
+    """Build an exact source figure-id -> URL/caption registry for a chapter."""
+    registry: dict[str, list[dict]] = {}
+    for figure in _source_figure_layout(sections):
+        figure_id = figure["figure_id"]
+        entries = registry.setdefault(figure_id, [])
+        if not any(entry.get("url") == figure["url"] for entry in entries):
+            entries.append(figure)
+    return registry
+
+
+def _attach_explicit_figure_images(
+    items: list[dict], sections: list[dict],
+) -> list[dict]:
+    """Attach explicit figures, with a tightly bounded visual-task fallback."""
+    layout = _source_figure_layout(sections)
+    registry = _source_figure_registry(sections)
+    if not registry:
+        return items
+    section_offsets: dict[int, int] = {}
+    offset = 0
+    for index, section in enumerate(sections):
+        section_offsets[index] = offset
+        offset += len(str(section.get("body") or "")) + 1
+    implicit_visual_cue = re.compile(
+        r"\b(?:caricatur(?:e|ist)|artist|print|portrait|diagram|"
+        r"figure|image|illustration|painting|portray(?:ed|al)?|"
+        r"look(?:\s+at)?|shown)\b",
+        re.IGNORECASE,
+    )
+    for item in items:
+        raw_task = str(
+            item.get("raw_task") or item.get("normalized_task") or "")
+        # Captions/adjacent figure blocks must not themselves decide which
+        # visual belongs to a question. Inspect the textual task after they are
+        # stripped, then use the document-wide registry for resolution.
+        refs = _figure_reference_ids(_strip_source_visual_markup(raw_task))
+        if not refs:
+            refs = _figure_reference_ids(str(item.get("source_label") or ""))
+        resolved: list[dict] = []
+        if refs:
+            for figure_id in refs:
+                for entry in registry.get(figure_id, []):
+                    if not any(existing["url"] == entry["url"] for existing in resolved):
+                        resolved.append(entry)
+        elif implicit_visual_cue.search(raw_task):
+            try:
+                section_index = int(item.get("_source_section_index"))
+                position = int(item.get("_source_position") or 0)
+            except (TypeError, ValueError):
+                section_index = -1
+                position = 0
+            target = section_offsets.get(section_index, -1) + position
+            if target >= 0:
+                nearby = [
+                    figure for figure in layout
+                    if abs(int(figure.get("offset") or 0) - target) <= 4_000
+                ]
+                if nearby:
+                    task_terms = {
+                        word.lower() for word in re.findall(
+                            r"[A-Za-z]{4,}",
+                            _strip_source_visual_markup(raw_task),
+                        )
+                    } - {
+                        "with", "from", "that", "this", "into", "what",
+                        "which", "when", "where", "have", "were", "they",
+                        "their", "about", "help", "look", "figure", "image",
+                    }
+
+                    def _visual_score(figure: dict) -> tuple[int, int]:
+                        caption_terms = set(re.findall(
+                            r"[A-Za-z]{4,}",
+                            str(figure.get("caption") or "").lower(),
+                        ))
+                        overlap = len(task_terms & caption_terms)
+                        distance = abs(
+                            int(figure.get("offset") or 0) - target)
+                        return overlap, -distance
+
+                    resolved.append(max(nearby, key=_visual_score))
+        if not resolved:
+            if refs or implicit_visual_cue.search(raw_task):
+                # Prevent a caption/URL physically adjacent to the OCR block
+                # from being emitted as a substitute for an unresolved Figure.
+                # The visible source reference remains, allowing strict final
+                # validation to stop the job rather than ship a wrong image.
+                item["image_urls"] = []
+                item["_image_captions"] = {}
+                item["_figure_images_resolved"] = True
+                item["requires_visual"] = bool(refs)
+            continue
+        item["image_urls"] = [entry["url"] for entry in resolved]
+        item["_image_captions"] = {
+            entry["url"]: entry.get("caption") or "" for entry in resolved
+        }
+        item["_figure_images_resolved"] = True
+        item["requires_visual"] = True
+    return items
 
 
 def _strip_source_visual_markup(text: str) -> str:
@@ -4577,7 +4978,19 @@ def _inventory_task_text(item: dict) -> str:
         or item.get("question")
         or ""
     )
-    visual_captions = _source_visual_captions(str(task))
+    task = _inventory_comparison_text(str(task))
+    stored_captions = item.get("_image_captions")
+    visual_captions = {
+        str(url): _clean_visual_caption(caption)
+        for url, caption in (stored_captions or {}).items()
+        if str(url or "").strip()
+    } if isinstance(stored_captions, dict) else {}
+    # Local source markup can contribute a caption too, but a document-level
+    # exact-reference caption is authoritative when both are present. Once the
+    # figure resolver ran, do not re-add visual wrappers adjacent to a task.
+    if not item.get("_figure_images_resolved"):
+        for url, caption in _source_visual_captions(str(task)).items():
+            visual_captions.setdefault(url, caption)
     source_kind = (item.get("source_kind") or "").strip().lower()
     task = _strip_public_source_heading(str(task))
     task = _inventory_task_without_solution(
@@ -4618,6 +5031,35 @@ def _case_prompt_needs_source(prompt: str, source_text: str) -> bool:
     return (
         bi.normalize_question_text(prompt)
         != bi.normalize_question_text(source_text)
+    )
+
+
+_CASE_TITLE_QUESTION_RE = re.compile(
+    r"^(?:solve|simplify|find|write|identify|expand|compare|calculate|"
+    r"rationalise|express|evaluate|convert|draw|label|explain|prove|"
+    r"describe|discuss|analyse|analyze|examine|interpret|outline|assess|"
+    r"state|list|mention|account|justify|trace|distinguish|define|"
+    r"what|why|how|who|when|where|which)\b",
+    re.IGNORECASE,
+)
+
+
+def _case_title_needs_definition(case_title: str, examples: list[dict]) -> bool:
+    """Whether legacy Case text is a question instead of a sub-type definition."""
+    title = (case_title or "").strip()
+    first_example = (
+        str(examples[0].get("example_prompt") or "").strip()
+        if examples else ""
+    )
+    return bool(
+        not title
+        or title.endswith("?")
+        or _CASE_TITLE_QUESTION_RE.match(title)
+        or (
+            first_example
+            and bi.normalize_question_text(title)
+            == bi.normalize_question_text(first_example)
+        )
     )
 
 
@@ -4680,6 +5122,38 @@ def _backfill_type_cases_from_inventory(types: list[dict], inventory: dict) -> l
                         ex["example_prompt"] = source_text
                 if ex.get("example_prompt"):
                     seen_prompts.add(bi.normalize_question_text(ex["example_prompt"]))
+        # Legacy mining emitted one raw ``case_prompt`` per Case. Preserve its
+        # source task as an Example, then derive a reusable Case definition
+        # from that task so question wording never occupies the Case line.
+        for case in cases:
+            legacy = (case.get("case_prompt") or "").strip()
+            if legacy:
+                legacy_qid = (case.get("source_question_id") or "").strip()
+                example = {
+                    "source_question_id": legacy_qid,
+                    "example_prompt": legacy,
+                }
+                case["examples"] = [example, *(case.get("examples") or [])]
+                case.pop("case_prompt", None)
+                case.pop("source_question_id", None)
+                if legacy_qid:
+                    example_by_qid[legacy_qid] = example
+            examples = _case_examples(case)
+            if _case_title_needs_definition(
+                str(case.get("case_title") or ""), examples,
+            ):
+                representative_qid = (
+                    str(examples[0].get("source_question_id") or "").strip()
+                    if examples else ""
+                )
+                representative = (
+                    str(examples[0].get("example_prompt") or "").strip()
+                    if examples else ""
+                )
+                if representative:
+                    _, case_title = _semantic_fallback_wording(
+                        by_qid.get(representative_qid, {}), representative)
+                    case["case_title"] = case_title
         for qid in source_ids:
             source_text = _inventory_task_text(by_qid.get(qid, {}))
             if not source_text:
@@ -4694,11 +5168,11 @@ def _backfill_type_cases_from_inventory(types: list[dict], inventory: dict) -> l
             if key in seen_prompts:
                 continue
             example = {"source_question_id": qid, "example_prompt": source_text}
+            _, case_title = _semantic_fallback_wording(
+                by_qid.get(qid, {}), source_text)
             cases.append({
                 "case_id": f"CASE-{len(cases) + 1:04d}",
-                "case_title": (
-                    mtype.get("task_pattern") or mtype.get("type_title") or ""
-                ).strip(),
+                "case_title": case_title,
                 "examples": [example],
                 "case_signature": "",
             })
@@ -6219,11 +6693,15 @@ def _mined_type_to_body(mtype: dict, start_type: int) -> tuple[str, int]:
         examples = [ex for ex in examples if ex]
         if not case_title and not examples:
             continue
-        # Legacy mined output has no sub-type definition; the full question
-        # doubles as the Case line so nothing is lost.
-        if not case_title:
-            case_title = examples[0]
-            examples = examples[1:]
+        # Legacy mined output may place the complete question in ``case_prompt``
+        # (or even in ``case_title``) without defining the Case. Preserve that
+        # question as an Example and derive a declarative Case variation from
+        # the assessed action and conditions.
+        if _case_title_needs_definition(
+            case_title,
+            [{"example_prompt": example} for example in examples],
+        ):
+            _, case_title = _semantic_fallback_wording({}, examples[0])
         cases.append((case_title, examples))
     if not title or not cases:
         return "", start_type
@@ -6231,8 +6709,8 @@ def _mined_type_to_body(mtype: dict, start_type: int) -> tuple[str, int]:
     parts = [f"Type {n:02d}: {title}"]
     for c_i, (case_title, examples) in enumerate(cases, start=1):
         parts.append(f"Case {c_i:02d}: {case_title}")
-        for example in examples:
-            parts.append(f"Example: {example}")
+        for example_i, example in enumerate(examples, start=1):
+            parts.append(f"Example {example_i:02d}: {example}")
     return " ".join(parts), n
 
 
@@ -6508,6 +6986,9 @@ def _merge_similar_concepts_via_api(records: list[dict], *, meta: dict) -> list[
 
 
 def _misconception_body(details: str) -> str:
+    misconception, _ = cr.analysis_components(details)
+    if misconception:
+        return misconception
     for label, content in cr.split_sections(details or ""):
         if cr.is_misconception_label(label):
             return content.strip()
@@ -6516,6 +6997,9 @@ def _misconception_body(details: str) -> str:
 
 def _error_analysis_body(details: str) -> str:
     """Return the canonical Error Analysis body, accepting known label aliases."""
+    _, error_analysis = cr.analysis_components(details)
+    if error_analysis:
+        return error_analysis
     for label, content in cr.split_sections(details or ""):
         if cr.is_error_analysis_label(label):
             return content.strip()
@@ -6528,7 +7012,7 @@ def _learner_analysis_needs_rewrite(details: str) -> bool:
     error_analysis = _error_analysis_body(details)
     misconception_ok = cv.is_valid_misconception(misconception)
     error_analysis_ok = cv.is_valid_error_analysis(error_analysis)
-    if not (misconception_ok or error_analysis_ok):
+    if not (misconception_ok and error_analysis_ok):
         return True
     if misconception and not misconception_ok:
         return True
@@ -6546,12 +7030,9 @@ def _ensure_misconceptions_via_api(
 ) -> list[dict]:
     """Have GPT write missing or generic learner-analysis sections.
 
-    The legacy function name remains for callers and tests. A normal concept now
-    needs at least one of Misconceptions or Error Analysis, not necessarily both.
-    Misconceptions hold commonly held incorrect beliefs or interpretations;
-    Error Analysis holds plausible procedural, computational, representational,
-    or reasoning mistakes made while applying the concept and explicitly names
-    the learner and mistaken action.
+    The legacy function name remains for callers and tests. A normal concept
+    needs one combined section containing both a misconception and a distinct
+    application/reasoning error.
     """
     import json as _json
 
@@ -6619,13 +7100,18 @@ def _ensure_misconceptions_via_api(
         sections = [
             (label, content)
             for label, content in cr.split_sections(rec.get("concept_details", ""))
-            if not cr.is_misconception_label(label)
-            and not cr.is_error_analysis_label(label)
+            if not cr.is_learner_analysis_label(label)
         ]
+        combined: list[str] = []
         if misconception:
-            sections.append(("Misconceptions", misconception))
+            combined.append(f"Misconceptions: {misconception}")
         if error_analysis:
-            sections.append(("Error Analysis", error_analysis))
+            combined.append(f"Error Analysis: {error_analysis}")
+        if combined:
+            sections.append((
+                "Misconception/ Error Analysis",
+                "; ".join(combined),
+            ))
         rec["concept_details"] = cr.join_sections(sections)
         completed += 1
     progress.log(f"Specific learner analysis written for {completed} concept(s).",
@@ -7698,6 +8184,12 @@ _FATAL_CODES = {
     "generic_misconception", "misconception_framing",
     "generic_error_analysis", "error_analysis_framing",
     "issue_section_overlap",
+    "analysis_section_format", "missing_misconception",
+    "missing_error_analysis", "figure_reference_without_image",
+    "figure_reference_image_mismatch", "generic_case_definition",
+    "missing_case_definition", "case_without_example",
+    "case_question_not_definition", "example_numbering",
+    "verbatim_source_description",
 }
 
 
@@ -7757,7 +8249,8 @@ def _repair_records_via_api(
     for attempt in range(max_attempts + 1):
         report = cv.validate_concept_rows(
             records, **opts,
-            allowed_source_examples=allowed_source_examples)
+            allowed_source_examples=allowed_source_examples,
+            source_text=source_context)
         hard = [e for e in report["errors"] if e["severity"] == "error"]
         progress.log(
             f"{stage}: validation found {len(hard)} error(s), "
@@ -7840,8 +8333,9 @@ def _artifact_match_snippet(rec: dict) -> str:
 
 
 _INVENTORY_EXAMPLE_SEGMENT_RE = re.compile(
-    r"(\bExamples?\s*:\s*)(.*?)"
-    r"(?=\bExamples?\s*:|\b(?:Case|Type)\s+\d{1,2}:|\s+//\s+|$)",
+    r"(\bExamples?(?:\s+0*\d+)?\s*:\s*)(.*?)"
+    r"(?=\bExamples?(?:\s+0*\d+)?\s*:|"
+    r"\b(?:Case|Type)\s+\d{1,2}:|\s+//\s+|$)",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -7962,7 +8456,8 @@ def _neutralize_unrepaired_rows(
 
 _TYPE_SPLIT_RE = re.compile(r"(?=\b(?:Miscellaneous\s+)?Type\s+\d{1,2}:)", re.IGNORECASE)
 _CASE_SPLIT_RE = re.compile(r"(?=\bCase\s+\d{1,2}:)", re.IGNORECASE)
-_EXAMPLE_LINE_RE = re.compile(r"\bExamples?\s*:\s*", re.IGNORECASE)
+_EXAMPLE_LINE_RE = re.compile(
+    r"\bExamples?(?:\s+0*\d+)?\s*:\s*", re.IGNORECASE)
 
 
 def _inventory_lookup_texts(inventory: dict | None) -> list[str]:
@@ -7976,7 +8471,7 @@ def _inventory_lookup_texts(inventory: dict | None) -> list[str]:
         if source_kind in _HUB_INVENTORY_KINDS:
             continue
         text = _inventory_task_text(item)
-        key = bi.normalize_question_text(text)
+        key = _inventory_coverage_key(text)
         if text and key and key not in seen and not cv._example_too_short(text):
             seen.add(key)
             out.append(text)
@@ -8016,6 +8511,16 @@ def _rendered_type_examples(records: list[dict]) -> list[str]:
     return examples
 
 
+def _inventory_coverage_key(text: str) -> str:
+    """Normalize only cosmetic cleaner changes for source-Example coverage."""
+    value = bi.normalize_question_text(_inventory_comparison_text(text))
+    # ``clean_concept_record`` tidies OCR spacing such as ``21 ,`` and
+    # ``. . .``. That must not make an otherwise identical source Example look
+    # missing at the deposit boundary.
+    value = re.sub(r"\s+([,;:.!?])", r"\1", value)
+    return value.replace("…", "...")
+
+
 def _rendered_inventory_example_counts(
     records: list[dict], expected_keys: set[str],
 ) -> dict[str, int]:
@@ -8029,7 +8534,7 @@ def _rendered_inventory_example_counts(
     """
     counts = {key: 0 for key in expected_keys if key}
     for record in records:
-        body = bi.normalize_question_text(
+        body = _inventory_coverage_key(
             _types_body(record.get("concept_details", "")))
         for marker in _EXAMPLE_LINE_RE.finditer(body):
             suffix = body[marker.end():]
@@ -8039,7 +8544,8 @@ def _rendered_inventory_example_counts(
                 tail = suffix[len(key):].lstrip()
                 if not tail or re.match(
                     r"^(?:(?:Miscellaneous\s+)?Type\s+\d{1,2}:"
-                    r"|Case\s+\d{1,2}:|Examples?\s*:)",
+                    r"|Case\s+\d{1,2}:|"
+                    r"Examples?(?:\s+0*\d+)?\s*:)",
                     tail,
                     re.IGNORECASE,
                 ):
@@ -8070,7 +8576,7 @@ def _rendered_inventory_coverage_defects(
         if source_kind in _HUB_INVENTORY_KINDS:
             continue
         text = _inventory_task_text(item)
-        key = bi.normalize_question_text(text)
+        key = _inventory_coverage_key(text)
         if not key or cv._example_too_short(text):
             continue
         expected_by_qid[qid] = key
@@ -8092,7 +8598,7 @@ def _rendered_inventory_coverage_defects(
 def _rendered_inventory_example_locations(
     records: list[dict], item: dict,
 ) -> list[int]:
-    key = bi.normalize_question_text(_inventory_task_text(item))
+    key = _inventory_coverage_key(_inventory_task_text(item))
     if not key:
         return []
     return [
@@ -8170,7 +8676,7 @@ def _hub_inventory_examples_in_types(
 ) -> set[str]:
     """Pure procedure/project Hub prompts incorrectly rendered as Examples."""
     expected_keys = {
-        bi.normalize_question_text(_inventory_task_text(item))
+        _inventory_coverage_key(_inventory_task_text(item))
         for item in (inventory or {}).get("items") or []
         if isinstance(item, dict)
         and (item.get("source_kind") or "").strip().lower()
@@ -8266,10 +8772,7 @@ def _restore_source_owned_type_sections(
         insert_at = next(
             (
                 index for index, (label, _) in enumerate(candidate_sections)
-                if (
-                    cr.is_misconception_label(label)
-                    or cr.is_error_analysis_label(label)
-                )
+                if cr.is_learner_analysis_label(label)
             ),
             len(candidate_sections),
         )
@@ -8378,7 +8881,7 @@ def _rendered_inventory_keys_present(
         if not isinstance(item, dict):
             continue
         text = _inventory_task_text(item)
-        key = bi.normalize_question_text(text)
+        key = _inventory_coverage_key(text)
         if key and not cv._example_too_short(text):
             expected_keys.add(key)
     if not expected_keys:
@@ -8566,7 +9069,8 @@ def _append_inventory_example_to_record(
         ]
         case_no = (max(case_numbers) if case_numbers else 0) + 1
         addition = (
-            f" Case {case_no:02d}: {case_title} Example: {text.strip()}")
+            f" Case {case_no:02d}: {case_title} "
+            f"Example 01: {text.strip()}")
         new_body = (
             body[:existing.end()] + addition + body[existing.end():]
         ).strip()
@@ -8574,7 +9078,7 @@ def _append_inventory_example_to_record(
         type_no = _next_rendered_type_number(body)
         addition = (
             f"Type {type_no:02d}: {title} "
-            f"Case 01: {case_title} Example: {text.strip()}"
+            f"Case 01: {case_title} Example 01: {text.strip()}"
         )
         new_body = f"{body} {addition}".strip() if body.strip() else addition
     updated["concept_details"] = _inject_types(details, new_body)
@@ -8586,7 +9090,7 @@ def _dedupe_rendered_inventory_examples(
 ) -> tuple[list[dict], int]:
     """Keep the first Exact inventory Example; drop later duplicates."""
     expected_keys = {
-        bi.normalize_question_text(_inventory_task_text(item))
+        _inventory_coverage_key(_inventory_task_text(item))
         for item in (inventory or {}).get("items") or []
         if isinstance(item, dict)
     }
@@ -8637,7 +9141,7 @@ def _dedupe_rendered_inventory_examples(
                 examples = [piece.strip() for piece in pieces[1:] if piece.strip()]
                 kept: list[str] = []
                 for example in examples:
-                    key = bi.normalize_question_text(example)
+                    key = _inventory_coverage_key(example)
                     if key in expected_keys:
                         if key in seen:
                             removed += 1
@@ -8647,9 +9151,10 @@ def _dedupe_rendered_inventory_examples(
                     kept.append(example)
                 if kept:
                     cases.append((case_title, kept))
-                elif case_title and not cv._example_too_short(case_title):
-                    cases.append((case_title, []))
                 else:
+                    # A deduplicated Case with no remaining Example violates
+                    # the public Case -> Example hierarchy, so drop it rather
+                    # than leave an empty shell behind.
                     changed = True
             if cases:
                 header = type_header.strip()
@@ -8684,7 +9189,7 @@ def _align_activity_examples_with_hubs(
         if not isinstance(item, dict) or not item.get("_activity_origin"):
             continue
         text = _inventory_task_text(item)
-        key = bi.normalize_question_text(text)
+        key = _inventory_coverage_key(text)
         if not text or not key:
             continue
         example_locations = _rendered_inventory_example_locations(out, item)
@@ -8735,6 +9240,83 @@ def _align_activity_examples_with_hubs(
     return cr.renumber_types_continuously(out)
 
 
+def _relocate_chapter_wide_examples_from_culminations(
+    records: list[dict], inventory: dict | None,
+    mined_types: dict | None = None,
+) -> list[dict]:
+    """Keep ordinary chapter-review questions off an unrelated Culmination.
+
+    Chapter-end task lists are initially scoped to the whole chapter, so an
+    early Type assignment can temporarily place them under one Culmination.
+    Once a semantic topic hint exists, normal (non-synthesis) tasks belong on
+    a normal concept in that topic.  Add the authoritative Example there
+    first, then exact-dedupe with the target first so the earlier Culmination
+    copy cannot win merely because it occurs first in chapter order.
+    """
+    out = [dict(record) for record in records]
+    mined_by_qid = _mined_assignment_units_by_qid(mined_types)
+    moved = 0
+    for item in (inventory or {}).get("items") or []:
+        if not isinstance(item, dict) or not item.get("_chapter_wide_task"):
+            continue
+        if (item.get("source_kind") or "").strip().lower() in _HUB_INVENTORY_KINDS:
+            continue
+        qid = (item.get("qid") or "").strip()
+        mined_type = mined_by_qid.get(qid)
+        scope = (
+            _assignment_placement_scope(mined_type)
+            if mined_type is not None
+            else ""
+        )
+        task_text = _inventory_task_text(item)
+        if (
+            scope in {"mixed_synthesis", "cross_topic_synthesis"}
+            or (
+                not scope
+                and (
+                    _MIXED_ASSIGNMENT_CUE_RE.search(task_text)
+                    or _CROSS_TOPIC_ASSIGNMENT_CUE_RE.search(task_text)
+                )
+            )
+        ):
+            continue
+        locations = _rendered_inventory_example_locations(out, item)
+        if not any(
+            cr.is_culmination(out[index].get("concept_title") or "")
+            for index in locations
+        ):
+            continue
+        target = _best_record_index_for_inventory_item(
+            out, item, allow_culmination=False, mined_type=None)
+        if target < 0 or target >= len(out):
+            continue
+        if cr.is_culmination(out[target].get("concept_title") or ""):
+            continue
+        candidate = [dict(record) for record in out]
+        if target not in locations:
+            candidate[target] = _append_inventory_example_to_record(
+                candidate[target], task_text, item)
+        order = [target] + [
+            index for index in range(len(candidate)) if index != target
+        ]
+        ordered, _removed = _dedupe_rendered_inventory_examples(
+            [candidate[index] for index in order], {"items": [item]})
+        rebuilt = [dict(record) for record in candidate]
+        for position, index in enumerate(order):
+            rebuilt[index] = ordered[position]
+        if _rendered_inventory_example_locations(rebuilt, item) != [target]:
+            continue
+        out = rebuilt
+        moved += 1
+    if moved:
+        progress.log(
+            f"Relocated {moved} chapter-wide Example(s) from Culmination "
+            "to their assigned normal concept.",
+            level="success",
+        )
+    return cr.renumber_types_continuously(out)
+
+
 def _repair_rendered_inventory_coverage(
     records: list[dict], inventory: dict | None,
     mined_types: dict | None = None,
@@ -8767,7 +9349,7 @@ def _repair_rendered_inventory_coverage(
             skipped_unplaceable += 1
             continue
         text = _inventory_task_text(item)
-        key = bi.normalize_question_text(text)
+        key = _inventory_coverage_key(text)
         # Inventory wording is authoritative for coverage placement. Do not
         # refuse a still-missing source question merely because the validator
         # would prefer a longer Example — leaving it missing aborts deposit.
@@ -8793,7 +9375,7 @@ def _repair_rendered_inventory_coverage(
         if not item:
             continue
         text = _inventory_task_text(item)
-        key = bi.normalize_question_text(text)
+        key = _inventory_coverage_key(text)
         if not text or not key or key in covered_keys:
             continue
         index = _best_record_index_for_inventory_item(
@@ -8829,11 +9411,7 @@ def _enforce_rendered_inventory_coverage(
     records: list[dict], inventory: dict | None,
     mined_types: dict | None = None,
 ) -> list[dict]:
-    """Repair coverage, hard-fail only on residual duplicates.
-
-    Residual missing prompts after repair are logged and allowed through so one
-    pathological inventory stub cannot wipe an otherwise complete chapter map.
-    """
+    """Repair coverage and hard-fail on any residual placeable defect."""
     out = _repair_rendered_inventory_coverage(
         records, inventory, mined_types)
     defects = _rendered_inventory_coverage_defects(out, inventory)
@@ -8848,7 +9426,7 @@ def _enforce_rendered_inventory_coverage(
             "source question(s)"
         )
     if defects["missing"]:
-        # Last-chance force place, then warn rather than abort the chapter.
+        # Last-chance force place before enforcing the exact-once contract.
         out = _repair_rendered_inventory_coverage(
             out, inventory, mined_types)
         defects = _rendered_inventory_coverage_defects(out, inventory)
@@ -8863,18 +9441,19 @@ def _enforce_rendered_inventory_coverage(
                 "source question(s)"
             )
         if defects["missing"]:
-            progress.log(
-                "Continuing after inventory coverage repair with "
+            raise RuntimeError(
+                "rendered Types failed exact inventory coverage with "
                 f"{len(defects['missing'])} still-missing placeable "
                 f"source question(s): {', '.join(defects['missing'][:8])}"
                 + ("…" if len(defects["missing"]) > 8 else "")
                 + ".",
-                level="warning",
             )
     # Coverage may already be exact while later merge/refinement passes have
     # moved an assessable Activity Example away from its Hub. Reassert that
     # identity-based placement invariant at this terminal repair boundary.
-    return _align_activity_examples_with_hubs(out, inventory)
+    out = _align_activity_examples_with_hubs(out, inventory)
+    return _relocate_chapter_wide_examples_from_culminations(
+        out, inventory, mined_types)
 
 
 def _rebuild_types_after_final_placement_drift(
@@ -8959,8 +9538,9 @@ def _rebuild_types_body(
         parts.append(type_header.strip())
         for case_i, (case_title, examples) in enumerate(cases, start=1):
             parts.append(f"Case {case_i:02d}: {case_title.strip()}")
-            for example in examples:
-                parts.append(f"Example: {example.strip()}")
+            for example_i, example in enumerate(examples, start=1):
+                parts.append(
+                    f"Example {example_i:02d}: {example.strip()}")
     # Preserve original Type NN labels from headers; only Case indexes restart.
     return " ".join(parts)
 
@@ -9053,9 +9633,8 @@ def _salvage_short_case_examples(
                         )
                         if replacement:
                             examples = [replacement]
-                            case_title = (
-                                rec.get("concept_title") or "Source-based question"
-                            )
+                            _, case_title = _semantic_fallback_wording(
+                                {}, replacement)
                             expanded += 1
                             changed = True
                         else:
@@ -9064,9 +9643,8 @@ def _salvage_short_case_examples(
                             continue
                     else:
                         examples = [case_title]
-                        case_title = (
-                            rec.get("concept_title") or "Source-based question"
-                        )
+                        _, case_title = _semantic_fallback_wording(
+                            {}, examples[0])
                         changed = True
                 new_examples: list[str] = []
                 for ex in examples:
@@ -9094,11 +9672,20 @@ def _salvage_short_case_examples(
                         new_examples.append(ex)
                         used.add(bi.normalize_question_text(ex))
                 if new_examples:
+                    if _case_title_needs_definition(
+                        case_title,
+                        [{"example_prompt": example} for example in new_examples],
+                    ):
+                        _, case_title = _semantic_fallback_wording(
+                            {}, new_examples[0])
+                        changed = True
                     cases.append((case_title, new_examples))
-                elif case_title and not cv._example_too_short(case_title):
-                    # Keep a defined Case with no Example only when the Case
-                    # title itself is already a full question (legacy form).
-                    cases.append((case_title, []))
+                elif case_title:
+                    # A public Case without a usable Example violates the
+                    # hierarchy. Drop it; coverage repair can restore a
+                    # source-owned Example when one exists.
+                    dropped += 1
+                    changed = True
             if cases:
                 # Keep the original Type NN: title from the header line.
                 header = type_header.strip()
@@ -9126,11 +9713,16 @@ def _salvage_short_case_examples(
 def _validate_final_or_raise(
     records: list[dict], *, stage: str = "final",
     inventory: dict | None = None,
+    source_text: str = "",
 ) -> dict:
     report = cv.validate_concept_rows(
         records, allow_types=True, require_culmination=True,
         allow_culmination=True,
-        allowed_source_examples=_inventory_source_examples(inventory))
+        allowed_source_examples=_inventory_source_examples(inventory),
+        strict_type_hierarchy=True,
+        strict_analysis_section=True,
+        source_text=source_text,
+    )
     fatal = _fatal_errors(report)
     progress.log(
         f"{stage}: final validation found {len(fatal)} fatal error(s), "
@@ -11950,6 +12542,146 @@ def _newest_compatible_concept_checkpoint(
     return copy.deepcopy(max(candidates, key=lambda item: (item[0], item[1]))[2])
 
 
+def _final_checkpoint_refresh_reasons(
+    checkpoint: dict | None, *, sections: list[dict],
+    source_topic_excerpts: list[dict],
+) -> list[str]:
+    """Return structural evidence that a saved final map must be rebuilt.
+
+    A compatible checkpoint only proves that its JSON shape is safe to read. It
+    does not prove that it was generated from the current source-completeness
+    rules.  In particular, older final checkpoints can omit an entire source
+    topic or a deterministic question anchor while still passing their schema
+    check.  Resume from the preceding stage in that case so the normal final
+    recovery path can repair the map.
+    """
+    if not checkpoint:
+        return []
+    reasons: list[str] = []
+    missing_topics = _missing_source_topic_excerpts(
+        checkpoint.get("records") or [], source_topic_excerpts)
+    if missing_topics:
+        reasons.append(
+            "missing source topic(s): "
+            + ", ".join(
+                (group.get("topic") or "").strip()
+                for group in missing_topics
+            )
+        )
+    inventory_items = (
+        (checkpoint.get("question_task_inventory") or {}).get("items") or []
+    )
+    anchors = _source_task_anchors(sections)
+    missing_anchors = [
+        anchor for anchor in anchors
+        if not any(
+            isinstance(item, dict) and _inventory_items_match(item, anchor)
+            for item in inventory_items
+        )
+    ]
+    if missing_anchors:
+        reasons.append(
+            f"missing {len(missing_anchors)} deterministic source task anchor(s)"
+        )
+    stale_direct_prompts = [
+        anchor for anchor in anchors
+        if anchor.get("_source_task_boundary") == "direct_prompt"
+        and not any(
+            isinstance(item, dict)
+            and _inventory_items_match(item, anchor)
+            and _inventory_task_match_key(item)
+            == _inventory_task_match_key(anchor)
+            for item in inventory_items
+        )
+    ]
+    if stale_direct_prompts:
+        reasons.append(
+            f"{len(stale_direct_prompts)} direct checkpoint prompt(s) retain OCR prose"
+        )
+    analysis_report = cv.validate_concept_rows(
+        checkpoint.get("records") or [], strict_analysis_section=True)
+    malformed_analysis = [
+        error for error in analysis_report["errors"]
+        if error.get("code") == "analysis_section_format"
+        and error.get("severity") == "error"
+    ]
+    if malformed_analysis:
+        reasons.append(
+            f"{len(malformed_analysis)} final learner-analysis section(s) "
+            "need canonical normalization"
+        )
+    source_text = "\n\n".join(
+        str(group.get("excerpt") or "")
+        for group in source_topic_excerpts
+        if isinstance(group, dict)
+    )
+    if source_text:
+        description_report = cv.validate_concept_rows(
+            checkpoint.get("records") or [], source_text=source_text)
+        copied_descriptions = [
+            error for error in description_report["errors"]
+            if error.get("code") == "verbatim_source_description"
+        ]
+        if copied_descriptions:
+            reasons.append(
+                f"{len(copied_descriptions)} Description(s) copy source prose"
+            )
+    return reasons
+
+
+def _refresh_inventory_from_source_anchors(
+    inventory: dict | None, sections: list[dict],
+) -> dict:
+    """Merge authoritative source tasks into an older resumed inventory.
+
+    Existing qids remain stable so mined Type assignments still point at their
+    original tasks.  New deterministic anchors receive new qids and are later
+    placed by the ordinary exact-coverage repair pass.
+    """
+    refreshed = copy.deepcopy(inventory or _empty_inventory())
+    items = [
+        dict(item) for item in refreshed.get("items") or []
+        if isinstance(item, dict)
+    ]
+    merged = _merge_source_task_anchors(items, _source_task_anchors(sections))
+    merged = _attach_explicit_figure_images(merged, sections)
+    seen_qids = {
+        str(item.get("qid") or "").strip()
+        for item in merged
+        if str(item.get("qid") or "").strip()
+    }
+    qid_numbers = [
+        int(match.group(1))
+        for qid in seen_qids
+        if (match := re.fullmatch(r"QINV-(\d+)", qid))
+    ]
+    next_qid = (max(qid_numbers) if qid_numbers else 0) + 1
+    next_order = max(
+        (
+            int(item.get("order_index") or 0)
+            for item in merged
+            if str(item.get("order_index") or "").isdigit()
+        ),
+        default=0,
+    )
+    for item in merged:
+        qid = str(item.get("qid") or "").strip()
+        if not qid or qid in seen_qids and sum(
+                str(candidate.get("qid") or "").strip() == qid
+                for candidate in merged) > 1:
+            qid = f"QINV-{next_qid:04d}"
+            next_qid += 1
+            item["qid"] = qid
+        if not item.get("order_index"):
+            next_order += 1
+            item["order_index"] = next_order
+        if item.get("_topic_scope") == "chapter":
+            item["_chapter_wide_task"] = True
+    refreshed["items"] = merged
+    refreshed["stats"] = _inventory_stats(merged)
+    return refreshed
+
+
 def _valid_concept_checkpoint(checkpoint: dict | None) -> bool:
     """Backward-compatible public predicate used by upload/bundle services."""
     return _newest_compatible_concept_checkpoint(checkpoint) is not None
@@ -12013,11 +12745,15 @@ def _run_live_concept_pre_final_stages(
     artifacts: dict | None,
     resume_checkpoint: dict | None,
     checkpoint_callback,
+    allow_final_checkpoint: bool = True,
 ) -> tuple[list[dict], dict, dict, dict[tuple[str, str], dict]]:
     """Run through Type/activity assignment from the newest compatible stage."""
+    resumable_stages = set(_POST_CONCEPT_CHECKPOINT_STAGES)
+    if not allow_final_checkpoint:
+        resumable_stages.discard("final_content_ready")
     saved = _newest_compatible_concept_checkpoint(
         resume_checkpoint,
-        allowed_stages=_POST_CONCEPT_CHECKPOINT_STAGES,
+        allowed_stages=resumable_stages,
     )
     saved_stage = str(saved.get("stage") or "") if saved else ""
     saved_order = _checkpoint_order(saved_stage)
@@ -12287,8 +13023,14 @@ def _prepare_final_concept_content(
     method_anchors: list[dict],
     headings: list[str],
     source_topic_excerpts: list[dict],
+    refresh_chapter_wide_assignments: bool = False,
 ) -> list[dict]:
     """Run every semantic/API finalizer before the deterministic final gate."""
+    # A resumed post-Type checkpoint can still predate topic-coverage recovery.
+    # Restore any structurally proven source topic before downstream cleanup
+    # merges or culminations can make that omission difficult to diagnose.
+    out = _recover_missing_topic_concepts_via_api(
+        out, meta=meta, source_topic_excerpts=source_topic_excerpts)
     out = _scrub_section_numbers(out)
     out = _merge_concept_records(out)
     out = _dedupe_titles_chapter_wide(out)
@@ -12376,6 +13118,19 @@ def _prepare_final_concept_content(
                 (group.get("topic") or "").strip()
                 for group in missing_topics)
         )
+    if refresh_chapter_wide_assignments:
+        # Old final checkpoints may have a valid-but-stale topic assignment
+        # that sent every chapter-end question to one Culmination. Re-run the
+        # constrained semantic distribution after restored topics are present,
+        # then let exact inventory coverage place each source prompt once.
+        question_task_inventory = _assign_chapter_wide_inventory_topics_via_api(
+            meta=meta,
+            inventory=question_task_inventory,
+            records=out,
+            source_topic_excerpts=source_topic_excerpts,
+        )
+        for item in question_task_inventory.get("items") or []:
+            item.pop("_topic_scope", None)
     type_topic_violations = _mined_type_topic_violations(
         out, mined_types)
     if type_topic_violations:
@@ -12397,11 +13152,41 @@ def _prepare_final_concept_content(
     out = _salvage_short_case_examples(
         out, inventory=question_task_inventory)
     out = _canonicalize_concept_rich_text(out)
+    # Final API/salvage passes can emit a learner-analysis label on a newline
+    # after the earlier chapter refinement. Normalize that contract immediately
+    # before validation without re-running the full chapter refiner: full
+    # refinement can structurally alter rows after the immutable METHOD-row
+    # snapshot has just been restored.
+    out = cv.ensure_valid_learner_analysis(out)
+    out = _canonicalize_concept_rich_text(out)
     boundary_report = cv.validate_concept_rows(
         out, allow_types=True, require_culmination=True,
         allow_culmination=True,
         allowed_source_examples=_inventory_source_examples(
-            question_task_inventory))
+            question_task_inventory),
+        source_text=mmd_text,
+    )
+    if any(
+        error.get("code") == "verbatim_source_description"
+        and error.get("severity") == "error"
+        for error in boundary_report["errors"]
+    ):
+        before_description_repair = out
+        repaired_descriptions = _repair_records_via_api(
+            out,
+            meta=meta,
+            stage="final",
+            source_context=mmd_text,
+            max_attempts=2,
+            allowed_source_examples=_inventory_source_examples(
+                question_task_inventory),
+        )
+        out = _accept_exact_inventory_type_review(
+            before_description_repair,
+            repaired_descriptions,
+            question_task_inventory,
+            mined_types,
+        )
     if any(
         error.get("code") == "source_artifact"
         and error.get("severity") == "error"
@@ -12479,6 +13264,23 @@ def concepts_from_mmd(
         method_anchors = _method_coverage_anchors(sections)
         headings = _topic_headings(sections)
         source_topic_excerpts = _group_source_topic_excerpts(sections)
+        saved_final = _newest_compatible_concept_checkpoint(
+            resume_checkpoint,
+            allowed_stages={"final_content_ready"},
+        )
+        final_checkpoint_refresh_reasons = _final_checkpoint_refresh_reasons(
+            saved_final,
+            sections=sections,
+            source_topic_excerpts=source_topic_excerpts,
+        )
+        if final_checkpoint_refresh_reasons:
+            progress.log(
+                "Final checkpoint is structurally incomplete; resuming from "
+                "the preceding stage: "
+                + "; ".join(final_checkpoint_refresh_reasons),
+                level="warning",
+            )
+            saved_final = None
         allow_chapter_title_topic = _chapter_title_is_main_topic(
             sections, chapter_title)
         progress.log("Concept generation metadata received:\n" + _metadata_block(meta))
@@ -12506,11 +13308,14 @@ def concepts_from_mmd(
             artifacts=artifacts,
             resume_checkpoint=resume_checkpoint,
             checkpoint_callback=checkpoint_callback,
+            allow_final_checkpoint=not final_checkpoint_refresh_reasons,
         )
-        saved_final = _newest_compatible_concept_checkpoint(
-            resume_checkpoint,
-            allowed_stages={"final_content_ready"},
-        )
+        if final_checkpoint_refresh_reasons:
+            question_task_inventory = _refresh_inventory_from_source_anchors(
+                question_task_inventory, sections)
+            if artifacts is not None:
+                artifacts["question_task_inventory"] = copy.deepcopy(
+                    question_task_inventory)
         if saved_final:
             progress.log(
                 "Restored final content checkpoint; semantic/API repair will "
@@ -12531,6 +13336,8 @@ def concepts_from_mmd(
                 method_anchors=method_anchors,
                 headings=headings,
                 source_topic_excerpts=source_topic_excerpts,
+                refresh_chapter_wide_assignments=bool(
+                    final_checkpoint_refresh_reasons),
             )
             _emit_concept_checkpoint(
                 checkpoint_callback,
@@ -12543,7 +13350,11 @@ def concepts_from_mmd(
             )
         out = _canonicalize_concept_rich_text(out)
         _validate_final_or_raise(
-            out, stage="final", inventory=question_task_inventory)
+            out,
+            stage="final",
+            inventory=question_task_inventory,
+            source_text=mmd_text,
+        )
         missing = sum(
             1 for r in out
             if not _has_meaningful_types(r.get("concept_details", ""))
@@ -12671,28 +13482,29 @@ COUNTS (STRICT): {{min_t}}-{{max_t}} topics; every topic has
 {{min_ct}}-{{max_ct}} concepts. Order by dependency. No duplicates.
 
 CONCEPT DESCRIPTION FORMAT (MANDATORY): one string, sections separated by " // ".
-Use exactly one of these learner-analysis tails (Types may be inserted before
-the tail when the prerequisite has assessable check formats):
+Every concept ends with exactly one learner-analysis section (Types may be
+inserted before it):
 Description: <what the student should already know; 2-4 short lines; must not
-teach the chapter> // Misconceptions: <commonly held incorrect beliefs or interpretations>
-Description: <...> // Error Analysis: <plausible mistaken action while applying the prerequisite skill>
-Description: <...> // Misconceptions: <incorrect belief> // Error Analysis: <distinct mistaken action>
+teach the chapter> // Misconception/ Error Analysis: Misconceptions: <commonly
+held incorrect belief>; Error Analysis: <distinct mistaken action>
 When Types are useful, classify ALL distinct prerequisite-check varieties using
-zero-padded labels exactly "Type 01:" and "Case 01:": Type 01: <variety title>
-Case 01: <example prompt> Case 02: ... Type 02: <variety> Case 01: ...
+zero-padded labels exactly "Type 01:", "Case 01:", and "Example 01:":
+Type 01: <variety title> Case 01: <declarative sub-type definition>
+Example 01: <full check question> Example 02: <another question for this Case>
+Case 02: <definition> Example 01: <question> Type 02: <variety> ...
+Cases define the variation and are never questions; questions appear only as
+numbered Examples, restarting at Example 01 for each Case.
 Description is the important lesson-planning input: source/syllabus-grounded,
 clear, and concise (2-4 compact sentences, not a chapter dump). Include Types
 only when the prerequisite has assessable check formats; pure vocabulary recall
-may omit Types. Every concept MUST include at least one of Misconceptions or
-Error Analysis. Misconceptions are commonly held incorrect beliefs or
-interpretations about the prerequisite. Error Analysis describes plausible
-procedural, computational, representational, or reasoning mistakes learners may
-make while applying it. Error Analysis must name the learner explicitly (for
-example, "Students may omit ...") and state the mistaken action. Either section
-may appear alone; include both only when they are distinct and non-duplicative.
-Use canonical order Description,
-Activity/Info Hub when present, Types when present, Misconceptions, Error
-Analysis; never write N/A/None/filler. Restart at Type 01 per concept;
+may omit Types. Every concept MUST include both labelled meanings inside the
+single ``Misconception/ Error Analysis`` section. Misconceptions are commonly
+held incorrect beliefs or interpretations. Error Analysis describes a distinct
+procedural, computational, representational, or reasoning mistake and names the
+learner explicitly (for example, "Students may omit ..."). Never emit separate
+top-level Misconceptions or Error Analysis sections. Use canonical order:
+Description, Activity/Info Hub when present, Types when present, then the one
+combined analysis section; never write N/A/None/filler. Restart at Type 01 per concept;
 continuous renumbering happens downstream.
 NEVER reference source artifacts and never the words "MMD".
 Do NOT mention groups or group columns.
@@ -12720,13 +13532,15 @@ fails "was this already expected knowledge before this grade?" (unsure or
 borderline -> REPLACE). Allow previous-grade ideas and foundational skills.
 STRUCTURE: output exactly the same number of topics, and per topic exactly
 the same number of concepts — substitute rejected rows, never delete slots.
-Keep the same schema and canonical Description: // Types: // Misconceptions: //
-Error Analysis: order. Types is optional. Every concept must contain at least
-one of Misconceptions or Error Analysis; either may appear alone, and both may
-appear only when distinct and non-duplicative. Error Analysis must name the
-learner explicitly (for example, "Students may omit ...") and state the
-mistaken action. Use zero-padded numeric labels (Type 01:, Case 01:) where Types
-exist, plus the tag (FL|NU|VC|RS|GR).
+Keep the same schema and canonical ``Description: ... // Types: ... //
+Misconception/ Error Analysis: Misconceptions: ...; Error Analysis: ...``
+order. Types is optional. Every concept must contain both distinct labelled
+meanings inside that one top-level analysis section; never emit separate
+top-level sections. Error Analysis must name the learner explicitly and state
+the mistaken action. Where Types exist, use zero-padded Type/Case/Example
+labels, make each Case a declarative sub-type definition, put full questions
+only in Examples, and restart Example numbering at 01 per Case. Keep the tag
+(FL|NU|VC|RS|GR).
 Rewrite repetitive sibling names to be distinct.
 Return ONLY JSON with one key "topics". No markdown, no commentary.""")
 

@@ -2,6 +2,8 @@
 required fields, and tag-stripping round-trip."""
 import io
 
+import pytest
+
 from app import bulk_import as bi
 from app import models
 from app.bulk_import import writer
@@ -78,25 +80,31 @@ def test_deposit_applies_numbering_recap_titlecase_and_topic_columns(db):
          "parent_concept": "integer operations",
          "concept_details": (
              "Description: a // Types: Type 01: Direct "
-             "Case 01: Add 2 and 3 using integer addition rules. "
-             "Case 02: Add 5 and 9 using integer addition rules. // "
+             "Case 01: Direct addition of two positive integers. "
+             "Example 01: Add 2 and 3 using integer addition rules. "
+             "Case 02: Direct addition with a two-digit total. "
+             "Example 01: Add 5 and 9 using integer addition rules. // "
              "Misconception: Students may believe adding integers always increases the value."), "keywords": ""},
         {"topic": "operations on numbers", "concept_title": "Culmination - Operations On Numbers",
          "parent_concept": "Culmination",
          "concept_details": ("Description: a long synthesis paragraph // "
-                             "Types: Type 01: Mixed Case 01: Combine addition and subtraction steps in one integer problem. // "
+                             "Types: Type 01: Mixed "
+                             "Case 01: Mixed-operation integer review. "
+                             "Example 01: Combine addition and subtraction steps in one integer problem. // "
                              "Misconception: Students may believe mixed review tasks use only one operation."), "keywords": ""},
         {"topic": "powers and roots", "concept_title": "squares of numbers",
          "parent_concept": "powers",
          "concept_details": (
              "Description: b // Types: Type 01: Compute "
-             "Case 01: Calculate 4 squared and explain the multiplication. // "
+             "Case 01: Computing a square by repeated multiplication. "
+             "Example 01: Calculate 4 squared and explain the multiplication. // "
              "Misconception: Students may think squaring a number means doubling it."), "keywords": ""},
         {"topic": "powers and roots", "concept_title": "Culmination - Powers and Roots",
          "parent_concept": "Culmination",
          "concept_details": (
              "Description: recap // Types: Type 01: Mixed "
-             "Case 01: Combine square and square-root facts in one review problem. // "
+             "Case 01: Mixed review of powers and inverse roots. "
+             "Example 01: Combine square and square-root facts in one review problem. // "
              "Misconception: Students may believe roots and powers cannot appear together."), "keywords": ""},
     ]
     build_concepts._deposit_concepts(db, chapter, records, "Post", "")
@@ -130,6 +138,239 @@ def test_deposit_applies_numbering_recap_titlecase_and_topic_columns(db):
     assert row[4] == chapter.post_topics  # chapter band col E
     assert row[7] == "Operations on Numbers"
     assert "_" not in row[7]
+
+
+def test_post_deposit_rejects_cases_without_numbered_examples(db):
+    from app.services import build_concepts
+
+    chapter = models.Chapter(
+        chapter_code="07CBMA_StrictCases", board="CBSE", grade="07",
+        subject="Mathematics", unit="Mathematics Unit",
+        chapter_title="Strict Case Contract",
+        chapter_display_name="Strict Case Contract",
+    )
+    db.add(chapter)
+    db.commit()
+    records = [
+        {
+            "topic": "Integer Operations",
+            "concept_title": "Adding Integers",
+            "parent_concept": "Integer Operations",
+            "concept_details": (
+                "Description: Addition combines signed integer quantities. // "
+                "Types: Type 01: Direct calculation "
+                "Case 01: Direct addition of two positive integers. // "
+                "Misconceptions: Students may believe signed addition always "
+                "increases the magnitude."
+            ),
+            "keywords": "",
+        },
+        {
+            "topic": "Integer Operations",
+            "concept_title": "Culmination - Integer Operations",
+            "parent_concept": "Culmination",
+            "concept_details": "Description: Recap",
+            "keywords": "",
+        },
+    ]
+
+    with pytest.raises(ValueError, match="case_without_example"):
+        build_concepts._deposit_concepts(
+            db, chapter, records, "Post", "")
+
+
+def test_post_deposit_preserves_inventory_example_and_image_in_export(db):
+    from app.services import build_concepts
+
+    chapter = models.Chapter(
+        chapter_code="10CBPH_Circuits", board="CBSE", grade="10",
+        subject="Physics", unit="Electricity",
+        chapter_title="Circuit Interpretation",
+        chapter_display_name="Circuit Interpretation",
+    )
+    db.add(chapter)
+    db.commit()
+    item = {
+        "qid": "QINV-0001",
+        "source_kind": "exercise",
+        "topic_hint": "Circuit Diagrams",
+        "source_label": "Fig. 11.1",
+        "raw_task": (
+            "Compare the circuits in Fig. 11.1 and state which lamp glows."
+        ),
+        "image_urls": ["https://example.test/figure-11-1.png"],
+    }
+    prompt = build_concepts.generation._inventory_task_text(item)
+    records = [
+        {
+            "topic": "Circuit Diagrams",
+            "concept_title": "Reading Circuit Diagrams",
+            "parent_concept": "Electric Circuits",
+            "concept_details": (
+                "Description: Circuit diagrams show connected paths for current. // "
+                "Types: Type 01: Diagram interpretation "
+                "Case 01: Comparisons based on a visible circuit configuration. "
+                f"Example 01: {prompt} // "
+                "Misconceptions: Students may believe an open switch increases "
+                "current. // Error Analysis: A learner may trace current through "
+                "the broken branch and reach the wrong result."
+            ),
+            "keywords": "",
+        },
+        {
+            "topic": "Circuit Diagrams",
+            "concept_title": "Culmination - Circuit Diagrams",
+            "parent_concept": "Culmination",
+            "concept_details": "Description: Recap",
+            "keywords": "",
+        },
+    ]
+    inventory = {"items": [item]}
+
+    created, merged = build_concepts._deposit_concepts(
+        db,
+        chapter,
+        records,
+        "Post",
+        "",
+        inventory=inventory,
+        source_text=item["raw_task"],
+    )
+    assert not merged
+    assert len(created) == 2
+    concept = next(
+        concept
+        for topic in chapter.topics
+        for concept in topic.concepts
+        if concept.concept_title == "Reading Circuit Diagrams"
+    )
+    assert "Case 01:" in concept.concept_details
+    assert "Example 01:" in concept.concept_details
+    assert (
+        '[img src="https://example.test/figure-11-1.png" '
+        'alt="Fig. 11.1"]'
+    ) in concept.concept_details
+
+    row = writer._concept_to_row(concept, "objective")
+    exported = row[bi.OBJECTIVE_FIELDS.index("concept_details")]
+    assert exported == concept.concept_details
+    assert "Example 01:" in exported
+    assert "https://example.test/figure-11-1.png" in exported
+
+
+def test_post_deposit_refreshes_existing_concept_with_current_contract(db):
+    """A title collision must not leave legacy content in the exported row."""
+    from app.services import build_concepts
+
+    chapter = models.Chapter(
+        chapter_code="10CBSS_Refresh", board="CBSE", grade="10",
+        subject="Social Science", unit="History",
+        chapter_title="Refresh Contract", chapter_display_name="Refresh Contract",
+    )
+    topic = models.Topic(
+        topic_title="Nationalism", topic_display_name="Nationalism",
+        pre_post_learning="Post",
+    )
+    chapter.topics.append(topic)
+    legacy = models.Concept(
+        concept_title="Popular Sovereignty",
+        concept_display_name="Popular Sovereignty",
+        parent_concept="Legacy Parent",
+        concept_details=(
+            "Description: Legacy text. // Misconceptions: Students may believe "
+            "only rulers hold political authority. // Error Analysis: Students "
+            "may omit the role of citizens."
+        ),
+        keywords="legacy",
+    )
+    topic.concepts.append(legacy)
+    db.add(chapter)
+    db.commit()
+    legacy_id = legacy.id
+
+    records = [
+        {
+            "topic": "Nationalism",
+            "concept_title": "Popular Sovereignty",
+            "parent_concept": "Democratic Nationhood",
+            "concept_details": (
+                "Description: Popular sovereignty locates political authority "
+                "with citizens who participate in shaping public institutions. // "
+                "Misconception/ Error Analysis: Misconceptions: Students may "
+                "believe sovereignty belongs only to a monarch.; Error Analysis: "
+                "Students may omit citizens' role when explaining political "
+                "authority."
+            ),
+            "keywords": "sovereignty, citizens",
+        },
+        {
+            "topic": "Nationalism",
+            "concept_title": "Culmination - Nationalism",
+            "parent_concept": "Culmination",
+            "concept_details": "Description: Recap",
+            "keywords": "",
+        },
+    ]
+
+    created, merged = build_concepts._deposit_concepts(
+        db, chapter, records, "Post", "NCERT")
+
+    assert legacy_id in merged
+    assert len(created) == 1
+    db.flush()
+    refreshed = db.get(models.Concept, legacy_id)
+    assert refreshed is not None
+    assert refreshed.parent_concept == "Democratic Nationhood"
+    assert refreshed.keywords == "sovereignty, citizens"
+    assert refreshed.concept_details.count("Misconception/ Error Analysis:") == 1
+    assert " // Misconceptions:" not in refreshed.concept_details
+    assert " // Error Analysis:" not in refreshed.concept_details
+
+
+def test_post_deposit_rejects_missing_inventory_question_before_writes(db):
+    from app.services import build_concepts
+
+    chapter = models.Chapter(
+        chapter_code="10CBSS_Coverage", board="CBSE", grade="10",
+        subject="Social Science", unit="History",
+        chapter_title="Coverage Contract",
+        chapter_display_name="Coverage Contract",
+    )
+    db.add(chapter)
+    db.commit()
+    records = [{
+        "topic": "Nationalism",
+        "concept_title": "Popular Sovereignty",
+        "parent_concept": "Nation States",
+        "concept_details": (
+            "Description: Popular sovereignty places political authority with "
+            "the people. // Misconceptions: Students may believe sovereignty "
+            "belongs only to a monarch."
+        ),
+        "keywords": "",
+    }]
+    inventory = {"items": [{
+        "qid": "QINV-0007",
+        "source_kind": "checkpoint_question",
+        "topic_hint": "Nationalism",
+        "raw_task": (
+            "Explain how popular sovereignty changed political authority."
+        ),
+    }]}
+
+    with pytest.raises(
+        ValueError,
+        match=r"inventory coverage failed.*missing=QINV-0007",
+    ):
+        build_concepts._deposit_concepts(
+            db,
+            chapter,
+            records,
+            "Post",
+            "",
+            inventory=inventory,
+        )
+    assert chapter.topics == []
 
 
 def test_group_label_columns_present_and_ordered():
