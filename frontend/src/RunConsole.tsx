@@ -56,7 +56,13 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
 
   const apply = useCallback((evt: StreamEvent) => {
     setState((s) => {
-      if (evt.type === "heartbeat") return s;
+      if (evt.type === "heartbeat") {
+        if (!s.active || s.progressLabel.includes("still working")) return s;
+        const label = s.progressLabel
+          ? `${s.progressLabel} (still working...)`
+          : "Still working...";
+        return { ...s, progressLabel: label };
+      }
       const next = { ...s };
       if (evt.type === "progress") {
         next.progress = evt.value;

@@ -2331,6 +2331,63 @@ def _transient_backoff(exc: Exception, attempt: int) -> float:
     return max(suggested or 0.0, backoff)
 
 
+class OpenAIQueueTimeoutError(RuntimeError):
+    """Raised when a generation request cannot obtain an OpenAI slot in time."""
+
+
+def _acquire_openai_slot(
+    gate: "threading.BoundedSemaphore", *, purpose: OpenAIPurpose,
+) -> None:
+    """Acquire a shared OpenAI slot while keeping long queue waits observable.
+
+    The previous bare ``with gate`` could wait forever if another request was
+    wedged in the SDK.  Periodic messages make an expected busy period clear
+    in the UI, while the configurable deadline leaves Build Concepts with its
+    already-saved checkpoint rather than a permanently running request.
+    """
+    if gate.acquire(blocking=False):
+        return
+
+    timeout = config.OPENAI_SLOT_WAIT_TIMEOUT_SECONDS
+    purpose_label = str(purpose).replace("_", " ")
+    progress.log(
+        "OpenAI capacity is busy; waiting for a free "
+        f"{purpose_label} slot.",
+        level="warning",
+    )
+    if timeout <= 0:
+        raise OpenAIQueueTimeoutError(
+            "OpenAI capacity is busy and no queue wait is configured. "
+            "Try again after another generation finishes."
+        )
+
+    import time
+
+    started = time.monotonic()
+    while True:
+        elapsed = time.monotonic() - started
+        remaining = timeout - elapsed
+        if remaining <= 0:
+            raise OpenAIQueueTimeoutError(
+                "Timed out waiting for an available OpenAI generation slot. "
+                "If this run has a saved checkpoint, resume it after another "
+                "generation finishes."
+            )
+        wait_for = min(config.OPENAI_SLOT_WAIT_LOG_SECONDS, remaining)
+        if gate.acquire(timeout=wait_for):
+            waited = time.monotonic() - started
+            progress.log(
+                f"OpenAI slot acquired after {waited:.0f}s; continuing.",
+                level="success",
+            )
+            return
+        waited = time.monotonic() - started
+        progress.log(
+            f"Still waiting for OpenAI capacity ({waited:.0f}s).",
+            level="warning",
+        )
+
+
 def _openai_json(
     system: str,
     user: str,
@@ -2361,14 +2418,20 @@ def _openai_json(
         RateLimitError, APIConnectionError, APITimeoutError, InternalServerError)
     limit = config.OPENAI_MAX_OUTPUT_TOKENS if max_tokens is None else max_tokens
     request_policy = chat_request_policy(purpose, model=config.OPENAI_MODEL)
-    client = OpenAI()
+    # Disable SDK-level retries: this layer already supplies the retry policy
+    # and can surface each wait to the active progress stream.
+    client = OpenAI(
+        timeout=config.OPENAI_REQUEST_TIMEOUT_SECONDS,
+        max_retries=0,
+    )
     gate = _get_openai_gate()
     last_err: Exception | None = None
     attempt = 0  # hard failures (bad JSON, truncation, 4xx)
     transient = 0  # rate limits / timeouts / 5xx — retried patiently
     while True:
         try:
-            with gate:
+            _acquire_openai_slot(gate, purpose=purpose)
+            try:
                 resp = client.chat.completions.create(
                     **request_policy,
                     messages=[{"role": "system", "content": system},
@@ -2376,6 +2439,8 @@ def _openai_json(
                     response_format={"type": "json_object"},
                     max_completion_tokens=limit,
                 )
+            finally:
+                gate.release()
             # Record before finish-reason/JSON validation: responses retried for
             # truncation or malformed JSON are still billable.
             try:
@@ -2393,6 +2458,8 @@ def _openai_json(
                     "Set AEGIS_OPENAI_MAX_OUTPUT_TOKENS higher or reduce input size."
                 )
             return json.loads(choice.message.content or "{}")
+        except OpenAIQueueTimeoutError:
+            raise
         except transient_errors as e:
             error_code = _openai_error_code(e)
             if error_code == "insufficient_quota":
@@ -13843,6 +13910,10 @@ def pre_learning_from_rows(
             progress.step(
                 "Pre-learning â€” deriving prerequisite map",
                 value=0.981,
+            )
+            progress.log(
+                "Generating the prerequisite map from the completed chapter. "
+                "This final AI step can take a few minutes for a large source.",
             )
             draft = _openai_json(
                 system, user, purpose="pre_learning")
