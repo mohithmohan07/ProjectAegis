@@ -18,11 +18,11 @@ def _codes(report):
 
 
 def _analysis_sections(details):
+    """Expose the two semantic analysis components across storage versions."""
+    misconception, error_analysis = cr.analysis_components(details)
     return [
-        (label, content)
-        for label, content in cr.split_sections(details)
-        if cr.is_misconception_label(label)
-        or cr.is_error_analysis_label(label)
+        *([("Misconceptions", misconception)] if misconception else []),
+        *([("Error Analysis", error_analysis)] if error_analysis else []),
     ]
 
 
@@ -119,12 +119,15 @@ def test_ensure_valid_learner_analysis_reclassifies_preserves_and_exempts_culmin
     assert "believe that every negative input" in repaired[0][1]
     assert "omit the negative sign" in repaired[1][1]
 
-    assert _analysis_sections(out[1]["concept_details"]) == [
-        ("Misconceptions", valid_misconception),
-    ]
-    assert _analysis_sections(out[2]["concept_details"]) == [
-        ("Error Analysis", valid_error),
-    ]
+    scale_analysis = _analysis_sections(out[1]["concept_details"])
+    assert scale_analysis[0] == ("Misconceptions", valid_misconception)
+    assert scale_analysis[1][0] == "Error Analysis"
+    assert cv.is_valid_error_analysis(scale_analysis[1][1])
+
+    signed_analysis = _analysis_sections(out[2]["concept_details"])
+    assert signed_analysis[0][0] == "Misconceptions"
+    assert cv.is_valid_misconception(signed_analysis[0][1])
+    assert signed_analysis[1] == ("Error Analysis", valid_error)
     assert _analysis_sections(out[3]["concept_details"]) == []
 
 
@@ -174,7 +177,9 @@ def test_belief_adverbs_remain_misconceptions_and_are_reclassified():
     sections = _analysis_sections(
         cv.ensure_valid_learner_analysis([record])[0]["concept_details"]
     )
-    assert sections == [("Misconceptions", beliefs[0])]
+    assert sections[0] == ("Misconceptions", beliefs[0])
+    assert sections[1][0] == "Error Analysis"
+    assert cv.is_valid_error_analysis(sections[1][1])
 
 
 def test_misconceptions_reject_generic_objects_and_mixed_action_statements():
@@ -215,9 +220,12 @@ def test_analysis_splitter_does_not_split_learner_words_inside_a_belief():
             "Belief With Learner Object",
             f"Description: Roles and learning rates vary. // Misconceptions: {belief}",
         )
-        assert _analysis_sections(
+        sections = _analysis_sections(
             cv.ensure_valid_learner_analysis([record])[0]["concept_details"]
-        ) == [("Misconceptions", belief)]
+        )
+        assert sections[0] == ("Misconceptions", belief)
+        assert sections[1][0] == "Error Analysis"
+        assert cv.is_valid_error_analysis(sections[1][1])
 
     assert not cv.is_valid_misconception("Students may believe.")
 
@@ -247,9 +255,13 @@ def test_misconceptions_reject_correction_prose_after_the_false_belief():
         "Description: Fractions use a common denominator before addition. // "
         f"Misconceptions: {corrected}",
     )
-    assert _analysis_sections(
+    sections = _analysis_sections(
         cv.ensure_valid_learner_analysis([record])[0]["concept_details"]
-    ) == [("Misconceptions", "Students may believe denominators are added.")]
+    )
+    assert sections[0] == (
+        "Misconceptions", "Students may believe denominators are added.")
+    assert sections[1][0] == "Error Analysis"
+    assert cv.is_valid_error_analysis(sections[1][1])
 
 
 def test_overlap_removal_keeps_distinct_error_analysis_items():
@@ -504,6 +516,127 @@ def test_strict_type_hierarchy_requires_defined_cases_and_numbered_examples():
     }
     assert not (_codes(valid_report) & hierarchy_codes)
     assert "source_artifact" not in _codes(valid_report)
+
+
+def test_strict_type_hierarchy_requires_a_case_for_every_type_and_real_definition():
+    orphan_type = _rec(
+        "Equation Practice",
+        "Description: A linear equation has one unknown and can be solved "
+        "through inverse operations. // "
+        "Types: Type 01: Direct equations "
+        "Case 01: Given one linear equation, isolate the unknown with inverse "
+        "operations. Example 01: Solve 3x + 2 = 14. "
+        "Type 02: Word-problem equations.",
+    )
+    orphan_report = cv.validate_concept_rows(
+        [orphan_type], strict_type_hierarchy=True)
+    assert "type_without_case" in _codes(orphan_report)
+
+    generic_case = _rec(
+        "Equation Practice",
+        "Description: A linear equation has one unknown and can be solved "
+        "through inverse operations. // "
+        "Types: Type 01: Direct equations "
+        "Case 01: Practice set Example 01: Solve 3x + 2 = 14.",
+    )
+    generic_report = cv.validate_concept_rows(
+        [generic_case], strict_type_hierarchy=True)
+    assert "generic_case_definition" in _codes(generic_report)
+
+
+def test_strict_analysis_requires_one_exact_combined_section():
+    valid = _rec(
+        "Signed Substitution",
+        "Description: Signed values retain their signs during substitution "
+        "into a formula. // Misconception/ Error Analysis: "
+        "Misconceptions: Students may believe a negative input always makes "
+        "the final result negative.; Error Analysis: Students may omit a "
+        "negative sign while substituting a value.",
+    )
+    valid_report = cv.validate_concept_rows(
+        [valid], strict_analysis_section=True)
+    assert not ({
+        "analysis_section_format", "missing_misconception",
+        "missing_error_analysis",
+    } & _codes(valid_report))
+
+    legacy = _rec(
+        "Signed Substitution",
+        "Description: Signed values retain their signs during substitution "
+        "into a formula. // Misconceptions: Students may believe a negative "
+        "input always makes the final result negative. // Error Analysis: "
+        "Students may omit a negative sign while substituting a value.",
+    )
+    legacy_report = cv.validate_concept_rows(
+        [legacy], strict_analysis_section=True)
+    assert "analysis_section_format" in _codes(legacy_report)
+
+    malformed = _rec(
+        "Signed Substitution",
+        "Description: Signed values retain their signs during substitution "
+        "into a formula. // Misconception/ Error Analysis: Error Analysis: "
+        "Students may omit a negative sign while substituting a value.; "
+        "Misconceptions: Students may believe a negative input always makes "
+        "the final result negative.",
+    )
+    malformed_report = cv.validate_concept_rows(
+        [malformed], strict_analysis_section=True)
+    assert "analysis_section_format" in _codes(malformed_report)
+
+    orphan_prefix = _rec(
+        "Signed Substitution",
+        "Description: Signed values retain their signs during substitution.\n"
+        "Misconception/ // Misconception/ Error Analysis: "
+        "Misconceptions: Students may believe a negative input always makes "
+        "the final result negative.; Error Analysis: Students may omit a "
+        "negative sign while substituting a value.",
+    )
+    orphan_report = cv.validate_concept_rows(
+        [orphan_prefix], strict_analysis_section=True)
+    assert "analysis_section_format" in _codes(orphan_report)
+
+
+def test_strict_figure_examples_require_matching_canonical_image_tag():
+    assert cv._example_figure_ids("Refer to Fig．1（a） and Fig. 11.4.") == [
+        "1(a)", "11.4",
+    ]
+    prefix = (
+        "Description: Circuit diagrams make the electrical relationships "
+        "visible to a reader. // Types: Type 01: Circuit interpretation "
+        "Case 01: Given a labelled circuit diagram, identify the stated "
+        "relationship. Example 01: Refer to Fig. 11.4 and state the "
+        "observation."
+    )
+    suffix = (
+        " // Misconception/ Error Analysis: Misconceptions: Students may "
+        "believe every circuit diagram shows the same current path.; Error "
+        "Analysis: Students may overlook the labelled component while "
+        "tracing the circuit."
+    )
+    valid = _rec(
+        "Circuit Interpretation",
+        prefix + ' [img src="https://example.test/11-4.png" '
+        'alt="Fig. 11.4 Circuit observation"]' + suffix,
+    )
+    valid_report = cv.validate_concept_rows(
+        [valid], strict_type_hierarchy=True, strict_analysis_section=True)
+    assert not ({
+        "figure_reference_without_image", "figure_reference_image_mismatch",
+    } & _codes(valid_report))
+
+    missing = _rec("Circuit Interpretation", prefix + suffix)
+    missing_report = cv.validate_concept_rows(
+        [missing], strict_type_hierarchy=True, strict_analysis_section=True)
+    assert "figure_reference_without_image" in _codes(missing_report)
+
+    mismatch = _rec(
+        "Circuit Interpretation",
+        prefix + ' [img src="https://example.test/11-5.png" '
+        'alt="Fig. 11.5 Different circuit"]' + suffix,
+    )
+    mismatch_report = cv.validate_concept_rows(
+        [mismatch], strict_type_hierarchy=True, strict_analysis_section=True)
+    assert "figure_reference_image_mismatch" in _codes(mismatch_report)
 
 
 def test_validator_rejects_culmination_before_culmination_pass():

@@ -57,19 +57,27 @@ def test_split_prompt_contracts_are_separated():
     assert "Ohm's" not in hub and "Belgium" not in hub and "Vetal" not in hub
 
 
-def test_pre_and_post_prompts_distinguish_misconceptions_from_error_analysis():
+def test_pre_and_post_prompts_require_one_combined_analysis_section():
     post = g.prompts.get_text("concepts.description_refine.system")
     pre = g._prelearning_system("Mathematics", "08", "CBSE")
 
     for contract in (post, pre):
         normalized = " ".join(contract.split())
-        assert "Misconceptions" in normalized
-        assert "Error Analysis" in normalized
-        assert "commonly held incorrect beliefs or interpretations" in normalized
-        assert "procedural, computational, representational, or reasoning mistakes" in normalized
-        assert "at least one" in normalized
-        assert "Either section may appear alone" in normalized
-        assert "name the learner explicitly" in normalized
+        assert "Misconception/ Error Analysis:" in normalized
+        assert "Misconceptions:" in normalized
+        assert "Error Analysis:" in normalized
+        assert "commonly held incorrect belief" in normalized
+        assert "procedural, computational, representational, or reasoning mistake" in normalized
+        assert "both labelled" in normalized.lower()
+        assert "Never emit separate top-level" in normalized
+        assert "learner explicitly" in normalized
+
+    types = g.prompts.get_text("concepts.types_assign.system")
+    pre_normalized = " ".join(pre.split())
+    assert "Cases define the variation and are never questions" in pre_normalized
+    assert "questions appear only as numbered Examples" in pre_normalized
+    assert "When an Example refers to one or more figures" in types
+    assert '[img src="https://..." alt="..."]' in types
 
 
 def test_universal_question_task_inventory_and_type_mining_prompts():
@@ -1955,7 +1963,9 @@ def test_final_content_checkpoint_skips_semantic_api_repair(monkeypatch):
             "concept_title": "C",
             "concept_details": (
                 "Description: A complete concept description. // "
-                "Error Analysis: Students may omit a required step."
+                "Misconception/ Error Analysis: Misconceptions: Learners "
+                "may believe every step is optional.; Error Analysis: "
+                "Students may omit a required step."
             ),
             "keywords": "",
         }],

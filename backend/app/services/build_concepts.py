@@ -40,7 +40,9 @@ from . import (
 )
 
 
-def _find_concept_in_chapter(chapter: models.Chapter, title: str) -> models.Concept | None:
+def _find_concept_in_chapter(
+    chapter: models.Chapter, title: str, *, pre_post: str = "",
+) -> models.Concept | None:
     """Locate an existing concept anywhere under the chapter by normalized title.
 
     Schools use different books; the same concept arriving from another book
@@ -48,6 +50,8 @@ def _find_concept_in_chapter(chapter: models.Chapter, title: str) -> models.Conc
     """
     norm = bi.normalize_question_text(title)
     for t in chapter.topics:
+        if pre_post and t.pre_post_learning.lower() != pre_post.lower():
+            continue
         for c in t.concepts:
             if bi.normalize_question_text(c.concept_title) == norm:
                 return c
@@ -107,11 +111,15 @@ def _add_concept(db: Session, topic: models.Topic, rec: dict,
 def _deposit_concepts(
     db: Session, chapter: models.Chapter, records: list[dict],
     pre_post: str, source_book: str,
+    *,
+    inventory: dict | None = None,
+    mined_types: dict | None = None,
+    source_text: str = "",
 ) -> tuple[list[int], list[int]]:
     """Create concepts under the chapter, reusing existing ones across books.
 
-    Returns (created_ids, merged_ids): merged = concept already existed (any
-    topic of this chapter, normalized-title match) and only its sources grew.
+    Returns (created_ids, merged_ids): a same-learning-kind normalized-title
+    match is refreshed from the newly validated record and its sources grow.
     """
     # Clean each record (name hygiene, Title Case, dangling-ref removal), then
     # run the deterministic chapter pass: continuous "Type NN" numbering across
@@ -130,11 +138,54 @@ def _deposit_concepts(
     # Misconceptions and/or Error Analysis, and add the deterministic fallback
     # only when a normal concept has neither.
     records = concept_validator.ensure_valid_learner_analysis(records)
+    if pre_post == "Post" and inventory:
+        coverage = generation._rendered_inventory_coverage_defects(
+            records, inventory)
+        if coverage["missing"] or coverage["duplicate"]:
+            progress.log(
+                "Deposit inventory validation failed: "
+                f"{len(coverage['missing'])} missing and "
+                f"{len(coverage['duplicate'])} duplicated question/task(s).",
+                level="error",
+            )
+            defect_parts = []
+            if coverage["missing"]:
+                defect_parts.append(
+                    "missing=" + ",".join(coverage["missing"]))
+            if coverage["duplicate"]:
+                defect_parts.append(
+                    "duplicate=" + ",".join(coverage["duplicate"]))
+            raise ValueError(
+                "question/task inventory coverage failed before deposit: "
+                + "; ".join(defect_parts)
+            )
+        topic_violations = generation._rendered_inventory_topic_violations(
+            records, inventory, mined_types)
+        if topic_violations:
+            qids = sorted({
+                str(item.get("qid") or "").strip()
+                for item in topic_violations
+                if str(item.get("qid") or "").strip()
+            })
+            progress.log(
+                "Deposit inventory topic validation failed for "
+                f"{len(topic_violations)} question/task placement(s).",
+                level="error",
+            )
+            raise ValueError(
+                "question/task inventory topic placement failed before "
+                "deposit: " + ",".join(qids)
+            )
     report = concept_validator.validate_concept_rows(
         records,
         allow_types=True,
         require_culmination=pre_post == "Post",
         allow_culmination=True,
+        allowed_source_examples=generation._inventory_source_examples(
+            inventory),
+        strict_type_hierarchy=pre_post == "Post",
+        strict_analysis_section=pre_post == "Post",
+        source_text=source_text if pre_post == "Post" else "",
     )
     fatal = [
         e for e in report["errors"]
@@ -142,6 +193,8 @@ def _deposit_concepts(
         and e["code"] in {
             "required", "required_parent", "description_prefix", "source_artifact",
             "types_format", "case_without_type", "type_without_case",
+            "missing_case_definition", "case_without_example",
+            "case_question_not_definition", "example_numbering",
             "culmination_description", "culmination_count", "culmination_order",
             "section_number", "empty_types", "short_case_example",
             "rich_text_format", "empty_misconception", "empty_error_analysis",
@@ -149,6 +202,9 @@ def _deposit_concepts(
             "issue_section_order", "generic_misconception",
             "misconception_framing", "generic_error_analysis",
             "error_analysis_framing", "issue_section_overlap",
+            "analysis_section_format", "missing_misconception",
+            "missing_error_analysis", "figure_reference_without_image",
+            "figure_reference_image_mismatch", "generic_case_definition",
         }
     ]
     progress.log(
@@ -161,10 +217,23 @@ def _deposit_concepts(
     created_ids: list[int] = []
     merged_ids: list[int] = []
     for rec in records:
-        existing = _find_concept_in_chapter(chapter, rec["concept_title"])
+        existing = _find_concept_in_chapter(
+            chapter, rec["concept_title"], pre_post=pre_post)
         if existing is not None:
+            # A re-run must not leave legacy split analysis, stale Types, or
+            # misplaced source questions in the workbook merely because a
+            # concept title already exists.  The incoming record has passed
+            # the current final contract, so it is the authoritative version.
+            topic = _find_or_create_topic(db, chapter, rec["topic"], pre_post)
+            existing.topic = topic
+            existing.concept_title = rec["concept_title"]
+            existing.concept_display_name = rec["concept_title"]
+            existing.parent_concept = rec.get("parent_concept", "")
+            existing.concept_details = rec.get("concept_details", "")
+            existing.keywords = rec.get("keywords", "")
             if source_book.strip():
                 existing.sources = bi.merge_sources(existing.sources, source_book)
+            db.flush()
             merged_ids.append(existing.id)
             continue
         topic = _find_or_create_topic(db, chapter, rec["topic"], pre_post)
@@ -527,6 +596,9 @@ def _deposit_and_publish_concepts(
     records: list[dict],
     pre_post: str,
     source_book: str,
+    inventory: dict | None = None,
+    mined_types: dict | None = None,
+    source_text: str = "",
 ) -> tuple[list[int], list[int], dict[str, int]]:
     """Serialize final dedupe, DB commit, and shared workbook publication."""
     with workbook_sync.output_workbook_lock():
@@ -535,7 +607,15 @@ def _deposit_and_publish_concepts(
         if chapter is None:
             raise ValueError("target chapter not found")
         created_ids, merged_ids = _deposit_concepts(
-            db, chapter, records, pre_post, source_book)
+            db,
+            chapter,
+            records,
+            pre_post,
+            source_book,
+            inventory=inventory,
+            mined_types=mined_types,
+            source_text=source_text,
+        )
         _sync_chapter_topic_summary(
             chapter, _chapter_meta_summary(chapter))
         written = _commit_and_publish_concept_workbook(
@@ -764,6 +844,9 @@ def generate_post_learning(
             records=records,
             pre_post="Post",
             source_book=job.source_book,
+            inventory=artifacts.get("question_task_inventory"),
+            mined_types=artifacts.get("mined_types"),
+            source_text=job.mmd_text,
         )
     except Exception:
         db.rollback()

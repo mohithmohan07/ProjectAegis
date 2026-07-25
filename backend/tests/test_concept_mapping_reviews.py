@@ -2,6 +2,8 @@
 import re
 from pathlib import Path
 
+import pytest
+
 from app import models
 from app import bulk_import as bi
 from app.services import (
@@ -13,6 +15,32 @@ from app.services import (
 from app.services import directory, generation as g
 
 
+def _tracked_source_sections(filename):
+    source = (Path(__file__).parents[1] / "data" / "Testing" / filename).read_text(
+        encoding="utf-8")
+    return g.parse_mmd_sections(source)
+
+
+def _attached_source_anchors(filename):
+    sections = _tracked_source_sections(filename)
+    return sections, g._attach_explicit_figure_images(
+        g._source_task_anchors(sections), sections)
+
+
+def _assert_exact_figure_attachment(item, registry, figure_ids):
+    """Assert source Figure IDs become same-question canonical image tags."""
+    expected = [registry[figure_id][0] for figure_id in figure_ids]
+    assert item["image_urls"] == [entry["url"] for entry in expected]
+    assert list((item.get("_image_captions") or {}).values()) == [
+        entry["caption"] for entry in expected
+    ]
+    rendered = g._inventory_task_text(item)
+    assert rendered.count("[img ") == len(expected)
+    for entry in expected:
+        assert f'[img src="{entry["url"]}" ' in rendered
+        assert " alt=\"" in rendered
+
+
 def test_misconception_dedup_keeps_one_section():
     details = (
         "Description: Layers are studied indirectly.\n"
@@ -21,9 +49,12 @@ def test_misconception_dedup_keeps_one_section():
         "Misconceptions: Students confuse crust and mantle."
     )
     out = cr.normalize_misconception_sections(details)
-    assert out.count("Misconception") == 1
+    assert [
+        label for label, _ in cr.split_sections(out)
+        if cr.is_learner_analysis_label(label)
+    ] == ["Misconception/ Error Analysis"]
     assert "Achieving Mastery:" in out
-    assert "Students confuse crust and mantle." in out
+    assert cr.analysis_components(out)[0] == "Students confuse crust and mantle."
 
 
 def test_misconception_strips_inline_after_mastery():
@@ -46,7 +77,10 @@ def test_misconception_prefers_specific_over_generic_duplicate():
         "representation given in the problem."
     )
     out = cr.normalize_misconception_sections(details)
-    assert out.count("Error Analysis:") == 1
+    assert [
+        label for label, _ in cr.split_sections(out)
+        if cr.is_learner_analysis_label(label)
+    ] == ["Misconception/ Error Analysis"]
     assert "ignore the parallel-line condition" in out
     assert "memorized rule" not in out
 
@@ -480,7 +514,7 @@ def test_latex_figure_uses_adjacent_source_caption_in_public_markdown():
     assert "\\includegraphics" not in text
     assert (
         f'[img src="{url}" '
-        'alt="Fig． 1 - A democratic republic print prepared in 1848"]'
+        'alt="Fig. 1 - A democratic republic print prepared in 1848"]'
         in text
     )
 
@@ -525,6 +559,17 @@ def test_uploaded_nationalism_fixture_recovers_all_checkpoint_containers():
     )
     assert "was not the result of a sudden upheaval" not in (
         italy_map_activity["raw_task"])
+    list_discuss = next(
+        item for item in checkpoints
+        if "political ends that List" in item["raw_task"]
+    )
+    assert "drew up the Treaty of Vienna" not in list_discuss["raw_task"]
+    culture_discuss = next(
+        item for item in checkpoints
+        if "language and popular traditions" in item["raw_task"]
+    )
+    assert "Peasants' uprising" not in culture_discuss["raw_task"]
+    assert "National Assembly proclaimed" not in culture_discuss["raw_task"]
 
 
 def test_uploaded_nationalism_fixture_exposes_all_six_main_topics():
@@ -593,6 +638,136 @@ def test_repeated_generic_checkpoint_labels_preserve_distinct_tasks():
         "Explain how language contributed to national identity.",
         "Compare the political meanings of two allegories.",
     ]
+
+
+def test_checkpoint_refresh_matches_mojibake_activity_rows_without_new_qids():
+    """Old RNE checkpoints use generic Activity labels and damaged UTF-8."""
+    opening = "In what way does this print（Fig．1） depict a utopian vision?"
+    hubner = "Describe what you see in Fig. 17. What could Hübner mean?"
+    saved = [
+        {
+            "qid": "QINV-0017",
+            "source_kind": "activity",
+            "source_label": "Activity",
+            "raw_task": (
+                "In what way does this printï¼ˆFigï¼Ž1ï¼‰ depict a "
+                "utopian vision?"
+            ),
+        },
+        {
+            "qid": "QINV-0004",
+            "source_kind": "checkpoint_question",
+            "source_label": "Activity",
+            "raw_task": (
+                "Describe what you see in Fig. 17. What could HÃ¼bner mean?"
+            ),
+        },
+    ]
+    anchors = [
+        {
+            "source_kind": "checkpoint_question",
+            "source_label": "Activity",
+            "parent_source_label": "Activity",
+            "raw_task": opening,
+            "normalized_task": opening,
+            "_activity_origin": True,
+        },
+        {
+            "source_kind": "checkpoint_question",
+            "source_label": "Activity",
+            "parent_source_label": "Activity",
+            "raw_task": hubner,
+            "normalized_task": hubner,
+            "_activity_origin": True,
+        },
+    ]
+
+    merged = g._merge_source_task_anchors(saved, anchors)
+
+    assert [item["qid"] for item in merged] == ["QINV-0017", "QINV-0004"]
+    assert [item["raw_task"] for item in merged] == [opening, hubner]
+    assert g._inventory_coverage_key(saved[0]["raw_task"]) == (
+        g._inventory_coverage_key(opening))
+    assert g._inventory_coverage_key(saved[1]["raw_task"]) == (
+        g._inventory_coverage_key(hubner))
+
+
+def test_mojibake_activity_question_becomes_a_trimmed_checkpoint_with_figure():
+    clean_prompt = (
+        "In what way does this print (Fig. 1) depict a utopian vision?"
+    )
+    damaged_prompt = clean_prompt.encode("utf-8").decode("latin-1")
+    source = (
+        "# The French Revolution\n"
+        "\\begin{figure}\n"
+        "\\includegraphics{https://example.test/fig-1.png}\n"
+        "\\caption{Fig. 1 - Test print}\n"
+        "\\end{figure}\n"
+        "## Activity\n"
+        f"{damaged_prompt}\n"
+        "identifiable by a flag.\n"
+    )
+
+    sections = g.parse_mmd_sections(source)
+    anchors = g._attach_explicit_figure_images(
+        g._source_task_anchors(sections), sections)
+
+    assert len(anchors) == 1
+    anchor = anchors[0]
+    assert anchor["source_kind"] == "checkpoint_question"
+    assert anchor["_activity_origin"] is True
+    assert "identifiable by a flag" not in anchor["raw_task"]
+    assert anchor["image_urls"] == ["https://example.test/fig-1.png"]
+    rendered = g._inventory_task_text(anchor)
+    assert clean_prompt in rendered
+    assert "HÃ" not in rendered
+    assert '[img src="https://example.test/fig-1.png" ' in rendered
+
+
+def test_canonical_rich_text_repairs_mojibake_in_existing_inventory_examples():
+    clean_prompt = "What could Hübner mean?"
+    damaged_prompt = clean_prompt.encode("utf-8").decode("latin-1")
+    records = [{
+        "concept_details": (
+            "Description: d // Types: Type 01: Visual interpretation "
+            "Case 01: Given a source visual, interpret its reference. "
+            f"Example 01: {damaged_prompt}"
+        ),
+    }]
+
+    out = g._canonicalize_concept_rich_text(records)
+
+    assert clean_prompt in out[0]["concept_details"]
+    assert "HÃ" not in out[0]["concept_details"]
+
+
+def test_trimmed_checkpoint_anchor_replaces_a_longer_ocr_bleed_variant():
+    prompt = "Discuss the importance of language in national identity."
+    anchor = {
+        "source_kind": "checkpoint_question",
+        "source_label": "Discuss",
+        "parent_source_label": "Discuss",
+        "raw_task": prompt,
+        "normalized_task": prompt,
+        "_source_task_boundary": "direct_prompt",
+    }
+    merged = g._merge_source_task_anchors([
+        {
+            "qid": "QINV-0022",
+            "source_kind": "checkpoint_question",
+            "source_label": "Discuss",
+            "raw_task": prompt + " National Assembly proclaimed a Republic.",
+            "image_urls": ["https://example.test/unrelated-figure.png"],
+            "requires_visual": True,
+        }
+    ], [anchor])
+
+    assert len(merged) == 1
+    assert merged[0]["qid"] == "QINV-0022"
+    assert merged[0]["raw_task"] == prompt
+    assert merged[0]["_source_task_boundary"] == "direct_prompt"
+    assert merged[0]["image_urls"] == []
+    assert not merged[0]["requires_visual"]
 
 
 def test_uploaded_nationalism_fixture_exposes_sorrieu_opening_for_recovery():
@@ -716,6 +891,104 @@ def test_uploaded_electricity_activities_feed_types_and_hubs_with_visuals():
     assert all(re.search(
         r'\[img\s+src="https://[^"]+"\s+alt="[^"]+"\]', text)
                for text in rendered_visuals)
+
+
+def test_tracked_rne_anchors_keep_question_boundaries_and_exact_figures():
+    sections, anchors = _attached_source_anchors("RNE.mmd")
+    registry = g._source_figure_registry(sections)
+
+    opening = next(
+        item for item in anchors if "utopian vision" in item["raw_task"])
+    assert "identifiable by the revolutionary tricolour" not in opening["raw_task"]
+    _assert_exact_figure_attachment(opening, registry, ["1"])
+
+    club_caricature = next(
+        item for item in anchors
+        if "What is the caricaturist trying to depict" in item["raw_task"])
+    _assert_exact_figure_attachment(club_caricature, registry, ["6"])
+
+    bismarck = next(
+        item for item in anchors
+        if "Bismarck and the elected deputies" in item["raw_task"])
+    assert "Chief Minister Cavour" not in bismarck["raw_task"]
+    _assert_exact_figure_attachment(bismarck, registry, ["13"])
+
+    italy_map = next(
+        item for item in anchors if "Look at Fig. 14(a)" in item["raw_task"])
+    _assert_exact_figure_attachment(italy_map, registry, ["14(a)", "14(b)"])
+
+    garibaldi = next(
+        item for item in anchors
+        if "artist has portrayed Garibaldi" in item["raw_task"])
+    _assert_exact_figure_attachment(garibaldi, registry, ["15"])
+
+    veit = next(
+        item for item in anchors if "Veit's Germania" in item["raw_task"])
+    _assert_exact_figure_attachment(veit, registry, ["17"])
+
+    hubner = next(
+        item for item in anchors if "Describe what you see in Fig. 17" in item["raw_task"])
+    _assert_exact_figure_attachment(hubner, registry, ["17"])
+    assert "19" not in g._figure_reference_ids(
+        " ".join((hubner.get("_image_captions") or {}).values()))
+
+    frankfurt = next(
+        item for item in anchors if "citizen of Frankfurt" in item["raw_task"])
+    _assert_exact_figure_attachment(frankfurt, registry, ["10"])
+
+
+def test_tracked_math_ap_inventory_has_all_examples_and_exact_figure_questions():
+    sections, anchors = _attached_source_anchors("jemh105 (1).mmd")
+    registry = g._source_figure_registry(sections)
+    worked_examples = [
+        item for item in anchors if item["source_kind"] == "worked_example"
+    ]
+    assert [item["source_label"] for item in worked_examples] == [
+        f"Example {number}" for number in range(1, 17)
+    ]
+    expected = {
+        "EXERCISE 5.3 Q18": "5.4",
+        "EXERCISE 5.3 Q19": "5.5",
+        "EXERCISE 5.3 Q20": "5.6",
+        "EXERCISE 5.4 (Optional)* Q3": "5.7",
+        "EXERCISE 5.4 (Optional)* Q5": "5.8",
+    }
+    for source_label, figure_id in expected.items():
+        item = next(item for item in anchors if item["source_label"] == source_label)
+        _assert_exact_figure_attachment(item, registry, [figure_id])
+
+
+def test_tracked_electricity_inventory_counts_and_activity_figure_sets():
+    sections, anchors = _attached_source_anchors(
+        "Class 10 Chapter 5 Electricity.mmd")
+    registry = g._source_figure_registry(sections)
+    assert len(g._topic_headings(sections)) == 8
+    counts = {
+        kind: sum(item["source_kind"] == kind for item in anchors)
+        for kind in {item["source_kind"] for item in anchors}
+    }
+    assert counts == {
+        "worked_example": 13,
+        "intext_question": 23,
+        "exercise": 18,
+        "checkpoint_question": 6,
+    }
+    assert [
+        item["source_label"] for item in anchors
+        if item["source_kind"] == "worked_example"
+    ] == [f"Example 11.{number}" for number in range(1, 14)]
+
+    expected = {
+        "Activity 11.1": ["11.2", "11.3"],
+        "Activity 11.2": ["11.4"],
+        "Activity 11.3": ["11.5"],
+        "Activity 11.4": ["11.6"],
+        "Activity 11.5": ["11.6", "11.8"],
+        "Activity 11.6": ["11.10", "11.11"],
+    }
+    for source_label, figure_ids in expected.items():
+        item = next(item for item in anchors if item["source_label"] == source_label)
+        _assert_exact_figure_attachment(item, registry, figure_ids)
 
 
 def test_assessable_activity_can_appear_once_in_types_and_in_hub():
@@ -851,14 +1124,18 @@ def test_validator_allows_figure_reference_with_embedded_image():
     assert not any(e["code"] == "source_artifact" for e in report["errors"])
     assert not any(e["code"] == "short_case_example" for e in report["errors"])
 
-    # Without the image URL the bare figure pointer is still an artifact.
+    # Without the image URL, strict Types validation sees the Figure and
+    # rejects the missing canonical image rather than hiding the reference.
     no_image = [{"topic": "Electricity", "parent_concept": "Ohm's Law",
                  "concept_title": "Resistance",
                  "concept_details": details.replace(
                      " ![](https://cdn.mathpix.com/f11.jpg)", ""),
                  "keywords": ""}]
-    report2 = concept_validator.validate_concept_rows(no_image, allow_types=True)
-    assert any(e["code"] == "source_artifact" for e in report2["errors"])
+    report2 = concept_validator.validate_concept_rows(
+        no_image, allow_types=True, strict_type_hierarchy=True)
+    assert any(
+        e["code"] == "figure_reference_without_image"
+        for e in report2["errors"])
 
 
 def test_validator_flags_truncated_example_lines():
@@ -878,14 +1155,15 @@ def test_validator_flags_truncated_example_lines():
     assert any(e["code"] == "short_case_example" for e in report["errors"])
 
 
-def test_cleanup_keeps_figure_reference_next_to_embedded_image():
+def test_cleanup_preserves_figure_reference_for_same_example_image_validation():
     text = ("Calculate the resistance for the given circuit. (Refer fig. 11.1) "
             "![](https://cdn.mathpix.com/f11.jpg)")
     assert concept_cleanup.strip_dangling_references(text) == text
     assert concept_cleanup.neutralize_source_artifacts(text) == text
-    # Without the image, the bare reference is still neutralized.
+    # Without the image, keep the Figure ID so strict validation can reject
+    # the missing tag instead of silently changing the question.
     bare = "Calculate the resistance for the given circuit shown in fig. 11.1."
-    assert "fig. 11.1" not in concept_cleanup.neutralize_source_artifacts(bare)
+    assert "fig. 11.1" in concept_cleanup.neutralize_source_artifacts(bare).lower()
 
 
 def test_multiple_specific_misconceptions_are_kept():
@@ -1925,10 +2203,13 @@ def test_neutralize_preserves_exact_inventory_owned_figure_prompt():
         allow_types=True,
         allowed_source_examples=g._inventory_source_examples(inventory),
     )
-    assert any(
+    assert not any(
         error["code"] == "source_artifact"
         for error in hard_gate["errors"]
     )
+    assert g._rendered_inventory_coverage_defects(unowned, inventory)["missing"] == [
+        "QINV-0031",
+    ]
 
 
 def test_chapter_meta_summary_retries_before_deterministic_fallback(monkeypatch, db):
@@ -1965,8 +2246,8 @@ def test_inventory_prompt_requires_checkpoints_activities_and_images():
     assert "heating-effect" in embedding
 
 
-def test_neutralize_compact_fig_refs_without_space():
-    """OCR often emits fig.11.1; neutralize must clear it or final validation fails."""
+def test_neutralize_preserves_compact_fig_refs_for_strict_image_validation():
+    """OCR compact Figure IDs must remain visible to the strict image check."""
     rec = {
         "topic": "Electric Current And Circuit",
         "parent_concept": "Resistance",
@@ -1988,7 +2269,13 @@ def test_neutralize_compact_fig_refs_without_space():
     report = concept_validator.validate_concept_rows(
         [out], allow_types=True, require_culmination=False)
     assert not any(e["code"] == "source_artifact" for e in report["errors"])
-    assert "fig.11" not in out["concept_details"].lower()
+    assert "fig.11.5" in out["concept_details"].lower()
+    strict_report = concept_validator.validate_concept_rows(
+        [out], allow_types=True, strict_type_hierarchy=True)
+    assert any(
+        error["code"] == "figure_reference_without_image"
+        for error in strict_report["errors"]
+    )
 
 
 def test_chapter_opening_labelled_in_section_chunks():
@@ -2214,8 +2501,8 @@ def test_short_example_salvage_never_borrows_from_another_source_topic():
     assert other_topic_task not in out[0]["concept_details"]
 
 
-def test_final_scrub_clears_page14_and_reintroduced_artifacts():
-    """Electricity deposit must not die on OCR page14 / post-mastery Example N."""
+def test_final_scrub_clears_nonvisual_artifacts_but_keeps_figure_ids():
+    """Figure IDs remain for strict same-Example image validation."""
     rows = [
         {
             "topic": "Electric Current And Circuit",
@@ -2261,7 +2548,7 @@ def test_final_scrub_clears_page14_and_reintroduced_artifacts():
     combined = " ".join(r["concept_details"] for r in out)
     assert "page14" not in combined.lower()
     assert "example 12" not in combined.lower()
-    assert "fig.12" not in combined.lower()
+    assert "fig.12.5" in combined.lower()
 
 
 def test_salvage_replaces_artifact_examples_from_inventory():
@@ -2488,15 +2775,17 @@ Read the passage and use it for all parts.
 \section*{Questions}
 1. Using the passage above: (a) identify the speaker (b) explain the argument
 (c) infer why the audience responded.
-"""
+    """
     anchors = g._source_task_anchors(g.parse_mmd_sections(source))
-    exercises = [
-        item for item in anchors if item["source_kind"] == "exercise"
+    questions = [
+        item for item in anchors
+        if item["source_kind"] in {"exercise", "intext_question"}
     ]
-    assert len(exercises) == 1
-    assert "(a)" in exercises[0]["raw_task"]
-    assert "(b)" in exercises[0]["raw_task"]
-    assert "(c)" in exercises[0]["raw_task"]
+    assert len(questions) == 1
+    assert questions[0]["source_kind"] == "intext_question"
+    assert "(a)" in questions[0]["raw_task"]
+    assert "(b)" in questions[0]["raw_task"]
+    assert "(c)" in questions[0]["raw_task"]
 
 
 def test_split_subpart_anchors_replace_compound_model_inventory_row():
@@ -2641,6 +2930,37 @@ def test_final_checkpoint_missing_source_topic_resumes_from_prior_stage(
     assert {row["topic"] for row in restored_records} == set(topics)
     assert [group["topic"] for group in source_topic_excerpts] == topics
     assert {row["topic"] for row in out} == set(topics)
+
+
+def test_final_checkpoint_with_orphan_analysis_prefix_forces_final_repair():
+    source = "## T\nA short source section."
+    sections = g.parse_mmd_sections(source)
+    checkpoint = g._make_concept_checkpoint(
+        "final_content_ready",
+        records=[{
+            "topic": "T",
+            "parent_concept": "P",
+            "concept_title": "C",
+            "concept_details": (
+                "Description: d\nMisconception/ // "
+                "Misconception/ Error Analysis: Misconceptions: Students may "
+                "believe d is always true.; Error Analysis: Students may omit "
+                "a condition."
+            ),
+            "keywords": "",
+        }],
+        question_task_inventory={"items": [], "stats": {}},
+        mined_types={"types": []},
+        method_row_snapshot=[],
+    )
+
+    reasons = g._final_checkpoint_refresh_reasons(
+        checkpoint,
+        sections=sections,
+        source_topic_excerpts=g._group_source_topic_excerpts(sections),
+    )
+
+    assert any("learner-analysis" in reason for reason in reasons)
 
 
 def test_source_topic_order_is_restored_after_recovery_append():
@@ -3026,6 +3346,29 @@ def test_rendered_inventory_coverage_handles_embedded_structure_tokens_exactly()
     }
 
 
+def test_inventory_coverage_survives_cosmetic_cleanup_punctuation():
+    prompt = "Explain why 21 , values differ . . . Show the reasoning."
+    inventory = {"items": [{"qid": "QINV-0001", "raw_task": prompt}]}
+    record = {
+        "topic": "Data Interpretation",
+        "parent_concept": "Comparing Values",
+        "concept_title": "Comparing Measurements",
+        "concept_details": (
+            "Description: Compare measured values. // Types: "
+            "Type 01: Explain a comparison Case 01: Compare values "
+            f"Example 01: {prompt}"
+        ),
+        "keywords": "",
+    }
+    cleaned = concept_cleanup.clean_concept_record(dict(record))
+
+    assert "21, values differ..." in cleaned["concept_details"]
+    assert g._rendered_inventory_coverage_defects([cleaned], inventory) == {
+        "missing": [],
+        "duplicate": [],
+    }
+
+
 def test_salvage_does_not_duplicate_already_rendered_inventory_examples():
     """Short stubs must not steal inventory prompts already placed elsewhere."""
     germania = (
@@ -3355,8 +3698,8 @@ def test_coverage_defects_ignore_empty_or_stub_inventory_prompts():
     assert "closed electric circuit" in enforced[0]["concept_details"]
 
 
-def test_enforce_coverage_does_not_abort_on_residual_missing(monkeypatch):
-    """After repair attempts, residual missing warns instead of hard-failing."""
+def test_enforce_coverage_hard_fails_on_residual_missing(monkeypatch):
+    """A placeable inventory omission may never pass the final boundary."""
     prompt = (
         "Calculate the resistance of a conductor when potential difference "
         "and current are given."
@@ -3380,9 +3723,11 @@ def test_enforce_coverage_does_not_abort_on_residual_missing(monkeypatch):
         g, "_append_inventory_example_to_record",
         lambda record, text, item=None: record,
     )
-    out = g._enforce_rendered_inventory_coverage(records, inventory)
-    assert out is not None
-    assert g._rendered_inventory_coverage_defects(out, inventory)["missing"]
+    with pytest.raises(
+        RuntimeError,
+        match=r"failed exact inventory coverage.*still-missing",
+    ):
+        g._enforce_rendered_inventory_coverage(records, inventory)
 
 
 def test_unambiguous_case_evidence_overrides_wrong_concept_guess():

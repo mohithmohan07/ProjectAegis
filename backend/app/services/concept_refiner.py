@@ -20,17 +20,15 @@ team requires regardless of which extractor produced them:
    the end of a Description is normalized to a line-broken
    ``\\nAchieving Mastery: <statement>`` format.
 6. **Learner analysis is always present on normal concepts.** Each normal
-   concept ends with at least one of ``Misconceptions`` (a commonly held but
-   incorrect belief or interpretation) and ``Error Analysis`` (a plausible
-   procedural, computational, representational, or reasoning mistake). Either
-   section may appear alone, or both may appear when they add distinct value.
+   concept ends with exactly one ``Misconception/ Error Analysis`` section.
+   That section contains both a commonly held incorrect belief and a plausible
+   procedural, computational, representational, or reasoning mistake.
 
 ``concept_details`` is the canonical
-``Description: ... // Activity/Info Hub: ... // Types: ... // Misconceptions:
-... // Error Analysis: ...`` string (sections joined by " // "). Optional
-sections are omitted. Activity/Info Hub holds textbook activities, experiments,
-discussion cases, and other excess source material that must not overload
-Culmination or become vague Cases.
+``Description: ... // Activity/Info Hub: ... // Types: ... //
+Misconception/ Error Analysis: Misconceptions: ...; Error Analysis: ...`` string
+(sections joined by " // "). Optional Activity/Info Hub and Types sections are
+omitted when not applicable.
 """
 from __future__ import annotations
 
@@ -47,6 +45,7 @@ _EXAMPLE_TOKEN_RE = re.compile(
 _ACTIVITY_HUB_LABEL = "Activity/Info Hub"
 _MISCONCEPTIONS_LABEL = "Misconceptions"
 _ERROR_ANALYSIS_LABEL = "Error Analysis"
+_ANALYSIS_LABEL = "Misconception/ Error Analysis"
 
 
 def is_culmination(title: str) -> bool:
@@ -84,6 +83,26 @@ def is_error_analysis_label(label: str) -> bool:
         "possiblemistake",
         "possiblemistakes",
     }
+
+
+def is_combined_analysis_label(label: str) -> bool:
+    """Return True for the canonical single learner-analysis section."""
+    key = re.sub(r"[^a-z]", "", (label or "").strip().lower())
+    return key in {
+        "misconceptionerroranalysis",
+        "misconceptionserroranalysis",
+        "misconceptionanderroranalysis",
+        "misconceptionsanderroranalysis",
+    }
+
+
+def is_learner_analysis_label(label: str) -> bool:
+    """Accept canonical combined and legacy split learner-analysis labels."""
+    return (
+        is_combined_analysis_label(label)
+        or is_misconception_label(label)
+        or is_error_analysis_label(label)
+    )
 
 
 def split_sections(details: str) -> list[tuple[str, str]]:
@@ -316,6 +335,21 @@ _INLINE_ANALYSIS_RE = re.compile(
     r")\s*[:\-]\s*",
     re.IGNORECASE,
 )
+# Models occasionally put the combined learner-analysis label on a new line
+# inside Description instead of starting a new `` // `` section. The generic
+# inline matcher sees the nested ``Error Analysis:`` label in that form, but
+# not the leading ``Misconception/`` prefix.
+_NEWLINE_COMBINED_ANALYSIS_RE = re.compile(
+    r"(?:^|\r?\n)\s*Misconceptions?\s*/\s*"
+    r"Error\s+Analys(?:is|es)\s*:\s*",
+    re.IGNORECASE,
+)
+# If a prior pass already split the trailing canonical section, the malformed
+# newline prefix can remain by itself at the end of Description. It has no
+# learner-analysis content and must be discarded rather than rendered.
+_ORPHAN_ANALYSIS_PREFIX_RE = re.compile(
+    r"(?im)^[ \t]*Misconceptions?[ \t]*/[ \t]*(?:\r?\n|$)",
+)
 # Generic legacy fallback text; normalization drops a duplicate copy when a
 # more specific learner misconception exists.
 _GENERIC_MISCONCEPTION_RE = re.compile(
@@ -409,8 +443,11 @@ def _error_analysis_index(sections: list[tuple[str, str]]) -> int:
 
 
 def _fallback_misconception(title: str) -> str:
-    """Legacy name retained for callers; the text describes an application error."""
-    return _fallback_error_analysis(title)
+    concept = (title or "this concept").strip().rstrip(".")
+    return (
+        f"Students may assume {concept} is a rule that always applies without "
+        "checking its conditions, context, or representation."
+    )
 
 
 def _fallback_error_analysis(title: str) -> str:
@@ -466,6 +503,17 @@ def _analysis_text_key(text: str) -> str:
     return re.sub(r"\W+", " ", (text or "").lower()).strip()
 
 
+def _trim_analysis_marker_separator(text: str) -> str:
+    """Drop the semicolon that separates the two canonical components.
+
+    ``Misconceptions: ...; Error Analysis: ...`` is stored in one section.
+    When the content is split at the next nested label, that separator belongs
+    to neither component.  Removing it here keeps normalization idempotent
+    rather than accumulating ``;`` on each refinement pass.
+    """
+    return re.sub(r"\s*;\s*$", "", (text or "").strip()).strip()
+
+
 def _duplicate_belongs_to_misconceptions(text: str) -> bool:
     """Choose the more appropriate section for an exact cross-section copy."""
     # Explicit learner-belief syntax is the strongest signal. A broad word
@@ -482,17 +530,18 @@ def _duplicate_belongs_to_misconceptions(text: str) -> bool:
 
 
 def normalize_analysis_sections(details: str) -> str:
-    """Normalize distinct Misconceptions and Error Analysis sections.
+    """Normalize learner analysis into one combined canonical section.
 
     Learner-analysis text can appear inline in Description and in repeated
     sections. Inline copies are removed, repeated sections of the same kind are
-    consolidated, and the two different meanings are never merged together.
+    consolidated, while their two different meanings remain explicitly
+    labelled inside one public section.
 
     Misconceptions are commonly held but incorrect beliefs or interpretations.
     Error Analysis captures plausible procedural, computational,
     representational, or reasoning mistakes made while applying the concept.
-    The meanings remain separate; either section may appear alone, or both may
-    appear in canonical order after Types.
+    Legacy split sections are accepted as input. Output contains at most one
+    ``Misconception/ Error Analysis`` section after Types.
     """
     sections = split_sections(details)
     if not sections:
@@ -511,7 +560,7 @@ def normalize_analysis_sections(details: str) -> str:
 
     def _collect(kind: str, text: str) -> None:
         nonlocal stray_mastery
-        text = (text or "").strip()
+        text = _trim_analysis_marker_separator(text)
         if not text:
             return
         # A mastery statement drifted into the misconception text (review:
@@ -553,12 +602,36 @@ def normalize_analysis_sections(details: str) -> str:
     cleaned: list[tuple[str, str]] = []
     for label, content in sections:
         lower = label.strip().lower()
+        if is_combined_analysis_label(label):
+            matches = list(_INLINE_ANALYSIS_RE.finditer(content or ""))
+            if matches:
+                _collect_inline(content)
+            elif _LEARNER_FALSE_BELIEF_RE.search(content or ""):
+                _collect("misconception", content)
+            else:
+                _collect("error_analysis", content)
+            continue
         kind = _kind_for_label(label)
         if kind:
             _collect_inline(content, kind)
             continue
         if lower.startswith("description"):
             body = content
+            # Treat a newline-prefixed combined label as a separate semantic
+            # section so a stray ``Misconception/`` cannot survive in the
+            # public Description when the canonical delimiter was omitted.
+            newline_combined = _NEWLINE_COMBINED_ANALYSIS_RE.search(body)
+            if newline_combined:
+                combined_content = body[newline_combined.end():]
+                matches = list(_INLINE_ANALYSIS_RE.finditer(combined_content))
+                if matches:
+                    _collect_inline(combined_content)
+                elif _LEARNER_FALSE_BELIEF_RE.search(combined_content):
+                    _collect("misconception", combined_content)
+                else:
+                    _collect("error_analysis", combined_content)
+                body = body[:newline_combined.start()].rstrip()
+            body = _ORPHAN_ANALYSIS_PREFIX_RE.sub("", body).rstrip()
             # Remove one or more inline analysis blocks before or after mastery.
             inline = _INLINE_ANALYSIS_RE.search(body)
             if inline:
@@ -666,15 +739,19 @@ def normalize_analysis_sections(details: str) -> str:
             ordered[i] = (label, f"{body}\nAchieving Mastery: {stray_mastery}")
             break
     # Canonical order: Description (+ mastery), Activity/Info Hub, Types,
-    # Misconceptions, Error Analysis. The hub stays before assessable Cases.
+    # one combined learner-analysis section. The hub stays before assessable
+    # Cases.
     if hub_block:
         ordered.append(hub_block)
     if types_block:
         ordered.append(types_block)
+    combined: list[str] = []
     if chosen_misconceptions:
-        ordered.append((_MISCONCEPTIONS_LABEL, chosen_misconceptions))
+        combined.append(f"Misconceptions: {chosen_misconceptions}")
     if chosen_errors:
-        ordered.append((_ERROR_ANALYSIS_LABEL, chosen_errors))
+        combined.append(f"Error Analysis: {chosen_errors}")
+    if combined:
+        ordered.append((_ANALYSIS_LABEL, "; ".join(combined)))
     return join_sections(ordered)
 
 
@@ -703,8 +780,7 @@ def append_activity_hub(details: str, hub_text: str) -> str:
     for label, content in sections:
         if not inserted and (
             label.strip().lower().startswith("type")
-            or is_misconception_label(label)
-            or is_error_analysis_label(label)
+            or is_learner_analysis_label(label)
         ):
             out.append((_ACTIVITY_HUB_LABEL, text))
             inserted = True
@@ -733,13 +809,44 @@ def split_merged_description_blocks(details: str) -> str:
     return first if first.lower().startswith("description:") else raw
 
 
-def ensure_analysis_sections(records: list[dict]) -> list[dict]:
-    """Ensure every normal concept ends with Misconceptions or Error Analysis.
+def _analysis_components(
+    sections: list[tuple[str, str]],
+) -> tuple[str, str]:
+    """Return misconception and error-analysis text from canonical/legacy input."""
+    misconception = ""
+    error_analysis = ""
+    for label, content in sections:
+        if is_misconception_label(label):
+            misconception = content.strip() or misconception
+            continue
+        if is_error_analysis_label(label):
+            error_analysis = content.strip() or error_analysis
+            continue
+        if not is_combined_analysis_label(label):
+            continue
+        matches = list(_INLINE_ANALYSIS_RE.finditer(content or ""))
+        for index, marker in enumerate(matches):
+            end = (
+                matches[index + 1].start()
+                if index + 1 < len(matches)
+                else len(content)
+            )
+            value = _trim_analysis_marker_separator(content[marker.end():end])
+            kind = marker.group("label")
+            if is_misconception_label(kind):
+                misconception = value or misconception
+            elif is_error_analysis_label(kind):
+                error_analysis = value or error_analysis
+    return misconception, error_analysis
 
-    Either populated section satisfies the contract. When both are absent or
-    empty, a deterministic application mistake is added as Error Analysis;
-    culmination rows remain exempt.
-    """
+
+def analysis_components(details: str) -> tuple[str, str]:
+    """Public accessor for the two meanings inside one analysis section."""
+    return _analysis_components(split_sections(details or ""))
+
+
+def ensure_analysis_sections(records: list[dict]) -> list[dict]:
+    """Ensure one combined section containing both learner-analysis meanings."""
     for rec in records:
         if is_culmination(rec.get("concept_title", "")):
             continue
@@ -751,25 +858,22 @@ def ensure_analysis_sections(records: list[dict]) -> list[dict]:
         details = normalize_analysis_sections(details)
         rec["concept_details"] = details
         sections = split_sections(details)
-        misconception_idx = _misconception_index(sections)
-        error_idx = _error_analysis_index(sections)
-        has_misconception = (
-            misconception_idx >= 0
-            and bool(sections[misconception_idx][1].strip())
-        )
-        has_error_analysis = (
-            error_idx >= 0 and bool(sections[error_idx][1].strip())
-        )
-        if has_misconception or has_error_analysis:
+        misconception, error_analysis = _analysis_components(sections)
+        if misconception and error_analysis:
             continue
         sections = [
             (label, content)
             for label, content in sections
-            if not is_misconception_label(label)
-            and not is_error_analysis_label(label)
+            if not is_learner_analysis_label(label)
         ]
-        fallback = _fallback_error_analysis(rec.get("concept_title", ""))
-        sections.append((_ERROR_ANALYSIS_LABEL, fallback))
+        title = rec.get("concept_title", "")
+        misconception = misconception or _fallback_misconception(title)
+        error_analysis = error_analysis or _fallback_error_analysis(title)
+        sections.append((
+            _ANALYSIS_LABEL,
+            f"Misconceptions: {misconception}; "
+            f"Error Analysis: {error_analysis}",
+        ))
         rec["concept_details"] = join_sections(sections)
     return records
 
