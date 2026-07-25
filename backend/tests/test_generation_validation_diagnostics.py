@@ -82,6 +82,46 @@ def test_final_validation_logs_every_fatal_with_exact_location(monkeypatch):
     )
 
 
+def test_final_validation_rejects_missing_source_inventory(monkeypatch):
+    question = (
+        "Find the tenth term of the progression 3, 7, 11, 15 and explain "
+        "which values were substituted."
+    )
+    records = [
+        _row(
+            "Deriving the General Term",
+            "Description: The nth-term rule locates any requested term. // "
+            "Types: Type 01: Direct substitution Case 01: Locate a term "
+            "Example 01: Use the supplied values. // "
+            "Misconception/ Error Analysis: Misconceptions: Students may "
+            "swap the first term and common difference.; Error Analysis: "
+            "Students may use the term number without subtracting one.",
+        ),
+        _culmination(),
+    ]
+    inventory = {
+        "items": [{
+            "qid": "QINV-0001",
+            "topic_hint": "General Term",
+            "raw_task": question,
+        }],
+    }
+    monkeypatch.setattr(
+        g.cv,
+        "validate_concept_rows",
+        lambda *_args, **_kwargs: {
+            "errors": [],
+            "summary": {"warnings": 0},
+        },
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"final validation failed: exact_inventory_coverage; 1 missing",
+    ):
+        g._validate_final_or_raise(records, inventory=inventory)
+
+
 def test_late_canonicalization_normalizes_common_mathpix_wrappers():
     records = [_row(
         "Reading a Source Figure",
@@ -138,9 +178,164 @@ def test_inventory_coverage_ignores_katex_wrapper_only_repairs():
     assert g._inventory_coverage_key(raw) == (
         g._inventory_coverage_key(canonical)
     )
+    adjacent_raw = r"Use d=\frac{1}{2} and S_n=20."
+    adjacent_canonical = (
+        r"Use d=[Katex] \frac{1}{2} [/Katex] and "
+        r"[Katex] S_n=20 [/Katex]."
+    )
+    assert g._inventory_coverage_key(adjacent_raw) == (
+        g._inventory_coverage_key(adjacent_canonical)
+    )
+    mathpix_list = (
+        r"Answer each part. \begin{itemize}\begin{itemize}"
+        r"\item[(i)] Find the first term."
+        r"\item[(ii)] Find the common difference."
+        r"\end{itemize}\end{itemize}"
+    )
+    public_list = (
+        "Answer each part. \u2022 Find the first term."
+        "\u2022 Find the common difference."
+    )
+    assert g._inventory_coverage_key(mathpix_list) == (
+        g._inventory_coverage_key(public_list)
+    )
 
 
-def test_final_rich_text_repair_rejects_non_formatting_changes(monkeypatch):
+def test_source_figure_reconciliation_keeps_multi_image_alt_identity():
+    sections = g.parse_mmd_sections(
+        "# Visual task\n"
+        "![Fig. 5 - comparison](https://example.test/fig-5-a.png)\n"
+        "![Fig. 5 - comparison](https://example.test/fig-5-b.png)\n"
+    )
+    registry = g._source_figure_registry(sections)
+
+    tags = g._source_figure_tags_for_example(
+        "Refer to Fig. 5 and compare both panels.",
+        registry,
+    )
+
+    assert tags == [
+        '[img src="https://example.test/fig-5-a.png" '
+        'alt="Fig. 5 - comparison"]',
+        '[img src="https://example.test/fig-5-b.png" '
+        'alt="Fig. 5 - comparison, visual 2"]',
+    ]
+
+
+def test_inventory_gate_dedupes_after_figure_reconciliation():
+    source = (
+        "# Visual task\n"
+        "![Fig. 5 - comparison](https://example.test/fig-5-a.png)\n"
+        "![Fig. 5 - comparison](https://example.test/fig-5-b.png)\n"
+    )
+    item = {
+        "qid": "QINV-0001",
+        "source_kind": "exercise",
+        "topic_hint": "Visual task",
+        "raw_task": "Refer to Fig. 5 and compare both panels.",
+        "image_urls": [
+            "https://example.test/fig-5-a.png",
+            "https://example.test/fig-5-b.png",
+        ],
+        "_image_captions": {
+            "https://example.test/fig-5-a.png": "Fig. 5 - comparison",
+            "https://example.test/fig-5-b.png": "Fig. 5 - comparison",
+        },
+        "_figure_images_resolved": True,
+    }
+    inventory = {"items": [item], "stats": {}}
+    authoritative = g._inventory_task_text(item)
+    stale = authoritative.replace(", visual 2", "")
+    records = [_row(
+        "Compare a visual pair",
+        "Description: Two panels can be compared using the same criteria. // "
+        "Types: Type 01: Compare a visual pair "
+        "Case 01: Read both panels before comparing "
+        f"Example 01: {stale} // "
+        "Misconception/ Error Analysis: Misconceptions: Students may inspect "
+        "only one panel.; Error Analysis: Students may list features without "
+        "making a comparison.",
+        topic="Visual task",
+        parent="Visual comparison",
+    )]
+
+    restored = g._enforce_rendered_inventory_coverage(
+        records, inventory, {"types": []})
+    reconciled, changed = g._reconcile_explicit_figure_images(
+        restored, g.parse_mmd_sections(source))
+
+    assert changed == 1
+    assert g._rendered_inventory_coverage_defects(
+        reconciled, inventory)["duplicate"] == ["QINV-0001"]
+
+    final = g._enforce_rendered_inventory_coverage(
+        reconciled, inventory, {"types": []})
+    assert g._rendered_inventory_coverage_defects(final, inventory) == {
+        "missing": [],
+        "duplicate": [],
+    }
+
+
+def test_resumed_inventory_figure_urls_refresh_from_current_source():
+    stale_url = "https://example.test/stale-fig-5.png"
+    current_url = "https://example.test/current-fig-5.png"
+    inventory = {
+        "items": [{
+            "qid": "QINV-0001",
+            "source_kind": "exercise",
+            "raw_task": "Refer to Fig. 5 and compare both panels.",
+            "image_urls": [stale_url],
+            "_image_captions": {stale_url: "Fig. 5 - old copy"},
+            "_figure_images_resolved": True,
+        }],
+        "stats": {},
+    }
+    sections = g.parse_mmd_sections(
+        "# Visual task\n"
+        f"![Fig. 5 - current source]({current_url})\n"
+    )
+
+    refreshed = g._refresh_inventory_figure_metadata(inventory, sections)
+    refreshed_item = refreshed["items"][0]
+
+    assert refreshed_item["image_urls"] == [current_url]
+    assert refreshed_item["_image_captions"] == {
+        current_url: "Fig. 5 - current source",
+    }
+    assert stale_url not in g._inventory_task_text(refreshed_item)
+    assert current_url in g._inventory_task_text(refreshed_item)
+
+    removed = g._refresh_inventory_figure_metadata(
+        inventory,
+        g.parse_mmd_sections("# Visual task\nThe figure is unavailable.\n"),
+    )
+    removed_item = removed["items"][0]
+    assert removed_item["image_urls"] == []
+    assert removed_item["_image_captions"] == {}
+    assert removed_item["_figure_images_resolved"] is True
+    assert removed_item["requires_visual"] is True
+    assert stale_url not in g._inventory_task_text(removed_item)
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        (
+            r"Compare the quan[Katex] t [/Katex]ities using "
+            r"[Katex] \frac{a}{b} [/Katex]."
+        ),
+        (
+            r"Compare the [Katex] quantities [/Katex] using "
+            r"[Katex] \frac{a}{b} [/Katex]."
+        ),
+        (
+            r"Compare [Katex] the quantities using \frac{a}{b} [/Katex]."
+        ),
+    ],
+)
+def test_final_rich_text_repair_rejects_non_formatting_changes(
+    monkeypatch, replacement,
+):
     details = (
         r"Description: Compare the quantities using \frac{a}{b}."
         "\nAchieving Mastery: Explaining the comparison correctly. // "
@@ -164,16 +359,14 @@ def test_final_rich_text_repair_rejects_non_formatting_changes(monkeypatch):
             "concept_description": (
                 details.replace(
                     r"Compare the quantities using \frac{a}{b}.",
-                    (
-                        r"Replace the quantities using "
-                        r"[Katex] \frac{a}{b} [/Katex]."
-                    ),
+                    replacement,
                 )
             ),
             "keywords": "sequence, term",
         }]}
 
     monkeypatch.setattr(g, "_openai_json", changed_api)
+    monkeypatch.setattr(g.kr, "repair_unwrapped_math", lambda value: value)
 
     repaired, changed = g._repair_final_rich_text_via_api(
         records,
@@ -185,6 +378,56 @@ def test_final_rich_text_repair_rejects_non_formatting_changes(monkeypatch):
     assert calls == 1
     assert changed is False
     assert repaired == records
+
+
+def test_final_rich_text_repair_wraps_unambiguous_math_without_api(
+    monkeypatch,
+):
+    details = (
+        r"Description: Compare AP parameters safely."
+        "\nAchieving Mastery: Substituting each parameter correctly. // "
+        "Types: Type 01: Apply AP parameters "
+        "Case 01: Substitute the supplied values "
+        r"Example 01: Use a=10, d=\frac{1}{2}, and S_n=20. // "
+        "Misconception/ Error Analysis: Misconceptions: Students may swap "
+        "the parameters.; Error Analysis: Students may omit a sign."
+    )
+    row = _row(
+        "Use AP parameters",
+        details,
+        topic="T",
+        parent="P",
+        evidence="SRC-LOCKED-01",
+    )
+    row["review_metadata"] = {"locked": True}
+    records = [row, _culmination(topic="T")]
+    monkeypatch.setattr(
+        g,
+        "_openai_json",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("unambiguous formatting must not call the API")
+        ),
+    )
+
+    repaired, changed = g._repair_final_rich_text_via_api(
+        records,
+        meta=g._metadata(subject="Mathematics"),
+        inventory={"items": [], "stats": {}},
+        mined_types={"types": []},
+    )
+
+    assert changed is True
+    assert g.kr.rich_text_issues(repaired[0]["concept_details"]) == []
+    assert g.kr.unwrap_katex(repaired[0]["concept_details"]) == details
+    assert {
+        key: value
+        for key, value in repaired[0].items()
+        if key != "concept_details"
+    } == {
+        key: value
+        for key, value in row.items()
+        if key != "concept_details"
+    }
 
 
 def test_saved_final_checkpoint_repairs_rich_text_once_and_persists(
@@ -273,6 +516,7 @@ def test_saved_final_checkpoint_repairs_rich_text_once_and_persists(
         }
 
     monkeypatch.setattr(g, "_openai_json", repair_api)
+    monkeypatch.setattr(g.kr, "repair_unwrapped_math", lambda value: value)
     emitted: list[dict] = []
 
     repaired = g.concepts_from_mmd(

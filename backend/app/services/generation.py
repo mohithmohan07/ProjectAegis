@@ -4957,7 +4957,7 @@ def _source_figure_tags_for_example(
             if not any(existing.get("url") == entry.get("url") for existing in entries):
                 entries.append(entry)
     tags: list[str] = []
-    for entry in entries:
+    for image_index, entry in enumerate(entries):
         url = str(entry.get("url") or "").strip()
         # Existing inventory rendering requires public HTTPS image URLs.  Do
         # not turn an old checkpoint into a new runtime error when a malformed
@@ -4967,6 +4967,8 @@ def _source_figure_tags_for_example(
         alt = _clean_visual_caption(entry.get("caption") or "")
         if not alt:
             alt = f"Fig. {entry.get('figure_id') or ''}".strip()
+        if image_index:
+            alt = f"{alt}, visual {image_index + 1}"
         try:
             tags.append(kr.image(url, alt))
         except ValueError:
@@ -5037,8 +5039,6 @@ def _attach_explicit_figure_images(
     """Attach explicit figures, with a tightly bounded visual-task fallback."""
     layout = _source_figure_layout(sections)
     registry = _source_figure_registry(sections)
-    if not registry:
-        return items
     section_offsets: dict[int, int] = {}
     offset = 0
     for index, section in enumerate(sections):
@@ -8705,10 +8705,15 @@ def _rendered_type_examples(records: list[dict]) -> list[str]:
 def _inventory_coverage_key(text: str) -> str:
     """Normalize only cosmetic cleaner changes for source-Example coverage."""
     value = _inventory_comparison_text(text)
+    # The final rich-text cleanup converts Mathpix document/list wrappers into
+    # supported public markup (for example, ``\item`` becomes a bullet). Apply
+    # that same cosmetic normalization to the authoritative inventory text so
+    # an Example restored immediately before cleanup remains covered afterward.
+    value = _normalize_common_mathpix_wrappers(value)
     # Adding the required wire-format wrapper around an otherwise identical
     # source formula is a formatting repair, not a change to the source task.
     # Compare the LaTeX body while retaining image tags/URLs and all wording.
-    value = re.sub(r"\[/?katex\]", " ", value, flags=re.IGNORECASE)
+    value = kr.unwrap_katex(value)
     value = bi.normalize_question_text(value)
     # ``clean_concept_record`` tidies OCR spacing such as ``21 ,`` and
     # ``. . .``. That must not make an otherwise identical source Example look
@@ -9648,8 +9653,18 @@ def _enforce_rendered_inventory_coverage(
     # moved an assessable Activity Example away from its Hub. Reassert that
     # identity-based placement invariant at this terminal repair boundary.
     out = _align_activity_examples_with_hubs(out, inventory)
-    return _relocate_chapter_wide_examples_from_culminations(
+    out = _relocate_chapter_wide_examples_from_culminations(
         out, inventory, mined_types)
+    terminal_defects = _rendered_inventory_coverage_defects(out, inventory)
+    if terminal_defects["missing"] or terminal_defects["duplicate"]:
+        raise RuntimeError(
+            "rendered Types failed exact inventory coverage after final "
+            "placement: "
+            f"{len(terminal_defects['missing'])} missing, "
+            f"{len(terminal_defects['duplicate'])} duplicate source "
+            "question(s)"
+        )
+    return out
 
 
 def _rebuild_types_after_final_placement_drift(
@@ -9942,6 +9957,21 @@ def _validate_final_or_raise(
             f"{stage} validation failed: {codes}; first at "
             f"row_index={first_index}, concept={first_title!r}, "
             f"field={first_field!r}"
+        )
+    coverage_defects = _rendered_inventory_coverage_defects(
+        records, inventory)
+    if coverage_defects["missing"] or coverage_defects["duplicate"]:
+        progress.log(
+            f"{stage}: exact source inventory coverage failed with "
+            f"{len(coverage_defects['missing'])} missing and "
+            f"{len(coverage_defects['duplicate'])} duplicate Example(s).",
+            level="error",
+        )
+        raise RuntimeError(
+            f"{stage} validation failed: exact_inventory_coverage; "
+            f"{len(coverage_defects['missing'])} missing, "
+            f"{len(coverage_defects['duplicate'])} duplicate source "
+            "question(s)"
         )
     return report
 
@@ -12915,6 +12945,22 @@ def _refresh_inventory_from_source_anchors(
     return refreshed
 
 
+def _refresh_inventory_figure_metadata(
+    inventory: dict | None, sections: list[dict],
+) -> dict:
+    """Re-resolve resumed inventory images against the current source file."""
+    refreshed = copy.deepcopy(inventory or _empty_inventory())
+    items = [
+        dict(item) for item in refreshed.get("items") or []
+        if isinstance(item, dict)
+    ]
+    refreshed_items = _attach_explicit_figure_images(items, sections)
+    refreshed["items"] = refreshed_items
+    if refreshed_items != items:
+        refreshed["stats"] = _inventory_stats(refreshed_items)
+    return refreshed
+
+
 def _valid_concept_checkpoint(checkpoint: dict | None) -> bool:
     """Backward-compatible public predicate used by upload/bundle services."""
     return _newest_compatible_concept_checkpoint(checkpoint) is not None
@@ -13491,6 +13537,133 @@ def _repair_final_rich_text_via_api(
         # a removable spacer when the tag itself is stripped.
         return re.sub(r"\s+([,.;:!?])", r"\1", normalized)
 
+    def freeze_defect(value):
+        if isinstance(value, dict):
+            return tuple(sorted(
+                (key, freeze_defect(item)) for key, item in value.items()
+            ))
+        if isinstance(value, (list, tuple)):
+            return tuple(freeze_defect(item) for item in value)
+        return value
+
+    def defect_multiset(values) -> list:
+        return sorted(
+            (freeze_defect(value) for value in values),
+            key=repr,
+        )
+
+    def added_wrappers_are_math(before: str, after: str) -> bool:
+        pattern = re.compile(
+            r"\[katex\]\s*(?P<body>.*?)\s*\[/katex\]",
+            re.IGNORECASE | re.DOTALL,
+        )
+
+        def wrapper_spans(value: str) -> tuple[str, list[tuple[int, int, str]]]:
+            source = str(value or "")
+            spans: list[tuple[int, int, str]] = []
+            source_cursor = 0
+            unwrapped_cursor = 0
+            for match in pattern.finditer(source):
+                unwrapped_cursor += len(source[source_cursor:match.start()])
+                body = (match.group("body") or "").strip()
+                start = unwrapped_cursor
+                unwrapped_cursor += len(body)
+                spans.append((start, unwrapped_cursor, body))
+                source_cursor = match.end()
+            return kr.unwrap_katex(source), spans
+
+        _before_text, existing = wrapper_spans(before)
+        after_text, candidate_spans = wrapper_spans(after)
+        for start, end, body in candidate_spans:
+            identity = (start, end, body)
+            if identity in existing:
+                existing.remove(identity)
+                continue
+            if not kr.is_unambiguous_math_expression(body):
+                return False
+            if (
+                start > 0
+                and body
+                and re.match(r"\w", after_text[start - 1])
+                and re.match(r"\w", body[0])
+            ):
+                return False
+            if (
+                end < len(after_text)
+                and body
+                and re.match(r"\w", body[-1])
+                and re.match(r"\w", after_text[end])
+            ):
+                return False
+            if (
+                "//" in body
+                or re.search(
+                    r"\b(?:Miscellaneous\s+)?Type\s+\d{1,2}:"
+                    r"|\bCase\s+\d{1,2}:"
+                    r"|\bExamples?(?:\s+0*\d+)?\s*:",
+                    body,
+                    re.IGNORECASE,
+                )
+            ):
+                return False
+        return not existing
+
+    def formatting_only_review_is_safe(
+        baseline: list[dict], candidate: list[dict],
+    ) -> bool:
+        """Prove a late repair changed only KaTeX wrapper boundaries."""
+        if len(baseline) != len(candidate):
+            return False
+        for before, after in zip(baseline, candidate):
+            if _record_key(before) != _record_key(after):
+                return False
+            before_other = {
+                key: value for key, value in before.items()
+                if key != "concept_details"
+            }
+            after_other = {
+                key: value for key, value in after.items()
+                if key != "concept_details"
+            }
+            if before_other != after_other:
+                return False
+            if kr.unwrap_katex(
+                before.get("concept_details", "")
+            ) != kr.unwrap_katex(after.get("concept_details", "")):
+                return False
+            if not added_wrappers_are_math(
+                before.get("concept_details", ""),
+                after.get("concept_details", ""),
+            ):
+                return False
+
+        if _rendered_inventory_coverage_defects(
+            baseline, inventory
+        ) != _rendered_inventory_coverage_defects(candidate, inventory):
+            return False
+        comparisons = (
+            (
+                _rendered_inventory_topic_violations(
+                    baseline, inventory, mined_types),
+                _rendered_inventory_topic_violations(
+                    candidate, inventory, mined_types),
+            ),
+            (
+                _activity_example_hub_alignment_violations(
+                    baseline, inventory),
+                _activity_example_hub_alignment_violations(
+                    candidate, inventory),
+            ),
+            (
+                _hub_inventory_examples_in_types(baseline, inventory),
+                _hub_inventory_examples_in_types(candidate, inventory),
+            ),
+        )
+        return all(
+            defect_multiset(before) == defect_multiset(after)
+            for before, after in comparisons
+        )
+
     validation_args = {
         "allow_types": True,
         "require_culmination": True,
@@ -13531,6 +13704,71 @@ def _repair_final_rich_text_via_api(
         ]
         if not failed_rows:
             break
+
+        deterministic = copy.deepcopy(repaired)
+        deterministic_applied = 0
+        for row_index in failed_indexes:
+            if row_index >= len(deterministic):
+                continue
+            current_details = str(
+                repaired[row_index].get("concept_details", "") or "")
+            defects = set(kr.rich_text_issues(current_details))
+            if (
+                not defects
+                or not defects.issubset({
+                    "raw_latex", "raw_math_expression",
+                })
+            ):
+                continue
+            candidate_details = kr.repair_unwrapped_math(current_details)
+            if (
+                candidate_details == current_details
+                or kr.rich_text_issues(candidate_details)
+                or kr.unwrap_katex(candidate_details)
+                != kr.unwrap_katex(current_details)
+            ):
+                continue
+            deterministic[row_index]["concept_details"] = candidate_details
+            deterministic_applied += 1
+
+        if deterministic_applied:
+            if (
+                deterministic != repaired
+                and formatting_only_review_is_safe(repaired, deterministic)
+            ):
+                repaired = deterministic
+                progress.log(
+                    "Final rich-text repair deterministically wrapped "
+                    f"unambiguous math in {deterministic_applied} row(s).",
+                )
+                report = cv.validate_concept_rows(
+                    repaired, **validation_args)
+                rich_text_errors = [
+                    error for error in report["errors"]
+                    if (
+                        error.get("severity") == "error"
+                        and error.get("code") == "rich_text_format"
+                    )
+                ]
+                if not rich_text_errors:
+                    break
+                failed_indexes = sorted({
+                    error["row_index"] for error in rich_text_errors
+                    if isinstance(error.get("row_index"), int)
+                    and error["row_index"] >= 0
+                })
+                failed_rows = [
+                    repaired[index] for index in failed_indexes
+                    if index < len(repaired)
+                ]
+                if not failed_rows:
+                    break
+            elif deterministic != repaired:
+                progress.log(
+                    "Rejected deterministic final rich-text repair because "
+                    "it changed a protected row or source-inventory invariant.",
+                    level="warning",
+                )
 
         import json as _json
 
@@ -13632,6 +13870,13 @@ def _repair_final_rich_text_via_api(
             break
 
         next_records = _canonicalize_concept_rich_text(next_records)
+        if not formatting_only_review_is_safe(repaired, next_records):
+            progress.log(
+                "Rejected final rich-text repair because it changed a "
+                "protected row or source-inventory invariant.",
+                level="warning",
+            )
+            next_records = repaired
         next_records = _accept_exact_inventory_type_review(
             repaired, next_records, inventory, mined_types)
         if next_records == repaired:
@@ -13748,13 +13993,29 @@ def concepts_from_mmd(
             checkpoint_callback=checkpoint_callback,
             allow_final_checkpoint=not final_checkpoint_refresh_reasons,
         )
+        inventory_figure_metadata_refreshed = False
+        if saved_final:
+            refreshed_inventory = _refresh_inventory_figure_metadata(
+                question_task_inventory, sections)
+            inventory_figure_metadata_refreshed = (
+                refreshed_inventory != question_task_inventory
+            )
+            question_task_inventory = refreshed_inventory
+            if (
+                inventory_figure_metadata_refreshed
+                and artifacts is not None
+            ):
+                artifacts["question_task_inventory"] = copy.deepcopy(
+                    question_task_inventory)
         if final_checkpoint_refresh_reasons:
             question_task_inventory = _refresh_inventory_from_source_anchors(
                 question_task_inventory, sections)
             if artifacts is not None:
                 artifacts["question_task_inventory"] = copy.deepcopy(
                     question_task_inventory)
-        final_checkpoint_changed = not bool(saved_final)
+        final_checkpoint_changed = (
+            not bool(saved_final) or inventory_figure_metadata_refreshed
+        )
         if saved_final:
             progress.log(
                 "Restored final content checkpoint; semantic/API repair stays "
@@ -13814,6 +14075,22 @@ def concepts_from_mmd(
         # outer final gate, without spending another API request.
         out, reconciled_figure_examples = _reconcile_explicit_figure_images(
             out, sections)
+        post_figure_coverage = _rendered_inventory_coverage_defects(
+            out, question_task_inventory)
+        if (
+            post_figure_coverage["missing"]
+            or post_figure_coverage["duplicate"]
+        ):
+            # Replacing a stale figure tag can make an older near-match become
+            # identical to a source Example restored just above. Re-run the
+            # exact-once gate so the corrected copies are deterministically
+            # deduplicated before the terminal checkpoint is validated.
+            out = _enforce_rendered_inventory_coverage(
+                out, question_task_inventory, mined_types)
+            out = cr.renumber_types_continuously(out)
+            out = cv.ensure_valid_learner_analysis(out)
+            out = _canonicalize_concept_rich_text(out)
+            resumed_coverage_repaired = True
         if reconciled_figure_examples or resumed_coverage_repaired:
             progress.log(
                 (
