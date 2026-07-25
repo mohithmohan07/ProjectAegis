@@ -435,6 +435,36 @@ def test_validator_rejects_source_artifacts_and_bad_names():
     assert "source_artifact" in codes
 
 
+def test_validator_rejects_copied_source_prose_only_in_descriptions():
+    source = (
+        "A nation state is built when people share a sense of collective "
+        "identity and decide to live together under common political institutions."
+    )
+    copied = cv.validate_concept_rows([
+        _rec(
+            "Nation-state Formation",
+            "Description: " + source + " // Error Analysis: Students may "
+            "omit the role of shared political institutions when explaining "
+            "national identity.",
+        ),
+    ], source_text=source)
+    assert "verbatim_source_description" in _codes(copied)
+
+    question_only = cv.validate_concept_rows([
+        _rec(
+            "Nation-state Formation",
+            "Description: National identity connects collective belonging "
+            "with the choice to organise political life together. // "
+            "Types: Type 01: Explaining collective political identity "
+            "Case 01: Relating shared identity to common institutions "
+            "Example 01: " + source + " // Error Analysis: Students may "
+            "omit the role of shared political institutions when explaining "
+            "national identity.",
+        ),
+    ], source_text=source)
+    assert "verbatim_source_description" not in _codes(question_only)
+
+
 def test_validator_rejects_empty_sections_and_bad_types():
     report = cv.validate_concept_rows([
         _rec("Empty Types", "Description: useful enough description // Types:"),
@@ -444,6 +474,36 @@ def test_validator_rejects_empty_sections_and_bad_types():
     ])
     codes = {e["code"] for e in report["errors"]}
     assert {"empty_types", "empty_misconception", "case_without_type", "type_without_case"} <= codes
+
+
+def test_strict_type_hierarchy_requires_defined_cases_and_numbered_examples():
+    invalid = _rec(
+        "Equation Practice",
+        "Description: A linear equation has one unknown. // "
+        "Types: Type 01: Solving Linear Equations "
+        "Case 01: Solve 3x + 2 = 14. Example: Solve 3x + 2 = 14.",
+    )
+    report = cv.validate_concept_rows(
+        [invalid], strict_type_hierarchy=True)
+    assert {"case_question_not_definition", "example_numbering"} <= _codes(report)
+
+    valid = _rec(
+        "Equation Practice",
+        "Description: A linear equation has one unknown. // "
+        "Types: Type 01: Solving Linear Equations "
+        "Case 01: Given a linear equation with one unknown, isolate the "
+        "unknown using inverse operations "
+        "Example 01: Solve 3x + 2 = 14. "
+        "Example 02: Solve 5y - 7 = 18.",
+    )
+    valid_report = cv.validate_concept_rows(
+        [valid], strict_type_hierarchy=True)
+    hierarchy_codes = {
+        "missing_case_definition", "case_without_example",
+        "case_question_not_definition", "example_numbering",
+    }
+    assert not (_codes(valid_report) & hierarchy_codes)
+    assert "source_artifact" not in _codes(valid_report)
 
 
 def test_validator_rejects_culmination_before_culmination_pass():

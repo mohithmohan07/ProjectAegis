@@ -26,6 +26,7 @@ def test_concepts_system_requires_numeric_types_guidance():
     # Numeric zero-padded labels (Type 01:/Case 01:), not descriptive labels.
     types_system = g.prompts.get_text("concepts.types_assign.system")
     assert "Type 01:" in types_system and "Case 01:" in types_system
+    assert "Example 01:" in types_system
     assert "One Type = one distinct reusable assessment/task pattern" in types_system
     assert "Infer patterns from the actual action" in types_system
     assert "Misconception is REQUIRED" not in system
@@ -679,14 +680,17 @@ def test_mined_type_body_includes_definition():
     assert n == 1
     assert body.startswith("Type 01: Dividing Powers with the Same Base — ")
     assert "apply a^m ÷ a^n = a^(m-n) to simplify" in body
-    assert "Case 01: Simplify p^9 ÷ p^3" in body
+    assert "Case 01: Given the complete source context, simplifying" in body
+    assert "Example 01: Simplify p^9 ÷ p^3" in body
+    assert "Case 01: Simplify p^9 ÷ p^3" not in body
     # A definition identical to the title is not repeated.
     body2, _ = g._mined_type_to_body({
         "type_title": "Adding Numbers",
         "type_description": "Adding numbers.",
         "case_prompts": [{"case_prompt": "Find 2+3"}],
     }, 0)
-    assert body2 == "Type 01: Adding Numbers Case 01: Find 2+3"
+    assert body2.startswith("Type 01: Adding Numbers Case 01: Given the complete")
+    assert body2.endswith("Example 01: Find 2+3")
 
 
 def test_mined_type_body_includes_all_cases():
@@ -697,8 +701,31 @@ def test_mined_type_body_includes_all_cases():
         ],
     }, 0)
     assert n == 1
-    assert "Case 01: Solve equation 1" in body
-    assert "Case 08: Solve equation 8" in body
+    assert body.count("Case ") == 8
+    assert body.count("Example 01:") == 8
+    assert "Example 01: Solve equation 1" in body
+    assert "Example 01: Solve equation 8" in body
+
+
+def test_mined_type_body_numbers_multiple_examples_within_one_defined_case():
+    body, n = g._mined_type_to_body({
+        "type_title": "Solving Linear Equations",
+        "case_prompts": [{
+            "case_title": (
+                "Given a linear equation with one unknown, isolate the "
+                "unknown using inverse operations"
+            ),
+            "examples": [
+                {"example_prompt": "Solve 3x + 2 = 14."},
+                {"example_prompt": "Solve 5y - 7 = 18."},
+            ],
+        }],
+    }, 0)
+
+    assert n == 1
+    assert body.count("Case 01:") == 1
+    assert "Example 01: Solve 3x + 2 = 14." in body
+    assert "Example 02: Solve 5y - 7 = 18." in body
 
 
 def test_type_cases_backfill_full_source_questions_from_inventory():
@@ -720,9 +747,12 @@ def test_type_cases_backfill_full_source_questions_from_inventory():
         }],
     }]
     out = g._backfill_type_cases_from_inventory(types, inventory)
-    prompt = out[0]["case_prompts"][0]["case_prompt"]
+    case = out[0]["case_prompts"][0]
+    prompt = g._case_examples(case)[0]["example_prompt"]
     assert "AD = 3 cm" in prompt
     assert "Find EC with full reasoning" in prompt
+    assert "case_prompt" not in case
+    assert case["case_title"].startswith("Given the complete source context")
 
 
 def test_type_cases_restore_authoritative_source_for_every_qid():

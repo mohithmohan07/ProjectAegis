@@ -425,7 +425,7 @@ def test_mined_type_renders_case_subtypes_with_example_lines():
     }, 0)
     assert n == 1
     assert "Case 01: Ohm's law formula-based question when V and I are given" in body
-    assert "Example: Calculate the resistance of the circuit if V is 220 V" in body
+    assert "Example 01: Calculate the resistance of the circuit if V is 220 V" in body
     assert "Case 02: Ohm's law formula-based question when the circuit diagram" in body
     assert (
         '(Refer fig. 11.1) '
@@ -525,6 +525,49 @@ def test_uploaded_nationalism_fixture_recovers_all_checkpoint_containers():
     )
     assert "was not the result of a sudden upheaval" not in (
         italy_map_activity["raw_task"])
+
+
+def test_uploaded_nationalism_fixture_exposes_all_six_main_topics():
+    source = (
+        Path(__file__).parents[1] / "data" / "Testing" / "RNE.mmd"
+    ).read_text(encoding="utf-8")
+
+    assert g._topic_headings(g.parse_mmd_sections(source)) == [
+        "The French Revolution and the Idea of the Nation",
+        "The Making of Nationalism in Europe",
+        "The Age of Revolutions: 1830-1848",
+        "The Making of Germany and Italy",
+        "Visualising the Nation",
+        "Nationalism and Imperialism",
+    ]
+
+
+def test_uploaded_nationalism_fixture_inventories_all_chapter_final_tasks():
+    source = (
+        Path(__file__).parents[1] / "data" / "Testing" / "RNE.mmd"
+    ).read_text(encoding="utf-8")
+    anchors = g._source_task_anchors(g.parse_mmd_sections(source))
+    chapter_final = [
+        item for item in anchors
+        if (
+            item.get("_topic_scope") == "chapter"
+            and item.get("parent_source_label") in {
+                "Write in brief", "Discuss", "Project",
+            }
+        )
+    ]
+
+    assert len(chapter_final) == 11
+    assert sum(item["source_kind"] == "exercise" for item in chapter_final) == 10
+    stats = g._inventory_stats(anchors)
+    assert stats["chapter_final_tasks"] == 11
+    assert stats["chapter_final_exercises"] == 10
+    project = next(
+        item for item in chapter_final
+        if item["parent_source_label"] == "Project"
+    )
+    assert project["source_kind"] == "activity"
+    assert "nationalist symbols in countries outside Europe" in project["raw_task"]
 
 
 def test_repeated_generic_checkpoint_labels_preserve_distinct_tasks():
@@ -2531,6 +2574,75 @@ def test_missing_source_topic_recovery_adds_visualising_the_nation(monkeypatch):
     }
 
 
+def test_final_checkpoint_missing_source_topic_resumes_from_prior_stage(
+    monkeypatch,
+):
+    source = (
+        Path(__file__).parents[1] / "data" / "Testing" / "RNE.mmd"
+    ).read_text(encoding="utf-8")
+    topics = g._topic_headings(g.parse_mmd_sections(source))
+    missing_topic = "The Making of Nationalism in Europe"
+    assert missing_topic in topics
+
+    def record(topic):
+        return {
+            "topic": topic,
+            "parent_concept": topic,
+            "concept_title": f"{topic} concept",
+            "concept_details": "Description: A source-grounded concept.",
+            "keywords": "nationalism",
+    }
+
+    all_records = [record(topic) for topic in topics]
+    inventory = {"items": [], "stats": {}}
+    mined_types = {"types": []}
+    prior_stage = g._make_concept_checkpoint(
+        "post_type_assignment",
+        records=all_records,
+        question_task_inventory=inventory,
+        mined_types=mined_types,
+        method_row_snapshot=[],
+    )
+    incomplete_final = g._make_concept_checkpoint(
+        "final_content_ready",
+        records=[row for row in all_records if row["topic"] != missing_topic],
+        question_task_inventory=inventory,
+        mined_types=mined_types,
+        method_row_snapshot=[],
+    )
+    checkpoint_history = {
+        "checkpoint_format": g._CONCEPT_CHECKPOINT_FORMAT,
+        "schema_version": g._CONCEPT_CHECKPOINT_SCHEMA,
+        "checkpoints": [prior_stage, incomplete_final],
+    }
+    finalizer_calls = []
+
+    def finalize(records, **kwargs):
+        finalizer_calls.append((records, kwargs["source_topic_excerpts"]))
+        return records
+
+    monkeypatch.setattr(g, "_prepare_final_concept_content", finalize)
+    monkeypatch.setattr(g, "_canonicalize_concept_rich_text", lambda rows: rows)
+    monkeypatch.setattr(
+        g,
+        "_validate_final_or_raise",
+        lambda *args, **kwargs: {"ok": True, "errors": [], "summary": {}},
+    )
+
+    out = g.concepts_from_mmd(
+        source,
+        subject="Social Science",
+        live=True,
+        resume_checkpoint=checkpoint_history,
+    )
+
+    assert len(finalizer_calls) == 1
+    restored_records, source_topic_excerpts = finalizer_calls[0]
+    assert {row["topic"] for row in restored_records} == set(topics)
+    assert [group["topic"] for group in source_topic_excerpts] == topics
+    assert {row["topic"] for row in out} == set(topics)
+
+
 def test_source_topic_order_is_restored_after_recovery_append():
     records = [
         {
@@ -2609,6 +2721,50 @@ def test_chapter_wide_tasks_are_semantically_distributed(monkeypatch):
         "Visualising the Nation",
         "Nationalism and Imperialism",
     ]
+
+
+def test_chapter_wide_question_moves_from_culmination_to_its_normal_topic():
+    prompt = "Explain how Marianne represented the French nation."
+    inventory = {"items": [{
+        "qid": "QINV-0001",
+        "raw_task": prompt,
+        "source_kind": "exercise",
+        "topic_hint": "Visualising the Nation",
+        "_chapter_wide_task": True,
+    }]}
+    records = [
+        {
+            "topic": "The French Revolution",
+            "parent_concept": "The French Revolution",
+            "concept_title": "Popular Sovereignty",
+            "concept_details": "Description: Sovereignty shifted to citizens.",
+            "keywords": "sovereignty",
+        },
+        {
+            "topic": "The French Revolution",
+            "parent_concept": "Culmination",
+            "concept_title": "Culmination - Popular Sovereignty",
+            "concept_details": (
+                "Description: Recap // Types: Type 01: Interpreting "
+                "national allegory Case 01: Reading a national symbol "
+                f"Example 01: {prompt}"
+            ),
+            "keywords": "",
+        },
+        {
+            "topic": "Visualising the Nation",
+            "parent_concept": "Visualising the Nation",
+            "concept_title": "National Allegory",
+            "concept_details": "Description: Nations were personified in art.",
+            "keywords": "allegory",
+        },
+    ]
+
+    out = g._relocate_chapter_wide_examples_from_culminations(
+        records, inventory)
+
+    assert g._rendered_inventory_example_locations(out, inventory["items"][0]) == [2]
+    assert prompt not in out[1]["concept_details"]
 
 
 def test_chapter_wide_task_placement_retries_invalid_topic(monkeypatch):
@@ -2727,8 +2883,8 @@ def test_public_examples_strip_textbook_example_labels():
         }],
     }, 0)
     assert "Example 11" not in body
-    assert body.count("Example:") == 1
-    assert "Example: Find the sum of the first ten terms." in body
+    assert body.count("Example 01:") == 1
+    assert "Example 01: Find the sum of the first ten terms." in body
 
 
 def test_inventory_topic_with_tasks_requires_rendered_types():

@@ -25,7 +25,8 @@ _SECTION_NUMBER_RE = re.compile(r"\b(?:exercise|ex)?\s*\d+(?:\.\d+)+\b", re.IGNO
 # page14 / p14 (no space) are included — keep in sync with concept_cleanup
 # neutralize/scrub patterns.
 _SOURCE_ARTIFACT_RE = re.compile(
-    r"\b(?:MMDs?|Examples?\.?\s*\d+(?:\.\d+)*|Fig(?:ure)?s?\.?\s*\d+(?:\.\d+)*|"
+    r"\b(?:MMDs?|Examples?\.?\s*\d+(?:\.\d+)*(?![\d.]|\s*:)|"
+    r"Fig(?:ure)?s?\.?\s*\d+(?:\.\d+)*|"
     r"Tables?\.?\s*\d+(?:\.\d+)*|"
     r"Exercises?\.?\s*\d+(?:\.\d+)*|Ex\.?\s*\d+(?:\.\d+)*|"
     r"pages?\.?\s*(?:no\.?\s*)?\d+|p\.?\s*\d+)\b",
@@ -54,10 +55,24 @@ _CASE_SPECIFIC_DETAIL_RE = re.compile(
     r"[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+|"
     r"['\"][^'\"]{3,}['\"])"
 )
-_EXAMPLE_SPLIT_RE = re.compile(r"\bExamples?\s*:\s*", re.IGNORECASE)
+_EXAMPLE_SPLIT_RE = re.compile(
+    r"\bExamples?(?:\s+0*\d+)?\s*:\s*", re.IGNORECASE)
+_EXAMPLE_MARKER_RE = re.compile(
+    r"\b(?P<label>Examples?)(?:\s+(?P<number>0*\d+))?\s*:",
+    re.IGNORECASE,
+)
+_CASE_RAW_QUESTION_RE = re.compile(
+    r"^(?:solve|simplify|find|write|identify|expand|compare|calculate|"
+    r"rationalise|express|evaluate|convert|draw|label|explain|prove|"
+    r"describe|discuss|analyse|analyze|examine|interpret|outline|assess|"
+    r"state|list|mention|account|justify|trace|distinguish|define|"
+    r"what|why|how|who|when|where|which)\b",
+    re.IGNORECASE,
+)
 _EXAMPLE_SEGMENT_RE = re.compile(
-    r"(\bExamples?\s*:\s*)(.*?)"
-    r"(?=\bExamples?\s*:|\b(?:Case|Type)\s+\d{1,2}:|\s+//\s+|$)",
+    r"(\bExamples?(?:\s+0*\d+)?\s*:\s*)(.*?)"
+    r"(?=\bExamples?(?:\s+0*\d+)?\s*:|"
+    r"\b(?:Case|Type)\s+\d{1,2}:|\s+//\s+|$)",
     re.IGNORECASE | re.DOTALL,
 )
 _DESCRIPTION_LABEL_RE = re.compile(r"\bDescription\s*:", re.IGNORECASE)
@@ -81,7 +96,7 @@ _DESCRIPTION_SECTION_REF_RE = re.compile(
 # ("Refer fig. 11.1" next to its image URL); only textual pointers to unshipped
 # source artifacts (Example 5, Exercise 1.2, page 14, MMD) stay forbidden.
 _SOURCE_ARTIFACT_NO_FIG_RE = re.compile(
-    r"\b(?:MMDs?|Examples?\.?\s*\d+(?:\.\d+)*|"
+    r"\b(?:MMDs?|Examples?\.?\s*\d+(?:\.\d+)*(?![\d.]|\s*:)|"
     r"Exercises?\.?\s*\d+(?:\.\d+)*|Ex\.?\s*\d+(?:\.\d+)*|"
     r"pages?\.?\s*(?:no\.?\s*)?\d+|p\.?\s*\d+)\b",
     re.IGNORECASE,
@@ -288,6 +303,32 @@ def _description_text(details: str) -> str:
         if label.lower().startswith("description"):
             return content.strip()
     return ""
+
+
+def _source_word_windows(source_text: str, *, width: int = 18) -> set[str]:
+    """Return normalized contiguous source spans used to catch copied prose."""
+    words = re.findall(r"\w+", (source_text or "").casefold())
+    if len(words) < width:
+        return set()
+    return {
+        " ".join(words[index:index + width])
+        for index in range(len(words) - width + 1)
+    }
+
+
+def _verbatim_source_description_snippet(
+    description: str, source_windows: Collection[str], *, width: int = 18,
+) -> str:
+    """Return a copied Description span, excluding Types/Examples by design."""
+    if not source_windows:
+        return ""
+    words = re.findall(r"\w+", (description or "").casefold())
+    for index in range(max(0, len(words) - width + 1)):
+        candidate = " ".join(words[index:index + width])
+        if candidate in source_windows:
+            return candidate
+    return ""
+
 
 def _issue_sections(
     details: str, label_name: str,
@@ -577,12 +618,15 @@ def validate_concept_rows(
     require_culmination: bool = False,
     allow_culmination: bool = True,
     allowed_source_examples: Collection[str] = (),
+    strict_type_hierarchy: bool = False,
+    source_text: str = "",
 ) -> dict:
     """Return a structured validation report for concept-map records."""
     errors: list[dict] = []
     topic_title_counts: Counter[tuple[str, str]] = Counter()
     title_counts: Counter[str] = Counter()
     topic_rows: defaultdict[str, list[tuple[int, dict]]] = defaultdict(list)
+    source_windows = _source_word_windows(source_text)
 
     for i, row in enumerate(rows):
         topic = (row.get("topic") or "").strip()
@@ -776,6 +820,15 @@ def validate_concept_rows(
                     "Description cites a textbook section number instead of the idea",
                     "warning",
                 )
+            copied_source = _verbatim_source_description_snippet(
+                desc, source_windows)
+            if not is_culm and copied_source:
+                _add(
+                    errors, i, "concept_details",
+                    "verbatim_source_description",
+                    "Description repeats a long contiguous source passage; "
+                    "rewrite it in original teaching language",
+                )
             if _EMPTY_IMAGE_ALT_RE.search(details):
                 _add(
                     errors, i, "concept_details", "empty_image_alt",
@@ -811,6 +864,61 @@ def validate_concept_rows(
                 if _case_example_too_short(case_text):
                     _add(errors, i, "concept_details", "short_case_example",
                          "Case examples should include the full source question/task")
+                if strict_type_hierarchy:
+                    markers = list(_EXAMPLE_MARKER_RE.finditer(case_text))
+                    case_title = (
+                        case_text[:markers[0].start()].strip()
+                        if markers else case_text.strip()
+                    )
+                    examples = [
+                        value.strip()
+                        for value in _EXAMPLE_SPLIT_RE.split(case_text)[1:]
+                        if value.strip()
+                    ]
+                    if not case_title:
+                        _add(
+                            errors, i, "concept_details",
+                            "missing_case_definition",
+                            "Each Case must define the sub-type before its Examples",
+                        )
+                    if not markers or not examples:
+                        _add(
+                            errors, i, "concept_details",
+                            "case_without_example",
+                            "Each Case must contain at least one numbered Example",
+                        )
+                    title_key = _norm(case_title)
+                    if case_title and (
+                        case_title.endswith("?")
+                        or _CASE_RAW_QUESTION_RE.match(case_title)
+                        or any(title_key == _norm(example) for example in examples)
+                    ):
+                        _add(
+                            errors, i, "concept_details",
+                            "case_question_not_definition",
+                            "Case text must define a reusable variation; the "
+                            "complete question belongs in a numbered Example",
+                        )
+                    numbers = [
+                        marker.group("number") or ""
+                        for marker in markers
+                    ]
+                    if (
+                        any(
+                            marker.group("label").lower() != "example"
+                            for marker in markers
+                        )
+                        or numbers != [
+                            f"{number:02d}"
+                            for number in range(1, len(markers) + 1)
+                        ]
+                    ):
+                        _add(
+                            errors, i, "concept_details",
+                            "example_numbering",
+                            "Examples must use contiguous zero-padded labels "
+                            "starting at Example 01 within every Case",
+                        )
         if is_culm and details and not details.split(" // ", 1)[0].startswith(
                 "Description: Recap"):
             _add(errors, i, "concept_details", "culmination_description",

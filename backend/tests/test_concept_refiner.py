@@ -22,6 +22,31 @@ def test_continuous_type_numbering_across_concepts():
     assert "Type 03: Z Case 01: q4" in out[1]["concept_details"]
 
 
+def test_type_refinement_numbers_examples_within_each_case():
+    records = [
+        _rec(
+            "Linear Equations",
+            "Description: d // Types: Type 01: Solve equations "
+            "Case 01: Given a linear equation, isolate the unknown "
+            "Example: Solve 3x + 2 = 14. "
+            "Example 09: Solve 5y - 7 = 18. "
+            "Case 02: Given a word problem, form and solve an equation "
+            "Examples: A number increased by 5 is 12. Find the number. "
+            "// Misconception: m",
+        ),
+    ]
+
+    out = cr.renumber_types_continuously(records)
+    details = out[0]["concept_details"]
+    assert "Case 01: Given a linear equation" in details
+    assert "Example 01: Solve 3x + 2 = 14." in details
+    assert "Example 02: Solve 5y - 7 = 18." in details
+    assert "Case 02: Given a word problem" in details
+    assert "Example 01: A number increased by 5 is 12." in details
+    assert "Example 09:" not in details
+    assert "Examples:" not in details
+
+
 def test_culmination_uses_separate_miscellaneous_sequence():
     records = [
         _rec("A", "Description: a // Types: Type 01: X Case 01: q1 // Misconception: m"),

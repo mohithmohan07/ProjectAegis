@@ -42,6 +42,8 @@ _SECTION_SEP = " // "
 _TYPE_TOKEN_RE = re.compile(
     r"(?:Miscellaneous\s+)?Type\s*0*\d+\s*:", re.IGNORECASE)
 _CASE_TOKEN_RE = re.compile(r"Case\s*0*\d+\s*:", re.IGNORECASE)
+_EXAMPLE_TOKEN_RE = re.compile(
+    r"(?<!Worked )\bExamples?(?:\s+0*\d+)?\s*:", re.IGNORECASE)
 _ACTIVITY_HUB_LABEL = "Activity/Info Hub"
 _MISCONCEPTIONS_LABEL = "Misconceptions"
 _ERROR_ANALYSIS_LABEL = "Error Analysis"
@@ -162,6 +164,31 @@ def _renumber_reusable_block(
             return f"Case {case_count_by_signature[key]:02d}:"
 
         segment = _CASE_TOKEN_RE.sub(replace_case, segment)
+        # The renderer is deliberately permissive about legacy ``Example:``
+        # markers, but the public format is an explicit hierarchy.  Normalize
+        # Examples independently within every Case so each Case reads as a
+        # defined variation followed by Example 01, Example 02, and so on.
+        case_matches = list(_CASE_TOKEN_RE.finditer(segment))
+        if case_matches:
+            case_pieces: list[str] = [segment[:case_matches[0].start()]]
+            for case_index, case_match in enumerate(case_matches):
+                case_end = (
+                    case_matches[case_index + 1].start()
+                    if case_index + 1 < len(case_matches)
+                    else len(segment)
+                )
+                case_segment = segment[case_match.start():case_end]
+                example_number = 0
+
+                def replace_example(_match: re.Match) -> str:
+                    nonlocal example_number
+                    example_number += 1
+                    return f"Example {example_number:02d}:"
+
+                case_pieces.append(
+                    _EXAMPLE_TOKEN_RE.sub(replace_example, case_segment)
+                )
+            segment = "".join(case_pieces)
         pieces.append(segment)
     return "".join(pieces), next_number
 

@@ -807,8 +807,9 @@ prompts.register(
    "Definition of …", never a raw question, and never a textbook Activity title.
    Textbook activities, experiments, and discussion cases belong in
    Activity/Info Hub, not as Cases.
-   Every concrete source question goes on its own "Example:" line under the Case
-   it instantiates, copied in FULL without truncation. Include EVERY source
+   Every concrete source question goes on its own numbered "Example 01:" line
+   under the Case it instantiates, copied in FULL without truncation. Restart
+   Example numbering at 01 for each Case. Include EVERY source
    example available for each Case; only skip Types when a concept has zero
    meaningful assessable task varieties.""")
 
@@ -828,8 +829,9 @@ prompts.register(
    and never a textbook Activity / discussion-case title. Activities,
    experiments, and classroom discussion cases belong in Activity/Info Hub, not
    as Cases.
-   Every concrete source question goes on its own "Example:" line under the Case
-   it instantiates, copied in FULL without truncation. Include EVERY source
+   Every concrete source question goes on its own numbered "Example 01:" line
+   under the Case it instantiates, copied in FULL without truncation. Restart
+   Example numbering at 01 for each Case. Include EVERY source
    example available for each Case; only skip Types when the concept has zero
    meaningful assessable varieties.""")
 
@@ -839,9 +841,10 @@ prompts.register(
     default=(
         "Types: Type 01: <reusable assessable pattern> "
         "Case 01: <conceptual sub-type named by givens/ask/constraint> "
-        "Example: <full source question verbatim> "
+        "Example 01: <full source question verbatim> "
+        "Example 02: <another source question for the same Case> "
         "Case 02: <another conceptual sub-type for the same pattern> "
-        "Example: <another full source question verbatim, with figure URL "
+        "Example 01: <another full source question verbatim, with figure URL "
         "when the ask is visual: (Refer fig. X) "
         "[img src=\"https://full-public-image-url\" alt=\"meaningful visual description\"]>"
     ))
@@ -913,10 +916,11 @@ OUTPUT CONTRACT for concept_description (ONE string, sections joined by " // "):
 - Then include Types ONLY IF the concept has assessable question/problem
   varieties. {{types_guidance}}
   Format — use zero-padded numeric labels exactly "Type 01:", "Case 01:", and
-  an "Example:" line for every concrete source question:
+  a numbered "Example 01:" line for every concrete source question; restart
+  Example numbering at 01 for every Case:
   Types: Type 01: <pattern definition> Case 01: <defined sub-type>
-  Example: <full source question> Example: <another full source question>
-  Case 02: <defined sub-type> Example: <...> Type 02: <next pattern> ...
+  Example 01: <full source question> Example 02: <another full source question>
+  Case 02: <defined sub-type> Example 01: <...> Type 02: <next pattern> ...
   Restart at Type 01 within each concept — they are renumbered continuously
   across the whole chapter afterwards, so do NOT try to continue numbers yourself.
 - Example Types block:
@@ -1088,6 +1092,8 @@ Rules:
    conditions, and one compact example only when it helps.
 6. Do NOT dump the full textbook. Target 2-4 compact sentences, roughly 45-90
    words. Avoid repetitive wording across sibling concepts.
+   Explain the source in original teacher-facing language: do not copy a long
+   contiguous sentence or paragraph from the textbook into Description.
 7. Valid concept_description forms:
    Description: ... // Misconceptions: ...
    Description: ... // Error Analysis: ...
@@ -1126,10 +1132,11 @@ RULES:
    Description: ... // Types: ... // Misconceptions: ... // Error Analysis: ...
 3. {{types_guidance}}
 4. Format — zero-padded numeric labels exactly "Type 01:", "Case 01:", and an
-   "Example:" line per concrete source question:
+   "Example 01:" line per concrete source question; restart Example numbering
+   at 01 for every Case:
    Types: Type 01: <pattern definition> Case 01: <defined sub-type>
-   Example: <full source question> Example: <another full source question>
-   Case 02: <defined sub-type> Example: <...> Type 02: <next pattern> ...
+   Example 01: <full source question> Example 02: <another full source question>
+   Case 02: <defined sub-type> Example 01: <...> Type 02: <next pattern> ...
    (restart at Type 01 per concept; continuous renumbering across the chapter
    happens downstream).
 5. Example:
@@ -1416,6 +1423,8 @@ Rules:
   Example ending: "...\\nAchieving Mastery: Using the midpoint property to set up the smaller triangles correctly."
 - Use 45-90 words unless the concept is very simple. Never leave a Description
   truncated mid-sentence.
+- Paraphrase source prose into original teacher-facing language. Do not copy a
+  long contiguous sentence or paragraph from the textbook into Description.
 - A derivation/proof/formula-building concept MUST include one compact,
   source-grounded worked derivation cue introduced with "Worked Example:".
   It must demonstrate that derivation's reasoning, not merely apply or verify
@@ -1471,15 +1480,16 @@ Rules:
 - Textbook Activity / experiment / discussion tasks belong in Activity/Info Hub,
   not as Types/Cases.
 - Omit Types only for concepts with zero meaningful assessable question/task varieties.
-- If a Type is present, every Case must include a full self-contained example
-  question from the source. Do not shorten source questions; preserve all
+- If a Type is present, every Case must include a full self-contained numbered
+  "Example 01:" question from the source. Restart Example numbering at 01 for
+  each Case. Do not shorten source questions; preserve all
   given values, conditions, data, quotations, and the exact ask needed for a
   teacher to execute the example.
 - Include as many source examples as are available for each Type. Skip only
   purely introductory or rhetorical prompts with no expected student response.
 - Culmination rows may receive Types only for mixed multi-concept synthesis /
   revision / application; keep their Description ("Description: Recap") unchanged.
-- Use zero-padded labels exactly "Type 01:" and "Case 01:".
+- Use zero-padded labels exactly "Type 01:", "Case 01:", and "Example 01:".
 - Do not rewrite Misconceptions or Error Analysis except to keep existing useful
   sections in place and in that canonical order.
 - Do not include source labels such as "Example 3" or "Exercise 1.2" in public concept_details.
@@ -2058,6 +2068,11 @@ Rules:
   concept — rewrite the cell so it describes exactly one concept. NEVER
   delete the other concept's material blindly; if it clearly belongs to a
   different provided row, move it there.
+- For verbatim_source_description issues: retain the same facts but rewrite
+  the Description in original teacher-facing language. Do not reproduce a
+  long contiguous sentence or paragraph from the supplied source. This rule
+  applies only to Description; full source questions remain allowed in Types
+  Examples.
 - For short_case_example issues: replace the truncated Example with the FULL
   source question wording (and Mathpix URL when the question is visual).
 """)
@@ -4138,6 +4153,19 @@ def _inventory_stats(items: list[dict]) -> dict:
         "source_or_passage_tasks": sum(
             kind in {"source_task", "case_task", "passage_task"}
             for kind in kinds),
+        "chapter_final_tasks": sum(
+            bool(item.get("_chapter_wide_task"))
+            or item.get("_topic_scope") == "chapter"
+            for item in items
+        ),
+        "chapter_final_exercises": sum(
+            (item.get("source_kind") or "").strip().lower() == "exercise"
+            and (
+                bool(item.get("_chapter_wide_task"))
+                or item.get("_topic_scope") == "chapter"
+            )
+            for item in items
+        ),
         "total_inventory_items": len(items),
     }
 
@@ -4340,6 +4368,8 @@ def _extract_question_task_inventory_via_api(
             source_topic_excerpts=_group_source_topic_excerpts(sections),
         )
     for item in inventory["items"]:
+        if item.get("_topic_scope") == "chapter":
+            item["_chapter_wide_task"] = True
         item.pop("_topic_scope", None)
     inventory["stats"] = _inventory_stats(inventory["items"])
     if anchors:
@@ -4621,6 +4651,35 @@ def _case_prompt_needs_source(prompt: str, source_text: str) -> bool:
     )
 
 
+_CASE_TITLE_QUESTION_RE = re.compile(
+    r"^(?:solve|simplify|find|write|identify|expand|compare|calculate|"
+    r"rationalise|express|evaluate|convert|draw|label|explain|prove|"
+    r"describe|discuss|analyse|analyze|examine|interpret|outline|assess|"
+    r"state|list|mention|account|justify|trace|distinguish|define|"
+    r"what|why|how|who|when|where|which)\b",
+    re.IGNORECASE,
+)
+
+
+def _case_title_needs_definition(case_title: str, examples: list[dict]) -> bool:
+    """Whether legacy Case text is a question instead of a sub-type definition."""
+    title = (case_title or "").strip()
+    first_example = (
+        str(examples[0].get("example_prompt") or "").strip()
+        if examples else ""
+    )
+    return bool(
+        not title
+        or title.endswith("?")
+        or _CASE_TITLE_QUESTION_RE.match(title)
+        or (
+            first_example
+            and bi.normalize_question_text(title)
+            == bi.normalize_question_text(first_example)
+        )
+    )
+
+
 def _backfill_type_cases_from_inventory(types: list[dict], inventory: dict) -> list[dict]:
     """Ensure every source question attached to a Type appears as a full example.
 
@@ -4680,6 +4739,38 @@ def _backfill_type_cases_from_inventory(types: list[dict], inventory: dict) -> l
                         ex["example_prompt"] = source_text
                 if ex.get("example_prompt"):
                     seen_prompts.add(bi.normalize_question_text(ex["example_prompt"]))
+        # Legacy mining emitted one raw ``case_prompt`` per Case. Preserve its
+        # source task as an Example, then derive a reusable Case definition
+        # from that task so question wording never occupies the Case line.
+        for case in cases:
+            legacy = (case.get("case_prompt") or "").strip()
+            if legacy:
+                legacy_qid = (case.get("source_question_id") or "").strip()
+                example = {
+                    "source_question_id": legacy_qid,
+                    "example_prompt": legacy,
+                }
+                case["examples"] = [example, *(case.get("examples") or [])]
+                case.pop("case_prompt", None)
+                case.pop("source_question_id", None)
+                if legacy_qid:
+                    example_by_qid[legacy_qid] = example
+            examples = _case_examples(case)
+            if _case_title_needs_definition(
+                str(case.get("case_title") or ""), examples,
+            ):
+                representative_qid = (
+                    str(examples[0].get("source_question_id") or "").strip()
+                    if examples else ""
+                )
+                representative = (
+                    str(examples[0].get("example_prompt") or "").strip()
+                    if examples else ""
+                )
+                if representative:
+                    _, case_title = _semantic_fallback_wording(
+                        by_qid.get(representative_qid, {}), representative)
+                    case["case_title"] = case_title
         for qid in source_ids:
             source_text = _inventory_task_text(by_qid.get(qid, {}))
             if not source_text:
@@ -4694,11 +4785,11 @@ def _backfill_type_cases_from_inventory(types: list[dict], inventory: dict) -> l
             if key in seen_prompts:
                 continue
             example = {"source_question_id": qid, "example_prompt": source_text}
+            _, case_title = _semantic_fallback_wording(
+                by_qid.get(qid, {}), source_text)
             cases.append({
                 "case_id": f"CASE-{len(cases) + 1:04d}",
-                "case_title": (
-                    mtype.get("task_pattern") or mtype.get("type_title") or ""
-                ).strip(),
+                "case_title": case_title,
                 "examples": [example],
                 "case_signature": "",
             })
@@ -6219,11 +6310,15 @@ def _mined_type_to_body(mtype: dict, start_type: int) -> tuple[str, int]:
         examples = [ex for ex in examples if ex]
         if not case_title and not examples:
             continue
-        # Legacy mined output has no sub-type definition; the full question
-        # doubles as the Case line so nothing is lost.
-        if not case_title:
-            case_title = examples[0]
-            examples = examples[1:]
+        # Legacy mined output may place the complete question in ``case_prompt``
+        # (or even in ``case_title``) without defining the Case. Preserve that
+        # question as an Example and derive a declarative Case variation from
+        # the assessed action and conditions.
+        if _case_title_needs_definition(
+            case_title,
+            [{"example_prompt": example} for example in examples],
+        ):
+            _, case_title = _semantic_fallback_wording({}, examples[0])
         cases.append((case_title, examples))
     if not title or not cases:
         return "", start_type
@@ -6231,8 +6326,8 @@ def _mined_type_to_body(mtype: dict, start_type: int) -> tuple[str, int]:
     parts = [f"Type {n:02d}: {title}"]
     for c_i, (case_title, examples) in enumerate(cases, start=1):
         parts.append(f"Case {c_i:02d}: {case_title}")
-        for example in examples:
-            parts.append(f"Example: {example}")
+        for example_i, example in enumerate(examples, start=1):
+            parts.append(f"Example {example_i:02d}: {example}")
     return " ".join(parts), n
 
 
@@ -7698,6 +7793,9 @@ _FATAL_CODES = {
     "generic_misconception", "misconception_framing",
     "generic_error_analysis", "error_analysis_framing",
     "issue_section_overlap",
+    "missing_case_definition", "case_without_example",
+    "case_question_not_definition", "example_numbering",
+    "verbatim_source_description",
 }
 
 
@@ -7757,7 +7855,8 @@ def _repair_records_via_api(
     for attempt in range(max_attempts + 1):
         report = cv.validate_concept_rows(
             records, **opts,
-            allowed_source_examples=allowed_source_examples)
+            allowed_source_examples=allowed_source_examples,
+            source_text=source_context)
         hard = [e for e in report["errors"] if e["severity"] == "error"]
         progress.log(
             f"{stage}: validation found {len(hard)} error(s), "
@@ -7840,8 +7939,9 @@ def _artifact_match_snippet(rec: dict) -> str:
 
 
 _INVENTORY_EXAMPLE_SEGMENT_RE = re.compile(
-    r"(\bExamples?\s*:\s*)(.*?)"
-    r"(?=\bExamples?\s*:|\b(?:Case|Type)\s+\d{1,2}:|\s+//\s+|$)",
+    r"(\bExamples?(?:\s+0*\d+)?\s*:\s*)(.*?)"
+    r"(?=\bExamples?(?:\s+0*\d+)?\s*:|"
+    r"\b(?:Case|Type)\s+\d{1,2}:|\s+//\s+|$)",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -7962,7 +8062,8 @@ def _neutralize_unrepaired_rows(
 
 _TYPE_SPLIT_RE = re.compile(r"(?=\b(?:Miscellaneous\s+)?Type\s+\d{1,2}:)", re.IGNORECASE)
 _CASE_SPLIT_RE = re.compile(r"(?=\bCase\s+\d{1,2}:)", re.IGNORECASE)
-_EXAMPLE_LINE_RE = re.compile(r"\bExamples?\s*:\s*", re.IGNORECASE)
+_EXAMPLE_LINE_RE = re.compile(
+    r"\bExamples?(?:\s+0*\d+)?\s*:\s*", re.IGNORECASE)
 
 
 def _inventory_lookup_texts(inventory: dict | None) -> list[str]:
@@ -8039,7 +8140,8 @@ def _rendered_inventory_example_counts(
                 tail = suffix[len(key):].lstrip()
                 if not tail or re.match(
                     r"^(?:(?:Miscellaneous\s+)?Type\s+\d{1,2}:"
-                    r"|Case\s+\d{1,2}:|Examples?\s*:)",
+                    r"|Case\s+\d{1,2}:|"
+                    r"Examples?(?:\s+0*\d+)?\s*:)",
                     tail,
                     re.IGNORECASE,
                 ):
@@ -8566,7 +8668,8 @@ def _append_inventory_example_to_record(
         ]
         case_no = (max(case_numbers) if case_numbers else 0) + 1
         addition = (
-            f" Case {case_no:02d}: {case_title} Example: {text.strip()}")
+            f" Case {case_no:02d}: {case_title} "
+            f"Example 01: {text.strip()}")
         new_body = (
             body[:existing.end()] + addition + body[existing.end():]
         ).strip()
@@ -8574,7 +8677,7 @@ def _append_inventory_example_to_record(
         type_no = _next_rendered_type_number(body)
         addition = (
             f"Type {type_no:02d}: {title} "
-            f"Case 01: {case_title} Example: {text.strip()}"
+            f"Case 01: {case_title} Example 01: {text.strip()}"
         )
         new_body = f"{body} {addition}".strip() if body.strip() else addition
     updated["concept_details"] = _inject_types(details, new_body)
@@ -8647,9 +8750,10 @@ def _dedupe_rendered_inventory_examples(
                     kept.append(example)
                 if kept:
                     cases.append((case_title, kept))
-                elif case_title and not cv._example_too_short(case_title):
-                    cases.append((case_title, []))
                 else:
+                    # A deduplicated Case with no remaining Example violates
+                    # the public Case -> Example hierarchy, so drop it rather
+                    # than leave an empty shell behind.
                     changed = True
             if cases:
                 header = type_header.strip()
@@ -8730,6 +8834,83 @@ def _align_activity_examples_with_hubs(
         progress.log(
             f"Aligned {moved} assessable Activity Example(s) with their "
             "GPT-selected Activity/Info Hub concept.",
+            level="success",
+        )
+    return cr.renumber_types_continuously(out)
+
+
+def _relocate_chapter_wide_examples_from_culminations(
+    records: list[dict], inventory: dict | None,
+    mined_types: dict | None = None,
+) -> list[dict]:
+    """Keep ordinary chapter-review questions off an unrelated Culmination.
+
+    Chapter-end task lists are initially scoped to the whole chapter, so an
+    early Type assignment can temporarily place them under one Culmination.
+    Once a semantic topic hint exists, normal (non-synthesis) tasks belong on
+    a normal concept in that topic.  Add the authoritative Example there
+    first, then exact-dedupe with the target first so the earlier Culmination
+    copy cannot win merely because it occurs first in chapter order.
+    """
+    out = [dict(record) for record in records]
+    mined_by_qid = _mined_assignment_units_by_qid(mined_types)
+    moved = 0
+    for item in (inventory or {}).get("items") or []:
+        if not isinstance(item, dict) or not item.get("_chapter_wide_task"):
+            continue
+        if (item.get("source_kind") or "").strip().lower() in _HUB_INVENTORY_KINDS:
+            continue
+        qid = (item.get("qid") or "").strip()
+        mined_type = mined_by_qid.get(qid)
+        scope = (
+            _assignment_placement_scope(mined_type)
+            if mined_type is not None
+            else ""
+        )
+        task_text = _inventory_task_text(item)
+        if (
+            scope in {"mixed_synthesis", "cross_topic_synthesis"}
+            or (
+                not scope
+                and (
+                    _MIXED_ASSIGNMENT_CUE_RE.search(task_text)
+                    or _CROSS_TOPIC_ASSIGNMENT_CUE_RE.search(task_text)
+                )
+            )
+        ):
+            continue
+        locations = _rendered_inventory_example_locations(out, item)
+        if not any(
+            cr.is_culmination(out[index].get("concept_title") or "")
+            for index in locations
+        ):
+            continue
+        target = _best_record_index_for_inventory_item(
+            out, item, allow_culmination=False, mined_type=None)
+        if target < 0 or target >= len(out):
+            continue
+        if cr.is_culmination(out[target].get("concept_title") or ""):
+            continue
+        candidate = [dict(record) for record in out]
+        if target not in locations:
+            candidate[target] = _append_inventory_example_to_record(
+                candidate[target], task_text, item)
+        order = [target] + [
+            index for index in range(len(candidate)) if index != target
+        ]
+        ordered, _removed = _dedupe_rendered_inventory_examples(
+            [candidate[index] for index in order], {"items": [item]})
+        rebuilt = [dict(record) for record in candidate]
+        for position, index in enumerate(order):
+            rebuilt[index] = ordered[position]
+        if _rendered_inventory_example_locations(rebuilt, item) != [target]:
+            continue
+        out = rebuilt
+        moved += 1
+    if moved:
+        progress.log(
+            f"Relocated {moved} chapter-wide Example(s) from Culmination "
+            "to their assigned normal concept.",
             level="success",
         )
     return cr.renumber_types_continuously(out)
@@ -8874,7 +9055,9 @@ def _enforce_rendered_inventory_coverage(
     # Coverage may already be exact while later merge/refinement passes have
     # moved an assessable Activity Example away from its Hub. Reassert that
     # identity-based placement invariant at this terminal repair boundary.
-    return _align_activity_examples_with_hubs(out, inventory)
+    out = _align_activity_examples_with_hubs(out, inventory)
+    return _relocate_chapter_wide_examples_from_culminations(
+        out, inventory, mined_types)
 
 
 def _rebuild_types_after_final_placement_drift(
@@ -8959,8 +9142,9 @@ def _rebuild_types_body(
         parts.append(type_header.strip())
         for case_i, (case_title, examples) in enumerate(cases, start=1):
             parts.append(f"Case {case_i:02d}: {case_title.strip()}")
-            for example in examples:
-                parts.append(f"Example: {example.strip()}")
+            for example_i, example in enumerate(examples, start=1):
+                parts.append(
+                    f"Example {example_i:02d}: {example.strip()}")
     # Preserve original Type NN labels from headers; only Case indexes restart.
     return " ".join(parts)
 
@@ -9053,9 +9237,8 @@ def _salvage_short_case_examples(
                         )
                         if replacement:
                             examples = [replacement]
-                            case_title = (
-                                rec.get("concept_title") or "Source-based question"
-                            )
+                            _, case_title = _semantic_fallback_wording(
+                                {}, replacement)
                             expanded += 1
                             changed = True
                         else:
@@ -9064,9 +9247,8 @@ def _salvage_short_case_examples(
                             continue
                     else:
                         examples = [case_title]
-                        case_title = (
-                            rec.get("concept_title") or "Source-based question"
-                        )
+                        _, case_title = _semantic_fallback_wording(
+                            {}, examples[0])
                         changed = True
                 new_examples: list[str] = []
                 for ex in examples:
@@ -9094,11 +9276,20 @@ def _salvage_short_case_examples(
                         new_examples.append(ex)
                         used.add(bi.normalize_question_text(ex))
                 if new_examples:
+                    if _case_title_needs_definition(
+                        case_title,
+                        [{"example_prompt": example} for example in new_examples],
+                    ):
+                        _, case_title = _semantic_fallback_wording(
+                            {}, new_examples[0])
+                        changed = True
                     cases.append((case_title, new_examples))
-                elif case_title and not cv._example_too_short(case_title):
-                    # Keep a defined Case with no Example only when the Case
-                    # title itself is already a full question (legacy form).
-                    cases.append((case_title, []))
+                elif case_title:
+                    # A public Case without a usable Example violates the
+                    # hierarchy. Drop it; coverage repair can restore a
+                    # source-owned Example when one exists.
+                    dropped += 1
+                    changed = True
             if cases:
                 # Keep the original Type NN: title from the header line.
                 header = type_header.strip()
@@ -9126,11 +9317,15 @@ def _salvage_short_case_examples(
 def _validate_final_or_raise(
     records: list[dict], *, stage: str = "final",
     inventory: dict | None = None,
+    source_text: str = "",
 ) -> dict:
     report = cv.validate_concept_rows(
         records, allow_types=True, require_culmination=True,
         allow_culmination=True,
-        allowed_source_examples=_inventory_source_examples(inventory))
+        allowed_source_examples=_inventory_source_examples(inventory),
+        strict_type_hierarchy=True,
+        source_text=source_text,
+    )
     fatal = _fatal_errors(report)
     progress.log(
         f"{stage}: final validation found {len(fatal)} fatal error(s), "
@@ -11950,6 +12145,118 @@ def _newest_compatible_concept_checkpoint(
     return copy.deepcopy(max(candidates, key=lambda item: (item[0], item[1]))[2])
 
 
+def _final_checkpoint_refresh_reasons(
+    checkpoint: dict | None, *, sections: list[dict],
+    source_topic_excerpts: list[dict],
+) -> list[str]:
+    """Return structural evidence that a saved final map must be rebuilt.
+
+    A compatible checkpoint only proves that its JSON shape is safe to read. It
+    does not prove that it was generated from the current source-completeness
+    rules.  In particular, older final checkpoints can omit an entire source
+    topic or a deterministic question anchor while still passing their schema
+    check.  Resume from the preceding stage in that case so the normal final
+    recovery path can repair the map.
+    """
+    if not checkpoint:
+        return []
+    reasons: list[str] = []
+    missing_topics = _missing_source_topic_excerpts(
+        checkpoint.get("records") or [], source_topic_excerpts)
+    if missing_topics:
+        reasons.append(
+            "missing source topic(s): "
+            + ", ".join(
+                (group.get("topic") or "").strip()
+                for group in missing_topics
+            )
+        )
+    inventory_items = (
+        (checkpoint.get("question_task_inventory") or {}).get("items") or []
+    )
+    anchors = _source_task_anchors(sections)
+    missing_anchors = [
+        anchor for anchor in anchors
+        if not any(
+            isinstance(item, dict) and _inventory_items_match(item, anchor)
+            for item in inventory_items
+        )
+    ]
+    if missing_anchors:
+        reasons.append(
+            f"missing {len(missing_anchors)} deterministic source task anchor(s)"
+        )
+    source_text = "\n\n".join(
+        str(group.get("excerpt") or "")
+        for group in source_topic_excerpts
+        if isinstance(group, dict)
+    )
+    if source_text:
+        description_report = cv.validate_concept_rows(
+            checkpoint.get("records") or [], source_text=source_text)
+        copied_descriptions = [
+            error for error in description_report["errors"]
+            if error.get("code") == "verbatim_source_description"
+        ]
+        if copied_descriptions:
+            reasons.append(
+                f"{len(copied_descriptions)} Description(s) copy source prose"
+            )
+    return reasons
+
+
+def _refresh_inventory_from_source_anchors(
+    inventory: dict | None, sections: list[dict],
+) -> dict:
+    """Merge authoritative source tasks into an older resumed inventory.
+
+    Existing qids remain stable so mined Type assignments still point at their
+    original tasks.  New deterministic anchors receive new qids and are later
+    placed by the ordinary exact-coverage repair pass.
+    """
+    refreshed = copy.deepcopy(inventory or _empty_inventory())
+    items = [
+        dict(item) for item in refreshed.get("items") or []
+        if isinstance(item, dict)
+    ]
+    merged = _merge_source_task_anchors(items, _source_task_anchors(sections))
+    seen_qids = {
+        str(item.get("qid") or "").strip()
+        for item in merged
+        if str(item.get("qid") or "").strip()
+    }
+    qid_numbers = [
+        int(match.group(1))
+        for qid in seen_qids
+        if (match := re.fullmatch(r"QINV-(\d+)", qid))
+    ]
+    next_qid = (max(qid_numbers) if qid_numbers else 0) + 1
+    next_order = max(
+        (
+            int(item.get("order_index") or 0)
+            for item in merged
+            if str(item.get("order_index") or "").isdigit()
+        ),
+        default=0,
+    )
+    for item in merged:
+        qid = str(item.get("qid") or "").strip()
+        if not qid or qid in seen_qids and sum(
+                str(candidate.get("qid") or "").strip() == qid
+                for candidate in merged) > 1:
+            qid = f"QINV-{next_qid:04d}"
+            next_qid += 1
+            item["qid"] = qid
+        if not item.get("order_index"):
+            next_order += 1
+            item["order_index"] = next_order
+        if item.get("_topic_scope") == "chapter":
+            item["_chapter_wide_task"] = True
+    refreshed["items"] = merged
+    refreshed["stats"] = _inventory_stats(merged)
+    return refreshed
+
+
 def _valid_concept_checkpoint(checkpoint: dict | None) -> bool:
     """Backward-compatible public predicate used by upload/bundle services."""
     return _newest_compatible_concept_checkpoint(checkpoint) is not None
@@ -12013,11 +12320,15 @@ def _run_live_concept_pre_final_stages(
     artifacts: dict | None,
     resume_checkpoint: dict | None,
     checkpoint_callback,
+    allow_final_checkpoint: bool = True,
 ) -> tuple[list[dict], dict, dict, dict[tuple[str, str], dict]]:
     """Run through Type/activity assignment from the newest compatible stage."""
+    resumable_stages = set(_POST_CONCEPT_CHECKPOINT_STAGES)
+    if not allow_final_checkpoint:
+        resumable_stages.discard("final_content_ready")
     saved = _newest_compatible_concept_checkpoint(
         resume_checkpoint,
-        allowed_stages=_POST_CONCEPT_CHECKPOINT_STAGES,
+        allowed_stages=resumable_stages,
     )
     saved_stage = str(saved.get("stage") or "") if saved else ""
     saved_order = _checkpoint_order(saved_stage)
@@ -12287,8 +12598,14 @@ def _prepare_final_concept_content(
     method_anchors: list[dict],
     headings: list[str],
     source_topic_excerpts: list[dict],
+    refresh_chapter_wide_assignments: bool = False,
 ) -> list[dict]:
     """Run every semantic/API finalizer before the deterministic final gate."""
+    # A resumed post-Type checkpoint can still predate topic-coverage recovery.
+    # Restore any structurally proven source topic before downstream cleanup
+    # merges or culminations can make that omission difficult to diagnose.
+    out = _recover_missing_topic_concepts_via_api(
+        out, meta=meta, source_topic_excerpts=source_topic_excerpts)
     out = _scrub_section_numbers(out)
     out = _merge_concept_records(out)
     out = _dedupe_titles_chapter_wide(out)
@@ -12376,6 +12693,19 @@ def _prepare_final_concept_content(
                 (group.get("topic") or "").strip()
                 for group in missing_topics)
         )
+    if refresh_chapter_wide_assignments:
+        # Old final checkpoints may have a valid-but-stale topic assignment
+        # that sent every chapter-end question to one Culmination. Re-run the
+        # constrained semantic distribution after restored topics are present,
+        # then let exact inventory coverage place each source prompt once.
+        question_task_inventory = _assign_chapter_wide_inventory_topics_via_api(
+            meta=meta,
+            inventory=question_task_inventory,
+            records=out,
+            source_topic_excerpts=source_topic_excerpts,
+        )
+        for item in question_task_inventory.get("items") or []:
+            item.pop("_topic_scope", None)
     type_topic_violations = _mined_type_topic_violations(
         out, mined_types)
     if type_topic_violations:
@@ -12401,7 +12731,30 @@ def _prepare_final_concept_content(
         out, allow_types=True, require_culmination=True,
         allow_culmination=True,
         allowed_source_examples=_inventory_source_examples(
-            question_task_inventory))
+            question_task_inventory),
+        source_text=mmd_text,
+    )
+    if any(
+        error.get("code") == "verbatim_source_description"
+        and error.get("severity") == "error"
+        for error in boundary_report["errors"]
+    ):
+        before_description_repair = out
+        repaired_descriptions = _repair_records_via_api(
+            out,
+            meta=meta,
+            stage="final",
+            source_context=mmd_text,
+            max_attempts=2,
+            allowed_source_examples=_inventory_source_examples(
+                question_task_inventory),
+        )
+        out = _accept_exact_inventory_type_review(
+            before_description_repair,
+            repaired_descriptions,
+            question_task_inventory,
+            mined_types,
+        )
     if any(
         error.get("code") == "source_artifact"
         and error.get("severity") == "error"
@@ -12479,6 +12832,23 @@ def concepts_from_mmd(
         method_anchors = _method_coverage_anchors(sections)
         headings = _topic_headings(sections)
         source_topic_excerpts = _group_source_topic_excerpts(sections)
+        saved_final = _newest_compatible_concept_checkpoint(
+            resume_checkpoint,
+            allowed_stages={"final_content_ready"},
+        )
+        final_checkpoint_refresh_reasons = _final_checkpoint_refresh_reasons(
+            saved_final,
+            sections=sections,
+            source_topic_excerpts=source_topic_excerpts,
+        )
+        if final_checkpoint_refresh_reasons:
+            progress.log(
+                "Final checkpoint is structurally incomplete; resuming from "
+                "the preceding stage: "
+                + "; ".join(final_checkpoint_refresh_reasons),
+                level="warning",
+            )
+            saved_final = None
         allow_chapter_title_topic = _chapter_title_is_main_topic(
             sections, chapter_title)
         progress.log("Concept generation metadata received:\n" + _metadata_block(meta))
@@ -12506,11 +12876,14 @@ def concepts_from_mmd(
             artifacts=artifacts,
             resume_checkpoint=resume_checkpoint,
             checkpoint_callback=checkpoint_callback,
+            allow_final_checkpoint=not final_checkpoint_refresh_reasons,
         )
-        saved_final = _newest_compatible_concept_checkpoint(
-            resume_checkpoint,
-            allowed_stages={"final_content_ready"},
-        )
+        if final_checkpoint_refresh_reasons:
+            question_task_inventory = _refresh_inventory_from_source_anchors(
+                question_task_inventory, sections)
+            if artifacts is not None:
+                artifacts["question_task_inventory"] = copy.deepcopy(
+                    question_task_inventory)
         if saved_final:
             progress.log(
                 "Restored final content checkpoint; semantic/API repair will "
@@ -12531,6 +12904,8 @@ def concepts_from_mmd(
                 method_anchors=method_anchors,
                 headings=headings,
                 source_topic_excerpts=source_topic_excerpts,
+                refresh_chapter_wide_assignments=bool(
+                    final_checkpoint_refresh_reasons),
             )
             _emit_concept_checkpoint(
                 checkpoint_callback,
@@ -12543,7 +12918,11 @@ def concepts_from_mmd(
             )
         out = _canonicalize_concept_rich_text(out)
         _validate_final_or_raise(
-            out, stage="final", inventory=question_task_inventory)
+            out,
+            stage="final",
+            inventory=question_task_inventory,
+            source_text=mmd_text,
+        )
         missing = sum(
             1 for r in out
             if not _has_meaningful_types(r.get("concept_details", ""))
