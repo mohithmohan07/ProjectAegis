@@ -327,7 +327,7 @@ def test_post_deposit_refreshes_existing_concept_with_current_contract(db):
     assert " // Error Analysis:" not in refreshed.concept_details
 
 
-def test_post_deposit_rejects_missing_inventory_question_before_writes(db):
+def test_post_deposit_repairs_missing_inventory_question_before_writes(db):
     from app.services import build_concepts
 
     chapter = models.Chapter(
@@ -338,39 +338,59 @@ def test_post_deposit_rejects_missing_inventory_question_before_writes(db):
     )
     db.add(chapter)
     db.commit()
+    task = "Explain how popular sovereignty changed political authority."
     records = [{
         "topic": "Nationalism",
         "concept_title": "Popular Sovereignty",
         "parent_concept": "Nation States",
         "concept_details": (
             "Description: Popular sovereignty places political authority with "
-            "the people. // Misconceptions: Students may believe sovereignty "
-            "belongs only to a monarch."
+            "the people. // Misconception/ Error Analysis: Misconceptions: "
+            "Students may believe sovereignty belongs only to a monarch.; Error "
+            "Analysis: Students may treat political authority as hereditary "
+            "rather than civic."
         ),
+        "keywords": "",
+    }, {
+        "topic": "Nationalism",
+        "concept_title": "Culmination - Nationalism",
+        "parent_concept": "Culmination",
+        "concept_details": "Description: Recap",
         "keywords": "",
     }]
     inventory = {"items": [{
         "qid": "QINV-0007",
         "source_kind": "checkpoint_question",
         "topic_hint": "Nationalism",
-        "raw_task": (
-            "Explain how popular sovereignty changed political authority."
-        ),
+        "raw_task": task,
     }]}
 
-    with pytest.raises(
-        ValueError,
-        match=r"inventory coverage failed.*missing=QINV-0007",
-    ):
-        build_concepts._deposit_concepts(
-            db,
-            chapter,
-            records,
-            "Post",
-            "",
-            inventory=inventory,
-        )
-    assert chapter.topics == []
+    created, merged = build_concepts._deposit_concepts(
+        db,
+        chapter,
+        records,
+        "Post",
+        "",
+        inventory=inventory,
+    )
+
+    assert len(created) == 2
+    assert not merged
+    normal = next(
+        concept
+        for topic in chapter.topics
+        for concept in topic.concepts
+        if concept.concept_title == "Popular Sovereignty"
+    )
+    assert f"Example 01: {task}" in normal.concept_details
+    assert build_concepts.generation._rendered_inventory_coverage_defects(
+        [{
+            "concept_details": normal.concept_details,
+            "concept_title": normal.concept_title,
+            "topic": normal.topic.topic_title,
+        }],
+        inventory,
+    ) == {"missing": [], "duplicate": []}
 
 
 def test_group_label_columns_present_and_ordered():

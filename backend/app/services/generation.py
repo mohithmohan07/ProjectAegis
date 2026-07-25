@@ -13467,6 +13467,32 @@ def concepts_from_mmd(
                     method_row_snapshot),
             )
         out = _canonicalize_concept_rich_text(out)
+        # A saved final checkpoint bypasses the semantic finalizer.  Its source
+        # inventory remains authoritative, so restore any source Example that
+        # an older finalizer/checkpoint omitted before declaring the resumed map
+        # valid.  This is a deterministic placement repair only: no API call is
+        # made and no question wording is invented.  Fresh maps have already
+        # passed through this exact repair before their final checkpoint is
+        # emitted above, so limiting it here avoids making that checkpoint stale.
+        resumed_coverage_repaired = False
+        if saved_final:
+            pre_resume_repair = copy.deepcopy(out)
+            coverage_before_resume_repair = (
+                _rendered_inventory_coverage_defects(
+                    out, question_task_inventory))
+            out = _enforce_rendered_inventory_coverage(
+                out, question_task_inventory, mined_types)
+            resumed_coverage_repaired = out != pre_resume_repair
+            if resumed_coverage_repaired:
+                progress.log(
+                    "Repaired saved final checkpoint source-task coverage: "
+                    f"{len(coverage_before_resume_repair['missing'])} missing, "
+                    f"{len(coverage_before_resume_repair['duplicate'])} duplicate.",
+                    level="success",
+                )
+                out = cr.renumber_types_continuously(out)
+                out = cv.ensure_valid_learner_analysis(out)
+                out = _canonicalize_concept_rich_text(out)
         # A saved final checkpoint bypasses the finalizer above.  Correct any
         # stale Figure tag from the source registry immediately before the
         # outer final gate, without spending another API request.  Persist the
@@ -13474,11 +13500,15 @@ def concepts_from_mmd(
         # starts from the corrected checkpoint.
         out, reconciled_figure_examples = _reconcile_explicit_figure_images(
             out, sections)
-        if reconciled_figure_examples:
+        if reconciled_figure_examples or resumed_coverage_repaired:
             progress.log(
-                "Reconciled "
-                f"{reconciled_figure_examples} rendered Figure Example(s) "
-                "against the source registry.",
+                (
+                    "Reconciled "
+                    f"{reconciled_figure_examples} rendered Figure Example(s) "
+                    "against the source registry."
+                    if reconciled_figure_examples
+                    else "Persisting repaired saved final checkpoint coverage."
+                ),
                 level="success",
             )
             if saved_final:

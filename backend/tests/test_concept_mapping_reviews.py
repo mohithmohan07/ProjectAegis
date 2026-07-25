@@ -3055,6 +3055,78 @@ def test_saved_final_checkpoint_reconciles_wrong_figure_tag_without_api(
     assert "fig-18.png" in persisted["records"][0]["concept_details"]
 
 
+def test_saved_final_checkpoint_restores_missing_inventory_example_without_api(
+    monkeypatch,
+):
+    source = "# Nationalism\nPolitical authority can be understood in civic terms."
+    task = "Explain how popular sovereignty changed political authority."
+    analysis = (
+        "Misconception/ Error Analysis: Misconceptions: Students may believe "
+        "sovereignty belongs only to a monarch.; Error Analysis: Students may "
+        "treat political authority as hereditary rather than civic."
+    )
+    records = [
+        {
+            "topic": "Nationalism",
+            "parent_concept": "Nation States",
+            "concept_title": "Popular Sovereignty",
+            "concept_details": (
+                "Description: Popular sovereignty shifts political authority "
+                "from rulers to citizens. // " + analysis
+            ),
+            "keywords": "sovereignty, citizens",
+        },
+        {
+            "topic": "Nationalism",
+            "parent_concept": "Culmination",
+            "concept_title": "Culmination - Nationalism",
+            "concept_details": "Description: Recap",
+            "keywords": "nationalism",
+        },
+    ]
+    inventory = {
+        "items": [{
+            "qid": "QINV-0007",
+            "source_kind": "checkpoint_question",
+            "topic_hint": "Nationalism",
+            "raw_task": task,
+        }],
+        "stats": {"total_inventory_items": 1},
+    }
+    checkpoint = g._make_concept_checkpoint(
+        "final_content_ready",
+        records=records,
+        question_task_inventory=inventory,
+        mined_types={"types": []},
+        method_row_snapshot=[],
+    )
+    emitted = []
+
+    def no_api(*_args, **_kwargs):
+        raise AssertionError("a saved final checkpoint should not call the API")
+
+    monkeypatch.setattr(g, "_openai_json", no_api)
+    out = g.concepts_from_mmd(
+        source,
+        subject="Social Science",
+        chapter_title="Nationalism",
+        live=True,
+        resume_checkpoint=checkpoint,
+        checkpoint_callback=emitted.append,
+    )
+
+    assert g._rendered_inventory_coverage_defects(out, inventory) == {
+        "missing": [], "duplicate": []}
+    details = out[0]["concept_details"]
+    assert "Type 01:" in details
+    assert "Case 01:" in details
+    assert f"Example 01: {task}" in details
+    assert emitted
+    persisted = emitted[-1]
+    assert persisted["stage"] == "final_content_ready"
+    assert task in persisted["records"][0]["concept_details"]
+
+
 def test_source_topic_order_is_restored_after_recovery_append():
     records = [
         {
