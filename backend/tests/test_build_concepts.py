@@ -5,7 +5,7 @@ import pytest
 
 from app import models
 from app.services import build_concepts, openai_usage
-from tests.conftest import convert_concept_upload, stream_result
+from tests.conftest import convert_concept_upload, stream_events, stream_result
 
 
 def test_post_learning_creates_concepts(client, first_chapter):
@@ -231,6 +231,145 @@ def test_post_learning_discard_control_durably_clears_only_final_checkpoint(
     saved = db.get(models.UploadJob, job.id)
     assert saved.generation_checkpoint == {}
     assert "Discarded invalid generation checkpoint" in saved.detail
+
+
+def test_post_learning_api_discards_invalid_final_and_resumes_prior_without_api(
+    client, db, first_chapter, monkeypatch,
+):
+    source = "# T\nA short source section."
+    job = models.UploadJob(
+        module="build_concepts",
+        upload_type="document",
+        learning_kind="post",
+        filename="api-discard-final.mmd",
+        mmd_text=source,
+        status="converted",
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    chapter = db.get(models.Chapter, first_chapter["id"])
+
+    details = (
+        "Description: A complete concept description."
+        "\nAchieving Mastery: Applying the concept correctly. // "
+        "Misconception/ Error Analysis: Misconceptions: Students may believe "
+        "every condition is optional.; Error Analysis: Students may omit a "
+        "required condition."
+    )
+    culmination = {
+        "topic": "T",
+        "parent_concept": "Culmination",
+        "concept_title": "Culmination - General Term",
+        "concept_details": (
+            "Description: Recap the topic. // Types: Type 01: Mixed reasoning "
+            "Case 01: Connect the ideas Example: Combine the listed concepts "
+            "to solve a mixed review task."
+        ),
+        "keywords": "",
+    }
+
+    def records(title):
+        return [{
+            "topic": "T",
+            "parent_concept": "P",
+            "concept_title": title,
+            "concept_details": details,
+            "keywords": "",
+        }, copy.deepcopy(culmination)]
+
+    common = {
+        "question_task_inventory": {"items": [], "stats": {}},
+        "mined_types": {"types": []},
+        "method_row_snapshot": [],
+    }
+    prior = build_concepts.generation._make_concept_checkpoint(
+        "post_type_assignment",
+        records=records("Prior-stage concept"),
+        **common,
+    )
+    stale_final = build_concepts.generation._make_concept_checkpoint(
+        "final_content_ready",
+        records=records("Rejected final concept"),
+        **common,
+    )
+    checkpoint_args = {
+        "fingerprint": build_concepts._generation_checkpoint_fingerprint(
+            job, chapter),
+        "target_identity": build_concepts._generation_target_identity(chapter),
+        "target_chapter_id": chapter.id,
+    }
+    history = build_concepts._merge_generation_checkpoint_history(
+        {}, prior, **checkpoint_args)
+    job.generation_checkpoint = build_concepts._merge_generation_checkpoint_history(
+        history, stale_final, **checkpoint_args)
+    db.commit()
+
+    monkeypatch.setattr(
+        build_concepts.generation.config,
+        "use_live_generation",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        build_concepts.generation,
+        "_openai_json",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("checkpoint recovery must not call OpenAI")
+        ),
+    )
+    monkeypatch.setattr(
+        build_concepts.generation,
+        "_prepare_final_concept_content",
+        lambda current, **_kwargs: current,
+    )
+    validations = []
+
+    def validate(current, **_kwargs):
+        validations.append([row["concept_title"] for row in current])
+        if len(validations) == 1:
+            raise RuntimeError("legacy final rejected")
+        raise RuntimeError("stop after prior checkpoint was restored")
+
+    monkeypatch.setattr(
+        build_concepts.generation, "_validate_final_or_raise", validate)
+    monkeypatch.setattr(
+        build_concepts.drive_checkpoints,
+        "schedule_checkpoint_backup",
+        lambda *_args, **_kwargs: None,
+    )
+
+    events = stream_events(client.post(
+        f"/build-concepts/post-learning/uploads/{job.id}/generate",
+        json={"target_chapter_id": chapter.id},
+    ))
+
+    assert validations[0][0] == "Rejected final concept"
+    assert validations[1][0] == "Prior-stage concept"
+    assert any(
+        event.get("type") == "log"
+        and "Discarded durable checkpoint stage: final_content_ready."
+        in event.get("message", "")
+        for event in events
+    )
+    assert any(
+        event.get("type") == "error"
+        and "stop after prior checkpoint was restored"
+        in event.get("message", "")
+        for event in events
+    )
+
+    db.expire_all()
+    saved = db.get(models.UploadJob, job.id)
+    assert saved.generation_checkpoint["stage"] == "post_type_assignment"
+    assert [
+        entry["stage"]
+        for entry in saved.generation_checkpoint["checkpoints"]
+    ] == ["post_type_assignment"]
+    assert saved.openai_usage.get("request_count", 0) == 0
+
+    status = client.get(f"/build-concepts/uploads/{job.id}").json()
+    assert status["checkpoint_stage"] == "post_type_assignment"
+    assert status["checkpoint_progress"] == 0.91
 
 
 def test_post_learning_preserves_invalid_checkpoint_and_requires_start_over(

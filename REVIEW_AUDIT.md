@@ -104,7 +104,7 @@ The coverage is end to end rather than prompt-only:
 ## Verification result
 
 On 2026-07-26, after the current PDF-driven hardening edits, the complete
-backend suite passed locally with **729 tests**. This verifies the encoded
+backend suite passed locally with **730 tests**. This verifies the encoded
 deterministic contracts together; it does not replace the fresh production-model
 samples required for semantic acceptance.
 
@@ -114,6 +114,29 @@ Progressions, Electricity, and Rise of Nationalism in Europe remain required.
 Each sample must start from its checked-in MMD source, retain/resume the same
 durable job after a late validation failure, export a workbook, and be inspected
 against every chapter-specific ID above.
+
+## Local HTTP and checkpoint evidence
+
+On application commit `6dabb961f1453896022cf7b57e254e7560764e47`, all
+three checked-in MMD sources were exercised through the real local HTTP health,
+directory lookup, upload, conversion, generation-stream, and job-status routes
+with isolated databases. Live providers were forcibly disabled. Arithmetic
+Progressions normalized to 40,098 characters, Electricity to 53,529, and Rise
+of Nationalism in Europe to 61,351. Every run recorded zero provider requests,
+zero tokens, and zero estimated cost.
+
+The deliberately primitive test-only dry generator does not emit production
+inventories, Types, or checkpoints. The strict deposit boundary correctly
+rejected its full-chapter output, so these runs are route and conversion smoke
+evidence only, not semantic acceptance samples.
+
+An API-level regression now covers the late-checkpoint failure itself. Through
+the streamed generation endpoint it loads a history containing a valid
+`post_type_assignment` checkpoint and an invalid `final_content_ready`
+checkpoint, rejects the 98% content, durably removes only that stage, restores
+the 91% stage in the same request, and confirms the surviving stage through the
+job-status endpoint. An OpenAI-call sentinel proves this recovery is
+provider-free.
 
 ## Residual risks and completion gate
 
@@ -129,7 +152,7 @@ against every chapter-specific ID above.
 
 Do not mark the PDF audit “all covered” until:
 
-1. the exact pushed commit retains the **729-test** result in CI;
+1. the exact pushed commit retains the **730-test** result in CI;
 2. fresh AP, Electricity, and RNE jobs complete from their repository MMD
    sources, with checkpoint resume exercised for any late failure;
 3. the exported workbooks are checked against all stable IDs above, including
