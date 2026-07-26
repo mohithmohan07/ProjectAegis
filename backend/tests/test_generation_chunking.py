@@ -235,9 +235,25 @@ def test_inventory_extraction_retries_sparse_chunks(monkeypatch):
     def fake_openai(system, user, **kw):
         calls["n"] += 1
         if calls["n"] == 1:
-            return {"items": [{"raw_task": "Q1"}, {"raw_task": "Q2"}]}
+            return {"items": [
+                {
+                    "raw_task": (
+                        f"Solve equation problem number {i} with every "
+                        "supplied condition."
+                    ),
+                }
+                for i in range(1, 3)
+            ]}
         assert "under-extraction" in user
-        return {"items": [{"raw_task": f"Q{i}"} for i in range(1, 13)]}
+        return {"items": [
+            {
+                "raw_task": (
+                    f"Solve equation problem number {i} with every supplied "
+                    "condition."
+                ),
+            }
+            for i in range(1, 13)
+        ]}
 
     monkeypatch.setattr(g, "_openai_json", fake_openai)
     # This test isolates density retry behavior; deterministic source anchors

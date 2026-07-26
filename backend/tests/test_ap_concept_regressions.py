@@ -1048,6 +1048,16 @@ def test_pipeline_restores_skeleton_method_rows_before_description_and_cleanup(
 
 
 def test_final_pipeline_restores_post_description_method_snapshot(monkeypatch):
+    monkeypatch.setattr(
+        g,
+        "_openai_json",
+        lambda system, *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError(
+                "all API stages in this regression must be mocked: "
+                + system[:80]
+            )
+        ),
+    )
     anchors = [
         {
             "anchor_id": "METHOD-AAAAAAAAAA",
@@ -1123,12 +1133,42 @@ def test_final_pipeline_restores_post_description_method_snapshot(monkeypatch):
     monkeypatch.setattr(
         g, "_ensure_method_worked_examples_via_api",
         lambda records, **kwargs: records)
+    source_question = (
+        "Derive and use the nth-term relation from the first term and common "
+        "difference, explaining each algebraic step."
+    )
+    inventory = {"items": [{
+        "qid": "QINV-0001",
+        "source_kind": "exercise",
+        "topic_hint": "nth Term of an AP",
+        "raw_task": source_question,
+    }], "stats": {"total_inventory_items": 1}}
+    mined_types = {"types": [{
+        "type_id": "TYPE-0001",
+        "type_title": "Apply the general-term derivation",
+        "topic_match_hint": "nth Term of an AP",
+        "concept_match_hint": "Deriving the General Term",
+        "placement_scope": "normal",
+        "source_question_ids": ["QINV-0001"],
+        "case_prompts": [{
+            "case_id": "CASE-0001",
+            "case_title": (
+                "Given a first term and common difference, derive and use a "
+                "requested term"
+            ),
+            "placement_scope": "normal",
+            "examples": [{
+                "source_question_id": "QINV-0001",
+                "example_prompt": source_question,
+            }],
+        }],
+    }]}
     monkeypatch.setattr(
         g, "_extract_question_task_inventory_via_api",
-        lambda **kwargs: g._empty_inventory())
+        lambda **kwargs: inventory)
     monkeypatch.setattr(
         g, "_mine_types_from_inventory_via_api",
-        lambda **kwargs: {"types": []})
+        lambda **kwargs: mined_types)
     monkeypatch.setattr(
         g, "_build_culminations_via_api",
         lambda records, **kwargs: g._ensure_culmination_rows(records))
@@ -1142,11 +1182,17 @@ def test_final_pipeline_restores_post_description_method_snapshot(monkeypatch):
         target["concept_details"] = g._inject_types(
             target["concept_details"],
             "Type 01: Apply the general-term derivation "
-            "Case 01: Derive and use a requested term.",
+            "Case 01: Given a first term and common difference, derive and use "
+            f"a requested term Example 01: {source_question}",
         )
         return out
 
     monkeypatch.setattr(g, "_assign_types_via_api", add_richer_final_types)
+    monkeypatch.setattr(
+        g,
+        "_assign_mined_types_via_api",
+        lambda records, **kwargs: add_richer_final_types(records),
+    )
     monkeypatch.setattr(
         g, "_merge_similar_concepts_via_api",
         lambda records, **kwargs: records)
@@ -1217,6 +1263,16 @@ def test_final_pipeline_restores_post_description_method_snapshot(monkeypatch):
 def test_final_boundary_salvages_short_case_reintroduced_by_later_pass(
     monkeypatch,
 ):
+    monkeypatch.setattr(
+        g,
+        "_openai_json",
+        lambda system, *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError(
+                "all API stages in this regression must be mocked: "
+                + system[:80]
+            )
+        ),
+    )
     full_question = (
         "Determine whether the real-life savings pattern 100, 150, 200, 250 "
         "forms an arithmetic progression and justify the answer."
@@ -1225,10 +1281,20 @@ def test_final_boundary_salvages_short_case_reintroduced_by_later_pass(
         "Find the next three terms after 21 when the common difference is 4."
     )
     inventory = {
-        "items": [{
-            "qid": "QINV-AP-0001",
-            "raw_task": full_question,
-        }],
+        "items": [
+            {
+                "qid": "QINV-AP-0001",
+                "source_kind": "exercise",
+                "topic_hint": "Arithmetic Progressions",
+                "raw_task": full_question,
+            },
+            {
+                "qid": "QINV-AP-0002",
+                "source_kind": "exercise",
+                "topic_hint": "Arithmetic Progressions",
+                "raw_task": other_question,
+            },
+        ],
     }
     normal = _row(
         "Arithmetic Progressions",
@@ -1648,9 +1714,9 @@ def test_type_assignment_rejects_wrong_ap_source_topic(monkeypatch):
         records, meta=g._metadata(subject="Mathematics"),
         mined_types=mined, max_attempts=2)
 
-    # Two constrained embedding attempts plus one semantic host-entailment
-    # review of the accepted placement.
-    assert calls["count"] == 3
+    # The accepted retry has one legal source-topic destination, so it is
+    # deterministically certified without an unnecessary second API review.
+    assert calls["count"] == 2
     assert "Finding a Finite AP Sum" not in out[0]["concept_details"]
     assert "Finding a Finite AP Sum" in out[1]["concept_details"]
     assert not g._mined_type_topic_violations(out, mined)

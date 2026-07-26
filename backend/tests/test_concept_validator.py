@@ -447,6 +447,33 @@ def test_validator_rejects_source_artifacts_and_bad_names():
     assert "source_artifact" in codes
 
 
+def test_description_section_references_are_errors_but_decimals_are_allowed():
+    report = cv.validate_concept_rows([
+        _rec(
+            "Section Leak",
+            "Description: Section 5.3 introduces the finite-sum rule.",
+        ),
+        _rec(
+            "Section Symbol Leak",
+            "Description: The derivation follows \u00a7 4.2 of the source.",
+        ),
+        _rec(
+            "Legitimate Decimals",
+            "Description: A 2.5 ohm resistor has cross-section 1.2 square "
+            "centimetres, and the scale factor is 1.5.",
+        ),
+    ])
+
+    section_errors = [
+        error for error in report["errors"]
+        if error["code"] == "section_number_in_description"
+    ]
+    assert {
+        (error["row_index"], error["severity"])
+        for error in section_errors
+    } == {(0, "error"), (1, "error")}
+
+
 def test_validator_rejects_copied_source_prose_only_in_descriptions():
     source = (
         "A nation state is built when people share a sense of collective "
@@ -542,6 +569,404 @@ def test_strict_type_hierarchy_requires_a_case_for_every_type_and_real_definitio
     generic_report = cv.validate_concept_rows(
         [generic_case], strict_type_hierarchy=True)
     assert "generic_case_definition" in _codes(generic_report)
+
+
+def test_strict_type_hierarchy_rejects_empty_task_container_case_titles():
+    generic_titles = [
+        "Use the given information",
+        "Answer the question",
+        "Checkpoint",
+        "Activity",
+        "Exercise 5.2",
+        "Source inventory task",
+        "Task container",
+        "Discuss",
+    ]
+    rows = [
+        _rec(
+            f"Generic Case {index}",
+            "Description: Voltage depends on current and resistance. // "
+            "Types: Type 01: Explaining voltage changes "
+            f"Case 01: {title} "
+            "Example 01: Explain how voltage changes when current doubles "
+            "at constant resistance.",
+        )
+        for index, title in enumerate(generic_titles)
+    ]
+
+    report = cv.validate_concept_rows(rows, strict_type_hierarchy=True)
+    generic_rows = {
+        error["row_index"] for error in report["errors"]
+        if error["code"] == "generic_case_definition"
+    }
+    assert generic_rows == set(range(len(generic_titles)))
+
+
+def test_strict_type_hierarchy_allows_a_meaningful_imperative_case_title():
+    row = _rec(
+        "Voltage Relationships",
+        "Description: Ohm's law relates voltage, current, and resistance. // "
+        "Types: Type 01: Explaining variable relationships "
+        "Case 01: Discuss why voltage changes with resistance "
+        "Example 01: Explain why the voltage across a resistor increases "
+        "when its resistance rises at constant current.",
+    )
+
+    report = cv.validate_concept_rows([row], strict_type_hierarchy=True)
+
+    assert not (
+        _codes(report)
+        & {"generic_case_definition", "case_question_not_definition"}
+    )
+
+
+def test_strict_type_hierarchy_rejects_obvious_case_example_family_mismatch():
+    rows = [
+        _rec(
+            "Resistor Combinations",
+            "Description: Resistor topology determines equivalent resistance. // "
+            "Types: Type 01: Equivalent-resistance calculations "
+            "Case 01: Series resistor combinations "
+            "Example 01: Calculate the equivalent resistance of 6 ohm and "
+            "3 ohm resistors connected in parallel.",
+        ),
+        _rec(
+            "Arithmetic Mean Tasks",
+            "Description: Arithmetic means divide an interval into equal "
+            "additive steps. // "
+            "Types: Type 01: Working with fixed endpoints "
+            "Case 01: Finding arithmetic means between fixed endpoints "
+            "Example 01: Construct an arithmetic progression with first "
+            "term 4 and common difference 3.",
+        ),
+        _rec(
+            "Aligned Resistor Combination",
+            "Description: Resistors in series carry the same current. // "
+            "Types: Type 01: Equivalent-resistance calculations "
+            "Case 01: Series resistor combinations "
+            "Example 01: Calculate the equivalent resistance of 6 ohm and "
+            "3 ohm resistors connected in series.",
+        ),
+    ]
+
+    report = cv.validate_concept_rows(rows, strict_type_hierarchy=True)
+    mismatch_rows = {
+        error["row_index"] for error in report["errors"]
+        if error["code"] == "case_example_semantic_mismatch"
+    }
+
+    assert mismatch_rows == {0, 1}
+
+
+def test_strict_type_hierarchy_rejects_empty_generic_and_duplicate_type_titles():
+    case = (
+        "Case 01: Given a linear equation, isolate its unknown using inverse "
+        "operations. Example 01: Solve 3x + 2 = 14."
+    )
+    report = cv.validate_concept_rows(
+        [
+            _rec(
+                "Empty Type Title",
+                f"Description: Linear equations preserve equality. // "
+                f"Types: Type 01: {case}",
+            ),
+            _rec(
+                "Generic Type Title",
+                f"Description: Linear equations preserve equality. // "
+                f"Types: Type 01: Source inventory task {case}",
+            ),
+            _rec(
+                "Duplicate Type Titles",
+                f"Description: Linear equations preserve equality. // "
+                f"Types: Type 01: Direct equations {case} "
+                f"Type 02: direct   equations. {case}",
+            ),
+        ],
+        strict_type_hierarchy=True,
+    )
+
+    assert "missing_type_definition" in {
+        error["code"] for error in report["errors"]
+        if error["row_index"] == 0
+    }
+    assert "generic_type_definition" in {
+        error["code"] for error in report["errors"]
+        if error["row_index"] == 1
+    }
+    assert "duplicate_type_definition" in {
+        error["code"] for error in report["errors"]
+        if error["row_index"] == 2
+    }
+
+    legacy_report = cv.validate_concept_rows([
+        _rec(
+            "Legacy Generic Type",
+            f"Description: Linear equations preserve equality. // "
+            f"Types: Type 01: Assessment pattern {case}",
+        ),
+    ])
+    assert "generic_type_definition" not in _codes(legacy_report)
+
+
+def test_strict_type_titles_are_unique_across_normal_concepts_in_each_topic():
+    def row(title, topic):
+        return _rec(
+            title,
+            "Description: An equation remains balanced when the same inverse "
+            "operation is applied to both sides. // "
+            "Types: Type 01: Solving by inverse operations "
+            "Case 01: Isolating an unknown with one inverse operation "
+            "Example 01: Solve 3x + 2 = 14.",
+            topic=topic,
+        )
+
+    report = cv.validate_concept_rows(
+        [
+            row("One-step Equations", "Linear Equations"),
+            row("Two-step Equations", "  linear   equations  "),
+            row("Quadratic Rearrangement", "Quadratic Equations"),
+        ],
+        strict_type_hierarchy=True,
+    )
+
+    duplicate_rows = [
+        error["row_index"] for error in report["errors"]
+        if error["code"] == "duplicate_type_definition"
+    ]
+    assert duplicate_rows == [1]
+
+
+def test_strict_type_hierarchy_rejects_all_named_generic_type_variants():
+    generic_titles = [
+        "Assessment pattern",
+        "Source inventory task",
+        "Answering checkpoint question",
+        "Practice",
+        "Questions",
+        "Problems",
+        "Examples",
+        "Exercises",
+    ]
+    rows = [
+        _rec(
+            f"Concept {index}",
+            "Description: The method has a reusable task structure. // "
+            f"Types: Type 01: {title} "
+            "Case 01: Given a new input, apply the method and justify each "
+            "step. Example 01: Apply the method to input 12 and explain the "
+            "result.",
+        )
+        for index, title in enumerate(generic_titles, start=1)
+    ]
+
+    report = cv.validate_concept_rows(rows, strict_type_hierarchy=True)
+
+    generic_rows = {
+        error["row_index"] for error in report["errors"]
+        if error["code"] == "generic_type_definition"
+    }
+    assert generic_rows == set(range(len(generic_titles)))
+
+
+def test_strict_mastery_requires_one_canonical_terminal_description_line():
+    valid_details = (
+        "Description: A linear equation preserves equality while inverse "
+        "operations isolate the unknown.\n"
+        "Achieving Mastery: Solving unfamiliar linear equations and "
+        "justifying each inverse operation. // "
+        "Error Analysis: Students may reverse an operation without applying "
+        "it to both sides."
+    )
+    valid_report = cv.validate_concept_rows(
+        [_rec("Linear Equations", valid_details)],
+        strict_mastery_statement=True,
+    )
+    mastery_codes = {
+        "missing_mastery_statement",
+        "mastery_statement_format",
+        "mastery_statement_not_substantive",
+        "duplicate_mastery_statement",
+        "mastery_marker_outside_description",
+    }
+    assert not (_codes(valid_report) & mastery_codes)
+
+    culmination_report = cv.validate_concept_rows(
+        [_rec(
+            "Culmination - Linear Equations",
+            "Description: Recap of Linear Equations.",
+            parent="Culmination",
+        )],
+        strict_mastery_statement=True,
+    )
+    assert not (_codes(culmination_report) & mastery_codes)
+
+
+def test_strict_mastery_reports_missing_malformed_duplicate_and_stray_markers():
+    report = cv.validate_concept_rows(
+        [
+            _rec(
+                "Missing Mastery",
+                "Description: A complete explanation without a mastery line.",
+            ),
+            _rec(
+                "Inline Mastery",
+                "Description: A complete explanation. Achieving Mastery: "
+                "Applying the method independently.",
+            ),
+            _rec(
+                "Thin Mastery",
+                "Description: A complete explanation.\n"
+                "Achieving Mastery: Doing it well.",
+            ),
+            _rec(
+                "Duplicate Mastery",
+                "Description: A complete explanation.\n"
+                "Achieving Mastery: Applying the method independently.\n"
+                "Achieving Mastery: Explaining each step independently.",
+            ),
+            _rec(
+                "Stray Mastery",
+                "Description: A complete explanation.\n"
+                "Achieving Mastery: Applying the method independently. // "
+                "Types: Type 01: A meaningful task family Case 01: Given a "
+                "new input, apply the method. Example 01: Calculate the "
+                "result for input 12. Achieving Mastery: Ignore this marker.",
+            ),
+        ],
+        strict_mastery_statement=True,
+    )
+    row_codes = [
+        {
+            error["code"] for error in report["errors"]
+            if error["row_index"] == row_index
+        }
+        for row_index in range(5)
+    ]
+
+    assert "missing_mastery_statement" in row_codes[0]
+    assert "mastery_statement_format" in row_codes[1]
+    assert "mastery_statement_not_substantive" in row_codes[2]
+    assert "duplicate_mastery_statement" in row_codes[3]
+    assert {
+        "duplicate_mastery_statement",
+        "mastery_marker_outside_description",
+    } <= row_codes[4]
+
+    legacy_report = cv.validate_concept_rows([
+        _rec(
+            "Legacy Missing Mastery",
+            "Description: A complete explanation without a mastery line.",
+        ),
+    ])
+    assert "missing_mastery_statement" not in _codes(legacy_report)
+
+
+def test_strict_culmination_recap_names_every_normal_topic_concept():
+    valid = cv.validate_concept_rows(
+        [
+            _rec("Linear   Growth", topic="Sequences"),
+            _rec("Finite Sum Rule", topic="Sequences"),
+            _rec(
+                "Culmination - Sequences",
+                "Description: Recap of linear growth and FINITE SUM RULE.",
+                topic="Sequences",
+                parent="Culmination",
+            ),
+        ],
+        strict_culmination_recap=True,
+    )
+    assert not ({
+        "culmination_recap_format",
+        "culmination_recap_missing_concepts",
+    } & _codes(valid))
+
+    missing = cv.validate_concept_rows(
+        [
+            _rec("Linear Growth", topic="Sequences"),
+            _rec("Finite Sum Rule", topic="Sequences"),
+            _rec(
+                "Culmination - Sequences",
+                "Description: Recap of Linear Growth.",
+                topic="Sequences",
+                parent="Culmination",
+            ),
+        ],
+        strict_culmination_recap=True,
+    )
+    assert "culmination_recap_missing_concepts" in _codes(missing)
+    missing_error = next(
+        error for error in missing["errors"]
+        if error["code"] == "culmination_recap_missing_concepts"
+    )
+    assert "Finite Sum Rule" in missing_error["message"]
+
+    malformed = cv.validate_concept_rows(
+        [
+            _rec("Linear Growth", topic="Sequences"),
+            _rec(
+                "Culmination - Sequences",
+                "Description: Summary of Linear Growth.",
+                topic="Sequences",
+                parent="Culmination",
+            ),
+        ],
+        strict_culmination_recap=True,
+    )
+    assert "culmination_recap_format" in _codes(malformed)
+
+    legacy = cv.validate_concept_rows([
+        _rec(
+            "Culmination - Sequences",
+            "Description: Recap",
+            topic="Sequences",
+            parent="Culmination",
+        ),
+    ])
+    assert "culmination_recap_format" not in _codes(legacy)
+
+
+def test_strict_culmination_recap_ignores_canonical_katex_wrappers():
+    title = r"Use the Finite-sum Formula S_n = \frac{n}{2}(a+l)"
+    report = cv.validate_concept_rows(
+        [
+            _rec(title, topic="Sequences"),
+            _rec(
+                f"Culmination - {title}",
+                "Description: Recap of Use the Finite-sum Formula "
+                r"[Katex] S_n = \frac{n}{2}(a+l) [/Katex].",
+                topic="Sequences",
+                parent="Culmination",
+            ),
+        ],
+        strict_culmination_recap=True,
+    )
+
+    assert "culmination_recap_missing_concepts" not in _codes(report)
+
+
+def test_strict_culmination_recap_does_not_count_nested_title_as_separate():
+    report = cv.validate_concept_rows(
+        [
+            _rec("Arithmetic Progression", topic="Sequences"),
+            _rec("Progression", topic="Sequences"),
+            _rec(
+                "Culmination - Sequences",
+                "Description: Recap of Arithmetic Progression.",
+                topic="Sequences",
+                parent="Culmination",
+            ),
+        ],
+        strict_culmination_recap=True,
+    )
+
+    error = next(
+        error for error in report["errors"]
+        if error["code"] == "culmination_recap_missing_concepts"
+    )
+    assert (
+        "Recap of Arithmetic Progression and Progression."
+        in error["message"]
+    )
 
 
 def test_strict_analysis_requires_one_exact_combined_section():

@@ -122,6 +122,165 @@ def test_plain_ascii_equations_require_katex(expression):
         f"Description: Apply [Katex] {expression} [/Katex] to solve the problem.")
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (
+            r"Example 01: Use a=10 and d=\frac{1}{2}.",
+            r"Example 01: Use [Katex] a=10 [/Katex] and "
+            r"[Katex] d=\frac{1}{2} [/Katex].",
+        ),
+        (
+            r"Example 01: Sum \frac{1}{15}, \frac{1}{12}, \ldots.",
+            r"Example 01: Sum "
+            r"[Katex] \frac{1}{15}, \frac{1}{12}, \ldots [/Katex].",
+        ),
+        (
+            r"Hint: S_{x-1}=S_{49}-S_x.",
+            r"Hint: [Katex] S_{x-1}=S_{49}-S_x [/Katex].",
+        ),
+        (
+            r"Example 01: Invest at 8\% simple interest.",
+            r"Example 01: Invest at [Katex] 8\% [/Katex] simple interest.",
+        ),
+        (
+            r"Hint: Number of rungs = 250/25+1.",
+            r"Hint: Number of rungs = [Katex] 250/25+1 [/Katex].",
+        ),
+        (
+            r"Apply S_n=\frac{n}{2}[2a+(n-1)d].",
+            r"Apply [Katex] S_n=\frac{n}{2}[2a+(n-1)d] [/Katex].",
+        ),
+        (
+            r"Let \alpha_i identify the indexed value.",
+            r"Let [Katex] \alpha_i [/Katex] identify the indexed value.",
+        ),
+        (
+            r"Compute \frac{1}{2}^2.",
+            r"Compute [Katex] \frac{1}{2}^2 [/Katex].",
+        ),
+        (
+            r"Use x^\alpha in the rule.",
+            r"Use [Katex] x^\alpha [/Katex] in the rule.",
+        ),
+        (
+            r"Calculate a \times b.",
+            r"Calculate [Katex] a \times b [/Katex].",
+        ),
+    ],
+)
+def test_unwrapped_math_repair_preserves_hosted_source_fragments(
+    raw, expected,
+):
+    assert kr.rich_text_issues(raw)
+
+    repaired = kr.repair_unwrapped_math(raw)
+
+    assert repaired == expected
+    assert kr.rich_text_issues(repaired) == []
+    assert kr.unwrap_katex(repaired) == raw
+    assert kr.repair_unwrapped_math(repaired) == repaired
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (
+            r"Use a \frac{1}{2} scale.",
+            r"Use a [Katex] \frac{1}{2} [/Katex] scale.",
+        ),
+        (
+            r"Use a \theta angle.",
+            r"Use a [Katex] \theta [/Katex] angle.",
+        ),
+        (
+            r"Call \theta a variable.",
+            r"Call [Katex] \theta [/Katex] a variable.",
+        ),
+    ],
+)
+def test_unwrapped_math_repair_keeps_whitespace_separated_prose_atoms_out(
+    raw, expected,
+):
+    repaired = kr.repair_unwrapped_math(raw)
+
+    assert repaired == expected
+    assert kr.rich_text_issues(repaired) == []
+    assert kr.unwrap_katex(repaired) == raw
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        r"\alpha_i",
+        r"\frac{1}{2}^2",
+        r"x^\alpha",
+        r"a \times b",
+        r"a + \frac{1}{2}",
+        "a=10",
+        "250/25+1",
+        r"  \theta  ",
+    ],
+)
+def test_unambiguous_math_expression_accepts_one_complete_range(expression):
+    assert kr.is_unambiguous_math_expression(expression)
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "",
+        "quantities",
+        "a phrase",
+        r"a \frac{1}{2}",
+        r"\frac{1}{2} scale",
+        r"\frac{1}",
+    ],
+)
+def test_unambiguous_math_expression_rejects_prose_and_partial_math(
+    expression,
+):
+    assert not kr.is_unambiguous_math_expression(expression)
+
+
+def test_unwrapped_math_repair_protects_existing_markup_and_ambiguous_tex():
+    existing = (
+        r"Description: [Katex] \begin{aligned}a&=b\\c&=d\end{aligned} "
+        r"[/Katex] and `mode=active`."
+    )
+    assert kr.repair_unwrapped_math(existing) == existing
+
+    malformed = r"Description: Use \frac{1}{2 without a closing brace."
+    assert kr.repair_unwrapped_math(malformed) == malformed
+    assert "raw_latex" in kr.rich_text_issues(malformed)
+
+    for incomplete in (
+        r"Description: Use \frac{1}.",
+        r"Description: Use \left( x.",
+        r"Description: Use \begin{aligned} content.",
+    ):
+        assert kr.repair_unwrapped_math(incomplete) == incomplete
+        assert "raw_latex" in kr.rich_text_issues(incomplete)
+
+    with_url = (
+        r"Visit https://host.example/?x=10/2 and use \frac{1}{2}.")
+    url_repaired = kr.repair_unwrapped_math(with_url)
+    assert "https://host.example/?x=10/2" in url_repaired
+    assert (
+        r"use [Katex] \frac{1}{2} [/Katex]." in url_repaired
+    )
+
+
+def test_unwrapped_math_repair_handles_long_relations_iteratively():
+    raw = "Use " + "=".join([r"\alpha"] * 250) + "."
+
+    repaired = kr.repair_unwrapped_math(raw)
+
+    assert repaired.startswith(r"Use [Katex] \alpha=\alpha=")
+    assert repaired.endswith(r"\alpha [/Katex].")
+    assert kr.rich_text_issues(repaired) == []
+
+
 def test_key_value_and_inline_code_are_not_misclassified_as_equations():
     assert "raw_math_expression" not in kr.rich_text_issues(
         "Description: Set mode=active before continuing.")
@@ -452,6 +611,138 @@ def test_host_entailment_review_moves_case_to_supported_sibling(monkeypatch):
     )
     assert not result.get("CONCEPT-0001")
     assert result["CONCEPT-0002"][0]["type_id"] == "TYPE-0001"
+
+
+def test_host_entailment_review_fails_closed_without_a_complete_verdict(
+    monkeypatch,
+):
+    unit = _type(
+        "TYPE-0001",
+        "QINV-0001",
+        "Recover the input by reversing the supplied rule.",
+        title="Recovering an Input by Reversing a Rule",
+    )
+    concepts = [
+        {
+            "concept_id": "CONCEPT-0001",
+            "topic": "Methods",
+            "concept": "Method A",
+            "concept_description": "Apply the first supported procedure.",
+            "is_culmination": False,
+        },
+        {
+            "concept_id": "CONCEPT-0002",
+            "topic": "Methods",
+            "concept": "Method B",
+            "concept_description": "Apply the second supported procedure.",
+            "is_culmination": False,
+        },
+    ]
+    monkeypatch.setattr(
+        g, "_openai_json", lambda *_a, **_k: {"assignments": []})
+
+    with pytest.raises(
+        RuntimeError, match="did not certify every assignment unit"
+    ):
+        g._review_case_unit_hosts_via_api(
+            assignment_units=[unit],
+            per_concept={"CONCEPT-0001": [unit]},
+            concept_payload=concepts,
+            allowed_cids_by_tid={
+                "TYPE-0001": {"CONCEPT-0001", "CONCEPT-0002"},
+            },
+            meta={},
+        )
+
+
+def test_host_entailment_review_fails_closed_on_provider_error(monkeypatch):
+    unit = _type(
+        "TYPE-0001",
+        "QINV-0001",
+        "Recover the input by reversing the supplied rule.",
+        title="Recovering an Input by Reversing a Rule",
+    )
+    monkeypatch.setattr(
+        g,
+        "_openai_json",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            RuntimeError("provider unavailable")),
+    )
+
+    with pytest.raises(
+        RuntimeError, match="failed before a complete verdict"
+    ):
+        g._review_case_unit_hosts_via_api(
+            assignment_units=[unit],
+            per_concept={"CONCEPT-0001": [unit]},
+            concept_payload=[
+                {
+                    "concept_id": "CONCEPT-0001",
+                    "topic": "Methods",
+                    "concept": "Method A",
+                    "concept_description": "Apply the first procedure.",
+                    "is_culmination": False,
+                },
+                {
+                    "concept_id": "CONCEPT-0002",
+                    "topic": "Methods",
+                    "concept": "Method B",
+                    "concept_description": "Apply the second procedure.",
+                    "is_culmination": False,
+                },
+            ],
+            allowed_cids_by_tid={
+                "TYPE-0001": {"CONCEPT-0001", "CONCEPT-0002"},
+            },
+            meta={},
+        )
+
+
+def test_host_entailment_review_preserves_unreviewed_activity_units(
+    monkeypatch,
+):
+    reviewed = _type(
+        "TYPE-0001",
+        "QINV-0001",
+        "Recover the input by reversing the supplied rule.",
+        title="Recovering an Input by Reversing a Rule",
+    )
+    activity = _type(
+        "TYPE-ACTIVITY",
+        "QINV-ACTIVITY",
+        "Record how the output changes as the input is varied.",
+        title="Observing a Rule",
+    )
+    activity["is_activity"] = True
+    concepts = [{
+        "concept_id": "CONCEPT-0001",
+        "topic": "Methods",
+        "concept": "Reversing and Observing Rules",
+        "concept_description": "Undo a rule and observe its input-output pairs.",
+        "is_culmination": False,
+    }]
+    monkeypatch.setattr(g, "_openai_json", lambda *_a, **_k: {
+        "assignments": [{
+            "type_id": "TYPE-0001",
+            "concept_id": "CONCEPT-0001",
+            "reason": "The concept explicitly teaches reversal.",
+        }],
+    })
+
+    result = g._review_case_unit_hosts_via_api(
+        assignment_units=[reviewed, activity],
+        per_concept={"CONCEPT-0001": [reviewed, activity]},
+        concept_payload=concepts,
+        allowed_cids_by_tid={
+            "TYPE-0001": {"CONCEPT-0001"},
+            "TYPE-ACTIVITY": {"CONCEPT-0001"},
+        },
+        meta={},
+    )
+
+    assert [
+        unit["type_id"] for unit in result["CONCEPT-0001"]
+    ] == ["TYPE-0001", "TYPE-ACTIVITY"]
 
 
 def test_derivation_concept_receives_a_relevant_worked_example(monkeypatch):

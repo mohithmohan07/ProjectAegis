@@ -107,8 +107,53 @@ _ORPHAN_ANALYSIS_PREFIX_RE = re.compile(
     r"(?im)^[ \t]*Misconceptions?[ \t]*/[ \t]*(?=\r?$|\r?\n|//)",
 )
 _GENERIC_CASE_DEFINITION_RE = re.compile(
-    r"^(?:practice(?:\s+set)?|questions?|problems?|examples?|"
-    r"applications?|exercise(?:\s+set)?|case\s+study)\.?$",
+    r"^(?:"
+    r"(?:practice(?:\s+(?:sets?|tasks?|questions?|problems?|examples?|"
+    r"exercises?))?|questions?|problems?|examples?|applications?|"
+    r"case\s+stud(?:y|ies))|"
+    r"(?:(?:source|inventory|textbook|chapter|classroom|assessment|review|"
+    r"practice|given|following)\s+)*(?:checkpoints?|activit(?:y|ies)|exercises?|tasks?|"
+    r"prompts?|questions?|problems?)(?:\s+(?:labels?|containers?|sets?|"
+    r"tasks?|prompts?|questions?|problems?))?(?:\s+\d+(?:\.\d+)*)?|"
+    r"(?:use|apply)\s+(?:only\s+)?(?:the\s+)?"
+    r"(?:given|provided|following|above)\s+"
+    r"(?:information|data|details|facts|material|passage|source)|"
+    r"(?:answer|respond\s+to)\s+(?:the\s+)?"
+    r"(?:(?:given|provided|following|above)\s+)?(?:questions?|prompts?)|"
+    r"(?:complete|attempt|do|work\s+through)\s+(?:the\s+)?"
+    r"(?:(?:given|provided|following|above)\s+)?"
+    r"(?:activit(?:y|ies)|exercises?|tasks?|questions?|prompts?)|"
+    r"(?:discuss|think\s+and\s+discuss|let\s+us\s+discuss)"
+    r")$",
+    re.IGNORECASE,
+)
+_CASE_TITLE_INTERROGATIVE_RE = re.compile(
+    r"^(?:what|why|how|who|when|where|which)\b",
+    re.IGNORECASE,
+)
+_CASE_TITLE_SOURCE_DETAIL_RE = re.compile(
+    r"(?:\d|[=+*/^÷×]|[A-Za-z]\s*-\s*\d|"
+    r"['\"][^'\"]{3,}['\"]|\[(?:Katex|img)\b)",
+    re.IGNORECASE,
+)
+_GENERIC_TYPE_DEFINITION_RE = re.compile(
+    r"^(?:assessment\s+patterns?|source\s+inventory\s+tasks?|"
+    r"answering\s+(?:a\s+)?checkpoint\s+questions?|"
+    r"practice(?:\s+(?:sets?|questions?|problems?|examples?|exercises?))?|"
+    r"questions?|problems?|examples?|exercises?)$",
+    re.IGNORECASE,
+)
+_MASTERY_MARKER_RE = re.compile(
+    r"\b(?:achieving\s+mastery|mastery(?:\s+indicators?)?)\s*[:\-]",
+    re.IGNORECASE,
+)
+_CANONICAL_MASTERY_LINE_RE = re.compile(
+    r"\nAchieving Mastery: (?P<statement>[^\r\n]+)$",
+)
+_GENERIC_MASTERY_STATEMENT_RE = re.compile(
+    r"^(?:applying|using|understanding|mastering|doing)\s+"
+    r"(?:the|this)\s+(?:concept|topic|idea|material)"
+    r"(?:\s+correctly|\s+well|\s+independently)?\.?$",
     re.IGNORECASE,
 )
 _DESCRIPTION_LABEL_RE = re.compile(r"\bDescription\s*:", re.IGNORECASE)
@@ -125,8 +170,67 @@ _EMPTY_IMAGE_ALT_RE = re.compile(
     re.IGNORECASE,
 )
 _DESCRIPTION_SECTION_REF_RE = re.compile(
-    r"(?:\bsections?\s+|§\s*)\d+(?:\.\d+)+\b",
+    r"(?:(?<![-\w])(?<!cross\s)(?:chapter\s+)?"
+    r"sections?\s+(?:no\.?\s*)?|"
+    r"(?<!\w)\u00a7\s*)\d+(?:\.\d+)*(?![\d.])",
     re.IGNORECASE,
+)
+
+# Strict Case titles and their numbered Examples should describe the same
+# reusable variation. These dimensions intentionally cover only strongly
+# mutually exclusive families. A dimension is ignored whenever either side
+# names both families (for example, a comparison of series and parallel
+# circuits), which keeps the check conservative and extensible.
+_CASE_EXAMPLE_SEMANTIC_DIMENSIONS = (
+    (
+        "connection topology",
+        (
+            (
+                "series",
+                re.compile(
+                    r"\b(?:series\s+(?:(?:and|or|versus|vs\.?|/)\s+parallel|"
+                    r"connections?|combinations?|circuits?|"
+                    r"resistors?|arrangements?)|(?:resistors?|components?|"
+                    r"loads?|cells?|bulbs?|devices?)\s+(?:connected\s+)?"
+                    r"in\s+series|(?:connected|combined|arranged)\s+in\s+"
+                    r"series)\b",
+                    re.IGNORECASE,
+                ),
+            ),
+            (
+                "parallel",
+                re.compile(
+                    r"\b(?:parallel\s+(?:(?:and|or|versus|vs\.?|/)\s+series|"
+                    r"connections?|combinations?|circuits?|"
+                    r"resistors?|arrangements?)|(?:resistors?|components?|"
+                    r"loads?|cells?|bulbs?|devices?)\s+(?:connected\s+)?"
+                    r"in\s+parallel|(?:connected|combined|arranged)\s+in\s+"
+                    r"parallel)\b",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+    ),
+    (
+        "arithmetic-progression task family",
+        (
+            (
+                "arithmetic means",
+                re.compile(r"\barithmetic\s+means?\b", re.IGNORECASE),
+            ),
+            (
+                "progression construction",
+                re.compile(
+                    r"(?:\b(?:construct(?:ing|ion)?|form(?:ing|ation)?|"
+                    r"build(?:ing)?|generat(?:e|ing|ion)|creat(?:e|ing|ion)|"
+                    r"write)\b.{0,80}\b(?:arithmetic\s+progressions?|"
+                    r"a\.?p\.?)(?!\w)|\b(?:arithmetic\s+progressions?|"
+                    r"a\.?p\.?)\s+construction\b)",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+    ),
 )
 # With embedded Mathpix images, figure/table references are legitimate content
 # ("Refer fig. 11.1" next to its image URL); only textual pointers to unshipped
@@ -298,6 +402,64 @@ def _norm(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").strip().lower())
 
 
+def _normalized_case_definition(value: str) -> str:
+    """Normalize presentation-only Case-title differences for strict checks."""
+    normalized = unicodedata.normalize("NFKC", value or "")
+    return _norm(normalized).strip(" .,:;!?-")
+
+
+def _is_generic_case_definition(value: str) -> bool:
+    """Return whether a Case title is an empty task/container label."""
+    return bool(
+        _GENERIC_CASE_DEFINITION_RE.fullmatch(
+            _normalized_case_definition(value)
+        )
+    )
+
+
+def _case_title_is_raw_question(value: str) -> bool:
+    """Distinguish source questions from meaningful imperative task families."""
+    title = re.sub(
+        r"\s+", " ", unicodedata.normalize("NFKC", value or "")
+    ).strip()
+    if not title:
+        return False
+    if title.endswith("?") or _CASE_TITLE_INTERROGATIVE_RE.match(title):
+        return True
+    # An imperative with concrete source values is a one-off question
+    # ("Solve 3x + 2 = 14"). An assessable but reusable imperative such as
+    # "Discuss why voltage changes with resistance" remains a valid Case title.
+    return bool(
+        _CASE_RAW_QUESTION_RE.match(title)
+        and _CASE_TITLE_SOURCE_DETAIL_RE.search(title)
+    )
+
+
+def _case_example_semantic_mismatches(
+    case_title: str, example: str,
+) -> list[tuple[str, str, str]]:
+    """Return only unambiguous mutually-exclusive Case/Example family pairs."""
+    title = unicodedata.normalize("NFKC", case_title or "")
+    example_text = unicodedata.normalize("NFKC", example or "")
+    mismatches: list[tuple[str, str, str]] = []
+    for dimension, families in _CASE_EXAMPLE_SEMANTIC_DIMENSIONS:
+        title_families = [
+            label for label, pattern in families if pattern.search(title)
+        ]
+        example_families = [
+            label for label, pattern in families if pattern.search(example_text)
+        ]
+        if (
+            len(title_families) == 1
+            and len(example_families) == 1
+            and title_families[0] != example_families[0]
+        ):
+            mismatches.append(
+                (dimension, title_families[0], example_families[0])
+            )
+    return mismatches
+
+
 def _normalized_figure_id(value: str) -> str:
     """Normalize a Figure identifier while retaining decimal/suffix meaning."""
     return re.sub(
@@ -377,6 +539,43 @@ def _description_text(details: str) -> str:
         if label.lower().startswith("description"):
             return content.strip()
     return ""
+
+
+def _type_definition(type_body: str) -> str:
+    """Return the reusable Type title before its first Case."""
+    case_match = _CASE_ANY_RE.search(type_body or "")
+    value = (
+        type_body[:case_match.start()]
+        if case_match else type_body
+    )
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _normalized_type_definition(value: str) -> str:
+    """Normalize superficial Type-title differences for duplicate checks."""
+    normalized = unicodedata.normalize("NFKC", value or "")
+    return _norm(normalized).rstrip(" .,:;!?")
+
+
+def _is_substantive_mastery_statement(value: str) -> bool:
+    """Reject empty, placeholder, or generic final mastery claims."""
+    statement = re.sub(r"\s+", " ", value or "").strip()
+    words = re.findall(r"\w+", statement, re.UNICODE)
+    return bool(
+        len(words) >= 4
+        and len(statement) >= 12
+        and _norm(statement).rstrip(".") not in PLACEHOLDERS
+        and not _GENERIC_MASTERY_STATEMENT_RE.fullmatch(statement)
+    )
+
+
+def _normalized_recap_text(value: str) -> str:
+    """Normalize only presentation wrappers for exact recap comparison."""
+    value = re.sub(r"\[/?Katex\]", " ", value or "", flags=re.IGNORECASE)
+    value = re.sub(r"\[img\b[^\]]*\]", " ", value, flags=re.IGNORECASE)
+    value = unicodedata.normalize("NFKC", value)
+    value = _norm(value)
+    return re.sub(r"\s+([,;:.!?])", r"\1", value)
 
 
 def _source_word_windows(source_text: str, *, width: int = 18) -> set[str]:
@@ -682,17 +881,86 @@ def _example_too_short(example_text: str) -> bool:
     )
 
 
-def _case_example_too_short(case_text: str) -> bool:
+def _allowed_source_example_spans(
+    case_text: str, allowed_source_examples: Collection[str],
+) -> list[tuple[int, int]]:
+    """Locate exact source prompts so their internal labels stay content."""
+    spans: list[tuple[int, int]] = []
+    for source in allowed_source_examples:
+        raw = str(source or "")
+        canonical = katex_rules.canonicalize_rich_text(raw)
+        candidates = {
+            re.sub(r"\s+", " ", value).strip()
+            for value in (
+                raw,
+                canonical,
+                katex_rules.repair_unwrapped_math(canonical),
+            )
+            if value
+        }
+        for candidate in candidates:
+            if not candidate:
+                continue
+            for match in re.finditer(
+                re.escape(candidate), case_text, re.IGNORECASE
+            ):
+                spans.append(match.span())
+    return spans
+
+
+def _structural_example_markers(
+    case_text: str, allowed_source_examples: Collection[str],
+) -> list[re.Match]:
+    """Return Case-level markers, excluding labels quoted inside source text."""
+    source_spans = _allowed_source_example_spans(
+        case_text, allowed_source_examples)
+    return [
+        marker
+        for marker in _EXAMPLE_MARKER_RE.finditer(case_text)
+        if not any(
+            start <= marker.start() < end
+            for start, end in source_spans
+        )
+    ]
+
+
+def _case_examples(
+    case_text: str, markers: Collection[re.Match],
+) -> list[str]:
+    """Split a Case on already-classified structural Example markers."""
+    marker_list = list(markers)
+    return [
+        case_text[
+            marker.end():
+            marker_list[index + 1].start()
+            if index + 1 < len(marker_list)
+            else len(case_text)
+        ].strip()
+        for index, marker in enumerate(marker_list)
+        if case_text[
+            marker.end():
+            marker_list[index + 1].start()
+            if index + 1 < len(marker_list)
+            else len(case_text)
+        ].strip()
+    ]
+
+
+def _case_example_too_short(
+    case_text: str, allowed_source_examples: Collection[str] = (),
+) -> bool:
     """A Case is 'Case NN: <sub-type definition> Example: <full question> ...'.
 
     When Example lines exist, each must carry a substantive untruncated
     question. Legacy cases carry the question directly in the Case text.
     """
-    parts = _EXAMPLE_SPLIT_RE.split(case_text or "")
-    examples = [p.strip() for p in parts[1:] if p.strip()]
+    case_text = case_text or ""
+    markers = _structural_example_markers(
+        case_text, allowed_source_examples)
+    examples = _case_examples(case_text, markers)
     if examples:
         return any(_example_too_short(ex) for ex in examples)
-    return _example_too_short(parts[0].strip() if parts else "")
+    return _example_too_short(case_text.strip())
 
 
 def _add(errors: list[dict], row_index: int, field: str, code: str,
@@ -715,6 +983,8 @@ def validate_concept_rows(
     allowed_source_examples: Collection[str] = (),
     strict_type_hierarchy: bool = False,
     strict_analysis_section: bool = False,
+    strict_mastery_statement: bool = False,
+    strict_culmination_recap: bool = False,
     source_text: str = "",
 ) -> dict:
     """Return a structured validation report for concept-map records."""
@@ -722,6 +992,7 @@ def validate_concept_rows(
     topic_title_counts: Counter[tuple[str, str]] = Counter()
     title_counts: Counter[str] = Counter()
     topic_rows: defaultdict[str, list[tuple[int, dict]]] = defaultdict(list)
+    topic_type_definition_rows: dict[tuple[str, str], int] = {}
     source_windows = _source_word_windows(source_text)
 
     for i, row in enumerate(rows):
@@ -789,6 +1060,50 @@ def validate_concept_rows(
         if len(_DESCRIPTION_LABEL_RE.findall(details)) > 1:
             _add(errors, i, "concept_details", "merged_description",
                  "cell contains multiple concepts' Description blocks")
+        if strict_mastery_statement and not is_culm:
+            description = _description_text(details)
+            description_markers = list(
+                _MASTERY_MARKER_RE.finditer(description)
+            )
+            all_markers = list(_MASTERY_MARKER_RE.finditer(details))
+            canonical_mastery = _CANONICAL_MASTERY_LINE_RE.search(
+                description
+            )
+            if not description_markers:
+                _add(
+                    errors, i, "concept_details",
+                    "missing_mastery_statement",
+                    "normal concept Description requires one terminal "
+                    "'Achieving Mastery: <substantive text>' line",
+                )
+            elif canonical_mastery is None:
+                _add(
+                    errors, i, "concept_details",
+                    "mastery_statement_format",
+                    "Achieving Mastery must be the final Description line in "
+                    "canonical '\\nAchieving Mastery: <text>' format",
+                )
+            elif not _is_substantive_mastery_statement(
+                    canonical_mastery.group("statement")):
+                _add(
+                    errors, i, "concept_details",
+                    "mastery_statement_not_substantive",
+                    "Achieving Mastery must state a substantive, "
+                    "concept-specific learner capability",
+                )
+            if len(all_markers) > 1:
+                _add(
+                    errors, i, "concept_details",
+                    "duplicate_mastery_statement",
+                    "normal concepts must contain exactly one mastery marker",
+                )
+            if len(all_markers) > len(description_markers):
+                _add(
+                    errors, i, "concept_details",
+                    "mastery_marker_outside_description",
+                    "mastery markers are allowed only at the end of "
+                    "Description",
+                )
         if _norm(details) in PLACEHOLDERS or any(
             f" {p} " in f" {_norm(details)} " for p in PLACEHOLDERS
         ):
@@ -956,7 +1271,6 @@ def validate_concept_rows(
                     errors, i, "concept_details",
                     "section_number_in_description",
                     "Description cites a textbook section number instead of the idea",
-                    "warning",
                 )
             copied_source = _verbatim_source_description_snippet(
                 desc, source_windows)
@@ -992,31 +1306,82 @@ def validate_concept_rows(
                 _add(errors, i, "concept_details", "case_without_type",
                      "Case labels require a Type label")
             if type_body and _TYPE_ANY_RE.search(type_body):
+                seen_type_definitions: set[str] = set()
                 for type_match in _TYPE_SEGMENT_RE.finditer(type_body):
-                    if not _CASE_ANY_RE.search(type_match.group("body") or ""):
+                    matched_type_body = type_match.group("body") or ""
+                    if not _CASE_ANY_RE.search(matched_type_body):
                         _add(
                             errors, i, "concept_details", "type_without_case",
                             "Every Type must contain at least one Case",
                         )
+                    if strict_type_hierarchy:
+                        type_definition = _type_definition(
+                            matched_type_body
+                        )
+                        normalized_definition = _normalized_type_definition(
+                            type_definition
+                        )
+                        if not type_definition:
+                            _add(
+                                errors, i, "concept_details",
+                                "missing_type_definition",
+                                "Each Type must have a meaningful title before "
+                                "its first Case",
+                            )
+                        elif _GENERIC_TYPE_DEFINITION_RE.fullmatch(
+                                normalized_definition):
+                            _add(
+                                errors, i, "concept_details",
+                                "generic_type_definition",
+                                "Type titles must name a meaningful reusable "
+                                "task family, not a generic assessment label",
+                            )
+                        if normalized_definition:
+                            if normalized_definition in seen_type_definitions:
+                                _add(
+                                    errors, i, "concept_details",
+                                    "duplicate_type_definition",
+                                    "Type definitions must be unique within "
+                                    "each concept row",
+                                )
+                            seen_type_definitions.add(normalized_definition)
+                            if topic and not is_culm:
+                                topic_definition_key = (
+                                    _norm(topic),
+                                    normalized_definition,
+                                )
+                                first_row = topic_type_definition_rows.get(
+                                    topic_definition_key
+                                )
+                                if first_row is not None and first_row != i:
+                                    _add(
+                                        errors, i, "concept_details",
+                                        "duplicate_type_definition",
+                                        "Type definitions must be unique across "
+                                        "normal concepts within each topic",
+                                    )
+                                else:
+                                    topic_type_definition_rows[
+                                        topic_definition_key
+                                    ] = i
             if type_body and (not _TYPE_RE.search(type_body) or not _CASE_RE.search(type_body)):
                 _add(errors, i, "concept_details", "types_format",
                      "Types must use zero-padded Type NN and Case NN labels")
             for case_match in _CASE_SEGMENT_RE.finditer(type_body or ""):
                 case_text = re.sub(r"\s+", " ", case_match.group(1)).strip()
-                if _case_example_too_short(case_text):
+                if _case_example_too_short(
+                    case_text, allowed_source_examples
+                ):
                     _add(errors, i, "concept_details", "short_case_example",
                          "Case examples should include the full source question/task")
                 if strict_type_hierarchy:
-                    markers = list(_EXAMPLE_MARKER_RE.finditer(case_text))
+                    markers = _structural_example_markers(
+                        case_text, allowed_source_examples)
                     case_title = (
                         case_text[:markers[0].start()].strip()
                         if markers else case_text.strip()
                     )
-                    examples = [
-                        value.strip()
-                        for value in _EXAMPLE_SPLIT_RE.split(case_text)[1:]
-                        if value.strip()
-                    ]
+                    examples = _case_examples(case_text, markers)
                     if not case_title:
                         _add(
                             errors, i, "concept_details",
@@ -1030,6 +1395,22 @@ def validate_concept_rows(
                             "Each Case must contain at least one numbered Example",
                         )
                     for example_index, example in enumerate(examples, start=1):
+                        for (
+                            dimension,
+                            case_family,
+                            example_family,
+                        ) in _case_example_semantic_mismatches(
+                            case_title, example
+                        ):
+                            _add(
+                                errors,
+                                i,
+                                "concept_details",
+                                "case_example_semantic_mismatch",
+                                "Case and Example name mutually exclusive "
+                                f"{dimension} families (Case: {case_family}; "
+                                f"Example {example_index}: {example_family})",
+                            )
                         figure_ids = _example_figure_ids(example)
                         if not figure_ids:
                             continue
@@ -1060,8 +1441,7 @@ def validate_concept_rows(
                             )
                     title_key = _norm(case_title)
                     if case_title and (
-                        case_title.endswith("?")
-                        or _CASE_RAW_QUESTION_RE.match(case_title)
+                        _case_title_is_raw_question(case_title)
                         or any(title_key == _norm(example) for example in examples)
                     ):
                         _add(
@@ -1070,8 +1450,7 @@ def validate_concept_rows(
                             "Case text must define a reusable variation; the "
                             "complete question belongs in a numbered Example",
                         )
-                    elif case_title and _GENERIC_CASE_DEFINITION_RE.fullmatch(
-                            case_title):
+                    elif case_title and _is_generic_case_definition(case_title):
                         _add(
                             errors, i, "concept_details",
                             "generic_case_definition",
@@ -1123,6 +1502,12 @@ def validate_concept_rows(
             (i, r) for i, r in indexed
             if not concept_refiner.is_culmination(r.get("concept_title") or r.get("concept") or "")
         ]
+        culms = [
+            (i, r) for i, r in indexed
+            if concept_refiner.is_culmination(
+                r.get("concept_title") or r.get("concept") or ""
+            )
+        ]
         repeated = concept_cleanup.detect_repeated_leading_phrase(
             [r.get("concept_title") or r.get("concept") or "" for _, r in normal]
         )
@@ -1133,11 +1518,37 @@ def validate_concept_rows(
                 if _norm(title) in affected:
                     _add(errors, i, "concept_title", "repeated_sibling_opener",
                          f"repeated leading phrase: {repeated['phrase']}")
-        if require_culmination and topic:
-            culms = [
-                (i, r) for i, r in indexed
-                if concept_refiner.is_culmination(r.get("concept_title") or r.get("concept") or "")
+        if strict_culmination_recap:
+            normal_titles = [
+                (row.get("concept_title") or row.get("concept") or "").strip()
+                for _, row in normal
             ]
+            normal_titles = [title for title in normal_titles if title]
+            expected_recap = concept_refiner.recap_text(normal_titles)
+            for culmination_index, culmination in culms:
+                recap = _description_text(
+                    culmination.get("concept_details")
+                    or culmination.get("concept_description")
+                    or ""
+                )
+                if not re.match(r"^Recap of\s+\S", recap):
+                    _add(
+                        errors, culmination_index, "concept_details",
+                        "culmination_recap_format",
+                        "culmination Description must begin with the detailed "
+                        "canonical form 'Recap of ...'",
+                    )
+                if (
+                    _normalized_recap_text(recap)
+                    != _normalized_recap_text(expected_recap)
+                ):
+                    _add(
+                        errors, culmination_index, "concept_details",
+                        "culmination_recap_missing_concepts",
+                        "culmination recap must exactly match the canonical "
+                        f"topic recap: {expected_recap}",
+                    )
+        if require_culmination and topic:
             if len(culms) != 1:
                 row_i = indexed[-1][0] if indexed else -1
                 _add(errors, row_i, "concept_title", "culmination_count",

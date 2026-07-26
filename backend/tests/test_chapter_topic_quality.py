@@ -532,7 +532,11 @@ def test_sync_chapter_topic_summary_falls_back_without_meta(db):
 
 def test_mastery_line_pass_completes_missing_rows(monkeypatch):
     records = [
-        _rec("Has One", "Description: body.\nAchieving Mastery: doing it right."),
+        _rec(
+            "Has One",
+            "Description: body.\nAchieving Mastery: Applying the relationship "
+            "accurately to unfamiliar problems.",
+        ),
         _rec("Missing One", "Description: body only. // Types: Type 01: X Case 01: q"),
         _rec("Culmination - T", "Description: Recap", parent="Culmination"),
     ]

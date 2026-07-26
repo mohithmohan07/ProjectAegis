@@ -640,6 +640,36 @@ def test_repeated_generic_checkpoint_labels_preserve_distinct_tasks():
     ]
 
 
+def test_repeated_numbered_question_labels_are_local_not_chapter_wide():
+    assert g._source_label_is_generic("Q U E S T I O N S Q1")
+    assert g._source_label_is_generic("Questions Q2")
+    assert not g._source_label_is_generic("Question 3")
+    assert not g._source_label_is_generic("EXERCISE 5.2 Q2")
+    assert not g._source_label_is_generic("Activity 11.1")
+
+    sections = _tracked_source_sections(
+        "Class 10 Chapter 5 Electricity.mmd")
+    anchors = g._source_task_anchors(sections)
+    refreshed = g._refresh_inventory_from_source_anchors(
+        g._empty_inventory(), sections)
+
+    assert len(anchors) == 60
+    assert len(refreshed["items"]) == 60
+    assert {
+        g._inventory_task_match_key(item) for item in refreshed["items"]
+    } == {
+        g._inventory_task_match_key(item) for item in anchors
+    }
+    repeated_q1 = [
+        item for item in refreshed["items"]
+        if item["source_label"] == "Q U E S T I O N S Q1"
+    ]
+    assert len(repeated_q1) == 6
+    assert len({
+        g._inventory_task_match_key(item) for item in repeated_q1
+    }) == 6
+
+
 def test_checkpoint_refresh_matches_mojibake_activity_rows_without_new_qids():
     """Old RNE checkpoints use generic Activity labels and damaged UTF-8."""
     opening = "In what way does this print（Fig．1） depict a utopian vision?"
@@ -891,6 +921,10 @@ def test_uploaded_electricity_activities_feed_types_and_hubs_with_visuals():
     assert all(re.search(
         r'\[img\s+src="https://[^"]+"\s+alt="[^"]+"\]', text)
                for text in rendered_visuals)
+    assert all(
+        not g.kr.rich_text_issues(g._compact_activity_hub_note(item))
+        for item in activities
+    )
 
 
 def test_tracked_rne_anchors_keep_question_boundaries_and_exact_figures():
@@ -979,7 +1013,9 @@ def test_tracked_electricity_inventory_counts_and_activity_figure_sets():
     ] == [f"Example 11.{number}" for number in range(1, 14)]
 
     expected = {
-        "Activity 11.1": ["11.2", "11.3"],
+        # Fig. 11.3 is the worked result of the graphing activity, not an
+        # input visual required by the learner task.
+        "Activity 11.1": ["11.2"],
         "Activity 11.2": ["11.4"],
         "Activity 11.3": ["11.5"],
         "Activity 11.4": ["11.6"],
@@ -989,6 +1025,54 @@ def test_tracked_electricity_inventory_counts_and_activity_figure_sets():
     for source_label, figure_ids in expected.items():
         item = next(item for item in anchors if item["source_label"] == source_label)
         _assert_exact_figure_attachment(item, registry, figure_ids)
+
+    example_11_7 = next(
+        item for item in anchors if item["source_label"] == "Example 11.7"
+    )
+    _assert_exact_figure_attachment(example_11_7, registry, ["11.9"])
+
+
+def test_tracked_electricity_activities_exclude_result_and_derivation_prose():
+    _sections, anchors = _attached_source_anchors(
+        "Class 10 Chapter 5 Electricity.mmd")
+    activities = {
+        item["source_label"]: item
+        for item in anchors
+        if item.get("_activity_origin")
+    }
+
+    assert "Plot a graph between" in activities["Activity 11.1"]["raw_task"]
+    assert "In this Activity, you will find" not in (
+        activities["Activity 11.1"]["raw_task"])
+    activity_11_1 = g._inventory_task_text(activities["Activity 11.1"])
+    assert "Fig. 11.3" not in activity_11_1
+    assert "straight line" not in activity_11_1.lower()
+    assert "this is Ohm's law" not in activity_11_1.lower()
+    assert "In this Activity we observe" not in (
+        activities["Activity 11.2"]["raw_task"])
+    assert "It is observed that" not in (
+        activities["Activity 11.3"]["raw_task"])
+    assert r"\begin{table}" not in activities["Activity 11.3"]["raw_task"]
+    assert "You will observe that" not in (
+        activities["Activity 11.5"]["raw_task"])
+    assert "It is observed that" not in (
+        activities["Activity 11.6"]["raw_task"])
+    assert all(
+        not g.kr.rich_text_issues(g._inventory_task_text(item))
+        for item in activities.values()
+    )
+
+
+def test_figure_panel_inheritance_does_not_capture_question_subparts():
+    prompt = (
+        "Use Fig. 11.9. Calculate (a) the total resistance, "
+        "(b) the current, and (c) the potential difference."
+    )
+
+    assert g._figure_reference_ids(prompt) == ["11.9"]
+    assert g._figure_reference_ids(
+        "Compare Fig. 14(a) and (b), then explain the change."
+    ) == ["14(a)", "14(b)"]
 
 
 def test_assessable_activity_can_appear_once_in_types_and_in_hub():
@@ -2743,6 +2827,82 @@ def test_structured_mcq_options_rebuild_the_same_question_only():
     assert item["normalized_task"] == item["raw_task"]
 
 
+def test_structured_mcq_options_replace_a_conflicting_existing_tail():
+    item = g._sanitize_inventory_item({
+        "source_kind": "mcq",
+        "raw_task": (
+            "Which term is prime? (A) 13 (B) 14 (C) 15 (D) 16"
+        ),
+        "options": [
+            {"label": "A", "text": "14"},
+            {"label": "B", "text": "15"},
+            {"label": "C", "text": "16"},
+            {"label": "D", "text": "17"},
+        ],
+    })
+    assert item["raw_task"] == (
+        "Which term is prime? (A) 14 (B) 15 (C) 16 (D) 17"
+    )
+    assert item["raw_task"].count("(A)") == 1
+    assert "(A) 13" not in item["raw_task"]
+
+
+def test_structured_options_never_truncate_lowercase_multipart_exercise():
+    prompt = (
+        "Answer both parts: (a) calculate the current; "
+        "(b) explain why it changes."
+    )
+    item = g._sanitize_inventory_item({
+        "source_kind": "exercise",
+        "raw_task": prompt,
+        "options": [
+            {"label": "A", "text": "Current doubles"},
+            {"label": "B", "text": "Current halves"},
+        ],
+    })
+
+    assert item["raw_task"] == prompt
+    assert item["options"] == []
+    assert g._mcq_option_tail("Choose one: (A) first (C) third") is None
+
+
+def test_anchor_merge_prefers_source_mcq_options_when_model_options_conflict():
+    model_item = {
+        "source_kind": "mcq",
+        "source_label": "Exercise 5.2 Q2(i)",
+        "raw_task": (
+            "Which term of the AP is 78? "
+            "(A) 13 (B) 14 (C) 15 (D) 16"
+        ),
+        "normalized_task": "Which term of the AP is 78?",
+    }
+    source_anchor = {
+        "source_kind": "mcq",
+        "source_label": "Exercise 5.2 Q2(i)",
+        "raw_task": (
+            "Which term of the AP is 78? "
+            "(A) 14 (B) 15 (C) 16 (D) 17"
+        ),
+        "normalized_task": "Which term of the AP is 78?",
+    }
+    merged = g._merge_source_task_anchors([model_item], [source_anchor])
+    assert len(merged) == 1
+    assert merged[0]["raw_task"] == source_anchor["raw_task"]
+    assert "(A) 13" not in merged[0]["raw_task"]
+
+
+def test_plain_container_headings_are_removed_but_real_imperatives_survive():
+    assert g._strip_public_source_heading(
+        "Discuss\nExplain why the current changes."
+    ) == "Explain why the current changes."
+    assert g._strip_public_source_heading(
+        "Activity: Explain why the current changes."
+    ) == "Explain why the current changes."
+    assert g._strip_public_source_heading(
+        "Discuss why the current changes with resistance."
+    ) == "Discuss why the current changes with resistance."
+
+
 def test_lettered_exercise_subparts_keep_one_parent_anchor():
     source = r"""
 \section*{1 Revolutions}
@@ -2912,6 +3072,15 @@ def test_final_checkpoint_missing_source_topic_resumes_from_prior_stage(
 
     monkeypatch.setattr(g, "_prepare_final_concept_content", finalize)
     monkeypatch.setattr(g, "_canonicalize_concept_rich_text", lambda rows: rows)
+    # This test isolates source-topic recovery. Resuming the older empty
+    # inventory now also refreshes deterministic task anchors and would
+    # legitimately run the focused Type-delta API pass; keep that independent
+    # contract out of this fixture.
+    monkeypatch.setattr(
+        g,
+        "_reconcile_resumed_mined_types",
+        lambda *args, **kwargs: {"types": []},
+    )
     monkeypatch.setattr(
         g,
         "_validate_final_or_raise",
@@ -2963,6 +3132,39 @@ def test_final_checkpoint_with_orphan_analysis_prefix_forces_final_repair():
     assert any("learner-analysis" in reason for reason in reasons)
 
 
+def test_final_checkpoint_same_label_with_truncated_task_forces_refresh():
+    source = (
+        "## Number Patterns\n"
+        "Example 1: Calculate the twentieth term of the arithmetic "
+        "progression 4, 9, 14, 19 and explain every substituted value.\n"
+    )
+    sections = g.parse_mmd_sections(source)
+    anchors = g._source_task_anchors(sections)
+    assert anchors
+    anchor = anchors[0]
+    checkpoint = g._make_concept_checkpoint(
+        "final_content_ready",
+        records=[],
+        question_task_inventory={"items": [{
+            "qid": "QINV-0001",
+            "source_kind": anchor.get("source_kind") or "worked_example",
+            "source_label": anchor["source_label"],
+            "topic_hint": anchor.get("topic_hint") or "Number Patterns",
+            "raw_task": "Calculate the twentieth term.",
+        }], "stats": {}},
+        mined_types={"types": []},
+        method_row_snapshot=[],
+    )
+
+    reasons = g._final_checkpoint_refresh_reasons(
+        checkpoint,
+        sections=sections,
+        source_topic_excerpts=g._group_source_topic_excerpts(sections),
+    )
+
+    assert any("truncated or stale" in reason for reason in reasons)
+
+
 def test_saved_final_checkpoint_reconciles_wrong_figure_tag_without_api(
     monkeypatch,
 ):
@@ -3012,10 +3214,29 @@ def test_saved_final_checkpoint_reconciles_wrong_figure_tag_without_api(
             "keywords": "culmination, allegory",
         },
     ]
+    inventory = {"items": [
+        {
+            "qid": "QINV-0001",
+            "source_kind": "diagram_task",
+            "topic_hint": "Visual Symbols",
+            "raw_task": (
+                "Refer to Fig. 18 and identify the national symbol."
+            ),
+        },
+            {
+                "qid": "QINV-0002",
+                "source_kind": "exercise",
+                "topic_hint": "Visual Symbols",
+                "_chapter_wide_task": True,
+                "raw_task": (
+                    "Compare the national symbols shown in the chapter."
+                ),
+        },
+    ], "stats": {}}
     checkpoint = g._make_concept_checkpoint(
         "final_content_ready",
         records=records,
-        question_task_inventory={"items": [], "stats": {}},
+        question_task_inventory=inventory,
         mined_types={"types": []},
         method_row_snapshot=[],
     )

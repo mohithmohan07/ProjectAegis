@@ -17,6 +17,21 @@ def _type_embedding_request(user: str) -> tuple[list[dict], list[dict]]:
     return concepts, types
 
 
+def _echo_type_host_review(user: str) -> dict:
+    """Certify the current constrained hosts in tests not about re-review."""
+    marker = "\n\nCURRENT CASE-SCOPED ASSIGNMENTS TO REVIEW:\n"
+    assert marker in user
+    review = json.loads(user.split(marker, 1)[1])["types"]
+    return {"assignments": [
+        {
+            "type_id": unit["type_id"],
+            "concept_id": unit["current_concept_id"],
+            "reason": "Test fixture retains the constrained placement.",
+        }
+        for unit in review
+    ]}
+
+
 def test_concepts_system_requires_numeric_types_guidance():
     system = g._concepts_system("Mathematics")
     assert "Extract ONLY a clean teachable concept skeleton" in system
@@ -284,6 +299,8 @@ def test_assign_mined_types_retries_until_all_covered(monkeypatch):
     calls = {"n": 0}
 
     def fake_openai(system, user, **kw):
+        if "CURRENT CASE-SCOPED ASSIGNMENTS TO REVIEW" in user:
+            return _echo_type_host_review(user)
         calls["n"] += 1
         if calls["n"] == 1:
             # First attempt only assigns one of the two Types.
@@ -316,6 +333,8 @@ def test_case_scoped_embedding_splits_formula_and_real_life_cases(monkeypatch):
     calls = []
 
     def fake_openai(system, user, **kw):
+        if "CURRENT CASE-SCOPED ASSIGNMENTS TO REVIEW" in user:
+            return _echo_type_host_review(user)
         concepts, units = _type_embedding_request(user)
         calls.append((concepts, units))
         assert "case-scoped assignment unit" in system
@@ -424,6 +443,8 @@ def test_case_scoped_embedding_splits_formula_and_real_life_cases(monkeypatch):
 
 def test_case_scoped_activity_units_defer_to_inventory_hub_pass(monkeypatch):
     def fake_openai(system, user, **kw):
+        if "CURRENT CASE-SCOPED ASSIGNMENTS TO REVIEW" in user:
+            return _echo_type_host_review(user)
         concepts, units = _type_embedding_request(user)
         assert len(units) == 2
         assert all(unit["is_activity"] is True for unit in units)
@@ -472,6 +493,8 @@ def test_case_scoped_activity_units_defer_to_inventory_hub_pass(monkeypatch):
 
 def test_single_case_embedding_keeps_original_type_id(monkeypatch):
     def fake_openai(system, user, **kw):
+        if "CURRENT CASE-SCOPED ASSIGNMENTS TO REVIEW" in user:
+            return _echo_type_host_review(user)
         _concepts, units = _type_embedding_request(user)
         assert len(units) == 1
         assert units[0]["type_id"] == "TYPE-0001"
@@ -550,6 +573,8 @@ def test_scoped_type_embedding_groups_topics_and_excludes_other_concepts(monkeyp
     calls = []
 
     def fake_openai(system, user, **kw):
+        if "CURRENT CASE-SCOPED ASSIGNMENTS TO REVIEW" in user:
+            return _echo_type_host_review(user)
         concepts, types = _type_embedding_request(user)
         calls.append((concepts, types))
         assert len({row["topic"] for row in concepts}) == 1
@@ -603,6 +628,8 @@ def test_scoped_type_embedding_retries_with_same_candidates_and_lands_ids_once(
     calls = []
 
     def fake_openai(system, user, **kw):
+        if "CURRENT CASE-SCOPED ASSIGNMENTS TO REVIEW" in user:
+            return _echo_type_host_review(user)
         concepts, types = _type_embedding_request(user)
         calls.append((concepts, types))
         if len(calls) == 1:
@@ -1219,6 +1246,8 @@ def test_single_item_fallback_preserves_source_image_topic_and_embeds(monkeypatc
     ]
 
     def fake_openai(system, user, **kwargs):
+        if "CURRENT CASE-SCOPED ASSIGNMENTS TO REVIEW" in user:
+            return _echo_type_host_review(user)
         concepts, types = _type_embedding_request(user)
         assert [concept["concept_id"] for concept in concepts] == ["CONCEPT-0002"]
         assert types[0]["topic_match_hint"] == "Geometric Constructions"
@@ -1482,6 +1511,8 @@ def test_assign_mined_types_can_place_types_on_culminations(monkeypatch):
     captured = []
 
     def fake_openai(system, user, **kw):
+        if "CURRENT CASE-SCOPED ASSIGNMENTS TO REVIEW" in user:
+            return _echo_type_host_review(user)
         concepts, types = _type_embedding_request(user)
         captured.append((concepts, types))
         target = next(
@@ -1537,6 +1568,8 @@ def test_cross_topic_synthesis_can_use_only_a_later_topic_culmination(
     candidate_ids: dict[str, list[str]] = {}
 
     def fake_openai(system, user, **kw):
+        if "CURRENT CASE-SCOPED ASSIGNMENTS TO REVIEW" in user:
+            return _echo_type_host_review(user)
         concepts, types = _type_embedding_request(user)
         unit = types[0]
         type_id = unit["type_id"]
@@ -1771,11 +1804,11 @@ def test_pipeline_resume_checkpoint_skips_expensive_gpt_stages(monkeypatch):
                 "concept_details": "Description: Recap",
                 "keywords": "",
             },
-        ],
-        "question_task_inventory": {
-            "items": [{"qid": "QINV-STUB", "raw_task": ""}],
-            "stats": {"total_inventory_items": 1},
-        },
+            ],
+            "question_task_inventory": {
+                "items": [],
+                "stats": {"total_inventory_items": 0},
+            },
         "mined_types": {"types": []},
         "method_row_snapshot": [],
     }
@@ -1984,7 +2017,12 @@ def test_final_content_checkpoint_skips_semantic_api_repair(monkeypatch):
 
     assert records
     assert validated
-    assert callbacks == []
+    # The semantic/API finalizer remains skipped, but an older terminal
+    # checkpoint is deterministically upgraded with mastery and culmination
+    # contracts and the repaired 98% payload is persisted once.
+    assert [item["stage"] for item in callbacks] == [
+        "final_content_ready",
+    ]
 
 
 def test_pre_learning_resume_after_audit_skips_draft_and_auditor(monkeypatch):
@@ -2069,9 +2107,43 @@ def test_pre_learning_resume_after_audit_skips_draft_and_auditor(monkeypatch):
 def test_concepts_pipeline_runs_types_assign(monkeypatch):
     monkeypatch.setattr(g.config, "use_live_generation", lambda: True)
     calls = []
+    source_question = (
+        "Solve 3x + 2 = 14 and justify each inverse operation used to isolate x."
+    )
+    inventory = {"items": [{
+        "qid": "QINV-0001",
+        "source_kind": "exercise",
+        "topic_hint": "Algebra",
+        "raw_task": source_question,
+    }], "stats": {"total_inventory_items": 1}}
+    mined_types = {"types": [{
+        "type_id": "TYPE-0001",
+        "type_title": "Solving linear equations with inverse operations",
+        "topic_match_hint": "Algebra",
+        "concept_match_hint": "Linear equations",
+        "placement_scope": "normal",
+        "source_question_ids": ["QINV-0001"],
+        "case_prompts": [{
+            "case_id": "CASE-0001",
+            "case_title": (
+                "Given a linear equation, isolate its unknown with inverse "
+                "operations"
+            ),
+            "placement_scope": "normal",
+            "examples": [{
+                "source_question_id": "QINV-0001",
+                "example_prompt": source_question,
+            }],
+        }],
+    }]}
 
     def fake_openai(system, user, **kw):
         calls.append(system[:40])
+        if "Assign every mined Type assignment unit" in system:
+            return {"assignments": [{
+                "concept_id": "CONCEPT-0001",
+                "type_ids": ["TYPE-0001"],
+            }]}
         if "description-only" in system.lower():
             return {"rows": [{
                 "topic": "Algebra", "concept": "Linear equations",
@@ -2087,13 +2159,11 @@ def test_concepts_pipeline_runs_types_assign(monkeypatch):
                 "topic": "Algebra", "concept": "Linear equations",
                 "concept_description": (
                     "Description: altered by model // "
-                    "Types: Type 01: One-step Case 01: Solve "
-                    "[Katex] x+2=5 [/Katex] by subtracting 2 from both sides. "
-                    "Case 02: Solve [Katex] x-3=1 [/Katex] by adding 3 to both sides. "
-                    "Type 02: Two-step Case 01: Solve [Katex] 2x+1=7 [/Katex] "
-                    "by undoing addition and multiplication. "
-                    "Case 02: Solve [Katex] 3x-2=4 [/Katex] "
-                    "by undoing subtraction and multiplication. "
+                    "Types: Type 01: Solving linear equations with inverse "
+                    "operations Case 01: Given a linear equation, isolate its "
+                    "unknown with inverse operations Example 01: "
+                    + source_question
+                    + " "
                     "// Misconception: wrong inverse op"
                 ),
                 "keywords": "linear",
@@ -2110,9 +2180,27 @@ def test_concepts_pipeline_runs_types_assign(monkeypatch):
         }]}
 
     monkeypatch.setattr(g, "_openai_json", fake_openai)
-    records = g.concepts_from_mmd("## Algebra\nSolve linear equations.", subject="Mathematics")
+    monkeypatch.setattr(
+        g,
+        "_repair_records_via_api",
+        lambda records, **kwargs: records,
+    )
+    monkeypatch.setattr(
+        g,
+        "_extract_question_task_inventory_via_api",
+        lambda **kwargs: inventory,
+    )
+    monkeypatch.setattr(
+        g,
+        "_mine_types_from_inventory_via_api",
+        lambda **kwargs: mined_types,
+    )
+    records = g.concepts_from_mmd(
+        "## Algebra\nExercise 1: " + source_question,
+        subject="Mathematics",
+    )
     assert any("description-only" in c.lower() for c in calls)
-    assert any("Types-only" in c for c in calls)
+    assert any("Assign every mined Type" in c for c in calls)
     assert "preserving equality" in records[0]["concept_details"]
     assert "altered by model" not in records[0]["concept_details"]
     assert g._has_meaningful_types(records[0]["concept_details"])
