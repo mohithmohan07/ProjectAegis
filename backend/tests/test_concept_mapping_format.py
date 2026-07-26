@@ -140,6 +140,57 @@ def test_deposit_applies_numbering_recap_titlecase_and_topic_columns(db):
     assert "_" not in row[7]
 
 
+def test_post_deposit_keeps_math_recap_rich_text_canonical(db):
+    from app.services import build_concepts
+
+    chapter = models.Chapter(
+        chapter_code="10CBMA_MathRecap",
+        board="CBSE",
+        grade="10",
+        subject="Mathematics",
+        unit="Mathematics Unit",
+        chapter_title="Math Recap",
+        chapter_display_name="Math Recap",
+    )
+    db.add(chapter)
+    db.commit()
+    raw_title = r"Use the Finite-sum Formula S_n = \frac{n}{2}(a+l)"
+    records = [
+        {
+            "topic": "Sequences",
+            "concept_title": raw_title,
+            "parent_concept": "Finite Sums",
+            "concept_details": (
+                "Description: The finite-sum formula combines the first and "
+                "last terms of an arithmetic progression. // Misconception/ "
+                "Error Analysis: Misconceptions: Students may believe the "
+                "factor n can be omitted.; Error Analysis: Students may "
+                "substitute the common difference for the last term."
+            ),
+            "keywords": "",
+        },
+        {
+            "topic": "Sequences",
+            "concept_title": f"Culmination - {raw_title}",
+            "parent_concept": "Culmination",
+            "concept_details": "Description: Recap",
+            "keywords": "",
+        },
+    ]
+
+    created, _merged = build_concepts._deposit_concepts(
+        db, chapter, records, "Post", "")
+    db.flush()
+
+    culmination = next(
+        concept for concept in (db.get(models.Concept, cid) for cid in created)
+        if concept.parent_concept == "Culmination"
+    )
+    assert "[Katex]" in culmination.concept_details
+    assert not build_concepts.generation.kr.rich_text_issues(
+        culmination.concept_details)
+
+
 def test_post_deposit_rejects_cases_without_numbered_examples(db):
     from app.services import build_concepts
 
@@ -177,6 +228,123 @@ def test_post_deposit_rejects_cases_without_numbered_examples(db):
     with pytest.raises(ValueError, match="case_without_example"):
         build_concepts._deposit_concepts(
             db, chapter, records, "Post", "")
+
+
+def test_post_deposit_treats_explicit_empty_inventory_as_closed_world(db):
+    from app.services import build_concepts
+
+    chapter = models.Chapter(
+        chapter_code="10CBMA_EmptyInventory",
+        board="CBSE",
+        grade="10",
+        subject="Mathematics",
+        unit="Algebra",
+        chapter_title="Explicit Empty Inventory",
+        chapter_display_name="Explicit Empty Inventory",
+    )
+    db.add(chapter)
+    db.commit()
+    records = [
+        {
+            "topic": "Linear Equations",
+            "parent_concept": "Equation Solving",
+            "concept_title": "Balancing Linear Equations",
+            "concept_details": (
+                "Description: A linear equation remains balanced when the same "
+                "valid operation is applied to both sides. // "
+                "Types: Type 01: Solving linear balance equations "
+                "Case 01: Isolate the unknown using inverse operations. "
+                "Example 01: Solve 3x + 5 = 20 and explain each balancing step. "
+                "// Misconception/ Error Analysis: Misconceptions: Students "
+                "may believe an operation applies to only one side.; Error "
+                "Analysis: Students may change a sign without performing the "
+                "same inverse operation on both sides."
+            ),
+            "keywords": "",
+        },
+        {
+            "topic": "Linear Equations",
+            "parent_concept": "Culmination",
+            "concept_title": "Culmination - Linear Equations",
+            "concept_details": "Description: Recap",
+            "keywords": "",
+        },
+    ]
+
+    with pytest.raises(
+        ValueError,
+        match=r"source_inventory_semantics; unexpected_examples=1",
+    ):
+        build_concepts._deposit_concepts(
+            db,
+            chapter,
+            records,
+            "Post",
+            "",
+            inventory={"items": [], "stats": {}},
+        )
+
+    assert not chapter.topics
+
+
+def test_post_deposit_without_inventory_uses_generation_fatal_policy(db):
+    from app.services import build_concepts
+
+    chapter = models.Chapter(
+        chapter_code="10CBSS_NoInventoryFatal",
+        board="CBSE",
+        grade="10",
+        subject="Social Science",
+        unit="History",
+        chapter_title="No Inventory Fatal Validation",
+        chapter_display_name="No Inventory Fatal Validation",
+    )
+    db.add(chapter)
+    db.commit()
+    copied_description = (
+        "National allegories transform abstract political communities into "
+        "recognizable female figures whose attributes help citizens identify "
+        "shared history ideals and collective belonging across generations."
+    )
+    records = [
+        {
+            "topic": "National Allegories",
+            "parent_concept": "Visual Nationalism",
+            "concept_title": "Representing the Nation",
+            "concept_details": (
+                f"Description: {copied_description} // "
+                "Misconception/ Error Analysis: Misconceptions: Students may "
+                "believe every allegory represents the same nation.; Error "
+                "Analysis: Students may name a figure without connecting its "
+                "attributes to the represented nation."
+            ),
+            "keywords": "",
+        },
+        {
+            "topic": "National Allegories",
+            "parent_concept": "Culmination",
+            "concept_title": "Culmination - National Allegories",
+            "concept_details": "Description: Recap",
+            "keywords": "",
+        },
+    ]
+
+    with pytest.raises(
+        ValueError,
+        match=r"concept validation failed before deposit: "
+              r"verbatim_source_description",
+    ):
+        build_concepts._deposit_concepts(
+            db,
+            chapter,
+            records,
+            "Post",
+            "",
+            inventory=None,
+            source_text=copied_description,
+        )
+
+    assert not chapter.topics
 
 
 def test_post_deposit_preserves_inventory_example_and_image_in_export(db):

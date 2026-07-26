@@ -68,10 +68,15 @@ def test_post_learning_failure_persists_and_resumes_type_checkpoint(
                 build_concepts.generation._CONCEPT_CHECKPOINT_SCHEMA),
         "stage": "pre_type_assignment",
         "records": [{"topic": "T", "concept_title": "C"}],
-        "question_task_inventory": {
-            "items": [{"qid": "QINV-0001", "raw_task": "Explain the source."}],
-            "stats": {"total_inventory_items": 1},
-        },
+            "question_task_inventory": {
+                "items": [{
+                    "qid": "QINV-0001",
+                    "raw_task": (
+                        "Explain how the source supports the stated conclusion."
+                    ),
+                }],
+                "stats": {"total_inventory_items": 1},
+            },
         "mined_types": {"types": [{"type_id": "TYPE-0001"}]},
         "method_row_snapshot": [],
     }
@@ -178,6 +183,54 @@ def test_checkpoint_without_inventory_does_not_erase_saved_inventory(
     saved = db.get(models.UploadJob, job.id)
     assert saved.question_inventory["items"][0]["qid"] == "QINV-KEEP"
     assert saved.question_inventory["mined_types"][0]["type_id"] == "TYPE-KEEP"
+
+
+def test_post_learning_discard_control_durably_clears_only_final_checkpoint(
+    db, first_chapter, monkeypatch,
+):
+    job = models.UploadJob(
+        module="build_concepts",
+        upload_type="document",
+        learning_kind="post",
+        filename="discard-final.mmd",
+        mmd_text="## Topic\nSource body",
+        status="converted",
+    )
+    db.add(job)
+    db.commit()
+
+    final = build_concepts.generation._make_concept_checkpoint(
+        "final_content_ready",
+        records=[{"topic": "T", "concept_title": "C"}],
+        question_task_inventory={"items": [], "stats": {}},
+        mined_types={"types": []},
+        method_row_snapshot=[],
+    )
+
+    def fail_after_discard(*args, checkpoint_callback=None, **kwargs):
+        assert checkpoint_callback is not None
+        checkpoint_callback(final)
+        checkpoint_callback({
+            "checkpoint_action": "discard_stage",
+            "stage": "final_content_ready",
+            "reason": "strict validation failed",
+        })
+        raise RuntimeError("fallback generation failed")
+
+    monkeypatch.setattr(
+        build_concepts.generation,
+        "concepts_from_mmd",
+        fail_after_discard,
+    )
+
+    with pytest.raises(RuntimeError, match="fallback generation failed"):
+        build_concepts.generate_post_learning(
+            db, job.id, first_chapter["id"])
+
+    db.expire_all()
+    saved = db.get(models.UploadJob, job.id)
+    assert saved.generation_checkpoint == {}
+    assert "Discarded invalid generation checkpoint" in saved.detail
 
 
 def test_post_learning_preserves_invalid_checkpoint_and_requires_start_over(
@@ -431,6 +484,74 @@ def test_checkpoint_history_falls_back_from_unknown_newer_stage():
     )
 
     assert restored["stage"] == "pre_type_assignment"
+
+
+def test_checkpoint_history_discard_control_removes_stage_and_mirrors_fallback():
+    common = {
+        "records": [{"concept_title": "C"}],
+        "question_task_inventory": {"items": [], "stats": {}},
+        "mined_types": {"types": []},
+        "method_row_snapshot": [],
+    }
+    post_assignment = build_concepts.generation._make_concept_checkpoint(
+        "post_type_assignment", **common)
+    final = build_concepts.generation._make_concept_checkpoint(
+        "final_content_ready", **common)
+    kwargs = {
+        "fingerprint": "stable-fingerprint",
+        "target_identity": {"chapter_title": "chapter"},
+        "target_chapter_id": 7,
+    }
+    envelope = build_concepts._merge_generation_checkpoint_history(
+        {}, post_assignment, **kwargs)
+    envelope = build_concepts._merge_generation_checkpoint_history(
+        envelope, final, **kwargs)
+
+    discarded = build_concepts._merge_generation_checkpoint_history(
+        envelope,
+        {
+            "checkpoint_action": "discard_stage",
+            "stage": "final_content_ready",
+            "reason": "strict validation failed",
+        },
+        **kwargs,
+    )
+
+    assert [
+        entry["stage"] for entry in discarded["checkpoints"]
+    ] == ["post_type_assignment"]
+    assert discarded["stage"] == "post_type_assignment"
+    assert discarded["progress"] == post_assignment["progress"]
+    assert all(
+        "checkpoint_action" not in entry
+        for entry in discarded["checkpoints"]
+    )
+
+
+def test_checkpoint_history_discard_only_stage_clears_durable_envelope():
+    final = build_concepts.generation._make_concept_checkpoint(
+        "final_content_ready",
+        records=[{"concept_title": "C"}],
+        question_task_inventory={"items": [], "stats": {}},
+        mined_types={"types": []},
+        method_row_snapshot=[],
+    )
+    kwargs = {
+        "fingerprint": "stable-fingerprint",
+        "target_identity": {"chapter_title": "chapter"},
+        "target_chapter_id": 7,
+    }
+    envelope = build_concepts._merge_generation_checkpoint_history(
+        {}, final, **kwargs)
+
+    assert build_concepts._merge_generation_checkpoint_history(
+        envelope,
+        {
+            "checkpoint_action": "discard_stage",
+            "stage": "final_content_ready",
+        },
+        **kwargs,
+    ) == {}
 
 
 def test_inventory_csv_download(client, db, first_chapter):

@@ -122,6 +122,483 @@ def test_final_validation_rejects_missing_source_inventory(monkeypatch):
         g._validate_final_or_raise(records, inventory=inventory)
 
 
+def _strict_normal_row(
+    *, question: str = "", hub: str = "",
+) -> dict:
+    types = (
+        " // Types: Type 01: Applying the current relationship "
+        "Case 01: Given current and resistance, determine the requested "
+        f"quantity Example 01: {question}"
+        if question else ""
+    )
+    hub_section = f" // Activity/Info Hub: {hub}" if hub else ""
+    return _row(
+        "Electric Current Relationship",
+        "Description: Electric current relates charge flow to time and can "
+        "be combined with resistance to reason about a circuit."
+        "\nAchieving Mastery: Selecting and applying the current relationship "
+        "with the supplied circuit quantities."
+        + hub_section
+        + types
+        + " // Misconception/ Error Analysis: Misconceptions: Students may "
+        "believe current is consumed as it moves through a circuit.; Error "
+        "Analysis: Students may swap the current and resistance values while "
+        "substituting into the relationship.",
+        topic="Electric Current",
+        parent="Circuit Quantities",
+    )
+
+
+def _strict_culmination(*, question: str = "") -> dict:
+    types = (
+        " // Types: Miscellaneous Type 01: Integrating circuit quantities "
+        "Case 01: Combine several circuit relationships in one task "
+        f"Example 01: {question}"
+        if question else ""
+    )
+    return _row(
+        "Culmination - Electric Current Relationship",
+        "Description: Recap of Electric Current Relationship." + types,
+        topic="Electric Current",
+        parent="Culmination",
+    )
+
+
+def test_final_validation_requires_mastery_and_detailed_culmination_recap():
+    missing_mastery = _strict_normal_row()
+    missing_mastery["concept_details"] = missing_mastery[
+        "concept_details"
+    ].replace(
+        "\nAchieving Mastery: Selecting and applying the current relationship "
+        "with the supplied circuit quantities.",
+        "",
+    )
+    with pytest.raises(RuntimeError, match="missing_mastery_statement"):
+        g._validate_final_or_raise(
+            [missing_mastery, _strict_culmination()])
+
+    bare_recap = _strict_culmination()
+    bare_recap["concept_details"] = "Description: Recap"
+    with pytest.raises(RuntimeError, match="culmination_recap_format"):
+        g._validate_final_or_raise(
+            [_strict_normal_row(), bare_recap])
+
+
+def test_final_validation_rejects_unowned_extra_example():
+    source_question = (
+        "Calculate the current when 12 coulombs of charge pass a point in "
+        "three seconds."
+    )
+    invented = (
+        "Invent a different circuit problem that does not appear in the "
+        "uploaded source."
+    )
+    row = _strict_normal_row(question=source_question)
+    row["concept_details"] = row["concept_details"].replace(
+        " // Misconception/ Error Analysis:",
+        " Example 02: " + invented + " // Misconception/ Error Analysis:",
+    )
+    inventory = {"items": [{
+        "qid": "QINV-0001",
+        "source_kind": "exercise",
+        "topic_hint": "Electric Current",
+        "raw_task": source_question,
+    }]}
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"source_inventory_semantics; unexpected_examples=1",
+    ):
+        g._validate_final_or_raise(
+            [row, _strict_culmination()],
+            inventory=inventory,
+        )
+
+
+def test_final_validation_rejects_extra_truncated_inventory_substring():
+    source_question = (
+        "Calculate the current when 12 coulombs of charge pass a point in "
+        "three seconds and explain each transformation."
+    )
+    shortened = (
+        "when 12 coulombs of charge pass a point in three seconds and explain "
+        "each transformation"
+    )
+    row = _strict_normal_row(question=source_question)
+    row["concept_details"] = row["concept_details"].replace(
+        " // Misconception/ Error Analysis:",
+        " Example 02: " + shortened + " // Misconception/ Error Analysis:",
+    )
+    inventory = {"items": [{
+        "qid": "QINV-0001",
+        "source_kind": "exercise",
+        "topic_hint": "Electric Current",
+        "raw_task": source_question,
+    }]}
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"source_inventory_semantics; unexpected_examples=1",
+    ):
+        g._validate_final_or_raise(
+            [row, _strict_culmination()],
+            inventory=inventory,
+        )
+
+
+def test_closed_inventory_allows_exact_fragments_from_inner_example_marker():
+    source_question = (
+        "Analyze this worked demonstration. Example: Calculate the current "
+        "when 12 coulombs pass in three seconds."
+    )
+    row = _strict_normal_row(question=source_question)
+    inventory = {"items": [{
+        "qid": "QINV-0001",
+        "source_kind": "exercise",
+        "topic_hint": "Electric Current",
+        "raw_task": source_question,
+    }]}
+
+    assert not g._unexpected_rendered_type_examples(
+        [row, _strict_culmination()],
+        inventory,
+    )
+    g._validate_final_or_raise(
+        [row, _strict_culmination()],
+        inventory=inventory,
+    )
+
+
+def test_strict_validator_ignores_inner_example_after_katex_repair():
+    raw_question = (
+        r"Analyze this worked demonstration. Example: Calculate "
+        r"\frac{1}{2}+\frac{1}{3} and explain the result."
+    )
+    rendered_question = g.kr.repair_unwrapped_math(
+        g.kr.canonicalize_rich_text(raw_question))
+    report = g.cv.validate_concept_rows(
+        [_strict_normal_row(question=rendered_question)],
+        allow_types=True,
+        allowed_source_examples=[raw_question],
+        strict_type_hierarchy=True,
+    )
+
+    assert "example_numbering" not in {
+        error["code"] for error in report["errors"]
+    }
+
+
+def test_closed_inventory_rejects_extra_duplicate_inner_example_fragment():
+    source_question = (
+        "Analyze this worked demonstration. Example: Calculate the current "
+        "when 12 coulombs pass in three seconds."
+    )
+    fragment = "Calculate the current when 12 coulombs pass in three seconds."
+    row = _strict_normal_row(question=source_question)
+    row["concept_details"] = row["concept_details"].replace(
+        " // Misconception/ Error Analysis:",
+        f" Example 02: {fragment} // Misconception/ Error Analysis:",
+    )
+    inventory = {"items": [{
+        "qid": "QINV-0001",
+        "source_kind": "exercise",
+        "topic_hint": "Electric Current",
+        "raw_task": source_question,
+    }]}
+
+    unexpected = g._unexpected_rendered_type_examples(
+        [row, _strict_culmination()],
+        inventory,
+    )
+
+    assert len(unexpected) == 1
+    assert unexpected[0]["reason"] == "not_in_inventory"
+
+
+def test_final_validation_rejects_normal_scope_type_on_culmination():
+    question = (
+        "Calculate the current when 12 coulombs of charge pass a point in "
+        "three seconds."
+    )
+    inventory = {"items": [{
+        "qid": "QINV-0001",
+        "source_kind": "exercise",
+        "topic_hint": "Electric Current",
+        "raw_task": question,
+    }]}
+    mined = {"types": [{
+        "type_id": "TYPE-0001",
+        "type_title": "Applying the current relationship",
+        "topic_match_hint": "Electric Current",
+        "concept_match_hint": "Electric Current Relationship",
+        "placement_scope": "normal",
+        "source_question_ids": ["QINV-0001"],
+        "case_prompts": [{
+            "case_id": "CASE-0001",
+            "case_title": (
+                "Given current and resistance, determine the requested "
+                "quantity"
+            ),
+            "placement_scope": "normal",
+            "examples": [{
+                "source_question_id": "QINV-0001",
+                "example_prompt": question,
+            }],
+        }],
+    }]}
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"source_inventory_semantics; .*type_hosts=1",
+    ):
+        g._validate_final_or_raise(
+            [_strict_normal_row(), _strict_culmination(question=question)],
+            inventory=inventory,
+            mined_types=mined,
+        )
+
+
+def test_final_validation_infers_normal_scope_without_mined_taxonomy():
+    question = (
+        "Calculate the current when 12 coulombs of charge pass a point in "
+        "three seconds."
+    )
+    inventory = {"items": [{
+        "qid": "QINV-0001",
+        "source_kind": "exercise",
+        "topic_hint": "Electric Current",
+        "raw_task": question,
+    }]}
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"source_inventory_semantics; .*type_hosts=1",
+    ):
+        g._validate_final_or_raise(
+            [_strict_normal_row(), _strict_culmination(question=question)],
+            inventory=inventory,
+            mined_types={"types": []},
+        )
+
+
+def test_final_validation_infers_same_topic_synthesis_without_mined_taxonomy():
+    question = (
+        "Compare multiple circuit concepts and explain how they interact."
+    )
+    inventory = {"items": [{
+        "qid": "QINV-0001",
+        "source_kind": "exercise",
+        "topic_hint": "Electric Current",
+        "raw_task": question,
+    }]}
+
+    g._validate_final_or_raise(
+        [_strict_normal_row(), _strict_culmination(question=question)],
+        inventory=inventory,
+        mined_types={"types": []},
+    )
+
+
+def test_final_validation_keeps_single_concept_comparison_off_culmination():
+    question = (
+        "Compare the resistance between different sections of the same "
+        "conductor and explain the result."
+    )
+    inventory = {"items": [{
+        "qid": "QINV-0001",
+        "source_kind": "exercise",
+        "topic_hint": "Electric Current",
+        "raw_task": question,
+    }]}
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"source_inventory_semantics; .*type_hosts=1",
+    ):
+        g._validate_final_or_raise(
+            [_strict_normal_row(), _strict_culmination(question=question)],
+            inventory=inventory,
+            mined_types={"types": []},
+        )
+
+
+def test_final_validation_requires_every_pure_activity_in_a_hub():
+    activity = (
+        "Connect the circuit, vary the resistance, and record the current for "
+        "each setting."
+    )
+    inventory = {"items": [{
+        "qid": "QINV-ACT-01",
+        "source_kind": "activity",
+        "source_label": "Activity 12.1",
+        "topic_hint": "Electric Current",
+        "raw_task": activity,
+    }]}
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"source_inventory_semantics; hub_contract=1",
+    ):
+        g._validate_final_or_raise(
+            [_strict_normal_row(), _strict_culmination()],
+            inventory=inventory,
+        )
+
+
+def test_activity_hub_normalization_removes_answer_and_stale_image():
+    correct_image = "https://cdn.example.test/current-circuit.png"
+    wrong_image = "https://cdn.example.test/unrelated-voltmeter.png"
+    activity = (
+        "Connect the circuit, vary the resistance, and record the current for "
+        "each setting."
+    )
+    inventory = {"items": [{
+        "qid": "QINV-ACT-01",
+        "source_kind": "activity",
+        "source_label": "Activity 12.1",
+        "topic_hint": "Electric Current",
+        "raw_task": activity,
+        "image_urls": [correct_image],
+        "_image_captions": {
+            correct_image: "Fig. 12.1 - variable-resistance circuit",
+        },
+        "_figure_images_resolved": True,
+    }]}
+    stale_hub = (
+        "Activity - Activity 12.1: The result proves that current decreases. "
+        f'[img src="{wrong_image}" alt="Fig. 12.2 - voltmeter"].'
+    )
+    row = _strict_normal_row(hub=stale_hub)
+    row["_activity_hub_qids"] = ["QINV-ACT-01"]
+
+    normalized = g._normalize_activity_hubs_from_inventory(
+        [row, _strict_culmination()], inventory)
+    hub = g.cr.activity_hub_body(normalized[0]["concept_details"])
+
+    assert "result proves" not in hub
+    assert wrong_image not in hub
+    assert correct_image in hub
+    assert normalized[0]["_activity_hub_qids"] == ["QINV-ACT-01"]
+    assert not g._hub_inventory_contract_violations(normalized, inventory)
+
+
+def test_empty_authoritative_hub_inventory_strips_stale_hub_content():
+    row = _strict_normal_row(
+        hub="Activity - stale task: Record an observation.")
+    row["_activity_hub_qids"] = ["QINV-STALE"]
+
+    normalized = g._normalize_activity_hubs_from_inventory(
+        [row, _strict_culmination()],
+        {"items": [], "stats": {}},
+    )
+
+    assert not g.cr.activity_hub_body(normalized[0]["concept_details"])
+    assert "_activity_hub_qids" not in normalized[0]
+
+
+def test_final_repair_options_include_every_terminal_strict_contract():
+    options = g._validation_options("final")
+
+    assert options["strict_type_hierarchy"] is True
+    assert options["strict_analysis_section"] is True
+    assert options["strict_mastery_statement"] is True
+    assert options["strict_culmination_recap"] is True
+
+
+def test_final_repair_loop_receives_type_and_stray_mastery_defects(
+    monkeypatch,
+):
+    question = (
+        "Calculate the current when 12 coulombs pass in three seconds."
+    )
+    bad = _strict_normal_row(question=question)
+    bad["concept_details"] = bad["concept_details"].replace(
+        "Applying the current relationship",
+        "Assessment pattern",
+        1,
+    ).replace(
+        " // Misconception/ Error Analysis:",
+        " Achieving Mastery: Ignore this stray marker. // "
+        "Misconception/ Error Analysis:",
+    )
+    repaired = _strict_normal_row(question=question)
+    prompts = []
+
+    def repair_api(_system, user, **_kwargs):
+        prompts.append(user)
+        return {"rows": [{
+            "topic": repaired["topic"],
+            "parent_concept": repaired["parent_concept"],
+            "concept": repaired["concept_title"],
+            "concept_description": repaired["concept_details"],
+            "keywords": repaired["keywords"],
+        }]}
+
+    monkeypatch.setattr(g, "_openai_json", repair_api)
+
+    out = g._repair_records_via_api(
+        [bad, _strict_culmination()],
+        meta={},
+        stage="final",
+        max_attempts=1,
+    )
+
+    assert len(prompts) == 1
+    assert "generic_type_definition" in prompts[0]
+    assert "mastery_marker_outside_description" in prompts[0]
+    assert out[0]["concept_details"] == repaired["concept_details"]
+
+
+def test_generic_mined_type_title_is_replaced_from_its_source_example():
+    source_question = (
+        "Calculate current from the supplied charge and elapsed time."
+    )
+    mined_type = {
+        "type_id": "TYPE-0001",
+        "type_title": "Assessment pattern",
+        "topic_match_hint": "Electric Current",
+        "concept_match_hint": "Electric Current Relationship",
+        "placement_scope": "normal",
+        "case_prompts": [{
+            "case_title": "Substitute charge and time",
+            "examples": [{"example_prompt": source_question}],
+        }],
+    }
+    body, next_number = g._mined_type_to_body(mined_type, 0)
+
+    assert next_number == 1
+    assert "Assessment pattern" not in body
+    assert "Type 01: Calculating Current from the Supplied Charge" in body
+    assert source_question in body
+    row = _strict_normal_row()
+    row["concept_details"] = row["concept_details"].replace(
+        " // Misconception/ Error Analysis:",
+        f" // Types: {body} // Misconception/ Error Analysis:",
+    )
+    assert not g._mined_type_topic_violations(
+        [row, _strict_culmination()],
+        {"types": [mined_type]},
+    )
+
+
+def test_generic_mined_type_title_supports_legacy_string_case_prompt():
+    source_question = (
+        "Calculate current from the supplied charge and elapsed time."
+    )
+    body, next_number = g._mined_type_to_body(
+        {
+            "type_title": "Assessment pattern",
+            "case_prompts": [source_question],
+        },
+        0,
+    )
+
+    assert next_number == 1
+    assert "Assessment pattern" not in body
+    assert "Type 01: Calculating Current from the Supplied Charge" in body
+    assert source_question in body
+
+
 def test_late_canonicalization_normalizes_common_mathpix_wrappers():
     records = [_row(
         "Reading a Source Figure",
@@ -467,10 +944,18 @@ def test_saved_final_checkpoint_repairs_rich_text_once_and_persists(
     ]
     raw_records[0]["source_evidence"] = "SRC-LOCKED-01"
     raw_records[0]["review_metadata"] = {"locked": True}
+    source_question = (
+        r"Calculate \frac{1}{2}+\frac{1}{3} and explain each transformation."
+    )
     checkpoint = g._make_concept_checkpoint(
         "final_content_ready",
         records=raw_records,
-        question_task_inventory={"items": [], "stats": {}},
+        question_task_inventory={"items": [{
+            "qid": "QINV-0001",
+            "source_kind": "exercise",
+            "topic_hint": "T",
+            "raw_task": source_question,
+        }], "stats": {}},
         mined_types={"types": []},
         method_row_snapshot=[],
     )
@@ -612,6 +1097,151 @@ def test_final_checkpoint_is_emitted_only_after_validation(monkeypatch):
     )
 
 
+def test_invalid_inventory_checkpoint_rewinds_before_question_inventory():
+    prior = g._make_concept_checkpoint(
+        "description_method_snapshot",
+        records=[_row(
+            "Prior valid concept",
+            "Description: A complete concept description.",
+            topic="T",
+            parent="P",
+        )],
+        method_row_snapshot=[],
+    )
+    invalid = g._make_concept_checkpoint(
+        "question_inventory",
+        records=prior["records"],
+        question_task_inventory={"items": [{
+            "qid": "QINV-0001",
+            "source_kind": "exercise",
+            "raw_task": "",
+        }], "stats": {}},
+        method_row_snapshot=[],
+    )
+    history = {
+        "checkpoint_format": g._CONCEPT_CHECKPOINT_FORMAT,
+        "schema_version": g._CONCEPT_CHECKPOINT_SCHEMA,
+        "checkpoints": [prior, invalid],
+    }
+
+    restored = g._newest_compatible_concept_checkpoint(history)
+
+    assert restored["stage"] == "description_method_snapshot"
+
+
+def test_inventory_extraction_retries_empty_or_stub_rows_before_checkpoint(
+    monkeypatch,
+):
+    chunk = {
+        "text": "Exercise 1. Calculate current from charge and elapsed time.",
+        "source_topic": "Electric Current",
+        "chapter_wide_tasks": False,
+    }
+    monkeypatch.setattr(
+        g, "_inventory_chunks_by_topic", lambda _sections: [chunk])
+    monkeypatch.setattr(g, "_source_task_anchors", lambda _sections: [])
+    monkeypatch.setattr(
+        g,
+        "_attach_explicit_figure_images",
+        lambda items, _sections: items,
+    )
+    responses = iter([
+        {"items": [{
+            "source_kind": "exercise",
+            "raw_task": "",
+        }]},
+        {"items": [{
+            "source_kind": "exercise",
+            "raw_task": (
+                "Calculate current from the supplied charge and elapsed time."
+            ),
+        }]},
+    ])
+    calls = []
+
+    def extract(*_args, **_kwargs):
+        calls.append(True)
+        return next(responses)
+
+    monkeypatch.setattr(g, "_openai_json", extract)
+
+    inventory = g._extract_question_task_inventory_via_api(
+        meta={}, sections=[{"heading": "Electric Current", "text": "body"}])
+
+    assert len(calls) == 2
+    assert g._invalid_inventory_items(inventory) == []
+    assert inventory["items"][0]["qid"] == "QINV-0001"
+
+
+def test_inventory_extraction_rejects_empty_correction_retry(monkeypatch):
+    chunk = {
+        "text": "Exercise 1. Calculate current from charge and elapsed time.",
+        "source_topic": "Electric Current",
+        "chapter_wide_tasks": False,
+    }
+    monkeypatch.setattr(
+        g, "_inventory_chunks_by_topic", lambda _sections: [chunk])
+    monkeypatch.setattr(g, "_source_task_anchors", lambda _sections: [])
+    responses = iter([
+        {"items": [{
+            "source_kind": "exercise",
+            "raw_task": "",
+        }]},
+        {"items": []},
+    ])
+    monkeypatch.setattr(
+        g, "_openai_json", lambda *_args, **_kwargs: next(responses))
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"0 substantive row\(s\) after retry",
+    ):
+        g._extract_question_task_inventory_via_api(
+            meta={},
+            sections=[{"heading": "Electric Current", "text": "body"}],
+        )
+
+
+def test_inventory_extraction_rejects_correction_retry_that_drops_valid_rows(
+    monkeypatch,
+):
+    chunk = {
+        "text": "Exercise list with ten source questions.",
+        "source_topic": "Electric Current",
+        "chapter_wide_tasks": False,
+    }
+    monkeypatch.setattr(
+        g, "_inventory_chunks_by_topic", lambda _sections: [chunk])
+    monkeypatch.setattr(g, "_source_task_anchors", lambda _sections: [])
+    first_items = [
+        {
+            "source_kind": "exercise",
+            "raw_task": (
+                f"Calculate the requested circuit quantity for source case {i}."
+            ),
+        }
+        for i in range(1, 10)
+    ]
+    first_items.append({"source_kind": "exercise", "raw_task": ""})
+    responses = iter([
+        {"items": first_items},
+        {"items": [{
+            "source_kind": "exercise",
+            "raw_task": (
+                "Calculate the requested circuit quantity for source case 1."
+            ),
+        }]},
+    ])
+    monkeypatch.setattr(
+        g, "_openai_json", lambda *_args, **_kwargs: next(responses))
+
+    with pytest.raises(RuntimeError, match=r"below the required 9"):
+        g._extract_question_task_inventory_via_api(
+            meta={},
+            sections=[{"heading": "Electric Current", "text": "body"}],
+        )
+
+
 def test_rejected_saved_final_falls_back_to_preceding_checkpoint(monkeypatch):
     details = (
         "Description: A complete concept description."
@@ -690,8 +1320,101 @@ def test_rejected_saved_final_falls_back_to_preceding_checkpoint(monkeypatch):
         "Culmination - General Term",
     ]]
     assert out[0]["concept_title"] == "Prior-stage concept"
-    assert [item["stage"] for item in emitted] == ["final_content_ready"]
-    assert emitted[0]["records"] == out
+    assert emitted[0] == {
+        "checkpoint_action": "discard_stage",
+        "stage": "final_content_ready",
+        "reason": "strict terminal validation failed",
+    }
+    assert emitted[1]["stage"] == "final_content_ready"
+    assert emitted[1]["records"] == out
+
+
+def test_final_checkpoint_with_partial_mined_metadata_remains_api_free(
+    monkeypatch,
+):
+    first = (
+        "Calculate the current when 12 coulombs of charge pass a point in "
+        "three seconds."
+    )
+    second = (
+        "Explain how current changes when the same charge passes in half the "
+        "time."
+    )
+    normal = _strict_normal_row(question=first)
+    normal["concept_details"] = normal["concept_details"].replace(
+        " // Misconception/ Error Analysis:",
+        f" Example 02: {second} // Misconception/ Error Analysis:",
+    )
+    inventory = {"items": [
+        {
+            "qid": "QINV-0001",
+            "source_kind": "exercise",
+            "topic_hint": "Electric Current",
+            "raw_task": first,
+        },
+        {
+            "qid": "QINV-0002",
+            "source_kind": "exercise",
+            "topic_hint": "Electric Current",
+            "raw_task": second,
+        },
+    ], "stats": {}}
+    mined_types = {"types": [{
+        "type_id": "TYPE-0001",
+        "type_title": "Applying the current relationship",
+        "topic_match_hint": "Electric Current",
+        "concept_match_hint": "Electric Current Relationship",
+        "placement_scope": "normal",
+        "source_question_ids": ["QINV-0001"],
+        "case_prompts": [{
+            "case_id": "CASE-0001",
+            "case_title": (
+                "Given charge and time, determine the resulting current"
+            ),
+            "placement_scope": "normal",
+            "examples": [{
+                "source_question_id": "QINV-0001",
+                "example_prompt": first,
+            }],
+        }],
+    }]}
+    checkpoint = g._make_concept_checkpoint(
+        "final_content_ready",
+        records=[normal, _strict_culmination()],
+        question_task_inventory=inventory,
+        mined_types=mined_types,
+        method_row_snapshot=[],
+    )
+    monkeypatch.setattr(
+        g,
+        "_reconcile_resumed_mined_types",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError(
+                "a final checkpoint must not synthesize missing mined Types"
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        g,
+        "_openai_json",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("a valid final checkpoint must remain API-free")
+        ),
+    )
+    emitted: list[dict] = []
+
+    out = g.concepts_from_mmd(
+        "# Electric Current\nCircuit quantities relate charge flow to time.",
+        subject="Physics",
+        live=True,
+        resume_checkpoint=checkpoint,
+        checkpoint_callback=emitted.append,
+    )
+
+    assert out
+    assert first in out[0]["concept_details"]
+    assert second in out[0]["concept_details"]
+    assert emitted == []
 
 
 def test_method_recovery_canonicalizes_raw_math_before_strict_validation(

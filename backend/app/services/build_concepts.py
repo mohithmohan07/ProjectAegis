@@ -138,7 +138,12 @@ def _deposit_concepts(
     # Misconceptions and/or Error Analysis, and add the deterministic fallback
     # only when a normal concept has neither.
     records = concept_validator.ensure_valid_learner_analysis(records)
-    if pre_post == "Post" and inventory:
+    if pre_post == "Post":
+        records = generation._ensure_mastery_lines_via_api(
+            records, meta={}, use_api=False)
+        records = generation._ensure_terminal_culmination_contract(records)
+        records = generation._canonicalize_concept_rich_text(records)
+    if pre_post == "Post" and inventory is not None:
         # A final-content checkpoint is intentionally restored without another
         # model call.  The deposit-only formatting pass above can still remove
         # or reshape an Example from that otherwise-valid checkpoint, though.
@@ -146,6 +151,8 @@ def _deposit_concepts(
         # deterministic boundary, before deciding whether deposit may proceed.
         # This uses the persisted inventory and mined placement hints only; it
         # never spends an API request or invents a question.
+        records = generation._normalize_activity_hubs_from_inventory(
+            records, inventory)
         records = generation._enforce_rendered_inventory_coverage(
             records, inventory, mined_types)
         records = concept_refiner.renumber_types_continuously(records)
@@ -187,6 +194,16 @@ def _deposit_concepts(
                 "question/task inventory topic placement failed before "
                 "deposit: " + ",".join(qids)
             )
+        try:
+            generation._validate_final_or_raise(
+                records,
+                stage="deposit",
+                inventory=inventory,
+                mined_types=mined_types,
+                source_text=source_text,
+            )
+        except RuntimeError as exc:
+            raise ValueError(str(exc)) from exc
     report = concept_validator.validate_concept_rows(
         records,
         allow_types=True,
@@ -196,28 +213,23 @@ def _deposit_concepts(
             inventory),
         strict_type_hierarchy=pre_post == "Post",
         strict_analysis_section=pre_post == "Post",
+        strict_mastery_statement=pre_post == "Post",
+        strict_culmination_recap=pre_post == "Post",
         source_text=source_text if pre_post == "Post" else "",
     )
-    fatal = [
-        e for e in report["errors"]
-        if e["severity"] == "error"
-        and e["code"] in {
-            "required", "required_parent", "description_prefix", "source_artifact",
-            "types_format", "case_without_type", "type_without_case",
-            "missing_case_definition", "case_without_example",
-            "case_question_not_definition", "example_numbering",
-            "culmination_description", "culmination_count", "culmination_order",
-            "section_number", "empty_types", "short_case_example",
-            "rich_text_format", "empty_misconception", "empty_error_analysis",
-            "duplicate_misconception", "duplicate_error_analysis",
-            "issue_section_order", "generic_misconception",
-            "misconception_framing", "generic_error_analysis",
-            "error_analysis_framing", "issue_section_overlap",
-            "analysis_section_format", "missing_misconception",
-            "missing_error_analysis", "figure_reference_without_image",
-            "figure_reference_image_mismatch", "generic_case_definition",
-        }
-    ]
+    classified_fatal = generation._fatal_errors(report)
+    # Post deposit is the same terminal boundary as generation's final gate, so
+    # use its complete fatal-code policy even when no inventory was supplied.
+    # Pre-learning validation deliberately remains tolerant of warnings emitted
+    # by Post-only/intermediate contracts.
+    fatal = (
+        classified_fatal
+        if pre_post == "Post"
+        else [
+            error for error in classified_fatal
+            if error.get("severity") == "error"
+        ]
+    )
     progress.log(
         f"Deposit validation: {len(fatal)} fatal error(s), "
         f"{report['summary'].get('warnings', 0)} warning(s).")
@@ -492,18 +504,55 @@ def _merge_generation_checkpoint_history(
     target_identity: dict[str, str],
     target_chapter_id: int,
 ) -> dict:
-    """Keep the newest completed artifact per stage in one portable envelope."""
+    """Keep the newest completed artifact per stage in one portable envelope.
+
+    A callback may durably remove a rejected stage by sending the control event
+    ``{"checkpoint_action": "discard_stage", "stage": "<stage>"}``. Optional
+    diagnostic fields such as ``reason`` are ignored and are never persisted as
+    checkpoint history.
+    """
     history = [
         copy.deepcopy(entry)
         for entry in generation._concept_checkpoint_entries(stored)
         if isinstance(entry, dict) and str(entry.get("stage") or "").strip()
     ]
-    stage = str(checkpoint.get("stage") or "")
-    history = [
-        entry for entry in history
-        if str(entry.get("stage") or "") != stage
-    ]
-    history.append(copy.deepcopy(checkpoint))
+    stage = str(checkpoint.get("stage") or "").strip()
+    checkpoint_action = str(
+        checkpoint.get("checkpoint_action") or "").strip()
+    if checkpoint_action:
+        if checkpoint_action != "discard_stage":
+            raise ValueError(
+                f"unsupported generation checkpoint action: "
+                f"{checkpoint_action!r}"
+            )
+        if not stage:
+            raise ValueError(
+                "generation checkpoint discard_stage requires a stage"
+            )
+        history = [
+            entry for entry in history
+            if str(entry.get("stage") or "") != stage
+        ]
+        if not history:
+            return {}
+        # A discard control event is not itself a checkpoint. Mirror the
+        # furthest remaining durable stage so API/UI consumers immediately see
+        # the checkpoint that the next retry will actually resume from.
+        newest = max(
+            enumerate(history),
+            key=lambda indexed: (
+                generation._checkpoint_order(
+                    str(indexed[1].get("stage") or "")),
+                indexed[0],
+            ),
+        )[1]
+        checkpoint = newest
+    else:
+        history = [
+            entry for entry in history
+            if str(entry.get("stage") or "") != stage
+        ]
+        history.append(copy.deepcopy(checkpoint))
     return {
         "schema_version": generation._CONCEPT_CHECKPOINT_SCHEMA,
         "checkpoint_format": generation._CONCEPT_CHECKPOINT_FORMAT,
@@ -794,6 +843,11 @@ def generate_post_learning(
         )
 
     def save_checkpoint(checkpoint: dict) -> None:
+        discarded_stage = (
+            str(checkpoint.get("stage") or "").strip()
+            if checkpoint.get("checkpoint_action") == "discard_stage"
+            else ""
+        )
         durable = _merge_generation_checkpoint_history(
             job.generation_checkpoint,
             checkpoint,
@@ -802,6 +856,25 @@ def generate_post_learning(
             target_chapter_id=target_chapter_id,
         )
         job.generation_checkpoint = durable
+        if discarded_stage:
+            next_retry = (
+                "retry resumes from the newest remaining compatible stage"
+                if durable
+                else "retry restarts generation from the beginning"
+            )
+            job.detail = (
+                f"Discarded invalid generation checkpoint "
+                f"'{discarded_stage}'; {next_retry}."
+            )
+            uploads.persist_current_openai_usage(
+                db, job.id, owner_sub=owner_sub
+            )
+            drive_checkpoints.schedule_checkpoint_backup(job.id)
+            progress.log(
+                f"Discarded durable checkpoint stage: {discarded_stage}.",
+                level="warning",
+            )
+            return
         if (
             "question_task_inventory" in checkpoint
             or "mined_types" in checkpoint
@@ -974,6 +1047,11 @@ def generate_pre_learning_from_upload(
         )
 
     def save_checkpoint(checkpoint: dict) -> None:
+        discarded_stage = (
+            str(checkpoint.get("stage") or "").strip()
+            if checkpoint.get("checkpoint_action") == "discard_stage"
+            else ""
+        )
         durable = _merge_generation_checkpoint_history(
             job.generation_checkpoint,
             checkpoint,
@@ -982,6 +1060,25 @@ def generate_pre_learning_from_upload(
             target_chapter_id=target_chapter_id,
         )
         job.generation_checkpoint = durable
+        if discarded_stage:
+            next_retry = (
+                "retry resumes from the newest remaining compatible stage"
+                if durable
+                else "retry restarts generation from the beginning"
+            )
+            job.detail = (
+                f"Discarded invalid generation checkpoint "
+                f"'{discarded_stage}'; {next_retry}."
+            )
+            uploads.persist_current_openai_usage(
+                db, job.id, owner_sub=owner_sub
+            )
+            drive_checkpoints.schedule_checkpoint_backup(job.id)
+            progress.log(
+                f"Discarded durable checkpoint stage: {discarded_stage}.",
+                level="warning",
+            )
+            return
         if (
             "question_task_inventory" in checkpoint
             or "mined_types" in checkpoint

@@ -111,6 +111,26 @@ _GENERIC_CASE_DEFINITION_RE = re.compile(
     r"applications?|exercise(?:\s+set)?|case\s+study)\.?$",
     re.IGNORECASE,
 )
+_GENERIC_TYPE_DEFINITION_RE = re.compile(
+    r"^(?:assessment\s+patterns?|source\s+inventory\s+tasks?|"
+    r"answering\s+(?:a\s+)?checkpoint\s+questions?|"
+    r"practice(?:\s+(?:sets?|questions?|problems?|examples?|exercises?))?|"
+    r"questions?|problems?|examples?|exercises?)$",
+    re.IGNORECASE,
+)
+_MASTERY_MARKER_RE = re.compile(
+    r"\b(?:achieving\s+mastery|mastery(?:\s+indicators?)?)\s*[:\-]",
+    re.IGNORECASE,
+)
+_CANONICAL_MASTERY_LINE_RE = re.compile(
+    r"\nAchieving Mastery: (?P<statement>[^\r\n]+)$",
+)
+_GENERIC_MASTERY_STATEMENT_RE = re.compile(
+    r"^(?:applying|using|understanding|mastering|doing)\s+"
+    r"(?:the|this)\s+(?:concept|topic|idea|material)"
+    r"(?:\s+correctly|\s+well|\s+independently)?\.?$",
+    re.IGNORECASE,
+)
 _DESCRIPTION_LABEL_RE = re.compile(r"\bDescription\s*:", re.IGNORECASE)
 _IMAGE_URL_RE = re.compile(
     r"!\[[^\]]*\]\(https?://[^)]+\)|"
@@ -377,6 +397,43 @@ def _description_text(details: str) -> str:
         if label.lower().startswith("description"):
             return content.strip()
     return ""
+
+
+def _type_definition(type_body: str) -> str:
+    """Return the reusable Type title before its first Case."""
+    case_match = _CASE_ANY_RE.search(type_body or "")
+    value = (
+        type_body[:case_match.start()]
+        if case_match else type_body
+    )
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _normalized_type_definition(value: str) -> str:
+    """Normalize superficial Type-title differences for duplicate checks."""
+    normalized = unicodedata.normalize("NFKC", value or "")
+    return _norm(normalized).rstrip(" .,:;!?")
+
+
+def _is_substantive_mastery_statement(value: str) -> bool:
+    """Reject empty, placeholder, or generic final mastery claims."""
+    statement = re.sub(r"\s+", " ", value or "").strip()
+    words = re.findall(r"\w+", statement, re.UNICODE)
+    return bool(
+        len(words) >= 4
+        and len(statement) >= 12
+        and _norm(statement).rstrip(".") not in PLACEHOLDERS
+        and not _GENERIC_MASTERY_STATEMENT_RE.fullmatch(statement)
+    )
+
+
+def _normalized_recap_text(value: str) -> str:
+    """Normalize only presentation wrappers for exact recap comparison."""
+    value = re.sub(r"\[/?Katex\]", " ", value or "", flags=re.IGNORECASE)
+    value = re.sub(r"\[img\b[^\]]*\]", " ", value, flags=re.IGNORECASE)
+    value = unicodedata.normalize("NFKC", value)
+    value = _norm(value)
+    return re.sub(r"\s+([,;:.!?])", r"\1", value)
 
 
 def _source_word_windows(source_text: str, *, width: int = 18) -> set[str]:
@@ -682,17 +739,86 @@ def _example_too_short(example_text: str) -> bool:
     )
 
 
-def _case_example_too_short(case_text: str) -> bool:
+def _allowed_source_example_spans(
+    case_text: str, allowed_source_examples: Collection[str],
+) -> list[tuple[int, int]]:
+    """Locate exact source prompts so their internal labels stay content."""
+    spans: list[tuple[int, int]] = []
+    for source in allowed_source_examples:
+        raw = str(source or "")
+        canonical = katex_rules.canonicalize_rich_text(raw)
+        candidates = {
+            re.sub(r"\s+", " ", value).strip()
+            for value in (
+                raw,
+                canonical,
+                katex_rules.repair_unwrapped_math(canonical),
+            )
+            if value
+        }
+        for candidate in candidates:
+            if not candidate:
+                continue
+            for match in re.finditer(
+                re.escape(candidate), case_text, re.IGNORECASE
+            ):
+                spans.append(match.span())
+    return spans
+
+
+def _structural_example_markers(
+    case_text: str, allowed_source_examples: Collection[str],
+) -> list[re.Match]:
+    """Return Case-level markers, excluding labels quoted inside source text."""
+    source_spans = _allowed_source_example_spans(
+        case_text, allowed_source_examples)
+    return [
+        marker
+        for marker in _EXAMPLE_MARKER_RE.finditer(case_text)
+        if not any(
+            start <= marker.start() < end
+            for start, end in source_spans
+        )
+    ]
+
+
+def _case_examples(
+    case_text: str, markers: Collection[re.Match],
+) -> list[str]:
+    """Split a Case on already-classified structural Example markers."""
+    marker_list = list(markers)
+    return [
+        case_text[
+            marker.end():
+            marker_list[index + 1].start()
+            if index + 1 < len(marker_list)
+            else len(case_text)
+        ].strip()
+        for index, marker in enumerate(marker_list)
+        if case_text[
+            marker.end():
+            marker_list[index + 1].start()
+            if index + 1 < len(marker_list)
+            else len(case_text)
+        ].strip()
+    ]
+
+
+def _case_example_too_short(
+    case_text: str, allowed_source_examples: Collection[str] = (),
+) -> bool:
     """A Case is 'Case NN: <sub-type definition> Example: <full question> ...'.
 
     When Example lines exist, each must carry a substantive untruncated
     question. Legacy cases carry the question directly in the Case text.
     """
-    parts = _EXAMPLE_SPLIT_RE.split(case_text or "")
-    examples = [p.strip() for p in parts[1:] if p.strip()]
+    case_text = case_text or ""
+    markers = _structural_example_markers(
+        case_text, allowed_source_examples)
+    examples = _case_examples(case_text, markers)
     if examples:
         return any(_example_too_short(ex) for ex in examples)
-    return _example_too_short(parts[0].strip() if parts else "")
+    return _example_too_short(case_text.strip())
 
 
 def _add(errors: list[dict], row_index: int, field: str, code: str,
@@ -715,6 +841,8 @@ def validate_concept_rows(
     allowed_source_examples: Collection[str] = (),
     strict_type_hierarchy: bool = False,
     strict_analysis_section: bool = False,
+    strict_mastery_statement: bool = False,
+    strict_culmination_recap: bool = False,
     source_text: str = "",
 ) -> dict:
     """Return a structured validation report for concept-map records."""
@@ -789,6 +917,50 @@ def validate_concept_rows(
         if len(_DESCRIPTION_LABEL_RE.findall(details)) > 1:
             _add(errors, i, "concept_details", "merged_description",
                  "cell contains multiple concepts' Description blocks")
+        if strict_mastery_statement and not is_culm:
+            description = _description_text(details)
+            description_markers = list(
+                _MASTERY_MARKER_RE.finditer(description)
+            )
+            all_markers = list(_MASTERY_MARKER_RE.finditer(details))
+            canonical_mastery = _CANONICAL_MASTERY_LINE_RE.search(
+                description
+            )
+            if not description_markers:
+                _add(
+                    errors, i, "concept_details",
+                    "missing_mastery_statement",
+                    "normal concept Description requires one terminal "
+                    "'Achieving Mastery: <substantive text>' line",
+                )
+            elif canonical_mastery is None:
+                _add(
+                    errors, i, "concept_details",
+                    "mastery_statement_format",
+                    "Achieving Mastery must be the final Description line in "
+                    "canonical '\\nAchieving Mastery: <text>' format",
+                )
+            elif not _is_substantive_mastery_statement(
+                    canonical_mastery.group("statement")):
+                _add(
+                    errors, i, "concept_details",
+                    "mastery_statement_not_substantive",
+                    "Achieving Mastery must state a substantive, "
+                    "concept-specific learner capability",
+                )
+            if len(all_markers) > 1:
+                _add(
+                    errors, i, "concept_details",
+                    "duplicate_mastery_statement",
+                    "normal concepts must contain exactly one mastery marker",
+                )
+            if len(all_markers) > len(description_markers):
+                _add(
+                    errors, i, "concept_details",
+                    "mastery_marker_outside_description",
+                    "mastery markers are allowed only at the end of "
+                    "Description",
+                )
         if _norm(details) in PLACEHOLDERS or any(
             f" {p} " in f" {_norm(details)} " for p in PLACEHOLDERS
         ):
@@ -992,31 +1164,63 @@ def validate_concept_rows(
                 _add(errors, i, "concept_details", "case_without_type",
                      "Case labels require a Type label")
             if type_body and _TYPE_ANY_RE.search(type_body):
+                seen_type_definitions: set[str] = set()
                 for type_match in _TYPE_SEGMENT_RE.finditer(type_body):
-                    if not _CASE_ANY_RE.search(type_match.group("body") or ""):
+                    matched_type_body = type_match.group("body") or ""
+                    if not _CASE_ANY_RE.search(matched_type_body):
                         _add(
                             errors, i, "concept_details", "type_without_case",
                             "Every Type must contain at least one Case",
                         )
+                    if strict_type_hierarchy:
+                        type_definition = _type_definition(
+                            matched_type_body
+                        )
+                        normalized_definition = _normalized_type_definition(
+                            type_definition
+                        )
+                        if not type_definition:
+                            _add(
+                                errors, i, "concept_details",
+                                "missing_type_definition",
+                                "Each Type must have a meaningful title before "
+                                "its first Case",
+                            )
+                        elif _GENERIC_TYPE_DEFINITION_RE.fullmatch(
+                                normalized_definition):
+                            _add(
+                                errors, i, "concept_details",
+                                "generic_type_definition",
+                                "Type titles must name a meaningful reusable "
+                                "task family, not a generic assessment label",
+                            )
+                        if normalized_definition:
+                            if normalized_definition in seen_type_definitions:
+                                _add(
+                                    errors, i, "concept_details",
+                                    "duplicate_type_definition",
+                                    "Type definitions must be unique within "
+                                    "each concept row",
+                                )
+                            seen_type_definitions.add(normalized_definition)
             if type_body and (not _TYPE_RE.search(type_body) or not _CASE_RE.search(type_body)):
                 _add(errors, i, "concept_details", "types_format",
                      "Types must use zero-padded Type NN and Case NN labels")
             for case_match in _CASE_SEGMENT_RE.finditer(type_body or ""):
                 case_text = re.sub(r"\s+", " ", case_match.group(1)).strip()
-                if _case_example_too_short(case_text):
+                if _case_example_too_short(
+                    case_text, allowed_source_examples
+                ):
                     _add(errors, i, "concept_details", "short_case_example",
                          "Case examples should include the full source question/task")
                 if strict_type_hierarchy:
-                    markers = list(_EXAMPLE_MARKER_RE.finditer(case_text))
+                    markers = _structural_example_markers(
+                        case_text, allowed_source_examples)
                     case_title = (
                         case_text[:markers[0].start()].strip()
                         if markers else case_text.strip()
                     )
-                    examples = [
-                        value.strip()
-                        for value in _EXAMPLE_SPLIT_RE.split(case_text)[1:]
-                        if value.strip()
-                    ]
+                    examples = _case_examples(case_text, markers)
                     if not case_title:
                         _add(
                             errors, i, "concept_details",
@@ -1123,6 +1327,12 @@ def validate_concept_rows(
             (i, r) for i, r in indexed
             if not concept_refiner.is_culmination(r.get("concept_title") or r.get("concept") or "")
         ]
+        culms = [
+            (i, r) for i, r in indexed
+            if concept_refiner.is_culmination(
+                r.get("concept_title") or r.get("concept") or ""
+            )
+        ]
         repeated = concept_cleanup.detect_repeated_leading_phrase(
             [r.get("concept_title") or r.get("concept") or "" for _, r in normal]
         )
@@ -1133,11 +1343,37 @@ def validate_concept_rows(
                 if _norm(title) in affected:
                     _add(errors, i, "concept_title", "repeated_sibling_opener",
                          f"repeated leading phrase: {repeated['phrase']}")
-        if require_culmination and topic:
-            culms = [
-                (i, r) for i, r in indexed
-                if concept_refiner.is_culmination(r.get("concept_title") or r.get("concept") or "")
+        if strict_culmination_recap:
+            normal_titles = [
+                (row.get("concept_title") or row.get("concept") or "").strip()
+                for _, row in normal
             ]
+            normal_titles = [title for title in normal_titles if title]
+            expected_recap = concept_refiner.recap_text(normal_titles)
+            for culmination_index, culmination in culms:
+                recap = _description_text(
+                    culmination.get("concept_details")
+                    or culmination.get("concept_description")
+                    or ""
+                )
+                if not re.match(r"^Recap of\s+\S", recap):
+                    _add(
+                        errors, culmination_index, "concept_details",
+                        "culmination_recap_format",
+                        "culmination Description must begin with the detailed "
+                        "canonical form 'Recap of ...'",
+                    )
+                if (
+                    _normalized_recap_text(recap)
+                    != _normalized_recap_text(expected_recap)
+                ):
+                    _add(
+                        errors, culmination_index, "concept_details",
+                        "culmination_recap_missing_concepts",
+                        "culmination recap must exactly match the canonical "
+                        f"topic recap: {expected_recap}",
+                    )
+        if require_culmination and topic:
             if len(culms) != 1:
                 row_i = indexed[-1][0] if indexed else -1
                 _add(errors, row_i, "concept_title", "culmination_count",

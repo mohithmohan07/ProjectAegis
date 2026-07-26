@@ -2996,6 +2996,15 @@ def test_final_checkpoint_missing_source_topic_resumes_from_prior_stage(
 
     monkeypatch.setattr(g, "_prepare_final_concept_content", finalize)
     monkeypatch.setattr(g, "_canonicalize_concept_rich_text", lambda rows: rows)
+    # This test isolates source-topic recovery. Resuming the older empty
+    # inventory now also refreshes deterministic task anchors and would
+    # legitimately run the focused Type-delta API pass; keep that independent
+    # contract out of this fixture.
+    monkeypatch.setattr(
+        g,
+        "_reconcile_resumed_mined_types",
+        lambda *args, **kwargs: {"types": []},
+    )
     monkeypatch.setattr(
         g,
         "_validate_final_or_raise",
@@ -3047,6 +3056,39 @@ def test_final_checkpoint_with_orphan_analysis_prefix_forces_final_repair():
     assert any("learner-analysis" in reason for reason in reasons)
 
 
+def test_final_checkpoint_same_label_with_truncated_task_forces_refresh():
+    source = (
+        "## Number Patterns\n"
+        "Example 1: Calculate the twentieth term of the arithmetic "
+        "progression 4, 9, 14, 19 and explain every substituted value.\n"
+    )
+    sections = g.parse_mmd_sections(source)
+    anchors = g._source_task_anchors(sections)
+    assert anchors
+    anchor = anchors[0]
+    checkpoint = g._make_concept_checkpoint(
+        "final_content_ready",
+        records=[],
+        question_task_inventory={"items": [{
+            "qid": "QINV-0001",
+            "source_kind": anchor.get("source_kind") or "worked_example",
+            "source_label": anchor["source_label"],
+            "topic_hint": anchor.get("topic_hint") or "Number Patterns",
+            "raw_task": "Calculate the twentieth term.",
+        }], "stats": {}},
+        mined_types={"types": []},
+        method_row_snapshot=[],
+    )
+
+    reasons = g._final_checkpoint_refresh_reasons(
+        checkpoint,
+        sections=sections,
+        source_topic_excerpts=g._group_source_topic_excerpts(sections),
+    )
+
+    assert any("truncated or stale" in reason for reason in reasons)
+
+
 def test_saved_final_checkpoint_reconciles_wrong_figure_tag_without_api(
     monkeypatch,
 ):
@@ -3096,10 +3138,29 @@ def test_saved_final_checkpoint_reconciles_wrong_figure_tag_without_api(
             "keywords": "culmination, allegory",
         },
     ]
+    inventory = {"items": [
+        {
+            "qid": "QINV-0001",
+            "source_kind": "diagram_task",
+            "topic_hint": "Visual Symbols",
+            "raw_task": (
+                "Refer to Fig. 18 and identify the national symbol."
+            ),
+        },
+            {
+                "qid": "QINV-0002",
+                "source_kind": "exercise",
+                "topic_hint": "Visual Symbols",
+                "_chapter_wide_task": True,
+                "raw_task": (
+                    "Compare the national symbols shown in the chapter."
+                ),
+        },
+    ], "stats": {}}
     checkpoint = g._make_concept_checkpoint(
         "final_content_ready",
         records=records,
-        question_task_inventory={"items": [], "stats": {}},
+        question_task_inventory=inventory,
         mined_types={"types": []},
         method_row_snapshot=[],
     )
