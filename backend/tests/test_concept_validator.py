@@ -1,3 +1,5 @@
+import pytest
+
 from app.services import concept_validator as cv
 from app.services import concept_refiner as cr
 from app.services import generation as g
@@ -74,6 +76,28 @@ def test_actorless_application_mistake_is_invalid_error_analysis():
     assert "error_analysis_framing" in _codes(report)
 
 
+def test_validator_rejects_only_high_confidence_truncated_description_clause():
+    broken = cv.validate_concept_rows([_rec(
+        "Scientific Inquiry",
+        "Description: Students observe carefully, record evidence, and use it "
+        "to explain what they.",
+    )])
+    complete = cv.validate_concept_rows([
+        _rec(
+            "Scientific Inquiry",
+            "Description: Students observe carefully, record evidence, and "
+            "use it to explain what they observe.",
+        ),
+        _rec(
+            "Dependence",
+            "Description: The result depends on it.",
+        ),
+    ])
+
+    assert "description_truncated_clause" in _codes(broken)
+    assert "description_truncated_clause" not in _codes(complete)
+
+
 def test_ensure_valid_learner_analysis_reclassifies_preserves_and_exempts_culmination():
     valid_misconception = (
         "Students may misunderstand multiplication as an operation that "
@@ -131,6 +155,65 @@ def test_ensure_valid_learner_analysis_reclassifies_preserves_and_exempts_culmin
     assert _analysis_sections(out[3]["concept_details"]) == []
 
 
+@pytest.mark.parametrize(
+    ("title", "misconception", "error_analysis"),
+    [
+        (
+            "Scientific Inquiry as an Evolving Investigation Cycle",
+            "Students may assume that science only means memorising "
+            "established facts or using a sophisticated laboratory",
+            "Students may ask an unfocused question, collect observations "
+            "without a planned test, or treat one result as a final "
+            "explanation.",
+        ),
+        (
+            "Microorganisms, Health, and Infection Control",
+            "Students may believe that every microorganism causes disease or "
+            "that vaccines cure an infection immediately",
+            "Students may confuse preventive vaccination with treatment, or "
+            "stop prescribed medicine without considering the infection and "
+            "medical guidance.",
+        ),
+        (
+            "Moon Phases and Calendars",
+            "Students may believe that Moon phases are caused by Earth's "
+            "shadow every night or by the Moon changing shape",
+            "Students may draw the Sun, Earth, and Moon in positions that "
+            "cannot produce the observed illuminated portion.",
+        ),
+        (
+            "Earth's Habitability and Human-driven Climate Change",
+            "Students may assume that Earth's habitability depends only on "
+            "its distance from the Sun or that climate change is a single "
+            "day's weather",
+            "Students may confuse ultraviolet shielding with oxygen supply, "
+            "or infer long-term climate trends from one short-term "
+            "temperature observation.",
+        ),
+    ],
+)
+def test_final_analysis_normalization_preserves_specific_science_errors(
+    title,
+    misconception,
+    error_analysis,
+):
+    record = _rec(
+        title,
+        "Description: A source-faithful concept explanation. // "
+        "Misconception/ Error Analysis: "
+        f"Misconceptions: {misconception}; "
+        f"Error Analysis: {error_analysis}",
+    )
+
+    out = cv.ensure_valid_learner_analysis([record])[0]
+
+    assert cr.analysis_components(out["concept_details"]) == (
+        misconception,
+        error_analysis,
+    )
+    assert cv.is_valid_error_analysis(error_analysis)
+
+
 def test_error_analysis_rejects_generic_difficulty_without_a_mistaken_action():
     for text in (
         "Students may struggle with this concept.",
@@ -155,8 +238,27 @@ def test_error_analysis_accepts_subject_specific_actions_with_mistake_cues():
         "author's inference.",
         "Students may quote evidence without linking it to the claim.",
         "Students may return inside the loop rather than after the loop.",
+        "Students may treat political authority as hereditary rather than "
+        "civic.",
+        "Students may change two variables at once and attribute the outcome "
+        "to only one factor.",
+        "Students may record only the final observation and omit the trial "
+        "conditions.",
+        "Students may draw a conclusion after a single trial.",
+        "Students may compare unlike observations as though they came from "
+        "controlled trials.",
     ):
         assert cv.is_valid_error_analysis(text)
+
+
+def test_error_analysis_rejects_correct_procedural_action_without_a_defect():
+    assert not cv.is_valid_error_analysis(
+        "Students may record all observations accurately.")
+
+
+def test_concise_numeric_yes_no_question_is_not_a_stub():
+    assert not cv._example_too_short("Is 9 a cube?")
+    assert cv._example_too_short("Is this correct?")
 
 
 def test_belief_adverbs_remain_misconceptions_and_are_reclassified():

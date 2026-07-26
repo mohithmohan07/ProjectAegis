@@ -6,6 +6,26 @@ import openpyxl
 from app import bulk_import as bi
 from app import config, models
 from app.bulk_import import writer
+from app.services import concept_refiner
+
+
+def _use_specific_dry_learner_analysis(monkeypatch):
+    monkeypatch.setattr(
+        concept_refiner,
+        "_fallback_misconception",
+        lambda title: (
+            f"Students may believe the description of {title} guarantees the "
+            "same result in every context."
+        ),
+    )
+    monkeypatch.setattr(
+        concept_refiner,
+        "_fallback_error_analysis",
+        lambda title: (
+            f"Students may reverse a stated relationship while applying "
+            f"{title} to an example."
+        ),
+    )
 
 
 def test_merge_sources_dedupes_case_insensitively():
@@ -69,8 +89,11 @@ def test_legacy_workbook_without_concept_source_still_imports(client, db, tmp_pa
     assert q.group.group_type == "Basic"
 
 
-def test_concept_resused_across_books_merges_sources(client, db, first_chapter):
+def test_concept_resused_across_books_merges_sources(
+    client, db, first_chapter, monkeypatch,
+):
     """Same concept from a second book: not duplicated, sources accumulate."""
+    _use_specific_dry_learner_analysis(monkeypatch)
     body = (b"## Optics Basics\n"
             b"Refraction of light through glass slabs\n"
             b"Total internal reflection in prisms")

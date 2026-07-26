@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from . import (
     CHAPTER_FIELDS, TOPIC_FIELDS, CONCEPT_FIELDS, FIELDS_BY_KIND, SHEET_BY_KIND,
     SHEET_DOC_LINK, SECTION_BANDS, OBJECTIVE_GROUP_FIELDS, DESCRIPTIVE_GROUP_FIELDS,
-    merge_sources, strip_title_tag, strip_topic_title,
+    merge_sources, normalize_question_text, strip_title_tag, strip_topic_title,
 )
 from . import workbook_sync
 from .. import models
@@ -38,6 +38,8 @@ def _group_fields(kind: str) -> list[str]:
 # Positional indices shared by every content sheet (front bands are identical).
 _IDX_CHAPTER_TITLE = 0
 _IDX_TOPIC_TITLE = len(CHAPTER_FIELDS)
+_IDX_TOPIC_PRE_POST = _IDX_TOPIC_TITLE + TOPIC_FIELDS.index(
+    "pre_post_learning")
 _IDX_CONCEPT_TITLE = len(CHAPTER_FIELDS) + len(TOPIC_FIELDS)
 
 
@@ -120,9 +122,21 @@ def question_placement_key(label: str, group: models.Group) -> tuple:
 
 
 def concept_placement_key(concept: models.Concept, topic: models.Topic) -> tuple:
-    """Identity + ancestor path for one concept placement (keyed by concept_title)."""
+    """Normalized identity + ancestor path for one concept placement.
+
+    Concept generation may improve title capitalization or whitespace on a
+    later pass. Those presentation-only changes must refresh the original row,
+    not create a second CMS placement. Learning kind is part of the path
+    because one chapter may intentionally teach the same normalized concept in
+    distinct Pre and Post topic bands.
+    """
     chapter = topic.chapter
-    return (concept.concept_title, chapter.chapter_title, topic.topic_title)
+    return (
+        normalize_question_text(strip_title_tag(concept.concept_title)),
+        normalize_question_text(strip_title_tag(chapter.chapter_title)),
+        normalize_question_text(strip_topic_title(topic.topic_title)),
+        normalize_question_text(topic.pre_post_learning),
+    )
 
 
 def _row_question_placement_key(row: tuple, kind: str, concept_len: int) -> tuple | None:
@@ -143,9 +157,14 @@ def _row_concept_placement_key(row: tuple) -> tuple | None:
     title = strip_title_tag(_cell_str(row, _IDX_CONCEPT_TITLE))
     if not title:
         return None
-    return (title,
-            strip_title_tag(_cell_str(row, _IDX_CHAPTER_TITLE)),
-            strip_topic_title(_cell_str(row, _IDX_TOPIC_TITLE)))
+    return (
+        normalize_question_text(title),
+        normalize_question_text(
+            strip_title_tag(_cell_str(row, _IDX_CHAPTER_TITLE))),
+        normalize_question_text(
+            strip_topic_title(_cell_str(row, _IDX_TOPIC_TITLE))),
+        normalize_question_text(_cell_str(row, _IDX_TOPIC_PRE_POST)),
+    )
 
 
 class WorkbookIndex:
@@ -155,8 +174,8 @@ class WorkbookIndex:
     - ``labels`` / ``concept_titles``: entity identities present anywhere (used to
       classify a new placement as a *tag* vs a brand-new *add*).
     - ``q_rows``: placement key -> (sheet, row) for in-place source merges.
-    - ``concept_rows``: (concept_title, chapter_title) -> [(sheet, row), ...] —
-      every row carrying that concept's band, for source refreshes.
+    - ``concept_rows``: normalized placement key -> [(sheet, row), ...] —
+      exact-placement rows carrying that concept's band, for full refreshes.
     - ``sheet_meta``: per-sheet column geometry (legacy vs current layout).
     """
 
@@ -214,7 +233,7 @@ def scan_workbook(path: Path) -> WorkbookIndex:
             if ck:
                 idx.c_placements.add(ck)
                 idx.concept_titles.add(ck[0])
-                idx.concept_rows.setdefault((ck[0], ck[1]), []).append((sheet_name, row_i))
+                idx.concept_rows.setdefault(ck, []).append((sheet_name, row_i))
     wb.close()
     return idx
 
@@ -489,23 +508,206 @@ def _concept_to_row(concept: models.Concept, kind: str = "objective",
     return row[:expected]
 
 
-def _refresh_concept_sources(wb, index: WorkbookIndex, concept: models.Concept,
-                             chapter_title: str) -> int:
-    """Merge ``concept.sources`` into the concept_source cell of every existing
-    row that carries this concept's band (concept-only rows AND question rows)."""
-    updated = 0
-    for sheet_name, row_i in index.concept_rows.get(
-            (concept.concept_title, chapter_title), []):
+def _row_has_question(ws, row_i: int, q_start: int) -> bool:
+    """Whether an existing workbook row carries any Question-band content."""
+    return any(
+        str(ws.cell(row=row_i, column=column).value or "").strip()
+        for column in range(q_start + 1, ws.max_column + 1)
+    )
+
+
+def _refresh_concept_rows(
+    wb,
+    index: WorkbookIndex,
+    concept: models.Concept,
+    topic: models.Topic,
+    locations: list[tuple],
+    *,
+    include_ancestors: bool,
+) -> int:
+    """Refresh selected rows from the DB concept, retaining row identity.
+
+    Normal refreshes write only the Concept band. Placement reconciliation also
+    writes the Chapter and Topic bands so a stale row moves to its current
+    authoritative placement. Group and Question bands are never overwritten.
+    Concept source history is merged rather than replaced.
+    """
+    sources_updated = 0
+    for sheet_name, row_i in locations:
         meta = index.sheet_meta.get(sheet_name) or {}
-        col = meta.get("c_src_col")
-        if col is None:  # legacy-layout sheet: no concept_source column to update
+        concept_fields = meta.get("concept_fields")
+        q_start = meta.get("q_start")
+        if not concept_fields or q_start is None:
             continue
-        cell = wb[sheet_name].cell(row=row_i, column=col + 1)
-        merged = merge_sources(str(cell.value or ""), concept.sources)
-        if merged != str(cell.value or ""):
-            _set_cell_value(cell, merged)
-            updated += 1
-    return updated
+        ws = wb[sheet_name]
+        # Catalog-only rows deliberately leave basic/intermediate/advanced
+        # summaries blank. Question rows carry the current group summaries.
+        include_group_columns = _row_has_question(ws, row_i, q_start)
+        front_values = _front_bands(
+            concept,
+            topic,
+            include_group_columns=include_group_columns,
+            concept_fields=concept_fields,
+        )
+        start = 0 if include_ancestors else _IDX_CONCEPT_TITLE
+        for column_index, value in enumerate(front_values[start:], start=start):
+            field_index = column_index - _IDX_CONCEPT_TITLE
+            field = (
+                concept_fields[field_index]
+                if 0 <= field_index < len(concept_fields)
+                else ""
+            )
+            cell = ws.cell(row=row_i, column=column_index + 1)
+            if field == "concept_source":
+                current = str(cell.value or "")
+                value = merge_sources(current, str(value or ""))
+                if value != current:
+                    sources_updated += 1
+            _set_cell_value(cell, value)
+    return sources_updated
+
+
+def _refresh_concept_band(
+    wb,
+    index: WorkbookIndex,
+    concept: models.Concept,
+    topic: models.Topic,
+) -> int:
+    """Refresh every row at one exact concept placement in place."""
+    return _refresh_concept_rows(
+        wb,
+        index,
+        concept,
+        topic,
+        list(index.concept_rows.get(concept_placement_key(concept, topic), [])),
+        include_ancestors=False,
+    )
+
+
+def _move_indexed_concept_row(
+    index: WorkbookIndex,
+    old_key: tuple,
+    new_key: tuple,
+    location: tuple,
+) -> None:
+    """Reflect one in-place placement move in the current workbook index."""
+    old_locations = index.concept_rows.get(old_key, [])
+    if location in old_locations:
+        old_locations.remove(location)
+    if not old_locations:
+        index.concept_rows.pop(old_key, None)
+        index.c_placements.discard(old_key)
+    new_locations = index.concept_rows.setdefault(new_key, [])
+    if location not in new_locations:
+        new_locations.append(location)
+    index.c_placements.add(new_key)
+    index.concept_titles.add(new_key[0])
+
+
+def _reconcile_concept_placements(
+    wb,
+    index: WorkbookIndex,
+    concept: models.Concept,
+    desired_topics: list[models.Topic],
+) -> int:
+    """Move stale same-chapter rows to current DB placements conservatively.
+
+    Question rows always belong to the concept's authoritative home topic.
+    Catalog-only rows are reused only for desired placements that lack a
+    catalog row. Rows in another chapter are never candidates, even when their
+    normalized concept title is identical.
+    """
+    if not desired_topics or concept.topic is None:
+        return 0
+    home_key = concept_placement_key(concept, concept.topic)
+    identity, home_chapter, _, home_learning_kind = home_key
+    desired_by_key = {
+        concept_placement_key(concept, topic): topic
+        for topic in desired_topics
+    }
+    desired_same_chapter = {
+        key: topic
+        for key, topic in desired_by_key.items()
+        if key[1] == home_chapter and key[3] == home_learning_kind
+    }
+    same_chapter_keys = [
+        key
+        for key in list(index.concept_rows)
+        if (
+            key[0] == identity
+            and key[1] == home_chapter
+            and key[3] == home_learning_kind
+        )
+    ]
+    if not same_chapter_keys:
+        return 0
+
+    sources_updated = 0
+
+    # A ConceptTag does not relocate the concept's assessments. Therefore any
+    # question-bearing row under another topic is a stale former-home row,
+    # including when that topic remains a legitimate catalog tag.
+    for old_key in same_chapter_keys:
+        if old_key == home_key:
+            continue
+        for location in list(index.concept_rows.get(old_key, [])):
+            sheet_name, row_i = location
+            meta = index.sheet_meta.get(sheet_name) or {}
+            q_start = meta.get("q_start")
+            if q_start is None or not _row_has_question(
+                    wb[sheet_name], row_i, q_start):
+                continue
+            sources_updated += _refresh_concept_rows(
+                wb,
+                index,
+                concept,
+                concept.topic,
+                [location],
+                include_ancestors=True,
+            )
+            _move_indexed_concept_row(
+                index, old_key, home_key, location)
+
+    def _catalog_locations(key: tuple) -> list[tuple]:
+        out: list[tuple] = []
+        for location in index.concept_rows.get(key, []):
+            sheet_name, row_i = location
+            meta = index.sheet_meta.get(sheet_name) or {}
+            q_start = meta.get("q_start")
+            if q_start is not None and not _row_has_question(
+                    wb[sheet_name], row_i, q_start):
+                out.append(location)
+        return out
+
+    # Home comes first in ``desired_topics``. Reuse stale catalog rows for
+    # missing desired catalog placements in that same stable order.
+    missing_catalog = [
+        (key, desired_by_key[key])
+        for key in desired_by_key
+        if key in desired_same_chapter and not _catalog_locations(key)
+    ]
+    stale_catalog: list[tuple[tuple, tuple]] = []
+    for old_key in same_chapter_keys:
+        if old_key in desired_same_chapter:
+            continue
+        stale_catalog.extend(
+            (old_key, location)
+            for location in _catalog_locations(old_key)
+        )
+
+    for (old_key, location), (new_key, topic) in zip(
+            stale_catalog, missing_catalog):
+        sources_updated += _refresh_concept_rows(
+            wb,
+            index,
+            concept,
+            topic,
+            [location],
+            include_ancestors=True,
+        )
+        _move_indexed_concept_row(index, old_key, new_key, location)
+
+    return sources_updated
 
 
 @workbook_sync.synchronized_output_workbook
@@ -514,8 +716,9 @@ def append_concepts(db: Session, path: Path, concept_ids: list[int]) -> dict[str
 
     One row per (concept, placement): the concept's home topic plus every
     tagged topic/chapter. Placements already present are never re-added —
-    instead their ``concept_source`` cells are refreshed in place so a concept
-    re-used from another book accumulates sources (e.g. "NCERT; RD Sharma").
+    instead their complete Concept bands are refreshed in place from the
+    current DB concept. ``concept_source`` is merged so a concept re-used from
+    another book keeps all previously recorded sources.
     """
     index = scan_workbook(path)
     wb = openpyxl.load_workbook(path) if path.exists() else _new_workbook()
@@ -533,11 +736,14 @@ def append_concepts(db: Session, path: Path, concept_ids: list[int]) -> dict[str
         "parent_fallback": "parent_concept" not in concept_fields,
     }
     for c in concepts:
-        for topic in _concept_placements(c):
+        desired_topics = _concept_placements(c)
+        result["sources_updated"] += _reconcile_concept_placements(
+            wb, index, c, desired_topics)
+        for topic in desired_topics:
             key = concept_placement_key(c, topic)
             if key in index.c_placements:
-                result["sources_updated"] += _refresh_concept_sources(
-                    wb, index, c, topic.chapter.chapter_title)
+                result["sources_updated"] += _refresh_concept_band(
+                    wb, index, c, topic)
                 continue
             index.c_placements.add(key)
             target = ws.max_row + 1 if ws.max_row >= 2 else 3
@@ -546,6 +752,9 @@ def append_concepts(db: Session, path: Path, concept_ids: list[int]) -> dict[str
                 start=1,
             ):
                 _write_cell(ws, row=target, column=i, value=value)
+            index.concept_rows.setdefault(key, []).append(
+                (SHEET_BY_KIND["objective"], target))
+            index.concept_titles.add(key[0])
             result["written"] += 1
     workbook_sync.atomic_save_workbook(wb, path)
     return result

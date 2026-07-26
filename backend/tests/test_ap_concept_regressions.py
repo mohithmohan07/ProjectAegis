@@ -969,7 +969,11 @@ def test_pipeline_restores_skeleton_method_rows_before_description_and_cleanup(
                 f"{record['concept_title']}.\n"
                 f"Achieving Mastery: Explain {record['concept_title']} "
                 "independently. // "
-                "Error Analysis: Students may omit a required derivation step."
+                "Misconception/ Error Analysis: Misconceptions: Students may "
+                "believe any sequence is an arithmetic progression even when "
+                "consecutive differences change.; Error Analysis: Students may "
+                "omit checking consecutive differences before applying the "
+                "relevant AP derivation."
             )
             refined.append(record)
         return refined
@@ -1093,7 +1097,10 @@ def test_final_pipeline_restores_post_description_method_snapshot(monkeypatch):
         "Description: Build the general term from the first term and common "
         "difference.\n"
         "Achieving Mastery: Derive the general term independently. // "
-        "Misconceptions: Students may believe the term number is the term value."
+        "Misconception/ Error Analysis: Misconceptions: Students may believe "
+        "the term number is the term value.; Error Analysis: Students may "
+        "substitute the term number for n without first subtracting one in the "
+        "factor n-1."
     )
     dropped = _row(
         "Sum of First n Terms of an AP",
@@ -1104,7 +1111,10 @@ def test_final_pipeline_restores_post_description_method_snapshot(monkeypatch):
         "Description: Pair the forward and reversed finite progressions to "
         "derive their sum.\n"
         "Achieving Mastery: Derive the finite-sum rule independently. // "
-        "Error Analysis: Students may pair terms without keeping the term count fixed."
+        "Misconception/ Error Analysis: Misconceptions: Students may believe "
+        "paired terms can have different totals in the forward and reversed "
+        "arithmetic progression.; Error Analysis: Students may pair terms "
+        "without keeping the number of terms fixed."
     )
 
     monkeypatch.setattr(
@@ -1185,13 +1195,22 @@ def test_final_pipeline_restores_post_description_method_snapshot(monkeypatch):
             "Case 01: Given a first term and common difference, derive and use "
             f"a requested term Example 01: {source_question}",
         )
+        certification_owner = kwargs.get("mined_types")
+        if isinstance(certification_owner, dict):
+            g._reset_placement_certifications(certification_owner)
+            g._certify_inventory_host(
+                certification_owner,
+                "QINV-0001",
+                target,
+                basis="type_host_review",
+            )
         return out
 
     monkeypatch.setattr(g, "_assign_types_via_api", add_richer_final_types)
     monkeypatch.setattr(
         g,
         "_assign_mined_types_via_api",
-        lambda records, **kwargs: add_richer_final_types(records),
+        lambda records, **kwargs: add_richer_final_types(records, **kwargs),
     )
     monkeypatch.setattr(
         g, "_merge_similar_concepts_via_api",
@@ -1304,8 +1323,10 @@ def test_final_boundary_salvages_short_case_reintroduced_by_later_pass(
         "Description: Everyday savings can grow by a fixed amount, producing "
         "an ordered sequence with a constant difference.\n"
         "Achieving Mastery: Recognizing constant-change patterns independently. "
-        "// Error Analysis: Students may compare the terms instead of their "
-        "consecutive differences."
+        "// Misconception/ Error Analysis: Misconceptions: Students may believe "
+        "an increasing savings sequence is always an arithmetic progression "
+        "even when successive increases differ.; Error Analysis: Students may "
+        "compare the terms instead of their consecutive differences."
     )
 
     monkeypatch.setattr(g, "_method_coverage_anchors", lambda sections: [])
@@ -1340,6 +1361,16 @@ def test_final_boundary_salvages_short_case_reintroduced_by_later_pass(
             f"Case 01: Savings pattern Example: {full_question} "
             f"Case 02: Extend a sequence Example: {other_question}",
         )
+        certification_owner = kwargs.get("mined_types")
+        if isinstance(certification_owner, dict):
+            g._reset_placement_certifications(certification_owner)
+            for qid in ("QINV-AP-0001", "QINV-AP-0002"):
+                g._certify_inventory_host(
+                    certification_owner,
+                    qid,
+                    target,
+                    basis="type_host_review",
+                )
         return out
 
     monkeypatch.setattr(g, "_assign_types_via_api", assign_types)

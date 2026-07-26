@@ -40,6 +40,10 @@ from . import (
 )
 
 
+class DepositValidationError(ValueError):
+    """Deterministic content validation rejected deposit-ready concept rows."""
+
+
 def _find_concept_in_chapter(
     chapter: models.Chapter, title: str, *, pre_post: str = "",
 ) -> models.Concept | None:
@@ -151,10 +155,22 @@ def _deposit_concepts(
         # deterministic boundary, before deciding whether deposit may proceed.
         # This uses the persisted inventory and mined placement hints only; it
         # never spends an API request or invents a question.
-        records = generation._normalize_activity_hubs_from_inventory(
-            records, inventory)
-        records = generation._enforce_rendered_inventory_coverage(
-            records, inventory, mined_types)
+        try:
+            records = generation._normalize_activity_hubs_from_inventory(
+                records, inventory, mined_types)
+            records = generation._enforce_rendered_inventory_coverage(
+                records, inventory, mined_types)
+            # Inventory repair deliberately restores exact source wording. In
+            # mathematics that wording can contain bare TeX, so canonicalize
+            # after the repair as well as before it. Recheck exact coverage
+            # once more because Katex wrappers are presentation-only and must
+            # never change qid ownership or placement.
+            records = generation._canonicalize_concept_rich_text(records)
+            records = generation._enforce_rendered_inventory_coverage(
+                records, inventory, mined_types)
+            records = generation._canonicalize_concept_rich_text(records)
+        except RuntimeError as exc:
+            raise DepositValidationError(str(exc)) from exc
         records = concept_refiner.renumber_types_continuously(records)
         records = concept_validator.ensure_valid_learner_analysis(records)
         coverage = generation._rendered_inventory_coverage_defects(
@@ -173,7 +189,7 @@ def _deposit_concepts(
             if coverage["duplicate"]:
                 defect_parts.append(
                     "duplicate=" + ",".join(coverage["duplicate"]))
-            raise ValueError(
+            raise DepositValidationError(
                 "question/task inventory coverage failed before deposit: "
                 + "; ".join(defect_parts)
             )
@@ -190,7 +206,7 @@ def _deposit_concepts(
                 f"{len(topic_violations)} question/task placement(s).",
                 level="error",
             )
-            raise ValueError(
+            raise DepositValidationError(
                 "question/task inventory topic placement failed before "
                 "deposit: " + ",".join(qids)
             )
@@ -203,7 +219,7 @@ def _deposit_concepts(
                 source_text=source_text,
             )
         except RuntimeError as exc:
-            raise ValueError(str(exc)) from exc
+            raise DepositValidationError(str(exc)) from exc
     report = concept_validator.validate_concept_rows(
         records,
         allow_types=True,
@@ -235,7 +251,8 @@ def _deposit_concepts(
         f"{report['summary'].get('warnings', 0)} warning(s).")
     if fatal:
         codes = ", ".join(sorted({e["code"] for e in fatal}))
-        raise ValueError(f"concept validation failed before deposit: {codes}")
+        raise DepositValidationError(
+            f"concept validation failed before deposit: {codes}")
 
     created_ids: list[int] = []
     merged_ids: list[int] = []
@@ -400,11 +417,19 @@ def _store_inventory(job: models.UploadJob, artifacts: dict) -> None:
     mined = artifacts.get("mined_types") or {}
     if not inventory.get("items") and not mined.get("types"):
         return
-    job.question_inventory = {
+    stored = {
         "items": inventory.get("items", []),
         "stats": inventory.get("stats", {}),
         "mined_types": mined.get("types", []),
     }
+    certification_key = generation._PLACEMENT_CERTIFICATIONS_KEY
+    certification_ledger = mined.get(certification_key)
+    if isinstance(certification_ledger, dict):
+        # Keep the established list-shaped ``mined_types`` field for CSV and
+        # bundle compatibility while retaining the exact qid -> host evidence
+        # needed to audit a successful job after its checkpoint is cleared.
+        stored[certification_key] = copy.deepcopy(certification_ledger)
+    job.question_inventory = stored
 
 
 def _stable_checkpoint_value(value) -> str:
@@ -569,6 +594,92 @@ def _merge_generation_checkpoint_history(
         "progress": checkpoint.get("progress", 0.0),
         "checkpoints": history,
     }
+
+
+def _compatible_generation_checkpoint_envelope(
+    stored: dict | None,
+    *,
+    fingerprint: str,
+    target_identity: dict[str, str],
+    target_chapter_id: int,
+) -> dict:
+    """Prune unusable history and mirror the stage this deployment will use."""
+    history = [
+        copy.deepcopy(entry)
+        for entry in generation._concept_checkpoint_entries(stored)
+        if generation._compatible_concept_checkpoint_entry(entry)
+    ]
+    if not history:
+        return {}
+    candidate = {
+        "schema_version": generation._CONCEPT_CHECKPOINT_SCHEMA,
+        "checkpoint_format": generation._CONCEPT_CHECKPOINT_FORMAT,
+        "checkpoints": history,
+    }
+    newest = generation._newest_compatible_concept_checkpoint(candidate)
+    if newest is None:
+        return {}
+    stage = str(newest.get("stage") or "")
+    return {
+        "schema_version": generation._CONCEPT_CHECKPOINT_SCHEMA,
+        "checkpoint_format": generation._CONCEPT_CHECKPOINT_FORMAT,
+        "fingerprint": fingerprint,
+        "target_identity": copy.deepcopy(target_identity),
+        "target_chapter_id": target_chapter_id,
+        "stage": stage,
+        "stage_order": newest.get(
+            "stage_order", generation._checkpoint_order(stage)),
+        "stage_schema_version": newest.get("stage_schema_version", 1),
+        "stage_label": newest.get("stage_label", ""),
+        "saved_at": newest.get("saved_at", ""),
+        "progress": newest.get("progress", 0.0),
+        "checkpoints": history,
+    }
+
+
+def _persist_compatible_generation_checkpoint_mirror(
+    db: Session,
+    job: models.UploadJob,
+    *,
+    fingerprint: str,
+    target_identity: dict[str, str],
+    target_chapter_id: int,
+) -> tuple[dict | None, dict]:
+    """Persist the actual fallback stage before a resumed run can fail."""
+    stored = copy.deepcopy(job.generation_checkpoint or {})
+    normalized = _compatible_generation_checkpoint_envelope(
+        stored,
+        fingerprint=fingerprint,
+        target_identity=target_identity,
+        target_chapter_id=target_chapter_id,
+    )
+    resumed = generation._newest_compatible_concept_checkpoint(
+        normalized) or {}
+    if normalized != stored:
+        original_count = len(
+            generation._concept_checkpoint_entries(stored))
+        retained_count = len(
+            generation._concept_checkpoint_entries(normalized))
+        label = (
+            resumed.get("stage_label")
+            or resumed.get("stage")
+            or "the beginning"
+        )
+        job.generation_checkpoint = normalized
+        job.detail = (
+            f"Checkpoint compatibility refreshed; retry resumes from "
+            f"{label}."
+        )
+        db.commit()
+        drive_checkpoints.schedule_checkpoint_backup(job.id)
+        progress.log(
+            "Persisted compatible checkpoint fallback "
+            f"'{label}' before resume; removed "
+            f"{max(0, original_count - retained_count)} incompatible "
+            "stage(s).",
+            level="warning",
+        )
+    return (normalized or None), resumed
 
 
 def _checkpoint_mismatch_message(
@@ -829,8 +940,15 @@ def generate_post_learning(
         progress.log(message, level="error")
         raise ValueError(message)
     if resume_checkpoint:
-        resumed = generation._newest_compatible_concept_checkpoint(
-            resume_checkpoint) or {}
+        resume_checkpoint, resumed = (
+            _persist_compatible_generation_checkpoint_mirror(
+                db,
+                job,
+                fingerprint=fingerprint,
+                target_identity=target_identity,
+                target_chapter_id=target_chapter_id,
+            )
+        )
         stage_label = (
             resumed.get("stage_label")
             or resumed.get("stage")
@@ -932,6 +1050,21 @@ def generate_post_learning(
             mined_types=artifacts.get("mined_types"),
             source_text=job.mmd_text,
         )
+    except DepositValidationError:
+        db.rollback()
+        db.refresh(job)
+        newest = generation._newest_compatible_concept_checkpoint(
+            job.generation_checkpoint)
+        if (
+            newest
+            and newest.get("stage") == "final_content_ready"
+        ):
+            save_checkpoint({
+                "checkpoint_action": "discard_stage",
+                "stage": "final_content_ready",
+                "reason": "deterministic deposit validation failed",
+            })
+        raise
     except Exception:
         db.rollback()
         raise
@@ -1033,8 +1166,15 @@ def generate_pre_learning_from_upload(
         progress.log(message, level="error")
         raise ValueError(message)
     if resume_checkpoint:
-        resumed = generation._newest_compatible_concept_checkpoint(
-            resume_checkpoint) or {}
+        resume_checkpoint, resumed = (
+            _persist_compatible_generation_checkpoint_mirror(
+                db,
+                job,
+                fingerprint=fingerprint,
+                target_identity=target_identity,
+                target_chapter_id=target_chapter_id,
+            )
+        )
         stage_label = (
             resumed.get("stage_label")
             or resumed.get("stage")

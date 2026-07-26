@@ -84,7 +84,10 @@ def test_deposit_applies_numbering_recap_titlecase_and_topic_columns(db):
              "Example 01: Add 2 and 3 using integer addition rules. "
              "Case 02: Direct addition with a two-digit total. "
              "Example 01: Add 5 and 9 using integer addition rules. // "
-             "Misconception: Students may believe adding integers always increases the value."), "keywords": ""},
+             "Misconception/ Error Analysis: Misconceptions: Students may "
+             "believe adding integers always increases the value.; Error "
+             "Analysis: Students may ignore the sign of a negative addend "
+             "and add only its magnitude."), "keywords": ""},
         {"topic": "operations on numbers", "concept_title": "Culmination - Operations On Numbers",
          "parent_concept": "Culmination",
          "concept_details": ("Description: a long synthesis paragraph // "
@@ -98,7 +101,10 @@ def test_deposit_applies_numbering_recap_titlecase_and_topic_columns(db):
              "Description: b // Types: Type 01: Compute "
              "Case 01: Computing a square by repeated multiplication. "
              "Example 01: Calculate 4 squared and explain the multiplication. // "
-             "Misconception: Students may think squaring a number means doubling it."), "keywords": ""},
+             "Misconception/ Error Analysis: Misconceptions: Students may "
+             "think squaring a number means doubling it.; Error Analysis: "
+             "Students may multiply the base by two instead of multiplying "
+             "it by itself."), "keywords": ""},
         {"topic": "powers and roots", "concept_title": "Culmination - Powers and Roots",
          "parent_concept": "Culmination",
          "concept_details": (
@@ -165,7 +171,7 @@ def test_post_deposit_keeps_math_recap_rich_text_canonical(db):
                 "last terms of an arithmetic progression. // Misconception/ "
                 "Error Analysis: Misconceptions: Students may believe the "
                 "factor n can be omitted.; Error Analysis: Students may "
-                "substitute the common difference for the last term."
+                "use the common difference instead of the last term."
             ),
             "keywords": "",
         },
@@ -640,7 +646,25 @@ def test_roundtrip_recovers_clean_titles(db):
     assert "_" in str(rows[0][12])  # a tag is present
 
 
-def test_deposit_fills_required_fields(client, db):
+def test_deposit_fills_required_fields(client, db, monkeypatch):
+    from app.services import concept_refiner
+
+    monkeypatch.setattr(
+        concept_refiner,
+        "_fallback_misconception",
+        lambda title: (
+            f"Students may believe {title} applies to every social situation "
+            "in the same way."
+        ),
+    )
+    monkeypatch.setattr(
+        concept_refiner,
+        "_fallback_error_analysis",
+        lambda title: (
+            f"Students may omit a relevant source detail when explaining "
+            f"{title}."
+        ),
+    )
     # A fresh chapter with blank (NA-equivalent) required fields.
     chapter = models.Chapter(
         chapter_code="09CBSS_ReqTest", board="CBSE", grade="09",

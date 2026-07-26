@@ -68,6 +68,21 @@ def test_pre_learning_live_context_and_exclusion(monkeypatch):
 
     def fake_openai(system, user, **kw):
         calls.append(user)
+        if "Rows missing usable Misconceptions" in user:
+            return {"rows": [{
+                "topic": "Exponent Readiness",
+                "parent_concept": "Number Foundations",
+                "concept": "Repeated Multiplication Facts",
+                "concept_description": (
+                    "Description: Multiplication facts support repeated-factor "
+                    "reasoning. // Misconception/ Error Analysis: "
+                    "Misconceptions: Students may believe repeated "
+                    "multiplication means adding the factors.; Error Analysis: "
+                    "Students may omit one factor when expanding a repeated "
+                    "multiplication."
+                ),
+                "keywords": "multiplication, factors",
+            }]}
         if len(calls) == 1:
             return {"topics": [{
                 "topic_name": "Exponent Readiness",

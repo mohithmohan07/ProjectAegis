@@ -1322,6 +1322,12 @@ Rules:
   enough concepts for lesson planning. Distinct country/case studies, people,
   events, laws, or processes under one topic stay as separate concepts when a
   teacher would lesson-plan them apart.
+- Keep one coherent teaching domain per row. Never combine disjoint branches
+  that require separate lesson plans into one umbrella concept merely because
+  they occur in one headingless chapter or source block.
+- When the user supplies MUST-PRESERVE SOURCE-BACKED PARENT FAMILIES, retain at
+  least one normal concept for every listed family. Merge only aliases,
+  near-duplicates, cases, examples, or narrow fragments within a family.
 - Keep chapter-opening concepts (named people, paintings, framing ideas that
   appear before section 1) — do not fold them away into a later section concept.
 - Remove a concept when it is a duplicate, pure filler, a structural heading,
@@ -1710,6 +1716,9 @@ TYPE WORDING (each Type must be properly defined):
   Map Skill, Data Interpretation, Grammar Transformation, Literary
   Interpretation, Code Tracing, Algorithm Design, Case Application, or
   Long-Answer Structuring.
+- Use Diagram Interpretation only when the learner must read a supplied visual
+  and the owned inventory item has requires_visual=true. Observing a real-world
+  process is not Diagram Interpretation.
 """)
 
 prompts.register(
@@ -1791,10 +1800,12 @@ prompts.register(
     default="""\
 Review every case-scoped Type assignment against the allowed concept
 Descriptions. Return ONLY strict JSON:
-{"assignments":[{"type_id":"TYPE-0001","concept_id":"CONCEPT-0001","reason":"host description teaches this exact method and output"}]}.
+{"assignments":[{"type_id":"TYPE-0001::CASE-0001::0001","concept_id":"CONCEPT-0001","reason":"host description teaches this exact method and output"}]}.
 
 Rules:
-- Return every supplied type_id exactly once and invent no IDs.
+- Return every supplied opaque type_id exactly once, character-for-character,
+  including every ``::CASE-...::...`` suffix; never shorten it to its original
+  parent Type ID and invent no IDs.
 - Choose only from that unit's allowed_concept_ids.
 - A host is valid only when its title and Description teach the concrete
   Examples' assessed action, inputs, method/approach, constraints, and expected
@@ -2069,6 +2080,10 @@ Rules:
   long contiguous sentence or paragraph from the supplied source. This rule
   applies only to Description; full source questions remain allowed in Types
   Examples.
+- For description_truncated_clause issues: complete or rewrite only the broken
+  Description sentence using the supplied source context. Never guess missing
+  words, and preserve all valid surrounding Description, Types, Activity/Info
+  Hub, mastery, and learner-analysis content.
 - For rich_text_format issues: preserve the mathematical expression exactly,
   but wrap every bare equation or LaTeX fragment as
   ``[Katex] valid LaTeX [/Katex]``. Never leave raw ``$``/``$$`` delimiters,
@@ -2152,28 +2167,30 @@ prompts.register(
     default="""\
 Write or repair the single learner-analysis section for concept rows.
 Return ONLY strict JSON:
-{"rows":[{"topic":"","parent_concept":"","concept":"","concept_description":"","keywords":""}]}.
+{"rows":[{"concept":"","misconception":"","error_analysis":""}]}.
 
 Rules:
 - Each provided normal row is missing usable learner analysis, carries generic
-  filler, or duplicates the same issue across labels. Return the
-  SAME rows: identical topic, parent_concept, concept, keywords, Description,
-  Activity/Info Hub, and Types. Change only the learner-analysis tail.
-- Every row MUST finish with exactly:
-  ``Misconception/ Error Analysis: Misconceptions: <beliefs>; Error Analysis:
-  <mistakes>``.
-  ``Misconceptions`` states commonly held incorrect beliefs or interpretations
+  filler, or duplicates the same issue across labels. Return one compact object
+  for EVERY supplied concept, preserving its exact ``concept`` title. Do not
+  repeat or rewrite Description, Activity/Info Hub, Types, topic, or keywords.
+- ``misconception`` states one commonly held incorrect belief or interpretation
   in learner voice, such as "Students may believe/think/assume ..." or
   "Students may confuse ..."; do not write the correction as the belief.
-  ``Error Analysis`` states plausible procedural, computational,
+  ``error_analysis`` states one plausible procedural, computational,
   representational, or reasoning mistakes while applying the concept, naming
-  the learner and the actual mistaken step or action. Both labelled parts are
-  required and must be distinct. Never emit them as separate top-level sections.
-- Return only the 1-3 highest-value, likely items in each labelled part.
-  Merge overlapping variants instead of producing an exhaustive fragmented list.
+  the learner and the actual mistaken step or action. Both fields are required
+  and must be distinct.
 - For Misconceptions, avoid "should", "instead", "correctly", "remember that",
   and declarative textbook corrections such as "A nation is not ...". The
   Description already teaches the correct idea.
+- For Error Analysis, do not use belief verbs such as believe, think, assume,
+  interpret, confuse, or treat. Name a concrete faulty action or reasoning
+  step instead, such as omitting evidence, changing two variables, recording
+  the wrong observation, comparing unlike cases, or drawing a conclusion from
+  one trial.
+- The Misconception and Error Analysis must concern two different learner
+  problems; do not restate the same issue with different wording.
 - NEVER write templated filler like "Students may apply X as a memorized rule
   without checking the conditions", and never "N/A"/"None"/placeholders.
 - No source artifacts (Example 3, Exercise 1.2, page numbers) and never the
@@ -2836,7 +2853,10 @@ def _section_aware_chunks(mmd_text: str, max_chars: int | None = None) -> list[d
     """
     sections = [
         section for section in parse_mmd_sections(mmd_text)
-        if not _is_filler_source_topic(section.get("heading") or "")
+        if (
+            not _is_filler_source_topic(section.get("heading") or "")
+            and not _is_answer_key_source_section(section)
+        )
     ]
     return _pack_section_chunks(sections, max_chars)
 
@@ -3248,6 +3268,206 @@ def _append_activity_hub(details: str, hub_text: str) -> str:
 _HUB_INVENTORY_KINDS = frozenset({"activity", "experiment_task"})
 _ACTIVITY_PUBLIC_WORD_LIMIT = 55
 _ACTIVITY_PUBLIC_CHAR_LIMIT = 420
+_PLACEMENT_CERTIFICATION_VERSION = 1
+_PLACEMENT_CERTIFICATIONS_KEY = "placement_certifications"
+
+
+def _placement_host_identity(value: dict) -> dict:
+    """Stable persisted identity for one reviewed inventory-item host."""
+    title = str(
+        value.get("concept")
+        or value.get("concept_title")
+        or ""
+    ).strip()
+    is_culmination = bool(
+        value.get("is_culmination")
+        or cr.is_culmination(title)
+    )
+    return {
+        "topic": str(value.get("topic") or "").strip(),
+        "topic_key": _topic_comparison_key(value.get("topic") or ""),
+        "concept": title,
+        # Culmination titles are deterministic recaps and may be renamed when
+        # normal concepts are consolidated. One Culmination per topic is the
+        # stable identity; normal concepts retain their exact normalized title.
+        "concept_key": (
+            "__culmination__"
+            if is_culmination
+            else bi.normalize_question_text(title)
+        ),
+        "is_culmination": is_culmination,
+    }
+
+
+def _placement_certification_ledger(
+    mined_types: dict | None,
+) -> dict | None:
+    """Return a valid qid-host ledger, distinguishing absent from malformed."""
+    if not isinstance(mined_types, dict):
+        return None
+    raw = mined_types.get(_PLACEMENT_CERTIFICATIONS_KEY)
+    if raw is None:
+        return None
+    if (
+        not isinstance(raw, dict)
+        or raw.get("version") != _PLACEMENT_CERTIFICATION_VERSION
+        or not isinstance(raw.get("hosts"), dict)
+    ):
+        return {}
+    return raw
+
+
+def _placement_certification_entry_is_valid(entry: object) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    topic = str(entry.get("topic") or "").strip()
+    concept = str(entry.get("concept") or "").strip()
+    is_culmination = entry.get("is_culmination")
+    basis = entry.get("basis")
+    if (
+        not topic
+        or not concept
+        or not isinstance(is_culmination, bool)
+        or not isinstance(basis, str)
+        or not basis.strip()
+    ):
+        return False
+    return (
+        entry.get("topic_key") == _topic_comparison_key(topic)
+        and entry.get("concept_key")
+        == (
+            "__culmination__"
+            if is_culmination
+            else bi.normalize_question_text(concept)
+        )
+    )
+
+
+def _placement_certification_contract_complete(
+    mined_types: dict | None,
+    inventory: dict | None,
+) -> bool:
+    """Whether a persisted late-stage artifact certifies every inventory qid."""
+    expected_qids = {
+        str(item.get("qid") or "").strip()
+        for item in (inventory or {}).get("items") or []
+        if isinstance(item, dict) and str(item.get("qid") or "").strip()
+    }
+    if not expected_qids:
+        if (
+            not isinstance(mined_types, dict)
+            or _PLACEMENT_CERTIFICATIONS_KEY not in mined_types
+        ):
+            return True
+        ledger = _placement_certification_ledger(mined_types)
+        return bool(ledger) and not ledger["hosts"]
+    ledger = _placement_certification_ledger(mined_types)
+    if not ledger:
+        return False
+    hosts = ledger["hosts"]
+    return (
+        set(hosts) == expected_qids
+        and all(
+            _placement_certification_entry_is_valid(hosts[qid])
+            for qid in expected_qids
+        )
+    )
+
+
+def _reviewed_placement_authority_declared(
+    mined_types: dict | None,
+) -> bool:
+    """Whether terminal placement must use the reviewed qid-host ledger.
+
+    The pre-review raw-task heuristics remain useful for legacy checkpoints and
+    as proposal evidence before host review. Once assignment declares the
+    versioned certification ledger, however, those heuristics must not run as a
+    second independent certifier. Completeness, malformed entries, and drift
+    are enforced by :func:`_placement_certification_violations`.
+    """
+    return bool(
+        isinstance(mined_types, dict)
+        and _PLACEMENT_CERTIFICATIONS_KEY in mined_types
+    )
+
+
+def _reset_placement_certifications(mined_types: dict | None) -> dict | None:
+    if not isinstance(mined_types, dict):
+        return None
+    ledger = {
+        "version": _PLACEMENT_CERTIFICATION_VERSION,
+        "hosts": {},
+    }
+    mined_types[_PLACEMENT_CERTIFICATIONS_KEY] = ledger
+    return ledger
+
+
+def _certify_inventory_host(
+    mined_types: dict | None,
+    qid: str,
+    host: dict,
+    *,
+    basis: str,
+) -> None:
+    """Persist one exact qid -> reviewed host decision."""
+    qid = str(qid or "").strip()
+    if not qid or not isinstance(mined_types, dict):
+        return
+    ledger = _placement_certification_ledger(mined_types)
+    if ledger is None or not ledger:
+        ledger = _reset_placement_certifications(mined_types)
+    identity = _placement_host_identity(host)
+    if (
+        ledger is None
+        or not identity["topic_key"]
+        or not identity["concept_key"]
+    ):
+        raise RuntimeError(
+            f"cannot certify inventory host for {qid}: missing host identity"
+        )
+    candidate = {
+        **identity,
+        "basis": str(basis or "reviewed").strip() or "reviewed",
+    }
+    prior = ledger["hosts"].get(qid)
+    if prior is not None:
+        if not isinstance(prior, dict):
+            raise RuntimeError(
+                f"malformed prior placement certification for {qid}")
+        if (
+            prior.get("topic_key") != candidate["topic_key"]
+            or prior.get("concept_key") != candidate["concept_key"]
+            or bool(prior.get("is_culmination"))
+            != candidate["is_culmination"]
+        ):
+            raise RuntimeError(
+                f"conflicting placement certifications for {qid}"
+            )
+    ledger["hosts"][qid] = candidate
+
+
+def _certified_host_cid(
+    mined_types: dict | None,
+    qid: str,
+    concept_payload_by_id: dict[str, dict],
+) -> str:
+    ledger = _placement_certification_ledger(mined_types)
+    if not ledger:
+        return ""
+    expected = ledger["hosts"].get(str(qid or "").strip())
+    if not _placement_certification_entry_is_valid(expected):
+        return ""
+    matches: list[str] = []
+    for cid, payload in concept_payload_by_id.items():
+        actual = _placement_host_identity(payload)
+        if (
+            actual["topic_key"] == expected.get("topic_key")
+            and actual["concept_key"] == expected.get("concept_key")
+            and actual["is_culmination"]
+            == bool(expected.get("is_culmination"))
+        ):
+            matches.append(cid)
+    return matches[0] if len(matches) == 1 else ""
 
 
 def _strip_public_source_heading(text: str) -> str:
@@ -3324,17 +3544,40 @@ def _mark_activity_hub_placement(record: dict, item: dict) -> None:
 def _compact_activity_hub_note(item: dict, suggested: str = "") -> str:
     """Teacher-facing Activity summary; never copy the full source dump."""
     marker = _activity_hub_marker(item)
-    raw = _strip_public_source_heading(
-        bi.to_plain_text(suggested or _inventory_task_text(item)))
+    task_raw = _strip_public_source_heading(bi.to_plain_text(
+        suggested
+        or item.get("raw_task")
+        or item.get("normalized_task")
+        or _inventory_task_text(item)
+    ))
+    context_raw = _strip_public_source_heading(bi.to_plain_text(
+        item.get("shared_context") or ""
+    ))
     # ``to_plain_text`` removes the surrounding [Katex] tags but deliberately
     # preserves their TeX body. Re-wrap only unambiguous math before the Hub
     # note re-enters the canonical rich-text pipeline.
-    raw = kr.repair_unwrapped_math(raw)
+    task_raw = kr.repair_unwrapped_math(task_raw)
+    context_raw = kr.repair_unwrapped_math(context_raw)
     marker_key = bi.normalize_question_text(marker)
-    if marker_key and bi.normalize_question_text(raw).startswith(marker_key):
-        raw = raw[len(marker):].lstrip(" .:-")
-    sentences = re.split(r"(?<=[.!?])\s+", raw)
-    gist = " ".join(sentences[:2]).strip()
+    if (
+        marker_key
+        and bi.normalize_question_text(task_raw).startswith(marker_key)
+    ):
+        task_raw = task_raw[len(marker):].lstrip(" .:-")
+    task_sentences = re.split(r"(?<=[.!?])\s+", task_raw)
+    task_gist = " ".join(task_sentences[:2]).strip()
+    gist = task_gist
+    if context_raw:
+        context_sentence = re.split(
+            r"(?<=[.!?])\s+", context_raw, maxsplit=1)[0].strip()
+        with_context = " ".join(
+            part for part in (context_sentence, task_gist) if part
+        )
+        if (
+            len(with_context.split()) <= _ACTIVITY_PUBLIC_WORD_LIMIT
+            and len(with_context) <= _ACTIVITY_PUBLIC_CHAR_LIMIT
+        ):
+            gist = with_context
     words = gist.split()
     if len(words) > _ACTIVITY_PUBLIC_WORD_LIMIT:
         gist = " ".join(words[:_ACTIVITY_PUBLIC_WORD_LIMIT]).rstrip(" ,;:") + "…"
@@ -3356,7 +3599,10 @@ def _compact_activity_hub_note(item: dict, suggested: str = "") -> str:
     for image_tag in image_tags:
         if image_tag not in note:
             note = f"{note.rstrip('.')} {image_tag}"
-    return kr.canonicalize_rich_text(note.rstrip() + ".")
+    note = note.rstrip()
+    if not note.endswith((".", "!", "?")):
+        note += "."
+    return kr.canonicalize_rich_text(note)
 
 
 def _activity_hub_locations(records: list[dict], item: dict) -> list[int]:
@@ -3412,6 +3658,7 @@ def _hub_inventory_items(inventory: dict | None) -> list[dict]:
 
 def _normalize_activity_hubs_from_inventory(
     records: list[dict], inventory: dict | None,
+    mined_types: dict | None = None,
 ) -> list[dict]:
     """Rebuild source-owned Hub notes exactly once from authoritative items.
 
@@ -3446,35 +3693,63 @@ def _normalize_activity_hubs_from_inventory(
         )
 
     target_by_qid: dict[str, int] = {}
-    for item in items:
-        qid = str(item.get("qid") or "").strip()
-        hub_locations = [
-            index for index in _activity_hub_locations(records, item)
-            if eligible(index, item)
-        ]
-        example_locations = [
-            index for index in _rendered_inventory_example_locations(
-                records, item)
-            if eligible(index, item)
-        ]
-        target = next(
-            (
-                index for index in example_locations
-                if index in hub_locations
-            ),
-            -1,
-        )
-        if target < 0 and len(hub_locations) == 1:
-            target = hub_locations[0]
-        if target < 0 and example_locations:
-            target = example_locations[0]
-        if target < 0:
-            candidate = _best_record_index_for_inventory_item(
-                records, item, allow_culmination=False)
-            if eligible(candidate, item):
-                target = candidate
-        if target >= 0:
+    certification_declared = (
+        isinstance(mined_types, dict)
+        and _PLACEMENT_CERTIFICATIONS_KEY in mined_types
+    )
+    if certification_declared and items:
+        ledger = _placement_certification_ledger(mined_types)
+        if not ledger:
+            raise RuntimeError(
+                "activity hub normalization refused a malformed placement "
+                "certification ledger"
+            )
+        concept_payload = _scope_payload_from_records(records)
+        index_by_cid = {
+            f"CONCEPT-{index + 1:04d}": index
+            for index in range(len(records))
+        }
+        for item in items:
+            qid = str(item.get("qid") or "").strip()
+            cid = _certified_host_cid(
+                mined_types, qid, concept_payload)
+            target = index_by_cid.get(cid, -1)
+            if not eligible(target, item):
+                raise RuntimeError(
+                    "activity hub normalization could not resolve the "
+                    f"certified exact-topic normal host for {qid}"
+                )
             target_by_qid[qid] = target
+    else:
+        for item in items:
+            qid = str(item.get("qid") or "").strip()
+            hub_locations = [
+                index for index in _activity_hub_locations(records, item)
+                if eligible(index, item)
+            ]
+            example_locations = [
+                index for index in _rendered_inventory_example_locations(
+                    records, item)
+                if eligible(index, item)
+            ]
+            target = next(
+                (
+                    index for index in example_locations
+                    if index in hub_locations
+                ),
+                -1,
+            )
+            if target < 0 and len(hub_locations) == 1:
+                target = hub_locations[0]
+            if target < 0 and example_locations:
+                target = example_locations[0]
+            if target < 0:
+                candidate = _best_record_index_for_inventory_item(
+                    records, item, allow_culmination=False)
+                if eligible(candidate, item):
+                    target = candidate
+            if target >= 0:
+                target_by_qid[qid] = target
 
     out: list[dict] = []
     for record in records:
@@ -3614,7 +3889,7 @@ def _inventory_item_already_in_hubs(
 def _place_activity_inventory_into_hubs(
     records: list[dict], inventory: dict | None,
 ) -> list[dict]:
-    """Fallback: place remaining hub inventory items by topic heuristics."""
+    """Deterministically place only a proven Hub host; leave ambiguity open."""
     items = [
         item for item in _hub_inventory_items(inventory)
         if not _inventory_item_already_in_hubs(records, item)
@@ -3622,20 +3897,37 @@ def _place_activity_inventory_into_hubs(
     if not items or not records:
         return records
     out = [dict(rec) for rec in records]
+    concept_payload = _scope_payload_from_records(out)
     placed = 0
     for item in items:
-        text = _inventory_task_text(item)
-        # Activity/Info Hub never belongs on Culmination, even when no normal
-        # row shares the item's topic hint.
-        index = _best_record_index_for_inventory_item(
-            out, item, allow_culmination=False)
-        if index < 0:
-            continue
-        label = (
-            item.get("source_label")
-            or item.get("parent_source_label")
-            or "Activity"
+        topic_key = _topic_comparison_key(item.get("topic_hint") or "")
+        candidate_cids = tuple(
+            cid for cid, payload in concept_payload.items()
+            if (
+                not payload.get("is_culmination")
+                and (
+                    not topic_key
+                    or _topic_comparison_key(payload.get("topic") or "")
+                    == topic_key
+                )
+            )
         )
+        evidence_unit = {
+            "type_id": str(item.get("qid") or "").strip(),
+            "topic_match_hint": item.get("topic_hint") or "",
+            "placement_scope": "normal",
+            "is_activity": True,
+            "_source_task_evidence": _inventory_task_text(item),
+        }
+        cid = (
+            candidate_cids[0]
+            if len(candidate_cids) == 1
+            else _high_confidence_assignment_override(
+                evidence_unit, candidate_cids, concept_payload)
+        )
+        if not cid:
+            continue
+        index = int(cid.rsplit("-", 1)[-1]) - 1
         hub = _compact_activity_hub_note(item)
         out[index]["concept_details"] = _append_activity_hub(
             out[index].get("concept_details") or "", hub)
@@ -3643,8 +3935,8 @@ def _place_activity_inventory_into_hubs(
         placed += 1
     if placed:
         progress.log(
-            f"Fallback-placed {placed} activity/experiment item(s) into "
-            "Activity/Info Hub.",
+            f"Deterministically placed {placed} activity/experiment item(s) "
+            "into Activity/Info Hub.",
             level="success",
         )
     return out
@@ -3652,27 +3944,40 @@ def _place_activity_inventory_into_hubs(
 
 def _populate_activity_hubs_via_api(
     records: list[dict], inventory: dict | None, *, meta: dict,
+    mined_types: dict | None = None, max_attempts: int = 3,
 ) -> list[dict]:
-    """GPT-first Activity/Info Hub population; deterministic fallback for gaps."""
+    """Certify every Activity Hub host; never guess an ambiguous destination."""
     import json as _json
 
-    pending = [
-        item for item in _hub_inventory_items(inventory)
-        if not _inventory_item_already_in_hubs(records, item)
-    ]
+    items_by_qid: dict[str, dict] = {}
+    for item in _hub_inventory_items(inventory):
+        qid = str(item.get("qid") or "").strip()
+        if qid:
+            items_by_qid.setdefault(qid, item)
+    items = list(items_by_qid.values())
     if not records:
+        if items:
+            raise RuntimeError(
+                "activity hub placement failed: no concept hosts available")
         return records
-    if not pending:
-        # A Hub may have been populated by an earlier assignment pass. It is
-        # no longer pending, but its assessable exact Example must still be
-        # co-located before the snapshot/final placement guards run.
-        return _align_activity_examples_with_hubs(records, inventory)
+    if not items:
+        return _normalize_activity_hubs_from_inventory(
+            records, inventory, mined_types)
 
-    cid_map: dict[str, int] = {}
+    certification_owner = (
+        mined_types if isinstance(mined_types, dict) else {"types": []}
+    )
+    if _PLACEMENT_CERTIFICATIONS_KEY not in certification_owner:
+        _reset_placement_certifications(certification_owner)
+    elif not _placement_certification_ledger(certification_owner):
+        raise RuntimeError(
+            "activity hub placement refused a malformed placement "
+            "certification ledger"
+        )
+
     concept_payload: list[dict] = []
     for i, rec in enumerate(records, start=1):
         cid = f"CONCEPT-{i:04d}"
-        cid_map[cid] = i - 1
         concept_payload.append({
             "concept_id": cid,
             "topic": rec.get("topic", ""),
@@ -3682,85 +3987,209 @@ def _populate_activity_hubs_via_api(
             "existing_activity_hub": cr.activity_hub_body(
                 rec.get("concept_details") or ""),
         })
-    inventory_payload = []
-    for item in pending:
-        inventory_payload.append({
-            "qid": (item.get("qid") or "").strip(),
-            "source_kind": (item.get("source_kind") or "").strip().lower(),
-            "source_label": item.get("source_label") or "",
-            "topic_hint": item.get("topic_hint") or "",
-            "raw_task": _inventory_task_text(item),
-        })
-    inventory_payload = [row for row in inventory_payload if row["qid"]]
-    if not inventory_payload:
-        return records
-
-    system = prompts.get_text("concepts.activity_hub.system")
-    user = (
-        _metadata_block(meta)
-        + "\nPlace every pending activity/experiment/discussion inventory item "
-        "into Activity/Info Hub on a normal concept:\n"
-        + _json.dumps({
-            "concepts": concept_payload,
-            "pending_inventory": inventory_payload,
-        }, ensure_ascii=False)
-    )
-    progress.log(
-        f"Populating Activity/Info Hub via API for {len(inventory_payload)} "
-        "inventory item(s).")
-    data = _openai_json(system, user, purpose="concept_detailing")
-    out = [dict(rec) for rec in records]
-    placed_qids: set[str] = set()
-    for placement in (data or {}).get("placements") or []:
-        if not isinstance(placement, dict):
-            continue
-        cid = (placement.get("concept_id") or "").strip()
-        qid = (placement.get("qid") or "").strip()
-        if cid not in cid_map or not qid or qid in placed_qids:
-            continue
-        index = cid_map[cid]
-        if cr.is_culmination(out[index].get("concept_title") or ""):
-            continue
-        item = next(
-            (row for row in pending if (row.get("qid") or "").strip() == qid),
-            None,
+    concept_payload_by_id = {
+        row["concept_id"]: row for row in concept_payload
+    }
+    allowed_cids_by_qid: dict[str, tuple[str, ...]] = {}
+    ambiguous: dict[str, dict] = {}
+    deterministic = 0
+    ledger = _placement_certification_ledger(certification_owner)
+    if not ledger:
+        raise RuntimeError(
+            "activity hub placement could not initialize its placement "
+            "certification ledger"
         )
-        if item is None:
+    for qid, item in items_by_qid.items():
+        expected_topic = _topic_comparison_key(
+            item.get("topic_hint") or "")
+        allowed = tuple(
+            row["concept_id"]
+            for row in concept_payload
+            if (
+                not row["is_culmination"]
+                and (
+                    not expected_topic
+                    or _topic_comparison_key(row.get("topic") or "")
+                    == expected_topic
+                )
+            )
+        )
+        if not allowed:
+            raise RuntimeError(
+                "activity hub placement failed: no exact-topic normal "
+                f"concept host for {qid}"
+            )
+        allowed_cids_by_qid[qid] = allowed
+
+        existing_certification = ledger["hosts"].get(qid)
+        if existing_certification is not None:
+            if not _placement_certification_entry_is_valid(
+                existing_certification
+            ):
+                raise RuntimeError(
+                    "activity hub placement failed: malformed existing "
+                    f"certification for {qid}"
+                )
+            certified_cid = _certified_host_cid(
+                certification_owner, qid, concept_payload_by_id)
+            if not certified_cid:
+                raise RuntimeError(
+                    "activity hub placement failed: existing certification "
+                    f"for {qid} does not resolve to one current concept"
+                )
+            if certified_cid not in allowed:
+                raise RuntimeError(
+                    "activity hub placement failed: existing certification "
+                    f"for {qid} is not an exact-topic normal host"
+                )
             continue
-        expected_topic = _topic_comparison_key(item.get("topic_hint") or "")
-        target_topic = _topic_comparison_key(out[index].get("topic") or "")
-        if expected_topic and target_topic != expected_topic:
-            # GPT owns the semantic concept choice only within the source
-            # item's authoritative topic. Leave an out-of-topic choice pending
-            # for deterministic exact-topic fallback.
+
+        evidence_unit = {
+            "type_id": qid,
+            "topic_match_hint": item.get("topic_hint") or "",
+            "placement_scope": "normal",
+            "is_activity": True,
+            "_source_task_evidence": _inventory_task_text(item),
+        }
+        existing_locations = _activity_hub_locations(records, item)
+        existing_cid = (
+            f"CONCEPT-{existing_locations[0] + 1:04d}"
+            if len(existing_locations) == 1 else ""
+        )
+        if existing_cid not in allowed:
+            existing_cid = ""
+        if existing_cid:
+            proven_cid = existing_cid
+        elif len(allowed) == 1:
+            proven_cid = allowed[0]
+        else:
+            proven_cid = _high_confidence_assignment_override(
+                evidence_unit, allowed, concept_payload_by_id)
+        if proven_cid:
+            _certify_inventory_host(
+                certification_owner,
+                qid,
+                concept_payload_by_id[proven_cid],
+                basis=(
+                    "existing_activity_hub"
+                    if existing_cid
+                    else (
+                        "sole_exact_topic_host"
+                        if len(allowed) == 1
+                        else "source_evidence"
+                    )
+                ),
+            )
+            deterministic += 1
             continue
-        # The model chooses the semantic host only.  Public wording is always
-        # rebuilt from the authoritative source prompt so a suggested note
-        # cannot leak the activity's result/answer or attach a nearby image.
-        hub_note = _compact_activity_hub_note(item)
-        out[index]["concept_details"] = _append_activity_hub(
-            out[index].get("concept_details") or "", hub_note)
-        _mark_activity_hub_placement(out[index], item)
-        placed_qids.add(qid)
-    if placed_qids:
+        ambiguous[qid] = item
+
+    if deterministic:
         progress.log(
-            f"API-placed {len(placed_qids)} item(s) into Activity/Info Hub.",
+            f"Deterministically certified {deterministic} Activity/Info Hub "
+            "host(s) from sole-host or source evidence.",
             level="success",
         )
-    remaining = {
-        "items": [
-            item for item in pending
-            if (item.get("qid") or "").strip() not in placed_qids
-        ],
-    }
-    if remaining["items"]:
-        progress.log(
-            f"{len(remaining['items'])} Activity/Info Hub item(s) missed by "
-            "API placement; applying topic-heuristic fallback.",
-            level="warning",
+
+    system = prompts.get_text("concepts.activity_hub.system")
+    rejection_reason_by_qid: dict[str, str] = {}
+    api_certified = 0
+    for attempt in range(1, max(1, max_attempts) + 1):
+        if not ambiguous:
+            break
+        inventory_payload = []
+        for qid, item in ambiguous.items():
+            payload = {
+                "qid": qid,
+                "source_kind": (
+                    item.get("source_kind") or "").strip().lower(),
+                "source_label": item.get("source_label") or "",
+                "topic_hint": item.get("topic_hint") or "",
+                "raw_task": _inventory_task_text(item),
+                "allowed_concept_ids": list(
+                    allowed_cids_by_qid[qid]),
+            }
+            if qid in rejection_reason_by_qid:
+                payload["previous_rejection"] = (
+                    rejection_reason_by_qid[qid])
+            inventory_payload.append(payload)
+        user = (
+            _metadata_block(meta)
+            + "\nPlace every pending activity/experiment/discussion inventory "
+            "item into Activity/Info Hub on exactly one allowed normal "
+            "concept. Return one verdict for every qid:\n"
+            + _json.dumps({
+                "concepts": concept_payload,
+                "pending_inventory": inventory_payload,
+            }, ensure_ascii=False)
         )
-        out = _place_activity_inventory_into_hubs(out, remaining)
-    return _normalize_activity_hubs_from_inventory(out, inventory)
+        progress.log(
+            "Reviewing semantic Activity/Info Hub hosts via API for "
+            f"{len(inventory_payload)} inventory item(s), attempt {attempt}.")
+        data = _openai_json(
+            system, user, purpose="concept_detailing")
+        proposed: dict[str, str] = {}
+        invalid: set[str] = set()
+        for placement in (
+            data.get("placements") or []
+            if isinstance(data, dict) else []
+        ):
+            if not isinstance(placement, dict):
+                continue
+            qid = str(placement.get("qid") or "").strip()
+            cid = str(placement.get("concept_id") or "").strip()
+            if qid not in ambiguous:
+                continue
+            if qid in proposed:
+                invalid.add(qid)
+                continue
+            if cid not in allowed_cids_by_qid[qid]:
+                invalid.add(qid)
+                rejection_reason_by_qid[qid] = (
+                    "concept_id was not an allowed exact-topic normal host")
+                continue
+            proposed[qid] = cid
+        for qid in invalid:
+            proposed.pop(qid, None)
+            rejection_reason_by_qid.setdefault(
+                qid, "duplicate or invalid verdict")
+        for qid in set(ambiguous) - set(proposed):
+            rejection_reason_by_qid.setdefault(
+                qid, "missing verdict")
+        for qid, cid in proposed.items():
+            _certify_inventory_host(
+                certification_owner,
+                qid,
+                concept_payload_by_id[cid],
+                basis="activity_host_review",
+            )
+            ambiguous.pop(qid, None)
+            rejection_reason_by_qid.pop(qid, None)
+            api_certified += 1
+        if ambiguous:
+            progress.log(
+                f"Activity host review left {len(ambiguous)} uncertified "
+                "item(s); retrying only those qids.",
+                level="warning",
+            )
+
+    if ambiguous:
+        details = ", ".join(
+            f"{qid} ({rejection_reason_by_qid.get(qid, 'missing verdict')})"
+            for qid in sorted(ambiguous)
+        )
+        raise RuntimeError(
+            "activity hub placement review did not certify every inventory "
+            "item: " + details
+        )
+
+    if api_certified:
+        progress.log(
+            f"API-certified {api_certified} Activity/Info Hub host(s).",
+            level="success",
+        )
+    return _normalize_activity_hubs_from_inventory(
+        records, inventory, certification_owner)
 
 
 def _types_assign_system(subject: str) -> str:
@@ -3797,15 +4226,36 @@ _WORKED_EXAMPLE_START_RE = re.compile(
     r"([A-Za-z0-9]+(?:\.[A-Za-z0-9]+)*)[ \t]*[:：.)-]?[ \t]*",
 )
 _NUMBERED_TASK_START_RE = re.compile(
-    r"(?im)^[ \t]*(?:q(?:uestion)?[ \t]*)?[\[(]?"
-    r"(\d{1,3})[\])]?[ \t]*(?:[.):-][ \t]*|[ \t]+)"
+    r"(?im)^[ \t]*(?:\\item[ \t]*\[[ \t]*)?"
+    r"(?:q(?:uestion)?[ \t]*)?[\[(]?(\d{1,3})"
+    r"(?:[ \t]*[.)\]:-][ \t]*\]?[ \t]*|[ \t]+)"
+)
+_BULLET_TASK_START_RE = re.compile(
+    r"(?im)^[ \t]*\\item[ \t]*\[[ \t]*-[ \t]*\][ \t]*",
+)
+_DISCOVER_PROJECT_HEADING_RE = re.compile(
+    r"^discover\s*,?\s*design\s*,?\s*and\s*debate\b",
+    re.IGNORECASE,
 )
 _SOLUTION_START_RE = re.compile(
-    r"(?im)^[ \t]*(?:solutions?|answers?)[ \t]*[:：][ \t]*",
+    r"(?im)^[ \t]*(?:(?:solutions?|answers?)|soln?|ans)[ \t]*"
+    r"(?:[:：.]|[-–—])[ \t]*",
+)
+_CALLOUT_TASK_START_RE = re.compile(
+    r"(?im)^[ \t]*(?:\\item[ \t]*\[[ \t]*\][ \t]*)?"
+    r"(?:\(\s*\?\s*\)|\?)[ \t]*",
+)
+_BODY_FIGURE_IT_OUT_RE = re.compile(
+    r"(?im)^[ \t]*(?:\\item[ \t]*\[[ \t]*\][ \t]*)?"
+    r"(?:\(\s*\?\s*\)|\?)[ \t]*figure[ \t]+it[ \t]+out"
+    r"[ \t]*[:.!]?[ \t]*$",
 )
 _CHAPTER_WIDE_TASK_HEADING_RE = re.compile(
     r"^(?:chapter\s+)?(?:exercises?|questions?|review(?:\s+questions?)?|"
+    r"(?:\?\s*)?figure\s+it\s+out|"
     r"assessment|write\s+in\s+brief|discuss|project|"
+    r"keep\s+the\s+curiosity\s+alive|"
+    r"discover\s*,?\s*design\s*,?\s*and\s*debate|"
     r"end[-\s]+of[-\s]+chapter\s+(?:review|questions?))\s*[:.]?$",
     re.IGNORECASE,
 )
@@ -3817,9 +4267,16 @@ _CHECKPOINT_CONTAINER_HEADING_RE = re.compile(
 )
 _QUESTION_SENTENCE_RE = re.compile(
     r"(?:^|(?<=[.!?:])\s+)"
-    r"(?P<question>(?:(?:what|why|how|when|where|who|whom|whose|which)\b|"
+    r"(?P<question>(?:(?:and|but|or|now)\s+)?"
+    r"(?:(?:what|why|how|when|where|who|whom|whose|which)\b|"
     r"(?:can|could|do|does|did|is|are|was|were|will|would|should|has|have|"
     r"had|may)\b)[^?]{8,800}\?)",
+    re.IGNORECASE,
+)
+_CONDITIONAL_QUESTION_FOLLOWUP_RE = re.compile(
+    r"^\s+(?P<question>If\s+(?:not|so)\s*,\s*"
+    r"(?:can|could|do|does|did|is|are|was|were|will|would|should|"
+    r"has|have|had|may)\b[^?]{3,400}\?)",
     re.IGNORECASE,
 )
 _LEADING_SOURCE_TASK_LABEL_RE = re.compile(
@@ -3871,7 +4328,18 @@ def _inventory_task_without_solution(text: str, *, aggressive: bool = False) -> 
     text = (text or "").strip()
     match = _SOLUTION_START_RE.search(text)
     if match is None and aggressive:
-        match = re.search(r"(?i)\b(?:solutions?|answers?)\s*[:：]", text)
+        match = re.search(
+            r"(?i)(?<=[?!.])\s+(?:(?:solutions?|answers?)|soln?|ans)\s*"
+            r"(?:[:：.]|[-–—])",
+            text,
+        )
+    if match is None and aggressive:
+        match = re.search(
+            r"(?i)(?<=[?？])\s+(?:(?:yes|no)\s*,\s*(?:since|because)|"
+            r"we\s+know\s+that|we\s+can\s+see\s+that|thus|therefore|"
+            r"hence|clearly)\b",
+            text,
+        )
     if match is not None:
         text = text[:match.start()]
     return re.sub(r"\s+", " ", text).strip(" \n\t")
@@ -3918,33 +4386,384 @@ def _question_prompts_from_text(text: str) -> list[str]:
     the semantic inventory pass can still classify ambiguous prose.
     """
     prompts_out: list[str] = []
-    text = _inventory_comparison_text(str(text or ""))
+    # Mathpix image URLs contain query-string ``?`` characters; those are not
+    # learner questions. Remove visual markup and expose list items as ordinary
+    # source lines before scanning the prompt wording.
+    text = _strip_source_visual_markup(str(text or ""))
+    text = re.sub(
+        r"\\(?:begin|end)\{(?:itemize|enumerate)\}", "\n", text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"(?im)^\s*\\item(?:\[[^\]]*\])?\s*", "", text)
+    text = _inventory_comparison_text(text)
     source = str(text or "").translate(str.maketrans({"？": "?", "！": "!"}))
     for source_line in source.splitlines():
         normalized = re.sub(r"\s+", " ", source_line).strip()
         if not normalized:
             continue
-        for match in _QUESTION_SENTENCE_RE.finditer(normalized):
+        matches = list(_QUESTION_SENTENCE_RE.finditer(normalized))
+        for match_index, match in enumerate(matches):
             prefix = normalized[:match.start()].strip(" '\"“”‘’*-")
-            if prefix:
+            leading_connector = bool(re.fullmatch(
+                r"(?i)(?:and|but|or|now)", prefix))
+            if prefix and not leading_connector:
                 continue
-            prompt = match.group("question").strip()
+            prompt = (
+                normalized[:match.end()].strip()
+                if leading_connector
+                else match.group("question").strip()
+            )
+            # A printed discussion prompt can carry contextual prose and
+            # several related questions on one source line. Preserve that
+            # complete occurrence when the line ends with its last question.
+            last_match = matches[-1]
+            compound_prompt = bool(
+                match_index == 0
+                and last_match.end() == len(normalized)
+                and last_match.end() > match.end()
+            )
+            if compound_prompt:
+                prompt = normalized[:last_match.end()].strip()
+            # A conditional callback on the same source line completes the
+            # preceding ask. Keeping it with that prompt prevents the public
+            # Example from silently dropping the requested explanation.
+            followup = _CONDITIONAL_QUESTION_FOLLOWUP_RE.match(
+                normalized[match.end():])
+            if followup is not None:
+                prompt = f"{prompt} {followup.group('question').strip()}"
+            directive = re.match(
+                r"(?i)^\s+(?P<directive>"
+                r"(?:Record|Write|Discuss|Explain|Describe|Compare|Identify|"
+                r"Give|State|List|Note)\b[^.!?]*(?:[.!?]|$))",
+                normalized[match.end():],
+            )
+            if directive is not None:
+                prompt = (
+                    f"{prompt} {directive.group('directive').strip()}"
+                ).strip()
             if prompt and prompt not in prompts_out:
                 prompts_out.append(prompt)
+            if compound_prompt:
+                break
     return prompts_out
+
+
+_SCIENTIFIC_INVESTIGATION_CONTEXT_RE = re.compile(
+    r"\b(?:simple|scientific)\s+experiments?\b.*?"
+    r"\bchange\s+only\s+one\s+thing\s+at\s+a\s+time\b.*?"
+    r"\bsystematic\s+investigation\b",
+    re.IGNORECASE | re.DOTALL,
+)
+_HEADINGLESS_OVERVIEW_QUESTION_RE = re.compile(
+    r"(?im)(?:^|(?<=[.!?])\s+|(?<=:)\s+|\blike\s+)"
+    r"(?:but\s+|and\s+)?"
+    r"(?P<question>"
+    r"(?:have\s+you\s+noticed\b|"
+    r"(?:what|why|how|when|where|who|whom|whose|which)\b|"
+    r"(?:can|could|do|does|did|is|are|was|were|will|would|should|"
+    r"has|have|had|may)\b)"
+    r"[^?.\n]{8,500}\?)",
+)
+_HEADINGLESS_OVERVIEW_COMPANION_RE = re.compile(
+    r"(?i)^\s+(?P<companion>Or\s+how\b[^.!?\n]{8,400}\.)",
+)
+_NEGATIVE_AUXILIARY_QUESTION_RE = re.compile(
+    r"(?i)^(?:is|are|was|were|has|have|had|do|does|did|can|could|"
+    r"will|would|should|may)n['\N{RIGHT SINGLE QUOTATION MARK}]t\b",
+)
+_DIRECT_PROMPT_LEADING_CONNECTOR_RE = re.compile(
+    r"(?i)^(?:and|or|but)\s+",
+)
+_DIRECT_PROMPT_CONTEXT_STOP_WORDS = frozenset({
+    "a", "an", "and", "are", "but", "by", "can", "could", "did", "do",
+    "does", "for", "from", "had", "has", "have", "how", "in", "is", "it",
+    "may", "of", "on", "or", "should", "the", "this", "to", "was", "were",
+    "what", "when", "where", "which", "who", "whom", "whose", "why", "will",
+    "would", "you",
+})
+_SCIENTIFIC_INVESTIGATION_PROMPT_RES = (
+    (
+        "Scientific investigation: variable question",
+        re.compile(
+            r"\bWhat\s+are\s+the\s+different\s+things\s+that\s+may\s+"
+            r"change\b[^?]{8,400}\?",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "Scientific investigation: controls and observations",
+        re.compile(
+            r"\bwhat\s+all\s+can\s+(?:we|you)\s+change\s+or\s+control\s+"
+            r"when\s+(?:we|you)\s+do\s+the\s+experiment,\s*and\s+what\s+"
+            r"all\s+can\s+(?:we|you)\s+observe\s+to\s+see\s+if\s+these\s+"
+            r"changes\s+made\s+any\s+difference\.",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "Scientific investigation: observation and measurement",
+        re.compile(
+            r"\b(?:However,\s*)?to\s+make\s+sense\s+of\s+the\s+changes,\s*"
+            r"(?:we|you)\s+also\s+need\s+to\s+think\s+of\s+what\s+"
+            r"(?:we|you)\s+can\s+observe\s+or\s+measure\.",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "Scientific investigation: measuring an outcome",
+        re.compile(
+            r"\bMaybe\s+(?:we|you)\s+can\s+start\s+by\s+checking\s+whether\b"
+            r"[^.]{8,500}?\bor\s+(?:we|you)\s+can\s+measure\b[^.]{8,500}\.",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "Scientific investigation: testing a changed condition",
+        re.compile(
+            r"\bWe\s+can\s+check\s+whether\b[^.]{8,400}\.",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "Scientific investigation: controlled variable comparison",
+        re.compile(
+            r"\bFor\s+example,\s*if\s+(?:we|you)\s+wanted\s+to\s+see\s+"
+            r"the\s+effect\s+of\b[^.]{10,800}?\b(?:we|you)\s+would\b"
+            r"[^.]{10,800}\.",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "Scientific investigation: recording observations",
+        re.compile(
+            r"\bIt\s+is\s+also\s+a\s+good\s+idea\s+to\s+keep\s+notes\s+"
+            r"of\s+everything\s+that\s+you\s+see\s+and\s+sense\s+when\s+"
+            r"doing\s+an\s+experiment\.\s*"
+            r"(?:Did|What|Which|How)\b[^?]{8,400}\?",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "Scientific investigation: fresh and stored samples",
+        re.compile(
+            r"\bDo\b[^?]{8,300}?\bwhen\s+made\s+fresh\s+or\s+from\s+"
+            r"stored\b[^?]{0,160}\?",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "Scientific investigation: changing the sample",
+        re.compile(
+            r"\bWhat\s+happens\s+if\s+(?:I|we|you)\b[^?]{8,300}?\b"
+            r"before\b[^?]{3,160}\?",
+            re.IGNORECASE,
+        ),
+    ),
+)
+
+
+def _direct_prompt_question_tokens(value: str) -> list[str]:
+    """Normalize a question for a conservative single-gap comparison."""
+    text = _inventory_comparison_text(str(value or "")).strip()
+    text = _DIRECT_PROMPT_LEADING_CONNECTOR_RE.sub("", text, count=1)
+    return re.findall(r"[a-z0-9]+", text.lower())
+
+
+def _direct_prompt_single_gap(
+        left: str, right: str) -> tuple[bool, tuple[str, ...]]:
+    """Whether two questions differ by one short contiguous source phrase.
+
+    This is deliberately narrower than fuzzy matching. It recognizes a
+    repeated callback such as ``Why is one side [of a puri] thinner ...?``
+    without treating reordered, paraphrased, or merely topically similar
+    questions as the same source task. The returned tuple is the phrase
+    omitted from the shorter question.
+    """
+    left_text = _inventory_comparison_text(str(left or "")).strip()
+    right_text = _inventory_comparison_text(str(right or "")).strip()
+    if not left_text.endswith("?") or not right_text.endswith("?"):
+        return False, ()
+    left_tokens = _direct_prompt_question_tokens(left_text)
+    right_tokens = _direct_prompt_question_tokens(right_text)
+    if min(len(left_tokens), len(right_tokens)) < 8:
+        return False, ()
+    if len(left_tokens) == len(right_tokens):
+        return False, ()
+    shorter, longer = sorted(
+        (left_tokens, right_tokens), key=lambda tokens: len(tokens))
+    if not 1 <= len(longer) - len(shorter) <= 3:
+        return False, ()
+
+    prefix = 0
+    while (
+        prefix < len(shorter)
+        and shorter[prefix] == longer[prefix]
+    ):
+        prefix += 1
+    suffix = 0
+    while (
+        suffix < len(shorter) - prefix
+        and shorter[-(suffix + 1)] == longer[-(suffix + 1)]
+    ):
+        suffix += 1
+    if prefix < 4 or suffix < 4 or prefix + suffix != len(shorter):
+        return False, ()
+    omitted = tuple(longer[prefix:len(longer) - suffix])
+    return bool(omitted), omitted
+
+
+def _headingless_overview_prompt_label(task: str, index: int) -> str:
+    """Give each deterministic opening prompt a stable, non-colliding label."""
+    tokens = set(_direct_prompt_question_tokens(task))
+    labels = (
+        (("dough", "rise"), "Chapter opening: dough rising"),
+        (("world", "warmer"), "Chapter opening: global warming"),
+        (("body", "healthy"), "Chapter opening: staying healthy"),
+        (("fight", "infections"), "Chapter opening: fighting infections"),
+        (("side", "puri", "thinner"), "Chapter opening: puri side thickness"),
+        (
+            ("noticed", "puri", "phulka"),
+            "Chapter opening: puri and phulka observations",
+        ),
+        (("puff", "balloon"), "Chapter opening: puri balloon puffing"),
+    )
+    for terms, label in labels:
+        if all(term in tokens for term in terms):
+            return label
+    return f"Chapter opening question {index:02d}"
+
+
+def _headingless_overview_prose_prompts(text: str) -> list[dict]:
+    """Recover explicit opening questions from a headingless science chapter.
+
+    Ordinary prose questions remain semantic-model territory because many are
+    rhetorical. This backstop activates only when the same section contains a
+    complete, mechanically recognizable scientific-investigation passage. It
+    scans only the overview before that passage and accepts questions at strong
+    sentence, colon, or textbook ``like ...?`` boundaries.
+    """
+    source = _inventory_comparison_text(str(text or ""))
+    if not _SCIENTIFIC_INVESTIGATION_CONTEXT_RE.search(source):
+        return []
+    method_prompts = _scientific_investigation_prose_prompts(source)
+    if not method_prompts:
+        return []
+    cutoff = min(prompt["position"] for prompt in method_prompts)
+    overview = source[:cutoff]
+    # Preserve character offsets while preventing Mathpix image query strings
+    # (``?height=...``) from being mistaken for prose punctuation.
+    masked = re.sub(
+        r"!\[[^\]]*\]\([^)]+\)",
+        lambda match: " " * len(match.group(0)),
+        overview,
+    )
+    candidates: list[dict] = []
+    for match in _HEADINGLESS_OVERVIEW_QUESTION_RE.finditer(masked):
+        start, end = match.span("question")
+        task = re.sub(r"\s+", " ", overview[start:end]).strip()
+        if (
+            not task
+            or _NEGATIVE_AUXILIARY_QUESTION_RE.match(task)
+            or re.search(
+                r"(?:\.{3}|\N{HORIZONTAL ELLIPSIS})\s*\?$", task)
+        ):
+            continue
+        if re.match(r"(?i)^have\s+you\s+noticed\b", task):
+            companion = _HEADINGLESS_OVERVIEW_COMPANION_RE.match(
+                masked[match.end():])
+            if companion is not None:
+                companion_start = match.end() + companion.start("companion")
+                companion_end = match.end() + companion.end("companion")
+                companion_task = re.sub(
+                    r"\s+",
+                    " ",
+                    overview[companion_start:companion_end],
+                ).strip()
+                task = f"{task} {companion_task}"
+
+        duplicate_index = None
+        for index, existing in enumerate(candidates):
+            same_callback, _omitted = _direct_prompt_single_gap(
+                existing["task"], task)
+            if (
+                same_callback
+                and abs(existing["position"] - start) <= 1500
+            ):
+                duplicate_index = index
+                break
+        if duplicate_index is not None:
+            existing = candidates[duplicate_index]
+            if len(task) > len(existing["task"]):
+                candidates[duplicate_index] = {
+                    "position": start,
+                    "task": task,
+                }
+            continue
+        candidates.append({"position": start, "task": task})
+
+    candidates.sort(key=lambda item: item["position"])
+    for index, candidate in enumerate(candidates, start=1):
+        candidate["label"] = _headingless_overview_prompt_label(
+            candidate["task"], index)
+    return candidates
+
+
+def _scientific_investigation_prose_prompts(text: str) -> list[dict]:
+    """Recover explicit method tasks from an unlabelled investigation passage.
+
+    Introductory science chapters can present a complete investigation as
+    headingless prose.  The semantic inventory normally identifies its prompts,
+    but the source still gives us mechanically unambiguous task boundaries:
+    posing the variable question, selecting controls and measurements, carrying
+    out one-variable comparisons, and recording or extending observations. The
+    context guard keeps this backstop away from ordinary explanatory examples.
+    """
+    source = _inventory_comparison_text(str(text or ""))
+    if not _SCIENTIFIC_INVESTIGATION_CONTEXT_RE.search(source):
+        return []
+    prompts_out: list[dict] = []
+    for label, pattern in _SCIENTIFIC_INVESTIGATION_PROMPT_RES:
+        match = pattern.search(source)
+        if match is None:
+            continue
+        prompts_out.append({
+            "label": label,
+            "position": match.start(),
+            "task": re.sub(r"\s+", " ", match.group(0)).strip(),
+        })
+    return sorted(prompts_out, key=lambda item: item["position"])
 
 
 def _activity_has_assessable_response(text: str) -> bool:
     """Whether an Activity explicitly asks for a learner-produced response."""
-    text = _inventory_comparison_text(str(text or ""))
+    # Query strings in Mathpix URLs are not learner question marks. Strip
+    # visuals and expose LaTeX list items as ordinary lines before detecting
+    # questions or response-producing imperatives.
+    text = _strip_source_visual_markup(str(text or ""))
+    text = re.sub(
+        r"\\(?:begin|end)\{(?:itemize|enumerate)\}", "\n", text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"(?im)^\s*\\item(?:\[[^\]]*\])?\s*", "", text)
+    text = _inventory_comparison_text(text)
     value = str(text or "").translate(str.maketrans({"？": "?", "！": "!"}))
     if "?" in value:
         return True
-    return bool(re.search(
-        r"(?im)^\s*(?:[-*]\s*)?(?:describe|explain|write|discuss|compare|"
-        r"identify|interpret|analy[sz]e|justify|comment|imagine)\b",
-        value,
-    ))
+    return bool(
+        re.search(
+            r"(?im)^\s*(?:[-*]\s*)?(?:describe|explain|write|record|draw|"
+            r"observe|discuss|compare|identify|interpret|analy[sz]e|justify|"
+            r"comment|imagine|investigate|design|test|deduce|measure|note)\b",
+            value,
+        )
+        or re.search(
+            r"(?im)^[^\n]{0,220}\b(?:compare|discuss|draw|identify|"
+            r"observe|record|write|deduce|measure|note)\b",
+            value,
+        )
+    )
 
 
 def _trim_activity_ocr_bleed(text: str) -> str:
@@ -3960,6 +4779,35 @@ def _trim_activity_ocr_bleed(text: str) -> str:
     those high-confidence forms; multi-step procedure activities remain whole.
     """
     value = str(text or "")
+    # Some activities print the expected interpretation immediately after the
+    # learner's question and then continue with genuine investigation
+    # directives. Remove only this highly specific answer sentence.
+    value = re.sub(
+        r"(?i)(?<=[?？])\s+Simple\s+steps\s+like\s+good\s+sanitation\s+"
+        r"can\s+greatly\s+reduce\s+the\s+spread\s+of\s+communicable\s+"
+        r"diseases\.\s*",
+        " ",
+        value,
+        count=1,
+    )
+    bullet_matches = list(_BULLET_TASK_START_RE.finditer(value))
+    if len(bullet_matches) >= 2:
+        first_bullet = value[
+            bullet_matches[0].end():bullet_matches[1].start()
+        ]
+        second_bullet = value[bullet_matches[1].end():].lstrip()
+        if (
+            ("?" in first_bullet or "？" in first_bullet)
+            and re.match(
+                r"(?i)(?:Most\s+of\s+us\s+would|"
+                r"To\s+tackle\s+the\s+problem\b)",
+                second_bullet,
+            )
+        ):
+            return (
+                value[:bullet_matches[1].start()].rstrip()
+                + "\n\\end{itemize}"
+            )
     lines = value.splitlines()
     first_task_line = next(
         (
@@ -3987,8 +4835,53 @@ def _trim_activity_ocr_bleed(text: str) -> str:
             line.strip() for line in lines[first_task_line:paragraph_end]
         )
         first_paragraph = _inventory_comparison_text(first_paragraph)
-        if ("?" in first_paragraph or "？" in first_paragraph) and paragraph_end < len(lines):
+        if (
+            ("?" in first_paragraph or "？" in first_paragraph)
+            and paragraph_end < len(lines)
+            and not re.match(
+                r"\\begin\{(?:itemize|enumerate)\}",
+                first_line,
+                re.IGNORECASE,
+            )
+        ):
             return "\n".join(lines[:paragraph_end]).rstrip()
+    # A table/figure can be the final part of the procedure. A new question
+    # after that closed block is a distinct follow-up occurrence, not licence
+    # to absorb its supplied result and answer into the Activity anchor.
+    for match in re.finditer(
+        r"\\end\{(?:figure|table)\}", value, re.IGNORECASE
+    ):
+        suffix = value[match.end():].lstrip()
+        if re.match(
+            r"(?i)(?:"
+            r"(?:but\s+|and\s+|now\s+)?"
+            r"(?:what|why|how|when|where|who|which|can|could|do|does|"
+            r"did|is|are|was|were|will|would|should|has|have|may)\b"
+            r"|You\s+will\s+observe\b"
+            r"|After\s+some\s+time,\s+you\s+may\s+notice\b"
+            r")",
+            suffix,
+        ):
+            return value[:match.end()].rstrip()
+    inline_result = re.search(
+        r"(?i)\bAfter\s+some\s+time,\s+you\s+may\s+notice(?:\s+that)?\b",
+        value,
+    )
+    if inline_result is not None:
+        paragraph_tail = value[inline_result.start():]
+        paragraph_boundary = re.search(r"\n\s*\n", paragraph_tail)
+        paragraph = (
+            paragraph_tail[:paragraph_boundary.start()]
+            if paragraph_boundary is not None
+            else paragraph_tail
+        )
+        last_question = max(paragraph.rfind("?"), paragraph.rfind("？"))
+        if last_question >= 0:
+            return (
+                value[:inline_result.start()]
+                + paragraph[:last_question + 1]
+            ).rstrip()
+        return value[:inline_result.start()].rstrip()
     # Textbooks commonly put the observation/derivation immediately after an
     # Activity without introducing another heading. It is answer material,
     # not part of the learner task. Stop only on high-confidence result
@@ -3998,11 +4891,47 @@ def _trim_activity_ocr_bleed(text: str) -> str:
         r"(?im)^(?:"
         r"In\s+this\s+Activity(?:,\s*|\s+)(?:you\s+will\s+find|we\s+observe)"
         r"|It\s+is\s+observed\s+that"
-        r"|You\s+will\s+observe\s+that"
+        r"|You\s+will\s+observe\b"
+        r"|After\s+some\s+time,\s+you\s+may\s+notice(?:\s+that)?"
+        r"|You\s+may\s+notice\s+that"
+        r"|You\s+may\s+find\s+that"
+        r"|You\s+may\s+observe\s+(?:small|that)\b"
+        r"|This\s+(?:indicates|shows)\s+that"
+        r"|By\s+studying\s+the\s+Table\b.*?\bwe\s+can\b"
         r")\b",
         value,
     )
     if result_paragraph is not None:
+        # When the printed result paragraph itself ends in new reasoning
+        # questions (and no figure/table boundary separated it), retain the
+        # result as necessary context through the final question, but exclude
+        # the explanatory answer paragraph that follows.
+        paragraph_tail = value[result_paragraph.start():]
+        paragraph_boundary = re.search(r"\n\s*\n", paragraph_tail)
+        paragraph = (
+            paragraph_tail[:paragraph_boundary.start()]
+            if paragraph_boundary is not None
+            else paragraph_tail
+        )
+        last_question = max(paragraph.rfind("?"), paragraph.rfind("ï¼Ÿ"))
+        if re.search(
+            r"\\begin\{(?:figure|table)\}",
+            paragraph_tail[len(paragraph):],
+            re.IGNORECASE,
+        ):
+            return value[:result_paragraph.start()].rstrip()
+        if (
+            last_question >= 0
+            and re.match(
+                r"(?i)(?:After\s+some\s+time,\s+you\s+may\s+notice\b|"
+                r"You\s+may\s+(?:notice|observe)\b)",
+                paragraph,
+            )
+        ):
+            return (
+                value[:result_paragraph.start()]
+                + paragraph[:last_question + 1]
+            ).rstrip()
         return value[:result_paragraph.start()].rstrip()
 
     for match in re.finditer(r"\\end\{figure\}", value, re.IGNORECASE):
@@ -4010,6 +4939,64 @@ def _trim_activity_ocr_bleed(text: str) -> str:
         if suffix and suffix[0].islower():
             return value[:match.end()].rstrip()
     return value
+
+
+def _activity_followup_prompts(text: str) -> list[str]:
+    """Recover distinct learner asks after a mechanically bounded Activity.
+
+    A Mathpix Activity section often also contains its printed result and the
+    questions that follow it. The Activity anchor must not swallow those
+    separate occurrences, but deterministic coverage should still retain
+    high-confidence question paragraphs for the semantic inventory merge.
+    """
+    cleaned = _strip_source_visual_markup(str(text or ""))
+    prompts_out: list[str] = []
+    for paragraph in re.split(r"\n\s*\n", cleaned):
+        normalized = re.sub(r"\s+", " ", paragraph).strip()
+        if not normalized:
+            continue
+        direct = _question_prompts_from_text(normalized)
+        if direct:
+            for prompt in direct:
+                if prompt not in prompts_out:
+                    prompts_out.append(prompt)
+            continue
+
+        matches = list(_QUESTION_SENTENCE_RE.finditer(normalized))
+        if not matches:
+            continue
+        result_context = re.match(
+            r"(?i)(?:You\s+will\s+observe\b|"
+            r"After\s+some\s+time,\s+you\s+may\s+notice\b|"
+            r"You\s+may\s+(?:notice|observe)\b)",
+            normalized,
+        )
+        if result_context is not None:
+            prompt = matches[0].group("question").strip()
+            if prompt and prompt not in prompts_out:
+                prompts_out.append(prompt)
+            continue
+
+        # A contextual statement followed by two or more questions and no
+        # supplied answer is one compound learner prompt. Preserve its givens.
+        if len(matches) >= 2 and matches[-1].end() == len(normalized):
+            prompt = normalized[:matches[-1].end()].strip()
+            if prompt and prompt not in prompts_out:
+                prompts_out.append(prompt)
+    return prompts_out
+
+
+def _trim_scientific_method_infographic(text: str) -> str:
+    """Keep Observations through Application, excluding following prose."""
+    value = str(text or "")
+    application = re.search(r"(?im)^[ \t]*Application[ \t]*$", value)
+    if application is None:
+        return value
+    suffix = value[application.end():]
+    boundary = re.search(r"\n[ \t]*\n", suffix)
+    if boundary is None:
+        return value
+    return value[:application.end() + boundary.start()].rstrip()
 
 
 def _trim_standalone_checkpoint_ocr_bleed(text: str) -> str:
@@ -4037,6 +5024,95 @@ def _trim_standalone_checkpoint_ocr_bleed(text: str) -> str:
     ):
         return first_line
     return value
+
+
+def _clean_list_task_fragment(text: str) -> str:
+    """Remove list/page scaffolding that is not part of the source prompt."""
+    value = re.split(
+        r"(?i)\bPrepare\s+some\s+questions\s+based\s+on\s+your\b",
+        str(text or ""),
+        maxsplit=1,
+    )[0]
+    value = re.sub(
+        r"\\(?:begin|end)\{itemize\}", " ", value, flags=re.IGNORECASE)
+    value = re.sub(r"\$(?:\s*\\_){2,}\s*\$", " ", value)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _callout_task_from_match(text: str, match: re.Match) -> str:
+    """Read one ``?`` callout without swallowing the following explanation."""
+    lines = str(text or "")[match.end():].splitlines()
+    if not lines:
+        return ""
+    parts: list[str] = []
+    first = lines[0].strip()
+    if first:
+        parts.append(first)
+    in_figure = False
+    for line_index, line in enumerate(lines[1:], start=1):
+        stripped = line.strip()
+        if in_figure:
+            parts.append(stripped)
+            if re.search(r"\\end\{figure\}", stripped, re.IGNORECASE):
+                in_figure = False
+            continue
+        if not stripped:
+            if parts:
+                break
+            continue
+        if re.match(r"\\end\{itemize\}", stripped, re.IGNORECASE):
+            next_content = next(
+                (
+                    later.strip()
+                    for later in lines[line_index + 1:]
+                    if later.strip()
+                    and not re.match(
+                        r"\\(?:begin|end)\{itemize\}",
+                        later.strip(),
+                        re.IGNORECASE,
+                    )
+                ),
+                "",
+            )
+            if re.match(
+                r"(?i)(?:\\item\s*\[\s*\([ivxlcdm]+\)\s*\]|"
+                r"\([ivxlcdm]+\)|\([a-d]\))",
+                next_content,
+            ):
+                continue
+            break
+        if re.match(r"\\begin\{itemize\}", stripped, re.IGNORECASE):
+            continue
+        if not parts:
+            parts.append(stripped)
+            continue
+        if re.match(r"\\begin\{figure\}", stripped, re.IGNORECASE):
+            in_figure = True
+            parts.append(stripped)
+            continue
+        if (
+            re.match(
+                r"(?i)(?:hint\s*:|\\item\s*\[\s*\([ivxlcdm]+\)\s*\]|"
+                r"\([ivxlcdm]+\)|\([a-d]\))",
+                stripped,
+            )
+            or re.match(r"!\[[^\]]*\]\(", stripped)
+        ):
+            parts.append(stripped)
+            continue
+        if (
+            parts
+            and re.match(r"!\[[^\]]*\]\(", parts[-1])
+            and stripped[:1].islower()
+        ):
+            # Mathpix can replace a word/formula in the middle of one prompt
+            # with a cropped image on its own line. The lowercase continuation
+            # still belongs to the same source sentence.
+            parts.append(stripped)
+            continue
+        break
+    return _inventory_task_without_solution(
+        "\n".join(parts), aggressive=True)
 
 
 def _inventory_chunk_has_task_markers(chunk: dict) -> bool:
@@ -4067,6 +5143,90 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
     """
     ordered: list[tuple[int, int, dict]] = []
     paired = _sections_with_source_topics(sections)
+    canonical_topics = _topic_headings(sections)
+
+    def topic_word_family(value: str) -> str:
+        words = re.findall(r"[A-Za-z]{4,}", str(value or "").lower())
+        if not words:
+            return ""
+        word = words[0]
+        if word == "cubic":
+            return "cube"
+        if word.endswith("ies") and len(word) > 5:
+            return word[:-3] + "y"
+        if word.endswith("s") and not word.endswith("ss"):
+            return word[:-1]
+        return word
+
+    def section_task_topic(default_topic: str, heading: str) -> str:
+        """Use a clear subheading-to-main-topic family match for task scope."""
+        heading_family = topic_word_family(heading)
+        if not heading_family or _is_non_topic_heading(heading):
+            return default_topic
+        matches = [
+            candidate
+            for candidate in canonical_topics
+            if topic_word_family(candidate) == heading_family
+        ]
+        return matches[0] if len(matches) == 1 else default_topic
+
+    def source_anchor_context(
+        *, section_index: int, position: int, task: str,
+    ) -> str:
+        """Recover compact source context for explicit backward references."""
+        if not (0 <= section_index < len(paired)):
+            return ""
+        body = str(paired[section_index][1].get("body") or "")
+        prefix = body[:max(0, position)]
+        task_key = _topic_comparison_key(
+            _strip_source_visual_markup(str(task or "")))
+
+        if "this sum" in task_key:
+            display_math = re.findall(
+                r"\$\$(.+?)\$\$", prefix, flags=re.DOTALL)
+            if display_math:
+                expression = display_math[-1].strip().rstrip(" .")
+                return f"The referenced sum is $${expression}$$."
+
+        if (
+            "arrange them" in task_key
+            or "do the same" in task_key
+            or "more than one way" in task_key
+        ):
+            paragraphs = [
+                re.sub(r"\s+", " ", _strip_source_visual_markup(part)).strip()
+                for part in re.split(r"\n\s*\n", prefix)
+            ]
+            for paragraph in reversed(paragraphs):
+                paragraph_key = _topic_comparison_key(paragraph)
+                if "arrang" in paragraph_key and (
+                    "adjacent" in paragraph_key
+                    and "square" in paragraph_key
+                ):
+                    return paragraph
+
+        if "this insight" in task_key:
+            matches = re.findall(
+                r"(?i)(We\s+see\s+in\s+some\s+cases,\s+like\b[^.\n]*\.)",
+                prefix,
+            )
+            if matches:
+                return re.sub(r"\s+", " ", matches[-1]).strip()
+
+        if "locker" in task_key or "these five" in task_key:
+            context = (
+                "In the 100-locker puzzle, Person 1 opens every locker and "
+                "each Person k from 2 through 100 toggles every kth locker."
+            )
+            if "these five" in task_key:
+                clue = re.findall(
+                    r"(?i)(The\s+passcode\s+consists\s+of\b[^\"\n]*[.\"]?)",
+                    prefix,
+                )
+                if clue:
+                    context = f"{context} {clue[-1].strip(' \"')}"
+            return context
+        return ""
 
     def append_anchor(
         *, section_index: int, position: int, topic: str, kind: str,
@@ -4078,6 +5238,11 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
                 kind in {"worked_example", "solved_example"})))
         if not task:
             return
+        shared_context = source_anchor_context(
+            section_index=section_index,
+            position=position,
+            task=task,
+        )
         ordered.append((section_index, position, {
             "source_kind": kind,
             "source_label": label,
@@ -4088,7 +5253,7 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
             "raw_task": task,
             "raw_solution_or_answer": "",
             "normalized_task": task,
-            "shared_context": "",
+            "shared_context": shared_context,
             "subpart_label": "",
             "image_urls": re.findall(
                 r"https?://cdn\.mathpix\.com/[^)\s}\]]+", task),
@@ -4096,7 +5261,7 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
             "requires_visual": bool(re.search(
                 r"\bfig(?:ure)?\.?\s*\d|!\[[^\]]*\]\(", task,
                 re.IGNORECASE)),
-            "requires_context": False,
+            "requires_context": bool(shared_context),
             "_topic_scope": "chapter" if chapter_wide else "topic",
             "_activity_origin": activity_origin,
             "_source_section_index": section_index,
@@ -4107,6 +5272,8 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
 
     for section_index, (topic, section) in enumerate(paired):
         body = section.get("body") or ""
+        heading = section.get("heading") or ""
+        topic = section_task_topic(topic, heading)
         chapter_wide = _is_chapter_wide_task_section(
             section, section_index=section_index, paired_sections=paired)
         example_matches = list(_WORKED_EXAMPLE_START_RE.finditer(body))
@@ -4127,8 +5294,71 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
                 task=body[match.end():end],
             )
 
-        heading = section.get("heading") or ""
+        for overview_prompt in _headingless_overview_prose_prompts(body):
+            append_anchor(
+                section_index=section_index,
+                position=overview_prompt["position"],
+                topic=topic,
+                kind="intext_question",
+                label=overview_prompt["label"],
+                parent_label="Chapter opening",
+                task=overview_prompt["task"],
+                prefer_task_boundary=True,
+            )
+
+        for investigation_prompt in _scientific_investigation_prose_prompts(body):
+            append_anchor(
+                section_index=section_index,
+                position=investigation_prompt["position"],
+                topic=topic,
+                kind="experiment_task",
+                label=investigation_prompt["label"],
+                parent_label="Scientific investigation",
+                task=investigation_prompt["task"],
+                prefer_task_boundary=True,
+            )
+
         container_heading = _normalized_inventory_heading(heading)
+        if (
+            not example_matches
+            and container_heading == "think like a scientist"
+        ):
+            append_anchor(
+                section_index=section_index,
+                position=0,
+                topic=topic,
+                kind="activity",
+                label=heading,
+                parent_label=heading,
+                task=_trim_scientific_method_infographic(body),
+                chapter_wide=False,
+                activity_origin=False,
+            )
+            continue
+        if (
+            not example_matches
+            and _DISCOVER_PROJECT_HEADING_RE.match(container_heading)
+        ):
+            project_matches = list(_BULLET_TASK_START_RE.finditer(body))
+            for project_index, match in enumerate(project_matches, start=1):
+                end = (
+                    project_matches[project_index].start()
+                    if project_index < len(project_matches)
+                    else len(body)
+                )
+                append_anchor(
+                    section_index=section_index,
+                    position=match.start(),
+                    topic=topic,
+                    kind="activity",
+                    label=f"{heading} Project {project_index}",
+                    parent_label=heading,
+                    task=_clean_list_task_fragment(
+                        _strip_source_visual_markup(body[match.end():end])),
+                    chapter_wide=True,
+                )
+            if project_matches:
+                continue
         if (
             not example_matches
             and re.match(
@@ -4138,7 +5368,41 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
         ):
             is_project = bool(re.match(
                 r"^project\b", container_heading, re.IGNORECASE))
-            activity_body = _trim_activity_ocr_bleed(body)
+            activity_source = body
+            activity_payload = re.sub(
+                r"(?m)^\s*#{1,6}[^\n]*(?:\n|$)",
+                "",
+                str(body),
+                count=1,
+            ).strip()
+            if (
+                not activity_payload
+                and section_index + 1 < len(paired)
+            ):
+                next_topic, next_section = paired[section_index + 1]
+                next_heading = str(next_section.get("heading") or "")
+                if (
+                    next_topic == topic
+                    and not next_section.get("heading_number_prefix")
+                    and not re.match(
+                        r"^(?:activity|project|snapshots?|"
+                        r"keep\s+the\s+curiosity\s+alive|"
+                        r"discover\s*,?\s*design)",
+                        _normalized_inventory_heading(next_heading),
+                        re.IGNORECASE,
+                    )
+                ):
+                    activity_source = (
+                        body.rstrip()
+                        + "\n\n"
+                        + re.sub(
+                            r"(?m)^\s*#{1,6}[^\n]*(?:\n|$)",
+                            "",
+                            str(next_section.get("body") or ""),
+                            count=1,
+                        ).strip()
+                    )
+            activity_body = _trim_activity_ocr_bleed(activity_source)
             assessable_activity = (
                 not is_project
                 and _activity_has_assessable_response(activity_body)
@@ -4161,11 +5425,34 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
                 chapter_wide=chapter_wide,
                 activity_origin=assessable_activity,
             )
+            activity_remainder = (
+                activity_source[len(activity_body):]
+                if activity_source.startswith(activity_body)
+                else ""
+            )
+            for followup_index, followup in enumerate(
+                _activity_followup_prompts(activity_remainder), start=1
+            ):
+                append_anchor(
+                    section_index=section_index,
+                    position=len(activity_body) + followup_index,
+                    topic=topic,
+                    kind="intext_question",
+                    label=(
+                        f"{heading or f'Activity {section_index + 1}'} "
+                        f"Follow-up {followup_index}"
+                    ),
+                    parent_label=heading,
+                    task=followup,
+                    chapter_wide=chapter_wide,
+                    prefer_task_boundary=True,
+                )
             continue
         is_question_list_heading = _is_question_list_heading(heading)
         is_exercise_list_heading = bool(
             re.search(
-                r"\b(?:exercises?|ex\.|review|practice|problems?)\b",
+                r"\b(?:exercises?|ex\.|review|practice|problems?|"
+                r"figure\s+it\s+out)\b",
                 f"{heading} {container_heading}",
                 re.IGNORECASE,
             )
@@ -4185,7 +5472,7 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
                     else len(body)
                 )
                 question_label = f"{heading} Q{match.group(1)}".strip()
-                task_text = body[match.end():end]
+                task_text = _clean_list_task_fragment(body[match.end():end])
                 append_anchor(
                     section_index=section_index,
                     position=match.start(),
@@ -4208,6 +5495,67 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
                     chapter_wide=chapter_wide,
                 )
 
+        body_exercise_markers = list(_BODY_FIGURE_IT_OUT_RE.finditer(body))
+        if not is_task_list_heading:
+            for marker_index, marker in enumerate(body_exercise_markers):
+                marker_end = (
+                    body_exercise_markers[marker_index + 1].start()
+                    if marker_index + 1 < len(body_exercise_markers)
+                    else len(body)
+                )
+                exercise_body = body[marker.end():marker_end]
+                task_matches = list(_NUMBERED_TASK_START_RE.finditer(
+                    _mask_non_task_numbered_blocks(exercise_body)))
+                body_exercise_chapter_wide = not any(
+                    later_topic != topic
+                    for later_topic, _ in paired[section_index + 1:]
+                )
+                for task_index, task_match in enumerate(task_matches):
+                    end = (
+                        task_matches[task_index + 1].start()
+                        if task_index + 1 < len(task_matches)
+                        else len(exercise_body)
+                    )
+                    append_anchor(
+                        section_index=section_index,
+                        position=marker.end() + task_match.start(),
+                        topic=topic,
+                        kind="exercise",
+                        label=f"Figure it Out Q{task_match.group(1)}",
+                        parent_label="Figure it Out",
+                        task=_clean_list_task_fragment(
+                            exercise_body[task_match.end():end]),
+                        chapter_wide=body_exercise_chapter_wide,
+                    )
+
+        body_exercise_marker_starts = {
+            marker.start() for marker in body_exercise_markers
+        }
+        callout_matches = (
+            []
+            if is_task_list_heading or example_matches
+            else [
+                match
+                for match in _CALLOUT_TASK_START_RE.finditer(body)
+                if match.start() not in body_exercise_marker_starts
+            ]
+        )
+        for callout_index, match in enumerate(callout_matches, start=1):
+            task = _callout_task_from_match(body, match)
+            append_anchor(
+                section_index=section_index,
+                position=match.start(),
+                topic=topic,
+                kind="checkpoint_question",
+                label=f"Checkpoint {section_index + 1}.{callout_index}",
+                parent_label=heading,
+                task=task,
+                # Generated checkpoint ordinals shift whenever an earlier
+                # source prompt is recovered. Match these explicit callouts
+                # by their authoritative wording, never by the stale ordinal.
+                prefer_task_boundary=True,
+            )
+
         # Explicit checkpoint questions often live inside prose/boxed blocks
         # rather than under a numbered exercise heading. Restrict the
         # deterministic backstop to structurally named containers so rhetorical
@@ -4215,6 +5563,7 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
         if (
             not is_task_list_heading
             and not example_matches
+            and not callout_matches
             and _CHECKPOINT_CONTAINER_HEADING_RE.match(
                 _strip_section_number(heading))
         ):
@@ -4228,6 +5577,7 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
                     label=f"Checkpoint {section_index + 1}.{question_index}",
                     parent_label=heading,
                     task=task,
+                    prefer_task_boundary=True,
                 )
             if not question_prompts:
                 checkpoint_task = _trim_standalone_checkpoint_ocr_bleed(body)
@@ -4242,7 +5592,11 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
                     prefer_task_boundary=(
                         checkpoint_task != _strip_public_source_heading(body)),
                 )
-        elif not is_task_list_heading and not example_matches:
+        elif (
+            not is_task_list_heading
+            and not example_matches
+            and not callout_matches
+        ):
             # Multiple standalone interrogative paragraphs form an unlabelled
             # checkpoint list. A lone question in exposition is ambiguous and
             # remains a semantic-inventory decision.
@@ -4259,6 +5613,7 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
                         label=f"Checkpoint {section_index + 1}.{question_index}",
                         parent_label=heading,
                         task=task,
+                        prefer_task_boundary=True,
                     )
     return [
         item for _, _, item in sorted(ordered, key=lambda row: (row[0], row[1]))
@@ -4505,7 +5860,8 @@ def _inventory_task_match_key(item: dict) -> str:
 
 _GENERIC_SOURCE_LABEL_RE = re.compile(
     r"^(?:activity|discuss|discussion|project|questions?|checkpoint|"
-    r"think\s+about\s+it|let(?:'s|\s+us)\s+discuss)$",
+    r"figure\s+it\s+out|think\s+about\s+it|"
+    r"let(?:'s|\s+us)\s+discuss)$",
     re.IGNORECASE,
 )
 _SOURCE_LABEL_SUBPART_SUFFIX_RE = re.compile(
@@ -4551,26 +5907,238 @@ def _inventory_label_has_subpart(label: str) -> bool:
     return bool(_SOURCE_LABEL_SUBPART_SUFFIX_RE.search(str(label or "").strip()))
 
 
+def _inventory_scope_conflicts(item: dict, anchor: dict) -> bool:
+    """Whether two task rows point at different source occurrences."""
+    for field in (
+        "topic_hint",
+        "parent_source_label",
+        "_source_section_index",
+    ):
+        item_value = item.get(field)
+        anchor_value = anchor.get(field)
+        if item_value in (None, "") or anchor_value in (None, ""):
+            continue
+        if field == "_source_section_index":
+            if str(item_value).strip() != str(anchor_value).strip():
+                return True
+            continue
+        if _topic_comparison_key(str(item_value)) != _topic_comparison_key(
+            str(anchor_value)
+        ):
+            return True
+    return False
+
+
+def _inventory_has_specific_shared_scope(item: dict, anchor: dict) -> bool:
+    """Require positive local evidence before trusting a non-unique label."""
+    for field in ("topic_hint", "_source_section_index"):
+        item_value = item.get(field)
+        anchor_value = anchor.get(field)
+        if item_value in (None, "") or anchor_value in (None, ""):
+            continue
+        if field == "_source_section_index":
+            if str(item_value).strip() == str(anchor_value).strip():
+                return True
+            continue
+        if _topic_comparison_key(str(item_value)) == _topic_comparison_key(
+            str(anchor_value)
+        ):
+            return True
+    return False
+
+
+_INVENTORY_SUPERSCRIPT_TRANSLATION = str.maketrans({
+    "⁰": "^0",
+    "¹": "^1",
+    "²": "^2",
+    "³": "^3",
+    "⁴": "^4",
+    "⁵": "^5",
+    "⁶": "^6",
+    "⁷": "^7",
+    "⁸": "^8",
+    "⁹": "^9",
+    "ⁿ": "^n",
+})
+
+
+def _inventory_semantic_task_key(item: dict) -> str:
+    """Normalize equivalent Unicode/LaTeX task notation for source matching."""
+    task = str(
+        item.get("raw_task") or item.get("normalized_task") or ""
+    ).translate(_INVENTORY_SUPERSCRIPT_TRANSLATION)
+    task = _inventory_comparison_text(task)
+    task = _strip_source_visual_markup(task)
+    task = _normalize_exact_source_text(task)
+    task = re.sub(
+        r"\b([a-z])\s+(st|nd|rd|th)\b",
+        r"\1\2",
+        task,
+        flags=re.IGNORECASE,
+    )
+    return _LEADING_INVENTORY_TASK_NUMBER_RE.sub("", task, count=1)
+
+
 def _inventory_items_match(item: dict, anchor: dict) -> bool:
     label = bi.normalize_question_text(_inventory_comparison_text(
         item.get("source_label", "")))
     anchor_label = bi.normalize_question_text(_inventory_comparison_text(
         anchor.get("source_label", "")))
+    if _inventory_scope_conflicts(item, anchor):
+        return False
+    task = _inventory_task_match_key(item)
+    anchor_task = _inventory_task_match_key(anchor)
+    shorter_task, longer_task = sorted((task, anchor_task), key=len)
+    semantic_task = _inventory_semantic_task_key(item)
+    semantic_anchor_task = _inventory_semantic_task_key(anchor)
+    shorter_semantic, longer_semantic = sorted(
+        (semantic_task, semantic_anchor_task), key=len)
+    semantic_task_compatible = bool(
+        semantic_task
+        and semantic_anchor_task
+        and (
+            semantic_task == semantic_anchor_task
+            or (
+                len(shorter_semantic) >= 30
+                and shorter_semantic in longer_semantic
+            )
+        )
+    )
+    label_task_compatible = bool(
+        not task
+        or not anchor_task
+        or task == anchor_task
+        or semantic_task_compatible
+        or (
+            len(shorter_task) >= 40
+            and shorter_task in longer_task
+        )
+    )
     if (
         label
         and anchor_label
         and label == anchor_label
         and not _source_label_is_generic(label)
+        and _inventory_has_specific_shared_scope(item, anchor)
+        and label_task_compatible
     ):
         return True
-    task = _inventory_task_match_key(item)
-    anchor_task = _inventory_task_match_key(anchor)
     if not task or not anchor_task:
         return False
     if task == anchor_task:
         return True
-    shorter, longer = sorted((task, anchor_task), key=len)
-    return len(shorter) >= 40 and shorter in longer
+    if semantic_task_compatible:
+        return True
+    if (
+        anchor.get("_source_task_boundary") == "direct_prompt"
+        and len(task) >= 20
+        and task.endswith("?")
+        and (
+            anchor_task.endswith(task)
+            or anchor_task.startswith(task)
+        )
+    ):
+        # A semantic extraction can retain only the final observation question
+        # and omit its immediately preceding recording instruction.  The
+        # deterministic direct-prompt anchor is one source occurrence, so match
+        # the unique question tail and let the merge restore its full context.
+        return True
+    return len(shorter_task) >= 40 and shorter_task in longer_task
+
+
+def _normalized_inventory_source_label(item: dict) -> str:
+    return bi.normalize_question_text(_inventory_comparison_text(
+        item.get("source_label", "")))
+
+
+def _anchor_source_label_counts(anchors: list[dict]) -> Counter:
+    return Counter(
+        label
+        for anchor in anchors
+        if (label := _normalized_inventory_source_label(anchor))
+    )
+
+
+def _inventory_matches_anchor_identity(
+    item: dict, anchor: dict, label_counts: Counter,
+) -> bool:
+    """Match by content/scope, or by an unambiguous authoritative label."""
+    if _inventory_items_match(item, anchor):
+        return True
+    # Ordinal checkpoint labels can shift when a newly recovered question is
+    # inserted before an old checkpoint. Content, not the generated ordinal,
+    # must identify direct prompts.
+    if anchor.get("_source_task_boundary") == "direct_prompt":
+        return False
+    item_label = _normalized_inventory_source_label(item)
+    anchor_label = _normalized_inventory_source_label(anchor)
+    if anchor.get("_activity_origin"):
+        if (
+            item_label
+            and item_label == anchor_label
+            and _inventory_semantic_task_key(item)
+            == _inventory_semantic_task_key(anchor)
+        ):
+            # A checkpoint can have the exact short Activity prompt but stale
+            # semantic metadata (kind, topic, or Activity origin). Preserve the
+            # identity match so checkpoint refresh reports and repairs that
+            # semantic drift instead of misclassifying it as a missing task.
+            return True
+        item_root = re.search(
+            r"\bactivity\s+\d+(?:\.\d+)*\b", item_label,
+            re.IGNORECASE,
+        )
+        anchor_root = re.search(
+            r"\bactivity\s+\d+(?:\.\d+)*\b", anchor_label,
+            re.IGNORECASE,
+        )
+        same_activity = bool(
+            item_root
+            and anchor_root
+            and item_root.group(0).lower() == anchor_root.group(0).lower()
+        )
+        if not same_activity:
+            return False
+        item_topic = _topic_comparison_key(str(item.get("topic_hint") or ""))
+        anchor_topic = _topic_comparison_key(
+            str(anchor.get("topic_hint") or ""))
+        if item_topic and anchor_topic and item_topic != anchor_topic:
+            return False
+        item_semantic = _inventory_semantic_task_key(item)
+        anchor_semantic = _inventory_semantic_task_key(anchor)
+        if (
+            min(len(item_semantic), len(anchor_semantic)) >= 120
+            and (
+                item_semantic in anchor_semantic
+                or anchor_semantic in item_semantic
+            )
+        ):
+            # Adding an earlier recovered source block shifts persisted section
+            # indexes. A stale semantic Activity may also contain the supplied
+            # result/answer after the full procedure. The exact Activity
+            # number, topic, and complete contained procedure identify one
+            # occurrence; refresh it from the authoritative trimmed anchor.
+            return True
+        # One Activity can own a full procedure and several separate
+        # observation/reasoning prompts. Match only near-identical
+        # representations of the complete procedure, never a child by label.
+        item_words = set(item_semantic.split())
+        anchor_words = set(anchor_semantic.split())
+        union = item_words | anchor_words
+        overlap = len(item_words & anchor_words) / len(union) if union else 0.0
+        return bool(
+            min(len(item_words), len(anchor_words)) >= 8
+            and overlap >= 0.80
+        )
+    if not (
+        item_label
+        and item_label == anchor_label
+        and label_counts.get(anchor_label, 0) == 1
+    ):
+        return False
+    return bool(
+        item_label and anchor_label
+    )
 
 
 def _inventory_item_covers_anchor(item: dict, anchor: dict) -> bool:
@@ -4603,6 +6171,50 @@ def _inventory_item_covers_anchor(item: dict, anchor: dict) -> bool:
 def _merge_source_task_anchors(items: list[dict], anchors: list[dict]) -> list[dict]:
     """Backfill missing deterministic anchors and canonicalize matching rows."""
     merged = [dict(item) for item in items]
+    anchor_label_counts = _anchor_source_label_counts(anchors)
+    atomic_source_anchors = [
+        anchor for anchor in anchors
+        if (
+            (task := _inventory_semantic_task_key(anchor))
+            and len(task) >= 15
+        )
+    ]
+    compound_umbrella_ids: set[int] = set()
+    for item in merged:
+        item_label = bi.normalize_question_text(
+            _inventory_comparison_text(item.get("source_label") or ""))
+        if item_label and not _source_label_is_generic(item_label):
+            continue
+        item_task = _inventory_semantic_task_key(item)
+        if not item_task:
+            continue
+        covered_anchors = 0
+        for anchor in atomic_source_anchors:
+            anchor_task = _inventory_semantic_task_key(anchor)
+            if anchor_task == item_task or anchor_task not in item_task:
+                continue
+            item_topic = item.get("topic_hint")
+            anchor_topic = anchor.get("topic_hint")
+            if (
+                item_topic not in (None, "")
+                and anchor_topic not in (None, "")
+                and _topic_comparison_key(str(item_topic))
+                != _topic_comparison_key(str(anchor_topic))
+            ):
+                continue
+            covered_anchors += 1
+            if covered_anchors >= 2:
+                compound_umbrella_ids.add(id(item))
+                break
+    if compound_umbrella_ids:
+        # A semantic pass can summarize two explicit inline questions as one
+        # extra umbrella row while the deterministic anchors retain both exact
+        # prompts. Keeping all three would duplicate the source occurrence.
+        # Remove only unlabeled/generically labeled umbrellas containing at
+        # least two complete authoritative questions.
+        merged = [
+            item for item in merged if id(item) not in compound_umbrella_ids
+        ]
     anchors_by_question_root: dict[str, list[dict]] = {}
     for anchor in anchors:
         root = _inventory_question_label_root(
@@ -4615,6 +6227,12 @@ def _merge_source_task_anchors(items: list[dict], anchors: list[dict]) -> list[d
         if len(candidates) == 1
         and not _source_label_is_generic(
             candidates[0].get("source_label") or "")
+        and not candidates[0].get("_activity_origin")
+        and (
+            str(candidates[0].get("source_kind") or "").strip().lower()
+            not in _HUB_INVENTORY_KINDS
+        )
+        and candidates[0].get("_source_task_boundary") != "direct_prompt"
         and not (candidates[0].get("subpart_label") or "").strip()
         and not _inventory_label_has_subpart(
             candidates[0].get("source_label") or "")
@@ -4639,6 +6257,12 @@ def _merge_source_task_anchors(items: list[dict], anchors: list[dict]) -> list[d
         ]
     parent_counts: dict[str, int] = {}
     for anchor in anchors:
+        if not (
+            (anchor.get("subpart_label") or "").strip()
+            or _inventory_label_has_subpart(
+                anchor.get("source_label") or "")
+        ):
+            continue
         parent = bi.normalize_question_text(
             anchor.get("parent_source_label", ""))
         if parent and not _source_label_is_generic(parent):
@@ -4656,24 +6280,186 @@ def _merge_source_task_anchors(items: list[dict], anchors: list[dict]) -> list[d
             if bi.normalize_question_text(item.get("source_label", ""))
             not in split_parent_labels
         ]
-    for anchor in anchors:
+    for anchor_index, anchor in enumerate(anchors):
         anchor_root = _inventory_question_label_root(
             anchor.get("source_label") or "")
-        match_index = next(
-            (i for i, item in enumerate(merged)
-             if (
-                 _inventory_items_match(item, anchor)
-                 or (
-                     anchor_root in authoritative_parent_roots
-                     and _inventory_question_label_root(
-                         item.get("source_label") or "")
-                     == anchor_root
-                 )
-             )),
-            None,
-        )
+        matching_indices = [
+            i for i, item in enumerate(merged)
+            if (
+                _inventory_matches_anchor_identity(
+                    item, anchor, anchor_label_counts)
+                or (
+                    anchor_root in authoritative_parent_roots
+                    and _inventory_question_label_root(
+                        item.get("source_label") or "")
+                    == anchor_root
+                )
+            )
+        ]
+        match_index = matching_indices[0] if matching_indices else None
+        if len(matching_indices) > 1:
+            anchor_semantic = _inventory_semantic_task_key(anchor)
+
+            def match_score(index: int) -> tuple[int, int, int, int]:
+                candidate = merged[index]
+                candidate_semantic = _inventory_semantic_task_key(candidate)
+                return (
+                    int(bool(
+                        anchor_semantic
+                        and candidate_semantic == anchor_semantic
+                    )),
+                    int(bool(
+                        candidate.get("requires_context")
+                        and candidate.get("shared_context")
+                    )),
+                    len(candidate.get("image_urls") or []),
+                    len(str(
+                        candidate.get("raw_task")
+                        or candidate.get("normalized_task")
+                        or ""
+                    )),
+                )
+
+            match_index = max(matching_indices, key=match_score)
+            chosen = merged[match_index]
+            for index in matching_indices:
+                if index == match_index:
+                    continue
+                candidate = merged[index]
+                if (
+                    not chosen.get("shared_context")
+                    and candidate.get("shared_context")
+                ):
+                    chosen["shared_context"] = candidate["shared_context"]
+                    chosen["requires_context"] = bool(
+                        candidate.get("requires_context"))
+                if candidate.get("image_urls"):
+                    chosen["image_urls"] = list(dict.fromkeys(
+                        list(chosen.get("image_urls") or [])
+                        + list(candidate.get("image_urls") or [])
+                    ))
+            duplicate_ids = {
+                id(merged[index])
+                for index in matching_indices
+                if index != match_index
+            }
+            merged = [
+                item for item in merged if id(item) not in duplicate_ids
+            ]
+            match_index = next(
+                index for index, item in enumerate(merged)
+                if item is chosen
+            )
+            matching_indices = [match_index]
+        if (
+            match_index is not None
+            and anchor.get("_source_task_boundary") == "direct_prompt"
+        ):
+            # One model pass can return both a complete prompt and a trailing
+            # clause from that same prompt as separate inventory rows. Prefer
+            # an exact full-task match (otherwise the longest match), then
+            # discard only strict-contained fragments. When (and only when) an
+            # exact canonical row exists, also discard a callback that differs
+            # by one short phrase and whose semantic context retains that
+            # phrase. Equal wording in distinct scopes remains untouched.
+            anchor_task_key = _inventory_task_match_key(anchor)
+            exact_indices = [
+                index for index in matching_indices
+                if _inventory_task_match_key(merged[index]) == anchor_task_key
+            ]
+            match_index = (
+                exact_indices[0]
+                if exact_indices
+                else max(
+                    matching_indices,
+                    key=lambda index: len(
+                        _inventory_task_match_key(merged[index])),
+                )
+            )
+            chosen = merged[match_index]
+            callback_indices: set[int] = set()
+            if exact_indices:
+                for index, candidate in enumerate(merged):
+                    if index == match_index:
+                        continue
+                    candidate_task = _inventory_task_match_key(candidate)
+                    is_callback, omitted = _direct_prompt_single_gap(
+                        candidate_task, anchor_task_key)
+                    if not is_callback:
+                        continue
+                    scope_conflict = False
+                    for field in (
+                        "topic_hint", "parent_source_label", "page_hint",
+                        "_source_section_index",
+                    ):
+                        candidate_scope = candidate.get(field)
+                        anchor_scope = anchor.get(field)
+                        if (
+                            candidate_scope not in (None, "")
+                            and anchor_scope not in (None, "")
+                            and _topic_comparison_key(str(candidate_scope))
+                            != _topic_comparison_key(str(anchor_scope))
+                        ):
+                            scope_conflict = True
+                            break
+                    if scope_conflict:
+                        continue
+                    meaningful_omissions = {
+                        token for token in omitted
+                        if token not in _DIRECT_PROMPT_CONTEXT_STOP_WORDS
+                    }
+                    semantic_context = _topic_comparison_key(" ".join((
+                        str(candidate.get("normalized_task") or ""),
+                        str(candidate.get("shared_context") or ""),
+                    )))
+                    if (
+                        meaningful_omissions
+                        and not meaningful_omissions.issubset(
+                            set(semantic_context.split()))
+                    ):
+                        continue
+                    callback_indices.add(index)
+            fragment_ids = {
+                id(merged[index])
+                for index in set(matching_indices) | callback_indices
+                if (
+                    index != match_index
+                    and (candidate_task := _inventory_task_match_key(
+                        merged[index]))
+                    and candidate_task != anchor_task_key
+                    and len(candidate_task) < len(anchor_task_key)
+                    and (
+                        candidate_task in anchor_task_key
+                        or index in callback_indices
+                    )
+                )
+            }
+            if fragment_ids:
+                merged = [
+                    item for item in merged if id(item) not in fragment_ids
+                ]
+                match_index = next(
+                    index for index, item in enumerate(merged)
+                    if item is chosen
+                )
         if match_index is None:
-            merged.append(dict(anchor))
+            # Preserve source order when a model missed an anchor that appears
+            # before a later anchor it did extract.  Without this look-ahead,
+            # deterministic backfills are appended after the chapter's final
+            # task even though their source positions are known.
+            insert_index = next(
+                (
+                    item_index
+                    for later_anchor in anchors[anchor_index + 1:]
+                    for item_index, item in enumerate(merged)
+                    if _inventory_items_match(item, later_anchor)
+                ),
+                None,
+            )
+            if insert_index is None:
+                merged.append(dict(anchor))
+            else:
+                merged.insert(insert_index, dict(anchor))
             continue
         existing = merged[match_index]
         existing_task = str(
@@ -4753,26 +6539,116 @@ def _merge_source_task_anchors(items: list[dict], anchors: list[dict]) -> list[d
         if anchor.get("_source_task_boundary") != "direct_prompt":
             existing["requires_visual"] = bool(
                 existing.get("requires_visual") or anchor.get("requires_visual"))
+        if anchor.get("requires_context") and anchor.get("shared_context"):
+            existing["shared_context"] = anchor["shared_context"]
+            existing["requires_context"] = True
 
     deduped: list[dict] = []
-    seen_label_tasks: set[tuple[str, str]] = set()
-    seen_tasks: set[str] = set()
+    seen_label_tasks: set[tuple[str, str, tuple]] = set()
+    seen_tasks: set[tuple[str, tuple]] = set()
     for item in merged:
         label = bi.normalize_question_text(item.get("source_label", ""))
         task = bi.normalize_question_text(
             item.get("raw_task") or item.get("normalized_task") or "")
-        label_task = (label, task)
+        # The same wording can be a distinct source occurrence when it belongs
+        # to another topic, shared stem, activity boundary, or visual. Collapse
+        # only trace-equivalent representations of the same occurrence.
+        source_scope = (
+            _topic_comparison_key(item.get("topic_hint") or ""),
+            bi.normalize_question_text(item.get("parent_source_label") or ""),
+            bi.normalize_question_text(item.get("shared_context") or ""),
+            bool(item.get("_activity_origin")),
+            tuple(sorted(str(url) for url in item.get("image_urls") or [])),
+        )
+        task_identity = (task, source_scope)
+        label_task = (label, task, source_scope)
         if (
-            (task and task in seen_tasks)
+            (task and task_identity in seen_tasks)
             or (label and task and label_task in seen_label_tasks)
         ):
             continue
         if label and task:
             seen_label_tasks.add(label_task)
         if task:
-            seen_tasks.add(task)
+            seen_tasks.add(task_identity)
         deduped.append(item)
     return deduped
+
+
+def _unowned_inventory_row_is_non_task(item: dict) -> bool:
+    """High-confidence semantic rows that describe content but ask nothing."""
+    source_kind = str(item.get("source_kind") or "").strip().lower()
+    raw = _strip_source_visual_markup(str(
+        item.get("raw_task") or item.get("normalized_task") or ""))
+    plain = re.sub(r"\s+", " ", raw).strip()
+    if (
+        source_kind == "source_task"
+        and "?" not in plain
+        and not re.match(
+            r"(?i)^(?:analyse|analyze|compare|describe|discuss|draw|"
+            r"explain|identify|interpret|investigate|list|observe|"
+            r"prepare|record|state|study|write)\b",
+            plain,
+        )
+    ):
+        return True
+    return bool(
+        source_kind in {"intext_question", "checkpoint_question", "other"}
+        and re.search(
+            r"(?i)\?\s*(?:Let\s+us|We(?:'ll|\s+will)|You\s+will)\s+"
+            r"(?:find\s+out|learn|see|explore)\.?\s*$",
+            plain,
+        )
+    )
+
+
+def _prune_unowned_stub_inventory_rows(
+    items: list[dict], anchors: list[dict],
+) -> tuple[list[dict], int]:
+    """Remove only unusable model fragments with no exact source owner.
+
+    Deterministic anchors are the source-of-truth safety net. A model-only
+    empty or stub row cannot become a valid public Example and should not block
+    an otherwise exact inventory, but an exact source-owned short task remains
+    protected and must pass the normal terminal validation.
+    """
+    kept: list[dict] = []
+    removed = 0
+    for item in items:
+        text = _inventory_task_text(item)
+        key = _inventory_coverage_key(text)
+        source_kind = (item.get("source_kind") or "").strip().lower()
+        unusable = (
+            not key
+            or (
+                source_kind not in _HUB_INVENTORY_KINDS
+                and cv._example_too_short(text)
+            )
+        )
+        item_key = _inventory_task_match_key(item)
+        source_owned = any(
+            item_key
+            and item_key == _inventory_task_match_key(anchor)
+            and (
+                not (
+                    bool(anchor.get("requires_visual"))
+                    or bool(anchor.get("image_urls"))
+                )
+                or (
+                    bool(item.get("requires_visual"))
+                    and bool(item.get("image_urls"))
+                )
+            )
+            for anchor in anchors
+        )
+        if (
+            unusable
+            or _unowned_inventory_row_is_non_task(item)
+        ) and not source_owned:
+            removed += 1
+            continue
+        kept.append(item)
+    return kept, removed
 
 
 def _inventory_stats(items: list[dict]) -> dict:
@@ -5048,6 +6924,15 @@ def _extract_question_task_inventory_via_api(
         inventory["items"], anchors)
     inventory["items"] = _attach_explicit_figure_images(
         inventory["items"], sections)
+    inventory["items"], pruned_stubs = _prune_unowned_stub_inventory_rows(
+        inventory["items"], anchors)
+    if pruned_stubs:
+        progress.log(
+            "Pruned "
+            f"{pruned_stubs} model-only empty/stub inventory row(s) with no "
+            "exact deterministic source owner.",
+            level="warning",
+        )
     for i, item in enumerate(inventory["items"], start=1):
         item["qid"] = f"QINV-{i:04d}"
         item["order_index"] = i
@@ -5065,6 +6950,21 @@ def _extract_question_task_inventory_via_api(
     inventory["stats"] = _inventory_stats(inventory["items"])
     invalid_inventory = _invalid_inventory_items(inventory)
     if invalid_inventory:
+        for issue in invalid_inventory[:8]:
+            index = int(issue.get("index") or 0)
+            item = (
+                inventory["items"][index]
+                if 0 <= index < len(inventory["items"])
+                else {}
+            )
+            progress.log(
+                "Invalid inventory row before checkpoint: "
+                f"qid={issue.get('qid') or '<missing>'}; "
+                f"reason={issue.get('reason')}; "
+                f"label={str(item.get('source_label') or '')[:120]!r}; "
+                f"task={_trim(_inventory_task_text(item), 240)!r}.",
+                level="error",
+            )
         raise RuntimeError(
             "question inventory extraction produced "
             f"{len(invalid_inventory)} invalid source row(s); refusing to "
@@ -5202,7 +7102,8 @@ _CASE_SOURCE_ARTIFACT_RE = re.compile(
 
 _FIGURE_REFERENCE_RE = re.compile(
     r"\b(?:refer(?:\s+to)?\s+)?fig(?:ure)?s?[.．]?\s*"
-    r"(?P<number>\d+(?:[.．]\d+)*(?:\s*\([a-z]\))?)(?![\w．])",
+    r"(?P<number>\d+(?:[.．]\d+)*"
+    r"(?:\s*(?:\([a-z]\)|[a-z]))?)(?!\w|[.．]\d)",
     re.IGNORECASE,
 )
 _LATEX_FIGURE_BLOCK_RE = re.compile(
@@ -5268,8 +7169,19 @@ def _normalized_figure_id(value: str) -> str:
     """Return a stable figure identifier such as ``11.2`` or ``14(a)``."""
     text = unicodedata.normalize("NFKC", str(value or "")).lower()
     text = re.sub(r"\s+", "", text)
-    match = re.search(r"\d+(?:\.\d+)*(?:\([a-z]\))?", text)
-    return match.group(0) if match else ""
+    match = re.search(r"\d+(?:\.\d+)*(?:\([a-z]\)|[a-z])?", text)
+    if match is None:
+        return ""
+    figure_id = match.group(0)
+    bare_panel = re.fullmatch(
+        r"(?P<base>\d+(?:\.\d+)*)(?P<panel>[a-z])",
+        figure_id,
+    )
+    if bare_panel:
+        return (
+            f"{bare_panel.group('base')}({bare_panel.group('panel')})"
+        )
+    return figure_id
 
 
 def _figure_reference_ids(text: str) -> list[str]:
@@ -5362,6 +7274,32 @@ def _source_figure_registry(sections: list[dict]) -> dict[str, list[dict]]:
     return registry
 
 
+def _source_figure_registry_entries(
+    registry: dict[str, list[dict]], figure_id: str,
+) -> list[dict]:
+    """Resolve an exact panel or one unique combined-panel source figure."""
+    exact = registry.get(figure_id) or []
+    if exact:
+        return exact
+    panel = re.fullmatch(r"(?P<base>\d+(?:\.\d+)*)\([a-z]\)", figure_id)
+    if panel:
+        combined = registry.get(panel.group("base")) or []
+        if len(combined) == 1:
+            return combined
+        panel_letter = figure_id[-2].lower()
+        matching_combined = [
+            entry for entry in combined
+            if re.search(
+                rf"(?i)(?:\(\s*{re.escape(panel_letter)}\s*\)|"
+                rf"\b{re.escape(panel_letter)}\s*\))",
+                str(entry.get("caption") or ""),
+            )
+        ]
+        if len(matching_combined) == 1:
+            return matching_combined
+    return []
+
+
 _RENDERED_IMAGE_TAG_RE = re.compile(r"\[img\b[^\]]*\]", re.IGNORECASE)
 _RENDERED_EXAMPLE_SEGMENT_RE = re.compile(
     r"(?P<marker>\bExamples?(?:\s+0*\d+)?\s*:\s*)"
@@ -5392,7 +7330,7 @@ def _source_figure_tags_for_example(
 
     entries: list[dict] = []
     for figure_id in figure_ids:
-        matches = registry.get(figure_id) or []
+        matches = _source_figure_registry_entries(registry, figure_id)
         # An unresolved source reference must remain visible for strict final
         # validation rather than deleting a possibly useful existing tag.
         if not matches:
@@ -5491,25 +7429,154 @@ def _attach_explicit_figure_images(
     implicit_visual_cue = re.compile(
         r"\b(?:caricatur(?:e|ist)|artist|print|portrait|diagram|"
         r"figure|image|illustration|painting|portray(?:ed|al)?|"
-        r"look(?:\s+at)?|shown)\b",
+        r"look\s+at|shown)\b",
         re.IGNORECASE,
     )
+    missing_visual_cue = re.compile(
+        r"\b(?:following|given|provided|above|below)\s+"
+        r"(?:diagram|figure|image|illustration)\b|"
+        r"\b(?:diagram|figure|image|illustration)\s+"
+        r"(?:shown|given|provided|above|below)\b",
+        re.IGNORECASE,
+    )
+
+    def visual_term_key(word: str) -> str:
+        """Collapse only strong visual-word variants for caption matching."""
+        value = str(word or "").lower()
+        for prefix in (
+            "caricatur", "illustrat", "portray", "paint", "portrait",
+            "diagram", "symbol",
+        ):
+            if value.startswith(prefix):
+                return prefix
+        return value
+
+    def meaningful_visual_terms(text: str) -> set[str]:
+        return {
+            visual_term_key(word) for word in re.findall(
+                r"[A-Za-z]{4,}",
+                _strip_source_visual_markup(str(text or "")),
+            )
+        } - {
+            "with", "from", "that", "this", "into", "what", "which",
+            "when", "where", "have", "were", "they", "their", "about",
+            "help", "look", "figure", "image",
+        }
+
+    def embedded_task_visuals(task: str) -> list[dict]:
+        """Return visuals structurally inside this task, excluding table art."""
+        source = str(task or "")
+        captions = _source_visual_captions(source)
+        entries: list[dict] = []
+
+        def add(url: str, caption: str = "") -> None:
+            url = str(url or "").strip()
+            if not url or any(entry["url"] == url for entry in entries):
+                return
+            entries.append({
+                "url": url,
+                "caption": _clean_visual_caption(
+                    caption or captions.get(url) or ""),
+            })
+
+        for figure in _LATEX_FIGURE_BLOCK_RE.finditer(source):
+            include = _LATEX_INCLUDEGRAPHICS_RE.search(
+                figure.group("body") or "")
+            if include is not None:
+                add(include.group("url"))
+
+        # Completed table cells can carry decorative disease thumbnails even
+        # though their labels already provide all of the requested context.
+        # Keep standalone source images, but do not append table art as a set of
+        # unlabeled question visuals.
+        without_tables = re.sub(
+            r"\\begin\{table\}.*?\\end\{table\}",
+            " ",
+            source,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        without_tables = re.sub(
+            r"\\begin\{tabular\}.*?\\end\{tabular\}",
+            " ",
+            without_tables,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        without_tables = _LATEX_FIGURE_BLOCK_RE.sub(" ", without_tables)
+        for image in _MARKDOWN_IMAGE_RE.finditer(without_tables):
+            add(image.group("url"), image.group("alt"))
+        for image in _BRACKET_IMAGE_RE.finditer(without_tables):
+            add(image.group("url"), image.group("alt"))
+        return entries
+
     for item in items:
         raw_task = str(
             item.get("raw_task") or item.get("normalized_task") or "")
+        textual_task = _strip_source_visual_markup(raw_task)
+        implicit_task = re.sub(
+            r"\\begin\{(?:table|tabular)\}.*?"
+            r"\\end\{(?:table|tabular)\}",
+            " ",
+            textual_task,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        embedded = embedded_task_visuals(raw_task)
+        source_embedded_urls = {
+            str(url)
+            for url in (item.get("image_urls") or [])
+            if str(url or "") and str(url) in raw_task
+        }
+        task_terms = meaningful_visual_terms(textual_task)
+        owned_embedded = [
+            entry for entry in embedded
+            if (
+                entry.get("caption")
+                and task_terms
+                & meaningful_visual_terms(entry.get("caption") or "")
+            )
+        ]
         # Captions/adjacent figure blocks must not themselves decide which
         # visual belongs to a question. Inspect the textual task after they are
         # stripped, then use the document-wide registry for resolution.
-        refs = _figure_reference_ids(_strip_source_visual_markup(raw_task))
+        refs = _figure_reference_ids(textual_task)
         if not refs:
             refs = _figure_reference_ids(str(item.get("source_label") or ""))
         resolved: list[dict] = []
         if refs:
             for figure_id in refs:
-                for entry in registry.get(figure_id, []):
+                for entry in _source_figure_registry_entries(
+                    registry, figure_id
+                ):
                     if not any(existing["url"] == entry["url"] for existing in resolved):
                         resolved.append(entry)
-        elif implicit_visual_cue.search(raw_task):
+            # Mathpix sometimes emits the task-owned image without a caption,
+            # so it cannot enter the figure registry. A single image embedded
+            # inside the task is the only safe fallback for an unresolved
+            # explicit Figure reference.
+            if not resolved and len(embedded) == 1:
+                resolved.extend(embedded)
+        elif (
+            embedded
+            and str(item.get("source_kind") or "").strip().lower()
+            == "activity"
+            and item.get("_activity_origin") is False
+        ):
+            # Named source tasks such as "Think like a scientist" can be
+            # multi-panel activity infographics even though they do not carry
+            # an Activity number or prose reference to each panel. Their
+            # trimmed source boundary, rather than page proximity, owns the
+            # images.
+            resolved.extend(embedded)
+        elif (
+            embedded
+            and str(item.get("source_kind") or "").strip().lower()
+            == "exercise"
+        ):
+            # A figure physically inside one numbered exercise boundary belongs
+            # to that atomic question even when its stem says only "the setup".
+            resolved.extend(embedded)
+        elif owned_embedded:
+            resolved.extend(owned_embedded)
+        elif implicit_visual_cue.search(implicit_task):
             try:
                 section_index = int(item.get("_source_section_index"))
                 position = int(item.get("_source_position") or 0)
@@ -5520,33 +7587,68 @@ def _attach_explicit_figure_images(
             if target >= 0:
                 nearby = [
                     figure for figure in layout
-                    if abs(int(figure.get("offset") or 0) - target) <= 4_000
+                    if (
+                        abs(
+                            int(figure.get("section_index", -1))
+                            - section_index
+                        ) <= 2
+                        and abs(
+                            int(figure.get("offset") or 0) - target
+                        ) <= 4_000
+                    )
                 ]
                 if nearby:
-                    task_terms = {
-                        word.lower() for word in re.findall(
-                            r"[A-Za-z]{4,}",
-                            _strip_source_visual_markup(raw_task),
-                        )
-                    } - {
-                        "with", "from", "that", "this", "into", "what",
-                        "which", "when", "where", "have", "were", "they",
-                        "their", "about", "help", "look", "figure", "image",
-                    }
-
                     def _visual_score(figure: dict) -> tuple[int, int]:
-                        caption_terms = set(re.findall(
-                            r"[A-Za-z]{4,}",
-                            str(figure.get("caption") or "").lower(),
-                        ))
+                        caption_terms = meaningful_visual_terms(
+                            figure.get("caption") or "")
                         overlap = len(task_terms & caption_terms)
                         distance = abs(
                             int(figure.get("offset") or 0) - target)
                         return overlap, -distance
 
-                    resolved.append(max(nearby, key=_visual_score))
+                    nearest = max(nearby, key=_visual_score)
+                    # Proximity alone is not ownership evidence: opening art,
+                    # QR codes, and decorative illustrations can be closer than
+                    # the visual a prompt describes. An unnumbered visual task
+                    # in the same source section must share a meaningful term
+                    # with the caption. Across a heading boundary, require
+                    # stronger entity-level agreement; this retains a
+                    # Bismarck/caricature/Parliament plate but does not borrow
+                    # a prior bacterial-cell figure for a missing exercise
+                    # diagram.
+                    nearest_overlap = _visual_score(nearest)[0]
+                    same_section = (
+                        int(nearest.get("section_index", -1))
+                        == section_index
+                    )
+                    if (
+                        (same_section and nearest_overlap > 0)
+                        or (not same_section and nearest_overlap >= 3)
+                    ):
+                        resolved.append(nearest)
+        if (
+            not resolved
+            and source_embedded_urls
+            and embedded
+            and not any(entry.get("caption") for entry in embedded)
+        ):
+            # Images emitted inline as part of the task remain authoritative
+            # when Mathpix supplied no caption to match against and no
+            # semantically stronger registry figure was found. This covers
+            # multi-stage scientific-method panels while letting a named
+            # painting resolve to its captioned source plate.
+            resolved.extend(
+                entry for entry in embedded
+                if entry["url"] in source_embedded_urls
+            )
         if not resolved:
-            if refs or implicit_visual_cue.search(raw_task):
+            if (
+                refs
+                or implicit_visual_cue.search(implicit_task)
+                or source_embedded_urls
+                or item.get("image_urls")
+                or embedded
+            ):
                 # Prevent a caption/URL physically adjacent to the OCR block
                 # from being emitted as a substitute for an unresolved Figure.
                 # The visible source reference remains, allowing strict final
@@ -5554,12 +7656,55 @@ def _attach_explicit_figure_images(
                 item["image_urls"] = []
                 item["_image_captions"] = {}
                 item["_figure_images_resolved"] = True
-                item["requires_visual"] = bool(refs)
+                item["requires_visual"] = bool(
+                    refs or missing_visual_cue.search(implicit_task))
             continue
         item["image_urls"] = [entry["url"] for entry in resolved]
         item["_image_captions"] = {
             entry["url"]: entry.get("caption") or "" for entry in resolved
         }
+        item["_figure_images_resolved"] = True
+        item["requires_visual"] = True
+    visual_items_by_section: dict[int, list[dict]] = {}
+    for item in items:
+        if not item.get("image_urls"):
+            continue
+        try:
+            section_index = int(item.get("_source_section_index"))
+            position = int(item.get("_source_position") or 0)
+        except (TypeError, ValueError):
+            continue
+        visual_items_by_section.setdefault(section_index, []).append({
+            "position": position,
+            "image_urls": list(item.get("image_urls") or []),
+            "captions": dict(item.get("_image_captions") or {}),
+        })
+    for candidates in visual_items_by_section.values():
+        candidates.sort(key=lambda candidate: candidate["position"])
+    for item in items:
+        if item.get("image_urls") or not re.search(
+            r"\btable\s+above\b",
+            str(item.get("raw_task") or item.get("normalized_task") or ""),
+            re.IGNORECASE,
+        ):
+            continue
+        try:
+            section_index = int(item.get("_source_section_index"))
+            position = int(item.get("_source_position") or 0)
+        except (TypeError, ValueError):
+            continue
+        earlier = [
+            candidate
+            for candidate in visual_items_by_section.get(section_index, [])
+            if candidate["position"] < position
+        ]
+        if not earlier:
+            continue
+        nearest = earlier[-1]
+        if position - nearest["position"] > 4_000:
+            continue
+        item["image_urls"] = list(nearest["image_urls"])
+        item["_image_captions"] = dict(nearest["captions"])
         item["_figure_images_resolved"] = True
         item["requires_visual"] = True
     return items
@@ -5591,6 +7736,90 @@ def _visual_alt_text(
     if image_index:
         base = f"{base}, visual {image_index + 1}"
     return re.sub(r"[\[\]]", "", base)
+
+
+def _public_task_without_latex_layout(text: str) -> str:
+    """Convert source-only list/table scaffolding into readable prompt text."""
+    value = str(text or "")
+
+    def item_marker(match: re.Match) -> str:
+        label = str(match.group("label") or "").strip()
+        if label in {"", "-", "*", "•"}:
+            return " "
+        return f" {label} "
+
+    value = re.sub(
+        r"\\item(?:\[(?P<label>[^\]]*)\])?",
+        item_marker,
+        value,
+        flags=re.IGNORECASE,
+    )
+    value = re.sub(
+        r"\\(?:begin|end)\{(?:itemize|enumerate)\}",
+        " ",
+        value,
+        flags=re.IGNORECASE,
+    )
+    value = re.sub(
+        r"\\captionsetup\{[^{}]*\}", " ", value,
+        flags=re.IGNORECASE,
+    )
+    value = re.sub(
+        r"\\caption\{(?P<caption>[^{}]*)\}",
+        lambda match: f" {match.group('caption').strip()}. ",
+        value,
+        flags=re.IGNORECASE,
+    )
+
+    def plain_tabular(match: re.Match) -> str:
+        block = match.group(0)
+        block = re.sub(
+            r"^\\begin\{tabular\}\{[^\n]*?\}",
+            "",
+            block,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+        block = re.sub(
+            r"\\end\{tabular\}$", "", block,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+        block = re.sub(
+            r"\\multirow\{[^{}]*\}\{[^{}]*\}\{(?P<body>[^{}]*)\}",
+            lambda nested: nested.group("body"),
+            block,
+            flags=re.IGNORECASE,
+        )
+        block = re.sub(
+            r"\\multicolumn\{[^{}]*\}\{[^{}]*\}\{(?P<body>[^{}]*)\}",
+            lambda nested: nested.group("body"),
+            block,
+            flags=re.IGNORECASE,
+        )
+        block = re.sub(r"\\hline\b", " ", block, flags=re.IGNORECASE)
+        rows: list[str] = []
+        for row in re.split(r"\\\\", block):
+            cells = [
+                re.sub(r"\s+", " ", cell).strip(" {}")
+                for cell in row.split("&")
+            ]
+            cells = [cell for cell in cells if cell]
+            if cells:
+                rows.append(" | ".join(cells))
+        return ("; ".join(rows) + ". ") if rows else " "
+
+    value = re.sub(
+        r"\\begin\{tabular\}.*?\\end\{tabular\}",
+        plain_tabular,
+        value,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    value = re.sub(
+        r"\\(?:begin|end)\{table\}", " ", value,
+        flags=re.IGNORECASE,
+    )
+    return re.sub(r"\s+", " ", value).strip()
 
 
 def _inventory_task_text(item: dict) -> str:
@@ -5628,6 +7857,7 @@ def _inventory_task_text(item: dict) -> str:
     )
     task = _strip_leading_source_task_label(task)
     task = _strip_source_visual_markup(task)
+    task = _public_task_without_latex_layout(task)
     task = kr.canonicalize_rich_text(str(task)).strip()
     task = _PUBLIC_TASK_SECTION_REF_RE.sub("the earlier chapter discussion", task)
     context = kr.canonicalize_rich_text(
@@ -5923,14 +8153,232 @@ def _split_mined_types_by_source_topic(
     return _backfill_type_cases_from_inventory(split, inventory)
 
 
+def _split_mined_types_by_inventory_role(
+    types: list[dict], inventory: dict,
+) -> list[dict]:
+    """Make Activity ownership follow the source inventory, case by case.
+
+    A model can group an ordinary question and a textbook experiment under one
+    reusable Type, then mark the whole Type as an Activity. Type assignment
+    consequently skips the ordinary question while Hub placement never sees
+    it. Split that mixed family at Case/qid boundaries and derive
+    ``is_activity`` from the authoritative inventory role instead.
+    """
+    hub_qids = {
+        str(item.get("qid") or "").strip()
+        for item in _hub_inventory_items(inventory)
+        if str(item.get("qid") or "").strip()
+    }
+    split: list[dict] = []
+    split_count = 0
+    corrected_count = 0
+    for original in types:
+        if not isinstance(original, dict):
+            continue
+        source_qids = _type_source_qids(original)
+        role_groups = [
+            (
+                False,
+                [qid for qid in source_qids if qid not in hub_qids],
+            ),
+            (
+                True,
+                [qid for qid in source_qids if qid in hub_qids],
+            ),
+        ]
+        role_groups = [
+            (is_activity, qids)
+            for is_activity, qids in role_groups
+            if qids
+        ]
+        if len(role_groups) > 1:
+            split_count += 1
+        for is_activity, qids in role_groups:
+            qid_set = set(qids)
+            item = copy.deepcopy(original)
+            if bool(item.get("is_activity")) != is_activity:
+                corrected_count += 1
+            item["is_activity"] = is_activity
+            item["source_question_ids"] = qids
+            filtered_cases: list[dict] = []
+            for raw_case in original.get("case_prompts") or []:
+                if not isinstance(raw_case, dict):
+                    continue
+                case = copy.deepcopy(raw_case)
+                examples = [
+                    copy.deepcopy(example)
+                    for example in _case_examples(raw_case)
+                    if (
+                        str(
+                            example.get("source_question_id") or ""
+                        ).strip()
+                        in qid_set
+                    )
+                ]
+                legacy_qid = str(
+                    raw_case.get("source_question_id") or "").strip()
+                if examples:
+                    case.pop("case_prompt", None)
+                    case.pop("source_question_id", None)
+                    case["examples"] = examples
+                    filtered_cases.append(case)
+                elif legacy_qid in qid_set:
+                    filtered_cases.append(case)
+            item["case_prompts"] = filtered_cases
+            split.append(item)
+
+    for index, item in enumerate(split, start=1):
+        item["type_id"] = f"TYPE-{index:04d}"
+    if split_count or corrected_count:
+        progress.log(
+            "Reconciled mined Type Activity roles with the source inventory: "
+            f"split {split_count} mixed Type(s), corrected "
+            f"{corrected_count} role fragment(s).",
+            level="warning",
+        )
+    return _backfill_type_cases_from_inventory(split, inventory)
+
+
+def _prune_unowned_mined_examples(
+    types: list[dict], inventory: dict,
+) -> list[dict]:
+    """Remove model-authored Examples that have no exact inventory owner.
+
+    The inventory is a closed world: public Examples may only be materialized
+    from a known qid, and their wording is restored later from that inventory.
+    Filtering here prevents an invented, missing-qid, or unknown-qid Example
+    from surviving every exact *known-qid* coverage check and failing only at
+    the terminal unowned-Example gate.
+    """
+    allowed_qids = {
+        str(item.get("qid") or "").strip()
+        for item in inventory.get("items") or []
+        if isinstance(item, dict) and str(item.get("qid") or "").strip()
+    }
+    if not allowed_qids:
+        return []
+
+    pruned: list[dict] = []
+    removed_examples = 0
+    removed_types = 0
+    for raw_type in types:
+        if not isinstance(raw_type, dict):
+            continue
+        mtype = copy.deepcopy(raw_type)
+        source_ids: list[str] = []
+        for raw_qid in mtype.get("source_question_ids") or []:
+            qid = str(raw_qid or "").strip()
+            if qid in allowed_qids and qid not in source_ids:
+                source_ids.append(qid)
+
+        cases: list[dict] = []
+        for raw_case in mtype.get("case_prompts") or []:
+            if isinstance(raw_case, str):
+                # A free-form legacy Case has no auditable qid and therefore
+                # cannot own a public Example in the closed inventory.
+                removed_examples += 1
+                continue
+            if not isinstance(raw_case, dict):
+                continue
+            case = copy.deepcopy(raw_case)
+            legacy_qid = str(
+                case.get("source_question_id") or "").strip()
+            legacy_owned = legacy_qid in allowed_qids
+            if legacy_owned and legacy_qid not in source_ids:
+                source_ids.append(legacy_qid)
+
+            examples: list[dict] = []
+            for raw_example in case.get("examples") or []:
+                if not isinstance(raw_example, dict):
+                    removed_examples += 1
+                    continue
+                qid = str(
+                    raw_example.get("source_question_id") or "").strip()
+                if qid not in allowed_qids:
+                    removed_examples += 1
+                    continue
+                examples.append(copy.deepcopy(raw_example))
+                if qid not in source_ids:
+                    source_ids.append(qid)
+            if examples:
+                case["examples"] = examples
+                cases.append(case)
+            elif legacy_owned:
+                case.pop("examples", None)
+                cases.append(case)
+            elif (
+                case.get("examples")
+                or case.get("case_prompt")
+                or case.get("source_question_id")
+            ):
+                removed_examples += 1
+
+        if not source_ids:
+            removed_types += 1
+            continue
+        mtype["source_question_ids"] = source_ids
+        mtype["case_prompts"] = cases
+        pruned.append(mtype)
+
+    if removed_examples or removed_types:
+        progress.log(
+            "Pruned unowned mined output before Type rendering: "
+            f"{removed_examples} Example/Case payload(s), "
+            f"{removed_types} ownerless Type(s).",
+            level="warning",
+        )
+    return pruned
+
+
 def _normalize_mined_type_candidate(
     raw_types: list, inventory: dict,
 ) -> list[dict]:
     """Repair model schema drift, then apply deterministic Type normalization."""
     types = _repair_nested_mined_types(raw_types)
+    types = _prune_unowned_mined_examples(types, inventory)
     types = _backfill_type_cases_from_inventory(types, inventory)
     types = _split_mined_types_by_source_topic(types, inventory)
-    return _merge_equivalent_mined_types(types)
+    types = _split_mined_types_by_inventory_role(types, inventory)
+    types = _merge_equivalent_mined_types(types)
+    return _clear_nonvisual_diagram_interpretation_hints(types, inventory)
+
+
+def _clear_nonvisual_diagram_interpretation_hints(
+    types: list[dict], inventory: dict,
+) -> list[dict]:
+    """Drop a false optional visual-skill hint using authoritative inventory."""
+    inventory_by_qid = {
+        str(item.get("qid") or "").strip(): item
+        for item in (inventory or {}).get("items") or []
+        if isinstance(item, dict) and str(item.get("qid") or "").strip()
+    }
+    corrected = 0
+    for mtype in types:
+        if not isinstance(mtype, dict):
+            continue
+        if (
+            bi.normalize_question_text(
+                mtype.get("subject_skill_hint") or "")
+            != "diagram interpretation"
+        ):
+            continue
+        owned_items = [
+            inventory_by_qid[qid]
+            for qid in _type_source_qids(mtype)
+            if qid in inventory_by_qid
+        ]
+        if owned_items and not any(
+            item.get("requires_visual") is True for item in owned_items
+        ):
+            mtype["subject_skill_hint"] = ""
+            corrected += 1
+    if corrected:
+        progress.log(
+            "Cleared Diagram Interpretation from "
+            f"{corrected} nonvisual Type(s) using the source inventory.",
+            level="success",
+        )
+    return types
 
 
 def _merge_equivalent_mined_types(types: list[dict]) -> list[dict]:
@@ -7425,6 +9873,8 @@ def _has_valid_terminal_mastery(details: str) -> bool:
     statement = description[match.end():].strip()
     return bool(
         statement
+        and "\n" not in statement
+        and "\r" not in statement
         and description.endswith(f"\nAchieving Mastery: {statement}")
         and cv._is_substantive_mastery_statement(statement)
     )
@@ -7713,6 +10163,11 @@ def _learner_analysis_needs_rewrite(details: str) -> bool:
     """Whether a normal concept lacks a usable, non-duplicated analysis tail."""
     misconception = _misconception_body(details)
     error_analysis = _error_analysis_body(details)
+    if (
+        cv.is_terminal_generic_analysis_filler(misconception)
+        or cv.is_terminal_generic_analysis_filler(error_analysis)
+    ):
+        return True
     misconception_ok = cv.is_valid_misconception(misconception)
     error_analysis_ok = cv.is_valid_error_analysis(error_analysis)
     if not (misconception_ok and error_analysis_ok):
@@ -7730,6 +10185,7 @@ def _learner_analysis_needs_rewrite(details: str) -> bool:
 
 def _ensure_misconceptions_via_api(
     records: list[dict], *, meta: dict, use_api: bool = True,
+    max_attempts: int = 5,
 ) -> list[dict]:
     """Have GPT write missing or generic learner-analysis sections.
 
@@ -7750,49 +10206,213 @@ def _ensure_misconceptions_via_api(
     progress.log(
         f"Writing specific learner analysis for {len(targets)} concept(s) via API.")
     system = prompts.get_text("concepts.misconceptions.system")
-    rows = [
-        {
-            "topic": records[i].get("topic", ""),
-            "parent_concept": records[i].get("parent_concept", ""),
-            "concept": records[i].get("concept_title", ""),
-            "concept_description": records[i].get("concept_details", ""),
-            "keywords": records[i].get("keywords", ""),
-        }
-        for i in targets
-    ]
-    user = (
-        _metadata_block(meta)
-        + "\nRows missing usable Misconceptions and/or Error Analysis sections:\n"
-        + _json.dumps({"rows": rows}, ensure_ascii=False)
-    )
     by_title: dict[str, tuple[str, str]] = {}
-    try:
-        data = _openai_json(
-            system, user, purpose="concept_detailing")
-        for row in _concept_rows_to_records(data):
-            details = row.get("concept_details", "")
-            misconception = _misconception_body(details)
-            error_analysis = _error_analysis_body(details)
-            if not cv.is_valid_misconception(misconception):
-                misconception = ""
-            if not cv.is_valid_error_analysis(error_analysis):
-                error_analysis = ""
-            if (
-                misconception
-                and error_analysis
-                and cv.issue_sections_overlap(misconception, error_analysis)
-            ):
-                error_analysis = ""
-            if misconception or error_analysis:
-                by_title[bi.normalize_question_text(row["concept_title"])] = (
-                    misconception,
-                    error_analysis,
+    pending = {
+        bi.normalize_question_text(records[i].get("concept_title", "")): i
+        for i in targets
+    }
+    rejection_reasons: dict[str, list[str]] = {}
+    attempts = max(1, int(max_attempts or 1))
+    for attempt in range(1, attempts + 1):
+        if not pending:
+            break
+        pending_keys = list(pending)
+        if attempt > 1:
+            progress.log(
+                "Retrying specific learner analysis for "
+                f"{len(pending)} unresolved concept(s), attempt "
+                f"{attempt}/{attempts}.",
+                level="warning",
+            )
+        attempt_accepted = 0
+        next_reasons: dict[str, list[str]] = {
+            key: ["No row with this exact concept title was returned."]
+            for key in pending_keys
+        }
+        # Smaller batches keep each concept's description and the distinction
+        # between its two learner issues salient for long or mixed chapters.
+        for batch_start in range(0, len(pending_keys), 4):
+            batch_keys = pending_keys[batch_start:batch_start + 4]
+            rows = [
+                {
+                    "topic": records[pending[key]].get("topic", ""),
+                    "parent_concept": records[pending[key]].get(
+                        "parent_concept", ""),
+                    "concept": records[pending[key]].get("concept_title", ""),
+                    "concept_description": records[pending[key]].get(
+                        "concept_details", ""),
+                    "keywords": records[pending[key]].get("keywords", ""),
+                }
+                for key in batch_keys
+            ]
+            user = (
+                _metadata_block(meta)
+                + "\nRows missing usable Misconceptions and/or Error Analysis "
+                "sections:\n"
+                + _json.dumps({"rows": rows}, ensure_ascii=False)
+            )
+            if rejection_reasons:
+                user += (
+                    "\n\nVALIDATION FEEDBACK FROM THE PREVIOUS ATTEMPT. "
+                    "Repair every listed row and return each exact concept "
+                    "title:\n"
+                    + _json.dumps(
+                        {
+                            records[pending[key]].get("concept_title", ""):
+                            rejection_reasons.get(key, [])
+                            for key in batch_keys
+                        },
+                        ensure_ascii=False,
+                    )
                 )
-    except Exception as exc:  # noqa: BLE001 — deterministic backstop follows later
+                if any(
+                    any(
+                        reason.startswith("Error Analysis must")
+                        for reason in rejection_reasons.get(key, [])
+                    )
+                    for key in batch_keys
+                ):
+                    user += (
+                        "\n\nACTION-ONLY ERROR_ANALYSIS RETRY CONTRACT: For "
+                        "every row flagged for Error Analysis, start the field "
+                        "with 'Students may' and then name a concrete faulty "
+                        "step using an action such as omit, skip, reverse, "
+                        "swap, misread, miscopy, miscalculate, mislabel, "
+                        "misplace, misapply, add, subtract, multiply, divide, "
+                        "count, group, or fail to check. State the specific "
+                        "input, representation, operation, or inference that "
+                        "the learner handles wrongly and its consequence. Do "
+                        "not use believe, think, assume, expect, interpret, "
+                        "misinterpret, misunderstand, confuse, mistake, or "
+                        "treat anywhere in error_analysis."
+                    )
+            try:
+                data = _openai_json(
+                    system, user, purpose="concept_detailing")
+                returned_rows = [
+                    row for row in (data or {}).get("rows") or []
+                    if isinstance(row, dict)
+                ]
+            except Exception as exc:  # noqa: BLE001 - retry unresolved batch
+                progress.log(
+                    f"Learner-analysis batch attempt {attempt}/{attempts} "
+                    f"failed ({exc}).",
+                    level="warning",
+                )
+                continue
+            for row in returned_rows:
+                title_key = bi.normalize_question_text(
+                    row.get("concept") or row.get("concept_title") or "")
+                if title_key not in pending:
+                    continue
+
+                def compact_field(*names: str) -> str:
+                    value = next(
+                        (
+                            row.get(name) for name in names
+                            if row.get(name) not in (None, "")
+                        ),
+                        "",
+                    )
+                    if isinstance(value, list):
+                        value = "; ".join(
+                            str(item).strip() for item in value if str(item).strip()
+                        )
+                    return str(value or "").strip()
+
+                misconception = compact_field(
+                    "misconception", "misconceptions")
+                error_analysis = compact_field(
+                    "error_analysis", "errorAnalysis")
+                if not (misconception and error_analysis):
+                    # Backward compatibility for cached prompts/tests and
+                    # providers that still return the older full-row schema.
+                    details = cr.normalize_analysis_sections(compact_field(
+                        "concept_description", "concept_details"))
+                    misconception = (
+                        misconception or _misconception_body(details))
+                    error_analysis = (
+                        error_analysis or _error_analysis_body(details))
+                misconception = re.sub(
+                    r"^\s*Misconceptions?\s*:\s*",
+                    "",
+                    misconception,
+                    flags=re.IGNORECASE,
+                ).strip()
+                error_analysis = re.sub(
+                    r"^\s*Error\s*Analysis\s*:\s*",
+                    "",
+                    error_analysis,
+                    flags=re.IGNORECASE,
+                ).strip()
+                reasons: list[str] = []
+                if not cv.is_valid_misconception(misconception):
+                    reasons.append(
+                        "Misconceptions must state a specific learner belief "
+                        "using learner voice, not a correction or placeholder."
+                    )
+                if cv.is_terminal_generic_analysis_filler(misconception):
+                    reasons.append(
+                        "Misconceptions used forbidden title-substitution "
+                        "filler."
+                    )
+                if not cv.is_valid_error_analysis(error_analysis):
+                    reasons.append(
+                        "Error Analysis must name the learner and a concrete "
+                        "faulty action or reasoning step, not another belief."
+                    )
+                if cv.is_terminal_generic_analysis_filler(error_analysis):
+                    reasons.append(
+                        "Error Analysis used forbidden title-substitution "
+                        "filler."
+                    )
+                if (
+                    misconception
+                    and error_analysis
+                    and cv.issue_sections_overlap(
+                        misconception, error_analysis)
+                ):
+                    reasons.append(
+                        "Misconceptions and Error Analysis restated the same "
+                        "learner problem."
+                    )
+                if reasons:
+                    next_reasons[title_key] = reasons
+                    continue
+                if misconception and error_analysis:
+                    by_title[title_key] = (
+                        misconception,
+                        error_analysis,
+                    )
+                    attempt_accepted += 1
+        for key in list(pending):
+            if key in by_title:
+                pending.pop(key)
+        rejection_reasons = {
+            key: next_reasons.get(
+                key, ["The returned learner analysis was not usable."])
+            for key in pending
+        }
+        reason_counts: dict[str, int] = {}
+        for reasons in rejection_reasons.values():
+            for reason in reasons:
+                label = reason.split(".", 1)[0]
+                reason_counts[label] = reason_counts.get(label, 0) + 1
+        if reason_counts:
+            progress.log(
+                "Learner-analysis rejection summary: "
+                + "; ".join(
+                    f"{label}={count}"
+                    for label, count in sorted(reason_counts.items())
+                ),
+                level="warning",
+            )
         progress.log(
-            f"Learner-analysis pass failed ({exc}) — deterministic fallback will apply.",
-            level="warning")
-        return records
+            "Specific learner-analysis attempt "
+            f"{attempt}/{attempts} accepted {attempt_accepted} row(s); "
+            f"{len(pending)} remain.",
+            level="success" if not pending else "warning",
+        )
     completed = 0
     for i in targets:
         rec = records[i]
@@ -7817,8 +10437,27 @@ def _ensure_misconceptions_via_api(
             ))
         rec["concept_details"] = cr.join_sections(sections)
         completed += 1
-    progress.log(f"Specific learner analysis written for {completed} concept(s).",
-                 level="success")
+    if completed != len(targets):
+        missing = [
+            records[i].get("concept_title", "")
+            for i in targets
+            if bi.normalize_question_text(
+                records[i].get("concept_title", ""))
+            not in by_title
+        ]
+        progress.log(
+            "Specific learner analysis accepted for "
+            f"{completed}/{len(targets)} concept(s); final content is blocked.",
+            level="error",
+        )
+        raise RuntimeError(
+            "specific learner-analysis generation returned unusable rows for: "
+            + ", ".join(missing[:8])
+        )
+    progress.log(
+        f"Specific learner analysis written for {completed} concept(s).",
+        level="success",
+    )
     return records
 
 
@@ -8302,7 +10941,8 @@ def _high_confidence_assignment_override(
         for cid, prefixes in title_prefixes.items()
     }
     ranked = sorted(scores.items(), key=lambda pair: pair[1], reverse=True)
-    if ranked and ranked[0][1] > 0:
+    minimum_score = 2 if is_activity and len(normal) > 1 else 1
+    if ranked and ranked[0][1] >= minimum_score:
         runner_up = ranked[1][1] if len(ranked) > 1 else 0
         if ranked[0][1] > runner_up:
             return ranked[0][0]
@@ -8316,6 +10956,7 @@ def _review_case_unit_hosts_via_api(
     concept_payload: list[dict],
     allowed_cids_by_tid: dict[str, set[str]],
     meta: dict,
+    max_attempts: int = 3,
 ) -> dict[str, list[dict]]:
     """Second-pass semantic host review, constrained to proven concept IDs."""
     import json as _json
@@ -8351,69 +10992,123 @@ def _review_case_unit_hosts_via_api(
         review_units.append(unit)
     if not review_units:
         return per_concept
-    payload = []
-    for unit in review_units:
-        tid = (unit.get("type_id") or "").strip()
-        item = copy.deepcopy(unit)
-        item["current_concept_id"] = current_by_tid[tid]
-        item["allowed_concept_ids"] = sorted(
-            allowed_cids_by_tid.get(tid) or set())
-        item["placement_scope"] = _assignment_placement_scope(
-            unit, concept_payload_by_id)
-        payload.append(item)
-    user = (
-        _metadata_block(meta)
-        + "\nCONCEPT HOSTS:\n"
-        + _json.dumps({"concepts": concept_payload}, ensure_ascii=False)
-        + "\n\nCURRENT CASE-SCOPED ASSIGNMENTS TO REVIEW:\n"
-        + _json.dumps({"types": payload}, ensure_ascii=False)
-    )
     progress.log(
         f"Reviewing semantic host entailment for {len(review_units)} "
         "Type/Case assignment unit(s).")
-    try:
-        data = _openai_json(
-            prompts.get_text("concepts.type_host_review.system"),
-            user,
-            purpose="concept_validation",
-        )
-    except Exception as exc:  # noqa: BLE001
-        progress.log(
-            f"Type host entailment review failed ({exc}); refusing to certify "
-            "ambiguous concept hosts.",
-            level="error",
-        )
-        raise RuntimeError(
-            "type host entailment review failed before a complete verdict"
-        ) from exc
-
     proposed: dict[str, str] = {}
-    invalid: set[str] = set()
-    known_tids = {str(unit.get("type_id") or "").strip() for unit in review_units}
-    for assignment in (data or {}).get("assignments") or []:
-        if not isinstance(assignment, dict):
-            continue
-        tid = (assignment.get("type_id") or "").strip()
-        cid = (assignment.get("concept_id") or "").strip()
-        if tid not in known_tids or tid in proposed:
-            if tid:
-                invalid.add(tid)
-            continue
-        if cid not in (allowed_cids_by_tid.get(tid) or set()):
-            invalid.add(tid)
-            continue
-        proposed[tid] = cid
-    for tid in invalid:
-        proposed.pop(tid, None)
+    units_by_tid = {
+        str(unit.get("type_id") or "").strip(): unit
+        for unit in review_units
+    }
+    known_tids = set(units_by_tid)
+    unresolved_invalid: set[str] = set()
+    for attempt in range(1, max(1, max_attempts) + 1):
+        pending_tids = sorted(known_tids - set(proposed))
+        if not pending_tids:
+            break
+        payload = []
+        for tid in pending_tids:
+            unit = units_by_tid[tid]
+            item = copy.deepcopy(unit)
+            item["current_concept_id"] = current_by_tid[tid]
+            item["allowed_concept_ids"] = sorted(
+                allowed_cids_by_tid.get(tid) or set())
+            item["placement_scope"] = _assignment_placement_scope(
+                unit, concept_payload_by_id)
+            payload.append(item)
+        retry_contract = ""
+        if attempt > 1:
+            retry_contract = (
+                "\n\nRETRY CONTRACT: The previous response omitted or "
+                "malformed one or more opaque IDs. Return exactly these "
+                "remaining type_id values once each, character-for-character: "
+                + _json.dumps(pending_tids, ensure_ascii=False)
+            )
+        user = (
+            _metadata_block(meta)
+            + "\nCONCEPT HOSTS:\n"
+            + _json.dumps({"concepts": concept_payload}, ensure_ascii=False)
+            + "\n\nCURRENT CASE-SCOPED ASSIGNMENTS TO REVIEW:\n"
+            + _json.dumps({"types": payload}, ensure_ascii=False)
+            + retry_contract
+        )
+        try:
+            data = _openai_json(
+                prompts.get_text("concepts.type_host_review.system"),
+                user,
+                purpose="concept_validation",
+            )
+        except Exception as exc:  # noqa: BLE001
+            progress.log(
+                f"Type host entailment review failed ({exc}); refusing to "
+                "certify ambiguous concept hosts.",
+                level="error",
+            )
+            raise RuntimeError(
+                "type host entailment review failed before a complete verdict"
+            ) from exc
+
+        invalid_this_attempt: set[str] = set()
+        seen_this_attempt: set[str] = set()
+        canonicalized_aliases = 0
+        pending_by_origin: dict[str, list[str]] = {}
+        for pending_tid in pending_tids:
+            origin_tid = str(
+                units_by_tid[pending_tid].get("_origin_type_id") or "").strip()
+            if origin_tid:
+                pending_by_origin.setdefault(origin_tid, []).append(
+                    pending_tid)
+        for assignment in (data or {}).get("assignments") or []:
+            if not isinstance(assignment, dict):
+                continue
+            returned_tid = (assignment.get("type_id") or "").strip()
+            tid = returned_tid
+            if tid not in pending_tids:
+                aliases = pending_by_origin.get(returned_tid) or []
+                if len(aliases) == 1:
+                    # A model occasionally drops the case suffix even though
+                    # only one unresolved Case of that original Type remains.
+                    # The mapping is then exact and unambiguous.
+                    tid = aliases[0]
+                    canonicalized_aliases += 1
+            cid = (assignment.get("concept_id") or "").strip()
+            if tid not in pending_tids or tid in seen_this_attempt:
+                if returned_tid:
+                    invalid_this_attempt.add(returned_tid)
+                continue
+            seen_this_attempt.add(tid)
+            if cid not in (allowed_cids_by_tid.get(tid) or set()):
+                invalid_this_attempt.add(tid)
+                continue
+            proposed[tid] = cid
+        if canonicalized_aliases:
+            progress.log(
+                "Canonicalized "
+                f"{canonicalized_aliases} uniquely resolvable parent Type "
+                "ID verdict(s) to their opaque Case assignment-unit IDs.",
+                level="warning",
+            )
+        unresolved_invalid = invalid_this_attempt
+        remaining = sorted(known_tids - set(proposed))
+        if not remaining:
+            break
+        if attempt < max(1, max_attempts):
+            progress.log(
+                "Type host entailment review left "
+                f"{len(remaining)} unresolved assignment unit(s) on attempt "
+                f"{attempt}; retrying only the missing/invalid opaque IDs.",
+                level="warning",
+            )
+
     missing_verdicts = sorted(known_tids - set(proposed))
-    if invalid or missing_verdicts:
+    if missing_verdicts:
         details: list[str] = []
-        if invalid:
+        if unresolved_invalid:
             details.append(
-                "invalid verdicts for " + ", ".join(sorted(invalid)))
-        if missing_verdicts:
-            details.append(
-                "missing verdicts for " + ", ".join(missing_verdicts))
+                "invalid verdicts for "
+                + ", ".join(sorted(unresolved_invalid)))
+        details.append(
+            "missing verdicts for " + ", ".join(missing_verdicts))
         raise RuntimeError(
             "type host entailment review did not certify every assignment "
             "unit: " + "; ".join(details)
@@ -8461,6 +11156,9 @@ def _assign_mined_types_via_api(
     types = (mined_types or {}).get("types") or []
     if not types:
         return records
+    # A reassignment is a new review boundary. Never carry host verdicts from
+    # an earlier row topology into the freshly materialized concept map.
+    _reset_placement_certifications(mined_types)
 
     # Culmination rows are included so mixed/synthesis Types mined from the
     # source can be placed on them (this pass runs after the culmination pass).
@@ -8748,6 +11446,18 @@ def _assign_mined_types_via_api(
         allowed_cids_by_tid=allowed_cids_by_tid,
         meta=meta,
     )
+    for cid, units in per_concept.items():
+        host = concept_payload_by_id[cid]
+        for unit in units:
+            if unit.get("is_activity"):
+                continue
+            for qid in unit.get("source_question_ids") or []:
+                _certify_inventory_host(
+                    mined_types,
+                    qid,
+                    host,
+                    basis="type_host_review",
+                )
 
     for cid, tlist in per_concept.items():
         rec = cid_map[cid]
@@ -8991,6 +11701,9 @@ def _rendered_type_placement_violations(
     deterministic evidence used during assignment identifies one unique normal
     concept, the terminal gate also preserves that exact host.
     """
+    if _reviewed_placement_authority_declared(mined_types):
+        return []
+
     units_by_qid = _mined_assignment_units_by_qid(mined_types)
 
     concept_payload_by_id: dict[str, dict] = {}
@@ -9127,6 +11840,9 @@ def _normal_concept_type_coverage_violations(
     a real Type/Case hierarchy and the exact source item as one of its
     Examples.
     """
+    if _reviewed_placement_authority_declared(mined_types):
+        return []
+
     units_by_qid = _mined_assignment_units_by_qid(mined_types)
     concept_payload_by_id: dict[str, dict] = {}
     cids_by_topic: dict[str, list[str]] = {}
@@ -9471,6 +12187,7 @@ _FATAL_CODES = {
     "missing_case_definition", "case_without_example",
     "case_question_not_definition", "example_numbering",
     "section_number_in_description", "case_example_semantic_mismatch",
+    "description_truncated_clause",
     "verbatim_source_description",
     "missing_type_definition", "generic_type_definition",
     "duplicate_type_definition", "missing_mastery_statement",
@@ -9534,6 +12251,17 @@ def _repair_records_via_api(
     records = _ensure_parent_concepts(records)
     opts = _validation_options(stage)
     for attempt in range(max_attempts + 1):
+        if stage == "final":
+            # Models sometimes put the learner-analysis label on a newline
+            # after Achieving Mastery. This is a deterministic section-boundary
+            # defect, not a semantic-content defect. Normalize before every
+            # validation attempt, including API-returned rows, so a broad
+            # rewrite cannot damage an otherwise source-faithful Description
+            # or leave the loop with a newly malformed terminal contract.
+            records = cv.ensure_valid_learner_analysis(records)
+            records = _ensure_mastery_lines_via_api(
+                records, meta=meta, use_api=False)
+            records = _canonicalize_concept_rich_text(records)
         report = cv.validate_concept_rows(
             records, **opts,
             allowed_source_examples=allowed_source_examples,
@@ -9816,6 +12544,17 @@ def _inventory_coverage_key(text: str) -> str:
     # source formula is a formatting repair, not a change to the source task.
     # Compare the LaTeX body while retaining image tags/URLs and all wording.
     value = kr.unwrap_katex(value)
+    # Mathpix roman/lettered list labels may be removed by the inventory task
+    # sanitizer while the final rich-text renderer preserves their positions
+    # as bullets. These are cosmetic list markers; normalize both forms away
+    # while retaining every subpart's wording and order.
+    value = re.sub(
+        r"(?<!\w)\((?:[ivxlcdm]+|[a-z]|\d+)\)\s*",
+        " ",
+        value,
+        flags=re.IGNORECASE,
+    )
+    value = re.sub(r"(?<!\w)\u2022\s*", " ", value)
     value = bi.normalize_question_text(value)
     # ``clean_concept_record`` tidies OCR spacing such as ``21 ,`` and
     # ``. . .``. That must not make an otherwise identical source Example look
@@ -10110,6 +12849,131 @@ def _activity_example_hub_alignment_violations(
     return violations
 
 
+def _placement_certification_violations(
+    records: list[dict],
+    inventory: dict | None,
+    mined_types: dict | None,
+    *,
+    require_complete: bool = True,
+) -> list[dict]:
+    """Return qid placements that drifted from their reviewed exact host.
+
+    Absence means the caller is handling a pre-certification/legacy artifact.
+    Once the versioned key is declared, malformed entries and host drift fail
+    closed. Exact-review boundaries may temporarily allow an uncertified pure
+    Activity while the immediately following Hub pass is still pending; late
+    checkpoints and terminal/deposit validation always require completeness.
+    """
+    if (
+        not isinstance(mined_types, dict)
+        or _PLACEMENT_CERTIFICATIONS_KEY not in mined_types
+    ):
+        return []
+    ledger = _placement_certification_ledger(mined_types)
+    if not ledger:
+        return [{"qid": "", "reason": "malformed_ledger"}]
+
+    items_by_qid = {
+        str(item.get("qid") or "").strip(): item
+        for item in (inventory or {}).get("items") or []
+        if isinstance(item, dict) and str(item.get("qid") or "").strip()
+    }
+    hosts = ledger["hosts"]
+    violations: list[dict] = []
+    for qid in sorted(
+        set(hosts) - set(items_by_qid),
+        key=lambda value: str(value),
+    ):
+        violations.append({
+            "qid": str(qid),
+            "reason": "unknown_certified_qid",
+        })
+
+    concept_payload_by_id = _scope_payload_from_records(records)
+    index_by_cid = {
+        f"CONCEPT-{index + 1:04d}": index
+        for index in range(len(records))
+    }
+    for qid, item in items_by_qid.items():
+        expected = hosts.get(qid)
+        if expected is None:
+            if require_complete:
+                violations.append({
+                    "qid": qid,
+                    "reason": "missing_certification",
+                })
+            continue
+        if not _placement_certification_entry_is_valid(expected):
+            violations.append({
+                "qid": qid,
+                "reason": "malformed_certification",
+            })
+            continue
+
+        expected_cid = _certified_host_cid(
+            mined_types, qid, concept_payload_by_id)
+        if not expected_cid:
+            matching_hosts = [
+                cid
+                for cid, payload in concept_payload_by_id.items()
+                if (
+                    _placement_host_identity(payload)["topic_key"]
+                    == expected["topic_key"]
+                    and _placement_host_identity(payload)["concept_key"]
+                    == expected["concept_key"]
+                    and _placement_host_identity(payload)["is_culmination"]
+                    == expected["is_culmination"]
+                )
+            ]
+            violations.append({
+                "qid": qid,
+                "reason": (
+                    "certified_host_missing"
+                    if not matching_hosts
+                    else "certified_host_ambiguous"
+                ),
+                "expected_topic": expected["topic"],
+                "expected_concept": expected["concept"],
+            })
+            continue
+
+        source_kind = str(
+            item.get("source_kind") or "").strip().lower()
+        if source_kind in _HUB_INVENTORY_KINDS:
+            actual_locations = set(
+                _activity_hub_locations(records, item))
+        elif item.get("_activity_origin"):
+            actual_locations = set(
+                _rendered_inventory_example_locations(records, item)
+            ) | set(_activity_hub_locations(records, item))
+        else:
+            actual_locations = set(
+                _rendered_inventory_example_locations(records, item))
+        if not actual_locations:
+            violations.append({
+                "qid": qid,
+                "reason": "certified_placement_missing",
+                "expected_topic": expected["topic"],
+                "expected_concept": expected["concept"],
+            })
+            continue
+
+        expected_index = index_by_cid[expected_cid]
+        for actual_index in sorted(actual_locations):
+            if actual_index == expected_index:
+                continue
+            actual = _placement_host_identity(records[actual_index])
+            violations.append({
+                "qid": qid,
+                "reason": "certified_host_drift",
+                "expected_topic": expected["topic"],
+                "expected_concept": expected["concept"],
+                "actual_topic": actual["topic"],
+                "actual_concept": actual["concept"],
+            })
+    return violations
+
+
 def _hub_inventory_examples_in_types(
     records: list[dict], inventory: dict | None,
 ) -> set[str]:
@@ -10242,6 +13106,13 @@ def _exact_type_review_is_safe(
         records, inventory, mined_types
     ):
         return False
+    if _placement_certification_violations(
+        records,
+        inventory,
+        mined_types,
+        require_complete=False,
+    ):
+        return False
     if _activity_example_hub_alignment_violations(records, inventory):
         return False
     return not _hub_inventory_examples_in_types(records, inventory)
@@ -10274,11 +13145,23 @@ def _accept_exact_inventory_type_review(
         candidate, inventory, mined_types)
     activity_violations = _activity_example_hub_alignment_violations(
         candidate, inventory)
-    if topic_violations or activity_violations:
+    certification_violations = _placement_certification_violations(
+        candidate,
+        inventory,
+        mined_types,
+        require_complete=False,
+    )
+    if (
+        topic_violations
+        or activity_violations
+        or certification_violations
+    ):
         progress.log(
             "Rejected Types rewrite that moved exact inventory Examples: "
             f"{len(topic_violations)} outside their source topic, "
-            f"{len(activity_violations)} away from their Activity/Info Hub.",
+            f"{len(activity_violations)} away from their Activity/Info Hub, "
+            f"{len(certification_violations)} away from their certified "
+            "semantic host.",
             level="warning",
         )
         restored, preserved = _restore_source_owned_type_sections(
@@ -10730,8 +13613,17 @@ def _relocate_chapter_wide_examples_from_culminations(
             for index in locations
         ):
             continue
-        target = _best_record_index_for_inventory_item(
-            out, item, allow_culmination=False, mined_type=None)
+        certified_cid = _certified_host_cid(
+            mined_types,
+            qid,
+            _scope_payload_from_records(out),
+        )
+        target = (
+            int(certified_cid.rsplit("-", 1)[-1]) - 1
+            if certified_cid else
+            _best_record_index_for_inventory_item(
+                out, item, allow_culmination=False, mined_type=None)
+        )
         if target < 0 or target >= len(out):
             continue
         if cr.is_culmination(out[target].get("concept_title") or ""):
@@ -10780,6 +13672,16 @@ def _repair_rendered_inventory_coverage(
         if isinstance(item, dict) and (item.get("qid") or "").strip()
     }
     mined_by_qid = _mined_assignment_units_by_qid(mined_types)
+    concept_payload = _scope_payload_from_records(out)
+
+    def placement_index(qid: str, item: dict) -> int:
+        certified_cid = _certified_host_cid(
+            mined_types, qid, concept_payload)
+        if certified_cid:
+            return int(certified_cid.rsplit("-", 1)[-1]) - 1
+        return _best_record_index_for_inventory_item(
+            out, item, mined_type=mined_by_qid.get(qid))
+
     # Coverage is keyed by normalized prompt text. Multiple qids can share one
     # key; place each unique missing prompt once, then mark the key covered so
     # sibling qids do not double-append and trip the hard duplicate gate.
@@ -10802,8 +13704,7 @@ def _repair_rendered_inventory_coverage(
             continue
         if key in covered_keys:
             continue
-        index = _best_record_index_for_inventory_item(
-            out, item, mined_type=mined_by_qid.get(qid))
+        index = placement_index(qid, item)
         if index < 0 or index >= len(out):
             skipped_unplaceable += 1
             continue
@@ -10822,8 +13723,7 @@ def _repair_rendered_inventory_coverage(
         key = _inventory_coverage_key(text)
         if not text or not key or key in covered_keys:
             continue
-        index = _best_record_index_for_inventory_item(
-            out, item, mined_type=mined_by_qid.get(qid))
+        index = placement_index(qid, item)
         if index < 0 or index >= len(out):
             continue
         out[index] = _append_inventory_example_to_record(
@@ -10924,7 +13824,12 @@ def _rebuild_types_after_final_placement_drift(
     rebuilt = _strip_types_from_records(copy.deepcopy(records))
     rebuilt = _assign_mined_types_via_api(
         rebuilt, meta=meta, mined_types=mined_types)
-    rebuilt = _populate_activity_hubs_via_api(rebuilt, inventory, meta=meta)
+    rebuilt = _populate_activity_hubs_via_api(
+        rebuilt,
+        inventory,
+        meta=meta,
+        mined_types=mined_types,
+    )
     # Reassignment re-renders the original mined wording after the ordinary
     # terminal cleanup boundary. Apply the same source-artifact and short
     # Example cleanup before rechecking coverage and placement.
@@ -10932,6 +13837,41 @@ def _rebuild_types_after_final_placement_drift(
     rebuilt = _neutralize_unrepaired_rows(rebuilt, inventory=inventory)
     return _enforce_rendered_inventory_coverage(
         rebuilt, inventory, mined_types)
+
+
+def _normalize_activity_hubs_at_final_boundary(
+    records: list[dict],
+    inventory: dict | None,
+    mined_types: dict | None,
+    *,
+    meta: GenerationMetadata | None = None,
+) -> list[dict]:
+    """Resolve certified-host drift before rebuilding canonical Hub notes.
+
+    Late cleanup may rename or merge a certified normal concept. Hub
+    normalization intentionally fails closed when that exact host no longer
+    resolves, so fresh generation must rebuild the ID-constrained placements
+    first. Restored final checkpoints pass no ``meta`` and therefore raise;
+    their caller discards only the stale 98% stage and resumes from its
+    preceding checkpoint.
+    """
+    certification_violations = _placement_certification_violations(
+        records, inventory, mined_types)
+    if certification_violations:
+        if meta is None:
+            raise RuntimeError(
+                "saved final checkpoint contains unresolved certified "
+                "inventory hosts"
+            )
+        progress.log(
+            "Final cleanup changed a certified inventory host; rebuilding "
+            "Types and Activity/Info Hubs before normalization.",
+            level="warning",
+        )
+        records = _rebuild_types_after_final_placement_drift(
+            records, inventory, mined_types, meta=meta)
+    return _normalize_activity_hubs_from_inventory(
+        records, inventory, mined_types)
 
 
 def _match_inventory_for_short_example(
@@ -11250,6 +14190,8 @@ def _validate_final_or_raise(
                 records, inventory, mined_types),
             "type_hosts": _rendered_type_placement_violations(
                 records, inventory, mined_types),
+            "certified_hosts": _placement_certification_violations(
+                records, inventory, mined_types),
             "concept_type_coverage": (
                 _normal_concept_type_coverage_violations(
                     records, inventory, mined_types)
@@ -11511,8 +14453,51 @@ _CANONICALIZE_MAX_PER_TOPIC = 6
 _CANONICALIZE_MAX_CHAPTER_ROWS = 50
 
 
+_GENERIC_SKELETON_FAMILY_RE = re.compile(
+    r"^(?:general|chapter|concepts?|content|misc(?:ellaneous)?|"
+    r"introduction|overview|summary|recap|culmination)$",
+    re.IGNORECASE,
+)
+
+
+def _skeleton_family_labels(records: list[dict]) -> list[str]:
+    """Return distinct source-backed parent families in reading order.
+
+    A headingless chapter still has pedagogical branches.  Skeleton extraction
+    expresses those branches through ``parent_concept`` even when every row has
+    the selected chapter title as its topic.  Treating topic count alone as the
+    compaction floor can therefore collapse several independently teachable
+    domains into one broad row.
+    """
+    labels: list[str] = []
+    seen: set[tuple[str, str]] = set()
+    for record in records:
+        topic = str(record.get("topic") or "").strip()
+        parent = str(record.get("parent_concept") or "").strip()
+        parent_key = _topic_comparison_key(parent)
+        topic_key = _topic_comparison_key(topic)
+        if (
+            not parent_key
+            or parent_key == topic_key
+            or _GENERIC_SKELETON_FAMILY_RE.fullmatch(parent_key)
+        ):
+            continue
+        key = (topic_key, parent_key)
+        if key in seen:
+            continue
+        seen.add(key)
+        labels.append(parent)
+    return labels
+
+
 def _canonicalize_target_bounds(records: list[dict]) -> tuple[int, int]:
-    """Return compact-but-not-collapsed row-count bounds for a chapter map."""
+    """Return compact-but-not-collapsed row-count bounds for a chapter map.
+
+    Distinct parent families are structural evidence, especially for a
+    headingless source whose selected chapter title is the only legal topic.
+    Canonicalization may merge aliases and narrow fragments inside a family,
+    but it must retain room for at least one coherent concept per family.
+    """
     if not records:
         return 0, 0
     topics = {
@@ -11521,15 +14506,25 @@ def _canonicalize_target_bounds(records: list[dict]) -> tuple[int, int]:
         if (r.get("topic") or "").strip()
     }
     topic_count = max(1, len(topics))
+    family_count = len(_skeleton_family_labels(records))
+    structural_floor = min(
+        len(records),
+        _CANONICALIZE_MAX_CHAPTER_ROWS,
+        family_count,
+    )
     min_keep = max(
         _CANONICALIZE_MIN_CHAPTER_ROWS,
         topic_count * _CANONICALIZE_MIN_PER_TOPIC,
+        structural_floor,
     )
     max_keep = max(
         12,
         min(
             _CANONICALIZE_MAX_CHAPTER_ROWS,
-            topic_count * _CANONICALIZE_MAX_PER_TOPIC,
+            max(
+                topic_count * _CANONICALIZE_MAX_PER_TOPIC,
+                structural_floor,
+            ),
         ),
     )
     max_keep = min(len(records), max_keep)
@@ -11556,15 +14551,26 @@ def _consolidate_concepts_via_api(
     meta = meta or _metadata(subject=subject)
     system = prompts.get_text("concepts.canonicalize.system")
     payload = _json.dumps({"rows": _records_to_api_rows(records)}, ensure_ascii=False)
+    min_keep, max_keep = _canonicalize_target_bounds(records)
+    family_labels = _skeleton_family_labels(records)
+    family_block = ""
+    if family_labels:
+        family_block = (
+            "\nMUST-PRESERVE SOURCE-BACKED PARENT FAMILIES "
+            "(keep at least one coherent concept for each; merge only aliases "
+            "or near-duplicates within a family):\n- "
+            + "\n- ".join(family_labels)
+            + "\n"
+        )
     user = (
         _metadata_block(meta)
+        + family_block
         + f"\nDraft skeleton map ({len(records)} rows):\n"
         + payload
     )
     progress.log(f"Canonicalizing {len(records)} skeleton concepts via API pass.")
     data = _openai_json(system, user, purpose="concept_mapping")
     out = _concept_rows_to_records(data)
-    min_keep, max_keep = _canonicalize_target_bounds(records)
     if out and len(out) < min_keep:
         progress.log(
             f"Canonicalization returned {len(out)} rows for {len(records)} "
@@ -11576,8 +14582,10 @@ def _consolidate_concepts_via_api(
             user
             + f"\n\nYOUR PREVIOUS ANSWER KEPT ONLY {len(out)} OF {len(records)} ROWS — "
             "that is over-merging. Keep the main teaching objectives for every "
-            "topic, but still merge duplicates, examples, cases, and narrow "
-            f"fragments. Return roughly {min_keep}-{max_keep} rows."
+            "topic and every MUST-PRESERVE SOURCE-BACKED PARENT FAMILY, but "
+            "still merge duplicates, examples, cases, and narrow fragments. "
+            "Never combine disjoint subject domains merely to reach a numeric "
+            f"limit. Return roughly {min_keep}-{max_keep} rows."
         )
         retry_data = _openai_json(
             system, retry_user, purpose="concept_validation")
@@ -11596,9 +14604,10 @@ def _consolidate_concepts_via_api(
             + f"\n\nYOUR PREVIOUS ANSWER KEPT {len(out)} ROWS, WHICH IS TOO "
             "GRANULAR FOR A TEACHER-FACING CHAPTER MAP. Merge repeated terms, "
             "sub-types, examples, cases, and exercise-question headings into "
-            "their parent teaching concepts. Preserve all main objectives and "
-            f"topic order. Return at most {max_keep} rows and at least "
-            f"{min_keep} rows."
+            "their parent teaching concepts. Preserve all main objectives, "
+            "topic order, and every MUST-PRESERVE SOURCE-BACKED PARENT FAMILY. "
+            "Never combine disjoint subject domains into one row. Return at "
+            f"most {max_keep} rows and at least {min_keep} rows."
         )
         retry_data = _openai_json(
             system, retry_user, purpose="concept_validation")
@@ -12038,6 +15047,30 @@ def _expected_max_skeleton_rows(chunk_text: str, headings: list[str]) -> int:
     by_headings = heading_count * 4
     by_size = max(8, content // 900) if content >= 2_000 else 8
     return max(8, min(45, max(by_headings, by_size)))
+
+
+def _compact_skeleton_floor(
+    records: list[dict],
+    *,
+    expected_min: int,
+    expected_max: int,
+) -> int:
+    """Lower bound for a retry that compacts an over-dense skeleton.
+
+    Landing anywhere above the very conservative under-extraction floor is not
+    enough: a retry can otherwise swing from dozens of source-backed rows to a
+    handful of umbrella concepts.  Preserve every distinct parent family when
+    feasible and require at least sixty percent of the compact ceiling.
+    """
+    density_floor = (expected_max * 3 + 4) // 5
+    family_floor = min(
+        expected_max,
+        len(_skeleton_family_labels(records)),
+    )
+    return min(
+        expected_max,
+        max(expected_min, density_floor, family_floor),
+    )
 
 
 _METHOD_CUE_RE = re.compile(
@@ -12942,20 +15975,37 @@ def _extract_skeleton_via_api(
                 chunk_records = retry_records
         expected_max = _expected_max_skeleton_rows(chunk["text"], chunk_headings)
         if len(chunk_records) > expected_max:
+            compact_floor = _compact_skeleton_floor(
+                chunk_records,
+                expected_min=expected_min,
+                expected_max=expected_max,
+            )
+            family_labels = _skeleton_family_labels(chunk_records)
+            family_instruction = ""
+            if family_labels and len(family_labels) <= expected_max:
+                family_instruction = (
+                    "\nMUST-PRESERVE SOURCE-BACKED PARENT FAMILIES "
+                    "(retain at least one coherent concept for each):\n- "
+                    + "\n- ".join(family_labels)
+                    + "\n"
+                )
             progress.log(
                 f"  chunk {i}/{len(chunks)} returned {len(chunk_records)} "
-                f"concept(s) (target <= {expected_max}) — retrying as a "
-                "compact teaching skeleton.",
+                f"concept(s) (target {compact_floor}-{expected_max}) — "
+                "retrying as a compact teaching skeleton.",
                 level="warning",
             )
             retry_user = (
                 user
+                + family_instruction
                 + f"\n\nYOUR PREVIOUS ANSWER HAD {len(chunk_records)} CONCEPTS — "
                 "that is too granular. Merge terms, cases, examples, sub-types, "
                 "and question headings into their parent teaching concepts. "
-                "Keep only durable teacher-facing mastery objectives. Do not "
-                "lose main coverage. Return no more than "
-                f"{expected_max} concepts for this chunk."
+                "Keep only durable teacher-facing mastery objectives, retain "
+                "at least one coherent concept for every must-preserve family, "
+                "and never combine disjoint subject domains into one row. Do "
+                "not lose main coverage. Return between "
+                f"{compact_floor} and {expected_max} concepts for this chunk."
             )
             retry_data = _openai_json(
                 system, retry_user, purpose="concept_validation")
@@ -12964,8 +16014,14 @@ def _extract_skeleton_via_api(
                 r for r in retry_records
                 if not cr.is_culmination(r.get("concept_title", ""))
             ]
-            if expected_min <= len(retry_records) < len(chunk_records):
+            if compact_floor <= len(retry_records) < len(chunk_records):
                 chunk_records = retry_records
+            elif retry_records:
+                progress.log(
+                    f"  rejected compact skeleton with {len(retry_records)} "
+                    f"concept(s); the source-backed floor is {compact_floor}.",
+                    level="warning",
+                )
         missing_method_anchors = _missing_method_anchors(
             chunk_records, method_anchors)
         if missing_method_anchors:
@@ -13096,8 +16152,11 @@ _NON_TOPIC_RE = re.compile(
     r"passage[-\s]+based(?:\s+questions?)?|source[-\s]+based(?:\s+questions?)?|"
     r"map\s+(?:work|skills?|questions?)|"
     r"do\s+this|write\s+in\s+brief|discuss|.*\bactivity\b.*|activities|"
+    r"probe\s+and\s+ponder|keep\s+the\s+curiosity\s+alive|"
+    r"discover\s*,?\s*design\s*,?\s*and\s*debate|happy\s+investigating|"
+    r"(?:\?\s*)?figure\s+it\s+out|"
     r"projects?(?:\s+work)?|things\s+to\s+remember|"
-    r"points\s+to\s+remember|key\s+points|glossary)\b[\s\d.:()\-]*$",
+    r"points\s+to\s+remember|key\s+points|glossary)\b[\s\d.!?:()\-]*$",
     re.IGNORECASE,
 )
 # Filler umbrella headings that cleanup remaps away from the concept map.
@@ -13127,6 +16186,21 @@ def _is_filler_source_topic(heading: str) -> bool:
     if stripped in _FILLER_SOURCE_TOPIC_KEYS:
         return True
     return False
+
+
+def _is_answer_key_source_section(section: dict) -> bool:
+    """Detect an appended answer-key section without matching normal examples."""
+    body = str((section or {}).get("body") or "")
+    answer_markers = re.findall(
+        r"(?im)^[ \t]*(?:(?:answers?|solutions?)|ans|soln?)[ \t]*"
+        r"(?:[:：.]|[-–—])",
+        body,
+    )
+    page_markers = re.findall(
+        r"(?im)^[ \t]*Page[ \t]+No\.?[ \t]*\d+[ \t]*$", body)
+    return len(answer_markers) >= 3 and (
+        len(page_markers) >= 2 or len(answer_markers) >= 8
+    )
 
 
 def _is_non_topic_heading(heading: str) -> bool:
@@ -13453,6 +16527,28 @@ def _topic_headings(sections: list[dict]) -> list[str]:
         selected = candidates
 
     return _dedupe_topic_candidates(selected)
+
+
+def _apply_headingless_chapter_topic_fallback(
+    sections: list[dict], chapter_title: str,
+) -> bool:
+    """Use the selected chapter as the one topic when OCR exposes none.
+
+    Some short introductory chapters have no teaching-section headings at all;
+    their only heading can be a closing slogan such as ``Happy investigating!``.
+    The directory target is authoritative in that narrow case and is safer than
+    filing the complete chapter under ``General`` or the closing slogan.
+    """
+    title = str(chapter_title or "").strip()
+    if not sections or not title or _topic_headings(sections):
+        return False
+    first = sections[0]
+    first["heading"] = title
+    first["heading_level"] = 1
+    first["heading_numbered"] = False
+    first["heading_number_prefix"] = ""
+    first["heading_chapter"] = False
+    return True
 
 
 def _reorder_records_by_source_topics(
@@ -13939,13 +17035,13 @@ _CONCEPT_CHECKPOINT_STAGES = {
     },
     "post_type_assignment": {
         "order": 70,
-        "version": 1,
+        "version": 2,
         "progress": 0.91,
         "label": "Type assignment and activity hubs complete",
     },
     "final_content_ready": {
         "order": 80,
-        "version": 1,
+        "version": 2,
         "progress": 0.98,
         "label": "Final content ready for deterministic validation",
     },
@@ -14128,6 +17224,14 @@ def _compatible_concept_checkpoint_entry(checkpoint: dict | None) -> bool:
         "final_content_ready",
     } and not _checkpoint_has_fields(checkpoint, ("mined_types", dict)):
         return False
+    if (
+        stage in {"post_type_assignment", "final_content_ready"}
+        and not _placement_certification_contract_complete(
+            checkpoint.get("mined_types"),
+            checkpoint.get("question_task_inventory"),
+        )
+    ):
+        return False
     return True
 
 
@@ -14189,6 +17293,33 @@ def _without_concept_checkpoint_stage(
     return filtered
 
 
+def _semantic_inventory_items(value: dict | None) -> list[dict]:
+    """Comparable inventory content, excluding deterministic metadata.
+
+    Figure URLs, captions, and resolution flags are refreshed locally from the
+    current source registry when a final checkpoint is restored.  They must not
+    force an otherwise valid 98% checkpoint back through semantic/API stages.
+    Topic, task-kind, activity, wording, and context changes remain semantic and
+    still invalidate the persisted host review.
+    """
+    nonsemantic_keys = {
+        "order_index",
+        "image_urls",
+        "_image_captions",
+        "_figure_images_resolved",
+        "requires_visual",
+    }
+    return [
+        {
+            key: copy.deepcopy(field)
+            for key, field in item.items()
+            if key not in nonsemantic_keys
+        }
+        for item in (value or {}).get("items") or []
+        if isinstance(item, dict)
+    ]
+
+
 def _final_checkpoint_refresh_reasons(
     checkpoint: dict | None, *, sections: list[dict],
     source_topic_excerpts: list[dict],
@@ -14219,10 +17350,13 @@ def _final_checkpoint_refresh_reasons(
         (checkpoint.get("question_task_inventory") or {}).get("items") or []
     )
     anchors = _source_task_anchors(sections)
+    anchor_label_counts = _anchor_source_label_counts(anchors)
     missing_anchors = [
         anchor for anchor in anchors
         if not any(
-            isinstance(item, dict) and _inventory_items_match(item, anchor)
+            isinstance(item, dict)
+            and _inventory_matches_anchor_identity(
+                item, anchor, anchor_label_counts)
             for item in inventory_items
         )
     ]
@@ -14233,7 +17367,9 @@ def _final_checkpoint_refresh_reasons(
     stale_anchor_tasks = [
         anchor for anchor in anchors
         if any(
-            isinstance(item, dict) and _inventory_items_match(item, anchor)
+            isinstance(item, dict)
+            and _inventory_matches_anchor_identity(
+                item, anchor, anchor_label_counts)
             for item in inventory_items
         )
         and not any(
@@ -14247,6 +17383,19 @@ def _final_checkpoint_refresh_reasons(
             f"{len(stale_anchor_tasks)} checkpoint source task(s) are "
             "truncated or stale"
         )
+    refreshed_inventory = _refresh_inventory_from_source_anchors(
+        checkpoint.get("question_task_inventory") or {}, sections)
+    if (
+        _semantic_inventory_items(refreshed_inventory)
+        != _semantic_inventory_items(
+            checkpoint.get("question_task_inventory") or {})
+        and not missing_anchors
+        and not stale_anchor_tasks
+    ):
+        # The qid can remain stable while topic, task kind, Activity origin, or
+        # another semantic field changes. Such a checkpoint must replay the
+        # reviewed host decision even when its question wording still matches.
+        reasons.append("source inventory semantics changed")
     analysis_report = cv.validate_concept_rows(
         checkpoint.get("records") or [], strict_analysis_section=True)
     malformed_analysis = [
@@ -14378,7 +17527,27 @@ def _reconcile_resumed_mined_types(
             f"{len(remaining_missed)} missing, "
             f"{len(remaining_duplicates)} duplicate assignment(s)"
         )
-    return {"types": types}
+    reconciled = {"types": types}
+    ledger = _placement_certification_ledger(mined_types)
+    if ledger:
+        current_qids = {
+            str(item.get("qid") or "").strip()
+            for item in (inventory or {}).get("items") or []
+            if isinstance(item, dict)
+            and str(item.get("qid") or "").strip()
+        }
+        reconciled[_PLACEMENT_CERTIFICATIONS_KEY] = {
+            "version": _PLACEMENT_CERTIFICATION_VERSION,
+            "hosts": {
+                qid: copy.deepcopy(host)
+                for qid, host in ledger["hosts"].items()
+                if (
+                    qid in current_qids
+                    and _placement_certification_entry_is_valid(host)
+                )
+            },
+        }
+    return reconciled
 
 
 def _refresh_inventory_figure_metadata(
@@ -14509,19 +17678,9 @@ def _run_live_concept_pre_final_stages(
             restored_inventory = copy.deepcopy(question_task_inventory)
             question_task_inventory = _refresh_inventory_from_source_anchors(
                 question_task_inventory, sections)
-            def semantic_inventory_items(value: dict) -> list[dict]:
-                return [
-                    {
-                        key: field
-                        for key, field in item.items()
-                        if key != "order_index"
-                    }
-                    for item in (value.get("items") or [])
-                    if isinstance(item, dict)
-                ]
             inventory_refreshed = (
-                semantic_inventory_items(question_task_inventory)
-                != semantic_inventory_items(restored_inventory)
+                _semantic_inventory_items(question_task_inventory)
+                != _semantic_inventory_items(restored_inventory)
             )
             if inventory_refreshed:
                 progress.log(
@@ -14530,12 +17689,14 @@ def _run_live_concept_pre_final_stages(
                     level="success",
                 )
             if (
-                saved_stage != "final_content_ready"
-                and saved_order >= _checkpoint_order(
+                saved_order >= _checkpoint_order(
                     _CONCEPT_CHECKPOINT_STAGE)
                 and (
-                    bool((mined_types or {}).get("types"))
-                    or inventory_refreshed
+                    inventory_refreshed
+                    or (
+                        saved_stage != "final_content_ready"
+                        and bool((mined_types or {}).get("types"))
+                    )
                 )
             ):
                 mined_types = _reconcile_resumed_mined_types(
@@ -14544,6 +17705,47 @@ def _run_live_concept_pre_final_stages(
                     meta=meta,
                     use_api=True,
                 )
+                if (
+                    inventory_refreshed
+                    and _reviewed_placement_authority_declared(mined_types)
+                ):
+                    # QIDs are stable identifiers, not a promise that their
+                    # semantic host evidence is unchanged. Reassignment below
+                    # must create fresh reviewed qid-to-host certifications.
+                    _reset_placement_certifications(mined_types)
+            if (
+                saved_order >= _checkpoint_order(
+                    _CONCEPT_CHECKPOINT_STAGE)
+                and bool((mined_types or {}).get("types"))
+            ):
+                # This optional model hint is not part of semantic inventory
+                # identity, so clean it even for an otherwise unchanged saved
+                # final checkpoint that can skip full Type reconciliation.
+                mined_types["types"] = (
+                    _clear_nonvisual_diagram_interpretation_hints(
+                        list(mined_types.get("types") or []),
+                        question_task_inventory,
+                    )
+                )
+        if (
+            saved_stage != "final_content_ready"
+            and saved_order >= _checkpoint_order("post_type_assignment")
+            and not _placement_certification_contract_complete(
+                mined_types, question_task_inventory
+            )
+        ):
+            # Deterministic source-anchor rules can discover qids that did not
+            # exist when an otherwise-compatible 91% checkpoint was saved.
+            # Reconciled Types alone are insufficient: every current qid must
+            # pass the exact host assignment boundary and receive a durable
+            # certification before finalization.
+            progress.log(
+                "Refreshed inventory is not fully host-certified; rerunning "
+                "Type and Activity/Info Hub assignment from the 81% stage.",
+                level="warning",
+            )
+            out = _strip_types_from_records(copy.deepcopy(out))
+            saved_order = _checkpoint_order(_CONCEPT_CHECKPOINT_STAGE)
         progress.log(
             f"Restored checkpoint stage '{saved_stage}' "
             f"({len(out)} materialized concept row(s)).",
@@ -14742,7 +17944,20 @@ def _run_live_concept_pre_final_stages(
             mined_types=mined_types,
         )
         out = _populate_activity_hubs_via_api(
-            out, question_task_inventory, meta=meta)
+            out,
+            question_task_inventory,
+            meta=meta,
+            mined_types=mined_types,
+        )
+        if not _placement_certification_contract_complete(
+            mined_types, question_task_inventory
+        ):
+            raise RuntimeError(
+                "post-Type assignment did not certify every source inventory "
+                "qid to one durable concept host"
+            )
+        if artifacts is not None:
+            artifacts["mined_types"] = copy.deepcopy(mined_types)
         progress.set_progress(
             0.91, label="Concept extraction — Type assignment complete")
         _emit_concept_checkpoint(
@@ -14793,9 +18008,15 @@ def _prepare_final_concept_content(
         "Concept extraction — validating and repairing final map",
         value=0.93,
     )
-    before_duplicate_merge = out
+    before_duplicate_merge = copy.deepcopy(out)
     out = _merge_similar_concepts_via_api(out, meta=meta)
     out = _preserve_required_method_rows(before_duplicate_merge, out)
+    out = _accept_exact_inventory_type_review(
+        before_duplicate_merge,
+        out,
+        question_task_inventory,
+        mined_types,
+    )
     out = concept_cleanup.dedupe_similar_titles_chapter_wide(out)
     out = concept_cleanup.filter_review_violations(
         out, subject=subject, board=board, chapter_title=chapter_title)
@@ -14962,8 +18183,8 @@ def _prepare_final_concept_content(
             out, inventory=question_task_inventory)
     out = _enforce_rendered_inventory_coverage(
         out, question_task_inventory, mined_types)
-    out = _normalize_activity_hubs_from_inventory(
-        out, question_task_inventory)
+    out = _normalize_activity_hubs_at_final_boundary(
+        out, question_task_inventory, mined_types, meta=meta)
     out = cr.renumber_types_continuously(out)
 
     type_contract_codes = {
@@ -14997,6 +18218,10 @@ def _prepare_final_concept_content(
     )
     type_placement_violations = _rendered_type_placement_violations(
         out, question_task_inventory, mined_types)
+    placement_certification_violations = (
+        _placement_certification_violations(
+            out, question_task_inventory, mined_types)
+    )
     concept_type_coverage_violations = (
         _normal_concept_type_coverage_violations(
             out, question_task_inventory, mined_types)
@@ -15011,6 +18236,7 @@ def _prepare_final_concept_content(
         inventory_topic_violations
         or activity_alignment_violations
         or type_placement_violations
+        or placement_certification_violations
         or concept_type_coverage_violations
         or unexpected_examples
         or misplaced_hub_items
@@ -15030,7 +18256,7 @@ def _prepare_final_concept_content(
             meta=meta,
         )
         out = _normalize_activity_hubs_from_inventory(
-            out, question_task_inventory)
+            out, question_task_inventory, mined_types)
         out = cr.renumber_types_continuously(out)
         inventory_topic_violations = _rendered_inventory_topic_violations(
             out, question_task_inventory, mined_types)
@@ -15040,6 +18266,10 @@ def _prepare_final_concept_content(
         )
         type_placement_violations = _rendered_type_placement_violations(
             out, question_task_inventory, mined_types)
+        placement_certification_violations = (
+            _placement_certification_violations(
+                out, question_task_inventory, mined_types)
+        )
         concept_type_coverage_violations = (
             _normal_concept_type_coverage_violations(
                 out, question_task_inventory, mined_types)
@@ -15055,6 +18285,7 @@ def _prepare_final_concept_content(
         inventory_topic_violations
         or activity_alignment_violations
         or type_placement_violations
+        or placement_certification_violations
         or concept_type_coverage_violations
         or unexpected_examples
         or misplaced_hub_items
@@ -15068,6 +18299,8 @@ def _prepare_final_concept_content(
             f"{len(activity_alignment_violations)} assessable Activity "
             "Example(s) separated from their Activity/Info Hub, "
             f"{len(type_placement_violations)} Type host violation(s), "
+            f"{len(placement_certification_violations)} certified host "
+            "violation(s), "
             f"{len(concept_type_coverage_violations)} applicable concept "
             "Type coverage violation(s), "
             f"{len(unexpected_examples)} unowned Example(s), "
@@ -15509,6 +18742,14 @@ def concepts_from_mmd(
         progress.step("Concept extraction — parsing source structure", value=0.01)
         chunks = _section_aware_chunks(mmd_text)
         sections = [s for c in chunks for s in c["sections"]]
+        if _apply_headingless_chapter_topic_fallback(
+            sections, chapter_title
+        ):
+            progress.log(
+                "No usable teaching-section headings were present; using the "
+                "selected chapter title as the source topic.",
+                level="warning",
+            )
         method_anchors = _method_coverage_anchors(sections)
         headings = _topic_headings(sections)
         source_topic_excerpts = _group_source_topic_excerpts(sections)
@@ -15605,6 +18846,8 @@ def concepts_from_mmd(
                 refresh_chapter_wide_assignments=bool(
                     final_checkpoint_refresh_reasons),
             )
+        if artifacts is not None:
+            artifacts["mined_types"] = copy.deepcopy(mined_types)
         # Older terminal checkpoints can predate the canonical mastery/recap
         # contract. Upgrade those fields deterministically so resume remains
         # API-free while the exact rows sent to deposit satisfy today's gate.
@@ -15678,38 +18921,41 @@ def concepts_from_mmd(
             )
             final_checkpoint_changed = True
 
-        if saved_final:
-            # Fresh rows were normalized at the end of the semantic finalizer.
-            # Only restored terminal rows bypassed that boundary and need this
-            # additional deterministic pass.
-            before_hub_normalization = copy.deepcopy(out)
-            out = _normalize_activity_hubs_from_inventory(
-                out, question_task_inventory)
-            if out != before_hub_normalization:
-                final_checkpoint_changed = True
-
-        out, rich_text_repaired = _repair_final_rich_text_via_api(
-            out,
-            meta=meta,
-            inventory=question_task_inventory,
-            mined_types=mined_types,
-        )
-        if rich_text_repaired:
-            final_checkpoint_changed = True
-            # The helper preserves row identity and rejects any Types rewrite
-            # that changes exact source coverage. Reconcile canonical Figure
-            # tags once more, then send these exact rows to the strict gate.
-            out, repaired_figure_examples = (
-                _reconcile_explicit_figure_images(out, sections)
-            )
-            if repaired_figure_examples:
-                progress.log(
-                    "Reconciled "
-                    f"{repaired_figure_examples} Figure Example(s) after "
-                    "rich-text repair.",
-                    level="success",
-                )
         try:
+            if saved_final:
+                # Fresh rows were normalized at the end of the semantic
+                # finalizer. Only restored terminal rows bypassed that boundary
+                # and need this additional deterministic pass. Any unresolved
+                # certified host is part of the stale 98% payload and must
+                # enter the discard/resume path below.
+                before_hub_normalization = copy.deepcopy(out)
+                out = _normalize_activity_hubs_at_final_boundary(
+                    out, question_task_inventory, mined_types)
+                if out != before_hub_normalization:
+                    final_checkpoint_changed = True
+
+            out, rich_text_repaired = _repair_final_rich_text_via_api(
+                out,
+                meta=meta,
+                inventory=question_task_inventory,
+                mined_types=mined_types,
+            )
+            if rich_text_repaired:
+                final_checkpoint_changed = True
+                # The helper preserves row identity and rejects any Types
+                # rewrite that changes exact source coverage. Reconcile
+                # canonical Figure tags once more, then send these exact rows
+                # to the strict gate.
+                out, repaired_figure_examples = (
+                    _reconcile_explicit_figure_images(out, sections)
+                )
+                if repaired_figure_examples:
+                    progress.log(
+                        "Reconciled "
+                        f"{repaired_figure_examples} Figure Example(s) after "
+                        "rich-text repair.",
+                        level="success",
+                    )
             _validate_final_or_raise(
                 out,
                 stage="final",

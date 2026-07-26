@@ -285,3 +285,49 @@ test("checkpoint recovery presents usage as one resumed cumulative file total", 
   );
   expect(streamMock).toHaveBeenCalledTimes(1);
 });
+
+test("refreshes a rejected 98% checkpoint to the retained 91% stage", async () => {
+  const finalCheckpoint = savedJob({
+    checkpoint_stage: "final_content_ready",
+    checkpoint_progress: 0.98,
+  });
+  const retainedCheckpoint = savedJob({
+    checkpoint_stage: "post_type_assignment",
+    checkpoint_progress: 0.91,
+  });
+  apiMock.resumableConceptCheckpoints.mockImplementation(
+    async (kind: "post" | "pre") => ({
+      items: kind === "post"
+        ? [savedSummary({
+          checkpoint_stage: "final_content_ready",
+          checkpoint_progress: 0.98,
+        })]
+        : [],
+      total: kind === "post" ? 1 : 0,
+    }),
+  );
+  apiMock.getUploadJob
+    .mockResolvedValueOnce(finalCheckpoint)
+    .mockResolvedValueOnce(retainedCheckpoint);
+  streamMock.mockRejectedValue(
+    new Error("final validation failed; prior checkpoint retained"),
+  );
+  renderPage();
+
+  fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+  expect(await screen.findByText("Loaded electricity.pdf")).toBeDefined();
+  fireEvent.click(await screen.findByRole("button", {
+    name: "Select Electricity target",
+  }));
+  fireEvent.click(screen.getByRole("button", {
+    name: "Resume from 98% checkpoint",
+  }));
+
+  expect(await screen.findByText(
+    /final validation failed; prior checkpoint retained/,
+  )).toBeDefined();
+  expect(await screen.findByRole("button", {
+    name: "Resume from 91% checkpoint",
+  })).toBeDefined();
+  expect(apiMock.getUploadJob).toHaveBeenCalledTimes(2);
+});

@@ -655,6 +655,121 @@ def test_host_entailment_review_fails_closed_without_a_complete_verdict(
         )
 
 
+def test_host_entailment_review_accepts_unique_parent_type_alias(monkeypatch):
+    unit = _type(
+        "TYPE-0010::CASE-0022::0001",
+        "QINV-0019",
+        "Find the 36th positive odd number.",
+        title="Finding the nth Odd Number",
+    )
+    unit["_origin_type_id"] = "TYPE-0010"
+    concepts = [
+        {
+            "concept_id": "CONCEPT-0001",
+            "topic": "Methods",
+            "concept": "Procedure Alpha",
+            "concept_description": "Apply the first candidate procedure.",
+            "is_culmination": False,
+        },
+        {
+            "concept_id": "CONCEPT-0002",
+            "topic": "Methods",
+            "concept": "Procedure Beta",
+            "concept_description": "Use a term position to calculate a value.",
+            "is_culmination": False,
+        },
+    ]
+    monkeypatch.setattr(g, "_openai_json", lambda *_a, **_k: {
+        "assignments": [{
+            # Provider shortened the opaque unit ID to its parent Type ID.
+            "type_id": "TYPE-0010",
+            "concept_id": "CONCEPT-0002",
+        }],
+    })
+
+    result = g._review_case_unit_hosts_via_api(
+        assignment_units=[unit],
+        per_concept={"CONCEPT-0001": [unit]},
+        concept_payload=concepts,
+        allowed_cids_by_tid={
+            unit["type_id"]: {"CONCEPT-0001", "CONCEPT-0002"},
+        },
+        meta={},
+    )
+
+    assert not result.get("CONCEPT-0001")
+    assert result["CONCEPT-0002"] == [unit]
+
+
+def test_host_entailment_review_retries_ambiguous_parent_alias(monkeypatch):
+    first = _type(
+        "TYPE-0010::CASE-A::0001",
+        "QINV-0001",
+        "Apply source case A.",
+        title="Applying a Method",
+    )
+    second = _type(
+        "TYPE-0010::CASE-B::0002",
+        "QINV-0002",
+        "Apply source case B.",
+        title="Applying a Method",
+    )
+    for unit in (first, second):
+        unit["_origin_type_id"] = "TYPE-0010"
+    concepts = [
+        {
+            "concept_id": "CONCEPT-0001",
+            "topic": "Methods",
+            "concept": "Method Alpha",
+            "concept_description": "Apply procedure alpha.",
+            "is_culmination": False,
+        },
+        {
+            "concept_id": "CONCEPT-0002",
+            "topic": "Methods",
+            "concept": "Method Beta",
+            "concept_description": "Apply procedure beta.",
+            "is_culmination": False,
+        },
+    ]
+    calls = []
+
+    def review(_system, user, **_kwargs):
+        calls.append(user)
+        if len(calls) == 1:
+            return {"assignments": [{
+                "type_id": "TYPE-0010",
+                "concept_id": "CONCEPT-0001",
+            }]}
+        return {"assignments": [
+            {
+                "type_id": first["type_id"],
+                "concept_id": "CONCEPT-0001",
+            },
+            {
+                "type_id": second["type_id"],
+                "concept_id": "CONCEPT-0002",
+            },
+        ]}
+
+    monkeypatch.setattr(g, "_openai_json", review)
+    result = g._review_case_unit_hosts_via_api(
+        assignment_units=[first, second],
+        per_concept={"CONCEPT-0001": [first, second]},
+        concept_payload=concepts,
+        allowed_cids_by_tid={
+            first["type_id"]: {"CONCEPT-0001", "CONCEPT-0002"},
+            second["type_id"]: {"CONCEPT-0001", "CONCEPT-0002"},
+        },
+        meta={},
+    )
+
+    assert len(calls) == 2
+    assert "RETRY CONTRACT" in calls[1]
+    assert result["CONCEPT-0001"] == [first]
+    assert result["CONCEPT-0002"] == [second]
+
+
 def test_host_entailment_review_fails_closed_on_provider_error(monkeypatch):
     unit = _type(
         "TYPE-0001",
@@ -743,6 +858,178 @@ def test_host_entailment_review_preserves_unreviewed_activity_units(
     assert [
         unit["type_id"] for unit in result["CONCEPT-0001"]
     ] == ["TYPE-0001", "TYPE-ACTIVITY"]
+
+
+def test_case_scoped_host_review_certifies_distinct_hosts_per_qid(
+    monkeypatch,
+):
+    first_task = "Perform the requested method for source case one."
+    second_task = "Perform the requested method for source case two."
+    mined = {"types": [{
+        "type_id": "TYPE-0001",
+        "type_title": "Applying a Supplied Method",
+        "type_description": "Apply the method requested in each source case.",
+        "task_pattern": "Apply the requested method.",
+        "source_question_ids": ["QINV-0001", "QINV-0002"],
+        "case_prompts": [
+            {
+                "case_id": "CASE-A",
+                "case_title": "Source case one",
+                "placement_scope": "normal",
+                "examples": [{
+                    "source_question_id": "QINV-0001",
+                    "example_prompt": first_task,
+                }],
+            },
+            {
+                "case_id": "CASE-B",
+                "case_title": "Source case two",
+                "placement_scope": "normal",
+                "examples": [{
+                    "source_question_id": "QINV-0002",
+                    "example_prompt": second_task,
+                }],
+            },
+        ],
+        "topic_match_hint": "Methods",
+        "placement_scope": "normal",
+        "is_activity": False,
+    }]}
+    records = [
+        {
+            "topic": "Methods",
+            "parent_concept": "Approaches",
+            "concept_title": "Method Alpha",
+            "concept_details": "Description: Apply the first method.",
+            "keywords": "",
+        },
+        {
+            "topic": "Methods",
+            "parent_concept": "Approaches",
+            "concept_title": "Method Beta",
+            "concept_details": "Description: Apply the second method.",
+            "keywords": "",
+        },
+        {
+            "topic": "Methods",
+            "parent_concept": "Theory",
+            "concept_title": "Why the Methods Work",
+            "concept_details": (
+                "Description: Explain the assumptions shared by both methods."
+            ),
+            "keywords": "",
+        },
+    ]
+
+    def review(system, user, **kwargs):
+        if kwargs["purpose"] == "concept_mapping":
+            return {"assignments": [
+                {
+                    "concept_id": "CONCEPT-0001",
+                    "type_ids": ["TYPE-0001::CASE-A::0001"],
+                },
+                {
+                    "concept_id": "CONCEPT-0002",
+                    "type_ids": ["TYPE-0001::CASE-B::0002"],
+                },
+            ]}
+        assert kwargs["purpose"] == "concept_validation"
+        return {"assignments": [
+            {
+                "type_id": "TYPE-0001::CASE-A::0001",
+                "concept_id": "CONCEPT-0001",
+            },
+            {
+                "type_id": "TYPE-0001::CASE-B::0002",
+                "concept_id": "CONCEPT-0002",
+            },
+        ]}
+
+    monkeypatch.setattr(g, "_openai_json", review)
+    out = g._assign_mined_types_via_api(
+        records,
+        meta=g._metadata(subject="General"),
+        mined_types=mined,
+        max_attempts=1,
+    )
+
+    hosts = mined[g._PLACEMENT_CERTIFICATIONS_KEY]["hosts"]
+    assert hosts["QINV-0001"]["concept"] == "Method Alpha"
+    assert hosts["QINV-0002"]["concept"] == "Method Beta"
+    assert first_task in g._types_body(out[0]["concept_details"])
+    assert second_task in g._types_body(out[1]["concept_details"])
+    # No blanket Type is created for a theory-only sibling with no source qid.
+    assert not g._has_meaningful_types(out[2]["concept_details"])
+    assert not g._placement_certification_violations(
+        out,
+        _inventory(
+            _item("QINV-0001", first_task),
+            _item("QINV-0002", second_task),
+        ),
+        mined,
+    )
+    strict_report = cv.validate_concept_rows(
+        out,
+        allow_types=True,
+        require_culmination=False,
+        allow_culmination=True,
+        allowed_source_examples=(first_task, second_task),
+        strict_type_hierarchy=True,
+    )
+    assert "duplicate_type_definition" not in {
+        error["code"] for error in strict_report["errors"]
+    }
+
+
+def test_mined_type_normalization_prunes_examples_without_inventory_qids():
+    source_task = (
+        "Explain how the supplied evidence supports the stated conclusion."
+    )
+    inventory = _inventory(_item("QINV-0001", source_task))
+    raw_types = [{
+        "type_id": "TYPE-0001",
+        "type_title": "Explaining a Conclusion from Evidence",
+        "type_description": (
+            "Connect supplied evidence to the conclusion it supports."
+        ),
+        "task_pattern": "Explain a conclusion using supplied evidence.",
+        "source_question_ids": ["QINV-0001", "QINV-INVENTED"],
+        "case_prompts": [{
+            "case_id": "CASE-0001",
+            "case_title": "Evidence and a conclusion are supplied",
+            "examples": [
+                {
+                    "source_question_id": "QINV-0001",
+                    "example_prompt": "A shortened paraphrase.",
+                },
+                {
+                    "source_question_id": "QINV-INVENTED",
+                    "example_prompt": "Invented model-authored question.",
+                },
+                {
+                    "source_question_id": "",
+                    "example_prompt": "Question with no inventory owner.",
+                },
+            ],
+        }],
+        "topic_match_hint": "Methods",
+        "placement_scope": "normal",
+        "is_activity": False,
+    }]
+
+    normalized = g._normalize_mined_type_candidate(raw_types, inventory)
+
+    assert len(normalized) == 1
+    assert g._type_source_qids(normalized[0]) == ["QINV-0001"]
+    examples = [
+        example
+        for case in normalized[0]["case_prompts"]
+        for example in g._case_examples(case)
+    ]
+    assert examples == [{
+        "source_question_id": "QINV-0001",
+        "example_prompt": source_task,
+    }]
 
 
 def test_derivation_concept_receives_a_relevant_worked_example(monkeypatch):

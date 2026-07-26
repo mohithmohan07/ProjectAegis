@@ -104,9 +104,10 @@ The coverage is end to end rather than prompt-only:
 ## Verification result
 
 On 2026-07-26, after the current PDF-driven hardening edits, the complete
-backend suite passed locally with **730 tests**. This verifies the encoded
-deterministic contracts together; it does not replace the fresh production-model
-samples required for semantic acceptance.
+backend suite passed locally with **826 tests**. The frontend also passed all
+**29 tests** and its production build. This verifies the encoded deterministic
+contracts together; it does not replace the fresh production-model samples
+required for semantic acceptance.
 
 The PDF is now available and its latest review pages have been checked, but the
 overall audit is **not complete**. Fresh production-model samples for Arithmetic
@@ -135,8 +136,46 @@ the streamed generation endpoint it loads a history containing a valid
 `post_type_assignment` checkpoint and an invalid `final_content_ready`
 checkpoint, rejects the 98% content, durably removes only that stage, restores
 the 91% stage in the same request, and confirms the surviving stage through the
-job-status endpoint. An OpenAI-call sentinel proves this recovery is
-provider-free.
+job-status endpoint. A second streamed request completes from that retained
+stage and clears the checkpoint after success. An OpenAI-call sentinel proves
+both requests are provider-free. A frontend regression confirms that a failed
+98% retry refreshes the saved job and changes the action to
+`Resume from 91% checkpoint`. Before any resumed attempt begins, incompatible
+history entries are pruned and the durable top-level stage is committed to the
+actual compatible fallback. A failure before the first replacement checkpoint
+therefore cannot leave the UI advertising an unusable 98% stage.
+
+Deposit failures that come from deterministic concept validation are now typed
+separately from infrastructure failures. A deterministic rich-text, inventory,
+or certified-host failure rolls back the deposit and rewinds only the invalid
+98% `final_content_ready` checkpoint. A generic storage or operating-system
+failure rolls back without discarding that valid checkpoint. Focused
+regressions cover both branches and a provider-free retry through successful
+persistence.
+
+Every source-inventory qid now has a versioned, durable certification for its
+exact topic and concept host. Type and Activity placement write this ledger;
+exact review, terminal validation, coverage repair, checkpoint compatibility,
+deposit normalization, and persisted audit inventory all enforce it. Ambiguous
+Activity placement retries and then fails closed instead of guessing. The 91%
+and 98% checkpoint contracts are version 2; incompatible version-1 late stages
+fall back to the safe 81% pre-Type checkpoint. If final cleanup renames or
+merges a certified Activity host, fresh generation rebuilds the constrained
+placement before Hub normalization; a restored 98% checkpoint with the same
+drift is discarded and resumes from its preceding stage.
+If deterministic source-anchor refresh discovers new qids after a 91%
+checkpoint was saved, the pipeline explicitly returns to the 81% boundary and
+reruns Type and Activity host assignment so those qids cannot bypass durable
+certification.
+
+Workbook export now refreshes the full concept band, including existing
+question rows, legacy fields, sources, group summaries, and normalized title
+keys. When a concept's authoritative home topic changes within the same
+chapter, its catalog and question rows move in place while question content is
+preserved. Legitimate tag placements remain intact, and same-title rows in
+other chapters are never relocation candidates. Pre/Post learning kind is part
+of the workbook placement identity, so a same-titled Post concept can never
+relocate or overwrite its distinct Pre-learning row.
 
 ## Residual risks and completion gate
 
@@ -152,7 +191,7 @@ provider-free.
 
 Do not mark the PDF audit “all covered” until:
 
-1. the exact pushed commit retains the **730-test** result in CI;
+1. the exact pushed commit retains the **826-test** result in CI;
 2. fresh AP, Electricity, and RNE jobs complete from their repository MMD
    sources, with checkpoint resume exercised for any late failure;
 3. the exported workbooks are checked against all stable IDs above, including

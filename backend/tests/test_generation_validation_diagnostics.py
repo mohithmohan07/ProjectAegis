@@ -184,6 +184,92 @@ def test_final_validation_requires_mastery_and_detailed_culmination_recap():
             [_strict_normal_row(), bare_recap])
 
 
+def test_final_repair_normalizes_newline_analysis_before_api(monkeypatch):
+    row = _strict_normal_row()
+    row["concept_details"] = row["concept_details"].replace(
+        " // Misconception/ Error Analysis:",
+        "\nMisconception/ Error Analysis:",
+    )
+    assert not g._has_valid_terminal_mastery(row["concept_details"])
+
+    def unexpected_api(*_args, **_kwargs):
+        pytest.fail("deterministic terminal normalization should avoid API repair")
+
+    monkeypatch.setattr(g, "_openai_json", unexpected_api)
+    repaired = g._repair_records_via_api(
+        [row, _strict_culmination()],
+        meta={},
+        stage="final",
+        max_attempts=1,
+    )
+
+    assert g._has_valid_terminal_mastery(repaired[0]["concept_details"])
+    report = g.cv.validate_concept_rows(
+        repaired,
+        **g._validation_options("final"),
+    )
+    assert not [
+        error for error in report["errors"]
+        if error["severity"] == "error"
+    ]
+
+
+def test_final_repair_renormalizes_api_returned_newline_analysis(monkeypatch):
+    question = (
+        "Calculate the current when 12 coulombs pass in three seconds."
+    )
+    bad = _strict_normal_row(question=question)
+    bad["concept_details"] = bad["concept_details"].replace(
+        "Applying the current relationship",
+        "Assessment pattern",
+        1,
+    )
+    api_row = _strict_normal_row(question=question)
+    description, typed_tail = api_row["concept_details"].split(
+        " // Types:", 1,
+    )
+    types, analysis = typed_tail.split(
+        " // Misconception/ Error Analysis:", 1,
+    )
+    api_row["concept_details"] = (
+        description
+        + "\nMisconception/ Error Analysis:"
+        + analysis
+        + " // Types:"
+        + types
+    )
+    calls = []
+
+    def repair_api(*_args, **_kwargs):
+        calls.append(1)
+        return {"rows": [{
+            "topic": api_row["topic"],
+            "parent_concept": api_row["parent_concept"],
+            "concept": api_row["concept_title"],
+            "concept_description": api_row["concept_details"],
+            "keywords": api_row["keywords"],
+        }]}
+
+    monkeypatch.setattr(g, "_openai_json", repair_api)
+    repaired = g._repair_records_via_api(
+        [bad, _strict_culmination()],
+        meta={},
+        stage="final",
+        max_attempts=1,
+    )
+
+    assert len(calls) == 1
+    assert g._has_valid_terminal_mastery(repaired[0]["concept_details"])
+    report = g.cv.validate_concept_rows(
+        repaired,
+        **g._validation_options("final"),
+    )
+    assert not [
+        error for error in report["errors"]
+        if error["severity"] == "error"
+    ]
+
+
 def test_final_validation_rejects_unowned_extra_example():
     source_question = (
         "Calculate the current when 12 coulombs of charge pass a point in "
@@ -614,6 +700,238 @@ def test_terminal_host_gate_overrides_a_self_consistent_wrong_mined_hint():
         "expected_concept": "Identifying the Arithmetic Mean of Two AP Terms",
         "actual_concept": "Constructing Arithmetic Progressions",
     }]
+
+
+def test_reviewed_host_certification_replaces_legacy_raw_task_host_guess():
+    question = "Find the arithmetic mean between 4 and 10."
+    records = [
+        _row(
+            "Constructing Arithmetic Progressions",
+            "Description: Build a progression from its first term and common "
+            "difference. // Types: Type 01: Finding an arithmetic mean "
+            "Case 01: Two endpoint terms are supplied "
+            f"Example 01: {question}",
+            topic="Arithmetic Progressions",
+            parent="Construction",
+        ),
+        _row(
+            "Identifying the Arithmetic Mean of Two AP Terms",
+            "Description: The middle term lies equally far from two adjacent "
+            "terms in an arithmetic progression.",
+            topic="Arithmetic Progressions",
+            parent="Properties of AP Terms",
+        ),
+    ]
+    inventory = {"items": [{
+        "qid": "QINV-0001",
+        "source_kind": "exercise",
+        "topic_hint": "Arithmetic Progressions",
+        "raw_task": question,
+    }]}
+    mined = {"types": [{
+        "type_id": "TYPE-0001",
+        "type_title": "Finding an Arithmetic Mean",
+        "topic_match_hint": "Arithmetic Progressions",
+        "concept_match_hint": "Constructing Arithmetic Progressions",
+        "placement_scope": "normal",
+        "source_question_ids": ["QINV-0001"],
+        "case_prompts": [{
+            "case_id": "CASE-0001",
+            "case_title": "Two endpoint terms are supplied",
+            "placement_scope": "normal",
+            "examples": [{
+                "source_question_id": "QINV-0001",
+                "example_prompt": question,
+            }],
+        }],
+    }]}
+    g._reset_placement_certifications(mined)
+    g._certify_inventory_host(
+        mined,
+        "QINV-0001",
+        records[0],
+        basis="type_host_review",
+    )
+
+    assert g._placement_certification_violations(
+        records, inventory, mined) == []
+    # The pre-review heuristic would prefer the second concept from raw task
+    # wording. Once semantic review certifies the first host, terminal and
+    # deposit validation must not run that heuristic as a second certifier.
+    assert g._rendered_type_placement_violations(
+        records, inventory, mined) == []
+    assert g._normal_concept_type_coverage_violations(
+        records, inventory, mined) == []
+
+
+def test_certified_ambiguous_host_cannot_drift_during_review_or_final_gate(
+    monkeypatch,
+):
+    question = "Perform the supplied procedure and report the requested value."
+    type_body = (
+        " // Types: Type 01: Applying a Supplied Procedure "
+        "Case 01: A procedure is supplied "
+        f"Example 01: {question}"
+    )
+    original = [
+        _row(
+            "Method Alpha",
+            "Description: Apply the first supported procedure.",
+            topic="Methods",
+            parent="Approaches",
+        ),
+        _row(
+            "Method Beta",
+            "Description: Apply the second supported procedure." + type_body,
+            topic="Methods",
+            parent="Approaches",
+        ),
+        _row(
+            "Why the Procedures Work",
+            "Description: Explain assumptions shared by the procedures.",
+            topic="Methods",
+            parent="Theory",
+        ),
+    ]
+    candidate = [
+        dict(original[0]),
+        dict(original[1]),
+        dict(original[2]),
+    ]
+    candidate[0]["concept_details"] += type_body
+    candidate[1]["concept_details"] = (
+        "Description: Apply the second supported procedure."
+    )
+    inventory = {"items": [{
+        "qid": "QINV-0001",
+        "source_kind": "exercise",
+        "topic_hint": "Methods",
+        "raw_task": question,
+    }]}
+    mined = {"types": [{
+        "type_id": "TYPE-0001",
+        "type_title": "Applying a Supplied Procedure",
+        "type_description": "Use the supplied procedure.",
+        "task_pattern": "Perform the supplied procedure.",
+        "topic_match_hint": "Methods",
+        "placement_scope": "normal",
+        "source_question_ids": ["QINV-0001"],
+        "case_prompts": [{
+            "case_id": "CASE-0001",
+            "case_title": "A procedure is supplied",
+            "placement_scope": "normal",
+            "examples": [{
+                "source_question_id": "QINV-0001",
+                "example_prompt": question,
+            }],
+        }],
+    }]}
+    g._reset_placement_certifications(mined)
+    g._certify_inventory_host(
+        mined,
+        "QINV-0001",
+        original[1],
+        basis="type_host_review",
+    )
+
+    assert g._placement_certification_violations(
+        original, inventory, mined) == []
+    assert g._placement_certification_violations(
+        candidate, inventory, mined
+    ) == [{
+        "qid": "QINV-0001",
+        "reason": "certified_host_drift",
+        "expected_topic": "Methods",
+        "expected_concept": "Method Beta",
+        "actual_topic": "Methods",
+        "actual_concept": "Method Alpha",
+    }]
+    assert g._accept_exact_inventory_type_review(
+        original, candidate, inventory, mined) is original
+    # The theory-only sibling has no qid and therefore needs no Type or ledger
+    # entry; only the moved source item is rejected.
+    assert not g._has_meaningful_types(original[2]["concept_details"])
+
+    monkeypatch.setattr(
+        g.cv,
+        "validate_concept_rows",
+        lambda *_args, **_kwargs: {
+            "errors": [],
+            "summary": {"warnings": 0},
+        },
+    )
+    with pytest.raises(
+        RuntimeError,
+        match=r"source_inventory_semantics; .*certified_hosts=1",
+    ):
+        g._validate_final_or_raise(
+            candidate,
+            inventory=inventory,
+            mined_types=mined,
+        )
+
+
+def test_final_hub_normalization_rebuilds_a_renamed_certified_host(
+    monkeypatch,
+):
+    original_host = _row(
+        "Original Activity Host",
+        "Description: Interpret observations from a supported investigation.",
+        topic="Methods",
+        parent="Investigations",
+    )
+    renamed_host = {
+        **original_host,
+        "concept_title": "Refined Activity Host",
+    }
+    inventory = {"items": [{
+        "qid": "QINV-ACT-0001",
+        "source_kind": "activity",
+        "source_label": "Activity 1",
+        "topic_hint": "Methods",
+        "raw_task": (
+            "Investigate the supplied pattern and record the observations "
+            "needed to explain the result."
+        ),
+    }], "stats": {}}
+    mined = {"types": []}
+    g._reset_placement_certifications(mined)
+    g._certify_inventory_host(
+        mined,
+        "QINV-ACT-0001",
+        original_host,
+        basis="activity_host_review",
+    )
+    rebuilds: list[dict] = []
+
+    def rebuild(records, current_inventory, current_mined, *, meta):
+        rebuilds.append(meta)
+        assert current_inventory is inventory
+        assert current_mined is mined
+        g._reset_placement_certifications(current_mined)
+        g._certify_inventory_host(
+            current_mined,
+            "QINV-ACT-0001",
+            records[0],
+            basis="activity_host_review",
+        )
+        return records
+
+    monkeypatch.setattr(
+        g, "_rebuild_types_after_final_placement_drift", rebuild)
+
+    out = g._normalize_activity_hubs_at_final_boundary(
+        [renamed_host],
+        inventory,
+        mined,
+        meta={"subject": "Science"},
+    )
+
+    assert rebuilds == [{"subject": "Science"}]
+    assert out[0]["_activity_hub_qids"] == ["QINV-ACT-0001"]
+    assert "Activity/Info Hub:" in out[0]["concept_details"]
+    assert g._placement_certification_violations(
+        out, inventory, mined) == []
 
 
 def _electricity_type_fixture(
@@ -1331,16 +1649,25 @@ def test_saved_final_checkpoint_repairs_rich_text_once_and_persists(
     source_question = (
         r"Calculate \frac{1}{2}+\frac{1}{3} and explain each transformation."
     )
+    checkpoint_inventory = {"items": [{
+        "qid": "QINV-0001",
+        "source_kind": "exercise",
+        "topic_hint": "T",
+        "raw_task": source_question,
+    }], "stats": {}}
+    checkpoint_mined_types = {"types": []}
+    g._reset_placement_certifications(checkpoint_mined_types)
+    g._certify_inventory_host(
+        checkpoint_mined_types,
+        "QINV-0001",
+        raw_records[0],
+        basis="type_host_review",
+    )
     checkpoint = g._make_concept_checkpoint(
         "final_content_ready",
         records=raw_records,
-        question_task_inventory={"items": [{
-            "qid": "QINV-0001",
-            "source_kind": "exercise",
-            "topic_hint": "T",
-            "raw_task": source_question,
-        }], "stats": {}},
-        mined_types={"types": []},
+        question_task_inventory=checkpoint_inventory,
+        mined_types=checkpoint_mined_types,
         method_row_snapshot=[],
     )
     repaired_records = [
@@ -1511,6 +1838,120 @@ def test_invalid_inventory_checkpoint_rewinds_before_question_inventory():
     restored = g._newest_compatible_concept_checkpoint(history)
 
     assert restored["stage"] == "description_method_snapshot"
+
+
+def test_late_v1_checkpoints_fall_back_to_81_percent_and_v2_requires_ledger():
+    question = (
+        "Apply the supplied procedure and report the requested numerical "
+        "value."
+    )
+    records = [_row(
+        "Method Beta",
+        "Description: Apply the second supported procedure. // Types: "
+        "Type 01: Applying a Supplied Procedure "
+        "Case 01: A procedure is supplied "
+        f"Example 01: {question}",
+        topic="Methods",
+        parent="Approaches",
+    )]
+    inventory = {"items": [{
+        "qid": "QINV-0001",
+        "source_kind": "exercise",
+        "topic_hint": "Methods",
+        "raw_task": question,
+    }], "stats": {}}
+    types = [{
+        "type_id": "TYPE-0001",
+        "type_title": "Applying a Supplied Procedure",
+        "type_description": "Use the supplied procedure.",
+        "task_pattern": "Apply the procedure.",
+        "topic_match_hint": "Methods",
+        "placement_scope": "normal",
+        "source_question_ids": ["QINV-0001"],
+        "case_prompts": [{
+            "case_id": "CASE-0001",
+            "case_title": "A procedure is supplied",
+            "placement_scope": "normal",
+            "examples": [{
+                "source_question_id": "QINV-0001",
+                "example_prompt": question,
+            }],
+        }],
+    }]
+    pre_type = g._make_concept_checkpoint(
+        g._CONCEPT_CHECKPOINT_STAGE,
+        records=records,
+        question_task_inventory=inventory,
+        mined_types={"types": types},
+        method_row_snapshot=[],
+    )
+    legacy_post = g._make_concept_checkpoint(
+        "post_type_assignment",
+        records=records,
+        question_task_inventory=inventory,
+        mined_types={"types": types},
+        method_row_snapshot=[],
+    )
+    legacy_post["stage_schema_version"] = 1
+    legacy_final = g._make_concept_checkpoint(
+        "final_content_ready",
+        records=records,
+        question_task_inventory=inventory,
+        mined_types={"types": types},
+        method_row_snapshot=[],
+    )
+    legacy_final["stage_schema_version"] = 1
+    history = {
+        "checkpoint_format": g._CONCEPT_CHECKPOINT_FORMAT,
+        "schema_version": g._CONCEPT_CHECKPOINT_SCHEMA,
+        "checkpoints": [pre_type, legacy_post, legacy_final],
+    }
+
+    restored = g._newest_compatible_concept_checkpoint(history)
+
+    assert restored["stage"] == g._CONCEPT_CHECKPOINT_STAGE
+    assert restored["progress"] == pytest.approx(0.81)
+
+    incomplete_v2 = g._make_concept_checkpoint(
+        "post_type_assignment",
+        records=records,
+        question_task_inventory=inventory,
+        mined_types={"types": types},
+        method_row_snapshot=[],
+    )
+    assert not g._compatible_concept_checkpoint_entry(incomplete_v2)
+
+    certified_mined = {"types": types}
+    g._reset_placement_certifications(certified_mined)
+    g._certify_inventory_host(
+        certified_mined,
+        "QINV-0001",
+        records[0],
+        basis="type_host_review",
+    )
+    current_v2 = g._make_concept_checkpoint(
+        "post_type_assignment",
+        records=records,
+        question_task_inventory=inventory,
+        mined_types=certified_mined,
+        method_row_snapshot=[],
+    )
+    history["checkpoints"].append(current_v2)
+
+    assert current_v2["stage_schema_version"] == 2
+    assert g._compatible_concept_checkpoint_entry(current_v2)
+    assert g._newest_compatible_concept_checkpoint(
+        history)["stage"] == "post_type_assignment"
+
+    reconciled = g._reconcile_resumed_mined_types(
+        certified_mined,
+        inventory=inventory,
+        meta={},
+        use_api=False,
+    )
+    assert reconciled[g._PLACEMENT_CERTIFICATIONS_KEY] == (
+        certified_mined[g._PLACEMENT_CERTIFICATIONS_KEY]
+    )
 
 
 def test_inventory_extraction_retries_empty_or_stub_rows_before_checkpoint(
@@ -1713,6 +2154,100 @@ def test_rejected_saved_final_falls_back_to_preceding_checkpoint(monkeypatch):
     assert emitted[1]["records"] == out
 
 
+def test_saved_final_hub_normalization_failure_discards_only_98_percent(
+    monkeypatch,
+):
+    details = (
+        "Description: A complete concept description."
+        "\nAchieving Mastery: Applying the concept correctly. // "
+        "Misconception/ Error Analysis: Misconceptions: Students may believe "
+        "every condition is optional.; Error Analysis: Students may omit a "
+        "required condition."
+    )
+    prior_records = [
+        _row("Prior-stage concept", details, topic="T", parent="P"),
+        _culmination(topic="T"),
+    ]
+    stale_final_records = [
+        _row("Stale final concept", details, topic="T", parent="P"),
+        _culmination(topic="T"),
+    ]
+    inventory = {"items": [], "stats": {}}
+    mined_types = {"types": []}
+    prior = g._make_concept_checkpoint(
+        "post_type_assignment",
+        records=prior_records,
+        question_task_inventory=inventory,
+        mined_types=mined_types,
+        method_row_snapshot=[],
+    )
+    stale_final = g._make_concept_checkpoint(
+        "final_content_ready",
+        records=stale_final_records,
+        question_task_inventory=inventory,
+        mined_types=mined_types,
+        method_row_snapshot=[],
+    )
+    history = {
+        "checkpoint_format": g._CONCEPT_CHECKPOINT_FORMAT,
+        "schema_version": g._CONCEPT_CHECKPOINT_SCHEMA,
+        "stage": "final_content_ready",
+        "checkpoints": [prior, stale_final],
+    }
+
+    monkeypatch.setattr(
+        g,
+        "_normalize_activity_hubs_from_inventory",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("saved hub certification no longer resolves")
+        ),
+    )
+    monkeypatch.setattr(
+        g,
+        "_prepare_final_concept_content",
+        lambda current, **_kwargs: current,
+    )
+    monkeypatch.setattr(
+        g,
+        "_repair_final_rich_text_via_api",
+        lambda current, **_kwargs: (current, False),
+    )
+    monkeypatch.setattr(
+        g,
+        "_validate_final_or_raise",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "errors": [],
+            "summary": {},
+        },
+    )
+    monkeypatch.setattr(
+        g,
+        "_openai_json",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("fallback should reuse the preceding checkpoint")
+        ),
+    )
+    emitted: list[dict] = []
+
+    out = g.concepts_from_mmd(
+        "# T\nA short source section.",
+        subject="Mathematics",
+        live=True,
+        resume_checkpoint=history,
+        checkpoint_callback=emitted.append,
+    )
+
+    assert out[0]["concept_title"] == "Prior-stage concept"
+    assert emitted[0] == {
+        "checkpoint_action": "discard_stage",
+        "stage": "final_content_ready",
+        "reason": "strict terminal validation failed",
+    }
+    assert emitted[1]["stage"] == "final_content_ready"
+    assert emitted[1]["records"] == out
+
+
 def test_final_checkpoint_with_partial_mined_metadata_remains_api_free(
     monkeypatch,
 ):
@@ -1762,6 +2297,19 @@ def test_final_checkpoint_with_partial_mined_metadata_remains_api_free(
             }],
         }],
     }]}
+    g._reset_placement_certifications(mined_types)
+    g._certify_inventory_host(
+        mined_types,
+        "QINV-0001",
+        normal,
+        basis="type_host_review",
+    )
+    g._certify_inventory_host(
+        mined_types,
+        "QINV-0002",
+        normal,
+        basis="type_host_review",
+    )
     checkpoint = g._make_concept_checkpoint(
         "final_content_ready",
         records=[normal, _strict_culmination()],

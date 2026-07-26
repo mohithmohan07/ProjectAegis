@@ -87,6 +87,32 @@ def _resign(bundle):
     return bundle
 
 
+def _placement_certification_ledger():
+    return {
+        "version": generation._PLACEMENT_CERTIFICATION_VERSION,
+        "hosts": {
+            "QINV-0001": {
+                "topic": "Methods",
+                "topic_key": "methods",
+                "concept": "Method Beta",
+                "concept_key": "method beta",
+                "is_culmination": False,
+                "basis": "type_host_review",
+            },
+        },
+    }
+
+
+def _certified_inventory_item():
+    return {
+        "qid": "QINV-0001",
+        "source_kind": "exercise",
+        "raw_task": (
+            "Explain how Method Beta establishes the requested result."
+        ),
+    }
+
+
 def _post_bundle(client, bundle, *, learning_kind=""):
     suffix = f"?learning_kind={learning_kind}" if learning_kind else ""
     return client.post(
@@ -148,6 +174,49 @@ def test_checkpoint_bundle_round_trips_as_new_converted_job(client, db):
     )
 
 
+def test_placement_certification_ledger_round_trips_in_both_payload_copies(
+    db,
+):
+    original = _job(db)
+    ledger = _placement_certification_ledger()
+    inventory = {
+        "items": [_certified_inventory_item()],
+        "stats": {"total_inventory_items": 1},
+        "mined_types": [{"type_id": "TYPE-0001"}],
+        generation._PLACEMENT_CERTIFICATIONS_KEY: copy.deepcopy(ledger),
+    }
+    original.question_inventory = copy.deepcopy(inventory)
+    generation_checkpoint = copy.deepcopy(original.generation_checkpoint)
+    checkpoint = generation_checkpoint["checkpoints"][-1]
+    checkpoint["question_task_inventory"] = {
+        "items": [_certified_inventory_item()],
+        "stats": {"total_inventory_items": 1},
+    }
+    checkpoint["mined_types"] = {
+        "types": [{"type_id": "TYPE-0001"}],
+        generation._PLACEMENT_CERTIFICATIONS_KEY: copy.deepcopy(ledger),
+    }
+    original.generation_checkpoint = generation_checkpoint
+    db.commit()
+
+    _, raw_bytes = checkpoints.export_bundle(db, original.id)
+    bundle = json.loads(raw_bytes)
+    restored = checkpoints.import_bundle(db, raw_bytes)
+
+    assert bundle["payload"]["question_inventory"][
+        generation._PLACEMENT_CERTIFICATIONS_KEY
+    ] == ledger
+    assert bundle["payload"]["generation_checkpoint"]["checkpoints"][-1][
+        "mined_types"
+    ][generation._PLACEMENT_CERTIFICATIONS_KEY] == ledger
+    assert restored.question_inventory[
+        generation._PLACEMENT_CERTIFICATIONS_KEY
+    ] == ledger
+    assert restored.generation_checkpoint["checkpoints"][-1]["mined_types"][
+        generation._PLACEMENT_CERTIFICATIONS_KEY
+    ] == ledger
+
+
 def test_checkpoint_import_rejects_tampered_payload(client, db):
     original = _job(db)
     exported = client.get(
@@ -168,6 +237,88 @@ def test_checkpoint_import_rejects_tampered_payload(client, db):
 
     assert response.status_code == 400
     assert "checksum" in response.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    ("mutate", "detail_fragment"),
+    [
+        (
+            lambda ledger: ledger.update(version=2),
+            "version is not supported",
+        ),
+        (
+            lambda ledger: ledger["hosts"]["QINV-0001"].update(
+                concept_key="different concept"
+            ),
+            "normalized host identity",
+        ),
+        (
+            lambda ledger: ledger["hosts"].update({
+                "QINV-UNKNOWN": ledger["hosts"].pop("QINV-0001"),
+            }),
+            "must exactly cover the inventory qids",
+        ),
+    ],
+)
+def test_checksum_valid_malformed_inventory_certifications_are_rejected(
+    client, db, mutate, detail_fragment,
+):
+    original = _job(db)
+    bundle = client.get(
+        f"/build-concepts/uploads/{original.id}/checkpoint"
+    ).json()
+    bundle["payload"]["question_inventory"] = {
+        "items": [{"qid": "QINV-0001"}],
+        "stats": {"total_inventory_items": 1},
+        "mined_types": [{"type_id": "TYPE-0001"}],
+        generation._PLACEMENT_CERTIFICATIONS_KEY: (
+            _placement_certification_ledger()
+        ),
+    }
+    mutate(bundle["payload"]["question_inventory"][
+        generation._PLACEMENT_CERTIFICATIONS_KEY
+    ])
+    _resign(bundle)
+    before = db.query(models.UploadJob).count()
+
+    response = _post_bundle(client, bundle)
+
+    assert response.status_code == 400
+    assert detail_fragment in response.json()["detail"]
+    assert db.query(models.UploadJob).count() == before
+
+
+def test_checksum_valid_malformed_checkpoint_certification_is_rejected(
+    client, db,
+):
+    original = _job(db)
+    bundle = client.get(
+        f"/build-concepts/uploads/{original.id}/checkpoint"
+    ).json()
+    checkpoint = bundle["payload"]["generation_checkpoint"]["checkpoints"][-1]
+    checkpoint["question_task_inventory"] = {
+        "items": [_certified_inventory_item()],
+        "stats": {"total_inventory_items": 1},
+    }
+    checkpoint["mined_types"] = {
+        "types": [{"type_id": "TYPE-0001"}],
+        generation._PLACEMENT_CERTIFICATIONS_KEY: (
+            _placement_certification_ledger()
+        ),
+    }
+    checkpoint["mined_types"][
+        generation._PLACEMENT_CERTIFICATIONS_KEY
+    ]["hosts"]["QINV-0001"]["unexpected"] = "not portable"
+    _resign(bundle)
+    before = db.query(models.UploadJob).count()
+
+    response = _post_bundle(client, bundle)
+
+    assert response.status_code == 400
+    assert "contains unsupported field(s): unexpected" in (
+        response.json()["detail"]
+    )
+    assert db.query(models.UploadJob).count() == before
 
 
 @pytest.mark.parametrize(

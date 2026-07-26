@@ -71,6 +71,21 @@ def _rows(n: int, topic: str = "T") -> list[dict]:
     ]
 
 
+def _rows_with_families(
+    n: int, family_count: int, topic: str = "T",
+) -> list[dict]:
+    return [
+        {
+            "topic": topic,
+            "parent_concept": f"Source Family {((i - 1) % family_count) + 1:02d}",
+            "concept_title": f"Concept {i:02d}",
+            "concept_details": f"Description: about concept {i}",
+            "keywords": "",
+        }
+        for i in range(1, n + 1)
+    ]
+
+
 def _to_api_rows(records: list[dict]) -> list[dict]:
     return [
         {"topic": r["topic"], "parent_concept": r["parent_concept"],
@@ -129,6 +144,39 @@ def test_canonicalize_accepts_reasonable_compaction(monkeypatch):
     assert len(out) == 10
 
 
+def test_canonicalize_bounds_preserve_source_backed_parent_families():
+    records = _rows_with_families(18, family_count=9)
+
+    min_keep, max_keep = g._canonicalize_target_bounds(records)
+
+    assert min_keep == 9
+    assert max_keep >= min_keep
+
+
+def test_canonicalize_rejects_compaction_below_parent_family_floor(
+    monkeypatch,
+):
+    calls = {"n": 0}
+    records = _rows_with_families(18, family_count=9)
+
+    def fake_openai(system, user, **kw):
+        calls["n"] += 1
+        assert "MUST-PRESERVE SOURCE-BACKED PARENT FAMILIES" in user
+        if calls["n"] == 1:
+            return {"rows": _to_api_rows(_rows(6))}
+        assert "over-merging" in user
+        return {"rows": _to_api_rows(_rows(8))}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    monkeypatch.setattr(
+        g, "_repair_records_via_api", lambda records, **kw: records)
+
+    out = g._consolidate_concepts_via_api(records, subject="Science")
+
+    assert calls["n"] == 2
+    assert len(out) == 18
+
+
 def test_canonicalize_retries_when_model_stays_too_granular(monkeypatch):
     calls = {"n": 0}
 
@@ -175,7 +223,7 @@ def test_skeleton_retries_overdense_chunks(monkeypatch):
         if calls["n"] == 1:
             return {"rows": _to_api_rows(_rows(50))}
         assert "too granular" in user
-        return {"rows": _to_api_rows(_rows(12))}
+        return {"rows": _to_api_rows(_rows(20))}
 
     monkeypatch.setattr(g, "_openai_json", fake_openai)
     monkeypatch.setattr(g, "_repair_records_via_api", lambda records, **kw: records)
@@ -193,7 +241,35 @@ def test_skeleton_retries_overdense_chunks(monkeypatch):
         meta=g._metadata(subject="Math"),
     )
     assert calls["n"] == 2
-    assert len(records) == 12
+    assert len(records) == 20
+
+
+def test_skeleton_rejects_overdense_retry_that_collapses_parent_families(
+    monkeypatch,
+):
+    calls = {"n": 0}
+    dense_rows = _rows_with_families(27, family_count=9)
+
+    def fake_openai(system, user, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {"rows": _to_api_rows(dense_rows)}
+        assert "MUST-PRESERVE SOURCE-BACKED PARENT FAMILIES" in user
+        assert "Return between 11 and 18 concepts" in user
+        return {"rows": _to_api_rows(_rows(6))}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    monkeypatch.setattr(
+        g, "_repair_records_via_api", lambda records, **kw: records)
+    chunk_text = "SECTION TEXT:\n" + ("alpha beta gamma " * 985)
+
+    records = g._extract_skeleton_via_api(
+        [{"text": chunk_text, "sections": []}],
+        meta=g._metadata(subject="Science"),
+    )
+
+    assert calls["n"] == 2
+    assert len(records) == 27
 
 
 def test_culmination_pass_cannot_drop_normal_rows(monkeypatch):
@@ -363,9 +439,26 @@ def test_concepts_live_processes_every_chunk(monkeypatch):
     monkeypatch.setattr(
         g, "_consolidate_concepts_via_api",
         lambda records, **kw: records)
+
+    def refine_with_specific_analysis(records, **kw):
+        refined = []
+        for record in records:
+            current = dict(record)
+            title = current["concept_title"]
+            description = current["concept_details"].split(" // ", 1)[0]
+            current["concept_details"] = (
+                f"{description} // Misconception/ Error Analysis: "
+                f"Misconceptions: Students may believe {title} is "
+                "interchangeable with every other concept in Topic A.; Error "
+                f"Analysis: Students may omit the source evidence when "
+                f"distinguishing {title}."
+            )
+            refined.append(current)
+        return refined
+
     monkeypatch.setattr(
         g, "_refine_descriptions_via_api",
-        lambda records, **kw: records)
+        refine_with_specific_analysis)
     monkeypatch.setattr(
         g, "_assign_types_via_api",
         lambda records, **kw: records)
