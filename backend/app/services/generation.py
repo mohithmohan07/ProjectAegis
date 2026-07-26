@@ -5224,7 +5224,8 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
                     prefix,
                 )
                 if clue:
-                    context = f"{context} {clue[-1].strip(' \"')}"
+                    clue_text = clue[-1].strip(' "')
+                    context = f"{context} {clue_text}"
             return context
         return ""
 
