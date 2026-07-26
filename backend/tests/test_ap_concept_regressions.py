@@ -1714,9 +1714,9 @@ def test_type_assignment_rejects_wrong_ap_source_topic(monkeypatch):
         records, meta=g._metadata(subject="Mathematics"),
         mined_types=mined, max_attempts=2)
 
-    # Two constrained embedding attempts plus one semantic host-entailment
-    # review of the accepted placement.
-    assert calls["count"] == 3
+    # The accepted retry has one legal source-topic destination, so it is
+    # deterministically certified without an unnecessary second API review.
+    assert calls["count"] == 2
     assert "Finding a Finite AP Sum" not in out[0]["concept_details"]
     assert "Finding a Finite AP Sum" in out[1]["concept_details"]
     assert not g._mined_type_topic_violations(out, mined)

@@ -399,6 +399,142 @@ def test_final_validation_infers_same_topic_synthesis_without_mined_taxonomy():
     )
 
 
+def test_explicit_mixed_scope_requires_actual_synthesis_evidence():
+    ordinary = {
+        "type_title": "Calculating Current",
+        # A destination hint is routing context only and must not manufacture
+        # synthesis evidence for this ordinary single-method calculation.
+        "concept_match_hint": "Integrating Multiple Circuit Relationships",
+        "placement_scope": "mixed_synthesis",
+        "case_prompts": [{
+            "case_title": "Voltage and resistance are supplied",
+            "placement_scope": "mixed_synthesis",
+            "examples": [{
+                "example_prompt": (
+                    "Calculate current when voltage is 12 V and resistance "
+                    "is 6 ohms."
+                ),
+            }],
+        }],
+    }
+    synthesis = {
+        "type_title": "Integrating Multiple Circuit Relationships",
+        "placement_scope": "mixed_synthesis",
+        "case_prompts": [{
+            "case_title": "Combine current and heating relationships",
+            "placement_scope": "mixed_synthesis",
+            "examples": [{
+                "example_prompt": (
+                    "Combine Ohm's law and Joule heating to compare both "
+                    "effects."
+                ),
+            }],
+        }],
+    }
+    one_concept_comparison = {
+        "type_title": "Comparing Both Sections of One Conductor",
+        "placement_scope": "mixed_synthesis",
+        "case_prompts": [{
+            "case_title": "Both conductor sections are supplied",
+            "placement_scope": "mixed_synthesis",
+            "examples": [{
+                "example_prompt": (
+                    "Compare the resistance of both sections of the same "
+                    "uniform conductor."
+                ),
+            }],
+        }],
+    }
+    unproven_cross_topic = {
+        "type_title": "Calculating Current",
+        "placement_scope": "cross_topic_synthesis",
+        "case_prompts": [{
+            "case_title": "Charge and time are supplied",
+            "placement_scope": "cross_topic_synthesis",
+            "examples": [{
+                "example_prompt": (
+                    "Calculate current from the supplied charge and time."
+                ),
+            }],
+        }],
+    }
+    proven_cross_topic = {
+        "type_title": "Synthesising Ideas across Source Topics",
+        "placement_scope": "cross_topic_synthesis",
+        "case_prompts": [{
+            "case_title": "Methods from different source topics are combined",
+            "placement_scope": "cross_topic_synthesis",
+            "examples": [{
+                "example_prompt": (
+                    "Combine methods across different source topics."
+                ),
+            }],
+        }],
+    }
+    natural_cross_topic = {
+        "type_title": "Comparing Electrical and Heating Effects",
+        "placement_scope": "cross_topic_synthesis",
+        "case_prompts": [{
+            "case_title": "Electrical and heating effects are compared",
+            "placement_scope": "cross_topic_synthesis",
+            "examples": [{
+                "example_prompt": (
+                    "Compare resistance from the voltage-current relationship "
+                    "with the heating effect in the same conductor."
+                ),
+            }],
+        }],
+    }
+    concept_payload = {
+        "CONCEPT-0001": {
+            "concept_id": "CONCEPT-0001",
+            "topic": "Electric Current",
+            "concept": "Voltage-current Relationship",
+            "is_culmination": False,
+        },
+        "CONCEPT-0002": {
+            "concept_id": "CONCEPT-0002",
+            "topic": "Heating Effect",
+            "concept": "Joule Heating",
+            "is_culmination": False,
+        },
+        "CONCEPT-0003": {
+            "concept_id": "CONCEPT-0003",
+            "topic": "Electric Current",
+            "concept": "Ohm's Law",
+            "is_culmination": False,
+        },
+    }
+    invented_synthesis_title = {
+        **synthesis,
+        "_source_task_evidence": (
+            "Calculate current from the supplied charge and time."
+        ),
+    }
+
+    assert g._assignment_placement_scope(ordinary) == "normal"
+    assert g._assignment_placement_scope(one_concept_comparison) == "normal"
+    assert g._assignment_placement_scope(unproven_cross_topic) == "normal"
+    assert (
+        g._assignment_placement_scope(synthesis, concept_payload)
+        == "mixed_synthesis"
+    )
+    assert (
+        g._assignment_placement_scope(proven_cross_topic)
+        == "cross_topic_synthesis"
+    )
+    assert (
+        g._assignment_placement_scope(
+            natural_cross_topic, concept_payload)
+        == "cross_topic_synthesis"
+    )
+    assert (
+        g._assignment_placement_scope(
+            invented_synthesis_title, concept_payload)
+        == "normal"
+    )
+
+
 def test_final_validation_keeps_single_concept_comparison_off_culmination():
     question = (
         "Compare the resistance between different sections of the same "
@@ -420,6 +556,250 @@ def test_final_validation_keeps_single_concept_comparison_off_culmination():
             inventory=inventory,
             mined_types={"types": []},
         )
+
+
+def test_terminal_host_gate_overrides_a_self_consistent_wrong_mined_hint():
+    question = "Find the arithmetic mean between 4 and 10."
+    records = [
+        _row(
+            "Constructing Arithmetic Progressions",
+            "Description: Build a progression from its first term and common "
+            "difference. // Types: Type 01: Finding an arithmetic mean "
+            "Case 01: Two endpoint terms are supplied "
+            f"Example 01: {question}",
+            topic="Arithmetic Progressions",
+            parent="Construction",
+        ),
+        _row(
+            "Identifying the Arithmetic Mean of Two AP Terms",
+            "Description: The middle term lies equally far from two adjacent "
+            "terms in an arithmetic progression.",
+            topic="Arithmetic Progressions",
+            parent="Properties of AP Terms",
+        ),
+    ]
+    inventory = {"items": [{
+        "qid": "QINV-0001",
+        "source_kind": "exercise",
+        "topic_hint": "Arithmetic Progressions",
+        "raw_task": question,
+    }]}
+    mined = {"types": [{
+        "type_id": "TYPE-0001",
+        "type_title": "Finding an Arithmetic Mean",
+        "topic_match_hint": "Arithmetic Progressions",
+        # Deliberately self-consistent but wrong: terminal evidence must not
+        # allow this model-authored hint to certify itself.
+        "concept_match_hint": "Constructing Arithmetic Progressions",
+        "placement_scope": "normal",
+        "source_question_ids": ["QINV-0001"],
+        "case_prompts": [{
+            "case_id": "CASE-0001",
+            "case_title": "Two endpoint terms are supplied",
+            "placement_scope": "normal",
+            "examples": [{
+                "source_question_id": "QINV-0001",
+                "example_prompt": question,
+            }],
+        }],
+    }]}
+
+    violations = g._rendered_type_placement_violations(
+        records, inventory, mined)
+
+    assert violations == [{
+        "qid": "QINV-0001",
+        "type_id": "TYPE-0001",
+        "reason": "high_confidence_wrong_host",
+        "expected_concept": "Identifying the Arithmetic Mean of Two AP Terms",
+        "actual_concept": "Constructing Arithmetic Progressions",
+    }]
+
+
+def _electricity_type_fixture(
+    qid: str, question: str, *, concept_hint: str,
+) -> dict:
+    return {
+        "type_id": f"TYPE-{qid[-4:]}",
+        "type_title": "Calculating Electric Current from Charge and Time",
+        "type_description": (
+            "Use charge flow and elapsed time to calculate current."
+        ),
+        "task_pattern": "Calculate electric current from charge and time.",
+        "topic_match_hint": "Electricity",
+        "concept_match_hint": concept_hint,
+        "placement_scope": "normal",
+        "source_question_ids": [qid],
+        "case_prompts": [{
+            "case_id": f"CASE-{qid[-4:]}",
+            "case_title": "Charge and elapsed time are supplied",
+            "placement_scope": "normal",
+            "examples": [{
+                "source_question_id": qid,
+                "example_prompt": question,
+            }],
+        }],
+    }
+
+
+def _electricity_concept_rows(
+    *, current_types: str = "", potential_types: str = "",
+) -> list[dict]:
+    return [
+        _row(
+            "Electric Current from Charge and Time",
+            "Description: Current measures charge flow per unit time."
+            + current_types,
+            topic="Electricity",
+            parent="Circuit Quantities",
+        ),
+        _row(
+            "Potential Difference between Two Points",
+            "Description: Potential difference measures work per unit charge."
+            + potential_types,
+            topic="Electricity",
+            parent="Circuit Quantities",
+        ),
+        _row(
+            "Culmination - Electricity",
+            "Description: Recap of Electric Current from Charge and Time and "
+            "Potential Difference between Two Points.",
+            topic="Electricity",
+            parent="Culmination",
+        ),
+    ]
+
+
+def test_applicable_type_coverage_accepts_source_backed_host_and_theory_sibling():
+    question = (
+        "Calculate electric current when 24 coulombs pass in 6 seconds."
+    )
+    inventory = {"items": [{
+        "qid": "QINV-0001",
+        "source_kind": "exercise",
+        "topic_hint": "Electricity",
+        "raw_task": question,
+    }]}
+    types = (
+        " // Types: Type 01: Calculating current from charge and time "
+        "Case 01: Charge and elapsed time are supplied "
+        f"Example 01: {question}"
+    )
+    records = _electricity_concept_rows(current_types=types)
+    mined = {"types": [
+        _electricity_type_fixture(
+            "QINV-0001",
+            question,
+            concept_hint="Electric Current from Charge and Time",
+        ),
+    ]}
+
+    assert not g._normal_concept_type_coverage_violations(
+        records, inventory, mined)
+    # Potential Difference is intentionally theory-only in this fixture. The
+    # per-concept gate does not require a Types block without a source task.
+    assert not g._has_meaningful_types(records[1]["concept_details"])
+
+
+def test_applicable_type_coverage_rejects_missing_types_despite_wrong_hint(
+    monkeypatch,
+):
+    question = (
+        "Calculate electric current when 24 coulombs pass in 6 seconds."
+    )
+    inventory = {"items": [{
+        "qid": "QINV-0001",
+        "source_kind": "exercise",
+        "topic_hint": "Electricity",
+        "raw_task": question,
+    }]}
+    wrong_host_types = (
+        " // Types: Type 01: Calculating current from charge and time "
+        "Case 01: Charge and elapsed time are supplied "
+        f"Example 01: {question}"
+    )
+    records = _electricity_concept_rows(
+        potential_types=wrong_host_types)
+    mined = {"types": [
+        _electricity_type_fixture(
+            "QINV-0001",
+            question,
+            # The source/task semantics identify Current; this self-consistent
+            # wrong destination hint must not certify Potential Difference.
+            concept_hint="Potential Difference between Two Points",
+        ),
+    ]}
+
+    assert g._normal_concept_type_coverage_violations(
+        records, inventory, mined
+    ) == [{
+        "qid": "QINV-0001",
+        "type_id": "TYPE-0001",
+        "reason": "missing_meaningful_types",
+        "expected_concept": "Electric Current from Charge and Time",
+        "actual_concepts": ["Potential Difference between Two Points"],
+    }]
+
+    monkeypatch.setattr(
+        g.cv,
+        "validate_concept_rows",
+        lambda *_args, **_kwargs: {
+            "errors": [],
+            "summary": {"warnings": 0},
+        },
+    )
+    with pytest.raises(
+        RuntimeError,
+        match=r"source_inventory_semantics; .*concept_type_coverage=1",
+    ):
+        g._validate_final_or_raise(
+            records, inventory=inventory, mined_types=mined)
+
+
+def test_applicable_type_coverage_requires_qid_on_proven_typed_host():
+    question = (
+        "Calculate electric current when 24 coulombs pass in 6 seconds."
+    )
+    other_question = (
+        "Calculate electric current when 12 volts act across 4 ohms."
+    )
+    inventory = {"items": [{
+        "qid": "QINV-0001",
+        "source_kind": "exercise",
+        "topic_hint": "Electricity",
+        "raw_task": question,
+    }]}
+    current_types = (
+        " // Types: Type 01: Calculating current from voltage and resistance "
+        "Case 01: Voltage and resistance are supplied "
+        f"Example 01: {other_question}"
+    )
+    wrong_host_types = (
+        " // Types: Type 01: Calculating current from charge and time "
+        "Case 01: Charge and elapsed time are supplied "
+        f"Example 01: {question}"
+    )
+    records = _electricity_concept_rows(
+        current_types=current_types,
+        potential_types=wrong_host_types,
+    )
+    mined = {"types": [
+        _electricity_type_fixture(
+            "QINV-0001",
+            question,
+            concept_hint="Potential Difference between Two Points",
+        ),
+    ]}
+
+    assert g._normal_concept_type_coverage_violations(
+        records, inventory, mined
+    ) == [{
+        "qid": "QINV-0001",
+        "type_id": "TYPE-0001",
+        "reason": "source_qid_not_on_expected_host",
+        "expected_concept": "Electric Current from Charge and Time",
+        "actual_concepts": ["Potential Difference between Two Points"],
+    }]
 
 
 def test_final_validation_requires_every_pure_activity_in_a_hub():
@@ -503,6 +883,10 @@ def test_final_repair_options_include_every_terminal_strict_contract():
     assert options["strict_analysis_section"] is True
     assert options["strict_mastery_statement"] is True
     assert options["strict_culmination_recap"] is True
+    assert {
+        "section_number_in_description",
+        "case_example_semantic_mismatch",
+    } <= g._FATAL_CODES
 
 
 def test_final_repair_loop_receives_type_and_stray_mastery_defects(

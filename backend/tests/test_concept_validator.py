@@ -447,6 +447,33 @@ def test_validator_rejects_source_artifacts_and_bad_names():
     assert "source_artifact" in codes
 
 
+def test_description_section_references_are_errors_but_decimals_are_allowed():
+    report = cv.validate_concept_rows([
+        _rec(
+            "Section Leak",
+            "Description: Section 5.3 introduces the finite-sum rule.",
+        ),
+        _rec(
+            "Section Symbol Leak",
+            "Description: The derivation follows \u00a7 4.2 of the source.",
+        ),
+        _rec(
+            "Legitimate Decimals",
+            "Description: A 2.5 ohm resistor has cross-section 1.2 square "
+            "centimetres, and the scale factor is 1.5.",
+        ),
+    ])
+
+    section_errors = [
+        error for error in report["errors"]
+        if error["code"] == "section_number_in_description"
+    ]
+    assert {
+        (error["row_index"], error["severity"])
+        for error in section_errors
+    } == {(0, "error"), (1, "error")}
+
+
 def test_validator_rejects_copied_source_prose_only_in_descriptions():
     source = (
         "A nation state is built when people share a sense of collective "
@@ -544,6 +571,93 @@ def test_strict_type_hierarchy_requires_a_case_for_every_type_and_real_definitio
     assert "generic_case_definition" in _codes(generic_report)
 
 
+def test_strict_type_hierarchy_rejects_empty_task_container_case_titles():
+    generic_titles = [
+        "Use the given information",
+        "Answer the question",
+        "Checkpoint",
+        "Activity",
+        "Exercise 5.2",
+        "Source inventory task",
+        "Task container",
+        "Discuss",
+    ]
+    rows = [
+        _rec(
+            f"Generic Case {index}",
+            "Description: Voltage depends on current and resistance. // "
+            "Types: Type 01: Explaining voltage changes "
+            f"Case 01: {title} "
+            "Example 01: Explain how voltage changes when current doubles "
+            "at constant resistance.",
+        )
+        for index, title in enumerate(generic_titles)
+    ]
+
+    report = cv.validate_concept_rows(rows, strict_type_hierarchy=True)
+    generic_rows = {
+        error["row_index"] for error in report["errors"]
+        if error["code"] == "generic_case_definition"
+    }
+    assert generic_rows == set(range(len(generic_titles)))
+
+
+def test_strict_type_hierarchy_allows_a_meaningful_imperative_case_title():
+    row = _rec(
+        "Voltage Relationships",
+        "Description: Ohm's law relates voltage, current, and resistance. // "
+        "Types: Type 01: Explaining variable relationships "
+        "Case 01: Discuss why voltage changes with resistance "
+        "Example 01: Explain why the voltage across a resistor increases "
+        "when its resistance rises at constant current.",
+    )
+
+    report = cv.validate_concept_rows([row], strict_type_hierarchy=True)
+
+    assert not (
+        _codes(report)
+        & {"generic_case_definition", "case_question_not_definition"}
+    )
+
+
+def test_strict_type_hierarchy_rejects_obvious_case_example_family_mismatch():
+    rows = [
+        _rec(
+            "Resistor Combinations",
+            "Description: Resistor topology determines equivalent resistance. // "
+            "Types: Type 01: Equivalent-resistance calculations "
+            "Case 01: Series resistor combinations "
+            "Example 01: Calculate the equivalent resistance of 6 ohm and "
+            "3 ohm resistors connected in parallel.",
+        ),
+        _rec(
+            "Arithmetic Mean Tasks",
+            "Description: Arithmetic means divide an interval into equal "
+            "additive steps. // "
+            "Types: Type 01: Working with fixed endpoints "
+            "Case 01: Finding arithmetic means between fixed endpoints "
+            "Example 01: Construct an arithmetic progression with first "
+            "term 4 and common difference 3.",
+        ),
+        _rec(
+            "Aligned Resistor Combination",
+            "Description: Resistors in series carry the same current. // "
+            "Types: Type 01: Equivalent-resistance calculations "
+            "Case 01: Series resistor combinations "
+            "Example 01: Calculate the equivalent resistance of 6 ohm and "
+            "3 ohm resistors connected in series.",
+        ),
+    ]
+
+    report = cv.validate_concept_rows(rows, strict_type_hierarchy=True)
+    mismatch_rows = {
+        error["row_index"] for error in report["errors"]
+        if error["code"] == "case_example_semantic_mismatch"
+    }
+
+    assert mismatch_rows == {0, 1}
+
+
 def test_strict_type_hierarchy_rejects_empty_generic_and_duplicate_type_titles():
     case = (
         "Case 01: Given a linear equation, isolate its unknown using inverse "
@@ -592,6 +706,34 @@ def test_strict_type_hierarchy_rejects_empty_generic_and_duplicate_type_titles()
         ),
     ])
     assert "generic_type_definition" not in _codes(legacy_report)
+
+
+def test_strict_type_titles_are_unique_across_normal_concepts_in_each_topic():
+    def row(title, topic):
+        return _rec(
+            title,
+            "Description: An equation remains balanced when the same inverse "
+            "operation is applied to both sides. // "
+            "Types: Type 01: Solving by inverse operations "
+            "Case 01: Isolating an unknown with one inverse operation "
+            "Example 01: Solve 3x + 2 = 14.",
+            topic=topic,
+        )
+
+    report = cv.validate_concept_rows(
+        [
+            row("One-step Equations", "Linear Equations"),
+            row("Two-step Equations", "  linear   equations  "),
+            row("Quadratic Rearrangement", "Quadratic Equations"),
+        ],
+        strict_type_hierarchy=True,
+    )
+
+    duplicate_rows = [
+        error["row_index"] for error in report["errors"]
+        if error["code"] == "duplicate_type_definition"
+    ]
+    assert duplicate_rows == [1]
 
 
 def test_strict_type_hierarchy_rejects_all_named_generic_type_variants():

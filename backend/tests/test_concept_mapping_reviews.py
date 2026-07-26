@@ -2827,6 +2827,82 @@ def test_structured_mcq_options_rebuild_the_same_question_only():
     assert item["normalized_task"] == item["raw_task"]
 
 
+def test_structured_mcq_options_replace_a_conflicting_existing_tail():
+    item = g._sanitize_inventory_item({
+        "source_kind": "mcq",
+        "raw_task": (
+            "Which term is prime? (A) 13 (B) 14 (C) 15 (D) 16"
+        ),
+        "options": [
+            {"label": "A", "text": "14"},
+            {"label": "B", "text": "15"},
+            {"label": "C", "text": "16"},
+            {"label": "D", "text": "17"},
+        ],
+    })
+    assert item["raw_task"] == (
+        "Which term is prime? (A) 14 (B) 15 (C) 16 (D) 17"
+    )
+    assert item["raw_task"].count("(A)") == 1
+    assert "(A) 13" not in item["raw_task"]
+
+
+def test_structured_options_never_truncate_lowercase_multipart_exercise():
+    prompt = (
+        "Answer both parts: (a) calculate the current; "
+        "(b) explain why it changes."
+    )
+    item = g._sanitize_inventory_item({
+        "source_kind": "exercise",
+        "raw_task": prompt,
+        "options": [
+            {"label": "A", "text": "Current doubles"},
+            {"label": "B", "text": "Current halves"},
+        ],
+    })
+
+    assert item["raw_task"] == prompt
+    assert item["options"] == []
+    assert g._mcq_option_tail("Choose one: (A) first (C) third") is None
+
+
+def test_anchor_merge_prefers_source_mcq_options_when_model_options_conflict():
+    model_item = {
+        "source_kind": "mcq",
+        "source_label": "Exercise 5.2 Q2(i)",
+        "raw_task": (
+            "Which term of the AP is 78? "
+            "(A) 13 (B) 14 (C) 15 (D) 16"
+        ),
+        "normalized_task": "Which term of the AP is 78?",
+    }
+    source_anchor = {
+        "source_kind": "mcq",
+        "source_label": "Exercise 5.2 Q2(i)",
+        "raw_task": (
+            "Which term of the AP is 78? "
+            "(A) 14 (B) 15 (C) 16 (D) 17"
+        ),
+        "normalized_task": "Which term of the AP is 78?",
+    }
+    merged = g._merge_source_task_anchors([model_item], [source_anchor])
+    assert len(merged) == 1
+    assert merged[0]["raw_task"] == source_anchor["raw_task"]
+    assert "(A) 13" not in merged[0]["raw_task"]
+
+
+def test_plain_container_headings_are_removed_but_real_imperatives_survive():
+    assert g._strip_public_source_heading(
+        "Discuss\nExplain why the current changes."
+    ) == "Explain why the current changes."
+    assert g._strip_public_source_heading(
+        "Activity: Explain why the current changes."
+    ) == "Explain why the current changes."
+    assert g._strip_public_source_heading(
+        "Discuss why the current changes with resistance."
+    ) == "Discuss why the current changes with resistance."
+
+
 def test_lettered_exercise_subparts_keep_one_parent_anchor():
     source = r"""
 \section*{1 Revolutions}

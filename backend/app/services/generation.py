@@ -3253,7 +3253,7 @@ _ACTIVITY_PUBLIC_CHAR_LIMIT = 420
 def _strip_public_source_heading(text: str) -> str:
     """Remove Markdown/OCR block headings from public Hub/Example prose."""
     value = re.sub(
-        r"(?im)^\s*#{1,6}\s*(?:activity|discuss|discussion|exercise|"
+        r"(?im)^\s*(?:#{1,6}\s*)?(?:activity|discuss|discussion|exercise|"
         r"question|questions)\b(?:\s+\d+(?:\.\d+)*)?\s*[:.)-]?\s*"
         r"(?:\n|$)",
         "",
@@ -3268,6 +3268,15 @@ def _strip_public_source_heading(text: str) -> str:
         "",
         value,
     )
+    # OCR/plain-text extraction may collapse a container heading to
+    # ``Activity: Explain ...``. Require heading punctuation here so a genuine
+    # student-facing imperative such as ``Discuss why ...`` remains intact.
+    value = re.sub(
+        r"(?im)^\s*(?:activity|discuss|discussion|exercise|"
+        r"question|questions)\b(?:\s+\d+(?:\.\d+)*)?\s*[:.)-]\s*",
+        "",
+        value,
+    )
     value = re.sub(r"(?m)^\s*#{1,6}\s*", "", value)
     # Preserve line boundaries until solution/answer stripping has run; those
     # markers are intentionally line-anchored in source MMD.
@@ -3275,8 +3284,18 @@ def _strip_public_source_heading(text: str) -> str:
 
 
 def _activity_hub_marker(item: dict) -> str:
-    label = _strip_public_source_heading(
-        str(item.get("source_label") or item.get("parent_source_label") or ""))
+    # Source labels are identifiers, not public task prose. Keep a meaningful
+    # numbered label such as ``Activity 11.1`` even though the same text would
+    # be stripped as a container heading at the start of an Example.
+    label = re.sub(
+        r"^\s*#{1,6}\s*",
+        "",
+        str(
+            item.get("source_label")
+            or item.get("parent_source_label")
+            or ""
+        ),
+    ).strip()
     if label:
         label = label[:100].strip(" .:-")
         if _source_label_is_generic(label):
@@ -4268,7 +4287,8 @@ def _sanitize_inventory_item(
     cleaned["normalized_task"] = normalized or raw_task
     cleaned["raw_solution_or_answer"] = ""
     options = cleaned.get("options") or []
-    if isinstance(options, list):
+    structured_option_kind = kind in {"mcq", "assertion_reason"}
+    if isinstance(options, list) and structured_option_kind:
         rendered_options: list[str] = []
         for index, option in enumerate(options):
             if isinstance(option, dict):
@@ -4280,18 +4300,24 @@ def _sanitize_inventory_item(
                 text = str(option or "").strip()
             if text:
                 rendered_options.append(f"({label}) {text}")
-        # A structured options list is authoritative for MCQ fidelity. Append
-        # only formatted options absent from the task, preserving source order.
-        for rendered in rendered_options:
-            if bi.normalize_question_text(rendered) not in (
-                bi.normalize_question_text(raw_task)
-            ):
-                raw_task = f"{raw_task} {rendered}".strip()
+        # A structured options list is authoritative for MCQ fidelity. Replace
+        # an existing labelled option tail instead of appending to it: model
+        # output occasionally retains stale option text while also returning
+        # the corrected structured list, which used to produce two conflicting
+        # ``(A)``/``(B)`` sets in the public Example.
+        raw_task = _replace_structured_mcq_options(
+            raw_task, rendered_options)
         cleaned["options"] = rendered_options
         cleaned["raw_task"] = raw_task
         cleaned["normalized_task"] = (
             raw_task if rendered_options else (normalized or raw_task)
         )
+    elif options:
+        # Lettered multipart prompts such as ``(a) ... (b) ...`` are not MCQ
+        # option tails. If a model emits an ``options`` array for a non-
+        # objective source item, discard that unsupported metadata rather than
+        # truncating or appending to the authoritative question.
+        cleaned["options"] = []
     cleaned["topic_hint"] = (
         str(cleaned.get("topic_hint") or "").strip()
         if chapter_wide
@@ -4311,6 +4337,82 @@ def _sanitize_inventory_item(
     cleaned.setdefault("requires_visual", False)
     cleaned.setdefault("requires_context", False)
     return cleaned
+
+
+_MCQ_OPTION_MARKER_RE = re.compile(
+    r"(?<![\w])(?:\(\s*([A-Ha-h])\s*\)|"
+    r"\[\s*([A-Ha-h])\s*\]|([A-Ha-h])[.)])\s*"
+)
+
+
+def _mcq_option_tail(
+    value: str,
+) -> tuple[str, tuple[tuple[str, str], ...]] | None:
+    """Split a conventional A-H option tail from its question stem.
+
+    At least two ordered labels are required so prose parentheses and
+    lettered explanatory subparts are not treated as an MCQ merely because
+    they contain one ``(a)`` token.
+    """
+    text = str(value or "").strip()
+    matches = list(_MCQ_OPTION_MARKER_RE.finditer(text))
+    if len(matches) < 2:
+        return None
+    for start in range(len(matches) - 1):
+        labels = [
+            next(group for group in match.groups() if group).upper()
+            for match in matches[start:]
+        ]
+        expected_labels = [
+            chr(ord("A") + offset) for offset in range(len(labels))
+        ]
+        if labels != expected_labels:
+            continue
+        options: list[tuple[str, str]] = []
+        for offset, match in enumerate(matches[start:]):
+            end = (
+                matches[start + offset + 1].start()
+                if start + offset + 1 < len(matches)
+                else len(text)
+            )
+            option_text = text[match.end():end].strip(" \t\r\n;")
+            if not option_text:
+                break
+            label = next(
+                group for group in match.groups() if group).upper()
+            options.append((label, option_text))
+        if len(options) < 2:
+            continue
+        stem = text[:matches[start].start()].rstrip(" \t\r\n;:-")
+        if stem:
+            return stem, tuple(options)
+    return None
+
+
+def _replace_structured_mcq_options(
+    raw_task: str, rendered_options: list[str],
+) -> str:
+    """Render one canonical option block from structured MCQ options."""
+    task = str(raw_task or "").strip()
+    if not rendered_options:
+        return task
+    parsed = _mcq_option_tail(task)
+    if parsed is not None:
+        task = parsed[0]
+    elif _MCQ_OPTION_MARKER_RE.search(task):
+        # A partial/non-consecutive lettered block is more likely a multipart
+        # prompt or malformed extraction than a safe option tail. Preserve it
+        # for validation instead of appending a second canonical block.
+        return task
+    else:
+        # Preserve unusual source formatting when no complete option tail can
+        # be identified, while avoiding exact duplicate option fragments.
+        normalized_task = bi.normalize_question_text(task)
+        rendered_options = [
+            rendered for rendered in rendered_options
+            if bi.normalize_question_text(rendered) not in normalized_task
+        ]
+    return " ".join([task, *rendered_options]).strip()
 
 
 _LEADING_INVENTORY_TASK_NUMBER_RE = re.compile(
@@ -4586,11 +4688,40 @@ def _merge_source_task_anchors(items: list[dict], anchors: list[dict]) -> list[d
             or (anchor.get("source_kind") or "").strip().lower()
             in _HUB_INVENTORY_KINDS
         )
+        existing_mcq = _mcq_option_tail(existing_task)
+        anchor_mcq = _mcq_option_tail(anchor_task)
+        conflicting_source_options = False
+        if existing_mcq and anchor_mcq:
+            existing_stem, existing_options = existing_mcq
+            anchor_stem, anchor_options = anchor_mcq
+            existing_stem_key = bi.normalize_question_text(existing_stem)
+            anchor_stem_key = bi.normalize_question_text(anchor_stem)
+            same_question = bool(
+                existing_stem_key
+                and anchor_stem_key
+                and (
+                    existing_stem_key == anchor_stem_key
+                    or existing_stem_key in anchor_stem_key
+                    or anchor_stem_key in existing_stem_key
+                )
+            )
+            existing_option_key = tuple(
+                (label, bi.normalize_question_text(text))
+                for label, text in existing_options
+            )
+            anchor_option_key = tuple(
+                (label, bi.normalize_question_text(text))
+                for label, text in anchor_options
+            )
+            conflicting_source_options = (
+                same_question and existing_option_key != anchor_option_key
+            )
         authoritative_task = (
             anchor_task
             if (
                 anchor_is_activity
                 or anchor.get("_source_task_boundary") == "direct_prompt"
+                or conflicting_source_options
             )
             else (
                 existing_task
@@ -7840,14 +7971,22 @@ def _collapse_assignment_units_for_render(units: list[dict]) -> list[dict]:
 
 
 _ASSIGNMENT_PREFIX_STOPWORDS = {
+    "and", "are", "can", "did", "for", "has", "how", "its", "not",
+    "one", "the", "two", "use", "why", "you",
     "appl", "base", "case", "conc", "desc", "dete", "exam", "expl",
     "find", "give", "iden", "inte", "ques", "sour", "stat", "usin",
     "writ", "thro",
 }
 _MIXED_ASSIGNMENT_CUE_RE = re.compile(
-    r"\b(?:any\s+two|two\s+(?:countries|cases|methods|concepts)|"
-    r"compare|comparison|across\s+(?:cases|concepts)|"
-    r"several|multiple|combine|synthesi[sz]e)\b",
+    r"(?:\b(?:any\s+two|two|several|multiple)(?:\s+\w+){0,2}\s+"
+    r"(?:countries|cases|methods|concepts|relationships|ideas|principles)\b|"
+    r"\b(?:compare|comparison|contrast)\b(?=.{0,80}\b"
+    r"(?:countries|cases|methods|concepts|relationships|ideas|principles)\b)|"
+    r"\bacross\s+(?:cases|concepts)\b|"
+    r"\bmulti[-\s]+concept\b|"
+    r"\b(?:combin(?:e|ing)|integrat(?:e|ing))\b(?=.{0,80}\b"
+    r"(?:methods|concepts|relationships|ideas|principles)\b)|"
+    r"\bsynthesi[sz](?:e|ing|s)\b)",
     re.IGNORECASE,
 )
 # Inventory-only fallback inference must be more selective than the legacy
@@ -7879,10 +8018,140 @@ _ASSIGNMENT_PLACEMENT_SCOPES = frozenset({
 })
 
 
-def _assignment_placement_scope(mtype: dict) -> str:
+def _assignment_scope_evidence(mtype: dict) -> str:
+    """Source/task wording allowed to certify synthesis placement."""
+    source_task = str(mtype.get("_source_task_evidence") or "").strip()
+    if source_task:
+        return source_task
+    examples = [
+        str(example.get("example_prompt") or "").strip()
+        for case in (mtype.get("case_prompts") or [])
+        if isinstance(case, dict)
+        for example in _case_examples(case)
+        if str(example.get("example_prompt") or "").strip()
+    ]
+    if examples:
+        return " ".join(examples)
+    # Legacy units may lack structured Examples. task_pattern is closer to the
+    # actual ask than generated taxonomy titles or destination hints.
+    return str(mtype.get("task_pattern") or "").strip()
+
+
+def _scope_payload_rows(
+    concept_payload: dict[str, dict] | list[dict] | tuple[dict, ...] | None,
+) -> list[dict]:
+    if isinstance(concept_payload, dict):
+        return [
+            row for row in concept_payload.values()
+            if isinstance(row, dict)
+        ]
+    return [
+        row for row in (concept_payload or ())
+        if isinstance(row, dict)
+    ]
+
+
+def _evidence_topic_matches(
+    evidence: str,
+    concept_payload: dict[str, dict] | list[dict] | tuple[dict, ...] | None,
+) -> set[str]:
+    """Topics independently named by discriminative task/concept wording."""
+    # Culmination rows still carry an authoritative topic title. Include them
+    # when detecting cross-topic coverage so a chapter map with no normal row
+    # in the later topic can still prove that the source task names that topic.
+    rows = _scope_payload_rows(concept_payload)
+    prefixes_by_topic: dict[str, set[str]] = {}
+    for row in rows:
+        topic_key = _topic_comparison_key(row.get("topic") or "")
+        if not topic_key:
+            continue
+        prefixes_by_topic.setdefault(topic_key, set()).update(
+            _assignment_prefixes(
+                " ".join([
+                    str(row.get("topic") or ""),
+                    str(row.get("concept") or row.get("concept_title") or ""),
+                ])
+            )
+        )
+    frequency: dict[str, int] = {}
+    for prefixes in prefixes_by_topic.values():
+        for prefix in prefixes:
+            frequency[prefix] = frequency.get(prefix, 0) + 1
+    evidence_prefixes = _assignment_prefixes(evidence)
+    return {
+        topic_key
+        for topic_key, prefixes in prefixes_by_topic.items()
+        if any(
+            prefix in evidence_prefixes and frequency.get(prefix) == 1
+            for prefix in prefixes
+        )
+    }
+
+
+def _evidence_spans_concepts_in_source_topic(
+    evidence: str,
+    mtype: dict,
+    concept_payload: dict[str, dict] | list[dict] | tuple[dict, ...] | None,
+) -> bool:
+    """Whether source wording names two distinct normal concepts in one topic."""
+    source_topic = _topic_comparison_key(
+        mtype.get("_source_topic_evidence")
+        or mtype.get("topic_match_hint")
+        or ""
+    )
+    rows = [
+        row for row in _scope_payload_rows(concept_payload)
+        if (
+            not row.get("is_culmination")
+            and (
+                not source_topic
+                or _topic_comparison_key(row.get("topic") or "")
+                == source_topic
+            )
+        )
+    ]
+    prefixes_by_concept: dict[str, set[str]] = {}
+    for index, row in enumerate(rows):
+        cid = str(row.get("concept_id") or f"concept-{index}")
+        prefixes_by_concept[cid] = _assignment_prefixes(
+            row.get("concept") or row.get("concept_title") or "")
+    frequency: dict[str, int] = {}
+    for prefixes in prefixes_by_concept.values():
+        for prefix in prefixes:
+            frequency[prefix] = frequency.get(prefix, 0) + 1
+    evidence_prefixes = _assignment_prefixes(evidence)
+    matched = {
+        cid
+        for cid, prefixes in prefixes_by_concept.items()
+        if any(
+            prefix in evidence_prefixes and frequency.get(prefix) == 1
+            for prefix in prefixes
+        )
+    }
+    return len(matched) >= 2
+
+
+def _assignment_placement_scope(
+    mtype: dict,
+    concept_payload: dict[str, dict] | list[dict] | tuple[dict, ...] | None = None,
+) -> str:
     """Resolve GPT-authored Case scope, with a safe legacy fallback."""
     if mtype.get("is_activity"):
         return "normal"
+    # Destination hints are routing metadata, not proof that a task really is
+    # multi-concept synthesis. Otherwise a self-consistent bad hint such as
+    # "Integrating Circuit Concepts" can make an ordinary calculation look
+    # eligible for a Culmination.
+    evidence = _assignment_scope_evidence(mtype)
+    cross_topic_supported = bool(
+        _CROSS_TOPIC_ASSIGNMENT_CUE_RE.search(evidence)
+        or len(_evidence_topic_matches(evidence, concept_payload)) >= 2
+    )
+    mixed_supported = bool(
+        _MIXED_ASSIGNMENT_CUE_RE.search(evidence)
+        or _evidence_spans_concepts_in_source_topic(
+            evidence, mtype, concept_payload)
+    )
     case_scopes = {
         (case.get("placement_scope") or "").strip().lower()
         for case in (mtype.get("case_prompts") or [])
@@ -7891,16 +8160,36 @@ def _assignment_placement_scope(mtype: dict) -> str:
         in _ASSIGNMENT_PLACEMENT_SCOPES
     }
     if len(case_scopes) == 1:
-        return next(iter(case_scopes))
+        scope = next(iter(case_scopes))
+        if (
+            scope == "mixed_synthesis"
+            and not mixed_supported
+        ):
+            return "normal"
+        if (
+            scope == "cross_topic_synthesis"
+            and not cross_topic_supported
+        ):
+            return "normal"
+        return scope
     type_scope = (mtype.get("placement_scope") or "").strip().lower()
     if type_scope in _ASSIGNMENT_PLACEMENT_SCOPES:
+        if (
+            type_scope == "mixed_synthesis"
+            and not mixed_supported
+        ):
+            return "normal"
+        if (
+            type_scope == "cross_topic_synthesis"
+            and not cross_topic_supported
+        ):
+            return "normal"
         return type_scope
     # Backward compatibility for persisted/fixture Types authored before
     # placement_scope existed. New GPT output uses the explicit Case field.
-    evidence = _assignment_unit_text(mtype)
-    if _CROSS_TOPIC_ASSIGNMENT_CUE_RE.search(evidence):
+    if cross_topic_supported:
         return "cross_topic_synthesis"
-    if _MIXED_ASSIGNMENT_CUE_RE.search(evidence):
+    if mixed_supported:
         return "mixed_synthesis"
     return "normal"
 
@@ -7908,20 +8197,26 @@ def _assignment_placement_scope(mtype: dict) -> str:
 def _assignment_prefixes(text: str) -> set[str]:
     prefixes: set[str] = set()
     for word in _topic_comparison_key(text).split():
-        if len(word) < 4:
+        if len(word) < 3:
             continue
-        prefix = word[:4]
+        prefix = word if len(word) == 3 else word[:4]
         if prefix not in _ASSIGNMENT_PREFIX_STOPWORDS:
             prefixes.add(prefix)
     return prefixes
 
 
-def _assignment_unit_text(mtype: dict) -> str:
+def _assignment_unit_semantic_evidence(mtype: dict) -> str:
+    """Task semantics used to prove scope/host, excluding routing hints."""
+    source_task = str(mtype.get("_source_task_evidence") or "").strip()
+    if source_task:
+        # At terminal boundaries the exact inventory task is available. It is
+        # the only independent evidence allowed to certify scope or host; a
+        # model-authored Type title/Case must not outweigh or embellish it.
+        return source_task
     parts = [
         mtype.get("type_title") or "",
         mtype.get("type_description") or "",
         mtype.get("task_pattern") or "",
-        mtype.get("concept_match_hint") or "",
     ]
     for case in mtype.get("case_prompts") or []:
         if not isinstance(case, dict):
@@ -7936,6 +8231,20 @@ def _assignment_unit_text(mtype: dict) -> str:
             for example in _case_examples(case)
         )
     return " ".join(str(part) for part in parts if part)
+
+
+def _assignment_unit_text(mtype: dict) -> str:
+    """Full assignment context, including non-certifying routing hints."""
+    return " ".join(
+        str(part)
+        for part in (
+            _assignment_unit_semantic_evidence(mtype),
+            mtype.get("concept_match_hint") or "",
+            mtype.get("parent_concept_match_hint") or "",
+            mtype.get("topic_match_hint") or "",
+        )
+        if part
+    )
 
 
 def _high_confidence_assignment_override(
@@ -7956,14 +8265,17 @@ def _high_confidence_assignment_override(
     is_activity = bool(mtype.get("is_activity"))
     if is_activity and len(normal) == 1:
         return normal[0]["concept_id"]
-    evidence = _assignment_unit_text(mtype)
+    evidence = _assignment_unit_semantic_evidence(mtype)
     if (
         not is_activity
         and len(culminations) == 1
-        and _assignment_placement_scope(mtype) == "mixed_synthesis"
+        and _assignment_placement_scope(
+            mtype, concept_payload_by_id) == "mixed_synthesis"
     ):
         return culminations[0]
-    if _assignment_placement_scope(mtype) == "cross_topic_synthesis":
+    if _assignment_placement_scope(
+        mtype, concept_payload_by_id
+    ) == "cross_topic_synthesis":
         # The explicit classifier and ID-constrained GPT assignment must decide
         # whether this genuinely needs a later Culmination. Prefix overlap with
         # the source topic is expected and must not deterministically override
@@ -8014,11 +8326,29 @@ def _review_case_unit_hosts_via_api(
             tid = (unit.get("type_id") or "").strip()
             if tid:
                 current_by_tid[tid] = cid
-    review_units = [
-        unit for unit in assignment_units
-        if (unit.get("type_id") or "").strip() in current_by_tid
-        and not unit.get("is_activity")
-    ]
+    concept_payload_by_id = {
+        str(row.get("concept_id") or "").strip(): row
+        for row in concept_payload
+        if str(row.get("concept_id") or "").strip()
+    }
+    review_units: list[dict] = []
+    for unit in assignment_units:
+        tid = (unit.get("type_id") or "").strip()
+        current = current_by_tid.get(tid)
+        if not current or unit.get("is_activity"):
+            continue
+        allowed = tuple(sorted(
+            cid for cid in (allowed_cids_by_tid.get(tid) or set())
+            if cid in concept_payload_by_id
+        ))
+        # A sole legal destination, or an independently proven destination,
+        # needs no second probabilistic verdict. Ambiguous assignments still
+        # fail closed through the complete-review contract below.
+        proven = _high_confidence_assignment_override(
+            unit, allowed, concept_payload_by_id)
+        if allowed == (current,) or proven == current:
+            continue
+        review_units.append(unit)
     if not review_units:
         return per_concept
     payload = []
@@ -8028,7 +8358,8 @@ def _review_case_unit_hosts_via_api(
         item["current_concept_id"] = current_by_tid[tid]
         item["allowed_concept_ids"] = sorted(
             allowed_cids_by_tid.get(tid) or set())
-        item["placement_scope"] = _assignment_placement_scope(unit)
+        item["placement_scope"] = _assignment_placement_scope(
+            unit, concept_payload_by_id)
         payload.append(item)
     user = (
         _metadata_block(meta)
@@ -8046,12 +8377,15 @@ def _review_case_unit_hosts_via_api(
             user,
             purpose="concept_validation",
         )
-    except Exception as exc:  # noqa: BLE001 — constrained first pass is valid
+    except Exception as exc:  # noqa: BLE001
         progress.log(
-            f"Type host entailment review failed ({exc}); keeping assignments.",
-            level="warning",
+            f"Type host entailment review failed ({exc}); refusing to certify "
+            "ambiguous concept hosts.",
+            level="error",
         )
-        return per_concept
+        raise RuntimeError(
+            "type host entailment review failed before a complete verdict"
+        ) from exc
 
     proposed: dict[str, str] = {}
     invalid: set[str] = set()
@@ -8071,6 +8405,19 @@ def _review_case_unit_hosts_via_api(
         proposed[tid] = cid
     for tid in invalid:
         proposed.pop(tid, None)
+    missing_verdicts = sorted(known_tids - set(proposed))
+    if invalid or missing_verdicts:
+        details: list[str] = []
+        if invalid:
+            details.append(
+                "invalid verdicts for " + ", ".join(sorted(invalid)))
+        if missing_verdicts:
+            details.append(
+                "missing verdicts for " + ", ".join(missing_verdicts))
+        raise RuntimeError(
+            "type host entailment review did not certify every assignment "
+            "unit: " + "; ".join(details)
+        )
 
     rebuilt: dict[str, list[dict]] = {}
     moved = 0
@@ -8079,19 +8426,18 @@ def _review_case_unit_hosts_via_api(
         current = current_by_tid.get(tid)
         if not current:
             continue
+        # Activities deliberately bypass this semantic Type-host review; their
+        # authoritative inventory placement is handled by Activity/Info Hubs.
+        # Preserve those already-constrained assignments while requiring a
+        # complete verdict for every unit that was actually reviewed.
         target = proposed.get(tid, current)
         if target != current:
             moved += 1
         rebuilt.setdefault(target, []).append(unit)
     progress.log(
         f"Type host entailment review moved {moved} assignment unit(s); "
-        f"{len(known_tids) - len(proposed)} omitted/invalid verdict(s) "
-        "kept their constrained first-pass host.",
-        level=(
-            "success"
-            if not invalid and len(proposed) == len(known_tids)
-            else "warning"
-        ),
+        "every reviewed unit received a constrained semantic verdict.",
+        level="success",
     )
     return rebuilt
 
@@ -8134,6 +8480,9 @@ def _assign_mined_types_via_api(
             # chapter (e.g. heating-effect questions under resistivity).
             "chapter_position": i,
         })
+    concept_payload_by_id = {
+        row["concept_id"]: row for row in concept_payload
+    }
 
     original_types_by_id: dict[str, dict] = {}
     for i, t in enumerate(types, start=1):
@@ -8181,7 +8530,8 @@ def _assign_mined_types_via_api(
             if not cr.is_culmination(
                 cid_map[cid].get("concept_title", ""))
         }
-        placement_scope = _assignment_placement_scope(mtype)
+        placement_scope = _assignment_placement_scope(
+            mtype, concept_payload_by_id)
         allowed = normal_candidates
         if not mtype.get("is_activity") and placement_scope in {
             "mixed_synthesis", "cross_topic_synthesis",
@@ -8236,9 +8586,6 @@ def _assign_mined_types_via_api(
         )
 
     system = prompts.get_text("concepts.type_embedding.system")
-    concept_payload_by_id = {
-        row["concept_id"]: row for row in concept_payload
-    }
     groups: dict[tuple[str, tuple[str, ...]], list[str]] = {}
     for tid in types_by_id:
         group_key = (topic_key_by_tid[tid], candidate_cids_by_tid[tid])
@@ -8276,7 +8623,8 @@ def _assign_mined_types_via_api(
                 item = dict(types_by_id[tid])
                 allowed = allowed_cids_by_tid[tid]
                 item["allowed_concept_ids"] = sorted(allowed)
-                item["placement_scope"] = _assignment_placement_scope(item)
+                item["placement_scope"] = _assignment_placement_scope(
+                    item, concept_payload_by_id)
                 if rejections_by_tid.get(tid):
                     item["previous_rejections"] = rejections_by_tid[tid][-3:]
                 pending.append(item)
@@ -8307,7 +8655,8 @@ def _assign_mined_types_via_api(
                         effective_cid, {}).get("is_culmination")
                     type_allows_culmination = (
                         not types_by_id[tid].get("is_activity")
-                        and _assignment_placement_scope(types_by_id[tid])
+                        and _assignment_placement_scope(
+                            types_by_id[tid], concept_payload_by_id)
                         in {"mixed_synthesis", "cross_topic_synthesis"}
                     )
                     reason = ""
@@ -8433,6 +8782,19 @@ def _topic_first_positions(records: list[dict]) -> dict[str, int]:
     return positions
 
 
+def _scope_payload_from_records(records: list[dict]) -> dict[str, dict]:
+    return {
+        f"CONCEPT-{index + 1:04d}": {
+            "concept_id": f"CONCEPT-{index + 1:04d}",
+            "topic": record.get("topic") or "",
+            "concept": record.get("concept_title") or "",
+            "is_culmination": cr.is_culmination(
+                record.get("concept_title") or ""),
+        }
+        for index, record in enumerate(records)
+    }
+
+
 def _mined_type_allows_record(
     records: list[dict], mtype: dict, record: dict,
 ) -> bool:
@@ -8446,7 +8808,9 @@ def _mined_type_allows_record(
         not expected_key
         or not actual_key
         or mtype.get("is_activity")
-        or _assignment_placement_scope(mtype) != "cross_topic_synthesis"
+        or _assignment_placement_scope(
+            mtype, _scope_payload_from_records(records)
+        ) != "cross_topic_synthesis"
         or not cr.is_culmination(record.get("concept_title") or "")
     ):
         return False
@@ -8507,6 +8871,7 @@ def _mined_type_topic_violations(
             if title_key:
                 actual_by_title[title_key].append(rec)
 
+    scope_payload = _scope_payload_from_records(records)
     for title_key, expected in expected_by_title.items():
         remaining_matches = list(actual_by_title[title_key])
         # Reserve exact-topic rows for ordinary/same-topic Types before a
@@ -8515,7 +8880,8 @@ def _mined_type_topic_violations(
         ordered_expected = sorted(
             expected,
             key=lambda entry: (
-                _assignment_placement_scope(entry["mtype"])
+                _assignment_placement_scope(
+                    entry["mtype"], scope_payload)
                 == "cross_topic_synthesis"
             ),
         )
@@ -8566,6 +8932,54 @@ def _mined_type_topic_violations(
     return violations
 
 
+def _expected_normal_type_host_cid(
+    unit: dict,
+    topic_cids: tuple[str, ...],
+    concept_payload_by_id: dict[str, dict],
+    *,
+    allow_model_hints: bool = True,
+) -> str:
+    """Resolve a uniquely supported normal host without trusting one hint."""
+    normal_cids = tuple(
+        cid for cid in topic_cids
+        if (
+            cid in concept_payload_by_id
+            and not concept_payload_by_id[cid].get("is_culmination")
+        )
+    )
+    evidence_cid = _high_confidence_assignment_override(
+        unit, topic_cids, concept_payload_by_id)
+    if evidence_cid and evidence_cid in normal_cids:
+        return evidence_cid
+    if not allow_model_hints:
+        # A model-authored destination may be useful assignment context, but
+        # it must not independently certify terminal per-concept coverage.
+        return normal_cids[0] if len(normal_cids) == 1 else ""
+    hint = bi.normalize_question_text(
+        unit.get("concept_match_hint") or "")
+    parent_hint = bi.normalize_question_text(
+        unit.get("parent_concept_match_hint") or "")
+    exact_matches = [
+        cid for cid in normal_cids
+        if (
+            hint
+            and bi.normalize_question_text(
+                concept_payload_by_id[cid].get("concept") or "") == hint
+        )
+        or (
+            parent_hint
+            and bi.normalize_question_text(
+                concept_payload_by_id[cid].get("parent_concept") or "")
+            == parent_hint
+        )
+    ]
+    if len(exact_matches) == 1:
+        return exact_matches[0]
+    if len(normal_cids) == 1:
+        return normal_cids[0]
+    return ""
+
+
 def _rendered_type_placement_violations(
     records: list[dict], inventory: dict | None,
     mined_types: dict | None,
@@ -8607,8 +9021,8 @@ def _rendered_type_placement_violations(
         unit = units_by_qid.get(qid)
         if not qid:
             continue
+        task_text = _inventory_task_text(item)
         if unit is None:
-            task_text = _inventory_task_text(item)
             placement_scope = "normal"
             if (
                 _INVENTORY_CROSS_TOPIC_SYNTHESIS_CUE_RE.search(task_text)
@@ -8637,11 +9051,20 @@ def _rendered_type_placement_violations(
                 "parent_concept_match_hint": "",
                 "placement_scope": placement_scope,
                 "is_activity": bool(item.get("_activity_origin")),
+                "_source_task_evidence": task_text,
             }
+        else:
+            # A mined Type may contain a stale or self-consistent wrong routing
+            # hint. Terminal host proof must include the authoritative source
+            # task and must not let that hint certify itself.
+            unit = copy.deepcopy(unit)
+            unit["_source_task_evidence"] = task_text
+        unit["_source_topic_evidence"] = item.get("topic_hint") or ""
         locations = _rendered_inventory_example_locations(records, item)
         if not locations:
             continue
-        scope = _assignment_placement_scope(unit)
+        scope = _assignment_placement_scope(
+            unit, concept_payload_by_id)
         source_topic_key = _topic_comparison_key(
             unit.get("topic_match_hint")
             or item.get("topic_hint")
@@ -8655,31 +9078,12 @@ def _rendered_type_placement_violations(
 
         expected_cid = ""
         if scope == "normal" or unit.get("is_activity"):
-            hint = bi.normalize_question_text(
-                unit.get("concept_match_hint") or "")
-            parent_hint = bi.normalize_question_text(
-                unit.get("parent_concept_match_hint") or "")
-            exact_matches = [
-                cid for cid in normal_cids
-                if (
-                    hint
-                    and bi.normalize_question_text(
-                        concept_payload_by_id[cid]["concept"]) == hint
-                )
-                or (
-                    parent_hint
-                    and bi.normalize_question_text(
-                        concept_payload_by_id[cid]["parent_concept"])
-                    == parent_hint
-                )
-            ]
-            if len(exact_matches) == 1:
-                expected_cid = exact_matches[0]
-            elif len(normal_cids) == 1:
-                expected_cid = normal_cids[0]
-            else:
-                expected_cid = _high_confidence_assignment_override(
-                    unit, topic_cids, concept_payload_by_id)
+            expected_cid = _expected_normal_type_host_cid(
+                unit,
+                topic_cids,
+                concept_payload_by_id,
+                allow_model_hints=False,
+            )
         elif scope == "mixed_synthesis":
             expected_cid = _high_confidence_assignment_override(
                 unit, topic_cids, concept_payload_by_id)
@@ -8707,6 +9111,140 @@ def _rendered_type_placement_violations(
                     "expected_concept": expected["concept"],
                     "actual_concept": actual["concept"],
                 })
+    return violations
+
+
+def _normal_concept_type_coverage_violations(
+    records: list[dict], inventory: dict | None,
+    mined_types: dict | None,
+) -> list[dict]:
+    """Applicable normal concepts missing their source-backed Type coverage.
+
+    This is deliberately item-driven rather than a blanket "Types on every
+    concept" rule. A theory-only concept with no assessable source task remains
+    valid. When the authoritative task text (or a structurally unique sole
+    normal host) proves one normal concept, however, that concept must contain
+    a real Type/Case hierarchy and the exact source item as one of its
+    Examples.
+    """
+    units_by_qid = _mined_assignment_units_by_qid(mined_types)
+    concept_payload_by_id: dict[str, dict] = {}
+    cids_by_topic: dict[str, list[str]] = {}
+    index_by_cid: dict[str, int] = {}
+    for index, record in enumerate(records):
+        cid = f"CONCEPT-{index + 1:04d}"
+        index_by_cid[cid] = index
+        payload = {
+            "concept_id": cid,
+            "topic": record.get("topic") or "",
+            "parent_concept": record.get("parent_concept") or "",
+            "concept": record.get("concept_title") or "",
+            "is_culmination": cr.is_culmination(
+                record.get("concept_title") or ""),
+        }
+        concept_payload_by_id[cid] = payload
+        cids_by_topic.setdefault(
+            _topic_comparison_key(record.get("topic") or ""), []).append(cid)
+
+    violations: list[dict] = []
+    for item in (inventory or {}).get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        if (
+            str(item.get("source_kind") or "").strip().lower()
+            in _HUB_INVENTORY_KINDS
+        ):
+            continue
+        qid = str(item.get("qid") or "").strip()
+        task_text = _inventory_task_text(item)
+        if not qid or not task_text:
+            continue
+
+        mined_unit = units_by_qid.get(qid)
+        if mined_unit is not None:
+            unit = copy.deepcopy(mined_unit)
+        else:
+            placement_scope = "normal"
+            if (
+                _INVENTORY_CROSS_TOPIC_SYNTHESIS_CUE_RE.search(task_text)
+                or (
+                    item.get("_chapter_wide_task")
+                    and _CROSS_TOPIC_ASSIGNMENT_CUE_RE.search(task_text)
+                )
+            ):
+                placement_scope = "cross_topic_synthesis"
+            elif (
+                _INVENTORY_SYNTHESIS_CUE_RE.search(task_text)
+                or (
+                    item.get("_chapter_wide_task")
+                    and _MIXED_ASSIGNMENT_CUE_RE.search(task_text)
+                )
+            ):
+                placement_scope = "mixed_synthesis"
+            unit = {
+                "type_id": "",
+                "placement_scope": placement_scope,
+                "is_activity": bool(item.get("_activity_origin")),
+            }
+        # The inventory prompt is authoritative evidence. Routing hints stay
+        # available on ``unit`` for diagnostics but are explicitly disabled as
+        # a certifying signal below.
+        unit["_source_task_evidence"] = task_text
+        unit["_source_topic_evidence"] = item.get("topic_hint") or ""
+        if (
+            _assignment_placement_scope(
+                unit, concept_payload_by_id) != "normal"
+            and not unit.get("is_activity")
+        ):
+            continue
+
+        topic_key = _topic_comparison_key(
+            item.get("topic_hint")
+            or unit.get("topic_match_hint")
+            or ""
+        )
+        topic_cids = tuple(cids_by_topic.get(topic_key, ()))
+        # Prove the destination from the authoritative source task alone.
+        # Mined Type labels and Case summaries are model output too, so they
+        # must not turn a self-consistent but wrong taxonomy into terminal
+        # evidence for its own host.
+        host_evidence_unit = {
+            "type_id": unit.get("type_id") or "",
+            "placement_scope": "normal",
+            "is_activity": bool(unit.get("is_activity")),
+            "_source_task_evidence": task_text,
+        }
+        expected_cid = _expected_normal_type_host_cid(
+            host_evidence_unit,
+            topic_cids,
+            concept_payload_by_id,
+            allow_model_hints=False,
+        )
+        if not expected_cid:
+            continue
+        expected_index = index_by_cid[expected_cid]
+        expected_record = records[expected_index]
+        locations = _rendered_inventory_example_locations(records, item)
+        if not _has_meaningful_types(
+            expected_record.get("concept_details") or ""
+        ):
+            reason = "missing_meaningful_types"
+        elif expected_index not in locations:
+            reason = "source_qid_not_on_expected_host"
+        else:
+            continue
+        violations.append({
+            "qid": qid,
+            "type_id": unit.get("type_id") or "",
+            "reason": reason,
+            "expected_concept": (
+                concept_payload_by_id[expected_cid]["concept"]
+            ),
+            "actual_concepts": [
+                records[index].get("concept_title") or ""
+                for index in locations
+            ],
+        })
     return violations
 
 
@@ -8932,6 +9470,7 @@ _FATAL_CODES = {
     "figure_reference_image_mismatch", "generic_case_definition",
     "missing_case_definition", "case_without_example",
     "case_question_not_definition", "example_numbering",
+    "section_number_in_description", "case_example_semantic_mismatch",
     "verbatim_source_description",
     "missing_type_definition", "generic_type_definition",
     "duplicate_type_definition", "missing_mastery_statement",
@@ -9523,9 +10062,15 @@ def _rendered_inventory_topic_violations(
             if _topic_comparison_key(actual_topic) == expected_key:
                 continue
             qid = (item.get("qid") or "").strip()
+            source_scoped_types = []
+            for mtype in mined_by_qid.get(qid, []):
+                scoped = copy.deepcopy(mtype)
+                scoped["_source_task_evidence"] = _inventory_task_text(item)
+                scoped["_source_topic_evidence"] = expected_topic
+                source_scoped_types.append(scoped)
             if any(
                 _mined_type_allows_record(records, mtype, records[index])
-                for mtype in mined_by_qid.get(qid, [])
+                for mtype in source_scoped_types
             ):
                 continue
             violations.append({
@@ -9823,6 +10368,10 @@ def _best_record_index_for_inventory_item(
     """Pick the concept row that should host a still-missing inventory Example."""
     if not records:
         return 0
+    if mined_type is not None:
+        mined_type = copy.deepcopy(mined_type)
+        mined_type["_source_task_evidence"] = _inventory_task_text(item)
+        mined_type["_source_topic_evidence"] = item.get("topic_hint") or ""
     if item.get("_activity_origin"):
         hub_matches = [
             index for index in _activity_hub_locations(records, item)
@@ -9852,7 +10401,8 @@ def _best_record_index_for_inventory_item(
     mined_topic = _topic_comparison_key(
         (mined_type or {}).get("topic_match_hint") or "")
     placement_scope = (
-        _assignment_placement_scope(mined_type)
+        _assignment_placement_scope(
+            mined_type, _scope_payload_from_records(records))
         if mined_type is not None else "normal"
     )
     prefer_culmination = (
@@ -10151,12 +10701,18 @@ def _relocate_chapter_wide_examples_from_culminations(
             continue
         qid = (item.get("qid") or "").strip()
         mined_type = mined_by_qid.get(qid)
+        task_text = _inventory_task_text(item)
+        if mined_type is not None:
+            mined_type = copy.deepcopy(mined_type)
+            mined_type["_source_task_evidence"] = task_text
+            mined_type["_source_topic_evidence"] = (
+                item.get("topic_hint") or "")
         scope = (
-            _assignment_placement_scope(mined_type)
+            _assignment_placement_scope(
+                mined_type, _scope_payload_from_records(out))
             if mined_type is not None
             else ""
         )
-        task_text = _inventory_task_text(item)
         if (
             scope in {"mixed_synthesis", "cross_topic_synthesis"}
             or (
@@ -10694,6 +11250,10 @@ def _validate_final_or_raise(
                 records, inventory, mined_types),
             "type_hosts": _rendered_type_placement_violations(
                 records, inventory, mined_types),
+            "concept_type_coverage": (
+                _normal_concept_type_coverage_violations(
+                    records, inventory, mined_types)
+            ),
             "mined_types": _mined_type_topic_violations(
                 records, mined_types),
             "uncovered_topics": _inventory_topic_type_coverage_violations(
@@ -14437,6 +14997,10 @@ def _prepare_final_concept_content(
     )
     type_placement_violations = _rendered_type_placement_violations(
         out, question_task_inventory, mined_types)
+    concept_type_coverage_violations = (
+        _normal_concept_type_coverage_violations(
+            out, question_task_inventory, mined_types)
+    )
     unexpected_examples = _unexpected_rendered_type_examples(
         out, question_task_inventory)
     misplaced_hub_items = _hub_inventory_examples_in_types(
@@ -14447,6 +15011,7 @@ def _prepare_final_concept_content(
         inventory_topic_violations
         or activity_alignment_violations
         or type_placement_violations
+        or concept_type_coverage_violations
         or unexpected_examples
         or misplaced_hub_items
         or hub_contract_violations
@@ -14475,6 +15040,10 @@ def _prepare_final_concept_content(
         )
         type_placement_violations = _rendered_type_placement_violations(
             out, question_task_inventory, mined_types)
+        concept_type_coverage_violations = (
+            _normal_concept_type_coverage_violations(
+                out, question_task_inventory, mined_types)
+        )
         unexpected_examples = _unexpected_rendered_type_examples(
             out, question_task_inventory)
         misplaced_hub_items = _hub_inventory_examples_in_types(
@@ -14486,6 +15055,7 @@ def _prepare_final_concept_content(
         inventory_topic_violations
         or activity_alignment_violations
         or type_placement_violations
+        or concept_type_coverage_violations
         or unexpected_examples
         or misplaced_hub_items
         or hub_contract_violations
@@ -14498,6 +15068,8 @@ def _prepare_final_concept_content(
             f"{len(activity_alignment_violations)} assessable Activity "
             "Example(s) separated from their Activity/Info Hub, "
             f"{len(type_placement_violations)} Type host violation(s), "
+            f"{len(concept_type_coverage_violations)} applicable concept "
+            "Type coverage violation(s), "
             f"{len(unexpected_examples)} unowned Example(s), "
             f"{len(misplaced_hub_items)} Hub item(s) rendered as Types, "
             f"{len(hub_contract_violations)} Hub contract violation(s), "

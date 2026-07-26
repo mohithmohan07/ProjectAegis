@@ -107,8 +107,33 @@ _ORPHAN_ANALYSIS_PREFIX_RE = re.compile(
     r"(?im)^[ \t]*Misconceptions?[ \t]*/[ \t]*(?=\r?$|\r?\n|//)",
 )
 _GENERIC_CASE_DEFINITION_RE = re.compile(
-    r"^(?:practice(?:\s+set)?|questions?|problems?|examples?|"
-    r"applications?|exercise(?:\s+set)?|case\s+study)\.?$",
+    r"^(?:"
+    r"(?:practice(?:\s+(?:sets?|tasks?|questions?|problems?|examples?|"
+    r"exercises?))?|questions?|problems?|examples?|applications?|"
+    r"case\s+stud(?:y|ies))|"
+    r"(?:(?:source|inventory|textbook|chapter|classroom|assessment|review|"
+    r"practice|given|following)\s+)*(?:checkpoints?|activit(?:y|ies)|exercises?|tasks?|"
+    r"prompts?|questions?|problems?)(?:\s+(?:labels?|containers?|sets?|"
+    r"tasks?|prompts?|questions?|problems?))?(?:\s+\d+(?:\.\d+)*)?|"
+    r"(?:use|apply)\s+(?:only\s+)?(?:the\s+)?"
+    r"(?:given|provided|following|above)\s+"
+    r"(?:information|data|details|facts|material|passage|source)|"
+    r"(?:answer|respond\s+to)\s+(?:the\s+)?"
+    r"(?:(?:given|provided|following|above)\s+)?(?:questions?|prompts?)|"
+    r"(?:complete|attempt|do|work\s+through)\s+(?:the\s+)?"
+    r"(?:(?:given|provided|following|above)\s+)?"
+    r"(?:activit(?:y|ies)|exercises?|tasks?|questions?|prompts?)|"
+    r"(?:discuss|think\s+and\s+discuss|let\s+us\s+discuss)"
+    r")$",
+    re.IGNORECASE,
+)
+_CASE_TITLE_INTERROGATIVE_RE = re.compile(
+    r"^(?:what|why|how|who|when|where|which)\b",
+    re.IGNORECASE,
+)
+_CASE_TITLE_SOURCE_DETAIL_RE = re.compile(
+    r"(?:\d|[=+*/^÷×]|[A-Za-z]\s*-\s*\d|"
+    r"['\"][^'\"]{3,}['\"]|\[(?:Katex|img)\b)",
     re.IGNORECASE,
 )
 _GENERIC_TYPE_DEFINITION_RE = re.compile(
@@ -145,8 +170,67 @@ _EMPTY_IMAGE_ALT_RE = re.compile(
     re.IGNORECASE,
 )
 _DESCRIPTION_SECTION_REF_RE = re.compile(
-    r"(?:\bsections?\s+|§\s*)\d+(?:\.\d+)+\b",
+    r"(?:(?<![-\w])(?<!cross\s)(?:chapter\s+)?"
+    r"sections?\s+(?:no\.?\s*)?|"
+    r"(?<!\w)\u00a7\s*)\d+(?:\.\d+)*(?![\d.])",
     re.IGNORECASE,
+)
+
+# Strict Case titles and their numbered Examples should describe the same
+# reusable variation. These dimensions intentionally cover only strongly
+# mutually exclusive families. A dimension is ignored whenever either side
+# names both families (for example, a comparison of series and parallel
+# circuits), which keeps the check conservative and extensible.
+_CASE_EXAMPLE_SEMANTIC_DIMENSIONS = (
+    (
+        "connection topology",
+        (
+            (
+                "series",
+                re.compile(
+                    r"\b(?:series\s+(?:(?:and|or|versus|vs\.?|/)\s+parallel|"
+                    r"connections?|combinations?|circuits?|"
+                    r"resistors?|arrangements?)|(?:resistors?|components?|"
+                    r"loads?|cells?|bulbs?|devices?)\s+(?:connected\s+)?"
+                    r"in\s+series|(?:connected|combined|arranged)\s+in\s+"
+                    r"series)\b",
+                    re.IGNORECASE,
+                ),
+            ),
+            (
+                "parallel",
+                re.compile(
+                    r"\b(?:parallel\s+(?:(?:and|or|versus|vs\.?|/)\s+series|"
+                    r"connections?|combinations?|circuits?|"
+                    r"resistors?|arrangements?)|(?:resistors?|components?|"
+                    r"loads?|cells?|bulbs?|devices?)\s+(?:connected\s+)?"
+                    r"in\s+parallel|(?:connected|combined|arranged)\s+in\s+"
+                    r"parallel)\b",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+    ),
+    (
+        "arithmetic-progression task family",
+        (
+            (
+                "arithmetic means",
+                re.compile(r"\barithmetic\s+means?\b", re.IGNORECASE),
+            ),
+            (
+                "progression construction",
+                re.compile(
+                    r"(?:\b(?:construct(?:ing|ion)?|form(?:ing|ation)?|"
+                    r"build(?:ing)?|generat(?:e|ing|ion)|creat(?:e|ing|ion)|"
+                    r"write)\b.{0,80}\b(?:arithmetic\s+progressions?|"
+                    r"a\.?p\.?)(?!\w)|\b(?:arithmetic\s+progressions?|"
+                    r"a\.?p\.?)\s+construction\b)",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+    ),
 )
 # With embedded Mathpix images, figure/table references are legitimate content
 # ("Refer fig. 11.1" next to its image URL); only textual pointers to unshipped
@@ -316,6 +400,64 @@ _ISSUE_COMPARISON_STOP_WORDS = {
 
 def _norm(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").strip().lower())
+
+
+def _normalized_case_definition(value: str) -> str:
+    """Normalize presentation-only Case-title differences for strict checks."""
+    normalized = unicodedata.normalize("NFKC", value or "")
+    return _norm(normalized).strip(" .,:;!?-")
+
+
+def _is_generic_case_definition(value: str) -> bool:
+    """Return whether a Case title is an empty task/container label."""
+    return bool(
+        _GENERIC_CASE_DEFINITION_RE.fullmatch(
+            _normalized_case_definition(value)
+        )
+    )
+
+
+def _case_title_is_raw_question(value: str) -> bool:
+    """Distinguish source questions from meaningful imperative task families."""
+    title = re.sub(
+        r"\s+", " ", unicodedata.normalize("NFKC", value or "")
+    ).strip()
+    if not title:
+        return False
+    if title.endswith("?") or _CASE_TITLE_INTERROGATIVE_RE.match(title):
+        return True
+    # An imperative with concrete source values is a one-off question
+    # ("Solve 3x + 2 = 14"). An assessable but reusable imperative such as
+    # "Discuss why voltage changes with resistance" remains a valid Case title.
+    return bool(
+        _CASE_RAW_QUESTION_RE.match(title)
+        and _CASE_TITLE_SOURCE_DETAIL_RE.search(title)
+    )
+
+
+def _case_example_semantic_mismatches(
+    case_title: str, example: str,
+) -> list[tuple[str, str, str]]:
+    """Return only unambiguous mutually-exclusive Case/Example family pairs."""
+    title = unicodedata.normalize("NFKC", case_title or "")
+    example_text = unicodedata.normalize("NFKC", example or "")
+    mismatches: list[tuple[str, str, str]] = []
+    for dimension, families in _CASE_EXAMPLE_SEMANTIC_DIMENSIONS:
+        title_families = [
+            label for label, pattern in families if pattern.search(title)
+        ]
+        example_families = [
+            label for label, pattern in families if pattern.search(example_text)
+        ]
+        if (
+            len(title_families) == 1
+            and len(example_families) == 1
+            and title_families[0] != example_families[0]
+        ):
+            mismatches.append(
+                (dimension, title_families[0], example_families[0])
+            )
+    return mismatches
 
 
 def _normalized_figure_id(value: str) -> str:
@@ -850,6 +992,7 @@ def validate_concept_rows(
     topic_title_counts: Counter[tuple[str, str]] = Counter()
     title_counts: Counter[str] = Counter()
     topic_rows: defaultdict[str, list[tuple[int, dict]]] = defaultdict(list)
+    topic_type_definition_rows: dict[tuple[str, str], int] = {}
     source_windows = _source_word_windows(source_text)
 
     for i, row in enumerate(rows):
@@ -1128,7 +1271,6 @@ def validate_concept_rows(
                     errors, i, "concept_details",
                     "section_number_in_description",
                     "Description cites a textbook section number instead of the idea",
-                    "warning",
                 )
             copied_source = _verbatim_source_description_snippet(
                 desc, source_windows)
@@ -1203,6 +1345,25 @@ def validate_concept_rows(
                                     "each concept row",
                                 )
                             seen_type_definitions.add(normalized_definition)
+                            if topic and not is_culm:
+                                topic_definition_key = (
+                                    _norm(topic),
+                                    normalized_definition,
+                                )
+                                first_row = topic_type_definition_rows.get(
+                                    topic_definition_key
+                                )
+                                if first_row is not None and first_row != i:
+                                    _add(
+                                        errors, i, "concept_details",
+                                        "duplicate_type_definition",
+                                        "Type definitions must be unique across "
+                                        "normal concepts within each topic",
+                                    )
+                                else:
+                                    topic_type_definition_rows[
+                                        topic_definition_key
+                                    ] = i
             if type_body and (not _TYPE_RE.search(type_body) or not _CASE_RE.search(type_body)):
                 _add(errors, i, "concept_details", "types_format",
                      "Types must use zero-padded Type NN and Case NN labels")
@@ -1234,6 +1395,22 @@ def validate_concept_rows(
                             "Each Case must contain at least one numbered Example",
                         )
                     for example_index, example in enumerate(examples, start=1):
+                        for (
+                            dimension,
+                            case_family,
+                            example_family,
+                        ) in _case_example_semantic_mismatches(
+                            case_title, example
+                        ):
+                            _add(
+                                errors,
+                                i,
+                                "concept_details",
+                                "case_example_semantic_mismatch",
+                                "Case and Example name mutually exclusive "
+                                f"{dimension} families (Case: {case_family}; "
+                                f"Example {example_index}: {example_family})",
+                            )
                         figure_ids = _example_figure_ids(example)
                         if not figure_ids:
                             continue
@@ -1264,8 +1441,7 @@ def validate_concept_rows(
                             )
                     title_key = _norm(case_title)
                     if case_title and (
-                        case_title.endswith("?")
-                        or _CASE_RAW_QUESTION_RE.match(case_title)
+                        _case_title_is_raw_question(case_title)
                         or any(title_key == _norm(example) for example in examples)
                     ):
                         _add(
@@ -1274,8 +1450,7 @@ def validate_concept_rows(
                             "Case text must define a reusable variation; the "
                             "complete question belongs in a numbered Example",
                         )
-                    elif case_title and _GENERIC_CASE_DEFINITION_RE.fullmatch(
-                            case_title):
+                    elif case_title and _is_generic_case_definition(case_title):
                         _add(
                             errors, i, "concept_details",
                             "generic_case_definition",

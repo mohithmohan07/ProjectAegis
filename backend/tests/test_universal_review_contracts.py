@@ -613,6 +613,138 @@ def test_host_entailment_review_moves_case_to_supported_sibling(monkeypatch):
     assert result["CONCEPT-0002"][0]["type_id"] == "TYPE-0001"
 
 
+def test_host_entailment_review_fails_closed_without_a_complete_verdict(
+    monkeypatch,
+):
+    unit = _type(
+        "TYPE-0001",
+        "QINV-0001",
+        "Recover the input by reversing the supplied rule.",
+        title="Recovering an Input by Reversing a Rule",
+    )
+    concepts = [
+        {
+            "concept_id": "CONCEPT-0001",
+            "topic": "Methods",
+            "concept": "Method A",
+            "concept_description": "Apply the first supported procedure.",
+            "is_culmination": False,
+        },
+        {
+            "concept_id": "CONCEPT-0002",
+            "topic": "Methods",
+            "concept": "Method B",
+            "concept_description": "Apply the second supported procedure.",
+            "is_culmination": False,
+        },
+    ]
+    monkeypatch.setattr(
+        g, "_openai_json", lambda *_a, **_k: {"assignments": []})
+
+    with pytest.raises(
+        RuntimeError, match="did not certify every assignment unit"
+    ):
+        g._review_case_unit_hosts_via_api(
+            assignment_units=[unit],
+            per_concept={"CONCEPT-0001": [unit]},
+            concept_payload=concepts,
+            allowed_cids_by_tid={
+                "TYPE-0001": {"CONCEPT-0001", "CONCEPT-0002"},
+            },
+            meta={},
+        )
+
+
+def test_host_entailment_review_fails_closed_on_provider_error(monkeypatch):
+    unit = _type(
+        "TYPE-0001",
+        "QINV-0001",
+        "Recover the input by reversing the supplied rule.",
+        title="Recovering an Input by Reversing a Rule",
+    )
+    monkeypatch.setattr(
+        g,
+        "_openai_json",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            RuntimeError("provider unavailable")),
+    )
+
+    with pytest.raises(
+        RuntimeError, match="failed before a complete verdict"
+    ):
+        g._review_case_unit_hosts_via_api(
+            assignment_units=[unit],
+            per_concept={"CONCEPT-0001": [unit]},
+            concept_payload=[
+                {
+                    "concept_id": "CONCEPT-0001",
+                    "topic": "Methods",
+                    "concept": "Method A",
+                    "concept_description": "Apply the first procedure.",
+                    "is_culmination": False,
+                },
+                {
+                    "concept_id": "CONCEPT-0002",
+                    "topic": "Methods",
+                    "concept": "Method B",
+                    "concept_description": "Apply the second procedure.",
+                    "is_culmination": False,
+                },
+            ],
+            allowed_cids_by_tid={
+                "TYPE-0001": {"CONCEPT-0001", "CONCEPT-0002"},
+            },
+            meta={},
+        )
+
+
+def test_host_entailment_review_preserves_unreviewed_activity_units(
+    monkeypatch,
+):
+    reviewed = _type(
+        "TYPE-0001",
+        "QINV-0001",
+        "Recover the input by reversing the supplied rule.",
+        title="Recovering an Input by Reversing a Rule",
+    )
+    activity = _type(
+        "TYPE-ACTIVITY",
+        "QINV-ACTIVITY",
+        "Record how the output changes as the input is varied.",
+        title="Observing a Rule",
+    )
+    activity["is_activity"] = True
+    concepts = [{
+        "concept_id": "CONCEPT-0001",
+        "topic": "Methods",
+        "concept": "Reversing and Observing Rules",
+        "concept_description": "Undo a rule and observe its input-output pairs.",
+        "is_culmination": False,
+    }]
+    monkeypatch.setattr(g, "_openai_json", lambda *_a, **_k: {
+        "assignments": [{
+            "type_id": "TYPE-0001",
+            "concept_id": "CONCEPT-0001",
+            "reason": "The concept explicitly teaches reversal.",
+        }],
+    })
+
+    result = g._review_case_unit_hosts_via_api(
+        assignment_units=[reviewed, activity],
+        per_concept={"CONCEPT-0001": [reviewed, activity]},
+        concept_payload=concepts,
+        allowed_cids_by_tid={
+            "TYPE-0001": {"CONCEPT-0001"},
+            "TYPE-ACTIVITY": {"CONCEPT-0001"},
+        },
+        meta={},
+    )
+
+    assert [
+        unit["type_id"] for unit in result["CONCEPT-0001"]
+    ] == ["TYPE-0001", "TYPE-ACTIVITY"]
+
+
 def test_derivation_concept_receives_a_relevant_worked_example(monkeypatch):
     anchor_id = "METHOD-A1B2C3D4E5"
     record = {

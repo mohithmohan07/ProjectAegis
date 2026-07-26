@@ -17,6 +17,21 @@ def _type_embedding_request(user: str) -> tuple[list[dict], list[dict]]:
     return concepts, types
 
 
+def _echo_type_host_review(user: str) -> dict:
+    """Certify the current constrained hosts in tests not about re-review."""
+    marker = "\n\nCURRENT CASE-SCOPED ASSIGNMENTS TO REVIEW:\n"
+    assert marker in user
+    review = json.loads(user.split(marker, 1)[1])["types"]
+    return {"assignments": [
+        {
+            "type_id": unit["type_id"],
+            "concept_id": unit["current_concept_id"],
+            "reason": "Test fixture retains the constrained placement.",
+        }
+        for unit in review
+    ]}
+
+
 def test_concepts_system_requires_numeric_types_guidance():
     system = g._concepts_system("Mathematics")
     assert "Extract ONLY a clean teachable concept skeleton" in system
@@ -284,6 +299,8 @@ def test_assign_mined_types_retries_until_all_covered(monkeypatch):
     calls = {"n": 0}
 
     def fake_openai(system, user, **kw):
+        if "CURRENT CASE-SCOPED ASSIGNMENTS TO REVIEW" in user:
+            return _echo_type_host_review(user)
         calls["n"] += 1
         if calls["n"] == 1:
             # First attempt only assigns one of the two Types.
@@ -316,6 +333,8 @@ def test_case_scoped_embedding_splits_formula_and_real_life_cases(monkeypatch):
     calls = []
 
     def fake_openai(system, user, **kw):
+        if "CURRENT CASE-SCOPED ASSIGNMENTS TO REVIEW" in user:
+            return _echo_type_host_review(user)
         concepts, units = _type_embedding_request(user)
         calls.append((concepts, units))
         assert "case-scoped assignment unit" in system
@@ -424,6 +443,8 @@ def test_case_scoped_embedding_splits_formula_and_real_life_cases(monkeypatch):
 
 def test_case_scoped_activity_units_defer_to_inventory_hub_pass(monkeypatch):
     def fake_openai(system, user, **kw):
+        if "CURRENT CASE-SCOPED ASSIGNMENTS TO REVIEW" in user:
+            return _echo_type_host_review(user)
         concepts, units = _type_embedding_request(user)
         assert len(units) == 2
         assert all(unit["is_activity"] is True for unit in units)
@@ -472,6 +493,8 @@ def test_case_scoped_activity_units_defer_to_inventory_hub_pass(monkeypatch):
 
 def test_single_case_embedding_keeps_original_type_id(monkeypatch):
     def fake_openai(system, user, **kw):
+        if "CURRENT CASE-SCOPED ASSIGNMENTS TO REVIEW" in user:
+            return _echo_type_host_review(user)
         _concepts, units = _type_embedding_request(user)
         assert len(units) == 1
         assert units[0]["type_id"] == "TYPE-0001"
@@ -550,6 +573,8 @@ def test_scoped_type_embedding_groups_topics_and_excludes_other_concepts(monkeyp
     calls = []
 
     def fake_openai(system, user, **kw):
+        if "CURRENT CASE-SCOPED ASSIGNMENTS TO REVIEW" in user:
+            return _echo_type_host_review(user)
         concepts, types = _type_embedding_request(user)
         calls.append((concepts, types))
         assert len({row["topic"] for row in concepts}) == 1
@@ -603,6 +628,8 @@ def test_scoped_type_embedding_retries_with_same_candidates_and_lands_ids_once(
     calls = []
 
     def fake_openai(system, user, **kw):
+        if "CURRENT CASE-SCOPED ASSIGNMENTS TO REVIEW" in user:
+            return _echo_type_host_review(user)
         concepts, types = _type_embedding_request(user)
         calls.append((concepts, types))
         if len(calls) == 1:
@@ -1219,6 +1246,8 @@ def test_single_item_fallback_preserves_source_image_topic_and_embeds(monkeypatc
     ]
 
     def fake_openai(system, user, **kwargs):
+        if "CURRENT CASE-SCOPED ASSIGNMENTS TO REVIEW" in user:
+            return _echo_type_host_review(user)
         concepts, types = _type_embedding_request(user)
         assert [concept["concept_id"] for concept in concepts] == ["CONCEPT-0002"]
         assert types[0]["topic_match_hint"] == "Geometric Constructions"
@@ -1482,6 +1511,8 @@ def test_assign_mined_types_can_place_types_on_culminations(monkeypatch):
     captured = []
 
     def fake_openai(system, user, **kw):
+        if "CURRENT CASE-SCOPED ASSIGNMENTS TO REVIEW" in user:
+            return _echo_type_host_review(user)
         concepts, types = _type_embedding_request(user)
         captured.append((concepts, types))
         target = next(
@@ -1537,6 +1568,8 @@ def test_cross_topic_synthesis_can_use_only_a_later_topic_culmination(
     candidate_ids: dict[str, list[str]] = {}
 
     def fake_openai(system, user, **kw):
+        if "CURRENT CASE-SCOPED ASSIGNMENTS TO REVIEW" in user:
+            return _echo_type_host_review(user)
         concepts, types = _type_embedding_request(user)
         unit = types[0]
         type_id = unit["type_id"]
