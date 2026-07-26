@@ -5181,6 +5181,101 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
         task_key = _topic_comparison_key(
             _strip_source_visual_markup(str(task or "")))
 
+        if re.search(
+            r"\b(?:fill|complete)\b.{0,80}\btable(?:s)?\s+below\b",
+            task_key,
+            re.IGNORECASE,
+        ):
+            # Mathpix commonly places a table on the block after a short
+            # callout such as ``Fill the table below.``. The callout parser
+            # intentionally stops at that blank line so it does not absorb
+            # supplied answers or later exposition. Preserve the table as
+            # bounded source context instead: collect only tabular blocks
+            # before the next explicit callout in this source section.
+            task_window = body[max(0, position):]
+            source_directive = re.search(
+                (
+                    r"\b(?:fill|complete)\b.{0,120}?"
+                    r"\btable(?:s)?\s+below\b[.!?:]?"
+                ),
+                task_window,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+            if source_directive is not None:
+                task_window = task_window[source_directive.end():]
+            # A Mathpix image of the same table may sit between the directive
+            # and its machine-readable tabular transcription. Treat only
+            # tightly adjacent visual wrappers as transparent.
+            task_window = task_window.lstrip()
+            while task_window:
+                visual_match = next(
+                    (
+                        match
+                        for pattern in (
+                            _LATEX_FIGURE_BLOCK_RE,
+                            _LATEX_INCLUDEGRAPHICS_RE,
+                            _MARKDOWN_IMAGE_RE,
+                            _BRACKET_IMAGE_RE,
+                        )
+                        if (match := pattern.match(task_window)) is not None
+                    ),
+                    None,
+                )
+                if visual_match is None:
+                    break
+                task_window = task_window[visual_match.end():].lstrip()
+            # Activate only when the table is structurally adjacent. Otherwise
+            # a later table in the same long source section may belong to
+            # explanatory prose or a different checkpoint.
+            if re.match(
+                r"(?is)^\\begin\{tabular\}",
+                task_window,
+            ):
+                boundaries = []
+                next_callout = _CALLOUT_TASK_START_RE.search(task_window)
+                if next_callout is not None:
+                    boundaries.append(next_callout.start())
+                prefix_lower = prefix.lower()
+                for list_name in ("itemize", "enumerate"):
+                    if prefix_lower.rfind(
+                        f"\\begin{{{list_name}}}",
+                    ) <= prefix_lower.rfind(f"\\end{{{list_name}}}"):
+                        continue
+                    list_end = re.search(
+                        rf"\\end\{{{list_name}\}}",
+                        task_window,
+                        re.IGNORECASE,
+                    )
+                    if list_end is not None:
+                        boundaries.append(list_end.start())
+                if boundaries:
+                    task_window = task_window[:min(boundaries)]
+                    table_blocks = re.findall(
+                        r"\\begin\{tabular\}.*?\\end\{tabular\}",
+                        task_window,
+                        flags=re.IGNORECASE | re.DOTALL,
+                    )
+                else:
+                    # Without a source-owned boundary, only the immediately
+                    # adjacent table can be assigned confidently. Do not absorb
+                    # later tables merely because no further callout exists.
+                    first_table = re.match(
+                        (
+                            r"(?is)^\s*"
+                            r"(\\begin\{tabular\}.*?\\end\{tabular\})"
+                        ),
+                        task_window,
+                    )
+                    table_blocks = (
+                        [first_table.group(1)] if first_table is not None else [])
+                table_context = _public_task_without_latex_layout(
+                    "\n".join(table_blocks)).strip()
+                if table_context:
+                    return (
+                        "Use the following source table(s): "
+                        f"{table_context}"
+                    )
+
         if "this sum" in task_key:
             display_math = re.findall(
                 r"\$\$(.+?)\$\$", prefix, flags=re.DOTALL)
