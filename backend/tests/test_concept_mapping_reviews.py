@@ -3975,17 +3975,204 @@ def test_referential_sum_and_table_prompts_receive_source_context():
     ]
     anchors = g._attach_explicit_figure_images(
         g._source_task_anchors(sections), sections)
+    table_completion = next(
+        item for item in anchors
+        if item["raw_task"].startswith("Complete the table below."))
     table_pattern = next(
         item for item in anchors if "table above" in item["raw_task"])
     sum_prompt = next(
         item for item in anchors if "this sum" in item["raw_task"])
 
+    assert table_completion["image_urls"] == [url]
+    assert table_completion["requires_context"] is True
+    assert "1^3=1" in table_completion["shared_context"]
+    assert "2^3=8" in table_completion["shared_context"]
     assert table_pattern["image_urls"] == [url]
     assert f'[img src="{url}" ' in g._inventory_task_text(table_pattern)
     assert "91+93+95+97+99+101+103+105+107+109" in (
         sum_prompt["shared_context"])
     assert sum_prompt["requires_context"] is True
     assert "The referenced sum is [Katex]" in g._inventory_task_text(sum_prompt)
+
+
+def test_fill_table_below_callout_owns_adjacent_source_tables():
+    source = (
+        "\\subsection*{2.1 The Power of Doubling}\n"
+        "\\begin{itemize}\n"
+        "\\item[] (?) Fill the table below.\n\n"
+        "\\begin{tabular}{|l|l|l|l|l|l|}\n"
+        "\\hline Fold & Thickness & Fold & Thickness & Fold & Thickness \\\\\n"
+        "\\hline 18 & $\\approx 262 \\mathrm{~cm}$ & 21 & & 24 & \\\\\n"
+        "\\hline 19 & $\\approx 524 \\mathrm{~cm}$ & 22 & & 25 & \\\\\n"
+        "\\hline 20 & $\\approx 10.4 \\mathrm{~m}$ & 23 & & 26 & \\\\\n"
+        "\\hline\n"
+        "\\end{tabular}\n"
+        "\\item[] After 26 folds, the thickness is approximately 670 m.\n"
+        "\\begin{tabular}{|l|l|}\n"
+        "\\hline Fold & Thickness \\\\\n"
+        "\\hline 27 & $\\approx 1.3 \\mathrm{~km}$ \\\\\n"
+        "\\hline 28 & \\\\\n"
+        "\\hline\n"
+        "\\end{tabular}\n"
+        "\\item[] Continue the same doubling pattern through fold 45.\n"
+        "\\begin{tabular}{|l|l|l|}\n"
+        "\\hline Fold & Fold & Fold \\\\\n"
+        "\\hline 31 & 36 & 41 \\\\\n"
+        "\\hline 32 & 37 & 42 \\\\\n"
+        "\\hline 33 & 38 & 43 \\\\\n"
+        "\\hline 34 & 39 & 44 \\\\\n"
+        "\\hline 35 & 40 & 45 \\\\\n"
+        "\\hline\n"
+        "\\end{tabular}\n"
+        "\\end{itemize}\n"
+        "\\begin{tabular}{|l|l|}\n"
+        "\\hline Fold 4 & 0.016 cm \\\\\n"
+        "\\hline Fold 5 & 0.032 cm \\\\\n"
+        "\\hline\n"
+        "\\end{tabular}\n"
+        "\\begin{tabular}{|l|l|}\n"
+        "\\hline Fold 9 & 0.512 cm \\\\\n"
+        "\\hline Fold 10 & 1.024 cm \\\\\n"
+        "\\hline\n"
+        "\\end{tabular}\n"
+        "? What happens after 30 folds?\n"
+    )
+    sections = [
+        section
+        for chunk in g._section_aware_chunks(source)
+        for section in chunk["sections"]
+    ]
+
+    anchors = g._source_task_anchors(sections)
+    assert [
+        item["raw_task"] for item in anchors
+    ].count("Fill the table below.") == 1
+    assert len(anchors) == 2
+    table_prompt = next(
+        item for item in anchors if item["raw_task"] == "Fill the table below.")
+    public_task = g._inventory_task_text(table_prompt)
+
+    assert table_prompt["requires_context"] is True
+    assert "Fold | Thickness" in table_prompt["shared_context"]
+    assert "18" in table_prompt["shared_context"]
+    assert "21" in table_prompt["shared_context"]
+    assert "24" in table_prompt["shared_context"]
+    assert "26" in table_prompt["shared_context"]
+    assert "27" in table_prompt["shared_context"]
+    assert "28" in table_prompt["shared_context"]
+    assert "31" in table_prompt["shared_context"]
+    assert "36" in table_prompt["shared_context"]
+    assert "41" in table_prompt["shared_context"]
+    assert "45" in table_prompt["shared_context"]
+    assert "Fold 4" not in table_prompt["shared_context"]
+    assert "0.016 cm" not in table_prompt["shared_context"]
+    assert "Fold 9" not in table_prompt["shared_context"]
+    assert "1.024 cm" not in table_prompt["shared_context"]
+    assert "What happens after 30 folds?" not in table_prompt["shared_context"]
+    assert public_task.endswith("Fill the table below.")
+    assert not concept_validator._example_too_short(public_task)
+
+    contextless_stub = {
+        "items": [{
+            "qid": "QINV-0013",
+            "source_kind": "checkpoint_question",
+            "raw_task": "Fill the table below.",
+            "normalized_task": "Fill the table below.",
+        }],
+    }
+    assert g._invalid_inventory_items(contextless_stub) == [{
+        "index": 0,
+        "qid": "QINV-0013",
+        "reason": "stub_task",
+    }]
+
+    merged = g._merge_source_task_anchors(
+        [{
+            "qid": "QINV-0013",
+            "source_kind": "checkpoint_question",
+            "source_label": table_prompt["source_label"],
+            "raw_task": "Fill the table below.",
+            "normalized_task": "Fill the table below.",
+        }],
+        anchors,
+    )
+    recovered = [
+        item for item in merged
+        if item["raw_task"] == "Fill the table below."
+    ]
+    assert len(recovered) == 1
+    assert recovered[0]["qid"] == "QINV-0013"
+    next_qid = 14
+    for item in merged:
+        if item.get("qid"):
+            continue
+        item["qid"] = f"QINV-{next_qid:04d}"
+        next_qid += 1
+    assert g._invalid_inventory_items({"items": merged}) == []
+
+
+def test_fill_table_below_without_owner_boundary_takes_first_table_only():
+    source = (
+        "\\subsection*{1.1 Cubic Numbers}\n"
+        "? Complete the table below.\n\n"
+        "\\begin{tabular}{|l|l|}\n"
+        "\\hline A & B \\\\\n"
+        "\\hline 1 & 8 \\\\\n"
+        "\\hline\n"
+        "\\end{tabular}\n"
+        "This later reference table is not part of the checkpoint.\n"
+        "\\begin{tabular}{|l|l|}\n"
+        "\\hline X & Y \\\\\n"
+        "\\hline 99 & 100 \\\\\n"
+        "\\hline\n"
+        "\\end{tabular}\n"
+    )
+    sections = [
+        section
+        for chunk in g._section_aware_chunks(source)
+        for section in chunk["sections"]
+    ]
+
+    anchors = g._source_task_anchors(sections)
+    prompt = next(
+        item for item in anchors
+        if item["raw_task"] == "Complete the table below.")
+
+    assert "A | B" in prompt["shared_context"]
+    assert "1 | 8" in prompt["shared_context"]
+    assert "X | Y" not in prompt["shared_context"]
+    assert "99 | 100" not in prompt["shared_context"]
+
+
+def test_fill_table_below_does_not_claim_table_after_intervening_prose():
+    source = (
+        "\\subsection*{1.1 Cubic Numbers}\n"
+        "? Complete the table below.\n\n"
+        "This paragraph starts a separate worked explanation.\n"
+        "\\begin{tabular}{|l|l|}\n"
+        "\\hline X & Y \\\\\n"
+        "\\hline 99 & 100 \\\\\n"
+        "\\hline\n"
+        "\\end{tabular}\n"
+    )
+    sections = [
+        section
+        for chunk in g._section_aware_chunks(source)
+        for section in chunk["sections"]
+    ]
+
+    prompt = next(
+        item for item in g._source_task_anchors(sections)
+        if item["raw_task"] == "Complete the table below.")
+    prompt["qid"] = "QINV-0013"
+
+    assert prompt["shared_context"] == ""
+    assert prompt["requires_context"] is False
+    assert g._invalid_inventory_items({"items": [prompt]}) == [{
+        "index": 0,
+        "qid": "QINV-0013",
+        "reason": "stub_task",
+    }]
 
 
 def test_inventory_prunes_only_model_stub_without_exact_source_owner():
