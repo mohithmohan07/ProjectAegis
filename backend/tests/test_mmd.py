@@ -8,7 +8,33 @@ import io
 
 from pathlib import Path
 
-from app.services import mmd
+from app.services import generation as g, mmd
+
+
+def test_direct_parser_normalizes_non_lf_mathpix_headings():
+    lines = [
+        r"\section*{5.1 Arithmetic Progressions}",
+        "",
+        "Opening body.",
+        "",
+        r"\subsection*{EXERCISE 5.1}",
+        "",
+        "1. Find the next term.",
+        "",
+    ]
+
+    for newline in ("\r\n", "\r"):
+        source = newline.join(lines)
+        normalized = g.normalize_mmd_headings(source)
+        sections = g.parse_mmd_sections(source)
+
+        assert "\r" not in normalized
+        assert [section["heading"] for section in sections] == [
+            "Arithmetic Progressions",
+            "EXERCISE 5.1",
+        ]
+        assert "Opening body." in sections[0]["body"]
+        assert "Find the next term." in sections[1]["body"]
 
 
 def test_text_upload_decodes_utf8_independently_of_windows_locale(

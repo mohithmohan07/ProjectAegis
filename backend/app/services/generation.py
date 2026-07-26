@@ -2613,8 +2613,11 @@ def normalize_mmd_headings(mmd_text: str) -> str:
     ``\\subsection*{...}`` rather than Markdown ``#``. Without this pass a
     whole OCR'd chapter parses as ONE headingless section, which collapses
     section-aware chunking to a single giant chunk and starves extraction of
-    heading/topic context. Idempotent: already-Markdown text is unchanged.
+    heading/topic context. Normalize line endings here as well so direct
+    parser callers receive the same input contract as file-upload callers.
+    Idempotent apart from canonicalizing line endings to LF.
     """
+    mmd_text = (mmd_text or "").replace("\r\n", "\n").replace("\r", "\n")
 
     def _sub(m: "re.Match[str]") -> str:
         title = re.sub(r"\\[a-zA-Z]+\*?", " ", m.group(2))
@@ -2622,7 +2625,7 @@ def normalize_mmd_headings(mmd_text: str) -> str:
         title = re.sub(r"\s+", " ", title).strip()
         return "#" * _LATEX_HEADING_LEVELS[m.group(1)] + " " + title
 
-    return _LATEX_HEADING_RE.sub(_sub, mmd_text or "")
+    return _LATEX_HEADING_RE.sub(_sub, mmd_text)
 
 
 def _clean_heading_text(title: str) -> str:
@@ -3302,6 +3305,10 @@ def _compact_activity_hub_note(item: dict, suggested: str = "") -> str:
     marker = _activity_hub_marker(item)
     raw = _strip_public_source_heading(
         bi.to_plain_text(suggested or _inventory_task_text(item)))
+    # ``to_plain_text`` removes the surrounding [Katex] tags but deliberately
+    # preserves their TeX body. Re-wrap only unambiguous math before the Hub
+    # note re-enters the canonical rich-text pipeline.
+    raw = kr.repair_unwrapped_math(raw)
     marker_key = bi.normalize_question_text(marker)
     if marker_key and bi.normalize_question_text(raw).startswith(marker_key):
         raw = raw[len(marker):].lstrip(" .:-")
@@ -3773,6 +3780,22 @@ def _trim_activity_ocr_bleed(text: str) -> str:
         first_paragraph = _inventory_comparison_text(first_paragraph)
         if ("?" in first_paragraph or "？" in first_paragraph) and paragraph_end < len(lines):
             return "\n".join(lines[:paragraph_end]).rstrip()
+    # Textbooks commonly put the observation/derivation immediately after an
+    # Activity without introducing another heading. It is answer material,
+    # not part of the learner task. Stop only on high-confidence result
+    # phrases at a paragraph boundary, keeping the complete procedure,
+    # questions, tables-to-fill, and figures that precede it.
+    result_paragraph = re.search(
+        r"(?im)^(?:"
+        r"In\s+this\s+Activity(?:,\s*|\s+)(?:you\s+will\s+find|we\s+observe)"
+        r"|It\s+is\s+observed\s+that"
+        r"|You\s+will\s+observe\s+that"
+        r")\b",
+        value,
+    )
+    if result_paragraph is not None:
+        return value[:result_paragraph.start()].rstrip()
+
     for match in re.finditer(r"\\end\{figure\}", value, re.IGNORECASE):
         suffix = value[match.end():].lstrip()
         if suffix and suffix[0].islower():
@@ -4200,8 +4223,23 @@ _SOURCE_LABEL_SUBPART_SUFFIX_RE = re.compile(
 
 
 def _source_label_is_generic(label: str) -> bool:
-    return bool(_GENERIC_SOURCE_LABEL_RE.fullmatch(
-        bi.normalize_question_text(label)))
+    normalized = bi.normalize_question_text(_inventory_comparison_text(label))
+    if _GENERIC_SOURCE_LABEL_RE.fullmatch(
+            _collapse_spaced_heading_word(normalized)):
+        return True
+    numbered = re.fullmatch(
+        r"(?P<base>.+?)\s+(?:q(?:uestion)?\s*)?\d+(?:\.\d+)*",
+        normalized,
+        re.IGNORECASE,
+    )
+    if numbered is None:
+        return False
+    # A textbook can restart ``QUESTIONS Q1`` under every topic.  That label
+    # identifies a position within a local list, not a chapter-wide task.
+    # Exercise and numbered Activity labels remain authoritative.
+    return _collapse_spaced_heading_word(numbered.group("base")) in {
+        "questions", "checkpoint",
+    }
 
 
 def _inventory_question_label_root(label: str) -> str:
@@ -4856,8 +4894,20 @@ def _figure_reference_ids(text: str) -> list[str]:
             found.append(figure_id)
         base = re.sub(r"\([a-z]\)$", "", figure_id)
         suffix_window = source[match.end():match.end() + 80]
+        # Only inherit panels that immediately continue the Figure reference,
+        # as in ``Fig. 14(a) and (b)``. Looking anywhere in the following
+        # sentence misreads ordinary question subparts such as
+        # ``Fig. 11.9. Calculate (a) ..., (b) ...`` as a nonexistent
+        # ``Fig. 11.9(b)``.
+        panel_continuation = re.match(
+            r"(?:\s*(?:,|and)\s*\([a-z]\))+",
+            suffix_window,
+            re.IGNORECASE,
+        )
         for suffix in re.finditer(
-            r"(?:,|and)\s*\(([a-z])\)", suffix_window, re.IGNORECASE,
+            r"\(([a-z])\)",
+            panel_continuation.group(0) if panel_continuation else "",
+            re.IGNORECASE,
         ):
             panel = f"{base}({suffix.group(1).lower()})" if base else ""
             if panel and panel not in found:

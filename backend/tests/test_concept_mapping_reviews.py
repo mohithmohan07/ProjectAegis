@@ -640,6 +640,36 @@ def test_repeated_generic_checkpoint_labels_preserve_distinct_tasks():
     ]
 
 
+def test_repeated_numbered_question_labels_are_local_not_chapter_wide():
+    assert g._source_label_is_generic("Q U E S T I O N S Q1")
+    assert g._source_label_is_generic("Questions Q2")
+    assert not g._source_label_is_generic("Question 3")
+    assert not g._source_label_is_generic("EXERCISE 5.2 Q2")
+    assert not g._source_label_is_generic("Activity 11.1")
+
+    sections = _tracked_source_sections(
+        "Class 10 Chapter 5 Electricity.mmd")
+    anchors = g._source_task_anchors(sections)
+    refreshed = g._refresh_inventory_from_source_anchors(
+        g._empty_inventory(), sections)
+
+    assert len(anchors) == 60
+    assert len(refreshed["items"]) == 60
+    assert {
+        g._inventory_task_match_key(item) for item in refreshed["items"]
+    } == {
+        g._inventory_task_match_key(item) for item in anchors
+    }
+    repeated_q1 = [
+        item for item in refreshed["items"]
+        if item["source_label"] == "Q U E S T I O N S Q1"
+    ]
+    assert len(repeated_q1) == 6
+    assert len({
+        g._inventory_task_match_key(item) for item in repeated_q1
+    }) == 6
+
+
 def test_checkpoint_refresh_matches_mojibake_activity_rows_without_new_qids():
     """Old RNE checkpoints use generic Activity labels and damaged UTF-8."""
     opening = "In what way does this print（Fig．1） depict a utopian vision?"
@@ -891,6 +921,10 @@ def test_uploaded_electricity_activities_feed_types_and_hubs_with_visuals():
     assert all(re.search(
         r'\[img\s+src="https://[^"]+"\s+alt="[^"]+"\]', text)
                for text in rendered_visuals)
+    assert all(
+        not g.kr.rich_text_issues(g._compact_activity_hub_note(item))
+        for item in activities
+    )
 
 
 def test_tracked_rne_anchors_keep_question_boundaries_and_exact_figures():
@@ -979,7 +1013,9 @@ def test_tracked_electricity_inventory_counts_and_activity_figure_sets():
     ] == [f"Example 11.{number}" for number in range(1, 14)]
 
     expected = {
-        "Activity 11.1": ["11.2", "11.3"],
+        # Fig. 11.3 is the worked result of the graphing activity, not an
+        # input visual required by the learner task.
+        "Activity 11.1": ["11.2"],
         "Activity 11.2": ["11.4"],
         "Activity 11.3": ["11.5"],
         "Activity 11.4": ["11.6"],
@@ -989,6 +1025,54 @@ def test_tracked_electricity_inventory_counts_and_activity_figure_sets():
     for source_label, figure_ids in expected.items():
         item = next(item for item in anchors if item["source_label"] == source_label)
         _assert_exact_figure_attachment(item, registry, figure_ids)
+
+    example_11_7 = next(
+        item for item in anchors if item["source_label"] == "Example 11.7"
+    )
+    _assert_exact_figure_attachment(example_11_7, registry, ["11.9"])
+
+
+def test_tracked_electricity_activities_exclude_result_and_derivation_prose():
+    _sections, anchors = _attached_source_anchors(
+        "Class 10 Chapter 5 Electricity.mmd")
+    activities = {
+        item["source_label"]: item
+        for item in anchors
+        if item.get("_activity_origin")
+    }
+
+    assert "Plot a graph between" in activities["Activity 11.1"]["raw_task"]
+    assert "In this Activity, you will find" not in (
+        activities["Activity 11.1"]["raw_task"])
+    activity_11_1 = g._inventory_task_text(activities["Activity 11.1"])
+    assert "Fig. 11.3" not in activity_11_1
+    assert "straight line" not in activity_11_1.lower()
+    assert "this is Ohm's law" not in activity_11_1.lower()
+    assert "In this Activity we observe" not in (
+        activities["Activity 11.2"]["raw_task"])
+    assert "It is observed that" not in (
+        activities["Activity 11.3"]["raw_task"])
+    assert r"\begin{table}" not in activities["Activity 11.3"]["raw_task"]
+    assert "You will observe that" not in (
+        activities["Activity 11.5"]["raw_task"])
+    assert "It is observed that" not in (
+        activities["Activity 11.6"]["raw_task"])
+    assert all(
+        not g.kr.rich_text_issues(g._inventory_task_text(item))
+        for item in activities.values()
+    )
+
+
+def test_figure_panel_inheritance_does_not_capture_question_subparts():
+    prompt = (
+        "Use Fig. 11.9. Calculate (a) the total resistance, "
+        "(b) the current, and (c) the potential difference."
+    )
+
+    assert g._figure_reference_ids(prompt) == ["11.9"]
+    assert g._figure_reference_ids(
+        "Compare Fig. 14(a) and (b), then explain the change."
+    ) == ["14(a)", "14(b)"]
 
 
 def test_assessable_activity_can_appear_once_in_types_and_in_hub():
