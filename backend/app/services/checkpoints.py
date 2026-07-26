@@ -286,6 +286,108 @@ def _object_list(value: Any, path: str, maximum: int) -> list[dict]:
     return value
 
 
+def _validate_placement_certifications(
+    value: Any,
+    *,
+    inventory_items: list[dict],
+    path: str,
+) -> None:
+    """Validate the durable qid-to-host authority without trusting its shape."""
+    if not isinstance(value, dict):
+        raise ValueError(f"{path} must be an object")
+    _exact_keys(value, {"version", "hosts"}, path)
+    version = _integer(
+        value["version"],
+        f"{path}.version",
+        100,
+        minimum=1,
+    )
+    if version != generation._PLACEMENT_CERTIFICATION_VERSION:
+        raise ValueError(f"{path}.version is not supported")
+
+    inventory_qids: set[str] = set()
+    for index, item in enumerate(inventory_items):
+        qid = _string(
+            item.get("qid"),
+            f"{path} inventory item [{index}].qid",
+            128,
+            nonempty=True,
+        )
+        if qid in inventory_qids:
+            raise ValueError(
+                f"{path} inventory contains duplicate qid {qid!r}")
+        inventory_qids.add(qid)
+
+    hosts = value["hosts"]
+    if not isinstance(hosts, dict):
+        raise ValueError(f"{path}.hosts must be an object")
+    if len(hosts) > MAX_COLLECTION_ITEMS:
+        raise ValueError(
+            f"{path}.hosts exceeds the "
+            f"{MAX_COLLECTION_ITEMS:,}-item limit"
+        )
+
+    host_qids: set[str] = set()
+    host_fields = {
+        "topic",
+        "topic_key",
+        "concept",
+        "concept_key",
+        "is_culmination",
+        "basis",
+    }
+    for index, (qid_value, entry) in enumerate(hosts.items()):
+        qid = _string(
+            qid_value,
+            f"{path}.hosts key [{index}]",
+            128,
+            nonempty=True,
+        )
+        host_qids.add(qid)
+        host_path = f"{path}.hosts[{qid!r}]"
+        if not isinstance(entry, dict):
+            raise ValueError(f"{host_path} must be an object")
+        _exact_keys(entry, host_fields, host_path)
+        _string(entry["topic"], f"{host_path}.topic", 2_048, nonempty=True)
+        _string(
+            entry["topic_key"],
+            f"{host_path}.topic_key",
+            2_048,
+            nonempty=True,
+        )
+        _string(
+            entry["concept"],
+            f"{host_path}.concept",
+            2_048,
+            nonempty=True,
+        )
+        _string(
+            entry["concept_key"],
+            f"{host_path}.concept_key",
+            2_048,
+            nonempty=True,
+        )
+        if not isinstance(entry["is_culmination"], bool):
+            raise ValueError(
+                f"{host_path}.is_culmination must be a boolean")
+        _string(
+            entry["basis"],
+            f"{host_path}.basis",
+            256,
+            nonempty=True,
+        )
+        if not generation._placement_certification_entry_is_valid(entry):
+            raise ValueError(
+                f"{host_path} does not contain a normalized host identity")
+
+    if host_qids != inventory_qids:
+        raise ValueError(
+            f"{path}.hosts must exactly cover the inventory qids "
+            f"(missing={len(inventory_qids - host_qids)}, "
+            f"unknown={len(host_qids - inventory_qids)})"
+        )
+
+
 def _validate_checkpoint_entry(entry: Any, path: str) -> None:
     """Validate fields consumed when a stage is selected for resumption."""
     if not isinstance(entry, dict):
@@ -332,6 +434,28 @@ def _validate_checkpoint_entry(entry: Any, path: str) -> None:
     ):
         if field in entry and not isinstance(entry[field], dict):
             raise ValueError(f"{path}.{field} must be an object")
+    certification_key = generation._PLACEMENT_CERTIFICATIONS_KEY
+    mined_types = entry.get("mined_types")
+    if (
+        isinstance(mined_types, dict)
+        and certification_key in mined_types
+    ):
+        inventory = entry.get("question_task_inventory")
+        if not isinstance(inventory, dict):
+            raise ValueError(
+                f"{path}.question_task_inventory must accompany "
+                f"{path}.mined_types.{certification_key}"
+            )
+        inventory_items = _object_list(
+            inventory.get("items", []),
+            f"{path}.question_task_inventory.items",
+            MAX_COLLECTION_ITEMS,
+        )
+        _validate_placement_certifications(
+            mined_types[certification_key],
+            inventory_items=inventory_items,
+            path=f"{path}.mined_types.{certification_key}",
+        )
     if "completed_chunks" in entry:
         chunks = _object_list(
             entry["completed_chunks"], f"{path}.completed_chunks", 1_000)
@@ -420,9 +544,10 @@ def _validate_checkpoint(
 def _validate_inventory(value: Any, path: str) -> None:
     if not isinstance(value, dict):
         raise ValueError(f"{path} must be an object")
+    certification_key = generation._PLACEMENT_CERTIFICATIONS_KEY
     _exact_keys(
         value,
-        {"items", "stats", "mined_types"},
+        {"items", "stats", "mined_types", certification_key},
         path,
         required=set(),
     )
@@ -439,6 +564,12 @@ def _validate_inventory(value: Any, path: str) -> None:
         f"{path}.mined_types",
         MAX_COLLECTION_ITEMS,
     )
+    if certification_key in value:
+        _validate_placement_certifications(
+            value[certification_key],
+            inventory_items=items,
+            path=f"{path}.{certification_key}",
+        )
     del items  # shape check only
 
 

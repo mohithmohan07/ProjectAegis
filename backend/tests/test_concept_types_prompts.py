@@ -1228,6 +1228,7 @@ def test_single_item_fallback_preserves_source_image_topic_and_embeds(monkeypatc
     }
     assert "The length is 8 cm." not in example["example_prompt"]
 
+
     records = [
         {
             "topic": "Triangles",
@@ -1270,6 +1271,29 @@ def test_single_item_fallback_preserves_source_image_topic_and_embeds(monkeypatc
     assert fallback["type_title"] in embedded[1]["concept_details"]
     assert source_task in embedded[1]["concept_details"]
     assert image_url in embedded[1]["concept_details"]
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        "Solution. The length is 8 cm.",
+        "Sol. The length is 8 cm.",
+        "Ans. The length is 8 cm.",
+        "Answer — The length is 8 cm.",
+    ],
+)
+def test_inventory_strips_common_solution_marker_variants(marker):
+    prompt = "Find the missing length in the triangle."
+
+    cleaned = g._sanitize_inventory_item({
+        "source_kind": "worked_example",
+        "raw_task": f"{prompt}\n{marker}",
+        "normalized_task": f"{prompt}\n{marker}",
+    })
+
+    assert cleaned["raw_task"] == prompt
+    assert cleaned["normalized_task"] == prompt
+    assert cleaned["raw_solution_or_answer"] == ""
 
 
 def test_exact_once_duplicate_backstop_prunes_all_duplicate_shapes():
@@ -1794,7 +1818,13 @@ def test_pipeline_resume_checkpoint_skips_expensive_gpt_stages(monkeypatch):
                 "topic": "T",
                 "parent_concept": "P",
                 "concept_title": "C",
-                "concept_details": "Description: d",
+                "concept_details": (
+                    "Description: d // Misconception/ Error Analysis: "
+                    "Misconceptions: Students may believe the checkpoint "
+                    "concept applies outside its stated topic.; Error Analysis: "
+                    "Students may omit the topic condition when applying the "
+                    "checkpoint concept."
+                ),
                 "keywords": "",
             },
             {
@@ -1923,7 +1953,9 @@ def test_post_type_checkpoint_skips_type_assignment_and_activity_hubs(
     )
     checkpoint = {
         "schema_version": g._CONCEPT_CHECKPOINT_SCHEMA,
-        "stage_schema_version": 1,
+        "stage_schema_version": (
+            g._CONCEPT_CHECKPOINT_STAGES["post_type_assignment"]["version"]
+        ),
         "stage": "post_type_assignment",
         "records": [
             {
@@ -1961,6 +1993,104 @@ def test_post_type_checkpoint_skips_type_assignment_and_activity_hubs(
     assert records
     assert [item["stage"] for item in callbacks] == [
         "final_content_ready",
+    ]
+
+
+def test_post_type_checkpoint_reassigns_when_anchor_refresh_adds_uncertified_qid(
+    monkeypatch,
+):
+    records = [{
+        "topic": "T",
+        "parent_concept": "P",
+        "concept_title": "Current Relationship",
+        "concept_details": (
+            "Description: Relate the supplied quantities in a supported "
+            "calculation. // Types: Type 01: Stale saved Type "
+            "Case 01: A stale saved case Example 01: Stale saved question."
+        ),
+        "keywords": "",
+    }]
+    checkpoint = g._make_concept_checkpoint(
+        "post_type_assignment",
+        records=records,
+        question_task_inventory={"items": [], "stats": {}},
+        mined_types={"types": []},
+        method_row_snapshot=[],
+    )
+    refreshed_inventory = {"items": [{
+        "qid": "QINV-0001",
+        "source_kind": "exercise",
+        "topic_hint": "T",
+        "raw_task": (
+            "Calculate the requested quantity from the supplied values and "
+            "explain the substitution."
+        ),
+    }], "stats": {"total_inventory_items": 1}}
+    reconciled_mined = {"types": [{
+        "type_id": "TYPE-0001",
+        "type_title": "Applying the Current Relationship",
+        "topic_match_hint": "T",
+        "source_question_ids": ["QINV-0001"],
+        "case_prompts": [],
+    }]}
+    monkeypatch.setattr(
+        g,
+        "_refresh_inventory_from_source_anchors",
+        lambda *_args, **_kwargs: refreshed_inventory,
+    )
+    monkeypatch.setattr(
+        g,
+        "_reconcile_resumed_mined_types",
+        lambda *_args, **_kwargs: reconciled_mined,
+    )
+    assignments: list[bool] = []
+
+    def assign(current, **kwargs):
+        assignments.append(True)
+        assert "Stale saved Type" not in current[0]["concept_details"]
+        owner = kwargs["mined_types"]
+        g._reset_placement_certifications(owner)
+        g._certify_inventory_host(
+            owner,
+            "QINV-0001",
+            current[0],
+            basis="type_host_review",
+        )
+        return current
+
+    monkeypatch.setattr(g, "_assign_types_via_api", assign)
+    monkeypatch.setattr(
+        g,
+        "_populate_activity_hubs_via_api",
+        lambda current, *_args, **_kwargs: current,
+    )
+    emitted: list[dict] = []
+
+    out, inventory, mined, _snapshot = (
+        g._run_live_concept_pre_final_stages(
+            "## T\nSource body",
+            subject="Science",
+            board="CBSE",
+            chapter_title="Chapter",
+            chunks=[],
+            sections=[],
+            method_anchors=[],
+            headings=[],
+            source_topic_excerpts=[],
+            allow_chapter_title_topic=False,
+            meta={},
+            artifacts={},
+            resume_checkpoint=checkpoint,
+            checkpoint_callback=emitted.append,
+        )
+    )
+
+    assert out
+    assert assignments == [True]
+    assert inventory == refreshed_inventory
+    assert g._placement_certification_contract_complete(mined, inventory)
+    assert [item["stage"] for item in emitted] == [
+        "post_type_assignment",
     ]
 
 
@@ -2139,6 +2269,19 @@ def test_concepts_pipeline_runs_types_assign(monkeypatch):
 
     def fake_openai(system, user, **kw):
         calls.append(system[:40])
+        if "Rows missing usable Misconceptions" in user:
+            return {"rows": [{
+                "topic": "Algebra",
+                "concept": "Linear equations",
+                "concept_description": (
+                    "Description: Linear equations preserve equality while "
+                    "isolating the variable. // Misconception/ Error Analysis: "
+                    "Misconceptions: Students may believe an inverse operation "
+                    "changes the equality itself.; Error Analysis: Students "
+                    "may reverse an operation on only one side of the equation."
+                ),
+                "keywords": "linear",
+            }]}
         if "Assign every mined Type assignment unit" in system:
             return {"assignments": [{
                 "concept_id": "CONCEPT-0001",

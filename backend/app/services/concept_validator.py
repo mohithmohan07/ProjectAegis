@@ -175,6 +175,13 @@ _DESCRIPTION_SECTION_REF_RE = re.compile(
     r"(?<!\w)\u00a7\s*)\d+(?:\.\d+)*(?![\d.])",
     re.IGNORECASE,
 )
+_DESCRIPTION_TRUNCATED_CLAUSE_RE = re.compile(
+    r"\b(?:what|why|how|whether|when|where|because|although|while|if|"
+    r"unless|that|which|who|whom|whose)\s+"
+    r"(?:students?|learners?|children|they|we|you|he|she|it|one)"
+    r"\s*[.!?](?=\s|$)",
+    re.IGNORECASE,
+)
 
 # Strict Case titles and their numbered Examples should describe the same
 # reusable variation. These dimensions intentionally cover only strongly
@@ -339,13 +346,44 @@ _ERROR_ANALYSIS_ACTOR_RE = re.compile(
 _ERROR_ANALYSIS_SPECIFIC_MISTAKE_RE = re.compile(
     r"\b(?:instead\s+of|rather\s+than|incorrectly|wrong(?:ly)?|"
     r"too\s+(?:early|late|many|few|much|little))\b|"
-    r"\bwithout\s+(?:first\s+)?[a-z]+ing\b",
+    r"\bwithout\s+(?:first\s+)?[a-z]+ing\b|"
+    r"\bas\s+(?:an?\s+)?(?:final|complete|conclusive)\s+"
+    r"(?:answer|explanation|proof|conclusion)\b|"
+    r"\bthat\s+(?:cannot|does\s+not|do\s+not|fails?\s+to)\b|"
+    r"\bfrom\s+(?:only\s+)?(?:one|a\s+single)\b",
+    re.IGNORECASE,
+)
+_ERROR_ANALYSIS_PROCEDURAL_MISTAKE_RE = re.compile(
+    r"\b(?:change|vary|alter|control)"
+    r"(?:s|d|ed|ing|ies|ied)?\s+"
+    r"(?:more\s+than\s+one|multiple|two\s+(?:variables?|factors?|"
+    r"conditions?)\s+(?:at\s+once|simultaneously))\b|"
+    r"\b(?:record|measure|label|plot|classify)"
+    r"(?:s|d|ed|ing|ies|ied)?\s+"
+    r"(?:an?\s+|the\s+)?(?:incomplete|inaccurate|wrong)\b|"
+    r"\b(?:compare|combine|group|classify)"
+    r"(?:s|d|ed|ing|ies|ied)?\s+"
+    r"(?:unlike|incompatible|unrelated)\b|"
+    r"\b(?:draw|reach|make)(?:s|d|es|ed|ing)?\s+"
+    r"(?:an?\s+|the\s+)?conclusion\s+"
+    r"(?:after|from|using)\s+(?:only\s+)?(?:one|a\s+single)\b",
+    re.IGNORECASE,
+)
+_ERROR_ANALYSIS_CONTEXTUAL_PROCEDURAL_RE = re.compile(
+    r"\b(?:instead\s+of|rather\s+than)\b|"
+    r"\bwithout\s+(?:first\s+)?[a-z]+ing\b|"
+    r"\bas\s+(?:an?\s+)?(?:final|complete|conclusive)\s+"
+    r"(?:answer|explanation|proof|conclusion)\b|"
+    r"\bthat\s+(?:cannot|does\s+not|do\s+not|fails?\s+to)\b|"
+    r"\bfrom\s+(?:only\s+)?(?:one|a\s+single)\b",
     re.IGNORECASE,
 )
 _ERROR_ANALYSIS_ONLY_ACTION_RE = re.compile(
     r"\b(?:add|subtract|multiply|divide|copy|quote|use|apply|compare|"
     r"analy[sz]e|select|choose|read|write|label|plot|draw|count|combine|"
-    r"interpret|paraphrase|translate|test|check)(?:s|d|ed|ing|ies|ied)?\s+"
+    r"interpret|paraphrase|translate|test|check|record|measure|infer|"
+    r"conclude|explain|classify|identify|observe)"
+    r"(?:s|d|ed|ing|ies|ied)?\s+"
     r"only\s+(?:the\s+|a\s+|an\s+)?[a-z]",
     re.IGNORECASE,
 )
@@ -385,6 +423,16 @@ _GENERIC_ERROR_ANALYSIS_RE = re.compile(
     r"(?:(?:may|might|can|often|sometimes)\s+)?"
     r"(?:struggle\b.*|encounter\s+difficult(?:y|ies)\b.*|"
     r"have\s+difficult(?:y|ies)\b.*|find\b.*\bdifficult\b.*))\.?$",
+    re.IGNORECASE,
+)
+_TERMINAL_GENERIC_ANALYSIS_FILLER_RE = re.compile(
+    r"^Students\s+may\s+(?:"
+    r"assume\s+.+?\s+is\s+a\s+rule\s+that\s+always\s+applies\s+without\s+"
+    r"checking\s+its\s+conditions,\s*context,\s*or\s+representation"
+    r"|apply\s+.+?\s+as\s+a\s+memorized\s+rule\s+without\s+checking\s+"
+    r"the\s+conditions,\s*context,\s*or\s+representation\s+given\s+in\s+"
+    r"the\s+problem"
+    r")\.?$",
     re.IGNORECASE,
 )
 
@@ -692,6 +740,12 @@ def _is_generic_error_analysis(text: str) -> bool:
     )
 
 
+def is_terminal_generic_analysis_filler(text: str) -> bool:
+    """Whether text is the title-substitution fallback forbidden at final."""
+    return bool(_TERMINAL_GENERIC_ANALYSIS_FILLER_RE.fullmatch(
+        (text or "").strip()))
+
+
 def _is_plausible_error_analysis(text: str) -> bool:
     value = (text or "").strip()
     return bool(
@@ -700,6 +754,7 @@ def _is_plausible_error_analysis(text: str) -> bool:
         and (
             _ERROR_ANALYSIS_ACTION_RE.search(value)
             or _ERROR_ANALYSIS_SPECIFIC_MISTAKE_RE.search(value)
+            or _ERROR_ANALYSIS_PROCEDURAL_MISTAKE_RE.search(value)
             or _ERROR_ANALYSIS_ONLY_ACTION_RE.search(value)
             or _ERROR_ANALYSIS_NEGATED_ACTION_RE.search(value)
         )
@@ -721,10 +776,24 @@ def is_valid_misconception(text: str) -> bool:
 def is_valid_error_analysis(text: str) -> bool:
     """Return whether text states a specific application mistake, not a belief."""
     value = (text or "").strip()
+    specific_mistake = bool(
+        _ERROR_ANALYSIS_SPECIFIC_MISTAKE_RE.search(value)
+    )
+    contextual_procedural_mistake = bool(
+        _ERROR_ANALYSIS_CONTEXTUAL_PROCEDURAL_RE.search(value)
+    )
     return bool(
         value
         and not _is_generic_error_analysis(value)
-        and not _is_error_analysis_belief(value)
+        and (
+            not _is_error_analysis_belief(value)
+            # Some source-specific procedural errors contain an ambiguous
+            # verb such as "confuse" or "treat". Preserve them as Error
+            # Analysis when the same sentence also names the concrete faulty
+            # condition or inference, rather than collapsing them into a
+            # belief and replacing their original meaning with boilerplate.
+            or contextual_procedural_mistake
+        )
         and not _is_correction_shaped_error_analysis(value)
         and _is_plausible_error_analysis(value)
     )
@@ -820,13 +889,29 @@ def ensure_valid_learner_analysis(records: list[dict]) -> list[dict]:
                 )
                 belief_key = _norm(belief_value)
                 error_key = _norm(value)
+                valid_misconception = is_valid_misconception(belief_value)
+                valid_error = is_valid_error_analysis(value)
                 if (
-                    is_valid_misconception(belief_value)
+                    preferred_kind == "misconception"
+                    and valid_misconception
                     and belief_key not in seen_misconceptions
                 ):
                     seen_misconceptions.add(belief_key)
                     misconceptions.append(belief_value)
-                elif is_valid_error_analysis(value) and error_key not in seen_errors:
+                elif (
+                    preferred_kind == "error_analysis"
+                    and valid_error
+                    and error_key not in seen_errors
+                ):
+                    seen_errors.add(error_key)
+                    errors.append(value)
+                elif (
+                    valid_misconception
+                    and belief_key not in seen_misconceptions
+                ):
+                    seen_misconceptions.add(belief_key)
+                    misconceptions.append(belief_value)
+                elif valid_error and error_key not in seen_errors:
                     # Legacy rows often put procedural mistakes under
                     # Misconception, while some model versions did the reverse.
                     # Classify by meaning and preserve every distinct valid item.
@@ -872,6 +957,18 @@ def _example_too_short(example_text: str) -> bool:
     # Descriptive/history prompts are often 4+ words with a clear ask and no
     # digits (e.g. "Explain German unification under Prussia").
     if len(words) >= 4 and _CASE_TASK_VERB_RE.search(text):
+        return False
+    # A complete yes/no mathematics prompt can be both substantive and very
+    # short even though its interrogative auxiliary is not an action verb
+    # (for example, "Is 9 a cube?"). Require a question mark and concrete
+    # numeric/expression detail so generic fragments such as "Is this correct?"
+    # remain invalid.
+    if (
+        len(words) >= 3
+        and re.match(r"^\s*(?:is|are|does|do|can)\b", text, re.IGNORECASE)
+        and "?" in text
+        and _CASE_SPECIFIC_DETAIL_RE.search(text)
+    ):
         return False
     # Concise math tasks: action + concrete expression/value detail.
     return not (
@@ -992,7 +1089,9 @@ def validate_concept_rows(
     topic_title_counts: Counter[tuple[str, str]] = Counter()
     title_counts: Counter[str] = Counter()
     topic_rows: defaultdict[str, list[tuple[int, dict]]] = defaultdict(list)
-    topic_type_definition_rows: dict[tuple[str, str], int] = {}
+    topic_type_definition_rows: dict[
+        tuple[str, str, tuple[str, ...]], int
+    ] = {}
     source_windows = _source_word_windows(source_text)
 
     for i, row in enumerate(rows):
@@ -1207,7 +1306,14 @@ def validate_concept_rows(
         misconception = misconception_sections[0][2] if misconception_sections else ""
         error_analysis = error_analysis_sections[0][2] if error_analysis_sections else ""
         misconception_is_generic = bool(
-            misconception and _is_generic_misconception(misconception)
+            misconception
+            and (
+                _is_generic_misconception(misconception)
+                or (
+                    strict_analysis_section
+                    and is_terminal_generic_analysis_filler(misconception)
+                )
+            )
         )
         if misconception_is_generic:
             _add(errors, i, "concept_details", "generic_misconception",
@@ -1223,7 +1329,14 @@ def validate_concept_rows(
             )
 
         error_analysis_is_generic = bool(
-            error_analysis and _is_generic_error_analysis(error_analysis)
+            error_analysis
+            and (
+                _is_generic_error_analysis(error_analysis)
+                or (
+                    strict_analysis_section
+                    and is_terminal_generic_analysis_filler(error_analysis)
+                )
+            )
         )
         if error_analysis_is_generic:
             _add(
@@ -1271,6 +1384,15 @@ def validate_concept_rows(
                     errors, i, "concept_details",
                     "section_number_in_description",
                     "Description cites a textbook section number instead of the idea",
+                )
+            if not is_culm and _DESCRIPTION_TRUNCATED_CLAUSE_RE.search(desc):
+                _add(
+                    errors,
+                    i,
+                    "concept_details",
+                    "description_truncated_clause",
+                    "Description ends a subordinate clause after a bare "
+                    "subject; complete or rewrite the broken sentence",
                 )
             copied_source = _verbatim_source_description_snippet(
                 desc, source_windows)
@@ -1346,9 +1468,34 @@ def validate_concept_rows(
                                 )
                             seen_type_definitions.add(normalized_definition)
                             if topic and not is_culm:
+                                case_definition_keys: list[str] = []
+                                for case_match in _CASE_SEGMENT_RE.finditer(
+                                    matched_type_body
+                                ):
+                                    case_text = re.sub(
+                                        r"\s+", " ",
+                                        case_match.group(1) or "",
+                                    ).strip()
+                                    markers = _structural_example_markers(
+                                        case_text,
+                                        allowed_source_examples,
+                                    )
+                                    case_title = (
+                                        case_text[:markers[0].start()].strip()
+                                        if markers
+                                        else case_text
+                                    )
+                                    normalized_case = (
+                                        _normalized_case_definition(case_title)
+                                    )
+                                    if normalized_case:
+                                        case_definition_keys.append(
+                                            normalized_case
+                                        )
                                 topic_definition_key = (
                                     _norm(topic),
                                     normalized_definition,
+                                    tuple(case_definition_keys),
                                 )
                                 first_row = topic_type_definition_rows.get(
                                     topic_definition_key
@@ -1357,8 +1504,9 @@ def validate_concept_rows(
                                     _add(
                                         errors, i, "concept_details",
                                         "duplicate_type_definition",
-                                        "Type definitions must be unique across "
-                                        "normal concepts within each topic",
+                                        "The same Type and Case definition "
+                                        "must not be duplicated across normal "
+                                        "concepts within a topic",
                                     )
                                 else:
                                     topic_type_definition_rows[

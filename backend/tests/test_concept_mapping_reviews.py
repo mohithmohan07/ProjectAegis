@@ -1,4 +1,5 @@
 """Regression tests for QA review feedback (Reviews 01–06)."""
+import json
 import re
 from pathlib import Path
 
@@ -640,6 +641,143 @@ def test_repeated_generic_checkpoint_labels_preserve_distinct_tasks():
     ]
 
 
+def test_repeated_figure_it_out_labels_match_only_within_their_topic():
+    square = {
+        "source_kind": "exercise",
+        "source_label": "Figure it Out Q1",
+        "parent_source_label": "Figure it Out",
+        "topic_hint": "Square Numbers",
+        "raw_task": "Which numbers are not perfect squares?",
+    }
+    cube = {
+        "source_kind": "exercise",
+        "source_label": "Figure it Out Q1",
+        "parent_source_label": "Figure it Out",
+        "topic_hint": "Cubic Numbers",
+        "raw_task": "Find the cube roots of 27000 and 10648.",
+    }
+
+    assert g._inventory_items_match(square, square)
+    assert g._inventory_items_match(cube, cube)
+    assert not g._inventory_items_match(square, cube)
+    assert not g._inventory_items_match(cube, square)
+    stale_square = {
+        **square,
+        "topic_hint": "Cubic Numbers",
+    }
+    assert not g._inventory_items_match(stale_square, square)
+    assert not g._inventory_items_match(stale_square, cube)
+    merged = g._merge_source_task_anchors([dict(square), dict(cube)], [
+        dict(square),
+        dict(cube),
+    ])
+    assert [
+        (item["topic_hint"], item["raw_task"]) for item in merged
+    ] == [
+        ("Square Numbers", "Which numbers are not perfect squares?"),
+        ("Cubic Numbers", "Find the cube roots of 27000 and 10648."),
+    ]
+
+
+def test_math_notation_equivalence_merges_model_and_source_occurrences():
+    model = {
+        "source_kind": "worked_example",
+        "source_label": "Consecutive squares",
+        "topic_hint": "Square Numbers",
+        "raw_task": (
+            "Using the pattern above, find 36², given that 35²=1225."
+        ),
+        "shared_context": "The sum of the first n odd numbers is n².",
+        "requires_context": True,
+    }
+    anchor = {
+        "source_kind": "checkpoint_question",
+        "source_label": "Checkpoint 5.1",
+        "parent_source_label": "Perfect Squares and Odd Numbers",
+        "topic_hint": "Square Numbers",
+        "raw_task": (
+            "Using the pattern above, find $36^{2}$, "
+            "given that $35^{2}=1225$."
+        ),
+        "normalized_task": (
+            "Using the pattern above, find $36^{2}$, "
+            "given that $35^{2}=1225$."
+        ),
+    }
+
+    merged = g._merge_source_task_anchors([model], [anchor])
+
+    assert len(merged) == 1
+    assert merged[0]["source_label"] == "Checkpoint 5.1"
+    assert merged[0]["shared_context"] == model["shared_context"]
+
+
+def test_matching_source_anchor_collapses_duplicate_inventory_variants():
+    complete = {
+        "source_kind": "source_task",
+        "source_label": "Taxicab Numbers",
+        "topic_hint": "Cubic Numbers",
+        "raw_task": (
+            "Express 4104 and 13832 in two ways as sums of two positive cubes."
+        ),
+        "shared_context": "A taxicab number has two cube-sum representations.",
+        "requires_context": True,
+    }
+    truncated = {
+        "source_kind": "checkpoint_question",
+        "source_label": "Checkpoint 10.1",
+        "parent_source_label": "Taxicab Numbers",
+        "topic_hint": "Cubic Numbers",
+        "raw_task": "Express 4104 and 13832 in two ways as sums of",
+    }
+    anchor = {
+        **complete,
+        "source_kind": "checkpoint_question",
+        "source_label": "Checkpoint 10.1",
+        "parent_source_label": "Taxicab Numbers",
+    }
+
+    merged = g._merge_source_task_anchors(
+        [complete, truncated], [anchor])
+
+    assert len(merged) == 1
+    assert merged[0]["source_label"] == "Checkpoint 10.1"
+    assert merged[0]["shared_context"] == complete["shared_context"]
+
+
+def test_compound_figure_it_out_umbrella_is_replaced_by_atomic_anchors():
+    umbrella = {
+        "source_kind": "exercise",
+        "source_label": "Figure it Out",
+        "raw_task": (
+            "1. Find the cube roots of 27000 and 10648. "
+            "2. What number will you multiply by 1323 to make it a cube "
+            "number?"
+        ),
+    }
+    anchors = [
+        {
+            "source_kind": "exercise",
+            "source_label": "? Figure it Out Q1",
+            "raw_task": "Find the cube roots of 27000 and 10648.",
+        },
+        {
+            "source_kind": "exercise",
+            "source_label": "? Figure it Out Q2",
+            "raw_task": (
+                "What number will you multiply by 1323 to make it a cube "
+                "number?"
+            ),
+        },
+    ]
+
+    merged = g._merge_source_task_anchors([umbrella], anchors)
+
+    assert [item["raw_task"] for item in merged] == [
+        anchor["raw_task"] for anchor in anchors
+    ]
+
+
 def test_repeated_numbered_question_labels_are_local_not_chapter_wide():
     assert g._source_label_is_generic("Q U E S T I O N S Q1")
     assert g._source_label_is_generic("Questions Q2")
@@ -1063,6 +1201,24 @@ def test_tracked_electricity_activities_exclude_result_and_derivation_prose():
     )
 
 
+def test_activity_prompt_stops_before_inline_observed_result():
+    body = (
+        "\\begin{itemize}\n"
+        "\\item[-] Mix yeast with flour and warm water.\n"
+        "\\item[-] Observe the dough after four hours.\n"
+        "\\end{itemize}\n\n"
+        "Did its volume or texture change? If not, wait a little longer. "
+        "After some time, you may notice that the dough has risen and become "
+        "fluffy. This happens because carbon dioxide is released."
+    )
+
+    prompt = g._trim_activity_ocr_bleed(body)
+
+    assert "Did its volume or texture change?" in prompt
+    assert "the dough has risen" not in prompt
+    assert "carbon dioxide is released" not in prompt
+
+
 def test_figure_panel_inheritance_does_not_capture_question_subparts():
     prompt = (
         "Use Fig. 11.9. Calculate (a) the total resistance, "
@@ -1098,6 +1254,47 @@ def test_assessable_activity_can_appear_once_in_types_and_in_hub():
         "duplicate": [],
     }
     assert g._hub_inventory_examples_in_types(rows, inventory) == set()
+
+
+def test_inventory_coverage_equates_roman_subparts_with_rendered_bullets():
+    inventory = {"items": [
+        {
+            "qid": "QINV-0001",
+            "source_kind": "exercise",
+            "raw_task": (
+                "State true or false. Explain your reasoning. "
+                "\\item[(i)] The cube of any odd number is even. "
+                "\\item[(ii)] No perfect cube ends with 8."
+            ),
+        },
+        {
+            "qid": "QINV-0002",
+            "source_kind": "exercise",
+            "raw_task": (
+                "Fill the pattern: \\item[] "
+                "$1^{2}+2^{2}+2^{2}=3^{2}$."
+            ),
+        },
+    ]}
+    records = [{
+        "topic": "Cubic Numbers",
+        "concept_title": "Cube Patterns",
+        "concept_details": (
+            "Description: Cubes have reusable patterns. // Types: "
+            "Type 01: Testing cube claims Case 01: Multiple claims "
+            "Example 01: State true or false. Explain your reasoning. "
+            "â€¢ The cube of any odd number is even. "
+            "â€¢ No perfect cube ends with 8. "
+            "Type 02: Completing patterns Case 01: Square-sum pattern "
+            "Example 01: Fill the pattern: â€¢ "
+            "[Katex] 1^{2}+2^{2}+2^{2}=3^{2} [/Katex]."
+        ),
+    }]
+
+    assert g._rendered_inventory_coverage_defects(records, inventory) == {
+        "missing": [],
+        "duplicate": [],
+    }
 
 
 def test_assessable_activity_coverage_repair_reuses_its_gpt_hub_concept():
@@ -1326,7 +1523,10 @@ def test_learner_analysis_via_api_replaces_generic_text(monkeypatch):
             "topic": "Triangles", "parent_concept": "Similarity",
             "concept": "Basic Proportionality Theorem",
             "concept_description": (
-                "Description: unchanged // Error Analysis: Students may apply "
+                "Description: unchanged\n"
+                "Misconception/ Error Analysis: Misconceptions: Students may "
+                "believe any line through two sides of a triangle creates "
+                "proportional segments; Error Analysis: Students may apply "
                 "the ratio to non-parallel cutting lines or form AD/DB and "
                 "AE/EC without first checking that DE is parallel to BC."
             ),
@@ -1348,9 +1548,181 @@ def test_learner_analysis_via_api_replaces_generic_text(monkeypatch):
     out = g._ensure_misconceptions_via_api(records, meta=g._metadata(subject="Math"))
     details = out[0]["concept_details"]
     assert "memorized rule" not in details
+    assert "any line through two sides" in details
     assert "non-parallel cutting lines" in details
+    assert "Misconceptions:" in details
     assert "Error Analysis:" in details
     assert "Relates parallel lines and proportional segments." in details
+
+
+def test_learner_analysis_via_api_fails_closed_when_no_row_is_usable(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        g,
+        "_openai_json",
+        lambda *args, **kwargs: {
+            "rows": [{
+                "topic": "Triangles",
+                "parent_concept": "Similarity",
+                "concept": "Basic Proportionality Theorem",
+                "concept_description": "Description: unchanged",
+                "keywords": "",
+            }],
+        },
+    )
+    records = [{
+        "topic": "Triangles",
+        "parent_concept": "Similarity",
+        "concept_title": "Basic Proportionality Theorem",
+        "concept_details": (
+            "Description: Relates parallel lines and proportional segments."
+        ),
+        "keywords": "",
+    }]
+
+    with pytest.raises(
+        RuntimeError,
+        match="specific learner-analysis generation returned unusable rows",
+    ):
+        g._ensure_misconceptions_via_api(
+            records, meta=g._metadata(subject="Math"))
+
+
+def test_learner_analysis_via_api_retries_only_unresolved_rows(monkeypatch):
+    titles = ["Fair Test", "Systematic Observation"]
+    calls: list[dict] = []
+
+    def analysis_row(title: str, *, valid: bool) -> dict:
+        return {
+            "concept": title,
+            "misconception": (
+                "Students may believe that one observation proves a "
+                "universal pattern."
+                if valid else "Students may find this difficult."
+            ),
+            "error_analysis": (
+                "Students may omit the time and conditions when recording "
+                "each trial."
+                if valid else "Students may answer incorrectly."
+            ),
+        }
+
+    def fake_openai(_system, user, **_kwargs):
+        payload = json.loads(
+            user.split(
+                "Rows missing usable Misconceptions and/or Error Analysis "
+                "sections:\n",
+                1,
+            )[1].split("\n\nVALIDATION FEEDBACK", 1)[0]
+        )
+        requested = [row["concept"] for row in payload["rows"]]
+        calls.append({"requested": requested})
+        if len(calls) == 1:
+            return {"rows": [
+                analysis_row(titles[0], valid=True),
+                analysis_row(titles[1], valid=False),
+            ]}
+        return {"rows": [analysis_row(titles[1], valid=True)]}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    records = [{
+        "topic": "Investigation",
+        "parent_concept": "Scientific Method",
+        "concept_title": title,
+        "concept_details": f"Description: {title}.",
+        "keywords": "",
+    } for title in titles]
+
+    repaired = g._ensure_misconceptions_via_api(
+        records, meta=g._metadata(subject="Science"), max_attempts=3)
+
+    assert calls == [
+        {"requested": titles},
+        {"requested": [titles[1]]},
+    ]
+    assert all(
+        not g._learner_analysis_needs_rewrite(row["concept_details"])
+        for row in repaired
+    )
+
+
+def test_learner_analysis_action_only_retry_recovers_stubborn_error(
+    monkeypatch,
+):
+    calls: list[str] = []
+
+    def fake_openai(_system, user, **_kwargs):
+        calls.append(user)
+        if len(calls) < 4:
+            error = (
+                "Students may believe that consecutive odd numbers can be "
+                "added in any order."
+            )
+        else:
+            error = (
+                "Students may miscalculate the running total by adding one "
+                "odd term twice, producing a sum that no longer equals the "
+                "cube."
+            )
+        return {"rows": [{
+            "concept": "Cubes as Sums of Consecutive Odd Numbers",
+            "misconception": (
+                "Students may believe every odd number is itself a perfect "
+                "cube."
+            ),
+            "error_analysis": error,
+        }]}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    records = [{
+        "topic": "Cubic Numbers",
+        "parent_concept": "Odd-number Patterns",
+        "concept_title": "Cubes as Sums of Consecutive Odd Numbers",
+        "concept_details": (
+            "Description: A cube can be represented by an appropriate block "
+            "of consecutive odd numbers."
+        ),
+        "keywords": "",
+    }]
+
+    repaired = g._ensure_misconceptions_via_api(
+        records, meta=g._metadata(subject="Mathematics"))
+
+    assert len(calls) == 4
+    assert "ACTION-ONLY ERROR_ANALYSIS RETRY CONTRACT" in calls[1]
+    assert not g._learner_analysis_needs_rewrite(
+        repaired[0]["concept_details"])
+    assert "adding one odd term twice" in repaired[0]["concept_details"]
+
+
+def test_terminal_validation_rejects_both_title_substitution_fallbacks():
+    records = cr.ensure_analysis_sections([{
+        "topic": "Inquiry",
+        "parent_concept": "Scientific Method",
+        "concept_title": "Science as Evolving Inquiry",
+        "concept_details": (
+            "Description: Scientific explanations change when evidence changes."
+        ),
+        "keywords": "",
+    }])
+    misconception, error_analysis = cr.analysis_components(
+        records[0]["concept_details"])
+
+    assert concept_validator.is_terminal_generic_analysis_filler(
+        misconception)
+    assert concept_validator.is_terminal_generic_analysis_filler(
+        error_analysis)
+    report = concept_validator.validate_concept_rows(
+        records,
+        strict_analysis_section=True,
+    )
+    assert {
+        error["code"] for error in report["errors"]
+    }.issuperset({
+        "generic_misconception",
+        "generic_error_analysis",
+    })
 
 
 def test_validator_flags_merged_description_blocks():
@@ -1435,6 +1807,132 @@ def test_unassigned_mined_types_fail_instead_of_guessing(monkeypatch):
         g._assign_mined_types_via_api(
             records, meta=g._metadata(subject="Physics"), mined_types=mined,
             max_attempts=1)
+
+
+def test_mined_activity_role_is_split_by_authoritative_inventory_qids():
+    inventory = {"items": [
+        {
+            "qid": "QINV-0001",
+            "source_kind": "short_answer",
+            "topic_hint": "Scientific Investigation",
+            "raw_task": "Why is one side of the puri thinner?",
+        },
+        {
+            "qid": "QINV-0002",
+            "source_kind": "experiment_task",
+            "topic_hint": "Scientific Investigation",
+            "raw_task": "Measure the time taken for the puri to puff.",
+        },
+    ]}
+    raw_types = [{
+        "type_id": "TYPE-0001",
+        "type_title": "Investigating puri puffing",
+        "type_description": "Use observations to investigate puffing.",
+        "task_pattern": "Explain or test one aspect of puri puffing.",
+        "concept_match_hint": "Controlled Investigation",
+        "topic_match_hint": "Scientific Investigation",
+        "is_activity": True,
+        "source_question_ids": ["QINV-0001", "QINV-0002"],
+        "case_prompts": [
+            {
+                "case_id": "CASE-0001",
+                "case_title": "Explain unequal thickness",
+                "examples": [{
+                    "source_question_id": "QINV-0001",
+                    "example_prompt": "Why is one side of the puri thinner?",
+                }],
+            },
+            {
+                "case_id": "CASE-0002",
+                "case_title": "Measure puffing time",
+                "examples": [{
+                    "source_question_id": "QINV-0002",
+                    "example_prompt": (
+                        "Measure the time taken for the puri to puff."),
+                }],
+            },
+        ],
+    }]
+
+    normalized = g._normalize_mined_type_candidate(raw_types, inventory)
+
+    assert [
+        (item["is_activity"], item["source_question_ids"])
+        for item in normalized
+    ] == [
+        (False, ["QINV-0001"]),
+        (True, ["QINV-0002"]),
+    ]
+    assert not g._uncovered_inventory_items(inventory, normalized)
+    assert not g._duplicate_inventory_assignments(inventory, normalized)
+
+
+def test_diagram_interpretation_hint_requires_an_owned_visual_item():
+    puri_prompt = (
+        "Have you noticed how a puri or a batura puffs up when placed in hot "
+        "oil? Or how a phulka swells when put directly on the flame."
+    )
+    diagram_prompt = "Interpret the labelled diagram of the experimental setup."
+    inventory = {"items": [
+        {
+            "qid": "QINV-0001",
+            "source_kind": "intext_question",
+            "topic_hint": "Scientific Investigation",
+            "raw_task": puri_prompt,
+            "requires_visual": False,
+        },
+        {
+            "qid": "QINV-0002",
+            "source_kind": "diagram_task",
+            "topic_hint": "Scientific Investigation",
+            "raw_task": diagram_prompt,
+            "requires_visual": True,
+        },
+    ]}
+
+    def mined_type(qid: str, prompt: str) -> dict:
+        return {
+            "type_id": f"TYPE-{qid}",
+            "type_title": f"Interpreting {qid}",
+            "type_description": "Interpret the supplied source evidence.",
+            "task_pattern": "Interpret the supplied evidence.",
+            "concept_match_hint": f"Concept for {qid}",
+            "topic_match_hint": "Scientific Investigation",
+            "subject_skill_hint": "Diagram Interpretation",
+            "source_question_ids": [qid],
+            "case_prompts": [{
+                "case_id": f"CASE-{qid}",
+                "case_title": f"Case for {qid}",
+                "examples": [{
+                    "source_question_id": qid,
+                    "example_prompt": prompt,
+                }],
+            }],
+        }
+
+    normalized = g._normalize_mined_type_candidate(
+        [
+            mined_type("QINV-0001", puri_prompt),
+            mined_type("QINV-0002", diagram_prompt),
+        ],
+        inventory,
+    )
+
+    by_qid = {
+        item["source_question_ids"][0]: item
+        for item in normalized
+    }
+    assert by_qid["QINV-0001"]["subject_skill_hint"] == ""
+    assert (
+        by_qid["QINV-0002"]["subject_skill_hint"]
+        == "Diagram Interpretation"
+    )
+    assert (
+        by_qid["QINV-0001"]["case_prompts"][0]["examples"][0][
+            "example_prompt"
+        ]
+        == puri_prompt
+    )
 
 
 def test_activity_types_defer_to_compact_inventory_hub_not_culmination(monkeypatch):
@@ -1876,7 +2374,7 @@ def test_final_placement_rebuild_reuses_gpt_assignment_on_final_rows(monkeypatch
     monkeypatch.setattr(g, "_assign_mined_types_via_api", fake_assign)
     monkeypatch.setattr(
         g, "_populate_activity_hubs_via_api",
-        lambda candidate, inventory, *, meta: candidate,
+        lambda candidate, inventory, *, meta, mined_types=None: candidate,
     )
     original_salvage = g._salvage_short_case_examples
     original_neutralize = g._neutralize_unrepaired_rows
@@ -1952,7 +2450,7 @@ def test_cross_topic_gpt_hub_choice_falls_back_to_exact_example_row(monkeypatch)
     assert not g._activity_example_hub_alignment_violations(out, inventory)
 
 
-def test_activity_hub_fallback_never_uses_culmination_without_topic_normal():
+def test_activity_hub_fallback_never_crosses_topics_without_normal_host():
     activity = "Observe how current changes when another cell is added."
     inventory = {"items": [{
         "qid": "QINV-0001",
@@ -1981,7 +2479,7 @@ def test_activity_hub_fallback_never_uses_culmination_without_topic_normal():
     out = g._place_activity_inventory_into_hubs(records, inventory)
 
     assert not cr.activity_hub_body(out[0]["concept_details"])
-    assert activity in cr.activity_hub_body(out[1]["concept_details"])
+    assert not cr.activity_hub_body(out[1]["concept_details"])
 
 
 def test_empty_activity_task_uses_source_label_for_hub_fallback():
@@ -2104,6 +2602,127 @@ def test_activity_hub_populated_via_api_not_chapter_filters(monkeypatch):
         "Can You Help Poor Vikram in Answering Vetal?")
     assert g._is_filler_source_topic("Overview")
     assert g._is_filler_source_topic("Summary")
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"placements": []},
+        {"placements": [{
+            "qid": "QINV-0001",
+            "concept_id": "CONCEPT-9999",
+        }]},
+    ],
+    ids=["missing-verdict", "invalid-concept"],
+)
+def test_ambiguous_activity_hub_review_fails_closed(
+    monkeypatch, response,
+):
+    item = {
+        "qid": "QINV-0001",
+        "source_kind": "activity",
+        "source_label": "Classroom investigation",
+        "raw_task": (
+            "Complete the classroom investigation and record the results."
+        ),
+        "topic_hint": "Methods",
+    }
+    records = [
+        {
+            "topic": "Methods",
+            "parent_concept": "Approaches",
+            "concept_title": "Method Alpha",
+            "concept_details": "Description: Apply the first approach.",
+            "keywords": "",
+        },
+        {
+            "topic": "Methods",
+            "parent_concept": "Approaches",
+            "concept_title": "Method Beta",
+            "concept_details": "Description: Apply the second approach.",
+            "keywords": "",
+        },
+    ]
+    calls = []
+    monkeypatch.setattr(
+        g,
+        "_openai_json",
+        lambda *_args, **_kwargs: calls.append(True) or response,
+    )
+    mined = {"types": []}
+
+    with pytest.raises(
+        RuntimeError,
+        match="did not certify every inventory item",
+    ):
+        g._populate_activity_hubs_via_api(
+            records,
+            {"items": [item]},
+            meta=g._metadata(subject="General"),
+            mined_types=mined,
+            max_attempts=2,
+        )
+
+    assert len(calls) == 2
+    assert not any(
+        cr.activity_hub_body(record["concept_details"])
+        for record in records
+    )
+    assert mined[g._PLACEMENT_CERTIFICATIONS_KEY]["hosts"] == {}
+
+
+def test_activity_hub_sole_exact_topic_host_is_certified_without_api(
+    monkeypatch,
+):
+    item = {
+        "qid": "QINV-0001",
+        "source_kind": "activity",
+        "source_label": "Activity 1",
+        "raw_task": "Observe the setup and record each result.",
+        "topic_hint": "Observation",
+    }
+    records = [
+        {
+            "topic": "Observation",
+            "parent_concept": "Investigation",
+            "concept_title": "Recording Experimental Results",
+            "concept_details": "Description: Record observations consistently.",
+            "keywords": "",
+        },
+        {
+            "topic": "Observation",
+            "parent_concept": "Culmination",
+            "concept_title": "Culmination - Observation",
+            "concept_details": "Description: Recap of the investigation.",
+            "keywords": "",
+        },
+    ]
+    monkeypatch.setattr(
+        g,
+        "_openai_json",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("a sole exact-topic host needs no API verdict")
+        ),
+    )
+    mined = {"types": []}
+
+    out = g._populate_activity_hubs_via_api(
+        records,
+        {"items": [item]},
+        meta=g._metadata(subject="General"),
+        mined_types=mined,
+    )
+
+    certification = mined[g._PLACEMENT_CERTIFICATIONS_KEY]["hosts"][
+        "QINV-0001"
+    ]
+    assert certification["concept"] == "Recording Experimental Results"
+    assert certification["basis"] == "sole_exact_topic_host"
+    assert "record each result" in cr.activity_hub_body(
+        out[0]["concept_details"])
+    assert not cr.activity_hub_body(out[1]["concept_details"])
+    assert not g._placement_certification_violations(
+        out, {"items": [item]}, mined)
 
 
 def test_duplicate_inventory_assignments_are_reported():
@@ -2776,6 +3395,993 @@ def test_history_structure_audit_captures_all_checkpoints_and_exercises():
     assert all(not item["topic_hint"] for item in exercises)
 
 
+def test_headingless_intro_chapter_uses_selected_chapter_as_its_topic():
+    chapter_title = "Exploring the Investigative World of Science"
+    sections = g.parse_mmd_sections(
+        "Science begins with careful questions and systematic investigation.\n"
+        "\\section*{Happy investigating!}\n"
+        "Continue observing, measuring, and revising explanations.\n"
+    )
+
+    assert g._topic_headings(sections) == []
+    assert g._apply_headingless_chapter_topic_fallback(
+        sections, chapter_title)
+    assert g._topic_headings(sections) == [chapter_title]
+    assert {
+        topic for topic, _section in g._sections_with_source_topics(sections)
+    } == {chapter_title}
+
+
+def test_headingless_scientific_investigation_prose_has_exact_method_anchors():
+    source = (
+        "We can do simple experiments to answer focused questions.\n\n"
+        "What are the different things that may change the way a puri puffs "
+        "up when fried? For that, we try and find out what all can we change "
+        "or control when we do the experiment, and what all can we observe to "
+        "see if these changes made any difference.\n\n"
+        "However, to make sense of the changes, we also need to think of what "
+        "we can observe or measure. Maybe we can start by checking whether the "
+        "puri puffs up (yes/no), or we can measure the time it takes to puff "
+        "up (seconds). We can check whether a very thick layer of dough still "
+        "gives a thin side to the puri.\n\n"
+        "Further, while doing such experiments, it is better to change only "
+        "one thing at a time while keeping the other conditions same. For "
+        "example, if we wanted to see the effect of boiling hot, hot, and not "
+        "very hot oil, we would\nuse circles of dough of the same thickness, "
+        "and drop them in the same way. It is also a good idea to keep notes "
+        "of everything that you see and sense when doing an experiment. Did "
+        "the oil splatter, smell, or smoke? Do puris puff better when made "
+        "fresh or from stored dough? What happens if I prick a hole in the "
+        "puri before frying?\n\n"
+        "This is the idea of systematic investigation.\n"
+    )
+
+    anchors = g._source_task_anchors(g.parse_mmd_sections(source))
+
+    assert len(anchors) == 9
+    assert all(item["source_kind"] == "experiment_task" for item in anchors)
+    assert [item["source_label"] for item in anchors] == [
+        "Scientific investigation: variable question",
+        "Scientific investigation: controls and observations",
+        "Scientific investigation: observation and measurement",
+        "Scientific investigation: measuring an outcome",
+        "Scientific investigation: testing a changed condition",
+        "Scientific investigation: controlled variable comparison",
+        "Scientific investigation: recording observations",
+        "Scientific investigation: fresh and stored samples",
+        "Scientific investigation: changing the sample",
+    ]
+    assert anchors[2]["raw_task"] == (
+        "However, to make sense of the changes, we also need to think of what "
+        "we can observe or measure."
+    )
+    assert anchors[5]["raw_task"] == (
+        "For example, if we wanted to see the effect of boiling hot, hot, and "
+        "not very hot oil, we would use circles of dough of the same thickness, "
+        "and drop them in the same way."
+    )
+    assert anchors[6]["raw_task"] == (
+        "It is also a good idea to keep notes of everything that you see and "
+        "sense when doing an experiment. Did the oil splatter, smell, or smoke?"
+    )
+
+
+def _headingless_overview_and_method_mmd():
+    return (
+        "We explore everyday life-like why does dough rise? - and bigger "
+        "mysteries like is the world getting warmer?\n\n"
+        "But what does our body need to stay healthy? How do we fight these "
+        "infections? We will investigate these ideas.\n\n"
+        "Isn't it fascinating that calendars which determine our routines are "
+        "linked to objects beyond our planet?\n\n"
+        "Let us return to a question asked earlier: Why is one side of a puri "
+        "thinner than the other?\n\n"
+        "A kitchen is a place to observe and ask what happens if...? Have you "
+        "noticed how a puri or a batura puffs up when placed in hot oil? Or "
+        "how a phulka swells when put directly on the flame. Why does it puff "
+        "up like a balloon? And why is one side thinner than the other?\n\n"
+        "We can do simple experiments to answer focused questions. What are "
+        "the different things that may change the way a puri puffs up when "
+        "fried? For that, we find out what all can we change or control when "
+        "we do the experiment, and what all can we observe to see if these "
+        "changes made any difference.\n\n"
+        "However, to make sense of the changes, we also need to think of what "
+        "we can observe or measure. Maybe we can start by checking whether the "
+        "puri puffs up (yes/no), or we can measure the time it takes to puff "
+        "up (seconds). We can check whether a very thick layer of dough still "
+        "gives a thin side to the puri.\n\n"
+        "It is better to change only one thing at a time. For example, if we "
+        "wanted to see the effect of boiling hot, hot, and not very hot oil, "
+        "we would use circles of dough of the same thickness, and drop them in "
+        "the same way. It is also a good idea to keep notes of everything that "
+        "you see and sense when doing an experiment. Did the oil splatter, "
+        "smell, or smoke? Do puris puff better when made fresh or from stored "
+        "dough? What happens if I prick a hole in the puri before frying?\n\n"
+        "This is the idea of systematic investigation.\n"
+    )
+
+
+def test_headingless_science_overview_recovers_only_exact_opening_prompts():
+    prompts = g._headingless_overview_prose_prompts(
+        _headingless_overview_and_method_mmd())
+
+    assert [item["task"] for item in prompts] == [
+        "why does dough rise?",
+        "is the world getting warmer?",
+        "what does our body need to stay healthy?",
+        "How do we fight these infections?",
+        "Why is one side of a puri thinner than the other?",
+        (
+            "Have you noticed how a puri or a batura puffs up when placed in "
+            "hot oil? Or how a phulka swells when put directly on the flame."
+        ),
+        "Why does it puff up like a balloon?",
+    ]
+    assert len({item["label"] for item in prompts}) == 7
+    assert all("fascinating" not in item["task"] for item in prompts)
+    assert all("what happens if" not in item["task"] for item in prompts)
+
+
+def test_headingless_science_source_has_seven_overview_and_nine_method_anchors():
+    anchors = g._source_task_anchors(
+        g.parse_mmd_sections(_headingless_overview_and_method_mmd()))
+
+    assert len(anchors) == 16
+    assert [
+        item["source_kind"] for item in anchors[:7]
+    ] == ["intext_question"] * 7
+    assert [
+        item["source_kind"] for item in anchors[7:]
+    ] == ["experiment_task"] * 9
+    assert all(
+        item["_source_task_boundary"] == "direct_prompt"
+        for item in anchors
+    )
+
+
+def test_headingless_overview_merge_restores_seven_without_split_or_callback():
+    topic = "Exploring the Investigative World of Science"
+    model_items = [
+        {
+            "qid": "QINV-0000",
+            "source_kind": "short_answer",
+            "source_label": "",
+            "topic_hint": topic,
+            "raw_task": (
+                "These may range from everyday life-like why does dough rise? "
+                "- to the bigger mysteries of Earth and beyond like is the "
+                "world getting warmer?"
+            ),
+            "normalized_task": (
+                "Identify scientific questions arising from everyday "
+                "phenomena and global changes."
+            ),
+        },
+        {
+            "qid": "QINV-0001",
+            "source_kind": "intext_question",
+            "source_label": "Chapter opening prompt",
+            "topic_hint": topic,
+            "raw_task": "Why is one side of a puri thinner than the other?",
+            "normalized_task": (
+                "Explain why one side of a puri may be thinner than the other."
+            ),
+        },
+        {
+            "qid": "QINV-0002",
+            "source_kind": "intext_question",
+            "source_label": "Investigation prompt",
+            "topic_hint": topic,
+            "raw_task": (
+                "Have you noticed how a puri or a batura puffs up when placed "
+                "in hot oil?"
+            ),
+            "normalized_task": (
+                "Observe how a puri or batura puffs up in hot oil."
+            ),
+        },
+        {
+            "qid": "QINV-0003",
+            "source_kind": "intext_question",
+            "source_label": "Investigation prompt",
+            "topic_hint": topic,
+            "raw_task": (
+                "Or how a phulka swells when put directly on the flame."
+            ),
+            "normalized_task": (
+                "Observe how a phulka swells when placed on a flame."
+            ),
+        },
+        {
+            "qid": "QINV-0004",
+            "source_kind": "intext_question",
+            "source_label": "Investigation prompt",
+            "topic_hint": topic,
+            "raw_task": "Why does it puff up like a balloon?",
+            "normalized_task": (
+                "Explain why the puri puffs up like a balloon."
+            ),
+        },
+        {
+            "qid": "QINV-0005",
+            "source_kind": "intext_question",
+            "source_label": "Investigation prompt",
+            "topic_hint": topic,
+            "raw_task": "And why is one side thinner than the other?",
+            "normalized_task": (
+                "Explain why the two sides of the puri have unequal thickness."
+            ),
+            "shared_context": (
+                "The prompt concerns the uneven thickness observed in a puri."
+            ),
+        },
+    ]
+    sections = g.parse_mmd_sections(_headingless_overview_and_method_mmd())
+    assert g._apply_headingless_chapter_topic_fallback(sections, topic)
+    overview_anchors = [
+        item for item in g._source_task_anchors(sections)
+        if item["parent_source_label"] == "Chapter opening"
+    ]
+
+    merged = g._merge_source_task_anchors(model_items, overview_anchors)
+
+    assert len(merged) == 7
+    assert sum(
+        "one side of a puri thinner" in item["raw_task"].lower()
+        for item in merged
+    ) == 1
+    assert all(
+        item["raw_task"] != "And why is one side thinner than the other?"
+        for item in merged
+    )
+    assert "QINV-0000" not in {item.get("qid") for item in merged}
+    assert sum(
+        item["raw_task"].startswith("Have you noticed")
+        and "Or how a phulka" in item["raw_task"]
+        for item in merged
+    ) == 1
+    assert "QINV-0001" in {item.get("qid") for item in merged}
+
+
+def test_direct_prompt_callback_cleanup_requires_context_and_matching_scope():
+    full = "Why is one side of a puri thinner than the other?"
+    short = "And why is one side thinner than the other?"
+    topic = "Exploring the Investigative World of Science"
+    items = [
+        {
+            "qid": "QINV-0001",
+            "topic_hint": topic,
+            "raw_task": full,
+            "normalized_task": full,
+        },
+        {
+            "qid": "QINV-0002",
+            "topic_hint": topic,
+            "raw_task": short,
+            "normalized_task": short,
+        },
+        {
+            "qid": "QINV-0003",
+            "topic_hint": "Geometry",
+            "raw_task": short,
+            "normalized_task": (
+                "Explain why the two sides of the puri have unequal thickness."
+            ),
+        },
+    ]
+    anchor = {
+        "source_kind": "intext_question",
+        "source_label": "Chapter opening: puri side thickness",
+        "topic_hint": topic,
+        "raw_task": full,
+        "normalized_task": full,
+        "_source_task_boundary": "direct_prompt",
+    }
+
+    merged = g._merge_source_task_anchors(items, [anchor])
+
+    assert {item.get("qid") for item in merged} == {
+        "QINV-0001", "QINV-0002", "QINV-0003",
+    }
+
+
+def test_scientific_investigation_backstop_preserves_finer_model_splits():
+    source = (
+        "We can do simple experiments to answer focused questions.\n\n"
+        "However, to make sense of the changes, we also need to think of what "
+        "we can observe or measure.\n\n"
+        "It is better to change only one thing at a time. For example, if we "
+        "wanted to see the effect of boiling hot, hot, and not very hot oil, "
+        "we would use circles of dough of the same thickness, and drop them in "
+        "the same way. It is also a good idea to keep notes of everything that "
+        "you see and sense when doing an experiment. Did the oil splatter, "
+        "smell, or smoke?\n\n"
+        "This is the idea of systematic investigation.\n"
+    )
+    model_items = [
+        {
+            "source_kind": "observation_task",
+            "source_label": "Chapter opening investigation",
+            "raw_task": (
+                "Have you noticed how a puri puffs up when placed in hot oil?"
+            ),
+            "normalized_task": (
+                "Have you noticed how a puri puffs up when placed in hot oil?"
+            ),
+        },
+        {
+            "source_kind": "short_answer",
+            "source_label": "Chapter opening investigation",
+            "raw_task": "Why does it puff up like a balloon?",
+            "normalized_task": "Why does it puff up like a balloon?",
+        },
+        {
+            "source_kind": "short_answer",
+            "source_label": "Chapter opening investigation",
+            "raw_task": "And why is one side thinner than the other?",
+            "normalized_task": "And why is one side thinner than the other?",
+        },
+        {
+            "source_kind": "experiment_task",
+            "source_label": "Chapter opening investigation",
+            "raw_task": "Did the oil splatter, smell, or smoke?",
+            "normalized_task": "Did the oil splatter, smell, or smoke?",
+        },
+    ]
+    for index, item in enumerate(model_items, start=1):
+        item["qid"] = f"QINV-{index:04d}"
+        item["order_index"] = index
+
+    sections = g.parse_mmd_sections(source)
+    anchors = g._source_task_anchors(sections)
+    merged = g._merge_source_task_anchors(model_items, anchors)
+
+    assert len(merged) == 6
+    assert all(
+        any(
+            item["raw_task"] == task
+            for item in merged
+        )
+        for task in (
+            "Have you noticed how a puri puffs up when placed in hot oil?",
+            "Why does it puff up like a balloon?",
+            "And why is one side thinner than the other?",
+        )
+    )
+    assert sum(
+        item["raw_task"].endswith("Did the oil splatter, smell, or smoke?")
+        for item in merged
+    ) == 1
+    assert any(
+        item["raw_task"].startswith(
+            "It is also a good idea to keep notes of everything")
+        for item in merged
+    )
+    assert [
+        item["source_label"] for item in merged[-3:]
+    ] == [
+        "Scientific investigation: observation and measurement",
+        "Scientific investigation: controlled variable comparison",
+        "Scientific investigation: recording observations",
+    ]
+
+    refreshed = g._refresh_inventory_from_source_anchors(
+        {"items": model_items, "stats": {}},
+        sections,
+    )
+    assert len(refreshed["items"]) == 6
+    assert len({
+        item["qid"] for item in refreshed["items"]
+    }) == 6
+    assert {
+        f"QINV-{index:04d}" for index in range(1, 5)
+    }.issubset({
+        item["qid"] for item in refreshed["items"]
+    })
+
+
+def test_direct_prompt_anchor_removes_its_contained_model_fragment():
+    full = (
+        "Maybe we can start by checking whether the puri puffs up (yes/no), "
+        "or we can measure the time it takes to puff up (seconds)."
+    )
+    fragment = "or we can measure the time it takes to puff up (seconds)."
+    model_items = [
+        {
+            "source_kind": "experiment_task",
+            "source_label": "Scientific investigation: measuring an outcome",
+            "raw_task": full,
+            "normalized_task": full,
+            "topic_hint": "Exploring the Investigative World of Science",
+        },
+        {
+            "source_kind": "experiment_task",
+            "source_label": "Chapter opening",
+            "raw_task": fragment,
+            "normalized_task": (
+                "Measure the time taken by the puri to puff up in seconds."
+            ),
+            "topic_hint": "Exploring the Investigative World of Science",
+        },
+    ]
+    anchor = {
+        "source_kind": "experiment_task",
+        "source_label": "Scientific investigation: measuring an outcome",
+        "raw_task": full,
+        "normalized_task": full,
+        "topic_hint": "Exploring the Investigative World of Science",
+        "_source_task_boundary": "direct_prompt",
+    }
+
+    merged = g._merge_source_task_anchors(model_items, [anchor])
+
+    assert len(merged) == 1
+    assert merged[0]["raw_task"] == full
+
+
+def test_activity_hub_note_keeps_task_sentences_before_optional_context():
+    question = "Did the oil splatter, smell, or smoke?"
+    item = {
+        "qid": "QINV-0015",
+        "source_kind": "experiment_task",
+        "source_label": "Scientific investigation: recording observations",
+        "shared_context": (
+            "The task refers to recording observations during the "
+            "puri-frying experiment."
+        ),
+        "raw_task": (
+            "It is also a good idea to keep notes of everything that you see "
+            f"and sense when doing an experiment. {question}"
+        ),
+    }
+
+    note = g._compact_activity_hub_note(item)
+
+    assert question in note
+    assert "recording observations during the puri-frying experiment" in note
+    assert not note.endswith("?.")
+    assert len(note) <= g._ACTIVITY_PUBLIC_CHAR_LIMIT + 150
+
+
+def test_grade8_math_callouts_exercises_and_answer_key_boundary():
+    source = (
+        "\\section*{A Square and a Cube}\n"
+        "A minister describes the one-hundred-locker puzzle.\n"
+        "\\begin{itemize}\n"
+        "\\item[] ? Before the process begins, how can Khoisnam know which "
+        "lockers remain open?\n"
+        "Hint: Find how many times each locker is toggled.\n"
+        "\\end{itemize}\n"
+        "If a locker is toggled an odd number of times it remains open. This "
+        "paragraph explains the answer and must not enter the prompt.\n"
+        "\\subsection*{1.1 Square Numbers}\n"
+        "\\begin{itemize}\n"
+        "\\item[] ? What is the square root of 64?\n"
+        "We know that 8 multiplied by 8 is 64.\n"
+        "\\end{itemize}\n"
+        "\\section*{? Figure it Out}\n"
+        "\\begin{itemize}\n"
+        "\\item[1.] Which of 2032 and 1089 is a perfect square?\n"
+        "\\item[2.] Find the side of a square with area 441 square metres.\n"
+        "\\end{itemize}\n"
+        "\\section*{1 A SQUARE AND A CUBE}\n"
+        "Page No. 2\n"
+        "Question one.\nAns. First answer.\n"
+        "Page No. 3\n"
+        "Question two.\nAns. Second answer.\n"
+        "Page No. 4\n"
+        "Question three.\nAns. Third answer.\n"
+    )
+    chunks = g._section_aware_chunks(source)
+    sections = [section for chunk in chunks for section in chunk["sections"]]
+    anchors = g._source_task_anchors(sections)
+
+    assert all(
+        not g._is_answer_key_source_section(section) for section in sections)
+    assert [item["source_kind"] for item in anchors].count("exercise") == 2
+    locker = next(
+        item for item in anchors if "Khoisnam" in item["raw_task"])
+    square_root = next(
+        item for item in anchors if "square root of 64" in item["raw_task"])
+    assert "Hint: Find how many times" in locker["raw_task"]
+    assert "This paragraph explains" not in locker["raw_task"]
+    assert "We know that" not in square_root["raw_task"]
+    assert all("Ans." not in item["raw_task"] for item in anchors)
+
+
+def test_grade8_math_mid_sentence_image_keeps_lowercase_prompt_tail():
+    url = "https://cdn.mathpix.com/cropped/operator.jpg"
+    source = (
+        "\\subsection*{1.2 Cubic Numbers}\n"
+        "\\section*{Taxicab Numbers}\n"
+        "\\begin{itemize}\n"
+        "\\item[] ? Express 4104 as the sum of\n"
+        f"![]({url})\n"
+        "two positive cubes.\n"
+        "\\end{itemize}\n"
+    )
+    sections = [
+        section
+        for chunk in g._section_aware_chunks(source)
+        for section in chunk["sections"]
+    ]
+
+    anchors = g._source_task_anchors(sections)
+
+    assert len(anchors) == 1
+    assert anchors[0]["raw_task"].endswith("two positive cubes.")
+    assert anchors[0]["image_urls"] == [url]
+
+
+def test_grade8_math_final_figure_it_out_and_square_pairs_task_scopes():
+    source = (
+        "\\subsection*{1.1 Square Numbers}\n"
+        "Square teaching text.\n"
+        "\\subsection*{1.2 Cubic Numbers}\n"
+        "Cube teaching text.\n"
+        "\\subsection*{1.3 A Pinch of History}\n"
+        "History teaching text.\n"
+        "\\section*{? Figure it Out}\n"
+        "\\begin{itemize}\n"
+        "\\item[1.] Find the cube root of 27000.\n"
+        "\\end{itemize}\n"
+        "\\section*{Square Pairs!}\n"
+        "Try arranging the numbers without repetition so that every adjacent "
+        "pair adds to a square.\n\n"
+        "Can you arrange the numbers in more than one way? "
+        "If not, can you explain why?\n"
+        "Can you arrange them in a circle?\n"
+    )
+    sections = [
+        section
+        for chunk in g._section_aware_chunks(source)
+        for section in chunk["sections"]
+    ]
+
+    anchors = g._source_task_anchors(sections)
+    final_exercise = next(
+        item for item in anchors if "cube root of 27000" in item["raw_task"])
+    square_pair = next(
+        item for item in anchors if "more than one way" in item["raw_task"])
+
+    assert final_exercise["topic_hint"] == ""
+    assert final_exercise["_topic_scope"] == "chapter"
+    assert square_pair["topic_hint"] == "Square Numbers"
+    assert "every adjacent pair" in square_pair["shared_context"]
+    assert square_pair["requires_context"] is True
+    assert square_pair["raw_task"].endswith(
+        "If not, can you explain why?")
+
+
+def test_referential_sum_and_table_prompts_receive_source_context():
+    url = "https://cdn.mathpix.com/cropped/cube-table.jpg"
+    source = (
+        "\\subsection*{1.1 Cubic Numbers}\n"
+        "? Complete the table below.\n"
+        f"![]({url})\n\n"
+        "\\begin{tabular}{|l|l|}\n"
+        "\\hline $1^3=1$ & $2^3=8$ \\\\\n"
+        "\\hline\n"
+        "\\end{tabular}\n"
+        "? What patterns do you notice in the table above?\n"
+        "\\section*{Perfect Cubes and Consecutive Odd Numbers}\n"
+        "$$91+93+95+97+99+101+103+105+107+109.$$\n"
+        "? Can you tell what this sum is without doing the calculation?\n"
+    )
+    sections = [
+        section
+        for chunk in g._section_aware_chunks(source)
+        for section in chunk["sections"]
+    ]
+    anchors = g._attach_explicit_figure_images(
+        g._source_task_anchors(sections), sections)
+    table_pattern = next(
+        item for item in anchors if "table above" in item["raw_task"])
+    sum_prompt = next(
+        item for item in anchors if "this sum" in item["raw_task"])
+
+    assert table_pattern["image_urls"] == [url]
+    assert f'[img src="{url}" ' in g._inventory_task_text(table_pattern)
+    assert "91+93+95+97+99+101+103+105+107+109" in (
+        sum_prompt["shared_context"])
+    assert sum_prompt["requires_context"] is True
+    assert "The referenced sum is [Katex]" in g._inventory_task_text(sum_prompt)
+
+
+def test_inventory_prunes_only_model_stub_without_exact_source_owner():
+    source_task = "Is 9 a cube?"
+    anchors = [{
+        "source_kind": "checkpoint_question",
+        "source_label": "Checkpoint 9.2",
+        "raw_task": source_task,
+        "normalized_task": source_task,
+    }]
+    model_items = [
+        dict(anchors[0]),
+        {
+            "source_kind": "other",
+            "source_label": "Unowned fragment",
+            "raw_task": "q",
+            "normalized_task": "q",
+        },
+    ]
+
+    cleaned, removed = g._prune_unowned_stub_inventory_rows(
+        model_items, anchors)
+
+    assert removed == 1
+    assert [item["raw_task"] for item in cleaned] == [source_task]
+
+
+def test_visual_anchor_does_not_protect_duplicate_that_lost_its_image():
+    prompt = "Complete the table below."
+    url = "https://cdn.mathpix.com/table.jpg"
+    anchors = [{
+        "source_kind": "checkpoint_question",
+        "source_label": "Checkpoint 9.4",
+        "raw_task": prompt,
+        "normalized_task": prompt,
+        "requires_visual": True,
+        "image_urls": [url],
+    }]
+    complete = dict(anchors[0])
+    incomplete = {
+        "source_kind": "checkpoint_question",
+        "source_label": "Checkpoint 9.4",
+        "raw_task": prompt,
+        "normalized_task": prompt,
+        "requires_visual": False,
+        "image_urls": [],
+    }
+
+    cleaned, removed = g._prune_unowned_stub_inventory_rows(
+        [complete, incomplete], anchors)
+
+    assert removed == 1
+    assert cleaned == [complete]
+
+
+def test_source_owned_markdown_visual_survives_attachment_resolution():
+    prompt = "Complete the table below."
+    url = "https://cdn.mathpix.com/table.jpg"
+    raw_task = f"{prompt} ![]({url})"
+    item = {
+        "source_kind": "checkpoint_question",
+        "source_label": "Checkpoint 9.4",
+        "raw_task": raw_task,
+        "normalized_task": raw_task,
+        "requires_visual": True,
+        "image_urls": [url],
+    }
+
+    attached = g._attach_explicit_figure_images([item], [])[0]
+
+    assert attached["image_urls"] == [url]
+    assert attached["requires_visual"] is True
+    assert attached["_figure_images_resolved"] is True
+    assert f'[img src="{url}" ' in g._inventory_task_text(attached)
+
+
+def test_conditional_followup_remains_in_the_same_checkpoint_prompt():
+    source = (
+        "\\section*{Square Pairs!}\n"
+        "Can you arrange them in more than one way? "
+        "If not, can you explain why?\n"
+        "Can you do the same with numbers from 1 to 32, but in a circle?\n"
+    )
+    sections = [
+        section
+        for chunk in g._section_aware_chunks(source)
+        for section in chunk["sections"]
+    ]
+
+    anchors = g._source_task_anchors(sections)
+
+    assert [anchor["raw_task"] for anchor in anchors] == [
+        (
+            "Can you arrange them in more than one way? "
+            "If not, can you explain why?"
+        ),
+        "Can you do the same with numbers from 1 to 32, but in a circle?",
+    ]
+    resumed = {
+        **anchors[0],
+        "qid": "QINV-0001",
+        "raw_task": "Can you arrange them in more than one way?",
+        "normalized_task": "Can you arrange them in more than one way?",
+    }
+    merged = g._merge_source_task_anchors([resumed], anchors)
+    first = next(item for item in merged if item.get("qid") == "QINV-0001")
+    assert first["raw_task"] == anchors[0]["raw_task"]
+
+
+def test_grade8_math_body_figure_it_out_and_callout_boundaries():
+    local_exercises = "".join(
+        f"\\item[{number}.] Local exercise {number}.\n"
+        for number in range(1, 4)
+    )
+    final_exercises = "".join(
+        f"\\item[{number}.] Final exercise {number}.\n"
+        for number in range(1, 14)
+    ) + "14. Final exercise 14.\n"
+    source = (
+        "\\subsection*{2.2 Exponential Notation and Operations}\n"
+        "\\begin{itemize}\n"
+        "\\item[] ? Make reasonable assumptions and find the answers. "
+        "Remember to estimate first.\n"
+        "\\item[] ? Is the first power larger? Yes, since its exponent is "
+        "greater.\n"
+        "\\item[] ? Figure it Out\n"
+        f"{local_exercises}"
+        "\\end{itemize}\n"
+        "\\subsection*{2.5 A Pinch of History}\n"
+        "\\begin{itemize}\n"
+        "\\item[] ? Calculate and write the answer using scientific notation:\n"
+        "\\begin{itemize}\n"
+        "\\item[(i)] First nested subpart.\n"
+        "\\item[(ii)] Second nested subpart.\n"
+        "\\end{itemize}\n"
+        "\\end{itemize}\n"
+        "\\begin{itemize}\n"
+        "\\item[(iii)] Third nested subpart.\n"
+        "\\item[(iv)] Fourth nested subpart.\n"
+        "\\end{itemize}\n"
+        "\\item[] ? Figure it Out\n"
+        f"{final_exercises}"
+    )
+
+    sections = [
+        section
+        for chunk in g._section_aware_chunks(source)
+        for section in chunk["sections"]
+    ]
+    anchors = g._source_task_anchors(sections)
+    exercises = [
+        item for item in anchors if item["source_kind"] == "exercise"
+    ]
+
+    assert len(exercises) == 17
+    assert any(
+        item["raw_task"] == "Local exercise 1."
+        and item["topic_hint"] == "Exponential Notation and Operations"
+        for item in exercises
+    )
+    assert any(
+        item["raw_task"] == "Final exercise 14."
+        and item["topic_hint"] == ""
+        for item in exercises
+    )
+    assert all(
+        item["raw_task"].lower() != "figure it out" for item in anchors
+    )
+
+    nested = next(
+        item for item in anchors
+        if item["raw_task"].startswith(
+            "Calculate and write the answer using scientific notation")
+    )
+    assert "Third nested subpart" in nested["raw_task"]
+    assert "Fourth nested subpart" in nested["raw_task"]
+
+    ordinary_answers = next(
+        item for item in anchors if "reasonable assumptions" in item["raw_task"]
+    )
+    assert ordinary_answers["raw_task"] == (
+        "Make reasonable assumptions and find the answers. "
+        "Remember to estimate first."
+    )
+    inline_answer = next(
+        item for item in anchors if "first power larger" in item["raw_task"]
+    )
+    assert inline_answer["raw_task"] == "Is the first power larger?"
+
+
+def test_grade8_science_final_blocks_inventory_nine_questions_and_four_projects():
+    source = (
+        "## 2.4 Microorganisms and Us\n"
+        "Microorganisms interact with food, soil, and health.\n"
+        "\\section*{Keep the curiosity alive}\n"
+        "\\begin{itemize}\n"
+        "\\item[1.] Label the cell diagram.\n"
+        "\\item[2.] Study the yeast set-up in Fig. 2.14 and answer:\n"
+        "\\begin{itemize}\n"
+        "\\item[(i)] Predict what happens after four hours and choose a reason.\n"
+        "\\item[(ii)] Explain the purpose of passing the gas into lime water.\n"
+        "\\end{itemize}\n"
+        "\\begin{figure}\n"
+        "\\includegraphics{https://example.test/fig-2-14.png}\n"
+        "\\caption{Fig. 2.14: Experimental set-up}\n"
+        "\\end{figure}\n"
+        "\\item[3.] Explain why a bean farmer may not add nitrogen fertiliser.\n"
+        "\\item[4.] Compare two compost pits with and without dry leaves.\n"
+        "\\item[5.] Identify the three described microorganisms.\n"
+        "\\item[6.] Design an experiment for microbial growth conditions.\n"
+        "\\item[7.] Compare bread kept near a sink and in a refrigerator.\n"
+        "\\item[8.] Give two explanations for curd becoming more sour.\n"
+        "\\item[9.] Observe Fig. 2.15 and answer all three subparts.\n"
+        "\\begin{figure}\n"
+        "\\includegraphics{https://example.test/fig-2-15.png}\n"
+        "\\caption{Fig. 2.15: Experimental set-up}\n"
+        "\\end{figure}\n"
+        "\\end{itemize}\n"
+        "\\section*{Discover, design, and debate}\n"
+        "\\begin{itemize}\n"
+        "\\item[-] Investigate India's biogas programme.\n"
+        "\\item[-] Document a traditional fermented food from your area.\n"
+        "\\item[-] Study the parts of a mushroom under magnification.\n"
+        "\\item[-] Interview an entrepreneur about mushroom cultivation.\n"
+        "\\end{itemize}\n"
+    )
+    sections = g.parse_mmd_sections(source)
+    anchors = g._attach_explicit_figure_images(
+        g._source_task_anchors(sections), sections)
+    questions = [
+        item for item in anchors if item["source_kind"] == "exercise"
+    ]
+    projects = [
+        item for item in anchors if item["source_kind"] == "activity"
+    ]
+
+    assert len(questions) == 9
+    assert len(projects) == 4
+    assert "(i)" in questions[1]["raw_task"]
+    assert "(ii)" in questions[1]["raw_task"]
+    assert questions[1]["image_urls"] == [
+        "https://example.test/fig-2-14.png"]
+    assert questions[8]["image_urls"] == [
+        "https://example.test/fig-2-15.png"]
+    assert all(item["_topic_scope"] == "chapter" for item in anchors)
+
+
+def test_grade8_science_activity_figures_use_exact_source_boundaries():
+    disease_figures = "".join(
+        (
+            "\\begin{figure}\n"
+            f"\\includegraphics{{https://example.test/disease-{index}.png}}\n"
+            f"\\caption{{{caption}}}\n"
+            "\\end{figure}\n"
+        )
+        for index, caption in enumerate(
+            ("Cold and flu", "Typhoid", "Diabetes", "Asthma", "Chickenpox"),
+            start=1,
+        )
+    )
+    source = (
+        "\\subsection*{3.2 How Can We Stay Healthy?}\n"
+        "\\section*{Activity 3.3: Let us compare}\n"
+        "\\begin{itemize}\n"
+        "\\item[-] Look at Fig. 3.3a and Fig. 3.3b. Which playground "
+        "would you like to play in, and why?\n"
+        "\\item[-] Most of us would choose the clean playground; this is "
+        "the supplied answer.\n"
+        "\\end{itemize}\n"
+        "\\begin{figure}\n"
+        "\\includegraphics{https://example.test/fig-3-3.png}\n"
+        "\\caption{Fig. 3.3: Two different playgrounds}\n"
+        "\\end{figure}\n"
+        "\\subsection*{3.5 How to Prevent and Control Diseases?}\n"
+        "\\begin{figure}\n"
+        "\\includegraphics{https://example.test/fig-3-5-a.png}\n"
+        "\\caption{Fig. 3.5 (a): Spread in the community}\n"
+        "\\end{figure}\n"
+        "\\section*{Activity 3.7: Let us infer}\n"
+        "\\begin{itemize}\n"
+        "\\item[-] Study the infographic in Fig. 3.5b. How did resistance "
+        "develop, and what precautions should be taken?\n"
+        "\\item[-] To tackle the problem, use antibiotics only as "
+        "prescribed; this is the supplied answer.\n"
+        "\\end{itemize}\n"
+        "\\begin{figure}\n"
+        "\\includegraphics{https://example.test/fig-3-5-b.png}\n"
+        "\\caption{Fig. 3.5 (b): Development of resistance}\n"
+        "\\end{figure}\n"
+        "\\section*{Keep the curiosity alive}\n"
+        "\\begin{itemize}\n"
+        "\\item[1.] Group the diseases shown in the images as communicable "
+        "or non-communicable.\n"
+        f"{disease_figures}"
+        "\\end{itemize}\n"
+    )
+    sections = g.parse_mmd_sections(source)
+    anchors = g._attach_explicit_figure_images(
+        g._source_task_anchors(sections), sections)
+
+    compare = next(
+        item for item in anchors if item["source_label"].startswith(
+            "Activity 3.3"))
+    resistance = next(
+        item for item in anchors if item["source_label"].startswith(
+            "Activity 3.7"))
+    disease_grouping = next(
+        item for item in anchors if item["source_label"].endswith("Q1"))
+
+    assert "supplied answer" not in compare["raw_task"]
+    assert compare["image_urls"] == ["https://example.test/fig-3-3.png"]
+    assert "supplied answer" not in resistance["raw_task"]
+    assert resistance["image_urls"] == [
+        "https://example.test/fig-3-5-b.png"]
+    assert len(disease_grouping["image_urls"]) == 5
+    assert list(disease_grouping["_image_captions"].values()) == [
+        "Cold and flu", "Typhoid", "Diabetes", "Asthma", "Chickenpox",
+    ]
+    assert g._figure_reference_ids(
+        "Compare Fig. 3.5a, Fig. 3.5b, and Fig. 3.3a."
+    ) == ["3.5(a)", "3.5(b)", "3.3(a)"]
+
+
+def test_grade8_science_activity_result_prose_and_infographic_boundaries():
+    source = (
+        "\\subsection*{3.4 Diseases: What Are the Causes and Types?}\n"
+        "\\section*{Activity 3.4: Let us find out}\n"
+        "\\begin{itemize}\n"
+        "\\item[-] Check the information in Table 3.1 and add missing "
+        "details.\n"
+        "\\item[-] Study the table and propose preventive steps.\n"
+        "\\end{itemize}\n"
+        "\\begin{table}\n"
+        "\\begin{tabular}{|l|l|}\n"
+        "Disease ![](https://example.test/decorative.png) & Prevention \\\\\n"
+        "\\end{tabular}\n"
+        "\\end{table}\n"
+        "By studying the Table 3.1, we can understand the completed answer.\n"
+        "Parasites are unrelated following exposition.\n"
+        "\\subsection*{3.5 How to Prevent and Control Diseases?}\n"
+        "\\section*{Activity 3.6: Let us read}\n"
+        "\\section*{Odisha - community-led sanitation campaign}\n"
+        "A sanitation campaign helped families build and use toilets.\n"
+        "What do you infer from this case study? Simple steps like good "
+        "sanitation can greatly reduce the spread of communicable diseases. "
+        "Find similar campaigns in your location. Share and discuss their "
+        "impact with your peers.\n"
+        "\\section*{Ability of the body to fight diseases}\n"
+        "Immunity protects the body.\n"
+        "\\section*{Think like a scientist}\n"
+        "Observations\nJenner observed a pattern.\n\n"
+        "Hypothesis\n![](https://example.test/hypothesis.png)\n"
+        "Cowpox exposure might protect people.\n\n"
+        "Experimentation\n![](https://example.test/experiment.png)\n"
+        "He tested the hypothesis.\n\n"
+        "Results\nThe test supported it.\n\n"
+        "Application\nMass vaccination helped eradicate smallpox.\n"
+        "![](https://example.test/application.png)\n\n"
+        "Vaccines are discussed in unrelated following prose.\n"
+        "![](https://example.test/unrelated.png)\n"
+        "\\subsection*{3.5.1 Treatment of diseases}\n"
+        "Treatment follows diagnosis.\n"
+    )
+    sections = g.parse_mmd_sections(source)
+    anchors = g._attach_explicit_figure_images(
+        g._source_task_anchors(sections), sections)
+
+    table_activity = next(
+        item for item in anchors if item["source_label"].startswith(
+            "Activity 3.4"))
+    sanitation = next(
+        item for item in anchors if item["source_label"].startswith(
+            "Activity 3.6"))
+    scientific_method = next(
+        item for item in anchors if item["source_label"] == (
+            "Think like a scientist"))
+
+    assert "Table 3.1" in table_activity["raw_task"]
+    assert "By studying" not in table_activity["raw_task"]
+    assert "Parasites" not in table_activity["raw_task"]
+    assert table_activity["image_urls"] == []
+    assert "sanitation campaign helped" in sanitation["raw_task"]
+    assert "What do you infer" in sanitation["raw_task"]
+    assert "Find similar campaigns" in sanitation["raw_task"]
+    assert "Simple steps like" not in sanitation["raw_task"]
+    assert scientific_method["source_kind"] == "activity"
+    assert scientific_method["_activity_origin"] is False
+    assert "Application" in scientific_method["raw_task"]
+    assert "Vaccines are discussed" not in scientific_method["raw_task"]
+    assert scientific_method["image_urls"] == [
+        "https://example.test/hypothesis.png",
+        "https://example.test/experiment.png",
+        "https://example.test/application.png",
+    ]
+
+
 def test_inventory_keeps_distinct_questions_with_shared_section_label():
     items = [
         {
@@ -2787,6 +4393,65 @@ def test_inventory_keeps_distinct_questions_with_shared_section_label():
         for number in range(1, 12)
     ]
     assert len(g._merge_source_task_anchors(items, [])) == 11
+
+
+def test_inventory_keeps_repeated_wording_when_source_context_differs():
+    prompt = "What do you observe?"
+    items = [
+        {
+            "source_kind": "checkpoint_question",
+            "source_label": "Reflect",
+            "parent_source_label": "Activity 2.1",
+            "topic_hint": "Microorganisms",
+            "raw_task": prompt,
+        },
+        {
+            "source_kind": "checkpoint_question",
+            "source_label": "Reflect",
+            "parent_source_label": "Activity 2.2",
+            "topic_hint": "Food Preservation",
+            "raw_task": prompt,
+        },
+    ]
+
+    assert g._merge_source_task_anchors(items, []) == items
+
+
+def test_inventory_still_dedupes_trace_equivalent_representations():
+    item = {
+        "source_kind": "exercise",
+        "source_label": "Question 1",
+        "parent_source_label": "Exercise",
+        "topic_hint": "Powers",
+        "raw_task": "Write the number as a power.",
+    }
+
+    assert g._merge_source_task_anchors([item, dict(item)], []) == [item]
+
+
+def test_implicit_visual_does_not_attach_decorative_nearest_image():
+    source = (
+        "## Cells\n"
+        "\\begin{figure}\n"
+        "\\includegraphics{https://example.test/school-logo.png}\n"
+        "\\caption{Decorative school logo}\n"
+        "\\end{figure}\n"
+    )
+    sections = g.parse_mmd_sections(source)
+    item = {
+        "source_kind": "diagram_task",
+        "source_label": "Observe",
+        "topic_hint": "Cells",
+        "raw_task": "Look at the image and explain the process.",
+        "_source_section_index": 0,
+        "_source_position": 0,
+    }
+
+    attached = g._attach_explicit_figure_images([item], sections)[0]
+
+    assert attached["image_urls"] == []
+    assert attached["_figure_images_resolved"] is True
+    assert attached["requires_visual"] is False
 
 
 def test_anchor_merge_preserves_full_mcq_stem_and_its_own_options():
@@ -3081,6 +4746,12 @@ def test_final_checkpoint_missing_source_topic_resumes_from_prior_stage(
         "_reconcile_resumed_mined_types",
         lambda *args, **kwargs: {"types": []},
     )
+    # This fixture isolates source-topic recovery. RNE also contains real
+    # deterministic task anchors; allowing those into this deliberately empty
+    # inventory would correctly rewind the 91% checkpoint for a fresh
+    # certified Type-host review. That independent contract is covered by the
+    # checkpoint inventory-refresh tests.
+    monkeypatch.setattr(g, "_source_task_anchors", lambda _sections: [])
     monkeypatch.setattr(
         g,
         "_validate_final_or_raise",
@@ -3165,6 +4836,42 @@ def test_final_checkpoint_same_label_with_truncated_task_forces_refresh():
     assert any("truncated or stale" in reason for reason in reasons)
 
 
+def test_final_checkpoint_same_qid_with_changed_semantics_forces_refresh():
+    source = (
+        "## Microorganisms\n"
+        "### Activity\n"
+        "What changes do you observe?\n"
+    )
+    sections = g.parse_mmd_sections(source)
+    anchors = g._source_task_anchors(sections)
+    assert len(anchors) == 1
+    anchor = anchors[0]
+    checkpoint = g._make_concept_checkpoint(
+        "final_content_ready",
+        records=[],
+        question_task_inventory={"items": [{
+            "qid": "QINV-0001",
+            "source_kind": "exercise",
+            "source_label": anchor["source_label"],
+            "parent_source_label": anchor.get("parent_source_label") or "",
+            "topic_hint": "A stale topic",
+            "raw_task": anchor["raw_task"],
+            "normalized_task": anchor["raw_task"],
+            "_activity_origin": False,
+        }], "stats": {}},
+        mined_types={"types": []},
+        method_row_snapshot=[],
+    )
+
+    reasons = g._final_checkpoint_refresh_reasons(
+        checkpoint,
+        sections=sections,
+        source_topic_excerpts=g._group_source_topic_excerpts(sections),
+    )
+
+    assert "source inventory semantics changed" in reasons
+
+
 def test_saved_final_checkpoint_reconciles_wrong_figure_tag_without_api(
     monkeypatch,
 ):
@@ -3231,13 +4938,27 @@ def test_saved_final_checkpoint_reconciles_wrong_figure_tag_without_api(
                 "raw_task": (
                     "Compare the national symbols shown in the chapter."
                 ),
-        },
-    ], "stats": {}}
+            },
+        ], "stats": {}}
+    mined_types = {"types": []}
+    g._reset_placement_certifications(mined_types)
+    g._certify_inventory_host(
+        mined_types,
+        "QINV-0001",
+        records[0],
+        basis="type_host_review",
+    )
+    g._certify_inventory_host(
+        mined_types,
+        "QINV-0002",
+        records[0],
+        basis="type_host_review",
+    )
     checkpoint = g._make_concept_checkpoint(
         "final_content_ready",
         records=records,
         question_task_inventory=inventory,
-        mined_types={"types": []},
+        mined_types=mined_types,
         method_row_snapshot=[],
     )
     emitted = []
@@ -3314,11 +5035,19 @@ def test_saved_final_checkpoint_restores_missing_inventory_example_without_api(
         }],
         "stats": {"total_inventory_items": 1},
     }
+    mined_types = {"types": []}
+    g._reset_placement_certifications(mined_types)
+    g._certify_inventory_host(
+        mined_types,
+        "QINV-0007",
+        records[0],
+        basis="type_host_review",
+    )
     checkpoint = g._make_concept_checkpoint(
         "final_content_ready",
         records=records,
         question_task_inventory=inventory,
-        mined_types={"types": []},
+        mined_types=mined_types,
         method_row_snapshot=[],
     )
     emitted = []
@@ -4165,3 +5894,81 @@ def test_unambiguous_case_evidence_overrides_wrong_concept_guess():
         britain, candidates, concepts) == "CONCEPT-0002"
     assert g._high_confidence_assignment_override(
         mixed, candidates, concepts) == "CONCEPT-0003"
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    [
+        (
+            "The task introduces a systematic investigation of puri puffing. "
+            "What are the different things that may change the way a puri "
+            "puffs up when fried?"
+        ),
+        (
+            "The task refers to recording observations during the puri-frying "
+            "experiment. It is also a good idea to keep notes of everything "
+            "that you see and sense when doing an experiment. Did the oil "
+            "splatter, smell, or smoke?"
+        ),
+    ],
+)
+def test_activity_host_override_rejects_single_prefix_collision(evidence):
+    concepts = {
+        "CONCEPT-0001": {
+            "concept_id": "CONCEPT-0001",
+            "topic": "Exploring the Investigative World of Science",
+            "concept": "Particle Motion in Different States of Matter",
+            "is_culmination": False,
+        },
+        "CONCEPT-0002": {
+            "concept_id": "CONCEPT-0002",
+            "topic": "Exploring the Investigative World of Science",
+            "concept": "Reflection and Refraction in Everyday Optics",
+            "is_culmination": False,
+        },
+        "CONCEPT-0003": {
+            "concept_id": "CONCEPT-0003",
+            "topic": "Exploring the Investigative World of Science",
+            "concept": (
+                "Designing Fair Tests with Variables and Measurable Evidence"
+            ),
+            "is_culmination": False,
+        },
+    }
+    activity = {
+        "is_activity": True,
+        "_source_task_evidence": evidence,
+        "placement_scope": "normal",
+    }
+
+    assert g._high_confidence_assignment_override(
+        activity, tuple(concepts), concepts) == ""
+
+
+def test_activity_host_override_accepts_two_independent_title_signals():
+    concepts = {
+        "CONCEPT-0001": {
+            "concept_id": "CONCEPT-0001",
+            "topic": "Scientific Inquiry",
+            "concept": "Particle Motion in Different States of Matter",
+            "is_culmination": False,
+        },
+        "CONCEPT-0002": {
+            "concept_id": "CONCEPT-0002",
+            "topic": "Scientific Inquiry",
+            "concept": (
+                "Designing Fair Tests with Variables and Measurable Evidence"
+            ),
+            "is_culmination": False,
+        },
+    }
+    activity = {
+        "is_activity": True,
+        "_source_task_evidence": (
+            "Design a fair test with variables and record measurable evidence."
+        ),
+        "placement_scope": "normal",
+    }
+
+    assert g._high_confidence_assignment_override(
+        activity, tuple(concepts), concepts) == "CONCEPT-0002"

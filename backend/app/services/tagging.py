@@ -129,12 +129,12 @@ def _classify_concept(c: models.Concept, index: writer.WorkbookIndex) -> list[di
         key = writer.concept_placement_key(c, topic)
         if key in index.c_placements:
             outcome = "SKIP"
-        elif c.concept_title in index.concept_titles:
+        elif key[0] in index.concept_titles:
             outcome = "TAG"
         else:
             outcome = "ADD"
         index.c_placements.add(key)
-        index.concept_titles.add(c.concept_title)
+        index.concept_titles.add(key[0])
         rows.append({
             "kind": "concept",
             "outcome": outcome,

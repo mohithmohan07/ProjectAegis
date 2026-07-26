@@ -8,7 +8,27 @@ from app.services import build_concepts, openai_usage
 from tests.conftest import convert_concept_upload, stream_events, stream_result
 
 
-def test_post_learning_creates_concepts(client, first_chapter):
+def _use_specific_dry_learner_analysis(monkeypatch):
+    monkeypatch.setattr(
+        build_concepts.concept_refiner,
+        "_fallback_misconception",
+        lambda title: (
+            f"Students may believe the description of {title} guarantees the "
+            "same result in every context."
+        ),
+    )
+    monkeypatch.setattr(
+        build_concepts.concept_refiner,
+        "_fallback_error_analysis",
+        lambda title: (
+            f"Students may reverse a stated relationship while applying "
+            f"{title} to an example."
+        ),
+    )
+
+
+def test_post_learning_creates_concepts(client, first_chapter, monkeypatch):
+    _use_specific_dry_learner_analysis(monkeypatch)
     files = {"file": ("notes.txt", io.BytesIO(
         b"## Trigonometry Basics\nSine ratio: opposite over hypotenuse\n"
         b"Cosine ratio: adjacent over hypotenuse"
@@ -25,8 +45,11 @@ def test_post_learning_creates_concepts(client, first_chapter):
     assert result["rows_appended"] >= 2
 
 
-def test_post_learning_groups_concepts_under_one_topic(client, db, first_chapter):
+def test_post_learning_groups_concepts_under_one_topic(
+    client, db, first_chapter, monkeypatch,
+):
     """Concepts sharing a topic name must share ONE Topic row (no duplicates)."""
+    _use_specific_dry_learner_analysis(monkeypatch)
     files = {"file": ("grouping.txt", io.BytesIO(
         b"## Grouping Topic 9912\nGrouping concept alpha 9912\n"
         b"Grouping concept beta 9912\nGrouping concept gamma 9912"
@@ -185,6 +208,120 @@ def test_checkpoint_without_inventory_does_not_erase_saved_inventory(
     assert saved.question_inventory["mined_types"][0]["type_id"] == "TYPE-KEEP"
 
 
+def test_store_inventory_preserves_placement_certifications_after_success():
+    job = models.UploadJob()
+    ledger = {
+        "version": 1,
+        "hosts": {
+            "QINV-0001": {
+                "topic": "Methods",
+                "topic_key": "methods",
+                "concept": "Method Beta",
+                "concept_key": "method beta",
+                "is_culmination": False,
+                "basis": "type_host_review",
+            },
+        },
+    }
+
+    build_concepts._store_inventory(job, {
+        "question_task_inventory": {
+            "items": [{"qid": "QINV-0001"}],
+            "stats": {"total_inventory_items": 1},
+        },
+        "mined_types": {
+            "types": [{"type_id": "TYPE-0001"}],
+            build_concepts.generation._PLACEMENT_CERTIFICATIONS_KEY: ledger,
+        },
+    })
+
+    assert job.question_inventory["mined_types"] == [{
+        "type_id": "TYPE-0001",
+    }]
+    assert job.question_inventory[
+        build_concepts.generation._PLACEMENT_CERTIFICATIONS_KEY
+    ] == ledger
+    assert job.question_inventory[
+        build_concepts.generation._PLACEMENT_CERTIFICATIONS_KEY
+    ] is not ledger
+
+
+def test_deposit_canonicalizes_bare_tex_restored_from_inventory(
+    db,
+    first_chapter,
+    monkeypatch,
+):
+    chapter = db.get(models.Chapter, first_chapter["id"])
+    task = r"Calculate \frac{1}{2}+\frac{1}{3} and explain the method."
+    inventory = {"items": [{
+        "qid": "QINV-0001",
+        "source_kind": "exercise",
+        "source_label": "Exercise 1",
+        "topic_hint": "Fractions",
+        "raw_task": task,
+        "normalized_task": task,
+    }]}
+    records = [{
+        "topic": "Fractions",
+        "parent_concept": "Operations",
+        "concept_title": "Adding Fractions",
+        "concept_details": (
+            "Description: Add fractions by expressing them with a common "
+            "denominator. Achieving Mastery: Explaining why the common "
+            "denominator preserves value. // "
+            "Misconception/ Error Analysis: Misconceptions: Learners may add "
+            "denominators directly.; Error Analysis: Learners may change the "
+            "denominator without scaling the numerator."
+        ),
+        "keywords": "fractions, denominator",
+    }]
+    validated: list[list[dict]] = []
+
+    def validate_final(current, **_kwargs):
+        validated.append(copy.deepcopy(current))
+        assert all(
+            build_concepts.generation.kr.rich_text_issues(
+                row["concept_details"]
+            ) == []
+            for row in current
+        )
+        assert any(
+            r"[Katex] \frac{1}{2}+\frac{1}{3} [/Katex]"
+            in row["concept_details"]
+            for row in current
+        )
+
+    monkeypatch.setattr(
+        build_concepts.generation,
+        "_validate_final_or_raise",
+        validate_final,
+    )
+    monkeypatch.setattr(
+        build_concepts.concept_validator,
+        "validate_concept_rows",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "errors": [],
+            "summary": {"warnings": 0},
+        },
+    )
+
+    created, merged = build_concepts._deposit_concepts(
+        db,
+        chapter,
+        records,
+        "Post",
+        "NCERT Grade 8",
+        inventory=inventory,
+        mined_types={"types": []},
+        source_text=task,
+    )
+
+    assert created
+    assert merged == []
+    assert validated
+
+
 def test_post_learning_discard_control_durably_clears_only_final_checkpoint(
     db, first_chapter, monkeypatch,
 ):
@@ -233,7 +370,7 @@ def test_post_learning_discard_control_durably_clears_only_final_checkpoint(
     assert "Discarded invalid generation checkpoint" in saved.detail
 
 
-def test_post_learning_api_discards_invalid_final_and_resumes_prior_without_api(
+def test_post_learning_api_discards_invalid_final_and_completes_retry_without_api(
     client, db, first_chapter, monkeypatch,
 ):
     source = "# T\nA short source section."
@@ -370,6 +507,47 @@ def test_post_learning_api_discards_invalid_final_and_resumes_prior_without_api(
     status = client.get(f"/build-concepts/uploads/{job.id}").json()
     assert status["checkpoint_stage"] == "post_type_assignment"
     assert status["checkpoint_progress"] == 0.91
+
+    accepted = []
+
+    def accept(current, **_kwargs):
+        accepted.append([row["concept_title"] for row in current])
+        return {"ok": True, "errors": [], "summary": {}}
+
+    deposited = []
+
+    def deposit(_db, *, records, **_kwargs):
+        deposited.append([row["concept_title"] for row in records])
+        return [], [], {
+            "written": 0,
+            "sources_updated": 0,
+            "parent_column": True,
+        }
+
+    monkeypatch.setattr(
+        build_concepts.generation, "_validate_final_or_raise", accept)
+    monkeypatch.setattr(
+        build_concepts, "_deposit_and_publish_concepts", deposit)
+
+    result = stream_result(client.post(
+        f"/build-concepts/post-learning/uploads/{job.id}/generate",
+        json={"target_chapter_id": chapter.id},
+    ))
+
+    assert result["job_id"] == job.id
+    assert accepted[0][0] == "Prior-stage concept"
+    assert deposited[0][0] == "Prior-stage concept"
+    db.expire_all()
+    completed = db.get(models.UploadJob, job.id)
+    assert completed.status == "generated"
+    assert completed.generation_checkpoint == {}
+    assert completed.openai_usage.get("request_count", 0) == 0
+
+    completed_status = client.get(
+        f"/build-concepts/uploads/{job.id}").json()
+    assert completed_status["checkpoint_available"] is False
+    assert completed_status["checkpoint_stage"] == ""
+    assert completed_status["checkpoint_progress"] == 0.0
 
 
 def test_post_learning_preserves_invalid_checkpoint_and_requires_start_over(
@@ -537,8 +715,10 @@ def test_upload_workbook_failure_rolls_back_new_concepts(
         "concept_title": marker,
         "concept_details": (
             "Description: Learners apply a complete, source-grounded "
-            "procedure accurately. // Error Analysis: Students may omit a "
-            "required step while applying the procedure."
+            "procedure accurately. // Misconception/ Error Analysis: "
+            "Misconceptions: Students may believe every procedure uses the "
+            "same sequence of steps.; Error Analysis: Students may omit a "
+            "required step while applying the stated procedure."
         ),
         "keywords": "",
     }
@@ -625,6 +805,85 @@ def test_checkpoint_history_falls_back_from_unknown_newer_stage():
     assert restored["stage"] == "pre_type_assignment"
 
 
+def test_post_learning_persists_compatible_mirror_before_fallback_can_fail(
+    db, first_chapter, monkeypatch,
+):
+    job = models.UploadJob(
+        module="build_concepts",
+        upload_type="document",
+        learning_kind="post",
+        filename="stale-98-mirror.mmd",
+        mmd_text="## Topic\nSource body",
+        status="converted",
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    chapter = db.get(models.Chapter, first_chapter["id"])
+    common = {
+        "records": [{"topic": "T", "concept_title": "Compatible prior"}],
+        "question_task_inventory": {"items": [], "stats": {}},
+        "mined_types": {"types": []},
+        "method_row_snapshot": [],
+    }
+    compatible = build_concepts.generation._make_concept_checkpoint(
+        "pre_type_assignment", **common)
+    incompatible_final = build_concepts.generation._make_concept_checkpoint(
+        "final_content_ready", **common)
+    incompatible_final["stage_schema_version"] = 1
+    checkpoint_args = {
+        "fingerprint": build_concepts._generation_checkpoint_fingerprint(
+            job, chapter),
+        "target_identity": build_concepts._generation_target_identity(chapter),
+        "target_chapter_id": chapter.id,
+    }
+    envelope = build_concepts._merge_generation_checkpoint_history(
+        {}, compatible, **checkpoint_args)
+    job.generation_checkpoint = (
+        build_concepts._merge_generation_checkpoint_history(
+            envelope, incompatible_final, **checkpoint_args)
+    )
+    db.commit()
+    assert job.generation_checkpoint["stage"] == "final_content_ready"
+    assert job.generation_checkpoint["progress"] == 0.98
+    received: list[dict] = []
+
+    def stop_before_checkpoint(*_args, resume_checkpoint=None, **_kwargs):
+        received.append(copy.deepcopy(resume_checkpoint))
+        raise RuntimeError("stop before the first replacement checkpoint")
+
+    monkeypatch.setattr(
+        build_concepts.generation,
+        "concepts_from_mmd",
+        stop_before_checkpoint,
+    )
+    monkeypatch.setattr(
+        build_concepts.drive_checkpoints,
+        "schedule_checkpoint_backup",
+        lambda *_args, **_kwargs: None,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="stop before the first replacement checkpoint",
+    ):
+        build_concepts.generate_post_learning(db, job.id, chapter.id)
+
+    assert received
+    assert received[0]["stage"] == "pre_type_assignment"
+    assert [
+        entry["stage"] for entry in received[0]["checkpoints"]
+    ] == ["pre_type_assignment"]
+    db.expire_all()
+    saved = db.get(models.UploadJob, job.id)
+    assert saved.generation_checkpoint["stage"] == "pre_type_assignment"
+    assert saved.generation_checkpoint["progress"] == 0.81
+    assert [
+        entry["stage"]
+        for entry in saved.generation_checkpoint["checkpoints"]
+    ] == ["pre_type_assignment"]
+
+
 def test_checkpoint_history_discard_control_removes_stage_and_mirrors_fallback():
     common = {
         "records": [{"concept_title": "C"}],
@@ -693,8 +952,9 @@ def test_checkpoint_history_discard_only_stage_clears_durable_envelope():
     ) == {}
 
 
-def test_inventory_csv_download(client, db, first_chapter):
+def test_inventory_csv_download(client, db, first_chapter, monkeypatch):
     """The stored Question / Task Inventory downloads as an audit CSV."""
+    _use_specific_dry_learner_analysis(monkeypatch)
     files = {"file": ("inv.txt", io.BytesIO(
         b"## Inventory Topic 7731\nInventory concept alpha 7731"
     ), "text/plain")}
