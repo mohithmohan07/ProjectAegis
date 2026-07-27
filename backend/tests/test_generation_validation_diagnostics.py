@@ -1609,6 +1609,66 @@ def test_final_rich_text_repair_wraps_unambiguous_math_without_api(
     }
 
 
+def test_final_rich_text_repair_handles_grouped_power_types_without_api(
+    monkeypatch,
+):
+    details = (
+        "Description: Compare equivalent grouped powers."
+        "\nAchieving Mastery: Rewriting each expression without changing its "
+        "value. // Types: Type 01: Rewriting powers as powers of powers — "
+        "Students construct equivalent grouped powers. Case 01: Factor the "
+        "exponent Example 01: Use (n^a)^b = n^(ab). "
+        "Type 02: Combining powers with equal exponents — Students combine "
+        "the bases while retaining the exponent. Case 01: Multiply equal "
+        "powers Example 01: Use m^a × n^a = (mn)^a and compute "
+        "2^5 × 5^5. Case 02: Divide equal powers Example 01: Use "
+        "m^a/n^a = (m/n)^a and simplify 10^4/5^4. // "
+        "Misconception/ Error Analysis: Misconceptions: Students may believe "
+        "the outer exponent applies only to the last factor.; Error Analysis: "
+        "Students may multiply the exponents without first identifying the "
+        "entire grouped base."
+    )
+    row = _row(
+        "Rewrite grouped powers",
+        details,
+        topic="T",
+        parent="P",
+        evidence="SRC-LOCKED-POWERS",
+    )
+    records = [row, _culmination(topic="T")]
+    monkeypatch.setattr(
+        g,
+        "_openai_json",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("grouped-power formatting must not call the API")
+        ),
+    )
+
+    repaired, changed = g._repair_final_rich_text_via_api(
+        records,
+        meta=g._metadata(subject="Mathematics"),
+        inventory={"items": [], "stats": {}},
+        mined_types={"types": []},
+    )
+
+    repaired_details = repaired[0]["concept_details"]
+    assert changed is True
+    assert g.kr.rich_text_issues(repaired_details) == []
+    assert g.kr.unwrap_katex(repaired_details) == details
+    assert "[Katex] (n^a)^b = n^(ab) [/Katex]" in repaired_details
+    assert "[Katex] m^a × n^a = (mn)^a [/Katex]" in repaired_details
+    assert "[Katex] m^a/n^a = (m/n)^a [/Katex]" in repaired_details
+    assert {
+        key: value
+        for key, value in repaired[0].items()
+        if key != "concept_details"
+    } == {
+        key: value
+        for key, value in row.items()
+        if key != "concept_details"
+    }
+
+
 def test_saved_final_checkpoint_repairs_rich_text_once_and_persists(
     monkeypatch,
 ):

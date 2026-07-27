@@ -167,6 +167,22 @@ def test_plain_ascii_equations_require_katex(expression):
             r"Calculate a \times b.",
             r"Calculate [Katex] a \times b [/Katex].",
         ),
+        (
+            "The answer has the form (a^m)^n.",
+            "The answer has the form [Katex] (a^m)^n [/Katex].",
+        ),
+        (
+            "Use (n^a)^b = n^(ab).",
+            "Use [Katex] (n^a)^b = n^(ab) [/Katex].",
+        ),
+        (
+            "Use m^a × n^a = (mn)^a.",
+            "Use [Katex] m^a × n^a = (mn)^a [/Katex].",
+        ),
+        (
+            "Use m^a/n^a = (m/n)^a.",
+            "Use [Katex] m^a/n^a = (m/n)^a [/Katex].",
+        ),
     ],
 )
 def test_unwrapped_math_repair_preserves_hosted_source_fragments(
@@ -219,6 +235,10 @@ def test_unwrapped_math_repair_keeps_whitespace_separated_prose_atoms_out(
         r"a + \frac{1}{2}",
         "a=10",
         "250/25+1",
+        "(a^m)^n",
+        "(n^a)^b = n^(ab)",
+        "m^a × n^a = (mn)^a",
+        "m^a/n^a = (m/n)^a",
         r"  \theta  ",
     ],
 )
@@ -235,6 +255,8 @@ def test_unambiguous_math_expression_accepts_one_complete_range(expression):
         r"a \frac{1}{2}",
         r"\frac{1}{2} scale",
         r"\frac{1}",
+        "(students)^2",
+        "(for example)^2",
     ],
 )
 def test_unambiguous_math_expression_rejects_prose_and_partial_math(
@@ -269,6 +291,13 @@ def test_unwrapped_math_repair_protects_existing_markup_and_ambiguous_tex():
     assert (
         r"use [Katex] \frac{1}{2} [/Katex]." in url_repaired
     )
+
+
+def test_partial_grouped_power_wrapper_is_still_rejected():
+    partial = "[Katex] (a^m) [/Katex]^n"
+
+    assert "raw_latex" in kr.rich_text_issues(partial)
+    assert kr.repair_unwrapped_math(partial) == partial
 
 
 def test_unwrapped_math_repair_handles_long_relations_iteratively():
