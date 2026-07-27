@@ -138,6 +138,10 @@ _RAW_LATEX_RE = re.compile(
     r"(?:\{[^}]*\}|[A-Za-z0-9])",
     re.IGNORECASE,
 )
+_RAW_SCRIPT_TAIL_RE = re.compile(
+    r"(?<![\w])[_^]\s*"
+    r"(?:\{[^}]*\}|\([^)]*\)|\[[^\]]*\]|[A-Za-z0-9])",
+)
 _TEX_COMMAND_GROUPS = {
     "frac": 2,
     "dfrac": 2,
@@ -231,6 +235,38 @@ def _balanced_group_end(
     return None
 
 
+_GROUP_MATH_CHARS_RE = re.compile(
+    r"[A-Za-z0-9\\{}_^+\-*/=<>.,%()\[\]\s\u00d7\u00f7]+"
+)
+
+
+def _balanced_math_group_end(value: str, start: int) -> int | None:
+    """Return a balanced, single-line group containing only math-like text."""
+    if start >= len(value) or value[start] not in "([":
+        return None
+    opening = value[start]
+    closing = ")" if opening == "(" else "]"
+    group_end = _balanced_group_end(
+        value, start, opening, closing)
+    if group_end is None:
+        return None
+    body = value[start + 1:group_end - 1].strip()
+    if (
+        not body
+        or "\n" in body
+        or _GROUP_MATH_CHARS_RE.fullmatch(body) is None
+        or (body.isalpha() and len(body) > 3)
+        or (
+            re.search(r"\s", body)
+            and re.search(
+                r"[_^+\-*/=<>\u00d7\u00f7\\]", body,
+            ) is None
+        )
+    ):
+        return None
+    return group_end
+
+
 def _consume_scripts(value: str, start: int) -> tuple[int, bool] | None:
     cursor = start
     scripted = False
@@ -242,6 +278,12 @@ def _consume_scripts(value: str, start: int) -> tuple[int, bool] | None:
         if value[argument_start] == "{":
             group_end = _balanced_group_end(
                 value, argument_start, "{", "}")
+            if group_end is None:
+                return None
+            cursor = group_end
+        elif value[argument_start] in "([":
+            group_end = _balanced_math_group_end(
+                value, argument_start)
             if group_end is None:
                 return None
             cursor = group_end
@@ -284,6 +326,16 @@ def _math_atom(
         if end != start + 1:
             return None
         return finish(end, False)
+    if character in "([":
+        group_end = _balanced_math_group_end(value, start)
+        if group_end is None:
+            return None
+        if not consume_scripts:
+            return None
+        scripted = _consume_scripts(value, group_end)
+        if scripted is None or not scripted[1]:
+            return None
+        return scripted[0], True
     if character != "\\":
         return None
 
@@ -671,7 +723,10 @@ def rich_text_issues(
         or re.search(r"\\[\[\]()]|(?<!\\)\$\$", delimiter_masked)
     ):
         issues.append("raw_math_delimiter")
-    if _RAW_LATEX_RE.search(math_masked):
+    if (
+        _RAW_LATEX_RE.search(math_masked)
+        or _RAW_SCRIPT_TAIL_RE.search(math_masked)
+    ):
         issues.append("raw_latex")
     if _has_raw_equation(delimiter_masked):
         issues.append("raw_math_expression")
