@@ -13906,6 +13906,346 @@ def _enforce_rendered_inventory_coverage(
     return out
 
 
+_TYPE_CASE_QUALIFIER_TOKEN_RE = re.compile(
+    r"\b(?:(?:Miscellaneous\s+)?(?:Type|Case)\s+\d{1,2}"
+    r"|Examples?(?:\s+0*\d+)?)\s*:",
+    re.IGNORECASE,
+)
+
+
+def _safe_type_case_qualifier(value: str) -> str:
+    """Keep concept context from becoming flat Types grammar."""
+    qualifier = re.sub(r"\s*//+\s*", " / ", str(value or ""))
+    qualifier = _TYPE_CASE_QUALIFIER_TOKEN_RE.sub(
+        lambda match: match.group(0).rstrip().rstrip(":"),
+        qualifier,
+    )
+    return re.sub(r"\s+", " ", qualifier).strip()
+
+
+def _disambiguate_certified_split_type_cases(
+    records: list[dict],
+    inventory: dict | None,
+    mined_types: dict | None,
+) -> list[dict]:
+    """Qualify only proven distinct Cases split from one reusable Type.
+
+    One mined Type can legitimately contain several Cases that the host review
+    assigns to different concepts. Rendering those Case-scoped units preserves
+    the source Examples and reviewed placements, but can leave two normal rows
+    with the same Type and Case definition. The strict hierarchy contract
+    rejects that cross-row duplicate.
+
+    Repair only when exact inventory Examples prove that the colliding segments
+    belong to distinct mined Case IDs/signatures from the same Type and every
+    QID is still on its certified host. Keep the canonical Type heading intact
+    and qualify only the later Case definition with its current concept title.
+    This preserves reusable Type identity and continuous Case numbering.
+    """
+    # Most final boundaries have no collision. Avoid rebuilding the full
+    # inventory-key index on those common/idempotent calls.
+    fast_seen: dict[tuple[str, str, tuple[str, ...]], int] = {}
+    collision_present = False
+    for row_index, record in enumerate(records):
+        concept_title = str(record.get("concept_title") or "").strip()
+        topic_key = cv._norm(str(record.get("topic") or ""))
+        if (
+            not topic_key
+            or cr.is_culmination(concept_title)
+        ):
+            continue
+        types_body = _types_body(record.get("concept_details") or "")
+        for type_match in cv._TYPE_SEGMENT_RE.finditer(types_body):
+            matched_type_body = type_match.group("body") or ""
+            definition_key = cv._normalized_type_definition(
+                cv._type_definition(matched_type_body))
+            case_keys: list[str] = []
+            for rendered_case in cv._CASE_SEGMENT_RE.finditer(
+                matched_type_body
+            ):
+                case_text = rendered_case.group(1) or ""
+                marker = cv._EXAMPLE_MARKER_RE.search(case_text)
+                case_title = (
+                    case_text[:marker.start()] if marker else case_text
+                )
+                key = cv._normalized_case_definition(case_title)
+                if key:
+                    case_keys.append(key)
+            signature = (topic_key, definition_key, tuple(case_keys))
+            first_row = fast_seen.get(signature)
+            if first_row is not None and first_row != row_index:
+                collision_present = True
+                break
+            fast_seen.setdefault(signature, row_index)
+        if collision_present:
+            break
+    if not collision_present:
+        return records
+
+    if not _placement_certification_contract_complete(
+        mined_types, inventory
+    ):
+        return records
+    certification_ledger = _placement_certification_ledger(mined_types)
+    if not certification_ledger:
+        return records
+
+    allowed_source_examples = _inventory_source_examples(inventory)
+    items_by_example_key: dict[str, list[dict]] = {}
+    for item in (inventory or {}).get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        qid = str(item.get("qid") or "").strip()
+        key = _inventory_coverage_key(_inventory_task_text(item))
+        if qid and key:
+            items_by_example_key.setdefault(key, []).append(item)
+    units_by_qid = _mined_assignment_units_by_qid(mined_types)
+    mined_by_type_id = {
+        str(mtype.get("type_id") or "").strip(): mtype
+        for mtype in (mined_types or {}).get("types") or []
+        if (
+            isinstance(mtype, dict)
+            and str(mtype.get("type_id") or "").strip()
+        )
+    }
+
+    def segment_proof(
+        matched_type_body: str,
+        normalized_definition: str,
+        record: dict,
+    ) -> dict | None:
+        qids: list[str] = []
+        for rendered_case in cv._CASE_SEGMENT_RE.finditer(
+            matched_type_body
+        ):
+            case_text = rendered_case.group(1) or ""
+            markers = cv._structural_example_markers(
+                case_text, allowed_source_examples)
+            for example in cv._case_examples(case_text, markers):
+                key = _inventory_coverage_key(
+                    _strip_leading_source_task_label(example).strip())
+                owners = items_by_example_key.get(key) or []
+                if len(owners) != 1:
+                    return None
+                qid = str(owners[0].get("qid") or "").strip()
+                if not qid or qid in qids:
+                    return None
+                expected_host = certification_ledger["hosts"].get(qid)
+                actual_host = _placement_host_identity(record)
+                if (
+                    not _placement_certification_entry_is_valid(
+                        expected_host)
+                    or actual_host["topic_key"]
+                    != expected_host["topic_key"]
+                    or actual_host["concept_key"]
+                    != expected_host["concept_key"]
+                    or actual_host["is_culmination"]
+                    != expected_host["is_culmination"]
+                ):
+                    return None
+                qids.append(qid)
+        if not qids:
+            return None
+
+        units = [units_by_qid.get(qid) for qid in qids]
+        if any(not isinstance(unit, dict) for unit in units):
+            return None
+        type_ids = {
+            str(unit.get("type_id") or "").strip()
+            for unit in units
+        }
+        if len(type_ids) != 1 or not next(iter(type_ids), ""):
+            return None
+        type_id = next(iter(type_ids))
+        mined_type = mined_by_type_id.get(type_id)
+        if not mined_type:
+            return None
+        canonical_titles = {
+            cv._normalized_type_definition(title)
+            for title in (
+                _canonical_mined_type_title(mined_type),
+                _canonical_mined_type_title(
+                    mined_type, include_definition=False),
+            )
+            if title
+        }
+        if normalized_definition not in canonical_titles:
+            return None
+
+        case_ids: set[str] = set()
+        case_signatures: set[str] = set()
+        for unit in units:
+            cases = unit.get("case_prompts") or []
+            if len(cases) != 1 or not isinstance(cases[0], dict):
+                return None
+            case_id = str(cases[0].get("case_id") or "").strip()
+            case_signature = bi.normalize_question_text(
+                cases[0].get("case_signature") or "")
+            if not case_id or not case_signature:
+                return None
+            case_ids.add(case_id)
+            case_signatures.add(case_signature)
+        return {
+            "type_id": type_id,
+            "qids": frozenset(qids),
+            "case_ids": frozenset(case_ids),
+            "case_signatures": frozenset(case_signatures),
+        }
+
+    out = [dict(record) for record in records]
+    # Mirrors concept_validator's exact cross-row duplicate signature.
+    seen: dict[tuple[str, str, tuple[str, ...]], int] = {}
+    proofs_by_signature: dict[
+        tuple[str, str, tuple[str, ...]],
+        list[dict | None],
+    ] = {}
+    repair_count = 0
+
+    for row_index, record in enumerate(out):
+        concept_title = re.sub(
+            r"\s+", " ", str(record.get("concept_title") or "")
+        ).strip()
+        topic_key = cv._norm(str(record.get("topic") or ""))
+        if (
+            not concept_title
+            or not topic_key
+            or cr.is_culmination(concept_title)
+        ):
+            continue
+
+        types_body = _types_body(record.get("concept_details") or "")
+        if not types_body:
+            continue
+        edits: list[tuple[int, int, str]] = []
+
+        for type_match in cv._TYPE_SEGMENT_RE.finditer(types_body):
+            matched_type_body = type_match.group("body") or ""
+            type_definition = cv._type_definition(matched_type_body)
+            normalized_definition = cv._normalized_type_definition(
+                type_definition
+            )
+            if not normalized_definition:
+                continue
+
+            case_definition_keys: list[str] = []
+            rendered_cases = list(
+                cv._CASE_SEGMENT_RE.finditer(matched_type_body))
+            for rendered_case in rendered_cases:
+                case_text = re.sub(
+                    r"\s+", " ", rendered_case.group(1) or ""
+                ).strip()
+                example_markers = cv._structural_example_markers(
+                    case_text,
+                    allowed_source_examples,
+                )
+                case_title = (
+                    case_text[:example_markers[0].start()].strip()
+                    if example_markers
+                    else case_text
+                )
+                normalized_case = cv._normalized_case_definition(case_title)
+                if normalized_case:
+                    case_definition_keys.append(normalized_case)
+
+            signature = (
+                topic_key,
+                normalized_definition,
+                tuple(case_definition_keys),
+            )
+            proof = segment_proof(
+                matched_type_body, normalized_definition, record)
+            first_row = seen.get(signature)
+            if first_row is None:
+                seen[signature] = row_index
+                proofs_by_signature[signature] = [proof]
+                continue
+            prior_proofs = proofs_by_signature.setdefault(signature, [])
+            # The validator has a separate within-row duplicate contract.
+            if first_row == row_index:
+                prior_proofs.append(proof)
+                continue
+            if (
+                not proof
+                or not prior_proofs
+                or any(not prior for prior in prior_proofs)
+                or any(
+                    prior["type_id"] != proof["type_id"]
+                    or prior["qids"] & proof["qids"]
+                    or prior["case_ids"] & proof["case_ids"]
+                    or prior["case_signatures"]
+                    & proof["case_signatures"]
+                    for prior in prior_proofs
+                    if prior
+                )
+                or not rendered_cases
+                or not case_definition_keys
+            ):
+                prior_proofs.append(proof)
+                continue
+
+            first_case = rendered_cases[0]
+            raw_case_body = first_case.group(1) or ""
+            raw_example_markers = cv._structural_example_markers(
+                raw_case_body, allowed_source_examples)
+            if not raw_example_markers:
+                continue
+            case_title_end = raw_example_markers[0].start()
+            raw_case_title = raw_case_body[:case_title_end]
+            raw_core = raw_case_title.rstrip()
+            if not raw_core:
+                continue
+            trailing_space = raw_case_title[len(raw_core):] or " "
+            qualifier = _safe_type_case_qualifier(concept_title)
+            if not qualifier:
+                prior_proofs.append(proof)
+                continue
+            qualified_case = f"{raw_core} — {qualifier}"
+            qualified_case_keys = list(case_definition_keys)
+            qualified_case_keys[0] = cv._normalized_case_definition(
+                qualified_case)
+            qualified_signature = (
+                topic_key,
+                normalized_definition,
+                tuple(qualified_case_keys),
+            )
+            if qualified_signature in seen:
+                # Duplicate concept titles are independently invalid. Do not
+                # invent an opaque numeric suffix to hide that separate defect.
+                continue
+
+            definition_start = (
+                type_match.start("body") + first_case.start(1))
+            definition_end = definition_start + case_title_end
+            edits.append((
+                definition_start,
+                definition_end,
+                qualified_case + trailing_space,
+            ))
+            seen[qualified_signature] = row_index
+            proofs_by_signature[qualified_signature] = [proof]
+            prior_proofs.append(proof)
+            repair_count += 1
+
+        for start, end, replacement in reversed(edits):
+            types_body = (
+                types_body[:start] + replacement + types_body[end:]
+            )
+        if edits:
+            record["concept_details"] = _inject_types(
+                record.get("concept_details") or "",
+                types_body,
+            )
+
+    if repair_count:
+        progress.log(
+            "Qualified "
+            f"{repair_count} certified split-Type Case definition(s) while "
+            "preserving the reusable Type, every Example, and every host.",
+            level="success",
+        )
+    return out
+
+
 def _rebuild_types_after_final_placement_drift(
     records: list[dict], inventory: dict | None, mined_types: dict | None,
     *, meta: GenerationMetadata,
@@ -13931,7 +14271,9 @@ def _rebuild_types_after_final_placement_drift(
     # Example cleanup before rechecking coverage and placement.
     rebuilt = _salvage_short_case_examples(rebuilt, inventory=inventory)
     rebuilt = _neutralize_unrepaired_rows(rebuilt, inventory=inventory)
-    return _enforce_rendered_inventory_coverage(
+    rebuilt = _enforce_rendered_inventory_coverage(
+        rebuilt, inventory, mined_types)
+    return _disambiguate_certified_split_type_cases(
         rebuilt, inventory, mined_types)
 
 
@@ -18231,6 +18573,10 @@ def _prepare_final_concept_content(
     # snapshot has just been restored.
     out = cv.ensure_valid_learner_analysis(out)
     out = _canonicalize_concept_rich_text(out)
+    out = _disambiguate_certified_split_type_cases(
+        out, question_task_inventory, mined_types)
+    out = cr.renumber_types_continuously(out)
+
     def final_boundary_report(value: list[dict]) -> dict:
         return cv.validate_concept_rows(
             value,
@@ -18281,6 +18627,8 @@ def _prepare_final_concept_content(
         out, question_task_inventory, mined_types)
     out = _normalize_activity_hubs_at_final_boundary(
         out, question_task_inventory, mined_types, meta=meta)
+    out = _disambiguate_certified_split_type_cases(
+        out, question_task_inventory, mined_types)
     out = cr.renumber_types_continuously(out)
 
     type_contract_codes = {
@@ -19030,6 +19378,13 @@ def concepts_from_mmd(
                 if out != before_hub_normalization:
                     final_checkpoint_changed = True
 
+            before_type_heading_repair = copy.deepcopy(out)
+            out = _disambiguate_certified_split_type_cases(
+                out, question_task_inventory, mined_types)
+            if out != before_type_heading_repair:
+                out = cr.renumber_types_continuously(out)
+                final_checkpoint_changed = True
+
             out, rich_text_repaired = _repair_final_rich_text_via_api(
                 out,
                 meta=meta,
@@ -19052,6 +19407,12 @@ def concepts_from_mmd(
                         "rich-text repair.",
                         level="success",
                     )
+            before_final_type_heading_repair = copy.deepcopy(out)
+            out = _disambiguate_certified_split_type_cases(
+                out, question_task_inventory, mined_types)
+            if out != before_final_type_heading_repair:
+                out = cr.renumber_types_continuously(out)
+                final_checkpoint_changed = True
             _validate_final_or_raise(
                 out,
                 stage="final",

@@ -2323,6 +2323,323 @@ def test_terminal_coverage_repair_realigns_an_exact_activity_example():
     assert not g._activity_example_hub_alignment_violations(out, inventory)
 
 
+def test_certified_split_type_cases_are_qualified_without_moving_examples(
+    monkeypatch,
+):
+    assert g._safe_type_case_qualifier(
+        "Social Case 01: Type 02: comparison // Worked Example: powers, "
+        "Example 100: reading and Examples: recap"
+    ) == (
+        "Social Case 01 Type 02 comparison / Worked Example powers, "
+        "Example 100 reading and Examples recap"
+    )
+
+    type_title = "Converting Geological Ages from Years to Seconds"
+    case_title = (
+        "Given the complete source context, completing time-scale table "
+        "relates geological ages to powers under its stated conditions"
+    )
+    fossil_prompt = (
+        "A fossil is 15 million years old. Express this age in seconds."
+    )
+    plant_prompt = (
+        "Plants appeared 470 million years ago. Express this age in seconds."
+    )
+    records = [
+        {
+            "topic": "Did You Ever Wonder?",
+            "parent_concept": "Scientific Notation",
+            "concept_title": (
+                "Calculating real-world quantities with scientific notation"
+            ),
+            "concept_details": (
+                "Description: Scientific notation supports large time-scale "
+                "calculations. // Types: "
+                f"Type 51: {type_title} Case 01: {case_title} "
+                f"Example 01: {plant_prompt}"
+            ),
+            "keywords": "scientific notation, time",
+        },
+        {
+            "topic": "Did You Ever Wonder?",
+            "parent_concept": "Powers of Ten",
+            "concept_title": "Interpreting powers of ten as time scales",
+            "concept_details": (
+                "Description: Powers of ten express geological ages "
+                "compactly. // Types: "
+                f"Type 51: {type_title} Case 01: {case_title} "
+                f"Example 01: {fossil_prompt}"
+            ),
+            "keywords": "powers of ten, geological age",
+        },
+    ]
+    inventory = {"items": [
+        {
+            "qid": "QINV-0085",
+            "source_kind": "exercise",
+            "topic_hint": "Did You Ever Wonder?",
+            "raw_task": fossil_prompt,
+        },
+        {
+            "qid": "QINV-0086",
+            "source_kind": "exercise",
+            "topic_hint": "Did You Ever Wonder?",
+            "raw_task": plant_prompt,
+        },
+    ]}
+    mined_types = {"types": [{
+        "type_id": "TYPE-0051",
+        "type_title": type_title,
+        "topic_match_hint": "Did You Ever Wonder?",
+        "source_question_ids": ["QINV-0085", "QINV-0086"],
+        "case_prompts": [
+            {
+                "case_id": "CASE-0078",
+                "case_title": case_title,
+                "case_signature": (
+                    "Fossil age of 15 million years converted to seconds"
+                ),
+                "source_question_ids": ["QINV-0085"],
+                "examples": [{
+                    "source_question_id": "QINV-0085",
+                    "example_prompt": fossil_prompt,
+                }],
+            },
+            {
+                "case_id": "CASE-0079",
+                "case_title": case_title,
+                "case_signature": (
+                    "Plant age of 470 million years converted to seconds"
+                ),
+                "source_question_ids": ["QINV-0086"],
+                "examples": [{
+                    "source_question_id": "QINV-0086",
+                    "example_prompt": plant_prompt,
+                }],
+            },
+        ],
+    }]}
+    g._reset_placement_certifications(mined_types)
+    g._certify_inventory_host(
+        mined_types,
+        "QINV-0085",
+        records[1],
+        basis="type_host_review",
+    )
+    g._certify_inventory_host(
+        mined_types,
+        "QINV-0086",
+        records[0],
+        basis="type_host_review",
+    )
+    mined_before = json.loads(json.dumps(mined_types))
+    body_before = [
+        g._types_body(record["concept_details"]) for record in records
+    ]
+    example_suffix_before = [
+        re.search(r"\bExample\s+\d{1,2}:.*", body, re.DOTALL).group(0)
+        for body in body_before
+    ]
+    validation_args = {
+        "allow_types": True,
+        "allowed_source_examples": [fossil_prompt, plant_prompt],
+        "strict_type_hierarchy": True,
+    }
+    before_report = concept_validator.validate_concept_rows(
+        records, **validation_args)
+    assert [
+        error for error in before_report["errors"]
+        if error["code"] == "duplicate_type_definition"
+    ]
+    assert g._rendered_inventory_coverage_defects(records, inventory) == {
+        "missing": [],
+        "duplicate": [],
+    }
+    assert not g._placement_certification_violations(
+        records, inventory, mined_types)
+
+    unproven_mined_types = json.loads(json.dumps(mined_types))
+    unproven_cases = unproven_mined_types["types"][0]["case_prompts"]
+    unproven_cases[1]["case_id"] = unproven_cases[0]["case_id"]
+    unproven_cases[1]["case_signature"] = unproven_cases[0]["case_signature"]
+    assert g._disambiguate_certified_split_type_cases(
+        records, inventory, unproven_mined_types) == records
+
+    out = g._disambiguate_certified_split_type_cases(
+        records, inventory, mined_types)
+
+    after_report = concept_validator.validate_concept_rows(
+        out, **validation_args)
+    assert not {
+        "missing_type_definition",
+        "generic_type_definition",
+        "duplicate_type_definition",
+    } & {
+        error["code"] for error in after_report["errors"]
+        if error["severity"] == "error"
+    }
+    assert g._types_body(out[0]["concept_details"]) == body_before[0]
+    assert (
+        f"Case 01: {case_title} — "
+        "Interpreting powers of ten as time scales"
+        in g._types_body(out[1]["concept_details"])
+    )
+    assert (
+        f"Type 51: {type_title} Case 01:"
+        in g._types_body(out[1]["concept_details"])
+    )
+    example_suffix_after = [
+        re.search(
+            r"\bExample\s+\d{1,2}:.*",
+            g._types_body(record["concept_details"]),
+            re.DOTALL,
+        ).group(0)
+        for record in out
+    ]
+    assert example_suffix_after == example_suffix_before
+    assert g._rendered_inventory_coverage_defects(out, inventory) == {
+        "missing": [],
+        "duplicate": [],
+    }
+    assert not g._placement_certification_violations(
+        out, inventory, mined_types)
+    assert not g._mined_type_topic_violations(out, mined_types)
+    assert mined_types == mined_before
+    assert records[1]["concept_details"] != out[1]["concept_details"]
+    assert g._disambiguate_certified_split_type_cases(
+        out, inventory, mined_types) == out
+
+    third_prompt = (
+        "A meteorite is 65 million years old. Express this age in seconds."
+    )
+    three_records = [dict(record) for record in records]
+    three_records.append({
+        **records[1],
+        "concept_title": "Comparing powers of ten across time scales",
+        "concept_details": records[1]["concept_details"].replace(
+            fossil_prompt, third_prompt),
+    })
+    three_inventory = json.loads(json.dumps(inventory))
+    three_inventory["items"].append({
+        "qid": "QINV-0087",
+        "source_kind": "exercise",
+        "topic_hint": "Did You Ever Wonder?",
+        "raw_task": third_prompt,
+    })
+    three_mined_types = json.loads(json.dumps(mined_types))
+    three_type = three_mined_types["types"][0]
+    three_type["source_question_ids"].append("QINV-0087")
+    repeated_case = json.loads(json.dumps(three_type["case_prompts"][0]))
+    repeated_case["source_question_ids"] = ["QINV-0087"]
+    repeated_case["examples"] = [{
+        "source_question_id": "QINV-0087",
+        "example_prompt": third_prompt,
+    }]
+    three_type["case_prompts"].append(repeated_case)
+    g._reset_placement_certifications(three_mined_types)
+    for qid, host in (
+        ("QINV-0085", three_records[1]),
+        ("QINV-0086", three_records[0]),
+        ("QINV-0087", three_records[2]),
+    ):
+        g._certify_inventory_host(
+            three_mined_types,
+            qid,
+            host,
+            basis="type_host_review",
+        )
+
+    three_out = g._disambiguate_certified_split_type_cases(
+        three_records, three_inventory, three_mined_types)
+
+    assert three_out[1]["concept_details"] != three_records[1][
+        "concept_details"
+    ]
+    assert three_out[2]["concept_details"] == three_records[2][
+        "concept_details"
+    ]
+    three_report = concept_validator.validate_concept_rows(
+        three_out,
+        allow_types=True,
+        allowed_source_examples=[
+            fossil_prompt, plant_prompt, third_prompt],
+        strict_type_hierarchy=True,
+    )
+    assert any(
+        error["code"] == "duplicate_type_definition"
+        for error in three_report["errors"]
+    )
+
+    renumbered = cr.renumber_types_continuously(out)
+
+    first_body = g._types_body(renumbered[0]["concept_details"])
+    second_body = g._types_body(renumbered[1]["concept_details"])
+    assert f"Type 01: {type_title} Case 01:" in first_body
+    assert (
+        f"Type 01: {type_title} Case 02: {case_title} — "
+        "Interpreting powers of ten as time scales"
+        in second_body
+    )
+
+    assignment_calls = []
+
+    def fake_assign(candidate, *, meta, mined_types):
+        assignment_calls.append((meta, mined_types))
+        assert all(
+            not g._types_body(row["concept_details"])
+            for row in candidate
+        )
+        for index, body in enumerate(body_before):
+            candidate[index]["concept_details"] = g._inject_types(
+                candidate[index]["concept_details"], body)
+        return candidate
+
+    monkeypatch.setattr(g, "_assign_mined_types_via_api", fake_assign)
+    monkeypatch.setattr(
+        g,
+        "_populate_activity_hubs_via_api",
+        lambda candidate, *_args, **_kwargs: candidate,
+    )
+    monkeypatch.setattr(
+        g,
+        "_salvage_short_case_examples",
+        lambda candidate, **_kwargs: candidate,
+    )
+    monkeypatch.setattr(
+        g,
+        "_neutralize_unrepaired_rows",
+        lambda candidate, **_kwargs: candidate,
+    )
+    monkeypatch.setattr(
+        g,
+        "_enforce_rendered_inventory_coverage",
+        lambda candidate, *_args, **_kwargs: candidate,
+    )
+
+    rebuilt = g._rebuild_types_after_final_placement_drift(
+        records,
+        inventory,
+        mined_types,
+        meta=g._metadata(subject="Mathematics"),
+    )
+
+    assert len(assignment_calls) == 1
+    rebuilt_report = concept_validator.validate_concept_rows(
+        rebuilt, **validation_args)
+    assert not {
+        "missing_type_definition",
+        "generic_type_definition",
+        "duplicate_type_definition",
+    } & {
+        error["code"] for error in rebuilt_report["errors"]
+        if error["severity"] == "error"
+    }
+    assert g._rendered_type_examples(rebuilt) == g._rendered_type_examples(
+        records)
+    assert not g._placement_certification_violations(
+        rebuilt, inventory, mined_types)
+
+
 def test_final_placement_rebuild_reuses_gpt_assignment_on_final_rows(monkeypatch):
     prompt = "Calculate the heat produced by a resistor carrying current."
     inventory = {"items": [{
