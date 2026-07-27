@@ -13906,6 +13906,135 @@ def _enforce_rendered_inventory_coverage(
     return out
 
 
+def _disambiguate_cross_row_duplicate_type_definitions(
+    records: list[dict],
+    inventory: dict | None,
+) -> list[dict]:
+    """Qualify only repeated Type headers split across concept hosts.
+
+    One mined Type can legitimately contain several Cases that the host review
+    assigns to different concepts. Rendering those Case-scoped units preserves
+    the source Examples and reviewed placements, but can leave two normal rows
+    with the same Type and Case definition. The strict hierarchy contract
+    rejects that cross-row duplicate.
+
+    Keep the first reusable heading unchanged and qualify each later duplicate
+    with its current concept title. Only the text before the first
+    ``Case NN:`` marker is changed; Cases, Examples, QIDs, topics, and placement
+    certifications remain untouched.
+    """
+    allowed_source_examples = _inventory_source_examples(inventory)
+    out = [dict(record) for record in records]
+    # Mirrors concept_validator's exact cross-row duplicate signature.
+    seen: dict[tuple[str, str, tuple[str, ...]], int] = {}
+    repair_count = 0
+
+    for row_index, record in enumerate(out):
+        concept_title = re.sub(
+            r"\s+", " ", str(record.get("concept_title") or "")
+        ).strip()
+        topic_key = cv._norm(str(record.get("topic") or ""))
+        if (
+            not concept_title
+            or not topic_key
+            or cr.is_culmination(concept_title)
+        ):
+            continue
+
+        types_body = _types_body(record.get("concept_details") or "")
+        if not types_body:
+            continue
+        edits: list[tuple[int, int, str]] = []
+
+        for type_match in cv._TYPE_SEGMENT_RE.finditer(types_body):
+            matched_type_body = type_match.group("body") or ""
+            case_match = cv._CASE_ANY_RE.search(matched_type_body)
+            if case_match is None:
+                continue
+            type_definition = cv._type_definition(matched_type_body)
+            normalized_definition = cv._normalized_type_definition(
+                type_definition
+            )
+            if not normalized_definition:
+                continue
+
+            case_definition_keys: list[str] = []
+            for rendered_case in cv._CASE_SEGMENT_RE.finditer(
+                matched_type_body
+            ):
+                case_text = re.sub(
+                    r"\s+", " ", rendered_case.group(1) or ""
+                ).strip()
+                example_markers = cv._structural_example_markers(
+                    case_text,
+                    allowed_source_examples,
+                )
+                case_title = (
+                    case_text[:example_markers[0].start()].strip()
+                    if example_markers
+                    else case_text
+                )
+                normalized_case = cv._normalized_case_definition(case_title)
+                if normalized_case:
+                    case_definition_keys.append(normalized_case)
+
+            signature = (
+                topic_key,
+                normalized_definition,
+                tuple(case_definition_keys),
+            )
+            first_row = seen.get(signature)
+            if first_row is None:
+                seen[signature] = row_index
+                continue
+            # The validator has a separate within-row duplicate contract.
+            if first_row == row_index:
+                continue
+
+            raw_definition = matched_type_body[:case_match.start()]
+            raw_core = raw_definition.rstrip()
+            trailing_space = raw_definition[len(raw_core):] or " "
+            qualified_core = f"{raw_core} — {concept_title}"
+            qualified_signature = (
+                topic_key,
+                cv._normalized_type_definition(qualified_core),
+                tuple(case_definition_keys),
+            )
+            if qualified_signature in seen:
+                # Duplicate concept titles are independently invalid. Do not
+                # invent an opaque numeric suffix to hide that separate defect.
+                continue
+
+            definition_start = type_match.start("body")
+            definition_end = definition_start + case_match.start()
+            edits.append((
+                definition_start,
+                definition_end,
+                qualified_core + trailing_space,
+            ))
+            seen[qualified_signature] = row_index
+            repair_count += 1
+
+        for start, end, replacement in reversed(edits):
+            types_body = (
+                types_body[:start] + replacement + types_body[end:]
+            )
+        if edits:
+            record["concept_details"] = _inject_types(
+                record.get("concept_details") or "",
+                types_body,
+            )
+
+    if repair_count:
+        progress.log(
+            "Qualified "
+            f"{repair_count} cross-concept duplicate Type heading(s) while "
+            "preserving every Case, Example, and current host.",
+            level="success",
+        )
+    return out
+
+
 def _rebuild_types_after_final_placement_drift(
     records: list[dict], inventory: dict | None, mined_types: dict | None,
     *, meta: GenerationMetadata,
@@ -13931,8 +14060,10 @@ def _rebuild_types_after_final_placement_drift(
     # Example cleanup before rechecking coverage and placement.
     rebuilt = _salvage_short_case_examples(rebuilt, inventory=inventory)
     rebuilt = _neutralize_unrepaired_rows(rebuilt, inventory=inventory)
-    return _enforce_rendered_inventory_coverage(
+    rebuilt = _enforce_rendered_inventory_coverage(
         rebuilt, inventory, mined_types)
+    return _disambiguate_cross_row_duplicate_type_definitions(
+        rebuilt, inventory)
 
 
 def _normalize_activity_hubs_at_final_boundary(
@@ -18231,6 +18362,10 @@ def _prepare_final_concept_content(
     # snapshot has just been restored.
     out = cv.ensure_valid_learner_analysis(out)
     out = _canonicalize_concept_rich_text(out)
+    out = _disambiguate_cross_row_duplicate_type_definitions(
+        out, question_task_inventory)
+    out = cr.renumber_types_continuously(out)
+
     def final_boundary_report(value: list[dict]) -> dict:
         return cv.validate_concept_rows(
             value,
@@ -18281,6 +18416,8 @@ def _prepare_final_concept_content(
         out, question_task_inventory, mined_types)
     out = _normalize_activity_hubs_at_final_boundary(
         out, question_task_inventory, mined_types, meta=meta)
+    out = _disambiguate_cross_row_duplicate_type_definitions(
+        out, question_task_inventory)
     out = cr.renumber_types_continuously(out)
 
     type_contract_codes = {
@@ -19030,6 +19167,13 @@ def concepts_from_mmd(
                 if out != before_hub_normalization:
                     final_checkpoint_changed = True
 
+            before_type_heading_repair = copy.deepcopy(out)
+            out = _disambiguate_cross_row_duplicate_type_definitions(
+                out, question_task_inventory)
+            if out != before_type_heading_repair:
+                out = cr.renumber_types_continuously(out)
+                final_checkpoint_changed = True
+
             out, rich_text_repaired = _repair_final_rich_text_via_api(
                 out,
                 meta=meta,
@@ -19052,6 +19196,12 @@ def concepts_from_mmd(
                         "rich-text repair.",
                         level="success",
                     )
+            before_final_type_heading_repair = copy.deepcopy(out)
+            out = _disambiguate_cross_row_duplicate_type_definitions(
+                out, question_task_inventory)
+            if out != before_final_type_heading_repair:
+                out = cr.renumber_types_continuously(out)
+                final_checkpoint_changed = True
             _validate_final_or_raise(
                 out,
                 stage="final",
