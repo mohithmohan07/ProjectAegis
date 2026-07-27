@@ -1770,7 +1770,8 @@ def test_pipeline_builds_culminations_before_types(monkeypatch):
         "description_method_snapshot",
         "question_inventory",
         "pre_type_assignment",
-        "post_type_assignment",
+        # The former 91% checkpoint claimed allocation before topology was
+        # final. The next durable artifact is now the validated 98% map.
         "final_content_ready",
     ]
     pre_type_checkpoint = next(
@@ -1852,7 +1853,6 @@ def test_pipeline_resume_checkpoint_skips_expensive_gpt_stages(monkeypatch):
     assert assigned
     assert out
     assert [checkpoint["stage"] for checkpoint in callbacks] == [
-        "post_type_assignment",
         "final_content_ready",
     ]
 
@@ -1915,19 +1915,26 @@ def test_skeleton_chunk_checkpoint_resumes_after_completed_chunks(monkeypatch):
     assert len(checkpoints[-1]["completed_chunks"]) == 3
 
 
-def test_post_type_checkpoint_skips_type_assignment_and_activity_hubs(
+def test_post_type_checkpoint_reallocates_on_final_topology(
     monkeypatch,
 ):
     monkeypatch.setattr(g.config, "use_live_generation", lambda: True)
-    monkeypatch.setattr(
-        g, "_assign_types_via_api",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("Type assignment must be restored")),
-    )
+    allocations: list[list[str]] = []
+
+    def assign_after_freeze(records, **_kwargs):
+        allocations.append([
+            record["concept_title"] for record in records
+        ])
+        assert all(
+            "Types:" not in record["concept_details"]
+            for record in records
+        )
+        return records
+
+    monkeypatch.setattr(g, "_assign_types_via_api", assign_after_freeze)
     monkeypatch.setattr(
         g, "_populate_activity_hubs_via_api",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("Activity hubs must be restored")),
+        lambda records, *_args, **_kwargs: records,
     )
     monkeypatch.setattr(
         g, "_repair_records_via_api", lambda records, **kwargs: records)
@@ -1964,7 +1971,9 @@ def test_post_type_checkpoint_skips_type_assignment_and_activity_hubs(
                 "concept_title": "C",
                 "concept_details": (
                     "Description: A complete concept description. // "
-                    "Error Analysis: Students may omit a required step."
+                    "Types: Type 01: Stale allocation Case 01: Stale case "
+                    "Example 01: Stale source task. // Error Analysis: "
+                    "Students may omit a required step."
                 ),
                 "keywords": "",
             },
@@ -1991,6 +2000,7 @@ def test_post_type_checkpoint_skips_type_assignment_and_activity_hubs(
     )
 
     assert records
+    assert allocations == [["C", "Culmination - C"]]
     assert [item["stage"] for item in callbacks] == [
         "final_content_ready",
     ]
@@ -2086,12 +2096,14 @@ def test_post_type_checkpoint_reassigns_when_anchor_refresh_adds_uncertified_qid
     )
 
     assert out
-    assert assignments == [True]
+    # Inventory semantics are refreshed now, but allocation remains deferred
+    # until the final concept topology is available.
+    assert assignments == []
+    assert "Stale saved Type" not in out[0]["concept_details"]
     assert inventory == refreshed_inventory
-    assert g._placement_certification_contract_complete(mined, inventory)
-    assert [item["stage"] for item in emitted] == [
-        "post_type_assignment",
-    ]
+    assert mined["_topology_allocation_contract"]["state"] == "deferred"
+    assert not g._placement_certification_contract_complete(mined, inventory)
+    assert emitted == []
 
 
 def test_final_content_checkpoint_skips_semantic_api_repair(monkeypatch):

@@ -1259,12 +1259,12 @@ def test_final_pipeline_restores_post_description_method_snapshot(monkeypatch):
         "METHOD-AAAAAAAAAA", "METHOD-BBBBBBBBBB",
     }
     assert "Apply the general-term derivation" in shared_final["concept_details"]
-    assert shared_final["topic"] == "nth Term of an AP"
+    assert shared_final["topic"] == "Nth Term of an AP"
     dropped_final = next(
         record for record in out
         if record["concept_title"] == "Deriving the Finite Sum"
     )
-    assert dropped_final["topic"] == "Sum of First n Terms of an AP"
+    assert dropped_final["topic"] == "Sum of First N Terms of an AP"
     assert g._method_anchor_ids(dropped_final) == {"METHOD-CCCCCCCCCC"}
     for restored in (shared_final, dropped_final):
         assert g._has_mastery_line(restored["concept_details"])
@@ -1448,8 +1448,10 @@ def test_final_boundary_salvages_short_case_reintroduced_by_later_pass(
     )
 
     assert final_repair_mutated
-    assert reintroduced_short_case
-    assert len(salvage_outputs) == 2
+    # Types do not exist during semantic mastery repair anymore, so a late
+    # semantic pass cannot truncate a source-owned Case Example.
+    assert not reintroduced_short_case
+    assert salvage_outputs
     final = next(
         record for record in out
         if record["concept_title"] == normal["concept_title"]
