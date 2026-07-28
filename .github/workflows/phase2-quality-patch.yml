@@ -1,0 +1,75 @@
+name: Apply final Phase 2 quality guards
+
+on:
+  push:
+    branches:
+      - agent/phase-2-canonical-source-inventory
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/phase-2-canonical-source-inventory
+      - name: Tighten source matching and terminal checkpoint coverage
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          service = Path("backend/app/services/canonical_source_phase2.py")
+          text = service.read_text(encoding="utf-8")
+          text = text.replace("from collections import Counter\n", "")
+          old = "        if not (exact or contained or same_label):\n"
+          new = "        if not (exact or contained or (same_label and same_section)):\n"
+          if old not in text and new not in text:
+              raise SystemExit("anchor-match guard was not found")
+          text = text.replace(old, new, 1)
+          service.write_text(text, encoding="utf-8")
+
+          tests = Path("backend/tests/test_canonical_source_phase2.py")
+          text = tests.read_text(encoding="utf-8")
+          marker = "\ndef test_phase2_checkpoint_inventory_is_retained():\n"
+          addition = r'''
+
+def test_legacy_final_checkpoint_requires_phase2_source_refresh():
+    legacy = generation._make_concept_checkpoint(
+        "final_content_ready",
+        records=[{"concept_title": "A"}],
+        question_task_inventory={"items": [{"qid": "QINV-0001"}]},
+        mined_types={
+            "types": [],
+            "_topology_allocation_contract": {
+                "version": 1,
+                "state": "allocated_after_freeze",
+            },
+        },
+        method_row_snapshot=[],
+    )
+
+    reasons = generation._final_checkpoint_refresh_reasons(
+        legacy,
+        sections=[],
+        source_topic_excerpts=[],
+    )
+
+    assert "Phase 2 ACSD source inventory" in " ".join(reasons)
+'''
+          if "test_legacy_final_checkpoint_requires_phase2_source_refresh" not in text:
+              if marker not in text:
+                  raise SystemExit("checkpoint test insertion marker was not found")
+              text = text.replace(marker, addition + marker, 1)
+          tests.write_text(text, encoding="utf-8")
+
+          Path(".github/workflows/phase2-quality-patch.yml").unlink()
+          PY
+      - name: Commit quality patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Tighten Phase 2 source and checkpoint guards"
+          git push origin HEAD:agent/phase-2-canonical-source-inventory
