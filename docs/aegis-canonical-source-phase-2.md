@@ -51,6 +51,17 @@ A chapter-wide review task can still require the existing constrained topic
 placement call because assigning that task to a concept-map topic is semantic
 classification, not source extraction.
 
+## Source-anchor enrichment
+
+Phase 1 already creates tasks from the deterministic production anchor parser.
+Phase 2 reuses that parser only to enrich those same source tasks with fields that
+were not persisted in the Phase 1 schema, such as shared context, subpart labels,
+answer text, and source-owned image captions.
+
+An enrichment row must match by exact or contained task text. A source label may
+help only inside the same source section; a repeated generic label cannot move a
+task to another section. ACSD task order and identity remain authoritative.
+
 ## Fail-closed gate
 
 Build Concepts stops before paid inventory or Type calls when ACSD contains any
@@ -75,11 +86,16 @@ are incompatible with ACSD.
 
 - When a pre-inventory checkpoint exists, Phase 2 retains the newest such stage
   and discards only legacy inventory-or-later stages.
-- When the only recovery point is a late checkpoint, it is retained. The active
-  resume path replaces its inventory from ACSD in place rather than destroying
-  all semantic work.
+- A retained non-final checkpoint refreshes its inventory from ACSD and uses the
+  existing resumed-Type reconciliation before final allocation.
+- A legacy `final_content_ready` checkpoint is never accepted as terminal. It is
+  forced through the normal recovery selector so an earlier compatible stage can
+  rebuild the source-critical ledger.
 - A checkpoint whose inventory declares
   `source_contract.mode = acsd-phase2-source-critical` resumes normally.
+
+This prioritises source correctness over reusing an inventory or Type taxonomy
+whose QIDs were created under the older model-derived contract.
 
 ## Artifact metadata
 
@@ -106,18 +122,13 @@ Before the next cutover slice:
 
 1. The same raw MMD must produce byte-identical ACSD tasks and inventory.
 2. RNE must consistently produce the same 26 source-ordered QIDs.
-3. Image URLs and Figure captions must remain source-exact.
-4. Mathematical task display must remain valid Aegis rich text.
-5. Legacy checkpoints must preserve their deepest safe semantic stage.
-6. Build Assessments must remain unchanged.
-7. The full backend, frontend build, and frontend test suites must pass.
+3. The RNE source-critical report must contain no blocking Phase 2 issue.
+4. Image URLs and Figure captions must remain source-exact.
+5. Mathematical task display must remain valid Aegis rich text.
+6. Legacy checkpoints must preserve the deepest safe semantic stage without
+   accepting an old final inventory as terminal.
+7. Build Assessments must remain unchanged.
+8. The full backend, frontend build, and frontend test suites must pass.
 
 The next slice may move topic-scoped semantic concept extraction to ACSD blocks,
 but only after this source-critical ledger has been exercised in production.
-
-## CI validation discipline
-
-Pull-request commits run the standard CI workflow once through the
-`pull_request` event. Push validation is limited to `main`, and a newer commit
-cancels an older in-flight run for the same pull request. Temporary diagnostic
-or self-patching workflows must not remain in the final Phase 2 diff.
