@@ -94,6 +94,13 @@ def test_phase2_rne_inventory_is_source_ordered_and_byte_deterministic():
     assert first.canonical["source_contract"]["mode"] == (
         phase2.SOURCE_CONTRACT_MODE
     )
+    assert first.canonical["phase2_inventory_ready"] is True
+    assert first.report["phase2_issues"] == []
+    assert "<!-- schema_version: 1.1.0 -->" in first.aegis_mmd
+    assert (
+        "<!-- compiler_version: phase-2-source-critical-1 -->"
+        in first.aegis_mmd
+    )
 
     tasks = first.canonical["tasks"]
     assert len(tasks) == 26
