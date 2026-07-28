@@ -158,6 +158,14 @@ export interface SourceArtifactManifest {
     raw_mmd_components?: string[];
   };
   phase2_inventory_ready?: boolean;
+  source_adjudication?: {
+    version?: string;
+    status?: "pending" | "verified" | "review_required" | "not_required" | "unavailable" | string;
+    packet_count?: number;
+    eligible_issue_count?: number;
+    verified_repairs?: number;
+    remaining_issues?: number;
+  };
   status: "passed" | "passed_with_warnings" | "failed" | "unavailable" | string;
   ready_for_future_cutover: boolean;
   source_sha256: string;

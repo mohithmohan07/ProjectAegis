@@ -135,3 +135,60 @@ test("shows the Phase 2 source-critical cutover without overstating semantic use
   expect(screen.getByRole("link", { name: "Source validation report" }))
     .toBeDefined();
 });
+
+test("shows bounded Phase 2.2 source adjudication before generation", () => {
+  const job = convertedJob();
+  if (!job.source_artifacts) throw new Error("fixture missing artifacts");
+  job.source_artifacts.phase2_inventory_ready = false;
+  job.source_artifacts.status = "failed";
+  job.source_artifacts.source_adjudication = {
+    version: "2.2.0",
+    status: "pending",
+    packet_count: 2,
+    eligible_issue_count: 3,
+  };
+
+  render(
+    <RunConsoleProvider>
+      <DocumentUpload
+        module="concepts"
+        conceptKind="post"
+        externalJob={job}
+        onJob={vi.fn()}
+      />
+    </RunConsoleProvider>,
+  );
+
+  expect(screen.getByText("Phase 2.2 canonical-source review")).toBeDefined();
+  expect(screen.getByText("AI source adjudication pending")).toBeDefined();
+  expect(screen.getByText(/only the relevant original-document pages/i))
+    .toBeDefined();
+});
+
+test("shows verified Phase 2.2 overlays without calling them raw-MMD edits", () => {
+  const job = convertedJob();
+  if (!job.source_artifacts) throw new Error("fixture missing artifacts");
+  job.source_artifacts.phase = "phase-2.2-source-adjudicated";
+  job.source_artifacts.source_adjudication = {
+    version: "2.2.0",
+    status: "verified",
+    verified_repairs: 2,
+    remaining_issues: 0,
+  };
+
+  render(
+    <RunConsoleProvider>
+      <DocumentUpload
+        module="concepts"
+        conceptKind="post"
+        externalJob={job}
+        onJob={vi.fn()}
+      />
+    </RunConsoleProvider>,
+  );
+
+  expect(screen.getByText("Phase 2.2 canonical-source inventory")).toBeDefined();
+  expect(screen.getByText("source adjudication verified")).toBeDefined();
+  expect(screen.getByText(/immutable raw MMD remains available unchanged/i))
+    .toBeDefined();
+});

@@ -28,6 +28,7 @@ from .. import config, models
 from .. import bulk_import as bi
 from ..bulk_import import workbook_sync, writer
 from . import (
+    canonical_source_phase22,
     chapter_durations,
     concept_cleanup,
     concept_refiner,
@@ -772,6 +773,10 @@ def _deposit_and_publish_concepts(
     source_text: str = "",
 ) -> tuple[list[int], list[int], dict[str, int]]:
     """Serialize final dedupe, DB commit, and shared workbook publication."""
+    # Phase 2.2 may have verified source-visible text that Mathpix omitted.
+    # Deposit validation sees the same derived semantic source as concept
+    # extraction, while UploadJob.mmd_text remains the immutable audit copy.
+    source_text = canonical_source_phase22.active_semantic_source(source_text)
     with workbook_sync.output_workbook_lock():
         db.expire_all()
         chapter = db.get(models.Chapter, chapter_id)

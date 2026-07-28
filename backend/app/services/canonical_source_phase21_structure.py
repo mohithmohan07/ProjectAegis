@@ -150,6 +150,35 @@ def numbered_heading_inventory(
         sub = _SUB_HEADING_RE.search(raw) or _MD_SUB_HEADING_RE.search(raw)
         if sub:
             subsections.setdefault(int(sub.group("major")), []).append(block)
+    # Phase 2.2 may recover an omitted parent heading from the original PDF.
+    # Keep it outside ``blocks`` so raw-MMD reconstruction remains byte-exact,
+    # but expose a block-shaped semantic entry to every existing hierarchy rule.
+    for section in canonical.get("sections") or []:
+        if not isinstance(section, dict):
+            continue
+        adjudicated = section.get("adjudicated_heading")
+        if not isinstance(adjudicated, dict):
+            continue
+        try:
+            number = int(adjudicated.get("section_number"))
+        except (TypeError, ValueError):
+            continue
+        title = str(adjudicated.get("title") or section.get("title") or "").strip()
+        if not number or not title:
+            continue
+        mains.setdefault(number, {
+            "block_id": f"ADJUDICATED-{section.get('section_id') or number}",
+            "section_id": section.get("section_id"),
+            "source_start": int(section.get("source_start") or 0),
+            "source_end": int(section.get("source_end") or 0),
+            "heading": {
+                "title": title,
+                "level": 1,
+                "heading_kind": "adjudicated_pdf",
+            },
+            "raw_text": str(adjudicated.get("raw_text") or ""),
+            "adjudicated_heading": True,
+        })
     return mains, subsections
 
 

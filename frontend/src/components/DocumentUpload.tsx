@@ -510,23 +510,46 @@ function SourceArtifactsCard({
 }) {
   if (!manifest?.available) return null;
   const summary = manifest.summary ?? {};
-  const phase2 = manifest.phase === "phase-2-source-critical"
-    && manifest.generation_usage?.mode === "source-critical";
+  const phase2 = manifest.generation_usage?.mode === "source-critical";
+  const adjudication = manifest.source_adjudication;
+  const adjudicationStatus = adjudication?.status ?? "";
+  const phase22 = phase2 && ["pending", "verified", "review_required"].includes(
+    adjudicationStatus,
+  );
   const statusClass = manifest.status === "passed"
     || (phase2 && manifest.phase2_inventory_ready) ? "green" : "accent";
-  const title = phase2
-    ? "Phase 2 canonical-source inventory"
-    : "Phase 1 canonical-source shadow";
+  const title = phase22
+    ? (adjudicationStatus === "verified"
+      ? "Phase 2.2 canonical-source inventory"
+      : "Phase 2.2 canonical-source review")
+    : phase2
+      ? "Phase 2 canonical-source inventory"
+      : "Phase 1 canonical-source shadow";
   const usageBadge = phase2
     ? "source-critical generation active"
     : "not used for generation";
-  const description = phase2
-    ? "Build Concepts now reads task order, stable QIDs, Figure ownership, images, "
-      + "KaTeX, and inventory identity from ACSD. Semantic concept extraction and "
-      + "writing still read the immutable raw MMD."
-    : "The current pipeline still reads the immutable raw MMD. These files let "
-      + "you inspect source order, task boundaries, images, KaTeX, and validation "
-      + "before any future cutover.";
+  const adjudicationBadge = adjudicationStatus === "verified"
+    ? "source adjudication verified"
+    : adjudicationStatus === "pending"
+      ? "AI source adjudication pending"
+      : adjudicationStatus === "review_required"
+        ? "source review required"
+        : "";
+  const description = phase22 && adjudicationStatus === "pending"
+    ? "The deterministic ACSD gate found bounded source gaps. Generate will inspect "
+      + "only the relevant original-document pages, accept verbatim visible evidence, "
+      + "and rerun every source contract before concept extraction."
+    : phase22 && adjudicationStatus === "verified"
+      ? "Build Concepts uses the deterministic ACSD ledger plus verified, auditable "
+        + "source-visible overlays recovered from the original document. The immutable "
+        + "raw MMD remains available unchanged."
+      : phase2
+        ? "Build Concepts now reads task order, stable QIDs, Figure ownership, images, "
+          + "KaTeX, and inventory identity from ACSD. Semantic concept extraction and "
+          + "writing still read the immutable raw MMD."
+        : "The current pipeline still reads the immutable raw MMD. These files let "
+          + "you inspect source order, task boundaries, images, KaTeX, and validation "
+          + "before any future cutover.";
   const counts = [
     ["sections", summary.sections],
     ["blocks", summary.blocks],
@@ -549,6 +572,11 @@ function SourceArtifactsCard({
           <span className={`badge ${phase2 ? "green" : "accent"}`}>
             {usageBadge}
           </span>
+          {adjudicationBadge && (
+            <span className={`badge ${adjudicationStatus === "verified" ? "green" : "accent"}`}>
+              {adjudicationBadge}
+            </span>
+          )}
         </div>
         <div className="muted" style={{ marginTop: 6 }}>
           {description}

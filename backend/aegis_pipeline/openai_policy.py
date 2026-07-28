@@ -17,6 +17,7 @@ OPENAI_MODEL_ENV: Final = "AEGIS_OPENAI_MODEL"
 OpenAIPurpose = Literal[
     "assessment_generation",
     "source_extraction",
+    "source_adjudication",
     "concept_mapping",
     "concept_detailing",
     "concept_validation",
@@ -36,6 +37,7 @@ ReasoningEffort = Literal["low", "medium", "high", "xhigh"]
 REASONING_EFFORT_BY_PURPOSE: Final[dict[OpenAIPurpose, ReasoningEffort]] = {
     "assessment_generation": "medium",
     "source_extraction": "medium",
+    "source_adjudication": "high",
     "concept_mapping": "high",
     "concept_detailing": "medium",
     "concept_validation": "xhigh",
