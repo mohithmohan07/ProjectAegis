@@ -47,6 +47,15 @@ _TASK_CONTAMINATION_RE = re.compile(
     r"(?i)(?:\bnew\s+words?\b|\\begin\{figure\}|\\captionsetup\b|"
     r"\\caption\b|\\includegraphics\b)"
 )
+_TABLE_HINT_RE = re.compile(
+    r"\\hline\b|\\begin\{tabular\}|"
+    r"\{\s*\|?(?:[lcrpmbX]\|?){2,}\s*\}",
+    re.IGNORECASE,
+)
+_TABLE_COLUMN_SPEC_RE = re.compile(
+    r"\{\s*\|?(?:[lcrpmbX]\|?){2,}\s*\}",
+    re.IGNORECASE,
+)
 
 
 def normal_text(value: object) -> str:
@@ -66,6 +75,42 @@ def strip_leading_task_cue(value: object) -> str:
     text = str(value or "").strip()
     match = _CUE_RE.match(text)
     return (match.group("body") if match else text).strip()
+
+
+def normalize_task_table_markup(value: object) -> str:
+    """Convert Mathpix tabular layout to readable, non-LaTeX task text."""
+    text = str(value or "")
+    if not _TABLE_HINT_RE.search(text):
+        return text
+    text = re.sub(
+        r"\\begin\{tabular\}\{[^{}]*\}",
+        "\n",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"\\end\{tabular\}", "\n", text, flags=re.IGNORECASE)
+    text = _TABLE_COLUMN_SPEC_RE.sub("\n", text)
+    text = re.sub(r"\\hline\b", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"\\\\(?=\s|$)", "\n", text)
+    text = re.sub(r"\s*&\s*", " | ", text)
+    lines = [re.sub(r"[ \t]+", " ", line).strip(" |	") for line in text.splitlines()]
+    return "\n".join(line for line in lines if line).strip()
+
+
+def canonical_task_display(value: object) -> str:
+    """Return task text with safe table layout and canonical rich text only."""
+    rendered = kr.canonicalize_rich_text(
+        normalize_task_table_markup(value)
+    ).strip()
+    issues = set(kr.rich_text_issues(rendered))
+    if issues and issues.issubset({"raw_latex", "raw_math_expression"}):
+        repaired = kr.repair_unwrapped_math(rendered)
+        if (
+            not kr.rich_text_issues(repaired)
+            and kr.unwrap_katex(repaired) == kr.unwrap_katex(rendered)
+        ):
+            rendered = repaired
+    return kr.canonicalize_rich_text(rendered).strip()
 
 
 def prompt_from_block(value: object) -> str:
@@ -111,6 +156,12 @@ def numbered_heading_inventory(
 def section_integrity_issues(canonical: dict[str, Any]) -> list[dict[str, Any]]:
     mains, subsections = numbered_heading_inventory(canonical)
     issues: list[dict[str, Any]] = []
+    # Some textbooks number only subsections using the external chapter number
+    # (for example 11.1–11.8 under an unnumbered "Electricity" heading). A
+    # missing parent is provable only after the source establishes at least one
+    # numbered main-section sequence of its own.
+    if not mains:
+        return issues
     for major, blocks in sorted(subsections.items()):
         if major in mains:
             continue
@@ -127,19 +178,18 @@ def section_integrity_issues(canonical: dict[str, Any]) -> list[dict[str, Any]]:
                 int(block.get("source_start") or 0) for block in blocks
             ),
         })
-    if mains:
-        numbers = sorted(mains)
-        if numbers[0] == 1:
-            for number in range(1, numbers[-1] + 1):
-                if number not in mains:
-                    issues.append({
-                        "severity": "error",
-                        "code": "phase21_numbered_section_gap",
-                        "message": (
-                            f"The numbered chapter sequence jumps over Section {number}."
-                        ),
-                        "section_number": number,
-                    })
+    numbers = sorted(mains)
+    if numbers[0] == 1:
+        for number in range(1, numbers[-1] + 1):
+            if number not in mains:
+                issues.append({
+                    "severity": "error",
+                    "code": "phase21_numbered_section_gap",
+                    "message": (
+                        f"The numbered chapter sequence jumps over Section {number}."
+                    ),
+                    "section_number": number,
+                })
     return issues
 
 
@@ -216,7 +266,7 @@ def recover_plain_task_cues(canonical: dict[str, Any]) -> int:
             "parent_source_label": cue,
             "topic_hint": topic_for_position(canonical, source_start),
             "raw_prompt": prompt,
-            "display_prompt": kr.canonicalize_rich_text(prompt),
+            "display_prompt": canonical_task_display(prompt),
             "identity_key": "",
             "section_id": section_id,
             "source_section_index": max(0, int(section.get("order") or 1) - 1),
@@ -310,7 +360,7 @@ def trim_task_boundaries(canonical: dict[str, Any]) -> int:
         })
         task.setdefault("raw_prompt_original", task.get("raw_prompt") or "")
         task["raw_prompt"] = candidate
-        task["display_prompt"] = kr.canonicalize_rich_text(candidate)
+        task["display_prompt"] = canonical_task_display(candidate)
         task["source_start"] = int(
             block.get("source_start") or task.get("source_start") or 0
         )
