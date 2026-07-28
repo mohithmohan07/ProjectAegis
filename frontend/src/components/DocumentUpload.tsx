@@ -243,10 +243,19 @@ export default function DocumentUpload({
       ? api.paths.assessmentConvert(job.id)
       : api.paths.conceptConvert(job.id);
     try {
-      const result = await run<{ status: string; mmd_text: string; mmd_chars: number }>(
-        `Converting ${job.filename} to MMD`, path);
+      const result = await run<{
+        status: string;
+        mmd_text: string;
+        mmd_chars: number;
+        source_artifacts?: UploadJob["source_artifacts"];
+      }>(`Converting ${job.filename} to MMD`, path);
       if (savedJobRequestGenerationRef.current !== requestGeneration) return;
-      emit({ ...job, status: "converted", mmd_text: result.mmd_text });
+      emit({
+        ...job,
+        status: "converted",
+        mmd_text: result.mmd_text,
+        source_artifacts: result.source_artifacts,
+      });
     } catch (e) {
       if (savedJobRequestGenerationRef.current === requestGeneration) {
         setError(String(e));
@@ -425,6 +434,7 @@ export default function DocumentUpload({
       {converted && job.mmd_text && (
         <pre className="mmd-preview">{job.mmd_text.slice(0, 800)}</pre>
       )}
+      {converted && <SourceArtifactsCard manifest={job.source_artifacts} />}
       {module === "concepts" && converted && (
         <div className={`checkpoint-card ${
           job.checkpoint_available ? "checkpoint-ready" : ""
@@ -491,6 +501,69 @@ export default function DocumentUpload({
       {error && <div className="error-box" style={{ marginTop: 8 }}>{error}</div>}
     </div>
   );
+}
+
+function SourceArtifactsCard({
+  manifest,
+}: {
+  manifest?: UploadJob["source_artifacts"];
+}) {
+  if (!manifest?.available) return null;
+  const summary = manifest.summary ?? {};
+  const statusClass = manifest.status === "passed" ? "green" : "accent";
+  const counts = [
+    ["sections", summary.sections],
+    ["blocks", summary.blocks],
+    ["tasks", summary.tasks],
+    ["images", summary.images],
+    ["math spans", summary.math_spans],
+  ]
+    .filter((entry): entry is [string, number] => Number.isFinite(entry[1]))
+    .map(([label, value]) => `${value} ${label}`)
+    .join(" · ");
+
+  return (
+    <div className="checkpoint-card" style={{ marginTop: 10 }}>
+      <div>
+        <div className="row">
+          <strong>Phase 1 canonical-source shadow</strong>
+          <span className={`badge ${statusClass}`}>
+            {manifest.status.replace(/_/g, " ")}
+          </span>
+          <span className="badge accent">not used for generation</span>
+        </div>
+        <div className="muted" style={{ marginTop: 6 }}>
+          The current pipeline still reads the immutable raw MMD. These files let
+          you inspect source order, task boundaries, images, KaTeX, and validation
+          before any future cutover.
+        </div>
+        {counts && <div className="muted mono" style={{ marginTop: 6 }}>{counts}</div>}
+        <div className="muted mono" style={{ marginTop: 4 }}>
+          ACSD {manifest.schema_version} · compiler {manifest.compiler_version}
+        </div>
+      </div>
+      <div className="row">
+        {manifest.files.map((artifact) => (
+          <a
+            className="button-link ghost"
+            href={artifact.download_url}
+            download={artifact.filename}
+            key={artifact.kind}
+            title={`${artifact.label} · ${formatBytes(artifact.size_bytes)}`}
+          >
+            {artifact.label}
+          </a>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function formatBytes(value: number): string {
+  if (!Number.isFinite(value) || value < 0) return "unknown size";
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function formatCheckpointStage(stage?: string): string {

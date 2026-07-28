@@ -135,6 +135,40 @@ export interface Session {
   created_at: string;
 }
 
+export interface SourceArtifactFile {
+  kind: "raw_mmd" | "canonical_json" | "aegis_mmd" | "report" | string;
+  label: string;
+  filename: string;
+  media_type: string;
+  size_bytes: number;
+  download_url: string;
+}
+
+export interface SourceArtifactManifest {
+  available: boolean;
+  shadow_mode: true;
+  used_for_generation: false;
+  schema_version: string;
+  compiler_version: string;
+  status: "passed" | "passed_with_warnings" | "failed" | "unavailable" | string;
+  ready_for_future_cutover: boolean;
+  source_sha256: string;
+  manifest_url: string;
+  summary: {
+    source_chars?: number;
+    sections?: number;
+    blocks?: number;
+    figures?: number;
+    images?: number;
+    math_spans?: number;
+    tasks?: number;
+    errors?: number;
+    warnings?: number;
+    [key: string]: number | undefined;
+  };
+  files: SourceArtifactFile[];
+}
+
 export interface UploadJob {
   id: number;
   module: string;
@@ -149,6 +183,7 @@ export interface UploadJob {
   status: string;
   result_ids: number[];
   detail: string;
+  source_artifacts?: SourceArtifactManifest;
   checkpoint_available?: boolean;
   checkpoint_stage?: string;
   checkpoint_saved_at?: string;

@@ -108,6 +108,7 @@ class UploadJobOut(BaseModel):
     status: str
     result_ids: list
     detail: str
+    source_artifacts: dict = Field(default_factory=dict)
     checkpoint_available: bool = False
     checkpoint_stage: str = ""
     checkpoint_saved_at: str = ""
