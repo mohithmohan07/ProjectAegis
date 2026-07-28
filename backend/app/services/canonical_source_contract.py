@@ -7,9 +7,9 @@ inspection and comparison only.
 """
 from __future__ import annotations
 
+import re
 from functools import wraps
 from pathlib import Path
-from types import ModuleType
 from typing import Any
 
 from .. import config
@@ -41,10 +41,34 @@ def _download(job_id: int, kind: str):
     return canonical_source.artifact_path(_artifact_directory(job_id), kind)
 
 
+def _install_heading_title_normalization() -> None:
+    """Expose clean semantic titles while the raw numbered heading stays intact."""
+    if getattr(canonical_source, "_NUMBERED_HEADING_TITLE_NORMALIZED", False):
+        return
+    original_heading_info = canonical_source._heading_info
+
+    @wraps(original_heading_info)
+    def heading_info(line: str):
+        result = original_heading_info(line)
+        if result is None:
+            return None
+        level, title, kind = result
+        title = re.sub(
+            r"^\s*\d+(?:\.\d+)*[.)]?\s+",
+            "",
+            str(title or ""),
+        ).strip()
+        return level, title, kind
+
+    canonical_source._heading_info = heading_info
+    canonical_source._NUMBERED_HEADING_TITLE_NORMALIZED = True
+
+
 def install() -> None:
     """Wrap upload conversion exactly once without changing its generation source."""
     from . import progress, uploads
 
+    _install_heading_title_normalization()
     if getattr(uploads, "_CANONICAL_SOURCE_SHADOW_VERSION", 0) >= _CONTRACT_VERSION:
         return
 
@@ -71,7 +95,7 @@ def install() -> None:
                 "Compiling Phase 1 canonical-source shadow; the existing "
                 "generation path will continue using the raw MMD unchanged."
             )
-            manifest = canonical_source.write_shadow_artifacts(
+            canonical_source.write_shadow_artifacts(
                 directory,
                 mmd_text=job.mmd_text,
                 source_filename=job.filename,
