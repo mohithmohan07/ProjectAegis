@@ -21,15 +21,24 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python scripts/generate_dummy_data.py
       - name: Run backend tests with bounded diagnostics
+        id: backend-tests
+        continue-on-error: true
         run: |
           set +e
           pytest -q > /tmp/pytest.log 2>&1
           status=$?
-          if [ "$status" -ne 0 ]; then
-            tail -n 260 /tmp/pytest.log
-            exit "$status"
-          fi
-          tail -n 20 /tmp/pytest.log
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          tail -n 260 /tmp/pytest.log
+      - name: Upload backend diagnostics
+        if: steps.backend-tests.outputs.status != '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase1-pytest-failure
+          path: /tmp/pytest.log
+          retention-days: 1
+      - name: Fail when backend tests fail
+        if: steps.backend-tests.outputs.status != '0'
+        run: exit 1
 
   frontend:
     runs-on: ubuntu-latest
