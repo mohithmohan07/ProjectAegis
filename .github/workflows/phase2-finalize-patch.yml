@@ -1,0 +1,50 @@
+name: Finalize Phase 2 source contract
+
+on:
+  push:
+    branches:
+      - agent/phase-2-canonical-source-inventory
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/phase-2-canonical-source-inventory
+      - name: Apply final deterministic assertions and remove this workflow
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          component = Path("frontend/src/components/DocumentUpload.tsx")
+          lines = component.read_text(encoding="utf-8").splitlines(keepends=True)
+          output = []
+          for line in lines:
+              if output and line == output[-1] and "manifest.phase" in line:
+                  continue
+              output.append(line)
+          component.write_text("".join(output), encoding="utf-8")
+
+          tests = Path("backend/tests/test_canonical_source_phase2.py")
+          text = tests.read_text(encoding="utf-8")
+          anchor = '''    assert first.canonical["source_contract"]["mode"] == (\n        phase2.SOURCE_CONTRACT_MODE\n    )\n'''
+          addition = '''    assert first.canonical["phase2_inventory_ready"] is True\n    assert first.report["phase2_issues"] == []\n    assert "<!-- schema_version: 1.1.0 -->" in first.aegis_mmd\n    assert (\n        "<!-- compiler_version: phase-2-source-critical-1 -->"\n        in first.aegis_mmd\n    )\n'''
+          if addition not in text:
+              if anchor not in text:
+                  raise SystemExit("Phase 2 test insertion anchor not found")
+              text = text.replace(anchor, anchor + addition, 1)
+          tests.write_text(text, encoding="utf-8")
+
+          Path(".github/workflows/phase2-finalize-patch.yml").unlink()
+          PY
+      - name: Commit final Phase 2 patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Finalize Phase 2 source-contract checks"
+          git push origin HEAD:agent/phase-2-canonical-source-inventory
