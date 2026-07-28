@@ -1,13 +1,14 @@
-"""Compatibility refinements for the Phase 2 ACSD checkpoint boundary."""
+"""Compatibility refinements for the Phase 2 ACSD source-critical boundary."""
 from __future__ import annotations
 
 import copy
+from functools import wraps
 from types import ModuleType
 from typing import Any
 
-from . import canonical_source_phase2 as phase2
+from . import canonical_source, canonical_source_phase2 as phase2
 
-_COMPAT_VERSION = 1
+_COMPAT_VERSION = 2
 
 
 def prune_legacy_inventory_checkpoints(db: Any, job: Any) -> bool:
@@ -98,8 +99,80 @@ def prune_legacy_inventory_checkpoints(db: Any, job: Any) -> bool:
     return True
 
 
-def install(_generation: ModuleType | None = None) -> None:
+def install(generation: ModuleType | None = None) -> None:
     if getattr(phase2, "_PHASE2_COMPAT_VERSION", 0) >= _COMPAT_VERSION:
         return
+
+    original_compile = phase2.compile_phase2_source
+
+    @wraps(original_compile)
+    def compile_phase2_source(*args, **kwargs):
+        compiled = original_compile(*args, **kwargs)
+        text = compiled.aegis_mmd
+        text = text.replace(
+            f"<!-- schema_version: {canonical_source.SCHEMA_VERSION} -->",
+            f"<!-- schema_version: {phase2.SCHEMA_VERSION} -->",
+            1,
+        )
+        text = text.replace(
+            f"<!-- compiler_version: {canonical_source.COMPILER_VERSION} -->",
+            f"<!-- compiler_version: {phase2.COMPILER_VERSION} -->",
+            1,
+        )
+        if text == compiled.aegis_mmd:
+            return compiled
+        return canonical_source.CompiledSource(
+            canonical=compiled.canonical,
+            aegis_mmd=text,
+            report=compiled.report,
+        )
+
+    phase2.compile_phase2_source = compile_phase2_source
     phase2.prune_legacy_inventory_checkpoints = prune_legacy_inventory_checkpoints
+
+    if generation is not None:
+        original_extract = generation._extract_question_task_inventory_via_api
+
+        @wraps(original_extract)
+        def guarded_extract(*args, **kwargs):
+            inventory = original_extract(*args, **kwargs)
+            contract = inventory.get("source_contract") if isinstance(inventory, dict) else {}
+            if not (
+                isinstance(contract, dict)
+                and contract.get("mode") == phase2.SOURCE_CONTRACT_MODE
+            ):
+                return inventory
+            items = [
+                item for item in inventory.get("items") or []
+                if isinstance(item, dict)
+            ]
+            qid_set = {str(item.get("qid") or "") for item in items}
+            expected = {
+                f"QINV-{index:04d}" for index in range(1, len(items) + 1)
+            }
+            if qid_set != expected:
+                raise RuntimeError(
+                    "Phase 2 chapter-wide topic placement changed the canonical "
+                    "Question / Task Inventory qid set"
+                )
+            items.sort(
+                key=lambda item: (
+                    int(item.get("order_index") or 0),
+                    str(item.get("qid") or ""),
+                )
+            )
+            qids = [str(item.get("qid") or "") for item in items]
+            if qids != [
+                f"QINV-{index:04d}" for index in range(1, len(items) + 1)
+            ]:
+                raise RuntimeError(
+                    "Phase 2 Question / Task Inventory order changed after "
+                    "source compilation"
+                )
+            inventory["items"] = items
+            inventory["stats"] = generation._inventory_stats(items)
+            return inventory
+
+        generation._extract_question_task_inventory_via_api = guarded_extract
+
     phase2._PHASE2_COMPAT_VERSION = _COMPAT_VERSION
