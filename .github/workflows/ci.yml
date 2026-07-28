@@ -10,7 +10,9 @@ permissions:
 
 jobs:
   phase2-finalize:
-    if: github.ref == 'refs/heads/agent/phase-2-canonical-source-inventory'
+    if: >-
+      github.ref == 'refs/heads/agent/phase-2-canonical-source-inventory' ||
+      github.event.pull_request.head.ref == 'agent/phase-2-canonical-source-inventory'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
