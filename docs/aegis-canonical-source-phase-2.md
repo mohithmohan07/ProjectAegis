@@ -134,4 +134,5 @@ The regression suite enforces the RNE task count, QID order, byte-identical
 compilation, and `phase2_inventory_ready` status before this slice is mergeable.
 
 The next slice may move topic-scoped semantic concept extraction to ACSD blocks,
-but only after this source-critical ledger has been exercised in production.
+but only after this source-critical ledger has been exercised in production and
+its deterministic inventory has been compared with the deposited Types.
