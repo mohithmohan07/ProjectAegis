@@ -70,6 +70,9 @@ def test_concept_conversion_writes_downloadable_shadow_artifacts(client):
     assert converted["status"] == "converted"
     assert converted["source_artifacts"]["available"] is True
     assert converted["source_artifacts"]["used_for_generation"] is False
+    reloaded = client.get(f"/build-concepts/uploads/{job['id']}")
+    assert reloaded.status_code == 200
+    assert reloaded.json()["source_artifacts"]["available"] is True
     _assert_downloads(client, job["id"], converted)
 
 
@@ -89,6 +92,9 @@ def test_assessment_conversion_uses_the_same_shadow_contract(client):
     converted = convert_assessment_upload(client, job["id"])
 
     assert converted["source_artifacts"]["available"] is True
+    reloaded = client.get(f"/build-assessments/uploads/{job['id']}")
+    assert reloaded.status_code == 200
+    assert reloaded.json()["source_artifacts"]["available"] is True
     _assert_downloads(client, job["id"], converted)
 
 
@@ -121,6 +127,7 @@ def test_replacing_the_source_removes_stale_shadow_artifacts(client):
         files=replacement,
     )
     assert response.status_code == 200
+    assert response.json()["source_artifacts"]["available"] is False
 
     manifest = client.get(f"/source-artifacts/uploads/{job['id']}")
     assert manifest.status_code == 200
