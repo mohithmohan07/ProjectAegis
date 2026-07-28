@@ -146,10 +146,18 @@ export interface SourceArtifactFile {
 
 export interface SourceArtifactManifest {
   available: boolean;
-  shadow_mode: true;
-  used_for_generation: false;
+  shadow_mode: boolean;
+  used_for_generation: boolean;
   schema_version: string;
   compiler_version: string;
+  phase?: string;
+  consumer_module?: string;
+  generation_usage?: {
+    mode: string;
+    components?: string[];
+    raw_mmd_components?: string[];
+  };
+  phase2_inventory_ready?: boolean;
   status: "passed" | "passed_with_warnings" | "failed" | "unavailable" | string;
   ready_for_future_cutover: boolean;
   source_sha256: string;

@@ -37,10 +37,18 @@ function convertedJob(): UploadJob {
     detail: "Converted to MMD",
     source_artifacts: {
       available: true,
-      shadow_mode: true,
-      used_for_generation: false,
-      schema_version: "1.0.0",
-      compiler_version: "phase-1-shadow-1",
+      shadow_mode: false,
+      used_for_generation: true,
+      schema_version: "1.1.0",
+      compiler_version: "phase-2-source-critical-1",
+      phase: "phase-2-source-critical",
+      consumer_module: "build_concepts",
+      generation_usage: {
+        mode: "source-critical",
+        components: ["question_task_inventory", "stable_qids"],
+        raw_mmd_components: ["semantic_concept_extraction"],
+      },
+      phase2_inventory_ready: true,
       status: "passed_with_warnings",
       ready_for_future_cutover: false,
       source_sha256: "abc123",
@@ -98,7 +106,7 @@ beforeEach(() => {
   apiMock.getUploadJob.mockRejectedValue(new Error("no saved job"));
 });
 
-test("shows inspectable Phase 1 artifacts without implying generation cutover", () => {
+test("shows the Phase 2 source-critical cutover without overstating semantic use", () => {
   render(
     <RunConsoleProvider>
       <DocumentUpload
@@ -110,10 +118,10 @@ test("shows inspectable Phase 1 artifacts without implying generation cutover", 
     </RunConsoleProvider>,
   );
 
-  expect(screen.getByText("Phase 1 canonical-source shadow")).toBeDefined();
-  expect(screen.getByText("not used for generation")).toBeDefined();
+  expect(screen.getByText("Phase 2 canonical-source inventory")).toBeDefined();
+  expect(screen.getByText("source-critical generation active")).toBeDefined();
   expect(screen.getByText(/6 sections · 42 blocks · 26 tasks/i)).toBeDefined();
-  expect(screen.getByText(/current pipeline still reads the immutable raw MMD/i))
+  expect(screen.getByText(/semantic concept extraction and writing still read/i))
     .toBeDefined();
 
   const raw = screen.getByRole("link", { name: "Immutable raw MMD" });

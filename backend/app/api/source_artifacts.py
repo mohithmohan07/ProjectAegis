@@ -1,4 +1,4 @@
-"""Private download endpoints for Phase-1 canonical-source shadow artifacts."""
+"""Private download endpoints for canonical-source artifacts."""
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -17,7 +17,7 @@ def source_artifact_manifest(
     db: Session = Depends(get_db),
     user: auth.Principal = Depends(auth.require_user),
 ):
-    """Return the shadow status and links without exposing another user's upload."""
+    """Return canonical-source status and links without exposing another user."""
     try:
         job = uploads.get_job(db, job_id, owner_sub=user.sub)
     except uploads.UploadJobNotFound as exc:
@@ -32,14 +32,16 @@ def download_source_artifact(
     db: Session = Depends(get_db),
     user: auth.Principal = Depends(auth.require_user),
 ):
-    """Download one immutable/raw, canonical, derived, or report artifact."""
+    """Download one raw, canonical, derived, or validation artifact."""
     try:
         job = uploads.get_job(db, job_id, owner_sub=user.sub)
+        manifest = uploads.source_artifact_manifest(job)
         path, spec = uploads.source_artifact_download(job, artifact_kind)
     except uploads.UploadJobNotFound as exc:
         raise HTTPException(404, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
+    usage = manifest.get("generation_usage") or {}
     return FileResponse(
         path,
         filename=spec["filename"],
@@ -47,6 +49,9 @@ def download_source_artifact(
         headers={
             "Cache-Control": "private, no-store",
             "X-Content-Type-Options": "nosniff",
-            "X-Aegis-Shadow-Only": "true",
+            "X-Aegis-Shadow-Only": (
+                "true" if manifest.get("shadow_mode", True) else "false"
+            ),
+            "X-Aegis-Generation-Usage": str(usage.get("mode") or "shadow"),
         },
     )
