@@ -114,3 +114,10 @@ Before the next cutover slice:
 
 The next slice may move topic-scoped semantic concept extraction to ACSD blocks,
 but only after this source-critical ledger has been exercised in production.
+
+## CI validation discipline
+
+Pull-request commits run the standard CI workflow once through the
+`pull_request` event. Push validation is limited to `main`, and a newer commit
+cancels an older in-flight run for the same pull request. Temporary diagnostic
+or self-patching workflows must not remain in the final Phase 2 diff.
