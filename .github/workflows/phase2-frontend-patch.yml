@@ -21,10 +21,13 @@ jobs:
           from pathlib import Path
 
           component = Path("frontend/src/components/DocumentUpload.tsx")
-          text = component.read_text(encoding="utf-8")
-          line = '          {manifest.phase ? ` · ${manifest.phase.replace(/-/g, " ")}` : ""}\n'
-          text = text.replace(line + line, line)
-          component.write_text(text, encoding="utf-8")
+          lines = component.read_text(encoding="utf-8").splitlines(keepends=True)
+          output = []
+          for line in lines:
+              if output and line == output[-1] and "manifest.phase" in line:
+                  continue
+              output.append(line)
+          component.write_text("".join(output), encoding="utf-8")
           PY
       - name: Commit generated patch
         run: |
