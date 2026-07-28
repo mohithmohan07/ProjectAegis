@@ -8,14 +8,8 @@ from typing import Any
 _ORPHAN_ANALYSIS_RE = re.compile(
     r"(?im)(?:^|\n)[ \t]*Misconceptions?[ \t]*/[ \t]*(?=\r?$|\r?\n|//)"
 )
-_REPEATED_HUB_PREFIX_RE = re.compile(
-    r"(?i)^\s*(?P<first>Activity|Project|Discuss)\s*[—–:-]\s*"
-    r"(?P=first)\s*[—–:-]\s*"
-)
-_REPEATED_SECOND_HUB_PREFIX_RE = re.compile(
-    r"(?i)^\s*(?P<first>Activity|Project|Discuss)\s*[—–:-]\s*"
-    r"(?P<second>Activity|Project|Discuss)\s*[—–:-]\s*"
-    r"(?P=second)\b\s*[—–:-]?\s*"
+_HUB_PREFIX_RE = re.compile(
+    r"(?i)^\s*(?P<label>Activity|Project|Discuss)\b\s*(?:[—–:-]\s*)?"
 )
 
 
@@ -66,25 +60,20 @@ def intact_type_assignment_units(
 
 
 def clean_activity_hub_content(content: str) -> str:
+    """Keep one leading Hub kind and remove every repeated copy of that label."""
     value = str(content or "").strip()
-    for _ in range(4):
-        updated = _REPEATED_HUB_PREFIX_RE.sub(
-            lambda match: f"{match.group('first').title()} — ",
-            value,
-            count=1,
-        )
-        updated = _REPEATED_SECOND_HUB_PREFIX_RE.sub(
-            lambda match: (
-                f"{match.group('first').title()} — "
-                f"{match.group('second').title()} — "
-            ),
-            updated,
-            count=1,
-        )
-        if updated == value:
+    first = _HUB_PREFIX_RE.match(value)
+    if first is None:
+        return re.sub(r"\s+", " ", value).strip()
+    label = first.group("label").title()
+    tail = value[first.end():].lstrip()
+    for _ in range(8):
+        repeated = _HUB_PREFIX_RE.match(tail)
+        if repeated is None or repeated.group("label").casefold() != label.casefold():
             break
-        value = updated
-    return re.sub(r"\s+", " ", value).strip()
+        tail = tail[repeated.end():].lstrip()
+    tail = re.sub(r"\s+", " ", tail).strip()
+    return f"{label} — {tail}".rstrip(" —")
 
 
 def record_example_qids(generation, record: dict, inventory: dict) -> list[str]:
