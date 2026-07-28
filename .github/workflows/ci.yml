@@ -1,9 +1,17 @@
 name: CI
 
 on:
+  # Pull-request branches are validated by the pull_request event below. Limiting
+  # push validation to main prevents every PR commit from launching an identical
+  # second workflow run.
   push:
-    branches: ["**"]
+    branches: ["main"]
   pull_request:
+
+# A newer commit supersedes an older in-flight run for the same PR or branch.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   backend:
