@@ -16,13 +16,17 @@ from .canonical_source_phase2_compat import (
 from .canonical_source_phase21_contract import (
     install as _install_canonical_source_phase21_contract,
 )
+from .canonical_source_phase211_contract import (
+    install as _install_canonical_source_phase211_contract,
+)
 
 # Production order is intentional and fail-closed: preserve source identity first,
 # defer Type allocation to the topology freeze, restore integration boundaries,
 # normalize source-owned display, and reconcile explicit Figure tags before every
 # strict terminal gate. Phase 1 compiles the audit bundle; Phase 2 consumes its
-# deterministic task ledger; Phase 2.1 then hardens missing chapter structure,
-# task boundaries, visual ownership, shared context, and mined-Type immutability.
+# deterministic task ledger; Phase 2.1 hardens source structure and ownership;
+# Phase 2.1.1 runs last to normalize task-list display and improve diagnostics
+# without weakening any earlier source or terminal contract.
 _install_closed_inventory_contract(generation)
 _install_concept_topology_contract(generation)
 _install_concept_topology_compat(generation)
@@ -32,6 +36,7 @@ _install_canonical_source_contract()
 _install_canonical_source_phase2_contract()
 _install_canonical_source_phase2_compat(generation)
 _install_canonical_source_phase21_contract(generation)
+_install_canonical_source_phase211_contract(generation)
 
 del _install_closed_inventory_contract
 del _install_concept_topology_contract
@@ -42,3 +47,4 @@ del _install_canonical_source_contract
 del _install_canonical_source_phase2_contract
 del _install_canonical_source_phase2_compat
 del _install_canonical_source_phase21_contract
+del _install_canonical_source_phase211_contract
