@@ -64,11 +64,102 @@ def _install_heading_title_normalization() -> None:
     canonical_source._NUMBERED_HEADING_TITLE_NORMALIZED = True
 
 
+def _install_task_source_order_normalization() -> None:
+    """Anchor task order to raw-character positions, never parser return order.
+
+    The existing source-task parser has its own semantic section ledger, which is
+    intentionally different from the ACSD's complete heading ledger.  Phase 1 uses
+    that parser for task discovery, but resolves every task back onto the immutable
+    raw MMD before assigning its canonical section and public TASK number.
+    """
+    if getattr(canonical_source, "_TASK_SOURCE_ORDER_NORMALIZED", False):
+        return
+
+    original_location = canonical_source._task_absolute_location
+
+    @wraps(original_location)
+    def task_absolute_location(
+        source: str,
+        raw_task: str,
+        section_index: int,
+        source_position: int,
+        section_ranges: dict[int, tuple[int, int]],
+    ):
+        result = original_location(
+            source,
+            raw_task,
+            section_index,
+            source_position,
+            section_ranges,
+        )
+        if result[2] == "exact_text_match" or not raw_task:
+            return result
+
+        matches: list[int] = []
+        cursor = 0
+        while True:
+            position = source.find(raw_task, cursor)
+            if position < 0:
+                break
+            matches.append(position)
+            cursor = position + max(1, len(raw_task))
+
+        if len(matches) == 1:
+            start = matches[0]
+            return start, start + len(raw_task), "unique_global_text_match"
+        if matches:
+            start_bound, _end_bound = section_ranges.get(
+                section_index,
+                (0, len(source)),
+            )
+            estimate = start_bound + max(0, source_position)
+            start = min(matches, key=lambda value: (abs(value - estimate), value))
+            return start, start + len(raw_task), "nearest_global_text_match"
+        return result
+
+    canonical_source._task_absolute_location = task_absolute_location
+    original_extract = canonical_source._extract_tasks
+
+    @wraps(original_extract)
+    def extract_tasks(source: str, sections: list[dict], figures: list[dict]):
+        tasks, issues = original_extract(source, sections, figures)
+        for task in tasks:
+            start = int(task.get("source_start") or 0)
+            owning_section = next(
+                (
+                    section
+                    for section in sections
+                    if int(section.get("source_start") or 0)
+                    <= start
+                    < int(section.get("source_end") or 0)
+                ),
+                None,
+            )
+            if owning_section is not None:
+                task["section_id"] = owning_section["section_id"]
+
+        tasks.sort(
+            key=lambda task: (
+                int(task.get("source_start") or 0),
+                int(task.get("source_position") or 0),
+                str(task.get("identity_key") or ""),
+            )
+        )
+        for index, task in enumerate(tasks, start=1):
+            task["task_id"] = f"TASK-{index:05d}"
+            task["order"] = index
+        return tasks, issues
+
+    canonical_source._extract_tasks = extract_tasks
+    canonical_source._TASK_SOURCE_ORDER_NORMALIZED = True
+
+
 def install() -> None:
     """Wrap upload conversion exactly once without changing its generation source."""
     from . import progress, uploads
 
     _install_heading_title_normalization()
+    _install_task_source_order_normalization()
     if getattr(uploads, "_CANONICAL_SOURCE_SHADOW_VERSION", 0) >= _CONTRACT_VERSION:
         return
 
