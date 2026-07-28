@@ -1,0 +1,26 @@
+name: Export Phase 2.2.1 development snapshot
+
+on:
+  push:
+    branches: ["agent/phase-2-2-1-pdf-acsd-fallback"]
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phase221-repository-snapshot
+          path: |
+            backend
+            frontend
+            .github/workflows/ci.yml
+            Dockerfile
+            fly.toml
+            README.md
+          include-hidden-files: true
+          retention-days: 1
