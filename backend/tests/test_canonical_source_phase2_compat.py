@@ -52,11 +52,14 @@ def test_exact_task_text_remains_stronger_than_section_label_metadata():
     assert match[1] is exact
 
 
-def test_legacy_final_checkpoint_requires_phase2_source_refresh():
-    legacy = generation._make_concept_checkpoint(
+def _final_checkpoint(with_phase2_inventory: bool):
+    inventory = {"items": [{"qid": "QINV-0001"}]}
+    if with_phase2_inventory:
+        inventory["source_contract"] = {"mode": phase2.SOURCE_CONTRACT_MODE}
+    return generation._make_concept_checkpoint(
         "final_content_ready",
         records=[{"concept_title": "A"}],
-        question_task_inventory={"items": [{"qid": "QINV-0001"}]},
+        question_task_inventory=inventory,
         mined_types={
             "types": [],
             "_topology_allocation_contract": {
@@ -67,39 +70,18 @@ def test_legacy_final_checkpoint_requires_phase2_source_refresh():
         method_row_snapshot=[],
     )
 
-    with phase2.activate({"source_contract": {"mode": phase2.SOURCE_CONTRACT_MODE}}):
-        reasons = generation._final_checkpoint_refresh_reasons(
-            legacy,
-            sections=[],
-            source_topic_excerpts=[],
-        )
 
-    assert "Phase 2 ACSD source inventory" in " ".join(reasons)
-
-
-def test_phase2_final_checkpoint_does_not_receive_phase2_legacy_reason():
-    current = generation._make_concept_checkpoint(
-        "final_content_ready",
-        records=[{"concept_title": "A"}],
-        question_task_inventory={
-            "items": [{"qid": "QINV-0001"}],
-            "source_contract": {"mode": phase2.SOURCE_CONTRACT_MODE},
-        },
-        mined_types={
-            "types": [],
-            "_topology_allocation_contract": {
-                "version": 1,
-                "state": "allocated_after_freeze",
-            },
-        },
-        method_row_snapshot=[],
-    )
-
-    with phase2.activate({"source_contract": {"mode": phase2.SOURCE_CONTRACT_MODE}}):
-        reasons = generation._final_checkpoint_refresh_reasons(
-            current,
-            sections=[],
-            source_topic_excerpts=[],
-        )
-
-    assert "Phase 2 ACSD source inventory" not in " ".join(reasons)
+def test_active_phase2_keeps_existing_terminal_recovery_rules():
+    for checkpoint in (
+        _final_checkpoint(False),
+        _final_checkpoint(True),
+    ):
+        with phase2.activate({
+            "source_contract": {"mode": phase2.SOURCE_CONTRACT_MODE}
+        }):
+            reasons = generation._final_checkpoint_refresh_reasons(
+                checkpoint,
+                sections=[],
+                source_topic_excerpts=[],
+            )
+        assert "Phase 2 ACSD source inventory" not in " ".join(reasons)
