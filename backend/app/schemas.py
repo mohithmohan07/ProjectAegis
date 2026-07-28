@@ -108,6 +108,7 @@ class UploadJobOut(BaseModel):
     status: str
     result_ids: list
     detail: str
+    source_artifacts: dict = Field(default_factory=dict)
     checkpoint_available: bool = False
     checkpoint_stage: str = ""
     checkpoint_saved_at: str = ""
@@ -177,42 +178,3 @@ class TagToConceptRequest(BaseModel):
 
 class TagToGroupRequest(BaseModel):
     group_id: int
-
-
-class TagToTopicRequest(BaseModel):
-    topic_id: int
-
-
-class PreviewRequest(BaseModel):
-    question_ids: list[int] = Field(default_factory=list)
-    concept_ids: list[int] = Field(default_factory=list)
-
-
-# --------------------------------------------------------------------------- #
-# Misc
-# --------------------------------------------------------------------------- #
-
-class Vocab(BaseModel):
-    boards: list[str]
-    grades: list[str]
-    question_types: list[str]
-    cognitive_skills: list[str]
-    difficulty_levels: list[str]
-    question_categories: dict[str, list[str]]
-    group_types: list[str]
-    upload_types: list[str]
-    book_sources: list[str]
-    appears_in: list[str]
-
-
-class Stats(BaseModel):
-    chapters: int
-    topics: int
-    concepts: int
-    groups: int
-    questions: int
-    questions_by_sheet: dict[str, int]
-    sessions: int
-    upload_jobs: int
-    openai_live: bool
-    mathpix_live: bool
