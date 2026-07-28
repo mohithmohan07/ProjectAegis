@@ -34,9 +34,16 @@ def test_phase2_source_critical_ledgers_are_ready_and_source_ordered(
 
     canonical = compiled.canonical
     tasks = canonical["tasks"]
-    assert canonical["phase2_inventory_ready"] is True
+    assert canonical["phase2_inventory_ready"] is True, (
+        filename,
+        compiled.report.get("phase2_issues"),
+    )
     assert compiled.report["phase2_issues"] == []
-    assert len(tasks) == expected_tasks
+    assert len(tasks) == expected_tasks, (
+        filename,
+        len(tasks),
+        [task.get("source_label") for task in tasks],
+    )
     assert [task["qid"] for task in tasks] == [
         f"QINV-{index:04d}"
         for index in range(1, expected_tasks + 1)
