@@ -163,8 +163,21 @@ def install() -> None:
     if getattr(uploads, "_CANONICAL_SOURCE_SHADOW_VERSION", 0) >= _CONTRACT_VERSION:
         return
 
+    original_serialize = uploads._serialize_job
     original_convert = uploads.convert_job
     original_replace = uploads.replace_file
+
+    @wraps(original_serialize)
+    def serialize_job(job):
+        result = original_serialize(job)
+        if isinstance(result, dict):
+            result = {
+                **result,
+                "source_artifacts": _manifest(int(job.id)),
+            }
+        return result
+
+    uploads._serialize_job = serialize_job
 
     @wraps(original_convert)
     def convert_job(*args, **kwargs):
@@ -235,6 +248,11 @@ def install() -> None:
             canonical_source.clear_shadow_artifacts(
                 _artifact_directory(int(job_id))
             )
+            if isinstance(result, dict):
+                result = {
+                    **result,
+                    "source_artifacts": _manifest(int(job_id)),
+                }
         return result
 
     uploads.convert_job = convert_job
