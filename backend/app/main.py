@@ -19,6 +19,7 @@ from .api import (
     build_assessments as build_assessments_api,
     build_concepts as build_concepts_api,
     data as data_api,
+    source_artifacts as source_artifacts_api,
     tagging as tagging_api,
     workbooks as workbooks_api,
 )
@@ -75,6 +76,7 @@ _authenticated = [Depends(auth_svc.require_user)]
 app.include_router(directory_api.router, dependencies=_authenticated)
 app.include_router(build_assessments_api.router, dependencies=_authenticated)
 app.include_router(build_concepts_api.router, dependencies=_authenticated)
+app.include_router(source_artifacts_api.router, dependencies=_authenticated)
 app.include_router(data_api.router, dependencies=_authenticated)
 app.include_router(tagging_api.router, dependencies=_authenticated)
 app.include_router(workbooks_api.router, dependencies=_authenticated)
