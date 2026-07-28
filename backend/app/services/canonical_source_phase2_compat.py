@@ -8,7 +8,70 @@ from typing import Any
 
 from . import canonical_source, canonical_source_phase2 as phase2
 
-_COMPAT_VERSION = 3
+_COMPAT_VERSION = 4
+
+
+def _match_anchor(
+    task: dict[str, Any],
+    anchors: list[dict[str, Any]],
+    used: set[int],
+) -> tuple[int, dict[str, Any]] | None:
+    """Match enrichment metadata without trusting a repeated label alone."""
+    raw_key = phase2._normal_text(task.get("raw_prompt") or "")
+    label_key = phase2._normal_text(task.get("source_label") or "")
+    try:
+        task_section = int(task.get("source_section_index") or 0)
+    except (TypeError, ValueError):
+        task_section = 0
+    try:
+        task_position = int(task.get("source_position") or 0)
+    except (TypeError, ValueError):
+        task_position = 0
+
+    ranked: list[tuple[tuple[int, int, int, int], int, dict[str, Any]]] = []
+    for index, anchor in enumerate(anchors):
+        if index in used:
+            continue
+        anchor_raw = str(
+            anchor.get("raw_task") or anchor.get("normalized_task") or ""
+        )
+        anchor_key = phase2._normal_text(anchor_raw)
+        if not anchor_key:
+            continue
+        anchor_label = phase2._normal_text(anchor.get("source_label") or "")
+        try:
+            anchor_section = int(anchor.get("_source_section_index") or 0)
+        except (TypeError, ValueError):
+            anchor_section = 0
+        try:
+            anchor_position = int(anchor.get("_source_position") or 0)
+        except (TypeError, ValueError):
+            anchor_position = 0
+
+        exact = int(anchor_key == raw_key and bool(raw_key))
+        contained = int(
+            bool(raw_key)
+            and min(len(raw_key), len(anchor_key)) >= 30
+            and (raw_key in anchor_key or anchor_key in raw_key)
+        )
+        same_label = int(bool(label_key) and label_key == anchor_label)
+        same_section = int(anchor_section == task_section)
+        label_scoped = same_label and same_section
+        if not (exact or contained or label_scoped):
+            continue
+        score = (
+            exact,
+            contained,
+            int(label_scoped),
+            -abs(anchor_position - task_position),
+        )
+        ranked.append((score, index, anchor))
+
+    if not ranked:
+        return None
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    _score, index, anchor = ranked[0]
+    return index, anchor
 
 
 def prune_legacy_inventory_checkpoints(db: Any, job: Any) -> bool:
@@ -130,6 +193,7 @@ def install(generation: ModuleType | None = None) -> None:
             report=compiled.report,
         )
 
+    phase2._match_anchor = _match_anchor
     phase2.compile_phase2_source = compile_phase2_source
     phase2.prune_legacy_inventory_checkpoints = prune_legacy_inventory_checkpoints
 
