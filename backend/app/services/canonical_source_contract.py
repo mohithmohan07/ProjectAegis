@@ -12,7 +12,7 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
-from .. import config
+from .. import config, models
 from . import canonical_source
 
 _CONTRACT_VERSION = 1
@@ -68,7 +68,7 @@ def _install_task_source_order_normalization() -> None:
     """Anchor task order to raw-character positions, never parser return order.
 
     The existing source-task parser has its own semantic section ledger, which is
-    intentionally different from the ACSD's complete heading ledger.  Phase 1 uses
+    intentionally different from the ACSD's complete heading ledger. Phase 1 uses
     that parser for task discovery, but resolves every task back onto the immutable
     raw MMD before assigning its canonical section and public TASK number.
     """
@@ -154,30 +154,38 @@ def _install_task_source_order_normalization() -> None:
     canonical_source._TASK_SOURCE_ORDER_NORMALIZED = True
 
 
+def _install_upload_manifest_property() -> None:
+    """Expose the deterministic manifest through existing UploadJob responses."""
+    if isinstance(getattr(models.UploadJob, "source_artifacts", None), property):
+        return
+
+    def source_artifacts(job: models.UploadJob) -> dict[str, Any]:
+        job_id = getattr(job, "id", None)
+        if not job_id:
+            return {
+                "available": False,
+                "shadow_mode": True,
+                "used_for_generation": False,
+                "status": "unavailable",
+                "files": [],
+            }
+        return _manifest(int(job_id))
+
+    models.UploadJob.source_artifacts = property(source_artifacts)
+
+
 def install() -> None:
     """Wrap upload conversion exactly once without changing its generation source."""
     from . import progress, uploads
 
     _install_heading_title_normalization()
     _install_task_source_order_normalization()
+    _install_upload_manifest_property()
     if getattr(uploads, "_CANONICAL_SOURCE_SHADOW_VERSION", 0) >= _CONTRACT_VERSION:
         return
 
-    original_serialize = uploads._serialize_job
     original_convert = uploads.convert_job
     original_replace = uploads.replace_file
-
-    @wraps(original_serialize)
-    def serialize_job(job):
-        result = original_serialize(job)
-        if isinstance(result, dict):
-            result = {
-                **result,
-                "source_artifacts": _manifest(int(job.id)),
-            }
-        return result
-
-    uploads._serialize_job = serialize_job
 
     @wraps(original_convert)
     def convert_job(*args, **kwargs):
@@ -248,11 +256,6 @@ def install() -> None:
             canonical_source.clear_shadow_artifacts(
                 _artifact_directory(int(job_id))
             )
-            if isinstance(result, dict):
-                result = {
-                    **result,
-                    "source_artifacts": _manifest(int(job_id)),
-                }
         return result
 
     uploads.convert_job = convert_job
