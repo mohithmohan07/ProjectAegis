@@ -19,25 +19,25 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements.txt
       - run: pip install -r requirements.txt
-      - name: Run dummy-data bootstrap with diagnostics
-        id: dummy-data
+      - run: python scripts/generate_dummy_data.py
+      - name: Run backend tests with diagnostics
+        id: backend-tests
         continue-on-error: true
         run: |
           set +e
-          python scripts/generate_dummy_data.py > /tmp/dummy-data.log 2>&1
+          pytest -q > /tmp/pytest.log 2>&1
           status=$?
           echo "status=$status" >> "$GITHUB_OUTPUT"
-      - name: Upload dummy-data diagnostics
-        if: steps.dummy-data.outputs.status != '0'
+      - name: Upload backend diagnostics
+        if: steps.backend-tests.outputs.status != '0'
         uses: actions/upload-artifact@v4
         with:
-          name: phase1-dummy-data-failure
-          path: /tmp/dummy-data.log
+          name: phase1-pytest-failure
+          path: /tmp/pytest.log
           retention-days: 1
-      - name: Fail when dummy-data bootstrap fails
-        if: steps.dummy-data.outputs.status != '0'
+      - name: Fail when backend tests fail
+        if: steps.backend-tests.outputs.status != '0'
         run: exit 1
-      - run: pytest -q
 
   frontend:
     runs-on: ubuntu-latest
