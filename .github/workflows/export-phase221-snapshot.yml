@@ -1,8 +1,8 @@
 name: Export Phase 2.2.1 development snapshot
 
 on:
-  push:
-    branches: ["agent/phase-2-2-1-pdf-acsd-fallback"]
+  pull_request:
+    branches: ["main"]
 
 permissions:
   contents: read
