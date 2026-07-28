@@ -1,4 +1,4 @@
-"""Converted uploads emit private Phase-1 shadow artifacts without cutover."""
+"""Converted uploads expose Phase-aware canonical-source artifacts."""
 from __future__ import annotations
 
 import io
@@ -11,26 +11,45 @@ SOURCE = (
     "# Ordered Chapter\n\n"
     "## First Topic\n\n"
     "A relation is $a^2+b^2=c^2$.\n\n"
+    "Questions\n\n"
+    "1. Calculate the missing value.\n\n"
     "## Last Topic\n\n"
     "The final topic remains last.\n"
 )
 
 
-def _assert_downloads(client, job_id: int, converted: dict) -> None:
+def _assert_downloads(
+    client,
+    job_id: int,
+    converted: dict,
+    *,
+    phase2: bool,
+) -> None:
     manifest = client.get(f"/source-artifacts/uploads/{job_id}")
     assert manifest.status_code == 200
     payload = manifest.json()
     assert payload["available"] is True
-    assert payload["shadow_mode"] is True
-    assert payload["used_for_generation"] is False
+    assert payload["shadow_mode"] is (not phase2)
+    assert payload["used_for_generation"] is phase2
     assert payload["manifest_url"] == f"/source-artifacts/uploads/{job_id}"
     assert {item["kind"] for item in payload["files"]} == {
         "raw_mmd", "canonical_json", "aegis_mmd", "report",
     }
+    if phase2:
+        assert payload["phase"] == "phase-2-source-critical"
+        assert payload["generation_usage"]["mode"] == "source-critical"
+        assert payload["phase2_inventory_ready"] is True
+    else:
+        assert payload["generation_usage"]["mode"] == "shadow"
 
     raw = client.get(f"/source-artifacts/uploads/{job_id}/raw_mmd")
     assert raw.status_code == 200
-    assert raw.headers["x-aegis-shadow-only"] == "true"
+    assert raw.headers["x-aegis-shadow-only"] == (
+        "false" if phase2 else "true"
+    )
+    assert raw.headers["x-aegis-generation-usage"] == (
+        "source-critical" if phase2 else "shadow"
+    )
     assert raw.text == converted["mmd_text"]
 
     canonical = client.get(
@@ -38,21 +57,35 @@ def _assert_downloads(client, job_id: int, converted: dict) -> None:
     )
     assert canonical.status_code == 200
     canonical_payload = json.loads(canonical.text)
-    assert canonical_payload["shadow_mode"] is True
-    assert canonical_payload["used_for_generation"] is False
+    assert canonical_payload["shadow_mode"] is (not phase2)
+    assert canonical_payload["used_for_generation"] is phase2
     assert canonical_payload["ordering_contract"]["topic_sequence_locked"] is True
+    if phase2:
+        assert canonical_payload["source_contract"]["mode"] == (
+            "acsd-phase2-source-critical"
+        )
+        assert [
+            task["qid"] for task in canonical_payload["tasks"]
+        ] == [
+            f"QINV-{index:04d}"
+            for index in range(1, len(canonical_payload["tasks"]) + 1)
+        ]
 
     derived = client.get(f"/source-artifacts/uploads/{job_id}/aegis_mmd")
     assert derived.status_code == 200
-    assert "AEGIS CANONICAL SOURCE SHADOW" in derived.text
+    assert (
+        "AEGIS CANONICAL SOURCE PHASE 2" in derived.text
+        if phase2
+        else "AEGIS CANONICAL SOURCE SHADOW" in derived.text
+    )
     assert "[Katex] a^2+b^2=c^2 [/Katex]" in derived.text
 
     report = client.get(f"/source-artifacts/uploads/{job_id}/report")
     assert report.status_code == 200
-    assert json.loads(report.text)["used_for_generation"] is False
+    assert json.loads(report.text)["used_for_generation"] is phase2
 
 
-def test_concept_conversion_writes_downloadable_shadow_artifacts(client):
+def test_concept_conversion_writes_phase2_source_critical_artifacts(client):
     files = {
         "file": (
             "ordered.mmd",
@@ -69,14 +102,16 @@ def test_concept_conversion_writes_downloadable_shadow_artifacts(client):
 
     assert converted["status"] == "converted"
     assert converted["source_artifacts"]["available"] is True
-    assert converted["source_artifacts"]["used_for_generation"] is False
+    assert converted["source_artifacts"]["used_for_generation"] is True
+    assert converted["source_artifacts"]["shadow_mode"] is False
     reloaded = client.get(f"/build-concepts/uploads/{job['id']}")
     assert reloaded.status_code == 200
     assert reloaded.json()["source_artifacts"]["available"] is True
-    _assert_downloads(client, job["id"], converted)
+    assert reloaded.json()["source_artifacts"]["used_for_generation"] is True
+    _assert_downloads(client, job["id"], converted, phase2=True)
 
 
-def test_assessment_conversion_uses_the_same_shadow_contract(client):
+def test_assessment_conversion_remains_on_phase1_shadow_contract(client):
     files = {
         "file": (
             "assessment-source.mmd",
@@ -92,13 +127,14 @@ def test_assessment_conversion_uses_the_same_shadow_contract(client):
     converted = convert_assessment_upload(client, job["id"])
 
     assert converted["source_artifacts"]["available"] is True
+    assert converted["source_artifacts"]["used_for_generation"] is False
     reloaded = client.get(f"/build-assessments/uploads/{job['id']}")
     assert reloaded.status_code == 200
     assert reloaded.json()["source_artifacts"]["available"] is True
-    _assert_downloads(client, job["id"], converted)
+    _assert_downloads(client, job["id"], converted, phase2=False)
 
 
-def test_replacing_the_source_removes_stale_shadow_artifacts(client):
+def test_replacing_the_source_removes_stale_canonical_artifacts(client):
     files = {
         "file": (
             "old.mmd",
