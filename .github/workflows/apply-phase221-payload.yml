@@ -3,7 +3,7 @@ name: Apply Phase 2.2.1 implementation
 on:
   push:
     branches: ["agent/phase-2-2-1-pdf-acsd-fallback"]
-    paths: [".phase221/payload.part03"]
+    paths: [".phase221/payload.part11"]
 
 permissions:
   contents: write
