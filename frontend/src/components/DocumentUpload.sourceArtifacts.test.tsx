@@ -98,7 +98,7 @@ beforeEach(() => {
   apiMock.getUploadJob.mockRejectedValue(new Error("no saved job"));
 });
 
-test("shows inspectable Phase 1 artifacts without implying generation cutover", () => {
+test("shows the Phase 2 source-critical cutover without overstating semantic use", () => {
   render(
     <RunConsoleProvider>
       <DocumentUpload
@@ -110,10 +110,10 @@ test("shows inspectable Phase 1 artifacts without implying generation cutover", 
     </RunConsoleProvider>,
   );
 
-  expect(screen.getByText("Phase 1 canonical-source shadow")).toBeDefined();
-  expect(screen.getByText("not used for generation")).toBeDefined();
+  expect(screen.getByText("Phase 2 canonical-source inventory")).toBeDefined();
+  expect(screen.getByText("source-critical generation active")).toBeDefined();
   expect(screen.getByText(/6 sections · 42 blocks · 26 tasks/i)).toBeDefined();
-  expect(screen.getByText(/current pipeline still reads the immutable raw MMD/i))
+  expect(screen.getByText(/semantic concept extraction and writing still read/i))
     .toBeDefined();
 
   const raw = screen.getByRole("link", { name: "Immutable raw MMD" });

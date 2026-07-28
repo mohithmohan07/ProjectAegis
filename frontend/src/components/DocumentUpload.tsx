@@ -510,7 +510,23 @@ function SourceArtifactsCard({
 }) {
   if (!manifest?.available) return null;
   const summary = manifest.summary ?? {};
-  const statusClass = manifest.status === "passed" ? "green" : "accent";
+  const phase2 = manifest.phase === "phase-2-source-critical"
+    && manifest.generation_usage?.mode === "source-critical";
+  const statusClass = manifest.status === "passed"
+    || (phase2 && manifest.phase2_inventory_ready) ? "green" : "accent";
+  const title = phase2
+    ? "Phase 2 canonical-source inventory"
+    : "Phase 1 canonical-source shadow";
+  const usageBadge = phase2
+    ? "source-critical generation active"
+    : "not used for generation";
+  const description = phase2
+    ? "Build Concepts now reads task order, stable QIDs, Figure ownership, images, "
+      + "KaTeX, and inventory identity from ACSD. Semantic concept extraction and "
+      + "writing still read the immutable raw MMD."
+    : "The current pipeline still reads the immutable raw MMD. These files let "
+      + "you inspect source order, task boundaries, images, KaTeX, and validation "
+      + "before any future cutover.";
   const counts = [
     ["sections", summary.sections],
     ["blocks", summary.blocks],
@@ -526,20 +542,21 @@ function SourceArtifactsCard({
     <div className="checkpoint-card" style={{ marginTop: 10 }}>
       <div>
         <div className="row">
-          <strong>Phase 1 canonical-source shadow</strong>
+          <strong>{title}</strong>
           <span className={`badge ${statusClass}`}>
             {manifest.status.replace(/_/g, " ")}
           </span>
-          <span className="badge accent">not used for generation</span>
+          <span className={`badge ${phase2 ? "green" : "accent"}`}>
+            {usageBadge}
+          </span>
         </div>
         <div className="muted" style={{ marginTop: 6 }}>
-          The current pipeline still reads the immutable raw MMD. These files let
-          you inspect source order, task boundaries, images, KaTeX, and validation
-          before any future cutover.
+          {description}
         </div>
         {counts && <div className="muted mono" style={{ marginTop: 6 }}>{counts}</div>}
         <div className="muted mono" style={{ marginTop: 4 }}>
           ACSD {manifest.schema_version} · compiler {manifest.compiler_version}
+          {manifest.phase ? ` · ${manifest.phase.replace(/-/g, " ")}` : ""}
         </div>
       </div>
       <div className="row">
