@@ -557,6 +557,7 @@ function SourceArtifactsCard({
         <div className="muted mono" style={{ marginTop: 4 }}>
           ACSD {manifest.schema_version} · compiler {manifest.compiler_version}
           {manifest.phase ? ` · ${manifest.phase.replace(/-/g, " ")}` : ""}
+          {manifest.phase ? ` · ${manifest.phase.replace(/-/g, " ")}` : ""}
         </div>
       </div>
       <div className="row">
