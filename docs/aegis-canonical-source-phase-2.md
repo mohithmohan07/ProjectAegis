@@ -133,6 +133,9 @@ Before the next cutover slice:
 The regression suite enforces the RNE task count, QID order, byte-identical
 compilation, and `phase2_inventory_ready` status before this slice is mergeable.
 
+The first deployed Phase 2 chapters must retain their validation reports so the
+stable ACSD inventory can be compared with the final deposited Type examples.
+
 The next slice may move topic-scoped semantic concept extraction to ACSD blocks,
 but only after this source-critical ledger has been exercised in production and
 its deterministic inventory has been compared with the deposited Types.
