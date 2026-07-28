@@ -49,6 +49,17 @@ CORS_ORIGINS = [
     if value.strip()
 ]
 
+
+# Canonical source assets created by the GPT PDF-to-ACSD fallback need stable
+# public HTTPS URLs because Bulk Import rich text accepts only public images.
+# Hosted deployments set this to their same-origin application URL.
+PUBLIC_BASE_URL = os.environ.get("AEGIS_PUBLIC_BASE_URL", "").strip().rstrip("/")
+SOURCE_ASSET_SECRET = (
+    os.environ.get("AEGIS_SOURCE_ASSET_SECRET", "").strip()
+    or SESSION_SECRET
+    or ADMIN_PASSWORD
+)
+
 # The Bulk Import workbook IS the database — single source of truth.
 BULK_IMPORT_DB = DATA_DIR / "bulk_import_database.xlsx"
 # Every generation appends here (append-only, never overwritten).

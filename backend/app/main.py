@@ -20,6 +20,7 @@ from .api import (
     build_concepts as build_concepts_api,
     data as data_api,
     source_artifacts as source_artifacts_api,
+    source_assets as source_assets_api,
     tagging as tagging_api,
     workbooks as workbooks_api,
 )
@@ -72,6 +73,7 @@ def health():
 
 
 app.include_router(auth_api.router)
+app.include_router(source_assets_api.router)
 _authenticated = [Depends(auth_svc.require_user)]
 app.include_router(directory_api.router, dependencies=_authenticated)
 app.include_router(build_assessments_api.router, dependencies=_authenticated)

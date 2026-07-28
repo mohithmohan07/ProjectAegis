@@ -531,6 +531,17 @@ def _enrich_blocks(
 
         if block["kind"] == "figure" or block_images:
             caption = _clean_caption(_balanced_command_body(raw, _CAPTION_START_RE))
+            if not caption:
+                # Markdown/canonical image syntax carries its caption in alt text
+                # rather than a LaTeX ``\caption`` command. Treat the first
+                # non-empty source alt as the canonical Figure caption so
+                # explicit ``Fig. N`` task references resolve identically across
+                # Mathpix and GPT PDF-to-ACSD sources.
+                caption = next((
+                    _clean_caption(image.get("alt_raw") or "")
+                    for image in block_images
+                    if str(image.get("alt_raw") or "").strip()
+                ), "")
             reference_ids = _figure_reference_ids(caption)
             figure = {
                 "figure_id": f"FIG-{len(figures) + 1:05d}",

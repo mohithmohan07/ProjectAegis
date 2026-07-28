@@ -142,7 +142,7 @@ test("shows bounded Phase 2.2 source adjudication before generation", () => {
   job.source_artifacts.phase2_inventory_ready = false;
   job.source_artifacts.status = "failed";
   job.source_artifacts.source_adjudication = {
-    version: "2.2.0",
+    version: "2.2.1",
     status: "pending",
     packet_count: 2,
     eligible_issue_count: 3,
@@ -159,8 +159,9 @@ test("shows bounded Phase 2.2 source adjudication before generation", () => {
     </RunConsoleProvider>,
   );
 
-  expect(screen.getByText("Phase 2.2 canonical-source review")).toBeDefined();
+  expect(screen.getByText("Phase 2.2.1 canonical-source review")).toBeDefined();
   expect(screen.getByText("AI source adjudication pending")).toBeDefined();
+  expect(screen.getByText("awaiting source adjudication")).toBeDefined();
   expect(screen.getByText(/only the relevant original-document pages/i))
     .toBeDefined();
 });
@@ -170,7 +171,7 @@ test("shows verified Phase 2.2 overlays without calling them raw-MMD edits", () 
   if (!job.source_artifacts) throw new Error("fixture missing artifacts");
   job.source_artifacts.phase = "phase-2.2-source-adjudicated";
   job.source_artifacts.source_adjudication = {
-    version: "2.2.0",
+    version: "2.2.1",
     status: "verified",
     verified_repairs: 2,
     remaining_issues: 0,
@@ -187,8 +188,81 @@ test("shows verified Phase 2.2 overlays without calling them raw-MMD edits", () 
     </RunConsoleProvider>,
   );
 
-  expect(screen.getByText("Phase 2.2 canonical-source inventory")).toBeDefined();
+  expect(screen.getByText("Phase 2.2.1 canonical-source inventory")).toBeDefined();
   expect(screen.getByText("source adjudication verified")).toBeDefined();
   expect(screen.getByText(/immutable raw MMD remains available unchanged/i))
     .toBeDefined();
+});
+
+
+test("shows verified GPT PDF-to-ACSD fallback provenance and artifacts", () => {
+  const job = convertedJob();
+  if (!job.source_artifacts) throw new Error("fixture missing artifacts");
+  job.source_artifacts.phase = "phase-2.2-source-adjudicated";
+  job.source_artifacts.source_reconstruction = {
+    version: "2.2.1",
+    status: "verified",
+    source_origin: "gpt_pdf_acsd_fallback",
+    page_count: 12,
+    batch_count: 4,
+    asset_count: 7,
+    mathpix_raw_preserved: true,
+  };
+  job.source_artifacts.files.push({
+    kind: "gpt_page_acsd",
+    label: "GPT page-level ACSD extraction",
+    filename: "source.gpt-page-acsd.json",
+    media_type: "application/json; charset=utf-8",
+    size_bytes: 8000,
+    download_url: "/source-artifacts/uploads/81/gpt_page_acsd",
+  });
+
+  render(
+    <RunConsoleProvider>
+      <DocumentUpload
+        module="concepts"
+        conceptKind="post"
+        externalJob={job}
+        onJob={vi.fn()}
+      />
+    </RunConsoleProvider>,
+  );
+
+  expect(screen.getByText("Phase 2.2.1 GPT-reconstructed canonical source"))
+    .toBeDefined();
+  expect(screen.getByText("GPT PDF-to-ACSD fallback")).toBeDefined();
+  expect(screen.getByText(/extracted 12 PDF page\(s\)/i)).toBeDefined();
+  expect(screen.getByRole("link", { name: "GPT page-level ACSD extraction" }))
+    .toBeDefined();
+});
+
+
+test("shows GPT PDF-to-ACSD review-required state without presenting it as pending adjudication", () => {
+  const job = convertedJob();
+  if (!job.source_artifacts) throw new Error("fixture missing artifacts");
+  job.source_artifacts.status = "failed";
+  job.source_artifacts.phase2_inventory_ready = false;
+  job.source_artifacts.source_reconstruction = {
+    version: "2.2.1",
+    status: "review_required",
+    source_origin: "gpt_pdf_acsd_fallback",
+    fallback_reason: ["pdf_text_coverage_too_low:0.120"],
+  };
+
+  render(
+    <RunConsoleProvider>
+      <DocumentUpload
+        module="concepts"
+        conceptKind="post"
+        externalJob={job}
+        onJob={vi.fn()}
+      />
+    </RunConsoleProvider>,
+  );
+
+  expect(screen.getByText("Phase 2.2.1 GPT source reconstruction review"))
+    .toBeDefined();
+  expect(screen.getByText("source reconstruction review required")).toBeDefined();
+  expect(screen.getByText("GPT PDF-to-ACSD review required")).toBeDefined();
+  expect(screen.getByText(/concept generation is blocked/i)).toBeDefined();
 });

@@ -33,8 +33,8 @@ from . import canonical_source_phase21_visuals as visuals
 from . import katex_rules as kr
 from . import progress
 
-ADJUDICATION_VERSION = "2.2.0"
-ADJUDICATION_COMPILER = "phase-2.2-evidence-adjudication-1"
+ADJUDICATION_VERSION = "2.2.1"
+ADJUDICATION_COMPILER = "phase-2.2.1-evidence-adjudication-1"
 ADJUDICATION_PHASE = "phase-2.2-source-adjudicated"
 ELIGIBLE_ISSUE_CODES = frozenset({
     "phase21_missing_numbered_parent_section",
@@ -71,7 +71,8 @@ _SOURCE_LABELS = {
 
 @dataclass(frozen=True)
 class EvidencePage:
-    page_number: int  # human-facing, 1-based
+    evidence_id: str
+    page_number: int  # human-facing, 1-based; never selected by the model
     text: str
     image_data_url: str
     score: float
@@ -394,13 +395,20 @@ def _candidate_page_numbers(
     return selected
 
 
+def _evidence_id(index: int) -> str:
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    if 0 <= index < len(alphabet):
+        return f"EVIDENCE-PAGE-{alphabet[index]}"
+    return f"EVIDENCE-PAGE-{index + 1:02d}"
+
+
 def collect_evidence_pages(
     path: Path,
     packet: dict[str, Any],
     *,
     source_chars: int,
 ) -> list[EvidencePage]:
-    """Return a bounded set of page images and text from the original document."""
+    """Return bounded original-document pages with opaque model-facing IDs."""
     import fitz
 
     document = fitz.open(path)
@@ -408,12 +416,13 @@ def collect_evidence_pages(
         page_texts = [page.get_text("text") or "" for page in document]
         ranked = _candidate_page_numbers(page_texts, packet, source_chars=source_chars)
         evidence: list[EvidencePage] = []
-        for page_index, score in ranked:
+        for evidence_index, (page_index, score) in enumerate(ranked):
             page = document[page_index]
-            matrix = fitz.Matrix(1.6, 1.6)
+            matrix = fitz.Matrix(2.0, 2.0)
             pixmap = page.get_pixmap(matrix=matrix, alpha=False)
-            data = pixmap.tobytes("jpeg", jpg_quality=82)
+            data = pixmap.tobytes("jpeg", jpg_quality=88)
             evidence.append(EvidencePage(
+                evidence_id=_evidence_id(evidence_index),
                 page_number=page_index + 1,
                 text=page_texts[page_index],
                 image_data_url=(
@@ -425,9 +434,18 @@ def collect_evidence_pages(
     finally:
         document.close()
 
-
 def _system_prompt(*, verification: bool) -> str:
     role = "verification reviewer" if verification else "source transcription adjudicator"
+    verdict_rule = (
+        'Return verdict "matches_exactly", "does_not_match", or "ambiguous".'
+        if verification
+        else 'Return verdict "visible_exact", "not_visible", or "ambiguous".'
+    )
+    addressing_rule = (
+        "Do not choose a page or insertion anchor; verify only the fixed candidate."
+        if verification
+        else "Choose evidence_id and insert_before_block_id only from supplied allowed IDs."
+    )
     return f"""
 You are the Aegis {role}. The supplied original textbook page images are the
 only authority. MMD excerpts are diagnostic context and may be incomplete.
@@ -436,48 +454,129 @@ Rules:
 1. Never reconstruct, paraphrase, complete, or infer missing textbook wording.
 2. Return text only when it is visibly printed on one supplied page.
 3. Preserve wording, spelling, punctuation, numbering, and order exactly.
-4. Choose insert_before_block_id only from the supplied allowed IDs.
+4. {addressing_rule}
 5. A Figure caption is not evidence that an unseen task exists.
-6. If visibility is uncertain, return verdict "ambiguous" or "not_visible".
+6. {verdict_rule}
 7. Output one JSON object only, with no markdown.
 """.strip()
 
 
-def _packet_prompt(packet: dict[str, Any], *, verification_candidate: dict[str, Any] | None = None) -> str:
-    schema = {
-        "verdict": "visible_exact | not_visible | ambiguous",
-        "page_number": 1,
-        "recovered_text": "exact visible text or empty string",
-        "source_label": "exact visible task cue or empty string",
-        "insert_before_block_id": "one allowed ID or empty string",
-        "confidence": 0.0,
-        "evidence": ["brief visual evidence, no chain of thought"],
+def _extraction_schema(packet: dict[str, Any], pages: list[EvidencePage]) -> dict[str, Any]:
+    evidence_ids = [page.evidence_id for page in pages]
+    anchors = [
+        str(value) for value in packet.get("allowed_insert_before_block_ids") or []
+        if str(value)
+    ]
+    return {
+        "name": "aegis_source_adjudication_extract",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "verdict": {
+                    "type": "string",
+                    "enum": ["visible_exact", "not_visible", "ambiguous"],
+                },
+                "evidence_id": {
+                    "type": "string",
+                    "enum": evidence_ids or ["NO-EVIDENCE-PAGE"],
+                },
+                "recovered_text": {"type": "string"},
+                "source_label": {"type": "string", "maxLength": 120},
+                "insert_before_block_id": {
+                    "type": "string",
+                    "enum": anchors or ["NO-INSERTION-ANCHOR"],
+                },
+                "confidence": {"type": "number"},
+                "evidence": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+            },
+            "required": [
+                "verdict", "evidence_id", "recovered_text", "source_label",
+                "insert_before_block_id", "confidence", "evidence",
+            ],
+            "additionalProperties": False,
+        },
     }
-    body = {
+
+
+def _verification_schema() -> dict[str, Any]:
+    return {
+        "name": "aegis_source_adjudication_verify",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "verdict": {
+                    "type": "string",
+                    "enum": ["matches_exactly", "does_not_match", "ambiguous"],
+                },
+                "recovered_text": {"type": "string"},
+                "source_label_matches": {"type": "boolean"},
+                "confidence": {"type": "number"},
+                "evidence": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+            },
+            "required": [
+                "verdict", "recovered_text", "source_label_matches",
+                "confidence", "evidence",
+            ],
+            "additionalProperties": False,
+        },
+    }
+
+
+def _packet_prompt(
+    packet: dict[str, Any],
+    pages: list[EvidencePage],
+    *,
+    verification_candidate: dict[str, Any] | None = None,
+    protocol_retry: str = "",
+) -> str:
+    page_ledger = [
+        {
+            "evidence_id": page.evidence_id,
+            "pdf_page_number_for_audit_only": page.page_number,
+        }
+        for page in pages
+    ]
+    body: dict[str, Any] = {
         "issue_packet": packet,
-        "required_response_schema": schema,
+        "evidence_page_ledger": page_ledger,
     }
     if verification_candidate is not None:
-        body["candidate_to_verify"] = verification_candidate
+        body["candidate_to_verify"] = {
+            "recovered_text": verification_candidate.get("recovered_text") or "",
+            "source_label": verification_candidate.get("source_label") or "",
+        }
         body["instruction"] = (
-            "Independently verify whether the candidate text is visibly present, "
-            "on the claimed page, with the claimed source label and insertion anchor."
+            "Independently verify the exact candidate transcription on this single "
+            "supplied page. Do not choose a page or insertion anchor."
         )
     else:
         body["instruction"] = (
-            "Transcribe only the exact missing heading or task if visibly present."
+            "Transcribe only the exact missing heading or task if visibly present. "
+            "Select evidence_id only from the supplied opaque evidence IDs and select "
+            "insert_before_block_id only from the packet's allowed list."
         )
+    if protocol_retry:
+        body["protocol_retry"] = protocol_retry
     return json.dumps(body, ensure_ascii=False, indent=2)
-
 
 def _openai_multimodal_json(
     *,
     system: str,
     prompt: str,
     pages: list[EvidencePage],
+    response_schema: dict[str, Any],
+    purpose: str = "source_adjudication",
     max_tokens: int = _MAX_OUTPUT_TOKENS,
 ) -> dict[str, Any]:
-    """One bounded multimodal JSON call using Aegis' shared OpenAI controls."""
+    """One bounded strict-schema multimodal call using Aegis controls."""
     from openai import (
         APIConnectionError,
         APITimeoutError,
@@ -493,7 +592,10 @@ def _openai_multimodal_json(
         extracted = _compact(page.text, limit=6000)
         content.append({
             "type": "text",
-            "text": f"ORIGINAL PDF PAGE {page.page_number}\nExtracted text layer:\n{extracted}",
+            "text": (
+                f"{page.evidence_id} (audit PDF page {page.page_number})\n"
+                f"Extracted text layer:\n{extracted}"
+            ),
         })
         content.append({
             "type": "image_url",
@@ -506,9 +608,7 @@ def _openai_multimodal_json(
         APITimeoutError,
         InternalServerError,
     )
-    request_policy = chat_request_policy(
-        "source_adjudication", model=config.OPENAI_MODEL
-    )
+    request_policy = chat_request_policy(purpose, model=config.OPENAI_MODEL)
     client = OpenAI(timeout=config.OPENAI_REQUEST_TIMEOUT_SECONDS, max_retries=0)
     gate = generation._get_openai_gate()
     transient = 0
@@ -516,7 +616,7 @@ def _openai_multimodal_json(
     last_error: Exception | None = None
     while True:
         try:
-            generation._acquire_openai_slot(gate, purpose="source_adjudication")
+            generation._acquire_openai_slot(gate, purpose=purpose)
             try:
                 response = client.chat.completions.create(
                     **request_policy,
@@ -524,7 +624,10 @@ def _openai_multimodal_json(
                         {"role": "system", "content": system},
                         {"role": "user", "content": content},
                     ],
-                    response_format={"type": "json_object"},
+                    response_format={
+                        "type": "json_schema",
+                        "json_schema": response_schema,
+                    },
                     max_completion_tokens=max_tokens,
                 )
             finally:
@@ -571,9 +674,12 @@ def _openai_multimodal_json(
                 ) from exc
             time.sleep(2)
 
-
 def _page_by_number(pages: list[EvidencePage], page_number: int) -> EvidencePage | None:
     return next((page for page in pages if page.page_number == page_number), None)
+
+
+def _page_by_evidence_id(pages: list[EvidencePage], evidence_id: str) -> EvidencePage | None:
+    return next((page for page in pages if page.evidence_id == evidence_id), None)
 
 
 def _confidence(value: object) -> float:
@@ -584,11 +690,12 @@ def _confidence(value: object) -> float:
 
 
 def _normalize_source_label(value: object, *, issue_type: str) -> str:
-    raw = _normal(value)
+    visible = re.sub(r"\s+", " ", str(value or "")).strip()[:120]
+    raw = _normal(visible)
     if raw in _SOURCE_LABELS:
         return _SOURCE_LABELS[raw]
     if issue_type == "orphan_figure_task":
-        return "Discuss"
+        return visible or "Task"
     return ""
 
 
@@ -602,46 +709,55 @@ def _validated_candidate(
     packet: dict[str, Any],
     candidate: dict[str, Any],
     pages: list[EvidencePage],
-) -> tuple[dict[str, Any] | None, str]:
+) -> tuple[dict[str, Any] | None, str, bool]:
+    """Return candidate, reason, and whether the rejection is protocol-only."""
     verdict = str(candidate.get("verdict") or "").strip().lower()
     if verdict != "visible_exact":
-        return None, f"extractor verdict was {verdict or 'missing'}"
+        return None, f"extractor verdict was {verdict or 'missing'}", False
     recovered = str(candidate.get("recovered_text") or "").strip()
     if not recovered:
-        return None, "extractor returned no source text"
-    try:
-        page_number = int(candidate.get("page_number") or 0)
-    except (TypeError, ValueError):
-        page_number = 0
-    page = _page_by_number(pages, page_number)
+        return None, "extractor returned no source text", False
+    evidence_id = str(candidate.get("evidence_id") or "").strip()
+    page = _page_by_evidence_id(pages, evidence_id)
     if page is None:
-        return None, "extractor selected a page outside the evidence packet"
+        allowed = ", ".join(page.evidence_id for page in pages) or "(none)"
+        return (
+            None,
+            f"extractor selected unsupported evidence_id={evidence_id!r}; allowed: {allowed}",
+            True,
+        )
     anchor = str(candidate.get("insert_before_block_id") or "").strip()
-    if anchor not in set(packet.get("allowed_insert_before_block_ids") or []):
-        return None, "extractor selected an insertion anchor outside the allowed set"
+    allowed_anchors = set(packet.get("allowed_insert_before_block_ids") or [])
+    if anchor not in allowed_anchors:
+        return (
+            None,
+            f"extractor selected unsupported insertion anchor {anchor!r}",
+            True,
+        )
     confidence = _confidence(candidate.get("confidence"))
     if confidence < _MIN_CONFIDENCE:
-        return None, f"extractor confidence {confidence:.3f} is below threshold"
+        return None, f"extractor confidence {confidence:.3f} is below threshold", False
 
     issue_type = str(packet.get("issue_type") or "")
     if issue_type == "missing_parent_section":
         number = int(packet.get("section_number") or 0)
         if not re.match(rf"^\s*{number}(?:\s|[.)-])", recovered):
-            return None, "recovered heading does not preserve the expected section number"
+            return None, "recovered heading does not preserve the expected section number", False
     elif issue_type == "orphan_figure_task":
         if not structure.is_task_like(recovered):
-            return None, "recovered text is not a question or instructional task"
+            return None, "recovered text is not a question or instructional task", False
         caption_key = _comparison_key(packet.get("figure_caption") or "")
         recovered_key = _comparison_key(recovered)
         if recovered_key and recovered_key == caption_key:
-            return None, "recovered text merely repeats the Figure caption"
+            return None, "recovered text merely repeats the Figure caption", False
     else:
-        return None, "unsupported adjudication packet"
+        return None, "unsupported adjudication packet", False
 
     normalized = copy.deepcopy(candidate)
     normalized.update({
         "verdict": "visible_exact",
-        "page_number": page_number,
+        "evidence_id": evidence_id,
+        "page_number": page.page_number,
         "recovered_text": recovered,
         "source_label": _normalize_source_label(
             candidate.get("source_label"), issue_type=issue_type
@@ -650,7 +766,7 @@ def _validated_candidate(
         "confidence": confidence,
         "text_layer_match": _text_layer_contains(page, recovered),
     })
-    return normalized, ""
+    return normalized, "", False
 
 
 def _verify_candidate(
@@ -658,38 +774,39 @@ def _verify_candidate(
     candidate: dict[str, Any],
     pages: list[EvidencePage],
 ) -> tuple[dict[str, Any] | None, str]:
-    page = _page_by_number(pages, int(candidate["page_number"]))
+    page = _page_by_evidence_id(pages, str(candidate.get("evidence_id") or ""))
     if page is None:
-        return None, "candidate page is unavailable"
+        return None, "candidate evidence page is unavailable"
     verification = _openai_multimodal_json(
         system=_system_prompt(verification=True),
-        prompt=_packet_prompt(packet, verification_candidate=candidate),
+        prompt=_packet_prompt(
+            packet,
+            [page],
+            verification_candidate=candidate,
+        ),
         pages=[page],
+        response_schema=_verification_schema(),
     )
-    verified, reason = _validated_candidate(packet, verification, [page])
-    if verified is None:
-        return None, f"verification rejected the candidate: {reason}"
-    if _comparison_key(verified["recovered_text"]) != _comparison_key(candidate["recovered_text"]):
+    verdict = str(verification.get("verdict") or "").strip().lower()
+    if verdict != "matches_exactly":
+        return None, f"verification verdict was {verdict or 'missing'}"
+    if not bool(verification.get("source_label_matches")):
+        return None, "verification rejected the visible source label"
+    verified_text = str(verification.get("recovered_text") or "").strip()
+    if _comparison_key(verified_text) != _comparison_key(candidate["recovered_text"]):
         return None, "extractor and verifier transcriptions disagree"
-    if verified["page_number"] != candidate["page_number"]:
-        return None, "extractor and verifier page numbers disagree"
-    if verified["insert_before_block_id"] != candidate["insert_before_block_id"]:
-        return None, "extractor and verifier insertion anchors disagree"
-    if packet.get("issue_type") == "orphan_figure_task":
-        left = _normal(verified.get("source_label"))
-        right = _normal(candidate.get("source_label"))
-        if left and right and left != right:
-            return None, "extractor and verifier source labels disagree"
-    text_layer = bool(candidate.get("text_layer_match") or verified.get("text_layer_match"))
+    verified_confidence = _confidence(verification.get("confidence"))
+    text_layer = bool(candidate.get("text_layer_match"))
     minimum = _MIN_CONFIDENCE if text_layer else _NO_TEXT_LAYER_MIN_CONFIDENCE
-    if min(candidate["confidence"], verified["confidence"]) < minimum:
+    if min(candidate["confidence"], verified_confidence) < minimum:
         return None, "verified confidence is below the evidence threshold"
     accepted = copy.deepcopy(candidate)
     accepted["verification"] = {
-        "confidence": verified["confidence"],
-        "page_number": verified["page_number"],
+        "confidence": verified_confidence,
+        "page_number": page.page_number,
+        "evidence_id": page.evidence_id,
         "text_layer_match": text_layer,
-        "transcription_key": _comparison_key(verified["recovered_text"]),
+        "transcription_key": _comparison_key(verified_text),
     }
     return accepted, ""
 
@@ -703,19 +820,60 @@ def adjudicate_packet_via_openai(
             "status": "review_required",
             "reason": "no original-document pages could be selected",
         }
-    candidate = _openai_multimodal_json(
-        system=_system_prompt(verification=False),
-        prompt=_packet_prompt(packet),
-        pages=pages,
+    allowed = ", ".join(
+        f"{page.evidence_id}=PDF page {page.page_number}" for page in pages
     )
-    validated, reason = _validated_candidate(packet, candidate, pages)
-    if validated is None:
-        return {"status": "review_required", "reason": reason, "extractor": candidate}
-    accepted, reason = _verify_candidate(packet, validated, pages)
-    if accepted is None:
-        return {"status": "review_required", "reason": reason, "extractor": validated}
-    return {"status": "verified", "decision": accepted}
-
+    progress.log(f"Source adjudication evidence ledger: {allowed}.")
+    retry_note = ""
+    candidate: dict[str, Any] = {}
+    for attempt in range(1, 3):
+        candidate = _openai_multimodal_json(
+            system=_system_prompt(verification=False),
+            prompt=_packet_prompt(
+                packet,
+                pages,
+                protocol_retry=retry_note,
+            ),
+            pages=pages,
+            response_schema=_extraction_schema(packet, pages),
+        )
+        validated, reason, protocol_error = _validated_candidate(
+            packet, candidate, pages
+        )
+        if validated is not None:
+            accepted, verify_reason = _verify_candidate(packet, validated, pages)
+            if accepted is None:
+                return {
+                    "status": "review_required",
+                    "reason": verify_reason,
+                    "extractor": validated,
+                }
+            return {"status": "verified", "decision": accepted}
+        if protocol_error and attempt == 1:
+            retry_note = (
+                f"The previous response violated the addressing protocol: {reason}. "
+                f"Use exactly one evidence_id from {[p.evidence_id for p in pages]} "
+                f"and one insertion anchor from "
+                f"{packet.get('allowed_insert_before_block_ids') or []}."
+            )
+            progress.log(
+                "Source adjudicator protocol rejection; retrying once with the "
+                "strict evidence/anchor contract.",
+                level="warning",
+            )
+            continue
+        return {
+            "status": "review_required",
+            "reason": reason,
+            "extractor": candidate,
+            "protocol_error": protocol_error,
+        }
+    return {
+        "status": "review_required",
+        "reason": "source adjudicator exhausted the protocol retry",
+        "extractor": candidate,
+        "protocol_error": True,
+    }
 
 def _cache_path(cache_key: str) -> Path:
     return _CACHE_DIR / f"{cache_key}.json"
@@ -1264,24 +1422,37 @@ def adjudicate_job_source(
     for index, packet in enumerate(packets, start=1):
         cache_key = _cache_key(canonical=canonical, source_path=source_path, packet=packet)
         cached = _read_cache(cache_key)
-        if cached is not None:
+        if cached is not None and (cached.get("result") or {}).get("status") == "verified":
             result = copy.deepcopy(cached.get("result") or {})
             cache_state = "hit"
+            progress.log(
+                f"Source packet {index}/{len(packets)} cache: verified hit.",
+                level="success",
+            )
         else:
             pages = collect_evidence_pages(
                 source_path, packet, source_chars=source_chars
             )
+            progress.log(
+                f"Source packet {index}/{len(packets)} ({packet['issue_type']}) "
+                f"candidate pages: "
+                + ", ".join(
+                    f"{page.evidence_id}=PDF {page.page_number}" for page in pages
+                )
+                + ". Cache: miss."
+            )
             result = provider(copy.deepcopy(packet), pages)
             cache_state = "miss"
-            cache_payload = {
-                "version": ADJUDICATION_VERSION,
-                "created_at": time.time(),
-                "packet_fingerprint": packet["fingerprint"],
-                "source_file_sha256": _pdf_sha256(source_path),
-                "model": config.OPENAI_MODEL,
-                "result": result,
-            }
-            _write_cache(cache_key, cache_payload)
+            if result.get("status") == "verified":
+                cache_payload = {
+                    "version": ADJUDICATION_VERSION,
+                    "created_at": time.time(),
+                    "packet_fingerprint": packet["fingerprint"],
+                    "source_file_sha256": _pdf_sha256(source_path),
+                    "model": config.OPENAI_MODEL,
+                    "result": result,
+                }
+                _write_cache(cache_key, cache_payload)
 
         entry = {
             "issue_id": packet["issue_id"],

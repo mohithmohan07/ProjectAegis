@@ -263,3 +263,7 @@ Replace `backend/data/bulk_import_database.xlsx` with the real Clarius Bulk
 Import workbook (or import one from the Database tab). Board / Grade / Subject
 are parsed from the ID prefixes (`10CBMA_…`) by `services/directory.py`; nothing
 else needs to change.
+
+## Canonical source recovery
+
+Build Concepts prefers Mathpix MMD, uses evidence-backed PDF adjudication for bounded omissions, and can fall back to verified GPT PDF-to-ACSD extraction when Mathpix hard-fails or produces objectively unusable output. The fallback preserves page order, exact source wording, mathematical structure and source-owned visual crops before compiling through the same deterministic ACSD gates. See `docs/aegis-canonical-source-phase-2-2-1.md`.

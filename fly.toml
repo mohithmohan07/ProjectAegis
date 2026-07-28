@@ -15,6 +15,7 @@ primary_region = 'ams'
   AEGIS_DB_URL = 'sqlite:////data/aegis.db'
   AEGIS_AUTH_MODE = 'google'
   AEGIS_ALLOWED_GOOGLE_DOMAIN = 'up.school'
+  AEGIS_PUBLIC_BASE_URL = 'https://projectaegis.fly.dev'
 
 [[mounts]]
   source = 'aegis_data'

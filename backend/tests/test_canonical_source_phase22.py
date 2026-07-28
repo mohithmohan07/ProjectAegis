@@ -106,7 +106,7 @@ def test_corrupted_rne_exposes_two_bounded_adjudication_packets():
     compiled = _compile(_corrupted_rne())
     marker = compiled.canonical["source_adjudication"]
 
-    assert marker["version"] == "2.2.0"
+    assert marker["version"] == "2.2.1"
     assert marker["status"] == "pending"
     assert marker["eligible_issue_count"] == 3
     assert [packet["issue_type"] for packet in marker["packets"]] == [
@@ -298,7 +298,7 @@ def test_multimodal_call_uses_source_adjudication_policy(monkeypatch):
                 choices=[SimpleNamespace(
                     message=SimpleNamespace(content=json.dumps({
                         "verdict": "not_visible",
-                        "page_number": 1,
+                        "evidence_id": "EVIDENCE-PAGE-A",
                         "recovered_text": "",
                         "source_label": "",
                         "insert_before_block_id": "",
@@ -313,6 +313,7 @@ def test_multimodal_call_uses_source_adjudication_policy(monkeypatch):
     monkeypatch.setattr(config, "OPENAI_MODEL", "gpt-5.6-luna")
     generation._openai_gate = None
     page = phase22.EvidencePage(
+        evidence_id="EVIDENCE-PAGE-A",
         page_number=1,
         text="Visible source",
         image_data_url="data:image/jpeg;base64,AA==",
@@ -323,6 +324,9 @@ def test_multimodal_call_uses_source_adjudication_policy(monkeypatch):
         system="system",
         prompt="prompt",
         pages=[page],
+        response_schema=phase22._extraction_schema(
+            {"allowed_insert_before_block_ids": ["BLK-1"]}, [page]
+        ),
         max_tokens=1234,
     )
 
@@ -330,8 +334,224 @@ def test_multimodal_call_uses_source_adjudication_policy(monkeypatch):
     call = calls[-1]
     assert call["model"] == "gpt-5.6-luna"
     assert call["reasoning_effort"] == "high"
-    assert call["response_format"] == {"type": "json_object"}
+    assert call["response_format"]["type"] == "json_schema"
+    assert call["response_format"]["json_schema"]["strict"] is True
     assert call["max_completion_tokens"] == 1234
     content = call["messages"][1]["content"]
     assert any(item.get("type") == "image_url" for item in content)
     generation._openai_gate = None
+
+
+def test_protocol_violation_retries_with_opaque_evidence_id(monkeypatch):
+    page = phase22.EvidencePage(
+        evidence_id="EVIDENCE-PAGE-A",
+        page_number=7,
+        text="2 The Making of Nationalism in Europe",
+        image_data_url="data:image/jpeg;base64,AA==",
+        score=1.0,
+    )
+    packet = {
+        "issue_type": "missing_parent_section",
+        "section_number": 2,
+        "allowed_insert_before_block_ids": ["BLK-0056"],
+    }
+    replies = [
+        {
+            "verdict": "visible_exact",
+            "evidence_id": "PDF-PAGE-7",
+            "recovered_text": "2 The Making of Nationalism in Europe",
+            "source_label": "",
+            "insert_before_block_id": "BLK-0056",
+            "confidence": 0.999,
+            "evidence": [],
+        },
+        {
+            "verdict": "visible_exact",
+            "evidence_id": "EVIDENCE-PAGE-A",
+            "recovered_text": "2 The Making of Nationalism in Europe",
+            "source_label": "",
+            "insert_before_block_id": "BLK-0056",
+            "confidence": 0.999,
+            "evidence": [],
+        },
+        {
+            "verdict": "matches_exactly",
+            "recovered_text": "2 The Making of Nationalism in Europe",
+            "source_label_matches": True,
+            "confidence": 0.999,
+            "evidence": [],
+        },
+    ]
+    calls: list[dict] = []
+
+    def fake_call(**kwargs):
+        calls.append(kwargs)
+        return replies.pop(0)
+
+    monkeypatch.setattr(phase22, "_openai_multimodal_json", fake_call)
+
+    result = phase22.adjudicate_packet_via_openai(packet, [page])
+
+    assert result["status"] == "verified"
+    assert result["decision"]["evidence_id"] == "EVIDENCE-PAGE-A"
+    assert len(calls) == 3
+    assert "protocol_retry" in calls[1]["prompt"]
+    assert calls[2]["pages"] == [page]
+
+
+def test_review_required_phase22_results_are_not_cached(tmp_path: Path, monkeypatch):
+    source = _corrupted_rne()
+    pdf = tmp_path / "RNE.pdf"
+    _make_pdf(pdf)
+    artifact_dir = tmp_path / "artifacts"
+    cache_dir = tmp_path / "cache"
+
+    from app.services import uploads
+
+    monkeypatch.setattr(uploads, "upload_file_path", lambda _job: pdf)
+    monkeypatch.setattr(uploads, "source_artifact_directory", lambda _job_id: artifact_dir)
+    monkeypatch.setattr(phase22, "_CACHE_DIR", cache_dir)
+    calls = 0
+
+    def provider(_packet, _pages):
+        nonlocal calls
+        calls += 1
+        return {"status": "review_required", "reason": "not visible"}
+
+    for job_id in (90, 91):
+        compiled = _compile(source)
+        job = SimpleNamespace(
+            id=job_id,
+            filename="RNE.pdf",
+            mmd_text=source,
+            generation_checkpoint={},
+            question_inventory={},
+            detail="",
+        )
+        db = SimpleNamespace(commit=lambda: None)
+        _canonical, _report, ready = phase22.adjudicate_job_source(
+            db,
+            job,
+            compiled.canonical,
+            compiled.report,
+            decision_provider=provider,
+        )
+        assert ready is False
+
+    assert calls == 4
+    assert list(cache_dir.glob("*.json")) == []
+
+
+def test_phase221_rejects_out_of_packet_evidence_id_as_protocol_error():
+    packet = {
+        "issue_type": "missing_parent_section",
+        "section_number": 2,
+        "allowed_insert_before_block_ids": ["BLK-00056"],
+    }
+    pages = [phase22.EvidencePage(
+        evidence_id="EVIDENCE-PAGE-A",
+        page_number=8,
+        text="2 The Making of Nationalism in Europe",
+        image_data_url="data:image/jpeg;base64,AA==",
+        score=1.0,
+    )]
+    candidate = {
+        "verdict": "visible_exact",
+        "evidence_id": "8",
+        "recovered_text": "2 The Making of Nationalism in Europe",
+        "source_label": "",
+        "insert_before_block_id": "BLK-00056",
+        "confidence": 0.999,
+        "evidence": [],
+    }
+
+    normalized, reason, protocol_error = phase22._validated_candidate(
+        packet, candidate, pages
+    )
+
+    assert normalized is None
+    assert protocol_error is True
+    assert "EVIDENCE-PAGE-A" in reason
+
+
+def test_review_required_adjudication_result_is_not_cached(tmp_path: Path, monkeypatch):
+    source = _corrupted_rne()
+    compiled = _compile(source)
+    pdf = tmp_path / "RNE.pdf"
+    _make_pdf(pdf)
+    artifact_dir = tmp_path / "artifacts"
+    cache_dir = tmp_path / "cache"
+
+    from app.services import uploads
+
+    monkeypatch.setattr(uploads, "upload_file_path", lambda _job: pdf)
+    monkeypatch.setattr(uploads, "source_artifact_directory", lambda _job_id: artifact_dir)
+    monkeypatch.setattr(phase22, "_CACHE_DIR", cache_dir)
+    job = SimpleNamespace(
+        id=76,
+        filename="RNE.pdf",
+        mmd_text=source,
+        generation_checkpoint={},
+        question_inventory={},
+        detail="",
+    )
+    db = SimpleNamespace(commit=lambda: None)
+
+    _canonical, _report, ready = phase22.adjudicate_job_source(
+        db,
+        job,
+        compiled.canonical,
+        compiled.report,
+        decision_provider=lambda _packet, _pages: {
+            "status": "review_required",
+            "reason": "protocol mismatch",
+            "protocol_error": True,
+        },
+    )
+
+    assert ready is False
+    assert list(cache_dir.glob("*.json")) == []
+
+
+def test_verifier_is_fixed_to_one_page_and_requires_source_label(monkeypatch):
+    packet = {
+        "issue_type": "orphan_figure_task",
+        "figure_caption": "Fig. 6 - The Club of Thinkers",
+        "allowed_insert_before_block_ids": ["BLK-00102"],
+    }
+    page = phase22.EvidencePage(
+        evidence_id="EVIDENCE-PAGE-A",
+        page_number=9,
+        text="Discuss\nWhat is the caricaturist trying to depict?",
+        image_data_url="data:image/jpeg;base64,AA==",
+        score=1.0,
+    )
+    candidate = {
+        "verdict": "visible_exact",
+        "evidence_id": page.evidence_id,
+        "page_number": page.page_number,
+        "recovered_text": "What is the caricaturist trying to depict?",
+        "source_label": "Discuss",
+        "insert_before_block_id": "BLK-00102",
+        "confidence": 0.999,
+        "text_layer_match": True,
+    }
+    seen: dict = {}
+
+    def response(**kwargs):
+        seen.update(kwargs)
+        return {
+            "verdict": "matches_exactly",
+            "recovered_text": candidate["recovered_text"],
+            "source_label_matches": True,
+            "confidence": 0.999,
+            "evidence": [],
+        }
+
+    monkeypatch.setattr(phase22, "_openai_multimodal_json", response)
+    accepted, reason = phase22._verify_candidate(packet, candidate, [page])
+
+    assert reason == ""
+    assert accepted is not None
+    assert seen["pages"] == [page]
+    assert "insert_before_block_id" not in seen["response_schema"]["schema"]["properties"]
