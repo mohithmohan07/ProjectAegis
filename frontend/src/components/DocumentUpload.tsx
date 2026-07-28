@@ -248,6 +248,7 @@ export default function DocumentUpload({
         mmd_text: string;
         mmd_chars: number;
         source_artifacts?: UploadJob["source_artifacts"];
+        openai_usage?: UploadJob["openai_usage"];
       }>(`Converting ${job.filename} to MMD`, path);
       if (savedJobRequestGenerationRef.current !== requestGeneration) return;
       emit({
@@ -255,6 +256,7 @@ export default function DocumentUpload({
         status: "converted",
         mmd_text: result.mmd_text,
         source_artifacts: result.source_artifacts,
+        openai_usage: result.openai_usage ?? job.openai_usage,
       });
     } catch (e) {
       if (savedJobRequestGenerationRef.current === requestGeneration) {
@@ -513,18 +515,33 @@ function SourceArtifactsCard({
   const phase2 = manifest.generation_usage?.mode === "source-critical";
   const adjudication = manifest.source_adjudication;
   const adjudicationStatus = adjudication?.status ?? "";
+  const reconstruction = manifest.source_reconstruction;
+  const reconstructionVerified = reconstruction?.status === "verified"
+    && reconstruction?.source_origin === "gpt_pdf_acsd_fallback";
+  const reconstructionReviewRequired = reconstruction?.status === "review_required"
+    && reconstruction?.source_origin === "gpt_pdf_acsd_fallback";
   const phase22 = phase2 && ["pending", "verified", "review_required"].includes(
     adjudicationStatus,
   );
+  const pendingAdjudication = phase22 && adjudicationStatus === "pending";
   const statusClass = manifest.status === "passed"
     || (phase2 && manifest.phase2_inventory_ready) ? "green" : "accent";
-  const title = phase22
-    ? (adjudicationStatus === "verified"
-      ? "Phase 2.2 canonical-source inventory"
-      : "Phase 2.2 canonical-source review")
-    : phase2
-      ? "Phase 2 canonical-source inventory"
-      : "Phase 1 canonical-source shadow";
+  const statusLabel = reconstructionReviewRequired
+    ? "source reconstruction review required"
+    : pendingAdjudication
+      ? "awaiting source adjudication"
+      : manifest.status.replace(/_/g, " ");
+  const title = reconstructionVerified
+    ? "Phase 2.2.1 GPT-reconstructed canonical source"
+    : reconstructionReviewRequired
+      ? "Phase 2.2.1 GPT source reconstruction review"
+      : phase22
+      ? (adjudicationStatus === "verified"
+        ? "Phase 2.2.1 canonical-source inventory"
+        : "Phase 2.2.1 canonical-source review")
+      : phase2
+        ? "Phase 2 canonical-source inventory"
+        : "Phase 1 canonical-source shadow";
   const usageBadge = phase2
     ? "source-critical generation active"
     : "not used for generation";
@@ -535,21 +552,36 @@ function SourceArtifactsCard({
       : adjudicationStatus === "review_required"
         ? "source review required"
         : "";
-  const description = phase22 && adjudicationStatus === "pending"
-    ? "The deterministic ACSD gate found bounded source gaps. Generate will inspect "
-      + "only the relevant original-document pages, accept verbatim visible evidence, "
-      + "and rerun every source contract before concept extraction."
-    : phase22 && adjudicationStatus === "verified"
-      ? "Build Concepts uses the deterministic ACSD ledger plus verified, auditable "
-        + "source-visible overlays recovered from the original document. The immutable "
-        + "raw MMD remains available unchanged."
-      : phase2
-        ? "Build Concepts now reads task order, stable QIDs, Figure ownership, images, "
-          + "KaTeX, and inventory identity from ACSD. Semantic concept extraction and "
-          + "writing still read the immutable raw MMD."
-        : "The current pipeline still reads the immutable raw MMD. These files let "
-          + "you inspect source order, task boundaries, images, KaTeX, and validation "
-          + "before any future cutover.";
+  const reconstructionBadge = reconstructionVerified
+    ? "GPT PDF-to-ACSD fallback"
+    : reconstructionReviewRequired
+      ? "GPT PDF-to-ACSD review required"
+      : "";
+  const description = reconstructionVerified
+    ? `Mathpix was unavailable or objectively unusable, so Aegis extracted ${
+      reconstruction?.page_count ?? 0
+    } PDF page(s) into strict page/block JSON, independently verified the batches, `
+      + "materialized source-owned visual crops, and compiled the result through the "
+      + "same deterministic ACSD gates. The original PDF remains the audit authority."
+    : reconstructionReviewRequired
+      ? "Mathpix failed the objective source-quality gate, and GPT PDF-to-ACSD "
+        + "could not verify a complete replacement. The original PDF and Mathpix "
+        + "audit artifacts remain preserved, and concept generation is blocked."
+      : phase22 && adjudicationStatus === "pending"
+      ? "The deterministic ACSD gate found bounded source gaps. Generate will inspect "
+        + "only the relevant original-document pages, accept verbatim visible evidence, "
+        + "and rerun every source contract before concept extraction."
+      : phase22 && adjudicationStatus === "verified"
+        ? "Build Concepts uses the deterministic ACSD ledger plus verified, auditable "
+          + "source-visible overlays recovered from the original document. The immutable "
+          + "raw MMD remains available unchanged."
+        : phase2
+          ? "Build Concepts now reads task order, stable QIDs, Figure ownership, images, "
+            + "KaTeX, and inventory identity from ACSD. Semantic concept extraction and "
+            + "writing still read the immutable raw MMD."
+          : "The current pipeline still reads the immutable raw MMD. These files let "
+            + "you inspect source order, task boundaries, images, KaTeX, and validation "
+            + "before any future cutover.";
   const counts = [
     ["sections", summary.sections],
     ["blocks", summary.blocks],
@@ -567,11 +599,16 @@ function SourceArtifactsCard({
         <div className="row">
           <strong>{title}</strong>
           <span className={`badge ${statusClass}`}>
-            {manifest.status.replace(/_/g, " ")}
+            {statusLabel}
           </span>
           <span className={`badge ${phase2 ? "green" : "accent"}`}>
             {usageBadge}
           </span>
+          {reconstructionBadge && (
+            <span className={`badge ${reconstructionVerified ? "green" : "accent"}`}>
+              {reconstructionBadge}
+            </span>
+          )}
           {adjudicationBadge && (
             <span className={`badge ${adjudicationStatus === "verified" ? "green" : "accent"}`}>
               {adjudicationBadge}

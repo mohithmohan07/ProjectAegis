@@ -166,6 +166,20 @@ export interface SourceArtifactManifest {
     verified_repairs?: number;
     remaining_issues?: number;
   };
+  source_reconstruction?: {
+    version?: string;
+    compiler?: string;
+    status?: "verified" | "not_used" | "review_required" | string;
+    source_origin?: string;
+    fallback_reason?: string[];
+    failure_reason?: string;
+    model?: string;
+    page_count?: number;
+    batch_count?: number;
+    asset_count?: number;
+    verified_task_visual_relationships?: number;
+    mathpix_raw_preserved?: boolean;
+  };
   status: "passed" | "passed_with_warnings" | "failed" | "unavailable" | string;
   ready_for_future_cutover: boolean;
   source_sha256: string;
