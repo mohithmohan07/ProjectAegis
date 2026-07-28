@@ -130,5 +130,8 @@ Before the next cutover slice:
 7. Build Assessments must remain unchanged.
 8. The full backend, frontend build, and frontend test suites must pass.
 
+The regression suite enforces the RNE task count, QID order, byte-identical
+compilation, and `phase2_inventory_ready` status before this slice is mergeable.
+
 The next slice may move topic-scoped semantic concept extraction to ACSD blocks,
 but only after this source-critical ledger has been exercised in production.
