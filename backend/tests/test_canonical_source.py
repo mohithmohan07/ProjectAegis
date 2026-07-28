@@ -70,7 +70,7 @@ def test_shadow_compiler_is_byte_deterministic_and_lossless():
     assert first.report["used_for_generation"] is False
 
 
-def test_rne_shadow_preserves_review_source_topic_order_and_task_count():
+def test_rne_shadow_preserves_review_source_topic_and_task_order():
     source = (DATA / "RNE.mmd").read_text(encoding="utf-8")
 
     compiled = canonical_source.compile_source(
@@ -94,7 +94,27 @@ def test_rne_shadow_preserves_review_source_topic_order_and_task_count():
     ]
     positions = [titles.index(title) for title in expected_topics]
     assert positions == sorted(positions)
-    assert len(compiled.canonical["tasks"]) == 26
+
+    tasks = compiled.canonical["tasks"]
+    assert len(tasks) == 26
+    assert [task["order"] for task in tasks] == list(range(1, 27))
+    assert [task["task_id"] for task in tasks] == [
+        f"TASK-{index:05d}" for index in range(1, 27)
+    ]
+    assert [task["source_start"] for task in tasks] == sorted(
+        task["source_start"] for task in tasks
+    )
+    section_by_id = {
+        section["section_id"]: section
+        for section in compiled.canonical["sections"]
+    }
+    assert all(
+        section_by_id[task["section_id"]]["source_start"]
+        <= task["source_start"]
+        < section_by_id[task["section_id"]]["source_end"]
+        for task in tasks
+    )
+
     assert compiled.report["summary"]["source_chars"] == len(source)
     assert compiled.report["summary"]["errors"] == len([
         issue for issue in compiled.report["issues"]
