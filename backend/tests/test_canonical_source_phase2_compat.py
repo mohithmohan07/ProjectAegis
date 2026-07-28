@@ -67,11 +67,12 @@ def test_legacy_final_checkpoint_requires_phase2_source_refresh():
         method_row_snapshot=[],
     )
 
-    reasons = generation._final_checkpoint_refresh_reasons(
-        legacy,
-        sections=[],
-        source_topic_excerpts=[],
-    )
+    with phase2.activate({"source_contract": {"mode": phase2.SOURCE_CONTRACT_MODE}}):
+        reasons = generation._final_checkpoint_refresh_reasons(
+            legacy,
+            sections=[],
+            source_topic_excerpts=[],
+        )
 
     assert "Phase 2 ACSD source inventory" in " ".join(reasons)
 
@@ -94,10 +95,11 @@ def test_phase2_final_checkpoint_does_not_receive_phase2_legacy_reason():
         method_row_snapshot=[],
     )
 
-    reasons = generation._final_checkpoint_refresh_reasons(
-        current,
-        sections=[],
-        source_topic_excerpts=[],
-    )
+    with phase2.activate({"source_contract": {"mode": phase2.SOURCE_CONTRACT_MODE}}):
+        reasons = generation._final_checkpoint_refresh_reasons(
+            current,
+            sections=[],
+            source_topic_excerpts=[],
+        )
 
     assert "Phase 2 ACSD source inventory" not in " ".join(reasons)
