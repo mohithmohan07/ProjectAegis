@@ -26,7 +26,7 @@ jobs:
         run: |
           set -euo pipefail
           cat .phase221_payload/part* | base64 --decode > /tmp/phase221.patch.xz
-          echo "6d414d1022c4626a499dc4c89a4d19572f2eefef5f88f3b83a86ef5820218a73  /tmp/phase221.patch.xz" | sha256sum --check --strict
+          echo "65486f47ceb896afdfe9c68166e89f7f0de3468d4d21c545e7f3b759d5ac9d70  /tmp/phase221.patch.xz" | sha256sum --check --strict
           xz --decompress --stdout /tmp/phase221.patch.xz > /tmp/phase221.patch
       - name: Apply tested Phase 2.2.1 changes
         shell: bash
