@@ -5,7 +5,6 @@ from pathlib import Path
 
 from app.services import canonical_source_phase2 as phase2
 from app.services import canonical_source_phase211_contract as phase211
-from app.services import canonical_source_phase21_structure as structure
 from app.services import katex_rules
 
 DATA = Path(__file__).parents[1] / "data" / "Testing"
@@ -40,7 +39,7 @@ def test_nested_mathpix_itemize_is_rendered_without_raw_latex():
     display = task["display_prompt"]
 
     assert compiled.canonical["phase21_hardening"]["patch_version"] == "2.1.1"
-    assert task["raw_prompt"].startswith("1. Write a note on:")
+    assert task["raw_prompt"].startswith("Write a note on:")
     assert "a) Guiseppe Mazzini" in display
     assert "e) The role of women in nationalist struggles" in display
     assert "\\item" not in display
