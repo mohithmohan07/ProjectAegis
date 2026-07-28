@@ -20,7 +20,16 @@ jobs:
           cache-dependency-path: backend/requirements.txt
       - run: pip install -r requirements.txt
       - run: python scripts/generate_dummy_data.py
-      - run: pytest -q
+      - name: Run backend tests with bounded diagnostics
+        run: |
+          set +e
+          pytest -q > /tmp/pytest.log 2>&1
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            tail -n 260 /tmp/pytest.log
+            exit "$status"
+          fi
+          tail -n 20 /tmp/pytest.log
 
   frontend:
     runs-on: ubuntu-latest
