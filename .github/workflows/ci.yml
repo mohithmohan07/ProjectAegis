@@ -20,7 +20,24 @@ jobs:
           cache-dependency-path: backend/requirements.txt
       - run: pip install -r requirements.txt
       - run: python scripts/generate_dummy_data.py
-      - run: pytest -q
+      - name: Run backend suite with captured output
+        id: backend-tests
+        continue-on-error: true
+        run: |
+          set +e
+          pytest -q > /tmp/phase21-pytest.log 2>&1
+          status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+      - name: Upload Phase 2.1 backend diagnostics
+        if: steps.backend-tests.outputs.status != '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase21-backend-failure
+          path: /tmp/phase21-pytest.log
+          retention-days: 1
+      - name: Fail when backend tests fail
+        if: steps.backend-tests.outputs.status != '0'
+        run: exit 1
 
   frontend:
     runs-on: ubuntu-latest
