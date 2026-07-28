@@ -1,14 +1,15 @@
 name: Apply Phase 2.2.1 implementation
 
 on:
-  push:
-    branches: ["agent/phase-2-2-1-pdf-acsd-fallback"]
+  pull_request:
+    branches: ["main"]
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
 
 concurrency:
-  group: phase221-one-shot-${{ github.ref }}
+  group: phase221-one-shot-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
@@ -18,6 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.head_ref }}
           fetch-depth: 0
       - name: Decode and verify implementation patch
         shell: bash
@@ -42,4 +44,4 @@ jobs:
           git add -A
           git diff --cached --check
           git commit -m "Implement Phase 2.2.1 PDF-to-ACSD fallback"
-          git push origin HEAD:${GITHUB_REF_NAME}
+          git push origin HEAD:${{ github.head_ref }}
