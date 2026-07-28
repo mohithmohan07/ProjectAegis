@@ -15,59 +15,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: agent/phase-2-canonical-source-inventory
-      - name: Apply narrow Phase 2 UI/type updates
+      - name: Remove duplicate Phase 2 metadata line
         run: |
           python - <<'PY'
           from pathlib import Path
 
-          types = Path("frontend/src/types.ts")
-          text = types.read_text(encoding="utf-8")
-          text = text.replace(
-              '  shadow_mode: true;\n  used_for_generation: false;\n  schema_version: string;\n  compiler_version: string;\n',
-              '  shadow_mode: boolean;\n  used_for_generation: boolean;\n  schema_version: string;\n  compiler_version: string;\n  phase?: string;\n  consumer_module?: string;\n  generation_usage?: {\n    mode: string;\n    components?: string[];\n    raw_mmd_components?: string[];\n  };\n  phase2_inventory_ready?: boolean;\n',
-          )
-          types.write_text(text, encoding="utf-8")
-
           component = Path("frontend/src/components/DocumentUpload.tsx")
           text = component.read_text(encoding="utf-8")
-          text = text.replace(
-              '  const statusClass = manifest.status === "passed" ? "green" : "accent";\n  const counts = [\n',
-              '  const phase2 = manifest.phase === "phase-2-source-critical"\n    && manifest.generation_usage?.mode === "source-critical";\n  const statusClass = manifest.status === "passed"\n    || (phase2 && manifest.phase2_inventory_ready) ? "green" : "accent";\n  const title = phase2\n    ? "Phase 2 canonical-source inventory"\n    : "Phase 1 canonical-source shadow";\n  const usageBadge = phase2\n    ? "source-critical generation active"\n    : "not used for generation";\n  const description = phase2\n    ? "Build Concepts now reads task order, stable QIDs, Figure ownership, images, "\n      + "KaTeX, and inventory identity from ACSD. Semantic concept extraction and "\n      + "writing still read the immutable raw MMD."\n    : "The current pipeline still reads the immutable raw MMD. These files let "\n      + "you inspect source order, task boundaries, images, KaTeX, and validation "\n      + "before any future cutover.";\n  const counts = [\n',
-          )
-          text = text.replace(
-              '          <strong>Phase 1 canonical-source shadow</strong>\n',
-              '          <strong>{title}</strong>\n',
-          )
-          text = text.replace(
-              '          <span className="badge accent">not used for generation</span>\n',
-              '          <span className={`badge ${phase2 ? "green" : "accent"}`}>\n            {usageBadge}\n          </span>\n',
-          )
-          text = text.replace(
-              '        <div className="muted" style={{ marginTop: 6 }}>\n          The current pipeline still reads the immutable raw MMD. These files let\n          you inspect source order, task boundaries, images, KaTeX, and validation\n          before any future cutover.\n        </div>\n',
-              '        <div className="muted" style={{ marginTop: 6 }}>\n          {description}\n        </div>\n',
-          )
-          text = text.replace(
-              '          ACSD {manifest.schema_version} · compiler {manifest.compiler_version}\n',
-              '          ACSD {manifest.schema_version} · compiler {manifest.compiler_version}\n          {manifest.phase ? ` · ${manifest.phase.replace(/-/g, " ")}` : ""}\n',
-          )
+          line = '          {manifest.phase ? ` · ${manifest.phase.replace(/-/g, " ")}` : ""}\n'
+          text = text.replace(line + line, line)
           component.write_text(text, encoding="utf-8")
-
-          test = Path("frontend/src/components/DocumentUpload.sourceArtifacts.test.tsx")
-          text = test.read_text(encoding="utf-8")
-          text = text.replace('       shadow_mode: true,\n       used_for_generation: false,\n       schema_version: "1.0.0",\n       compiler_version: "phase-1-shadow-1",\n', '       shadow_mode: false,\n       used_for_generation: true,\n       schema_version: "1.1.0",\n       compiler_version: "phase-2-source-critical-1",\n       phase: "phase-2-source-critical",\n       consumer_module: "build_concepts",\n       generation_usage: {\n         mode: "source-critical",\n         components: ["question_task_inventory", "stable_qids"],\n         raw_mmd_components: ["semantic_concept_extraction"],\n       },\n       phase2_inventory_ready: true,\n')
-          text = text.replace(
-              'test("shows inspectable Phase 1 artifacts without implying generation cutover", () => {',
-              'test("shows the Phase 2 source-critical cutover without overstating semantic use", () => {',
-          )
-          text = text.replace(
-              '  expect(screen.getByText("Phase 1 canonical-source shadow")).toBeDefined();\n  expect(screen.getByText("not used for generation")).toBeDefined();\n',
-              '  expect(screen.getByText("Phase 2 canonical-source inventory")).toBeDefined();\n  expect(screen.getByText("source-critical generation active")).toBeDefined();\n',
-          )
-          text = text.replace(
-              '  expect(screen.getByText(/current pipeline still reads the immutable raw MMD/i))\n    .toBeDefined();\n',
-              '  expect(screen.getByText(/semantic concept extraction and writing still read/i))\n    .toBeDefined();\n',
-          )
-          test.write_text(text, encoding="utf-8")
           PY
       - name: Commit generated patch
         run: |
@@ -77,6 +34,6 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add frontend/src/types.ts frontend/src/components/DocumentUpload.tsx frontend/src/components/DocumentUpload.sourceArtifacts.test.tsx
-          git commit -m "Show Phase 2 canonical source usage in UI"
+          git add frontend/src/components/DocumentUpload.tsx
+          git commit -m "Deduplicate Phase 2 artifact metadata"
           git push origin HEAD:agent/phase-2-canonical-source-inventory
