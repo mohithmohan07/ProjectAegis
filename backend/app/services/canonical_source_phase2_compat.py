@@ -8,7 +8,7 @@ from typing import Any
 
 from . import canonical_source, canonical_source_phase2 as phase2
 
-_COMPAT_VERSION = 4
+_COMPAT_VERSION = 5
 
 
 def _match_anchor(
@@ -119,8 +119,8 @@ def prune_legacy_inventory_checkpoints(db: Any, job: Any) -> bool:
         progress.log(
             "Legacy checkpoint has no earlier durable pre-inventory stage; "
             "retaining it for the normal recovery selector. A legacy final "
-            "checkpoint will not be accepted as terminal under the Phase 2 "
-            "source contract.",
+            "checkpoint will not be accepted as terminal under the active "
+            "Phase 2 source contract.",
             level="warning",
         )
         return False
@@ -244,7 +244,11 @@ def install(generation: ModuleType | None = None) -> None:
         @wraps(original_refresh_reasons)
         def final_checkpoint_refresh_reasons(checkpoint, **kwargs):
             reasons = list(original_refresh_reasons(checkpoint, **kwargs))
-            if checkpoint and not phase2._checkpoint_uses_phase2(checkpoint):
+            if (
+                phase2.active_canonical() is not None
+                and checkpoint
+                and not phase2._checkpoint_uses_phase2(checkpoint)
+            ):
                 reasons.append(
                     "final checkpoint predates Phase 2 ACSD source inventory"
                 )
