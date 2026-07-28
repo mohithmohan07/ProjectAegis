@@ -135,6 +135,40 @@ export interface Session {
   created_at: string;
 }
 
+export interface SourceArtifactFile {
+  kind: "raw_mmd" | "canonical_json" | "aegis_mmd" | "report" | string;
+  label: string;
+  filename: string;
+  media_type: string;
+  size_bytes: number;
+  download_url: string;
+}
+
+export interface SourceArtifactManifest {
+  available: boolean;
+  shadow_mode: true;
+  used_for_generation: false;
+  schema_version: string;
+  compiler_version: string;
+  status: "passed" | "passed_with_warnings" | "failed" | "unavailable" | string;
+  ready_for_future_cutover: boolean;
+  source_sha256: string;
+  manifest_url: string;
+  summary: {
+    source_chars?: number;
+    sections?: number;
+    blocks?: number;
+    figures?: number;
+    images?: number;
+    math_spans?: number;
+    tasks?: number;
+    errors?: number;
+    warnings?: number;
+    [key: string]: number | undefined;
+  };
+  files: SourceArtifactFile[];
+}
+
 export interface UploadJob {
   id: number;
   module: string;
@@ -149,6 +183,7 @@ export interface UploadJob {
   status: string;
   result_ids: number[];
   detail: string;
+  source_artifacts?: SourceArtifactManifest;
   checkpoint_available?: boolean;
   checkpoint_stage?: string;
   checkpoint_saved_at?: string;
@@ -186,113 +221,6 @@ export interface AuthUser {
   sub: string;
   email: string;
   name: string;
-  picture?: string;
-  hd?: string;
-}
-
-export interface AuthSession {
-  authenticated: boolean;
-  user: AuthUser | null;
-}
-
-export interface ResumableCheckpoint {
-  id: number;
-  module: string;
-  learning_kind: string;
-  filename: string;
-  status: string;
-  checkpoint_available: boolean;
-  checkpoint_stage?: string;
-  checkpoint_saved_at?: string;
-  checkpoint_progress?: number;
-  checkpoint_target_identity?: Record<string, string>;
-  generation_running?: boolean;
-  created_at: string;
-}
-
-export interface ResumableCheckpoints {
-  items: ResumableCheckpoint[];
-  total: number;
-}
-
-export interface Question {
-  id: number;
-  group_id: number;
-  sheet_kind: string;
-  question_label: string;
-  question_category: string;
-  cognitive_skills: string;
-  question_source: string;
-  level_of_difficulty: string;
-  question: string;
-  marks: number;
-  math_keyboard: string;
-  display_answer: string;
-  answer_explanation: string;
-  answers: Record<string, unknown>[];
-  sub_questions: Record<string, unknown>[];
-  origin: string;
-  created_at: string;
-}
-
-export type ScopeType = "chapter" | "topic" | "concept";
-export interface Scope {
-  type: ScopeType;
-  ids: number[];
-  label: string;
-}
-
-export interface TagResult {
-  status: string;
-  reason?: string;
-  question_label?: string;
-  concept_title?: string;
-  chapter_title?: string;
-  topic_title?: string;
-}
-
-export type Outcome = "ADD" | "TAG" | "SKIP";
-export interface PreviewRow {
-  kind: string;
-  outcome: Outcome;
-  identity: string;
-  sheet?: string;
-  placement: Record<string, string>;
-}
-export interface PreviewResult {
-  rows: PreviewRow[];
-  summary: Record<string, number>;
-  workbook: string;
-}
-
-export interface WorkbookResult {
-  output_pdf: string;
-  build_log: string;
-  valid: boolean;
-  issues: string[];
-  mode: "dry" | "live";
-  meta: Record<string, string>;
-  log: string;
-  openai_usage?: OpenAIUsage;
-}
-
-export interface PromptInfo {
-  key: string;
-  label: string;
-  category: string;
-  description: string;
-  variables: string[];
-  default: string;
-  current: string;
-  overridden: boolean;
-}
-
-export interface WorkbookEntry {
-  class_folder: string;
-  subject: string;
-  name: string;
-  rel: string;
-  size: number;
-  has_log: boolean;
-  openai_usage?: OpenAIUsage;
+  picture: string;
+  hd: string;
 }
