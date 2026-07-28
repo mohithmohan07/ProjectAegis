@@ -82,20 +82,23 @@ MMD is never edited to make the gate pass.
 ## Checkpoint migration
 
 A Phase 1 or older checkpoint can contain model-derived inventory rows whose QIDs
-are incompatible with ACSD.
+are incompatible with ACSD. Phase 2 does not delete the deepest checkpoint before
+the established recovery selector has inspected it.
 
-- When a pre-inventory checkpoint exists, Phase 2 retains the newest such stage
-  and discards only legacy inventory-or-later stages.
-- A retained non-final checkpoint refreshes its inventory from ACSD and uses the
-  existing resumed-Type reconciliation before final allocation.
-- A legacy `final_content_ready` checkpoint is never accepted as terminal. It is
-  forced through the normal recovery selector so an earlier compatible stage can
-  rebuild the source-critical ledger.
+- During resume, the active inventory adapter reconstructs source tasks from ACSD.
+- The existing terminal validator then checks exact coverage, Figure ownership,
+  Type placement, and host certification against that source-critical ledger.
+- A valid checkpoint can remain API-free.
+- A checkpoint that no longer satisfies the refreshed ledger is rejected by the
+  normal terminal gate and falls back to the preceding compatible stage.
 - A checkpoint whose inventory declares
-  `source_contract.mode = acsd-phase2-source-critical` resumes normally.
+  `source_contract.mode = acsd-phase2-source-critical` resumes with its stable
+  task identities normally.
 
-This prioritises source correctness over reusing an inventory or Type taxonomy
-whose QIDs were created under the older model-derived contract.
+An explicit administrative migration helper remains available for cases where a
+pre-inventory stage should be selected in advance, but it is not invoked before
+every generation request. This preserves semantic work while keeping ACSD source
+validation authoritative.
 
 ## Artifact metadata
 
@@ -125,13 +128,15 @@ Before the next cutover slice:
 3. The RNE source-critical report must contain no blocking Phase 2 issue.
 4. Image URLs and Figure captions must remain source-exact.
 5. Mathematical task display must remain valid Aegis rich text.
-6. Legacy checkpoints must preserve the deepest safe semantic stage without
-   accepting an old final inventory as terminal.
+6. Legacy checkpoints must retain the established API-free validation and
+   fallback behavior after their inventory is refreshed from ACSD.
 7. Build Assessments must remain unchanged.
 8. The full backend, frontend build, and frontend test suites must pass.
 
 The regression suite enforces the RNE task count, QID order, byte-identical
 compilation, and `phase2_inventory_ready` status before this slice is mergeable.
+Representative AP and Electricity sources also enforce their existing deterministic
+65-task and 60-task ledgers.
 
 The first deployed Phase 2 chapters must retain their validation reports so the
 stable ACSD inventory can be compared with the final deposited Type examples.
