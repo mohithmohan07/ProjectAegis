@@ -11,6 +11,7 @@ import copy
 from typing import Any
 
 from . import canonical_source_phase22 as phase22
+from . import canonical_source_phase22_contract as phase22_contract
 from . import canonical_source_phase221_contract as phase221
 
 _PUBLIC_FAMILY_VERSION = "2.2.0"
@@ -53,9 +54,20 @@ def install() -> None:
             ])
         )
 
+    def phase22_current(canonical: dict[str, Any] | None) -> bool:
+        marker = (canonical or {}).get("source_adjudication")
+        return bool(
+            isinstance(marker, dict)
+            and marker.get("version") == _PUBLIC_FAMILY_VERSION
+            and marker.get("patch_version") == phase221.PATCH_VERSION
+            and marker.get("evidence_page_protocol") == phase221._PROTOCOL
+        )
+
     # Keep the existing Phase 2.2 public-family marker, but ensure all new cache
-    # keys and canonical reports carry the patch protocol explicitly.
+    # keys and canonical reports carry the patch protocol explicitly. Existing
+    # 2.2.0 artifacts without the patch marker are recompiled once before retry.
     phase22.ADJUDICATION_VERSION = _PUBLIC_FAMILY_VERSION
     phase22.annotate_pending_adjudication = annotate_pending_adjudication
     phase22._cache_key = cache_key
+    phase22_contract._phase22_current = phase22_current
     phase22._PHASE221_METADATA_VERSION = _CONTRACT_VERSION
