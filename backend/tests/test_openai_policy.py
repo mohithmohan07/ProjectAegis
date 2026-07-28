@@ -14,6 +14,7 @@ from app.services import generation, workbooks
 EXPECTED_REASONING_POLICY = {
     "assessment_generation": "medium",
     "source_extraction": "medium",
+    "source_adjudication": "high",
     "concept_mapping": "high",
     "concept_detailing": "medium",
     "concept_validation": "xhigh",
