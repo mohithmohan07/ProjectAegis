@@ -8,6 +8,7 @@ from typing import Any
 from . import canonical_source
 from . import canonical_source_phase2 as phase2
 from . import canonical_source_phase21 as phase21
+from . import canonical_source_phase21_compat as phase21_compat
 from . import canonical_source_phase21_render as render
 from . import canonical_source_phase21_visuals as visuals
 from . import source_visual_contract
@@ -28,6 +29,7 @@ def install(generation: ModuleType) -> None:
     if getattr(phase2, "_PHASE21_CONTRACT_VERSION", 0) >= _CONTRACT_VERSION:
         return
 
+    phase21_compat.install()
     original_issue_reader = phase2.phase2_inventory_issues
     original_compile = phase2.compile_phase2_source
     original_load = phase2._load_or_refresh_for_job
