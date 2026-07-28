@@ -8,17 +8,19 @@ from typing import Any
 
 from . import canonical_source, canonical_source_phase2 as phase2
 
-_COMPAT_VERSION = 2
+_COMPAT_VERSION = 3
 
 
 def prune_legacy_inventory_checkpoints(db: Any, job: Any) -> bool:
     """Rewind legacy inventories only when an earlier durable stage exists.
 
     A historical checkpoint bundle can contain only a 91%/98% stage. Destroying
-    that sole recovery point would force a complete semantic regeneration. In
-    that shape, retain the checkpoint and let the active ACSD refresh path
-    replace its inventory in place. When a 55% or earlier stage is available,
-    rewind to it so Type mining starts cleanly from stable ACSD qids.
+    that sole recovery point before the generation recovery code inspects it can
+    discard useful semantic rows. In that shape, retain the bundle temporarily:
+    a non-final stage is refreshed and reconciled in place, while the terminal
+    refresh contract below refuses to accept a legacy final stage as complete.
+    When a 55% or earlier stage is available, rewind immediately so Type mining
+    starts cleanly from stable ACSD qids.
     """
     from . import generation, progress
 
@@ -53,8 +55,9 @@ def prune_legacy_inventory_checkpoints(db: Any, job: Any) -> bool:
     if not retained:
         progress.log(
             "Legacy checkpoint has no earlier durable pre-inventory stage; "
-            "retaining it and replacing its Question / Task Inventory from ACSD "
-            "during resume instead of discarding all semantic work.",
+            "retaining it for the normal recovery selector. A legacy final "
+            "checkpoint will not be accepted as terminal under the Phase 2 "
+            "source contract.",
             level="warning",
         )
         return False
@@ -132,6 +135,7 @@ def install(generation: ModuleType | None = None) -> None:
 
     if generation is not None:
         original_extract = generation._extract_question_task_inventory_via_api
+        original_refresh_reasons = generation._final_checkpoint_refresh_reasons
 
         @wraps(original_extract)
         def guarded_extract(*args, **kwargs):
@@ -173,6 +177,18 @@ def install(generation: ModuleType | None = None) -> None:
             inventory["stats"] = generation._inventory_stats(items)
             return inventory
 
+        @wraps(original_refresh_reasons)
+        def final_checkpoint_refresh_reasons(checkpoint, **kwargs):
+            reasons = list(original_refresh_reasons(checkpoint, **kwargs))
+            if checkpoint and not phase2._checkpoint_uses_phase2(checkpoint):
+                reasons.append(
+                    "final checkpoint predates Phase 2 ACSD source inventory"
+                )
+            return list(dict.fromkeys(reasons))
+
         generation._extract_question_task_inventory_via_api = guarded_extract
+        generation._final_checkpoint_refresh_reasons = (
+            final_checkpoint_refresh_reasons
+        )
 
     phase2._PHASE2_COMPAT_VERSION = _COMPAT_VERSION
