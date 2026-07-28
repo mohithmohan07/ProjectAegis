@@ -1,9 +1,15 @@
 name: CI
 
 on:
+  # Pull-request branches are validated by the pull_request event below. Limiting
+  # push validation to main prevents each PR commit from launching a duplicate run.
   push:
-    branches: ["**"]
+    branches: ["main"]
   pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   backend:
@@ -20,60 +26,7 @@ jobs:
           cache-dependency-path: backend/requirements.txt
       - run: pip install -r requirements.txt
       - run: python scripts/generate_dummy_data.py
-      - name: Run backend suite with captured output
-        id: backend-tests
-        continue-on-error: true
-        run: |
-          set +e
-          pytest -q > /tmp/phase21-pytest.log 2>&1
-          status=$?
-          if [ "$status" != "0" ]; then
-            python - <<'PY' >> /tmp/phase21-pytest.log 2>&1
-          import json
-          from pathlib import Path
-          from app.services import canonical_source_phase2 as phase2
-
-          data = Path("data/Testing")
-          for filename in ("jemh105 (1).mmd", "Class 10 Chapter 5 Electricity.mmd"):
-              source = (data / filename).read_text(encoding="utf-8")
-              compiled = phase2.compile_phase2_source(
-                  source,
-                  source_filename=filename,
-                  consumer_module="build_concepts",
-              )
-              print("\n=== PHASE21 DIAGNOSTIC", filename, "===")
-              print(json.dumps(compiled.report.get("phase2_issues") or [], ensure_ascii=False, indent=2))
-              tasks = {
-                  str(task.get("qid") or ""): task
-                  for task in compiled.canonical.get("tasks") or []
-                  if isinstance(task, dict)
-              }
-              for issue in compiled.report.get("phase2_issues") or []:
-                  qid = str(issue.get("qid") or "")
-                  if qid and qid in tasks:
-                      print("TASK", qid, json.dumps(tasks[qid], ensure_ascii=False, indent=2))
-              blocks = {
-                  str(block.get("block_id") or ""): block
-                  for block in compiled.canonical.get("blocks") or []
-                  if isinstance(block, dict)
-              }
-              for issue in compiled.report.get("phase2_issues") or []:
-                  block_id = str(issue.get("block_id") or "")
-                  if block_id and block_id in blocks:
-                      print("BLOCK", block_id, json.dumps(blocks[block_id], ensure_ascii=False, indent=2))
-          PY
-          fi
-          echo "status=$status" >> "$GITHUB_OUTPUT"
-      - name: Upload Phase 2.1 backend diagnostics
-        if: steps.backend-tests.outputs.status != '0'
-        uses: actions/upload-artifact@v4
-        with:
-          name: phase21-backend-failure
-          path: /tmp/phase21-pytest.log
-          retention-days: 1
-      - name: Fail when backend tests fail
-        if: steps.backend-tests.outputs.status != '0'
-        run: exit 1
+      - run: pytest -q
 
   frontend:
     runs-on: ubuntu-latest
