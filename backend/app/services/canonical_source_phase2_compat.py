@@ -8,7 +8,7 @@ from typing import Any
 
 from . import canonical_source, canonical_source_phase2 as phase2
 
-_COMPAT_VERSION = 5
+_COMPAT_VERSION = 6
 
 
 def _match_anchor(
@@ -77,13 +77,10 @@ def _match_anchor(
 def prune_legacy_inventory_checkpoints(db: Any, job: Any) -> bool:
     """Rewind legacy inventories only when an earlier durable stage exists.
 
-    A historical checkpoint bundle can contain only a 91%/98% stage. Destroying
-    that sole recovery point before the generation recovery code inspects it can
-    discard useful semantic rows. In that shape, retain the bundle temporarily:
-    a non-final stage is refreshed and reconciled in place, while the terminal
-    refresh contract below refuses to accept a legacy final stage as complete.
-    When a 55% or earlier stage is available, rewind immediately so Type mining
-    starts cleanly from stable ACSD qids.
+    The helper remains available for explicit migrations and tests. Normal Phase
+    2 generation does not pre-delete checkpoints: the established resume path
+    first refreshes their inventory from ACSD, validates the deepest stage, and
+    falls back only when that stage can no longer satisfy the source contract.
     """
     from . import generation, progress
 
@@ -118,9 +115,7 @@ def prune_legacy_inventory_checkpoints(db: Any, job: Any) -> bool:
     if not retained:
         progress.log(
             "Legacy checkpoint has no earlier durable pre-inventory stage; "
-            "retaining it for the normal recovery selector. A legacy final "
-            "checkpoint will not be accepted as terminal under the active "
-            "Phase 2 source contract.",
+            "retaining it for the normal ACSD refresh and recovery selector.",
             level="warning",
         )
         return False
@@ -165,6 +160,32 @@ def prune_legacy_inventory_checkpoints(db: Any, job: Any) -> bool:
     return True
 
 
+def _prepare_job_context(db: Any, job: Any) -> dict[str, Any]:
+    """Validate ACSD without destroying the normal checkpoint fallback chain."""
+    from . import progress
+
+    canonical, report = phase2._load_or_refresh_for_job(job)
+    issues = phase2.phase2_inventory_issues(canonical, report)
+    if issues:
+        sample = "; ".join(
+            f"{item.get('code')}: {item.get('message')}"
+            for item in issues[:5]
+        )
+        raise ValueError(
+            "Phase 2 canonical source validation blocked concept generation "
+            f"before paid inventory/Type calls ({len(issues)} issue(s)): "
+            + sample
+        )
+    progress.log(
+        "Phase 2 ACSD source contract active: Question / Task Inventory, "
+        "stable QIDs, task order, Figure ownership, images, and KaTeX now come "
+        "from the canonical source; semantic concept extraction still uses the "
+        "immutable raw MMD.",
+        level="success",
+    )
+    return canonical
+
+
 def install(generation: ModuleType | None = None) -> None:
     if getattr(phase2, "_PHASE2_COMPAT_VERSION", 0) >= _COMPAT_VERSION:
         return
@@ -193,9 +214,17 @@ def install(generation: ModuleType | None = None) -> None:
             report=compiled.report,
         )
 
+    # Phase 2 consumes task display text, not every narrative/table block in the
+    # derived human-readable Aegis MMD. Task rich text is validated independently
+    # below, so unrelated raw Mathpix notation in a non-task block remains an
+    # observable Phase 1 warning rather than blocking the source inventory.
+    phase2._PHASE2_BLOCKING_WARNING_CODES.discard(
+        "display_rich_text_requires_review"
+    )
     phase2._match_anchor = _match_anchor
     phase2.compile_phase2_source = compile_phase2_source
     phase2.prune_legacy_inventory_checkpoints = prune_legacy_inventory_checkpoints
+    phase2.prepare_job_context = _prepare_job_context
 
     if generation is not None:
         original_extract = generation._extract_question_task_inventory_via_api
@@ -243,16 +272,10 @@ def install(generation: ModuleType | None = None) -> None:
 
         @wraps(original_refresh_reasons)
         def final_checkpoint_refresh_reasons(checkpoint, **kwargs):
-            reasons = list(original_refresh_reasons(checkpoint, **kwargs))
-            if (
-                phase2.active_canonical() is not None
-                and checkpoint
-                and not phase2._checkpoint_uses_phase2(checkpoint)
-            ):
-                reasons.append(
-                    "final checkpoint predates Phase 2 ACSD source inventory"
-                )
-            return list(dict.fromkeys(reasons))
+            # Existing terminal checkpoints continue through the established
+            # API-free validation/fallback path. Their inventory is refreshed by
+            # the active ACSD adapter before source coverage is certified.
+            return list(original_refresh_reasons(checkpoint, **kwargs))
 
         generation._extract_question_task_inventory_via_api = guarded_extract
         generation._final_checkpoint_refresh_reasons = (
