@@ -1,0 +1,3627 @@
+"""Phase 3 API-first universal semantic source graph for Build Concepts.
+
+Phase 2 made the ACSD task ledger authoritative while semantic concept writing
+still consumed flat MMD.  Phase 3 introduces one stable graph between source
+conversion and generation:
+
+* the original PDF, Mathpix MMD, PDF text layer, and verified GPT page ACSD are
+  evidence channels rather than competing sources of truth;
+* textbook structure is represented by stable topic, subtopic, block, task,
+  Figure, and math IDs;
+* API calls interpret hierarchy and concept grounding only within deterministic
+  ID/evidence boundaries;
+* source order, exact task wording, QIDs, images, KaTeX, and final rendering
+  remain deterministic.
+
+The module is deliberately usable without a live provider.  Conversion writes a
+fully deterministic graph shadow.  At generation time, live deployments enrich
+and independently audit that graph before it becomes the semantic source.
+"""
+from __future__ import annotations
+
+import copy
+import hashlib
+import html
+import json
+import os
+import re
+import tempfile
+from contextlib import contextmanager
+from contextvars import ContextVar
+from pathlib import Path
+from typing import Any, Callable, Iterable, Iterator
+
+from .. import config
+from . import canonical_source
+from . import canonical_source_phase2 as phase2
+from . import canonical_source_phase21_structure as structure
+from . import canonical_source_phase22 as phase22
+from . import canonical_source_phase221_fallback as page_acsd
+from . import katex_rules as kr
+from . import progress
+
+PHASE = "phase-3-semantic-graph"
+SCHEMA_NAME = "Aegis Universal Semantic Source Graph"
+SCHEMA_VERSION = "3.0.0"
+COMPILER_VERSION = "phase-3-semantic-graph-1"
+
+GRAPH_FILENAME = "source.semantic-graph.json"
+GRAPH_REPORT_FILENAME = "source.semantic-graph-report.json"
+SEMANTIC_SOURCE_FILENAME = "source.semantic.mmd"
+VISION_ACSD_FILENAME = "source.phase3-page-acsd.json"
+
+ARTIFACT_SPECS: dict[str, dict[str, str]] = {
+    "semantic_graph": {
+        "filename": GRAPH_FILENAME,
+        "media_type": "application/json; charset=utf-8",
+        "label": "Phase 3 semantic source graph",
+    },
+    "semantic_graph_report": {
+        "filename": GRAPH_REPORT_FILENAME,
+        "media_type": "application/json; charset=utf-8",
+        "label": "Phase 3 semantic graph report",
+    },
+    "semantic_source": {
+        "filename": SEMANTIC_SOURCE_FILENAME,
+        "media_type": "text/markdown; charset=utf-8",
+        "label": "Phase 3 deterministic semantic source",
+    },
+    "phase3_page_acsd": {
+        "filename": VISION_ACSD_FILENAME,
+        "media_type": "application/json; charset=utf-8",
+        "label": "Phase 3 verified PDF page evidence",
+    },
+}
+
+_ACTIVE_GRAPH: ContextVar[dict[str, Any] | None] = ContextVar(
+    "aegis_phase3_active_semantic_graph", default=None
+)
+_ACTIVE_SESSION: ContextVar[dict[str, Any] | None] = ContextVar(
+    "aegis_phase3_active_session", default=None
+)
+
+_SPACE_RE = re.compile(r"\s+")
+_NUMBER_PREFIX_RE = re.compile(
+    r"^\s*(?:chapter\s+)?(?P<number>\d+(?:[.．]\d+)*)\s*"
+    r"(?:[-:–—]\s*|\s+)?(?P<title>.*)$",
+    re.IGNORECASE,
+)
+_MAIN_NUMBER_RE = re.compile(r"^\d+$")
+_SUB_NUMBER_RE = re.compile(r"^(?P<major>\d+)[.．](?P<minor>\d+)(?:[.．]\d+)*$")
+_AUXILIARY_TITLE_RE = re.compile(
+    r"^(?:new\s+words?|glossary|activity|activities|discuss|project|"
+    r"write\s+in\s+brief|exercise(?:s)?(?:\s+\d+(?:[.．]\d+)*)?|"
+    r"source(?:\s+[a-z0-9]+)?|box(?:\s+\d+)?|some\s+important\s+dates|"
+    r"summary|recap|review|learning\s+outcomes?|objectives?)\b",
+    re.IGNORECASE,
+)
+_SOURCE_TITLE_RE = re.compile(r"^(?:source|case\s+study|extract|passage)\b", re.I)
+_GLOSSARY_TITLE_RE = re.compile(r"^(?:new\s+words?|glossary|vocabulary)\b", re.I)
+_ACTIVITY_TITLE_RE = re.compile(
+    r"^(?:activity|activities|discuss|think\s+about\s+it|let'?s\s+discuss|project)\b",
+    re.I,
+)
+_EXERCISE_TITLE_RE = re.compile(
+    r"^(?:write\s+in\s+brief|exercise|exercises|questions?|review)\b", re.I
+)
+_BOX_TITLE_RE = re.compile(r"^(?:box|info\s+box|did\s+you\s+know)\b", re.I)
+_LAYOUT_COMMAND_RE = re.compile(
+    r"\\(?:captionsetup|caption|includegraphics|label|centering)\b(?:\[[^\]]*\])?"
+    r"(?:\{[^{}]*\})?",
+    re.IGNORECASE,
+)
+_ENV_RE = re.compile(
+    r"\\(?:begin|end)\{(?:figure\*?|table\*?|tabular\*?|itemize|enumerate)\}"
+    r"(?:\{[^{}]*\})?",
+    re.IGNORECASE,
+)
+_LIST_ITEM_RE = re.compile(r"\\item(?:\[(?P<label>[^\]]+)\])?\s*", re.IGNORECASE)
+_TABLE_BEGIN_RE = re.compile(r"\\begin\{tabular\}\{[^{}]*\}", re.IGNORECASE)
+_SUSPICIOUS_MARKUP_RE = re.compile(
+    r"<\s*/?\s*(?:smiles|chem|molecule|reaction|structure|mathml)\b",
+    re.IGNORECASE,
+)
+_MARKDOWN_IMAGE_ANY_RE = re.compile(
+    r"!\[(?P<alt>[^\]]*)\]\(\s*(?P<src>https://[^)\s]+)\s*\)",
+    re.IGNORECASE,
+)
+_CANONICAL_IMAGE_ANY_RE = re.compile(r"\[img\b[^\]]*\]", re.IGNORECASE)
+_CANONICAL_KATEX_ANY_RE = re.compile(
+    r"\[katex\]\s*.*?\s*\[/katex\]", re.IGNORECASE | re.DOTALL
+)
+_INCLUDEGRAPHICS_ANY_RE = re.compile(
+    r"\\includegraphics(?:\[[^\]]*\])?\{(?P<src>https://[^}\s]+)\}",
+    re.IGNORECASE,
+)
+_BARE_HTTPS_RE = re.compile(r"https://[^\s<>\[\]]+", re.IGNORECASE)
+_EMPTY_MATH_DELIMITER_PATTERNS = (
+    re.compile(r"\\\[\s*\\\]", re.DOTALL),
+    re.compile(r"\\\(\s*\\\)", re.DOTALL),
+    re.compile(r"(?<!\\)\$\$\s*(?<!\\)\$\$", re.DOTALL),
+    re.compile(r"(?<!\\)\$\s*(?<!\\)\$", re.DOTALL),
+)
+
+HierarchyProvider = Callable[[dict[str, Any]], dict[str, Any]]
+HierarchyCritic = Callable[[dict[str, Any]], dict[str, Any]]
+GroundingProvider = Callable[[dict[str, Any]], dict[str, Any]]
+GroundingCritic = Callable[[dict[str, Any]], dict[str, Any]]
+TopicResolutionProvider = Callable[[dict[str, Any]], dict[str, Any]]
+TopicResolutionCritic = Callable[[dict[str, Any]], dict[str, Any]]
+AnomalyProvider = Callable[[dict[str, Any]], dict[str, Any]]
+AnomalyCritic = Callable[[dict[str, Any]], dict[str, Any]]
+
+_VISUAL_MARKER_RE = re.compile(r"\[\[VISUAL:(\d+)\]\]", re.IGNORECASE)
+_WORD_TOKEN_RE = re.compile(r"[^\W_]{3,}", re.UNICODE)
+
+
+def _normal(value: object) -> str:
+    return _SPACE_RE.sub(" ", str(value or "")).strip().casefold()
+
+
+def _semantic_title_key(value: object) -> str:
+    text = str(value or "")
+    text = re.sub(r"\\(?:mathbf|boldsymbol|mathrm|text|operatorname)\s*\{([^{}]*)\}", r" \1 ", text)
+    text = re.sub(r"\\[A-Za-z]+\*?", " ", text)
+    text = text.replace("{", " ").replace("}", " ")
+    number, title = _title_number(text) if "_title_number" in globals() else ("", text)
+    if number and title:
+        text = title
+    else:
+        text = re.sub(r"^\s*\d+(?:[.．]\d+)*\s+", "", text)
+    return _normal(text)
+
+
+def _plain_title(value: object) -> str:
+    """Render a source heading as plain learner-visible text.
+
+    Topic identity remains tied to the source section ID; this helper removes
+    only presentation TeX such as ``\boldsymbol{n}`` and structural numbering.
+    It never invents or translates heading text.
+    """
+    text = html.unescape(str(value or "")).strip()
+    text = re.sub(
+        r"\\(?:mathbf|boldsymbol|mathrm|mathit|text|operatorname)\s*\{([^{}]*)\}",
+        r"\1",
+        text,
+    )
+    text = re.sub(r"\\(?:section|subsection|subsubsection|chapter)\*?\{([^{}]*)\}", r"\1", text)
+    text = re.sub(r"\\[A-Za-z]+\*?", " ", text)
+    text = text.replace("{", " ").replace("}", " ")
+    number, title = _title_number(text) if "_title_number" in globals() else ("", text)
+    if number and title:
+        text = title
+    else:
+        text = re.sub(r"^\s*(?:chapter\s+)?\d+(?:[.．]\d+)*\s+", "", text, flags=re.I)
+    return _SPACE_RE.sub(" ", text).strip(" -:–—\t\n")
+
+
+def _sha256_text(value: object) -> str:
+    return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
+
+
+def _sha256_json(value: object) -> str:
+    payload = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    return _sha256_text(payload)
+
+
+def _atomic_write(path: Path, content: str) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _json_text(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+
+
+def enabled() -> bool:
+    return os.environ.get("AEGIS_PHASE3_ENABLED", "1").strip().lower() not in {
+        "0", "false", "no", "off"
+    }
+
+
+def semantic_api_enabled() -> bool:
+    configured = os.environ.get("AEGIS_PHASE3_SEMANTIC_API_ENABLED", "1")
+    return (
+        enabled()
+        and configured.strip().lower() not in {"0", "false", "no", "off"}
+        and config.use_live_generation()
+    )
+
+
+def vision_enabled() -> bool:
+    configured = os.environ.get("AEGIS_PHASE3_PDF_VISION_ENABLED", "1")
+    return (
+        semantic_api_enabled()
+        and configured.strip().lower() not in {"0", "false", "no", "off"}
+    )
+
+
+def subject_adapter(subject: object) -> str:
+    """Return the universal adapter without generic ``Science`` shadowing.
+
+    The order is intentional: specialised names such as Computer Science,
+    Social Science, and Life Science must resolve before the generic fallback.
+    """
+    value = _normal(subject)
+    if any(token in value for token in ("mathematics", "maths", "math")):
+        return "mathematics"
+    if any(token in value for token in (
+        "computer science", "computer applications", "informatics", "coding",
+        "artificial intelligence", "machine learning", "data science",
+    )):
+        return "computer_science"
+    if any(token in value for token in ("electronics", "electrical technology")):
+        return "electronics"
+    if any(token in value for token in (
+        "biology", "life science", "botany", "zoology", "biotechnology",
+    )):
+        return "life_science"
+    if any(token in value for token in (
+        "environmental science", "environmental studies", "evs", "ecology",
+    )):
+        return "environmental_science"
+    if any(token in value for token in (
+        "physics", "chemistry", "physical science", "physical sciences",
+    )):
+        return "physical_science"
+    if any(token in value for token in (
+        "social science", "social studies", "history", "geography", "civics",
+        "political science", "sociology",
+    )):
+        return "social_science"
+    if any(token in value for token in (
+        "commerce", "economics", "commercial studies", "accountancy", "business",
+    )):
+        return "commerce"
+    if any(token in value for token in (
+        "english", "language", "literature", "kannada", "hindi", "sanskrit",
+        "french", "german", "urdu", "tamil", "telugu", "malayalam",
+    )):
+        return "language_literature"
+    if any(token in value for token in (
+        "physical education", "health education", "yoga", "sports",
+    )):
+        return "health_physical_education"
+    if any(token in value for token in (
+        "art", "music", "dance", "craft", "theatre", "drama",
+    )):
+        return "arts"
+    if "science" in value:
+        return "general_science"
+    return "general"
+
+
+def source_contract_hash(canonical: dict[str, Any]) -> str:
+    """Hash every identity-bearing canonical element and verified overlay."""
+    payload = {
+        "compiler": canonical.get("compiler_version"),
+        "schema": canonical.get("schema_version"),
+        "document": canonical.get("document"),
+        "section_sequence": canonical.get("section_sequence"),
+        "sections": [
+            {
+                "section_id": row.get("section_id"),
+                "order": row.get("order"),
+                "parent_section_id": row.get("parent_section_id"),
+                "level": row.get("level"),
+                "title": row.get("title"),
+                "source_start": row.get("source_start"),
+                "source_end": row.get("source_end"),
+                "adjudicated_heading": row.get("adjudicated_heading"),
+            }
+            for row in canonical.get("sections") or []
+            if isinstance(row, dict)
+        ],
+        "blocks": [
+            {
+                "block_id": row.get("block_id"),
+                "order": row.get("order"),
+                "kind": row.get("kind"),
+                "section_id": row.get("section_id"),
+                "source_start": row.get("source_start"),
+                "source_end": row.get("source_end"),
+                "raw_sha256": row.get("raw_sha256"),
+                "figure_id": row.get("figure_id"),
+                "task_ids": row.get("task_ids"),
+            }
+            for row in canonical.get("blocks") or []
+            if isinstance(row, dict)
+        ],
+        "tasks": [
+            {
+                "task_id": row.get("task_id"),
+                "qid": row.get("qid"),
+                "order": row.get("order"),
+                "identity_key": row.get("identity_key"),
+                "section_id": row.get("section_id"),
+                "source_start": row.get("source_start"),
+                "source_end": row.get("source_end"),
+                "figure_refs": row.get("figure_refs"),
+                "display_prompt": row.get("display_prompt"),
+            }
+            for row in canonical.get("tasks") or []
+            if isinstance(row, dict)
+        ],
+        "figures": canonical.get("figures") or [],
+        "math": canonical.get("math") or [],
+        "source_overlays": canonical.get("source_overlays") or [],
+        "source_adjudication": canonical.get("source_adjudication") or {},
+    }
+    return _sha256_json(payload)
+
+
+def semantic_context_hash(metadata: dict[str, Any] | None) -> str:
+    """Hash the user-selected academic context that can affect semantics."""
+    metadata = dict(metadata or {})
+    identity = {
+        key: str(metadata.get(key) or "").strip()
+        for key in (
+            "board",
+            "grade",
+            "subject",
+            "unit",
+            "chapter_title",
+            "chapter_id",
+            "chapter_code",
+            "learning_kind",
+        )
+    }
+    identity["subject_adapter"] = subject_adapter(identity["subject"])
+    return _sha256_json(identity)
+
+
+def _title_number(title: object, raw: object = "") -> tuple[str, str]:
+    text = _SPACE_RE.sub(" ", str(title or "")).strip()
+    source = str(raw or "")
+    candidates = [text]
+    latex = re.search(
+        r"\\(?:chapter|section|subsection|subsubsection)\*?\{\s*([^}]+)\}",
+        source,
+        flags=re.IGNORECASE,
+    )
+    if latex:
+        candidates.insert(0, latex.group(1).strip())
+    markdown = re.search(r"(?m)^#{1,6}\s+(.+?)\s*$", source)
+    if markdown:
+        candidates.insert(0, markdown.group(1).strip())
+    for candidate in candidates:
+        match = _NUMBER_PREFIX_RE.match(candidate)
+        if not match:
+            continue
+        number = (match.group("number") or "").replace("．", ".")
+        remainder = (match.group("title") or "").strip()
+        if number and remainder:
+            return number, remainder
+    return "", text
+
+
+def _baseline_section_role(
+    section: dict[str, Any],
+    *,
+    chapter_title: str,
+    numbered_main_section_ids: set[str],
+    numbered_sub_section_ids: set[str],
+    has_numbered_mains: bool,
+) -> str:
+    section_id = str(section.get("section_id") or "")
+    title = str(section.get("title") or "").strip()
+    title_key = _normal(title)
+    if not title or str(section.get("heading_kind") or "") == "implicit_preamble":
+        return "content_heading"
+    if section_id in numbered_main_section_ids:
+        return "main_topic"
+    if section_id in numbered_sub_section_ids:
+        return "subtopic"
+    if title_key and title_key == _normal(chapter_title):
+        return "chapter_heading"
+    if _GLOSSARY_TITLE_RE.match(title):
+        return "glossary"
+    if _SOURCE_TITLE_RE.match(title):
+        return "source_extract"
+    if _ACTIVITY_TITLE_RE.match(title):
+        return "activity"
+    if _EXERCISE_TITLE_RE.match(title):
+        return "exercise"
+    if _BOX_TITLE_RE.match(title):
+        return "box"
+    if _AUXILIARY_TITLE_RE.match(title):
+        return "other"
+    try:
+        level = max(1, int(section.get("level") or 1))
+    except (TypeError, ValueError):
+        level = 1
+    if has_numbered_mains:
+        return "content_heading"
+    if level == 1 and not _AUXILIARY_TITLE_RE.match(title):
+        return "main_topic"
+    if level > 1:
+        return "subtopic"
+    return "content_heading"
+
+
+def _section_excerpt(
+    section: dict[str, Any], blocks_by_id: dict[str, dict[str, Any]], limit: int = 900
+) -> str:
+    pieces: list[str] = []
+    for block_id in section.get("block_ids") or []:
+        block = blocks_by_id.get(str(block_id))
+        if not block or block.get("kind") in {"layout", "heading"}:
+            continue
+        text = str(block.get("display_text") or block.get("raw_text") or "").strip()
+        if text:
+            pieces.append(_SPACE_RE.sub(" ", text))
+        if sum(len(piece) for piece in pieces) >= limit:
+            break
+    return " ".join(pieces)[:limit]
+
+
+def _vision_heading_evidence(page_bundle: dict[str, Any] | None) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    if not isinstance(page_bundle, dict):
+        return out
+    for page in page_bundle.get("pages") or []:
+        if not isinstance(page, dict):
+            continue
+        page_number = int(page.get("page_number") or 0)
+        for block in page.get("blocks") or []:
+            if not isinstance(block, dict) or block.get("kind") != "heading":
+                continue
+            text = str(block.get("text") or "").strip()
+            if not text:
+                continue
+            number, title = _title_number(text)
+            out.append({
+                "page_id": str(page.get("page_id") or ""),
+                "page_number": page_number,
+                "reading_order": int(block.get("reading_order") or 0),
+                "heading_level": int(block.get("heading_level") or 1),
+                "text": text,
+                "number": number,
+                "title": title,
+                "confidence": float(block.get("confidence") or 0.0),
+            })
+    return out
+
+
+def _virtual_missing_main_candidates(
+    canonical: dict[str, Any], page_bundle: dict[str, Any] | None
+) -> list[dict[str, Any]]:
+    """Use verified page evidence only for provably missing numbered parents."""
+    mains, subsections = structure.numbered_heading_inventory(canonical)
+    missing = sorted(major for major in subsections if major not in mains)
+    if not missing:
+        return []
+    evidence = _vision_heading_evidence(page_bundle)
+    virtual: list[dict[str, Any]] = []
+    for number in missing:
+        matches = [
+            row for row in evidence
+            if row.get("number") == str(number)
+            and _MAIN_NUMBER_RE.fullmatch(str(row.get("number") or ""))
+            and float(row.get("confidence") or 0.0) >= 0.96
+        ]
+        titles = {_normal(row.get("title")) for row in matches if row.get("title")}
+        if len(matches) != 1 or len(titles) != 1:
+            continue
+        first_sub_start = min(
+            int(block.get("source_start") or 0) for block in subsections[number]
+        )
+        row = matches[0]
+        virtual.append({
+            "section_id": f"VISION-SECTION-{number:04d}",
+            "order": 0,
+            "parent_section_id": "",
+            "level": 1,
+            "depth": 1,
+            "title": str(row.get("title") or "").strip(),
+            "source_start": first_sub_start,
+            "source_end": first_sub_start,
+            "block_ids": [],
+            "phase3_virtual": True,
+            "vision_evidence": copy.deepcopy(row),
+            "number": str(number),
+        })
+    return virtual
+
+
+def _classification_payload(
+    canonical: dict[str, Any],
+    *,
+    metadata: dict[str, Any],
+    baseline: dict[str, str],
+    page_bundle: dict[str, Any] | None,
+) -> dict[str, Any]:
+    blocks_by_id = {
+        str(block.get("block_id") or ""): block
+        for block in canonical.get("blocks") or []
+        if isinstance(block, dict)
+    }
+    sections = [
+        {
+            "section_id": str(section.get("section_id") or ""),
+            "title": str(section.get("title") or ""),
+            "level": int(section.get("level") or 1),
+            "source_order": int(section.get("order") or 0),
+            "source_start": int(section.get("source_start") or 0),
+            "baseline_role": baseline.get(str(section.get("section_id") or ""), "other"),
+            "excerpt": _section_excerpt(section, blocks_by_id),
+        }
+        for section in canonical.get("sections") or []
+        if isinstance(section, dict) and str(section.get("section_id") or "")
+    ]
+    return {
+        "metadata": {
+            "board": str(metadata.get("board") or ""),
+            "grade": str(metadata.get("grade") or ""),
+            "subject": str(metadata.get("subject") or ""),
+            "unit": str(metadata.get("unit") or ""),
+            "chapter": str(metadata.get("chapter_title") or ""),
+            "subject_adapter": subject_adapter(metadata.get("subject")),
+        },
+        "sections": sections,
+        "verified_pdf_headings": _vision_heading_evidence(page_bundle),
+        "allowed_roles": [
+            "chapter_heading", "main_topic", "subtopic", "activity",
+            "exercise", "source_extract", "glossary", "box",
+            "content_heading", "other",
+        ],
+    }
+
+
+def _hierarchy_response_schema(section_ids: list[str]) -> dict[str, Any]:
+    return {
+        "name": "phase3_semantic_hierarchy",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "sections": {
+                    "type": "array",
+                    "minItems": len(section_ids),
+                    "maxItems": len(section_ids),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "section_id": {"type": "string", "enum": section_ids},
+                            "role": {
+                                "type": "string",
+                                "enum": [
+                                    "chapter_heading", "main_topic", "subtopic",
+                                    "activity", "exercise", "source_extract",
+                                    "glossary", "box", "content_heading", "other",
+                                ],
+                            },
+                            "parent_section_id": {
+                                "type": "string",
+                                "enum": ["", *section_ids],
+                            },
+                            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                            "evidence": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "maxItems": 4,
+                            },
+                        },
+                        "required": [
+                            "section_id", "role", "parent_section_id",
+                            "confidence", "evidence",
+                        ],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["sections"],
+            "additionalProperties": False,
+        },
+    }
+
+
+def _hierarchy_critic_schema(section_ids: list[str]) -> dict[str, Any]:
+    return {
+        "name": "phase3_semantic_hierarchy_critic",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "verdict": {"type": "string", "enum": ["verified", "repair_required"]},
+                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                "repairs": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "section_id": {"type": "string", "enum": section_ids},
+                            "role": {
+                                "type": "string",
+                                "enum": [
+                                    "chapter_heading", "main_topic", "subtopic",
+                                    "activity", "exercise", "source_extract",
+                                    "glossary", "box", "content_heading", "other",
+                                ],
+                            },
+                            "parent_section_id": {
+                                "type": "string",
+                                "enum": ["", *section_ids],
+                            },
+                            "reason": {"type": "string"},
+                        },
+                        "required": ["section_id", "role", "parent_section_id", "reason"],
+                        "additionalProperties": False,
+                    },
+                },
+                "issues": {"type": "array", "items": {"type": "string"}, "maxItems": 20},
+            },
+            "required": ["verdict", "confidence", "repairs", "issues"],
+            "additionalProperties": False,
+        },
+    }
+
+
+def _classify_hierarchy_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
+    section_ids = [str(row["section_id"]) for row in payload.get("sections") or []]
+    system = (
+        "You are the semantic source compiler for a universal textbook system. "
+        "Classify every supplied section by its pedagogical document role. Use "
+        "only the opaque section IDs supplied. Numbering, typography, extracted "
+        "text, verified PDF headings, and nearby content are evidence, not an "
+        "excuse to invent or reorder source material. Main topics are the actual "
+        "teaching divisions of the chapter. Activity, Discuss, Source, glossary, "
+        "boxes, review questions, and editorial labels are never main topics. "
+        "Preserve the chapter's physical order. Return every section exactly once."
+    )
+    return phase22._openai_multimodal_json(
+        system=system,
+        prompt=json.dumps(payload, ensure_ascii=False, indent=2),
+        pages=[],
+        response_schema=_hierarchy_response_schema(section_ids),
+        purpose="concept_mapping",
+        max_tokens=max(6000, min(24000, len(section_ids) * 260)),
+    )
+
+
+def _critic_hierarchy_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
+    section_ids = [str(row["section_id"]) for row in payload.get("sections") or []]
+    system = (
+        "Independently audit a proposed textbook hierarchy against the supplied "
+        "source evidence. Detect activity/glossary/source labels promoted as main "
+        "topics, lost numbered parents, subtopics attached to the wrong main "
+        "topic, and any order drift. Use only supplied IDs and allowed roles. "
+        "Return repairs only when source evidence supports them."
+    )
+    return phase22._openai_multimodal_json(
+        system=system,
+        prompt=json.dumps(payload, ensure_ascii=False, indent=2),
+        pages=[],
+        response_schema=_hierarchy_critic_schema(section_ids),
+        purpose="concept_mapping",
+        max_tokens=max(4000, min(16000, len(section_ids) * 180)),
+    )
+
+
+def _validate_classifications(
+    section_ids: list[str], value: dict[str, Any]
+) -> dict[str, dict[str, Any]]:
+    rows = value.get("sections") if isinstance(value, dict) else None
+    if not isinstance(rows, list):
+        raise ValueError("Phase 3 hierarchy classifier returned no sections array")
+    by_id: dict[str, dict[str, Any]] = {}
+    allowed = set(section_ids)
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError("Phase 3 hierarchy classifier returned a non-object row")
+        section_id = str(row.get("section_id") or "")
+        if section_id not in allowed or section_id in by_id:
+            raise ValueError("Phase 3 hierarchy classifier changed section identity")
+        parent = str(row.get("parent_section_id") or "")
+        if parent and parent not in allowed:
+            raise ValueError("Phase 3 hierarchy classifier invented a parent section")
+        by_id[section_id] = copy.deepcopy(row)
+    if set(by_id) != allowed:
+        missing = sorted(allowed - set(by_id))
+        raise ValueError(
+            "Phase 3 hierarchy classifier omitted section IDs: " + ", ".join(missing)
+        )
+    return by_id
+
+
+def _apply_critic_repairs(
+    classifications: dict[str, dict[str, Any]], critic: dict[str, Any]
+) -> dict[str, dict[str, Any]]:
+    verdict = str(critic.get("verdict") or "")
+    confidence = float(critic.get("confidence") or 0.0)
+    issues = [str(value).strip() for value in critic.get("issues") or [] if str(value).strip()]
+    if confidence < 0.96:
+        raise ValueError(
+            "Phase 3 hierarchy critic confidence is below the verification gate"
+        )
+    if verdict == "verified" and not issues:
+        return classifications
+    repaired = copy.deepcopy(classifications)
+    for row in critic.get("repairs") or []:
+        if not isinstance(row, dict):
+            continue
+        section_id = str(row.get("section_id") or "")
+        if section_id not in repaired:
+            raise ValueError("Phase 3 hierarchy critic invented a section ID")
+        repaired[section_id]["role"] = str(row.get("role") or repaired[section_id]["role"])
+        repaired[section_id]["parent_section_id"] = str(row.get("parent_section_id") or "")
+        repaired[section_id]["critic_reason"] = str(row.get("reason") or "")
+    repairs = [row for row in critic.get("repairs") or [] if isinstance(row, dict)]
+    if verdict == "repair_required" and not repairs:
+        detail = "; ".join(issues[:10]) or "critic requested repair without a bounded repair"
+        raise ValueError("Phase 3 hierarchy critic requires review: " + detail)
+    if issues and not repairs:
+        raise ValueError(
+            "Phase 3 hierarchy critic requires review: " + "; ".join(issues[:10])
+        )
+    if verdict not in {"verified", "repair_required"}:
+        raise ValueError(
+            "Phase 3 hierarchy critic returned an unsupported verdict: " + verdict
+        )
+    return repaired
+
+
+def _forced_structural_roles(
+    canonical: dict[str, Any],
+    classifications: dict[str, dict[str, Any]],
+    *,
+    numbered_hierarchy_active: bool = True,
+    fallback_main_section_ids: set[str] | None = None,
+) -> None:
+    """Protect proven source hierarchy without mistaking chapter numbers for topics."""
+    fallback_main_section_ids = set(fallback_main_section_ids or set())
+    for section_id in fallback_main_section_ids:
+        if section_id in classifications:
+            classifications[section_id]["role"] = "main_topic"
+            classifications[section_id]["parent_section_id"] = ""
+    if not numbered_hierarchy_active:
+        return
+    mains, subs = structure.numbered_heading_inventory(canonical)
+    main_section_by_number = {
+        number: str(block.get("section_id") or "") for number, block in mains.items()
+    }
+    for number, section_id in main_section_by_number.items():
+        if section_id in classifications:
+            classifications[section_id]["role"] = "main_topic"
+            classifications[section_id]["parent_section_id"] = ""
+            classifications[section_id]["structural_number"] = str(number)
+    for major, blocks in subs.items():
+        parent = main_section_by_number.get(major, "")
+        for block in blocks:
+            section_id = str(block.get("section_id") or "")
+            if section_id in classifications:
+                classifications[section_id]["role"] = "subtopic"
+                classifications[section_id]["parent_section_id"] = parent
+                number, _title = _title_number(
+                    (block.get("heading") or {}).get("title"), block.get("raw_text")
+                )
+                classifications[section_id]["structural_number"] = number
+
+
+def compile_semantic_graph(
+    canonical: dict[str, Any],
+    *,
+    source_text: str,
+    metadata: dict[str, Any] | None = None,
+    page_bundle: dict[str, Any] | None = None,
+    hierarchy_provider: HierarchyProvider | None = None,
+    critic_provider: HierarchyCritic | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Compile a stable graph from ACSD and optional API/PDF evidence."""
+    metadata = dict(metadata or {})
+    canonical = copy.deepcopy(canonical)
+    chapter_title = str(
+        metadata.get("chapter_title")
+        or (canonical.get("document") or {}).get("chapter_title")
+        or ""
+    ).strip()
+    sections = [
+        copy.deepcopy(row) for row in canonical.get("sections") or []
+        if isinstance(row, dict) and str(row.get("section_id") or "")
+    ]
+    sections.extend(_virtual_missing_main_candidates(canonical, page_bundle))
+    sections.sort(key=lambda row: (
+        int(row.get("source_start") or 0),
+        int(row.get("order") or 0),
+        str(row.get("section_id") or ""),
+    ))
+
+    mains, subs = structure.numbered_heading_inventory(canonical)
+    numbered_hierarchy_active = bool(mains)
+    if len(mains) == 1:
+        only_number, only_block = next(iter(mains.items()))
+        only_title = str((only_block.get("heading") or {}).get("title") or "").strip()
+        # Math textbooks often emit a standalone chapter number ("5") and
+        # then use 5.1/5.2 plus unnumbered teaching headings. That lone number
+        # is a chapter marker, not a topic.
+        if not re.search(r"[A-Za-z\u0080-\uffff]", only_title) or _normal(only_title) == str(only_number):
+            numbered_hierarchy_active = False
+    fallback_main_section_ids: set[str] = set()
+    fallback_topic_titles: list[str] = []
+    if not numbered_hierarchy_active or not mains:
+        try:
+            from . import generation as _generation
+            fallback_topic_titles = _generation._topic_headings(
+                _generation.parse_mmd_sections(source_text)
+            )
+        except Exception:
+            fallback_topic_titles = []
+        section_ids_by_title: dict[str, list[tuple[int, int, str]]] = {}
+        for section in sections:
+            section_ids_by_title.setdefault(_semantic_title_key(section.get("title")), []).append((
+                int(section.get("source_start") or 0),
+                int(section.get("level") or 1),
+                str(section.get("section_id") or ""),
+            ))
+        for title in fallback_topic_titles:
+            matches = [
+                value for value in section_ids_by_title.get(_semantic_title_key(title), [])
+                if value[2]
+            ]
+            if matches:
+                # A chapter title can be repeated as a numbered teaching section.
+                # Prefer the later/deeper occurrence rather than the cover heading.
+                matches.sort(key=lambda value: (value[0], value[1]))
+                fallback_main_section_ids.add(matches[-1][2])
+    numbered_main_ids = (
+        {
+            str(block.get("section_id") or "") for block in mains.values()
+            if str(block.get("section_id") or "")
+        }
+        if numbered_hierarchy_active else set()
+    ) | fallback_main_section_ids
+    numbered_sub_ids = (
+        {
+            str(block.get("section_id") or "")
+            for rows in subs.values() for block in rows
+            if str(block.get("section_id") or "")
+        }
+        if numbered_hierarchy_active else set()
+    ) - fallback_main_section_ids
+    for virtual in sections:
+        if virtual.get("phase3_virtual"):
+            numbered_main_ids.add(str(virtual.get("section_id") or ""))
+
+    fallback_subtopic_parent: dict[str, str] = {}
+    if fallback_main_section_ids:
+        ordered_fallback_mains = sorted(
+            [
+                section for section in sections
+                if str(section.get("section_id") or "") in fallback_main_section_ids
+            ],
+            key=lambda row: int(row.get("source_start") or 0),
+        )
+        for section in sections:
+            sid = str(section.get("section_id") or "")
+            if not sid or sid in fallback_main_section_ids:
+                continue
+            title = str(section.get("title") or "").strip()
+            try:
+                level = int(section.get("level") or 1)
+            except (TypeError, ValueError):
+                level = 1
+            if level <= 1 or _AUXILIARY_TITLE_RE.match(title):
+                continue
+            position = int(section.get("source_start") or 0)
+            parents = [
+                row for row in ordered_fallback_mains
+                if int(row.get("source_start") or 0) <= position
+            ]
+            if parents:
+                fallback_subtopic_parent[sid] = str(parents[-1].get("section_id") or "")
+
+    baseline = {
+        str(section.get("section_id") or ""): _baseline_section_role(
+            section,
+            chapter_title=chapter_title,
+            numbered_main_section_ids=numbered_main_ids,
+            numbered_sub_section_ids=numbered_sub_ids,
+            has_numbered_mains=(
+                numbered_hierarchy_active or bool(fallback_main_section_ids)
+            ),
+        )
+        for section in sections
+    }
+    for sid in fallback_subtopic_parent:
+        if baseline.get(sid) == "content_heading":
+            baseline[sid] = "subtopic"
+    section_ids = list(baseline)
+    classifications = {
+        section_id: {
+            "section_id": section_id,
+            "role": role,
+            "parent_section_id": "",
+            "confidence": 1.0,
+            "evidence": ["deterministic baseline"],
+        }
+        for section_id, role in baseline.items()
+    }
+    classification_mode = "deterministic"
+    if hierarchy_provider is not None and section_ids:
+        payload = _classification_payload(
+            {**canonical, "sections": sections},
+            metadata=metadata,
+            baseline=baseline,
+            page_bundle=page_bundle,
+        )
+        classifications = _validate_classifications(
+            section_ids, hierarchy_provider(payload)
+        )
+        classification_mode = "api_classified"
+        if critic_provider is not None:
+            critic_payload = {
+                **payload,
+                "proposed_hierarchy": list(classifications.values()),
+            }
+            classifications = _apply_critic_repairs(
+                classifications, critic_provider(critic_payload)
+            )
+            classification_mode = "api_classified_and_verified"
+
+    # The source numbering contract outranks semantic model drift.
+    _forced_structural_roles(
+        canonical,
+        classifications,
+        numbered_hierarchy_active=numbered_hierarchy_active,
+        # Unnumbered parser results are candidates, not semantic authority. They
+        # remain deterministic fallbacks only when no hierarchy API was used.
+        fallback_main_section_ids=(
+            fallback_main_section_ids if hierarchy_provider is None else set()
+        ),
+    )
+    if hierarchy_provider is None:
+        for sid, parent_sid in fallback_subtopic_parent.items():
+            if sid in classifications:
+                classifications[sid]["role"] = "subtopic"
+                classifications[sid]["parent_section_id"] = parent_sid
+                classifications[sid]["evidence"] = [
+                    "publisher-neutral fallback heading hierarchy"
+                ]
+    for section in sections:
+        if section.get("phase3_virtual"):
+            sid = str(section.get("section_id") or "")
+            classifications[sid] = {
+                "section_id": sid,
+                "role": "main_topic",
+                "parent_section_id": "",
+                "confidence": 1.0,
+                "evidence": ["verified PDF heading repairs missing numbered parent"],
+                "structural_number": str(section.get("number") or ""),
+            }
+
+    # Build stable main-topic identities in physical order.
+    main_sections = [
+        section for section in sections
+        if classifications[str(section.get("section_id") or "")]["role"] == "main_topic"
+    ]
+    if not main_sections:
+        # Headingless chapters still require one stable topology node. The
+        # selected chapter is authoritative; no model-authored title is used.
+        first_start = min(
+            [int(row.get("source_start") or 0) for row in sections] or [0]
+        )
+        main_sections = [{
+            "section_id": "PHASE3-SYNTHETIC-TOPIC",
+            "title": chapter_title or "Chapter Content",
+            "source_start": first_start,
+            "source_end": len(str(source_text or "")),
+            "order": 1,
+            "phase3_synthetic": True,
+        }]
+        classifications["PHASE3-SYNTHETIC-TOPIC"] = {
+            "section_id": "PHASE3-SYNTHETIC-TOPIC",
+            "role": "main_topic",
+            "parent_section_id": "",
+            "confidence": 1.0,
+            "evidence": ["headingless chapter fallback"],
+        }
+    main_sections.sort(key=lambda row: (
+        int(row.get("source_start") or 0), str(row.get("section_id") or "")
+    ))
+
+    topics: list[dict[str, Any]] = []
+    topic_by_section: dict[str, dict[str, Any]] = {}
+    for index, section in enumerate(main_sections, start=1):
+        section_id = str(section.get("section_id") or "")
+        number, title = _title_number(section.get("title"), section.get("raw_text"))
+        title = _plain_title(title or section.get("title")) or f"Topic {index}"
+        topic = {
+            "topic_id": f"TOPIC-{index:04d}",
+            "order": index,
+            "title": title,
+            "display_title": title,
+            "structural_number": number,
+            "section_id": section_id,
+            "source_start": int(section.get("source_start") or 0),
+            "source_end": int(section.get("source_end") or 0),
+            "source": "verified_pdf" if section.get("phase3_virtual") else "acsd",
+        }
+        topics.append(topic)
+        topic_by_section[section_id] = topic
+    for index, topic in enumerate(topics):
+        topic["source_end"] = (
+            topics[index + 1]["source_start"] if index + 1 < len(topics)
+            else len(str(source_text or ""))
+        )
+
+    def topic_for_position(position: int) -> dict[str, Any]:
+        prior = [row for row in topics if int(row["source_start"]) <= position]
+        return prior[-1] if prior else topics[0]
+
+    # Build stable subtopic nodes. Numbered ancestry is authoritative; API may
+    # also identify unnumbered pedagogical subtopics.
+    subtopic_sections = [
+        section for section in sections
+        if classifications[str(section.get("section_id") or "")]["role"] == "subtopic"
+    ]
+    subtopic_sections.sort(key=lambda row: (
+        int(row.get("source_start") or 0), str(row.get("section_id") or "")
+    ))
+    subtopics: list[dict[str, Any]] = []
+    subtopic_by_section: dict[str, dict[str, Any]] = {}
+    counts_by_topic: dict[str, int] = {}
+    for section in subtopic_sections:
+        sid = str(section.get("section_id") or "")
+        parent_sid = str(classifications[sid].get("parent_section_id") or "")
+        parent_topic = topic_by_section.get(parent_sid)
+        if parent_topic is None:
+            parent_topic = topic_for_position(int(section.get("source_start") or 0))
+        counts_by_topic[parent_topic["topic_id"]] = counts_by_topic.get(
+            parent_topic["topic_id"], 0
+        ) + 1
+        local_index = counts_by_topic[parent_topic["topic_id"]]
+        number, title = _title_number(section.get("title"), section.get("raw_text"))
+        title = _plain_title(title or section.get("title"))
+        node = {
+            "subtopic_id": f"{parent_topic['topic_id']}-SUB-{local_index:03d}",
+            "order": len(subtopics) + 1,
+            "topic_id": parent_topic["topic_id"],
+            "title": title,
+            "display_title": title,
+            "structural_number": number,
+            "section_id": sid,
+            "source_start": int(section.get("source_start") or 0),
+            "source_end": int(section.get("source_end") or 0),
+        }
+        subtopics.append(node)
+        subtopic_by_section[sid] = node
+    for topic in topics:
+        children = [row for row in subtopics if row["topic_id"] == topic["topic_id"]]
+        for index, child in enumerate(children):
+            child["source_end"] = (
+                children[index + 1]["source_start"] if index + 1 < len(children)
+                else topic["source_end"]
+            )
+
+    def subtopic_for_position(topic_id: str, position: int) -> dict[str, Any] | None:
+        prior = [
+            row for row in subtopics
+            if row["topic_id"] == topic_id and int(row["source_start"]) <= position
+        ]
+        return prior[-1] if prior else None
+
+    sections_out: list[dict[str, Any]] = []
+    for section in sections:
+        sid = str(section.get("section_id") or "")
+        position = int(section.get("source_start") or 0)
+        topic = topic_by_section.get(sid) or topic_for_position(position)
+        subtopic = subtopic_by_section.get(sid) or subtopic_for_position(
+            topic["topic_id"], position
+        )
+        role = classifications[sid]["role"]
+        if role == "main_topic":
+            subtopic = None
+        sections_out.append({
+            "section_id": sid,
+            "order": int(section.get("order") or 0),
+            "source_start": position,
+            "source_end": int(section.get("source_end") or position),
+            "title": str(section.get("title") or ""),
+            "role": role,
+            "topic_id": topic["topic_id"],
+            "subtopic_id": subtopic["subtopic_id"] if subtopic else "",
+            "parent_section_id": str(classifications[sid].get("parent_section_id") or ""),
+            "confidence": float(classifications[sid].get("confidence") or 0.0),
+            "evidence": list(classifications[sid].get("evidence") or []),
+            "phase3_virtual": bool(section.get("phase3_virtual")),
+        })
+
+    section_graph_by_id = {row["section_id"]: row for row in sections_out}
+    blocks: list[dict[str, Any]] = []
+    suspicious_blocks: list[str] = []
+    for block in sorted(
+        [row for row in canonical.get("blocks") or [] if isinstance(row, dict)],
+        key=lambda row: int(row.get("order") or 0),
+    ):
+        sid = str(block.get("section_id") or "")
+        section_node = section_graph_by_id.get(sid)
+        position = int(block.get("source_start") or 0)
+        topic = (
+            next((row for row in topics if row["topic_id"] == section_node["topic_id"]), None)
+            if section_node else topic_for_position(position)
+        ) or topics[0]
+        subtopic = (
+            next((row for row in subtopics if row["subtopic_id"] == section_node["subtopic_id"]), None)
+            if section_node and section_node.get("subtopic_id") else
+            subtopic_for_position(topic["topic_id"], position)
+        )
+        raw_text = str(block.get("raw_text") or "")
+        if _SUSPICIOUS_MARKUP_RE.search(raw_text):
+            suspicious_blocks.append(str(block.get("block_id") or ""))
+        blocks.append({
+            "block_id": str(block.get("block_id") or ""),
+            "order": int(block.get("order") or 0),
+            "kind": str(block.get("kind") or "other"),
+            "section_id": sid,
+            "topic_id": topic["topic_id"],
+            "subtopic_id": subtopic["subtopic_id"] if subtopic else "",
+            "source_start": position,
+            "source_end": int(block.get("source_end") or position),
+            "raw_sha256": str(block.get("raw_sha256") or _sha256_text(raw_text)),
+            "figure_id": str(block.get("figure_id") or ""),
+            "image_ids": list(block.get("image_ids") or []),
+            "math_ids": list(block.get("math_ids") or []),
+            "task_ids": list(block.get("task_ids") or []),
+        })
+
+    tasks: list[dict[str, Any]] = []
+    for task in sorted(
+        [row for row in canonical.get("tasks") or [] if isinstance(row, dict)],
+        key=lambda row: (int(row.get("order") or 0), int(row.get("source_start") or 0)),
+    ):
+        position = int(task.get("source_start") or 0)
+        topic = topic_for_position(position)
+        subtopic = subtopic_for_position(topic["topic_id"], position)
+        tasks.append({
+            "task_id": str(task.get("task_id") or ""),
+            "qid": str(task.get("qid") or ""),
+            "order": int(task.get("order") or 0),
+            "topic_id": topic["topic_id"],
+            "subtopic_id": subtopic["subtopic_id"] if subtopic else "",
+            "section_id": str(task.get("section_id") or ""),
+            "source_start": position,
+            "source_end": int(task.get("source_end") or position),
+            "source_label": str(task.get("source_label") or ""),
+            "source_kind": str(task.get("source_kind") or ""),
+            "identity_key": str(task.get("identity_key") or ""),
+            "display_prompt": str(task.get("display_prompt") or ""),
+            "figure_ids": [str(value) for value in task.get("figure_refs") or []],
+            "image_urls": [str(value) for value in task.get("image_urls") or []],
+            "requires_visual": bool(task.get("requires_visual")),
+            "chapter_wide": bool(task.get("chapter_wide") or task.get("_topic_scope") == "chapter"),
+        })
+
+    graph = {
+        "schema_name": SCHEMA_NAME,
+        "schema_version": SCHEMA_VERSION,
+        "compiler_version": COMPILER_VERSION,
+        "phase": PHASE,
+        "status": "ready" if not suspicious_blocks else "review_required",
+        "source_contract_hash": source_contract_hash(canonical),
+        "semantic_context_hash": semantic_context_hash(metadata),
+        "source_sha256": str(
+            (canonical.get("document") or {}).get("source_sha256") or _sha256_text(source_text)
+        ),
+        "semantic_source_sha256": "",
+        "classification_mode": classification_mode,
+        "metadata": {
+            **metadata,
+            "subject_adapter": subject_adapter(metadata.get("subject")),
+        },
+        "topics": topics,
+        "subtopics": subtopics,
+        "sections": sections_out,
+        "blocks": blocks,
+        "tasks": tasks,
+        "figures": copy.deepcopy(canonical.get("figures") or []),
+        "images": copy.deepcopy(canonical.get("images") or []),
+        "math": copy.deepcopy(canonical.get("math") or []),
+        "vision_evidence": {
+            "available": bool(page_bundle),
+            "schema_version": str((page_bundle or {}).get("schema_version") or ""),
+            "pdf_sha256": str((page_bundle or {}).get("pdf_sha256") or ""),
+            "page_count": len((page_bundle or {}).get("pages") or []),
+            "heading_count": len(_vision_heading_evidence(page_bundle)),
+        },
+        "issues": [
+            {
+                "code": "converter_semantic_markup_requires_pdf_reconciliation",
+                "severity": "error",
+                "block_ids": suspicious_blocks,
+                "message": (
+                    "Converter-specific semantic markup was found in source blocks; "
+                    "the original PDF must verify or replace those blocks before "
+                    "semantic generation."
+                ),
+            }
+        ] if suspicious_blocks else [],
+    }
+    semantic_source = render_semantic_source(graph, canonical)
+    graph["semantic_source_sha256"] = _sha256_text(semantic_source)
+    errors = validate_graph(
+        graph,
+        canonical=canonical,
+        semantic_source=semantic_source,
+        allow_unresolved_source_anomalies=bool(suspicious_blocks),
+    )
+    if errors:
+        graph["status"] = "failed"
+        graph["issues"].extend(errors)
+    report = {
+        "schema_name": f"{SCHEMA_NAME} Report",
+        "schema_version": SCHEMA_VERSION,
+        "compiler_version": COMPILER_VERSION,
+        "phase": PHASE,
+        "status": graph["status"],
+        "source_contract_hash": graph["source_contract_hash"],
+        "semantic_context_hash": graph["semantic_context_hash"],
+        "source_sha256": graph["source_sha256"],
+        "semantic_source_sha256": graph["semantic_source_sha256"],
+        "classification_mode": classification_mode,
+        "summary": {
+            "topics": len(topics),
+            "subtopics": len(subtopics),
+            "sections": len(sections_out),
+            "blocks": len(blocks),
+            "tasks": len(tasks),
+            "figures": len(graph["figures"]),
+            "images": len(graph["images"]),
+            "math_spans": len(graph["math"]),
+            "vision_pages": int(graph["vision_evidence"]["page_count"]),
+            "errors": sum(1 for row in graph["issues"] if row.get("severity") == "error"),
+            "warnings": sum(1 for row in graph["issues"] if row.get("severity") == "warning"),
+        },
+        "issues": copy.deepcopy(graph["issues"]),
+    }
+    return graph, report
+
+
+def _clean_list(value: str) -> str:
+    text = str(value or "")
+    text = re.sub(r"\\begin\{(?:itemize|enumerate)\}", "\n", text, flags=re.I)
+    text = re.sub(r"\\end\{(?:itemize|enumerate)\}", "\n", text, flags=re.I)
+    text = _LIST_ITEM_RE.sub(
+        lambda match: "\n- " + ((match.group("label") or "").strip() + " " if match.group("label") else ""),
+        text,
+    )
+    return text
+
+
+def _clean_table(value: str) -> str:
+    text = str(value or "")
+    # Preserve the learner-visible cell content of common publisher layout
+    # macros while discarding only their row/column spanning instructions.
+    text = re.sub(
+        r"\\multirow(?:\[[^\]]*\])?\{[^{}]*\}\{[^{}]*\}\{([^{}]*)\}",
+        r"\1",
+        text,
+        flags=re.I,
+    )
+    text = re.sub(
+        r"\\multicolumn\{[^{}]*\}\{[^{}]*\}\{([^{}]*)\}",
+        r"\1",
+        text,
+        flags=re.I,
+    )
+    text = re.sub(r"\\cline\{[^{}]*\}", "\n", text, flags=re.I)
+    text = structure.normalize_task_table_markup(text)
+    text = _TABLE_BEGIN_RE.sub("\n", text)
+    return text
+
+
+def _protect_rich_tokens(value: str) -> tuple[str, list[str]]:
+    """Protect URLs and canonical rich-text tokens from table normalization."""
+    text = str(value or "")
+    protected: list[str] = []
+
+    def stash(rendered: str) -> str:
+        token = f"@@AEGIS_PHASE3_TOKEN_{len(protected):05d}@@"
+        protected.append(rendered)
+        return token
+
+    text = _CANONICAL_KATEX_ANY_RE.sub(lambda match: stash(match.group(0)), text)
+    text = _CANONICAL_IMAGE_ANY_RE.sub(lambda match: stash(match.group(0)), text)
+
+    def markdown_image(match: re.Match) -> str:
+        src = str(match.group("src") or "").replace(r"\&", "&")
+        alt = str(match.group("alt") or "").strip() or "Source visual"
+        try:
+            rendered = kr.image(src, alt)
+        except ValueError:
+            rendered = match.group(0).replace(r"\&", "&")
+        return stash(rendered)
+
+    text = _MARKDOWN_IMAGE_ANY_RE.sub(markdown_image, text)
+
+    def includegraphics(match: re.Match) -> str:
+        src = str(match.group("src") or "").replace(r"\&", "&")
+        try:
+            rendered = kr.image(src, "Source visual")
+        except ValueError:
+            rendered = match.group(0).replace(r"\&", "&")
+        return stash(rendered)
+
+    text = _INCLUDEGRAPHICS_ANY_RE.sub(includegraphics, text)
+
+    def bare_url(match: re.Match) -> str:
+        url = match.group(0).replace(r"\&", "&")
+        return stash(url)
+
+    text = _BARE_HTTPS_RE.sub(bare_url, text)
+    return text, protected
+
+
+def _restore_rich_tokens(value: str, protected: list[str]) -> str:
+    text = str(value or "")
+    for index, rendered in enumerate(protected):
+        text = text.replace(f"@@AEGIS_PHASE3_TOKEN_{index:05d}@@", rendered)
+    return text
+
+
+def _clean_public_text(value: object) -> str:
+    text, protected = _protect_rich_tokens(str(value or ""))
+    text = _clean_list(_clean_table(text))
+    text = _LAYOUT_COMMAND_RE.sub(" ", text)
+    text = _ENV_RE.sub("\n", text)
+    text = re.sub(r"\\(?:section|subsection|subsubsection|chapter)\*?\{([^{}]*)\}", r"\1", text)
+    text = _restore_rich_tokens(text, protected)
+    for pattern in _EMPTY_MATH_DELIMITER_PATTERNS:
+        text = pattern.sub(" ", text)
+    text = kr.canonicalize_rich_text(text)
+    issues = set(kr.rich_text_issues(text))
+    if issues and issues.issubset({"raw_latex", "raw_math_expression"}):
+        repaired = kr.repair_unwrapped_math(text)
+        if not kr.rich_text_issues(repaired):
+            text = repaired
+    # Any residual layout/control command is not learner-visible source text.
+    text = re.sub(r"\\(?:hline|vspace|hspace|noindent|smallskip|medskip|bigskip)\b", " ", text)
+    lines = [re.sub(r"[ \t]+", " ", line).strip() for line in text.splitlines()]
+    return "\n".join(line for line in lines if line).strip()
+
+
+def _graph_block_text(
+    graph_block: dict[str, Any] | None,
+    canonical_block: dict[str, Any] | None,
+) -> str:
+    override = (graph_block or {}).get("source_override")
+    if isinstance(override, dict) and str(override.get("resolved_text") or ""):
+        resolved = str(override.get("resolved_text") or "")
+        if override.get("resolved_sha256") == _sha256_text(resolved):
+            return resolved
+    source = canonical_block or {}
+    return str(source.get("display_text") or source.get("raw_text") or "")
+
+
+def render_semantic_source(graph: dict[str, Any], canonical: dict[str, Any]) -> str:
+    """Render graph-controlled source text without model-authored wrappers.
+
+    Consecutive source blocks are normalized as one stream. Mathpix may split a
+    display-math opener, equation body, and closer into three ACSD blocks; a
+    block-by-block renderer would preserve orphan ``\\[``/``\\]`` delimiters.
+    """
+    graph_sections = {
+        str(row.get("section_id") or ""): row
+        for row in graph.get("sections") or [] if isinstance(row, dict)
+    }
+    topic_by_id = {
+        str(row.get("topic_id") or ""): row
+        for row in graph.get("topics") or [] if isinstance(row, dict)
+    }
+    subtopic_by_id = {
+        str(row.get("subtopic_id") or ""): row
+        for row in graph.get("subtopics") or [] if isinstance(row, dict)
+    }
+    figure_by_id = {
+        str(row.get("figure_id") or ""): row
+        for row in canonical.get("figures") or [] if isinstance(row, dict)
+    }
+    image_by_id = {
+        str(row.get("image_id") or ""): row
+        for row in canonical.get("images") or [] if isinstance(row, dict)
+    }
+    graph_block_by_id = {
+        str(row.get("block_id") or ""): row
+        for row in graph.get("blocks") or [] if isinstance(row, dict)
+    }
+    emitted_sections: set[str] = set()
+    pieces: list[str] = []
+    pending_text: list[str] = []
+    virtual_sections = sorted(
+        [
+            row for row in graph.get("sections") or []
+            if isinstance(row, dict) and row.get("phase3_virtual")
+        ],
+        key=lambda row: (
+            int(row.get("source_start") or 0),
+            str(row.get("section_id") or ""),
+        ),
+    )
+    virtual_index = 0
+
+    def flush_pending() -> None:
+        if not pending_text:
+            return
+        cleaned = _clean_public_text("\n".join(pending_text))
+        pending_text.clear()
+        if cleaned:
+            pieces.append(cleaned)
+
+    def emit_virtual_sections_through(position: int) -> None:
+        nonlocal virtual_index
+        while virtual_index < len(virtual_sections):
+            section = virtual_sections[virtual_index]
+            if int(section.get("source_start") or 0) > position:
+                break
+            virtual_index += 1
+            sid = str(section.get("section_id") or "")
+            if not sid or sid in emitted_sections:
+                continue
+            flush_pending()
+            emitted_sections.add(sid)
+            topic = topic_by_id.get(str(section.get("topic_id") or ""), {})
+            title = _plain_title(
+                topic.get("title") or section.get("title") or "Topic"
+            )
+            pieces.append(f"## {title}")
+
+    for block in sorted(
+        [row for row in canonical.get("blocks") or [] if isinstance(row, dict)],
+        key=lambda row: int(row.get("order") or 0),
+    ):
+        emit_virtual_sections_through(int(block.get("source_start") or 0))
+        sid = str(block.get("section_id") or "")
+        section = graph_sections.get(sid)
+        kind = str(block.get("kind") or "")
+        if kind == "layout":
+            continue
+        if kind == "heading" and section:
+            flush_pending()
+            if sid in emitted_sections:
+                continue
+            emitted_sections.add(sid)
+            role = str(section.get("role") or "content_heading")
+            title = _plain_title(section.get("title"))
+            if role == "main_topic":
+                title = _plain_title(
+                    topic_by_id.get(str(section.get("topic_id") or ""), {}).get("title")
+                    or title
+                )
+                pieces.append(f"## {title}")
+            elif role == "subtopic":
+                title = _plain_title(
+                    subtopic_by_id.get(str(section.get("subtopic_id") or ""), {}).get("title")
+                    or title
+                )
+                pieces.append(f"### {title}")
+            elif role == "chapter_heading":
+                pieces.append(f"# {title}")
+            elif title and role not in {"other"}:
+                pieces.append(f"### {title}")
+            continue
+        if kind == "figure":
+            flush_pending()
+            figure = figure_by_id.get(str(block.get("figure_id") or ""), {})
+            caption = _clean_public_text(figure.get("caption_raw") or "Source visual")
+            tags: list[str] = []
+            for image_id in figure.get("image_ids") or block.get("image_ids") or []:
+                image = image_by_id.get(str(image_id), {})
+                url = str(image.get("url") or "").strip().replace(r"\&", "&")
+                if not url:
+                    continue
+                try:
+                    tags.append(kr.image(url, caption or str(image.get("alt_raw") or "Source visual")))
+                except ValueError:
+                    continue
+            if tags:
+                pieces.append("\n".join(tags))
+            if caption:
+                pieces.append(caption)
+            continue
+        pending_text.append(_graph_block_text(
+            graph_block_by_id.get(str(block.get("block_id") or "")), block
+        ))
+    flush_pending()
+    emit_virtual_sections_through(10**18)
+    return "\n\n".join(piece.strip() for piece in pieces if piece.strip()).strip() + "\n"
+
+
+def _source_tokens(value: object) -> set[str]:
+    text = _SUSPICIOUS_MARKUP_RE.sub(" ", str(value or ""))
+    text = re.sub(r"https://\S+", " ", text)
+    text = re.sub(r"\\[A-Za-z]+(?:\[[^\]]*\])?", " ", text)
+    return {token.casefold() for token in _WORD_TOKEN_RE.findall(text)}
+
+
+def _page_block_visible_text(block: dict[str, Any]) -> str:
+    parts = [
+        str(block.get("text") or ""),
+        str(block.get("caption") or ""),
+        str(block.get("latex") or ""),
+    ]
+    parts.extend(
+        str(cell or "")
+        for row in block.get("table_rows") or []
+        for cell in row
+    )
+    return " ".join(part for part in parts if part).strip()
+
+
+def _page_block_key(page_id: object, reading_order: object) -> str:
+    return f"{str(page_id or '')}:{int(reading_order or 0):04d}"
+
+
+def _candidate_anomaly_packet(
+    canonical_block: dict[str, Any],
+    *,
+    page_bundle: dict[str, Any],
+    source_chars: int,
+    limit: int = 18,
+) -> dict[str, Any]:
+    source_text = str(
+        canonical_block.get("display_text") or canonical_block.get("raw_text") or ""
+    )
+    source_tokens = _source_tokens(source_text)
+    page_count = max(1, len(page_bundle.get("pages") or []))
+    predicted_page = min(
+        page_count,
+        max(
+            1,
+            int(
+                (int(canonical_block.get("source_start") or 0) / max(1, source_chars))
+                * page_count
+            )
+            + 1,
+        ),
+    )
+    scored: list[tuple[float, int, int, dict[str, Any], dict[str, Any]]] = []
+    canonical_kind = str(canonical_block.get("kind") or "")
+    for page in page_bundle.get("pages") or []:
+        if not isinstance(page, dict):
+            continue
+        page_number = int(page.get("page_number") or 0)
+        for block in page.get("blocks") or []:
+            if not isinstance(block, dict):
+                continue
+            visible = _page_block_visible_text(block)
+            tokens = _source_tokens(visible)
+            overlap = len(source_tokens & tokens)
+            coefficient = overlap / max(1, min(len(source_tokens), len(tokens)))
+            kind_bonus = 0.20 if str(block.get("kind") or "") == canonical_kind else 0.0
+            proximity = max(0.0, 0.10 - abs(page_number - predicted_page) * 0.025)
+            score = coefficient + kind_bonus + proximity
+            scored.append((
+                score,
+                page_number,
+                int(block.get("reading_order") or 0),
+                page,
+                block,
+            ))
+    scored.sort(key=lambda row: (-row[0], row[1], row[2]))
+    chosen = scored[:limit]
+    # Always retain table candidates close to the predicted page because a
+    # converter anomaly is frequently a visual table cell with little OCR text.
+    for row in scored:
+        if len(chosen) >= limit + 6:
+            break
+        if row in chosen:
+            continue
+        score, page_number, _order, _page, block = row
+        if (
+            str(block.get("kind") or "") == "table"
+            and abs(page_number - predicted_page) <= 2
+        ):
+            chosen.append(row)
+    candidate_blocks: list[dict[str, Any]] = []
+    candidate_page_numbers: list[int] = []
+    seen: set[str] = set()
+    for score, page_number, order, page, block in chosen:
+        key = _page_block_key(page.get("page_id"), order)
+        if key in seen:
+            continue
+        seen.add(key)
+        if page_number not in candidate_page_numbers:
+            candidate_page_numbers.append(page_number)
+        candidate_blocks.append({
+            "block_key": key,
+            "page_id": str(page.get("page_id") or ""),
+            "page_number": page_number,
+            "reading_order": order,
+            "kind": str(block.get("kind") or ""),
+            "text": str(block.get("text") or ""),
+            "latex": str(block.get("latex") or ""),
+            "table_rows": copy.deepcopy(block.get("table_rows") or []),
+            "linked_visual_orders": [
+                int(value) for value in block.get("linked_visual_orders") or []
+            ],
+            "caption": str(block.get("caption") or ""),
+            "confidence": float(block.get("confidence") or 0.0),
+            "retrieval_score": round(float(score), 6),
+        })
+    return {
+        "issue_code": "converter_semantic_markup_requires_pdf_reconciliation",
+        "canonical_block": {
+            "block_id": str(canonical_block.get("block_id") or ""),
+            "kind": canonical_kind,
+            "source_start": int(canonical_block.get("source_start") or 0),
+            "source_end": int(canonical_block.get("source_end") or 0),
+            "raw_text": source_text[:10000],
+        },
+        "candidate_blocks": candidate_blocks,
+        "candidate_page_numbers": sorted(candidate_page_numbers),
+        "instruction": (
+            "Select the one already-verified original-PDF page block that "
+            "contains the visible source evidence needed to replace the "
+            "converter-only semantic markup. Do not write replacement text."
+        ),
+    }
+
+
+def _anomaly_selection_schema(block_keys: list[str]) -> dict[str, Any]:
+    allowed = ["NONE", *block_keys]
+    return {
+        "name": "aegis_phase3_source_anomaly_selection",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "decision": {
+                    "type": "string",
+                    "enum": ["use_verified_page_block", "review_required"],
+                },
+                "selected_block_key": {"type": "string", "enum": allowed},
+                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                "reason": {"type": "string"},
+            },
+            "required": [
+                "decision", "selected_block_key", "confidence", "reason"
+            ],
+            "additionalProperties": False,
+        },
+    }
+
+
+def _anomaly_critic_schema(block_keys: list[str]) -> dict[str, Any]:
+    allowed = ["NONE", *block_keys]
+    return {
+        "name": "aegis_phase3_source_anomaly_verification",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "verdict": {"type": "string", "enum": ["verified", "rejected"]},
+                "selected_block_key": {"type": "string", "enum": allowed},
+                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                "issues": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+            },
+            "required": [
+                "verdict", "selected_block_key", "confidence", "issues"
+            ],
+            "additionalProperties": False,
+        },
+    }
+
+
+def _anomaly_evidence_pages(
+    source_path: Path,
+    page_numbers: Iterable[int],
+) -> list[phase22.EvidencePage]:
+    pages: list[phase22.EvidencePage] = []
+    for number in sorted({int(value) for value in page_numbers if int(value) > 0}):
+        row = page_acsd.collect_pdf_pages(
+            source_path, start_page=number, end_page=number
+        )[0]
+        pages.append(phase22.EvidencePage(
+            evidence_id=row.page_id,
+            page_number=row.page_number,
+            text=row.text,
+            image_data_url=row.image_data_url,
+            score=1.0,
+        ))
+    return pages
+
+
+def _select_source_anomaly_via_openai(
+    packet: dict[str, Any], *, source_path: Path
+) -> dict[str, Any]:
+    keys = [
+        str(row.get("block_key") or "")
+        for row in packet.get("candidate_blocks") or []
+        if str(row.get("block_key") or "")
+    ]
+    system = (
+        "You are the Aegis source-fusion selector. Compare the suspicious "
+        "Mathpix/ACSD block with the supplied original-PDF pages and the "
+        "already independently verified page-block ledger. Select only one "
+        "opaque block_key from the ledger. Never transcribe, repair, or invent "
+        "text, LaTeX, table cells, captions, or URLs. Return review_required "
+        "unless the selected block visibly contains the exact source evidence."
+    )
+    prompt = json.dumps({
+        key: value for key, value in packet.items()
+        if key != "candidate_page_numbers"
+    }, ensure_ascii=False, indent=2)
+    return phase22._openai_multimodal_json(
+        system=system,
+        prompt=prompt,
+        pages=_anomaly_evidence_pages(
+            source_path, packet.get("candidate_page_numbers") or []
+        ),
+        response_schema=_anomaly_selection_schema(keys),
+        purpose="source_adjudication",
+        max_tokens=5000,
+    )
+
+
+def _critic_source_anomaly_via_openai(
+    packet: dict[str, Any], selection: dict[str, Any], *, source_path: Path
+) -> dict[str, Any]:
+    keys = [
+        str(row.get("block_key") or "")
+        for row in packet.get("candidate_blocks") or []
+        if str(row.get("block_key") or "")
+    ]
+    system = (
+        "You are the independent Aegis source-fusion verifier. Verify that the "
+        "selected opaque page block is visibly supported by the original PDF "
+        "and is the correct evidence for the suspicious converter markup. Do "
+        "not rewrite anything. Reject uncertain, incomplete, or merely nearby "
+        "selections."
+    )
+    prompt = json.dumps({
+        "packet": {
+            key: value for key, value in packet.items()
+            if key != "candidate_page_numbers"
+        },
+        "selection": selection,
+    }, ensure_ascii=False, indent=2)
+    return phase22._openai_multimodal_json(
+        system=system,
+        prompt=prompt,
+        pages=_anomaly_evidence_pages(
+            source_path, packet.get("candidate_page_numbers") or []
+        ),
+        response_schema=_anomaly_critic_schema(keys),
+        purpose="source_adjudication",
+        max_tokens=4000,
+    )
+
+
+def _page_and_block_by_key(
+    page_bundle: dict[str, Any], block_key: str
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    for page in page_bundle.get("pages") or []:
+        if not isinstance(page, dict):
+            continue
+        for block in page.get("blocks") or []:
+            if not isinstance(block, dict):
+                continue
+            if _page_block_key(
+                page.get("page_id"), block.get("reading_order")
+            ) == block_key:
+                return page, block
+    return None, None
+
+
+def _render_page_visual_marker(page: dict[str, Any], order: int) -> str:
+    figure = next(
+        (
+            row for row in page.get("blocks") or []
+            if isinstance(row, dict)
+            and row.get("kind") == "figure"
+            and int(row.get("reading_order") or 0) == int(order)
+        ),
+        None,
+    )
+    if not isinstance(figure, dict):
+        raise ValueError("verified page table references an unknown visual block")
+    url = str(figure.get("asset_url") or "").strip()
+    if not url:
+        raise ValueError("verified page visual was not materialized as a source asset")
+    caption = str(figure.get("caption") or "Source table-cell visual").strip()
+    return kr.image(url, caption or "Source table-cell visual")
+
+
+def _render_page_cell(value: object, page: dict[str, Any]) -> str:
+    text = str(value or "")
+    return _VISUAL_MARKER_RE.sub(
+        lambda match: _render_page_visual_marker(page, int(match.group(1))),
+        text,
+    )
+
+
+def _canonical_table_rows(value: object) -> list[list[str]]:
+    protected_text, protected = _protect_rich_tokens(str(value or ""))
+    normalized = _clean_table(protected_text)
+    normalized = _restore_rich_tokens(normalized, protected)
+    rows: list[list[str]] = []
+    for line in normalized.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        rows.append([cell.strip() for cell in line.split(" | ")])
+    return rows
+
+
+def _row_overlap(left: list[str], right: list[str], *, skip: int) -> float:
+    left_tokens = _source_tokens(" ".join(
+        cell for index, cell in enumerate(left) if index != skip
+    ))
+    right_tokens = _source_tokens(" ".join(
+        cell for index, cell in enumerate(right) if index != skip
+    ))
+    if not left_tokens or not right_tokens:
+        return 0.0
+    return len(left_tokens & right_tokens) / max(1, min(len(left_tokens), len(right_tokens)))
+
+
+def _patch_suspicious_table(
+    canonical_text: str,
+    *,
+    selected_block: dict[str, Any],
+    selected_page: dict[str, Any],
+) -> str:
+    canonical_rows = _canonical_table_rows(canonical_text)
+    page_rows = [
+        [str(cell or "") for cell in row]
+        for row in selected_block.get("table_rows") or []
+    ]
+    if not canonical_rows or not page_rows:
+        raise ValueError("selected verified block does not contain table rows")
+    patched_any = False
+    for canonical_row in canonical_rows:
+        for cell_index, cell in enumerate(list(canonical_row)):
+            if not _SUSPICIOUS_MARKUP_RE.search(cell):
+                continue
+            candidates = [
+                ( _row_overlap(canonical_row, page_row, skip=cell_index), page_row )
+                for page_row in page_rows
+                if len(page_row) > cell_index
+            ]
+            if not candidates:
+                raise ValueError("verified table has no corresponding source row")
+            candidates.sort(key=lambda item: item[0], reverse=True)
+            score, matched_row = candidates[0]
+            if score < 0.50:
+                raise ValueError("verified table row does not match source context")
+            replacement = _render_page_cell(matched_row[cell_index], selected_page).strip()
+            suspicious_inner = re.sub(r"<[^>]+>", "", cell).strip()
+            if (
+                not replacement
+                or _SUSPICIOUS_MARKUP_RE.search(replacement)
+                or _normal(replacement) == _normal(suspicious_inner)
+            ):
+                raise ValueError("verified table cell does not resolve the converter anomaly")
+            canonical_row[cell_index] = replacement
+            patched_any = True
+    if not patched_any:
+        raise ValueError("canonical table no longer contains the reported anomaly")
+    return "\n".join(" | ".join(row) for row in canonical_rows)
+
+
+def _render_verified_page_block(
+    page: dict[str, Any], block: dict[str, Any]
+) -> str:
+    kind = str(block.get("kind") or "")
+    if kind == "table":
+        return "\n".join(
+            " | ".join(_render_page_cell(cell, page) for cell in row)
+            for row in block.get("table_rows") or []
+        )
+    if kind == "math":
+        latex = str(block.get("latex") or "").strip()
+        return kr.katex(latex) if latex else ""
+    if kind == "figure":
+        return _render_page_visual_marker(
+            page, int(block.get("reading_order") or 0)
+        )
+    return str(block.get("text") or "").strip()
+
+
+def reconcile_source_anomalies(
+    graph: dict[str, Any],
+    *,
+    canonical: dict[str, Any],
+    page_bundle: dict[str, Any] | None,
+    source_path: Path | None = None,
+    provider: AnomalyProvider | None = None,
+    critic: AnomalyCritic | None = None,
+) -> dict[str, Any]:
+    """Repair converter-only semantic markup using verified PDF block IDs.
+
+    The APIs select opaque evidence IDs only. Replacement text is derived
+    deterministically from the already-verified page ACSD, so a model cannot
+    improvise a formula, table cell, caption, or asset URL.
+    """
+    out = copy.deepcopy(graph)
+    out["issues"] = [
+        issue for issue in out.get("issues") or []
+        if issue.get("code") not in {
+            "semantic_source_rich_text",
+            "semantic_source_hash_mismatch",
+            "unresolved_source_override_markup",
+            "invalid_source_override_hash",
+        }
+    ]
+    canonical_blocks = {
+        str(row.get("block_id") or ""): row
+        for row in canonical.get("blocks") or [] if isinstance(row, dict)
+    }
+    suspicious_ids = [
+        str(block.get("block_id") or "")
+        for block in out.get("blocks") or []
+        if isinstance(block, dict)
+        and _SUSPICIOUS_MARKUP_RE.search(
+            str((canonical_blocks.get(str(block.get("block_id") or "")) or {}).get("raw_text") or "")
+        )
+    ]
+    if not suspicious_ids:
+        return out
+    if not isinstance(page_bundle, dict):
+        return out
+    provider = provider or (
+        (lambda packet: _select_source_anomaly_via_openai(
+            packet, source_path=Path(source_path)
+        ))
+        if semantic_api_enabled() and source_path is not None else None
+    )
+    critic = critic or (
+        (lambda payload: _critic_source_anomaly_via_openai(
+            payload["packet"], payload["selection"], source_path=Path(source_path)
+        ))
+        if semantic_api_enabled() and source_path is not None else None
+    )
+    if provider is None or critic is None:
+        return out
+    repairs: list[dict[str, Any]] = []
+    unresolved: list[str] = []
+    graph_block_by_id = {
+        str(row.get("block_id") or ""): row
+        for row in out.get("blocks") or [] if isinstance(row, dict)
+    }
+    source_chars = int((canonical.get("document") or {}).get("source_chars") or 0)
+    for block_id in suspicious_ids:
+        canonical_block = canonical_blocks.get(block_id)
+        graph_block = graph_block_by_id.get(block_id)
+        if not isinstance(canonical_block, dict) or not isinstance(graph_block, dict):
+            unresolved.append(block_id)
+            continue
+        packet = _candidate_anomaly_packet(
+            canonical_block,
+            page_bundle=page_bundle,
+            source_chars=max(1, source_chars),
+        )
+        keys = {
+            str(row.get("block_key") or "")
+            for row in packet.get("candidate_blocks") or []
+        }
+        if not keys:
+            unresolved.append(block_id)
+            continue
+        selection = provider(copy.deepcopy(packet))
+        selected_key = str((selection or {}).get("selected_block_key") or "")
+        if (
+            not isinstance(selection, dict)
+            or selection.get("decision") != "use_verified_page_block"
+            or selected_key not in keys
+            or float(selection.get("confidence") or 0.0) < 0.96
+        ):
+            unresolved.append(block_id)
+            continue
+        verification = critic({
+            "packet": copy.deepcopy(packet),
+            "selection": copy.deepcopy(selection),
+        })
+        if (
+            not isinstance(verification, dict)
+            or verification.get("verdict") != "verified"
+            or str(verification.get("selected_block_key") or "") != selected_key
+            or float(verification.get("confidence") or 0.0) < 0.96
+            or bool(verification.get("issues"))
+        ):
+            unresolved.append(block_id)
+            continue
+        selected_page, selected_block = _page_and_block_by_key(
+            page_bundle, selected_key
+        )
+        if not isinstance(selected_page, dict) or not isinstance(selected_block, dict):
+            unresolved.append(block_id)
+            continue
+        try:
+            canonical_text = str(
+                canonical_block.get("display_text")
+                or canonical_block.get("raw_text")
+                or ""
+            )
+            if canonical_block.get("kind") == "table":
+                if selected_block.get("kind") != "table":
+                    raise ValueError("table anomaly must be resolved by a verified table block")
+                resolved = _patch_suspicious_table(
+                    canonical_text,
+                    selected_block=selected_block,
+                    selected_page=selected_page,
+                )
+            else:
+                resolved = _render_verified_page_block(
+                    selected_page, selected_block
+                )
+                source_tokens = _source_tokens(canonical_text)
+                resolved_tokens = _source_tokens(resolved)
+                if source_tokens and resolved_tokens:
+                    overlap = len(source_tokens & resolved_tokens) / max(
+                        1, min(len(source_tokens), len(resolved_tokens))
+                    )
+                    if overlap < 0.35:
+                        raise ValueError(
+                            "verified replacement does not match the source block context"
+                        )
+            cleaned = _clean_public_text(resolved)
+            if (
+                not cleaned
+                or _SUSPICIOUS_MARKUP_RE.search(cleaned)
+                or kr.rich_text_issues(cleaned)
+            ):
+                raise ValueError("verified replacement violates semantic rich-text contract")
+        except (TypeError, ValueError):
+            unresolved.append(block_id)
+            continue
+        graph_block["source_override"] = {
+            "mode": "verified_pdf_block_patch",
+            "canonical_block_raw_sha256": str(
+                canonical_block.get("raw_sha256") or _sha256_text(canonical_text)
+            ),
+            "page_id": str(selected_page.get("page_id") or ""),
+            "page_number": int(selected_page.get("page_number") or 0),
+            "reading_order": int(selected_block.get("reading_order") or 0),
+            "selected_block_key": selected_key,
+            "resolved_text": resolved,
+            "resolved_sha256": _sha256_text(resolved),
+            "selection_confidence": float(selection.get("confidence") or 0.0),
+            "verification_confidence": float(verification.get("confidence") or 0.0),
+        }
+        repairs.append({
+            "block_id": block_id,
+            "selected_block_key": selected_key,
+            "page_number": int(selected_page.get("page_number") or 0),
+        })
+    out["source_fusion_repairs"] = repairs
+    if unresolved:
+        out["status"] = "review_required"
+        out["issues"] = [
+            issue for issue in out.get("issues") or []
+            if issue.get("code") != "converter_semantic_markup_requires_pdf_reconciliation"
+        ] + [{
+            "code": "converter_semantic_markup_requires_pdf_reconciliation",
+            "severity": "error",
+            "block_ids": unresolved,
+            "message": (
+                "Original-PDF source fusion could not safely resolve every "
+                "converter semantic-markup anomaly."
+            ),
+        }]
+    else:
+        out["status"] = "ready"
+        out["issues"] = [
+            issue for issue in out.get("issues") or []
+            if issue.get("code") != "converter_semantic_markup_requires_pdf_reconciliation"
+        ]
+        out["issues"].append({
+            "code": "converter_semantic_markup_repaired_from_verified_pdf",
+            "severity": "warning",
+            "block_ids": suspicious_ids,
+            "message": (
+                "Converter-only semantic markup was replaced using independently "
+                "verified original-PDF page blocks and deterministic rendering."
+            ),
+        })
+    semantic_source = render_semantic_source(out, canonical)
+    out["semantic_source_sha256"] = _sha256_text(semantic_source)
+    errors = validate_graph(out, canonical=canonical, semantic_source=semantic_source)
+    if errors:
+        out["status"] = "failed"
+        out.setdefault("issues", []).extend(errors)
+    return out
+
+
+def validate_graph(
+    graph: dict[str, Any],
+    *,
+    canonical: dict[str, Any],
+    semantic_source: str,
+    allow_unresolved_source_anomalies: bool = False,
+) -> list[dict[str, Any]]:
+    errors: list[dict[str, Any]] = []
+    topic_ids = [str(row.get("topic_id") or "") for row in graph.get("topics") or []]
+    subtopic_ids = [str(row.get("subtopic_id") or "") for row in graph.get("subtopics") or []]
+    block_ids = [str(row.get("block_id") or "") for row in graph.get("blocks") or []]
+    task_ids = [str(row.get("task_id") or "") for row in graph.get("tasks") or []]
+    qids = [str(row.get("qid") or "") for row in graph.get("tasks") or []]
+    for label, values in (
+        ("topic", topic_ids), ("subtopic", subtopic_ids), ("block", block_ids),
+        ("task", task_ids), ("qid", qids),
+    ):
+        nonempty = [value for value in values if value]
+        if len(nonempty) != len(set(nonempty)):
+            errors.append({
+                "severity": "error", "code": f"duplicate_{label}_identity",
+                "message": f"The semantic graph contains duplicate {label} identities.",
+            })
+    allowed_topics = set(topic_ids)
+    allowed_subtopics = set(subtopic_ids)
+    allowed_blocks = {
+        str(row.get("block_id") or "") for row in canonical.get("blocks") or []
+        if isinstance(row, dict)
+    }
+    allowed_tasks = {
+        str(row.get("task_id") or "") for row in canonical.get("tasks") or []
+        if isinstance(row, dict)
+    }
+    allowed_qids = {
+        str(row.get("qid") or "") for row in canonical.get("tasks") or []
+        if isinstance(row, dict)
+    }
+    for row in graph.get("blocks") or []:
+        if row.get("block_id") not in allowed_blocks:
+            errors.append({"severity": "error", "code": "unknown_block_id", "message": str(row.get("block_id"))})
+        if row.get("topic_id") not in allowed_topics:
+            errors.append({"severity": "error", "code": "unknown_block_topic", "message": str(row.get("block_id"))})
+        if row.get("subtopic_id") and row.get("subtopic_id") not in allowed_subtopics:
+            errors.append({"severity": "error", "code": "unknown_block_subtopic", "message": str(row.get("block_id"))})
+        override = row.get("source_override")
+        if isinstance(override, dict):
+            resolved = str(override.get("resolved_text") or "")
+            if not resolved or override.get("resolved_sha256") != _sha256_text(resolved):
+                errors.append({
+                    "severity": "error",
+                    "code": "invalid_source_override_hash",
+                    "message": str(row.get("block_id")),
+                })
+            if _SUSPICIOUS_MARKUP_RE.search(resolved):
+                errors.append({
+                    "severity": "error",
+                    "code": "unresolved_source_override_markup",
+                    "message": str(row.get("block_id")),
+                })
+    for row in graph.get("tasks") or []:
+        if row.get("task_id") not in allowed_tasks or row.get("qid") not in allowed_qids:
+            errors.append({"severity": "error", "code": "unknown_task_identity", "message": str(row.get("task_id"))})
+        if row.get("topic_id") not in allowed_topics:
+            errors.append({"severity": "error", "code": "unknown_task_topic", "message": str(row.get("task_id"))})
+    canonical_block_order = [
+        str(row.get("block_id") or "") for row in sorted(
+            [item for item in canonical.get("blocks") or [] if isinstance(item, dict)],
+            key=lambda item: int(item.get("order") or 0),
+        )
+    ]
+    if block_ids != canonical_block_order:
+        errors.append({
+            "severity": "error", "code": "block_order_drift",
+            "message": "Semantic graph block order differs from ACSD source order.",
+        })
+    canonical_qids = [
+        str(row.get("qid") or "") for row in sorted(
+            [item for item in canonical.get("tasks") or [] if isinstance(item, dict)],
+            key=lambda item: int(item.get("order") or 0),
+        )
+    ]
+    if qids != canonical_qids:
+        errors.append({
+            "severity": "error", "code": "task_order_drift",
+            "message": "Semantic graph QID order differs from the ACSD task ledger.",
+        })
+    if graph.get("source_contract_hash") != source_contract_hash(canonical):
+        errors.append({
+            "severity": "error", "code": "stale_source_contract_hash",
+            "message": "Semantic graph was compiled from a stale ACSD contract.",
+        })
+    if graph.get("semantic_context_hash") != semantic_context_hash(
+        graph.get("metadata") if isinstance(graph.get("metadata"), dict) else {}
+    ):
+        errors.append({
+            "severity": "error", "code": "invalid_semantic_context_hash",
+            "message": "Semantic graph academic context does not match its context hash.",
+        })
+    if graph.get("semantic_source_sha256") and graph.get("semantic_source_sha256") != _sha256_text(semantic_source):
+        errors.append({
+            "severity": "error", "code": "semantic_source_hash_mismatch",
+            "message": "Rendered semantic source does not match its graph hash.",
+        })
+    issues = kr.rich_text_issues(semantic_source)
+    if issues and not (
+        allow_unresolved_source_anomalies
+        and graph.get("status") == "review_required"
+        and any(
+            issue.get("code")
+            == "converter_semantic_markup_requires_pdf_reconciliation"
+            for issue in graph.get("issues") or []
+        )
+        and set(issues).issubset({"raw_latex"})
+    ):
+        errors.append({
+            "severity": "error", "code": "semantic_source_rich_text",
+            "message": "Phase 3 semantic source has non-canonical rich text: " + ", ".join(issues),
+        })
+    return errors
+
+
+def _topic_alias_map(graph: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    aliases: dict[str, dict[str, Any]] = {}
+    topics = {
+        str(row.get("topic_id") or ""): row for row in graph.get("topics") or []
+        if isinstance(row, dict)
+    }
+    for topic in topics.values():
+        for value in (
+            topic.get("title"), topic.get("display_title"),
+            f"{topic.get('structural_number')} {topic.get('title')}" if topic.get("structural_number") else "",
+        ):
+            key = _normal(value)
+            if key:
+                aliases[key] = topic
+    for subtopic in graph.get("subtopics") or []:
+        if not isinstance(subtopic, dict):
+            continue
+        parent = topics.get(str(subtopic.get("topic_id") or ""))
+        if not parent:
+            continue
+        for value in (
+            subtopic.get("title"), subtopic.get("display_title"),
+            f"{subtopic.get('structural_number')} {subtopic.get('title')}" if subtopic.get("structural_number") else "",
+        ):
+            key = _normal(value)
+            if key:
+                aliases[key] = parent
+    return aliases
+
+
+def canonical_topic_for_text(graph: dict[str, Any], value: object) -> dict[str, Any] | None:
+    key = _normal(value)
+    aliases = _topic_alias_map(graph)
+    if key in aliases:
+        return aliases[key]
+    stripped = _NUMBER_PREFIX_RE.sub(lambda match: match.group("title") or "", str(value or ""))
+    return aliases.get(_normal(stripped))
+
+
+def annotate_inventory(inventory: dict[str, Any], graph: dict[str, Any] | None = None) -> dict[str, Any]:
+    graph = graph or active_graph()
+    if not isinstance(graph, dict):
+        return inventory
+    out = copy.deepcopy(inventory or {})
+    task_by_qid = {
+        str(row.get("qid") or ""): row for row in graph.get("tasks") or []
+        if isinstance(row, dict) and str(row.get("qid") or "")
+    }
+    topic_by_id = {
+        str(row.get("topic_id") or ""): row for row in graph.get("topics") or []
+        if isinstance(row, dict)
+    }
+    subtopic_by_id = {
+        str(row.get("subtopic_id") or ""): row for row in graph.get("subtopics") or []
+        if isinstance(row, dict)
+    }
+    for item in out.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        qid = str(item.get("qid") or "")
+        task = task_by_qid.get(qid)
+        if not task:
+            continue
+        assigned_topic = None
+        if (
+            item.get("_chapter_wide_task")
+            or item.get("_topic_scope") == "chapter"
+            or task.get("chapter_wide")
+        ):
+            assigned_topic = canonical_topic_for_text(graph, item.get("topic_hint"))
+        if assigned_topic is not None:
+            task["topic_id"] = str(assigned_topic.get("topic_id") or "")
+            task["subtopic_id"] = ""
+        topic = topic_by_id.get(str(task.get("topic_id") or ""), {})
+        subtopic = subtopic_by_id.get(str(task.get("subtopic_id") or ""), {})
+        item["_semantic_topic_id"] = str(task.get("topic_id") or "")
+        item["_semantic_subtopic_id"] = str(task.get("subtopic_id") or "")
+        item["_semantic_graph_contract"] = graph.get("source_contract_hash")
+        item["_semantic_source_task_id"] = str(task.get("task_id") or "")
+        # The visible hint remains for legacy prompts, but structural identity is
+        # now the graph ID and always uses the canonical main-topic title.
+        if topic.get("title"):
+            item["topic_hint"] = str(topic["title"])
+        if subtopic.get("title"):
+            item["_semantic_subtopic_title"] = str(subtopic["title"])
+    return out
+
+
+def _qid_scope(graph: dict[str, Any], qids: Iterable[object]) -> tuple[list[str], list[str]]:
+    task_by_qid = {
+        str(row.get("qid") or ""): row for row in graph.get("tasks") or []
+        if isinstance(row, dict) and str(row.get("qid") or "")
+    }
+    topic_ids: list[str] = []
+    subtopic_ids: list[str] = []
+    for raw_qid in qids:
+        task = task_by_qid.get(str(raw_qid or "").strip())
+        if not task:
+            continue
+        topic_id = str(task.get("topic_id") or "")
+        subtopic_id = str(task.get("subtopic_id") or "")
+        if topic_id and topic_id not in topic_ids:
+            topic_ids.append(topic_id)
+        if subtopic_id and subtopic_id not in subtopic_ids:
+            subtopic_ids.append(subtopic_id)
+    return topic_ids, subtopic_ids
+
+
+def annotate_mined_types(
+    mined_types: dict[str, Any], graph: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    graph = graph or active_graph()
+    if not isinstance(graph, dict):
+        return mined_types
+    from . import generation
+
+    out = copy.deepcopy(mined_types or {})
+    topic_by_id = {
+        str(row.get("topic_id") or ""): row for row in graph.get("topics") or []
+        if isinstance(row, dict)
+    }
+    for mtype in out.get("types") or []:
+        if not isinstance(mtype, dict):
+            continue
+        qids = generation._type_source_qids(mtype)
+        topic_ids, subtopic_ids = _qid_scope(graph, qids)
+        mtype["_semantic_topic_ids"] = topic_ids
+        mtype["_semantic_subtopic_ids"] = subtopic_ids
+        mtype["_semantic_graph_contract"] = graph.get("source_contract_hash")
+        if len(topic_ids) == 1:
+            topic = topic_by_id.get(topic_ids[0], {})
+            if topic.get("title"):
+                mtype["topic_match_hint"] = str(topic["title"])
+            mtype["_semantic_scope"] = "topic"
+        elif len(topic_ids) > 1:
+            mtype["placement_scope"] = "cross_topic_synthesis"
+            mtype["_semantic_scope"] = "cross_topic_synthesis"
+            first = topic_by_id.get(topic_ids[0], {})
+            if first.get("title"):
+                mtype["topic_match_hint"] = str(first["title"])
+        for case in mtype.get("case_prompts") or []:
+            if not isinstance(case, dict):
+                continue
+            case_qids = generation._assignment_case_qids(case)
+            case_topics, case_subtopics = _qid_scope(graph, case_qids)
+            case["_semantic_topic_ids"] = case_topics
+            case["_semantic_subtopic_ids"] = case_subtopics
+            if len(case_topics) == 1:
+                case["_semantic_topic_id"] = case_topics[0]
+            elif len(case_topics) > 1:
+                case["_semantic_scope"] = "cross_topic_synthesis"
+    return out
+
+
+def annotate_assignment_units(
+    units: list[dict[str, Any]], graph: dict[str, Any] | None = None
+) -> list[dict[str, Any]]:
+    graph = graph or active_graph()
+    if not isinstance(graph, dict):
+        return units
+    topic_by_id = {
+        str(row.get("topic_id") or ""): row for row in graph.get("topics") or []
+        if isinstance(row, dict)
+    }
+    out = copy.deepcopy(units)
+    for unit in out:
+        qids = list(unit.get("source_question_ids") or [])
+        topic_ids, subtopic_ids = _qid_scope(graph, qids)
+        unit["_semantic_topic_ids"] = topic_ids
+        unit["_semantic_subtopic_ids"] = subtopic_ids
+        if len(topic_ids) == 1:
+            topic = topic_by_id.get(topic_ids[0], {})
+            unit["_semantic_topic_id"] = topic_ids[0]
+            if topic.get("title"):
+                unit["topic_match_hint"] = str(topic["title"])
+            if unit.get("placement_scope") == "cross_topic_synthesis":
+                unit["placement_scope"] = "mixed_synthesis"
+        elif len(topic_ids) > 1:
+            unit["placement_scope"] = "cross_topic_synthesis"
+            first = topic_by_id.get(topic_ids[0], {})
+            if first.get("title"):
+                unit["topic_match_hint"] = str(first["title"])
+    return out
+
+
+def _missing_host_schema(
+    assignment_unit_ids: list[str], source_block_ids: list[str]
+) -> dict[str, Any]:
+    return {
+        "name": "aegis_phase3_missing_type_host_concepts",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "concepts": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": max(1, len(assignment_unit_ids)),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "concept_title": {"type": "string"},
+                            "parent_concept": {"type": "string"},
+                            "description": {"type": "string"},
+                            "achieving_mastery": {"type": "string"},
+                            "keywords": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                            "source_block_ids": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {
+                                    "type": "string",
+                                    "enum": source_block_ids,
+                                },
+                            },
+                            "assignment_unit_ids": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {
+                                    "type": "string",
+                                    "enum": assignment_unit_ids,
+                                },
+                            },
+                        },
+                        "required": [
+                            "concept_title",
+                            "parent_concept",
+                            "description",
+                            "achieving_mastery",
+                            "keywords",
+                            "source_block_ids",
+                            "assignment_unit_ids",
+                        ],
+                        "additionalProperties": False,
+                    },
+                }
+            },
+            "required": ["concepts"],
+            "additionalProperties": False,
+        },
+    }
+
+
+def _missing_host_critic_schema() -> dict[str, Any]:
+    return {
+        "name": "aegis_phase3_missing_type_host_critic",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "verdict": {"type": "string", "enum": ["verified", "rejected"]},
+                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                "issues": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["verdict", "confidence", "issues"],
+            "additionalProperties": False,
+        },
+    }
+
+
+def _create_missing_hosts_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
+    unit_ids = [
+        str(row.get("assignment_unit_id") or "")
+        for row in payload.get("assignment_units") or []
+    ]
+    block_ids = [
+        str(row.get("block_id") or "")
+        for row in payload.get("source_blocks") or []
+    ]
+    system = (
+        "You are the Aegis missing-concept reconciler. A canonical textbook "
+        "topic contains source-grounded Type assignment units but the restored "
+        "checkpoint has no normal concept in that topic. Create the smallest "
+        "pedagogically coherent set of normal concepts needed to host every "
+        "assignment unit exactly once. Preserve grade and subject level. Use "
+        "only supplied source_block_ids and assignment_unit_ids. Do not create "
+        "a culmination, activity, question, person-only label, or unsupported "
+        "fact. Description and mastery must be specific enough to teach and "
+        "assess the source method or idea."
+    )
+    return phase22._openai_multimodal_json(
+        system=system,
+        prompt=json.dumps(payload, ensure_ascii=False, indent=2),
+        pages=[],
+        response_schema=_missing_host_schema(unit_ids, block_ids),
+        purpose="concept_mapping",
+        max_tokens=max(5000, min(24000, len(unit_ids) * 900)),
+    )
+
+
+def _critic_missing_hosts_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
+    system = (
+        "You are the independent Aegis concept-topology critic. Verify that "
+        "the proposed missing concepts are necessary, source-grounded, "
+        "non-duplicative, grade-appropriate, and collectively cover every "
+        "assignment unit exactly once without over-merging distinct methods. "
+        "Reject any unsupported, generic, culmination-like, or question-shaped "
+        "concept. Do not rewrite the proposal."
+    )
+    return phase22._openai_multimodal_json(
+        system=system,
+        prompt=json.dumps(payload, ensure_ascii=False, indent=2),
+        pages=[],
+        response_schema=_missing_host_critic_schema(),
+        purpose="concept_mapping",
+        max_tokens=4000,
+    )
+
+
+def ensure_type_scope_hosts(
+    records: list[dict[str, Any]],
+    *,
+    mined_types: dict[str, Any],
+    graph: dict[str, Any] | None = None,
+    canonical: dict[str, Any] | None = None,
+    provider: AnomalyProvider | None = None,
+    critic: AnomalyCritic | None = None,
+) -> list[dict[str, Any]]:
+    """Create source-grounded normal hosts before the legacy allocator gate.
+
+    This is the fail-soft turnover for an 81% legacy checkpoint: verified
+    concepts, inventory, and Types survive, while only missing topic topology is
+    reconciled before allocation. Heading text is never used as identity.
+    """
+    graph = graph or active_graph()
+    if not isinstance(graph, dict):
+        return records
+    canonical = canonical or (active_session() or {}).get("canonical") or {}
+    from . import concept_refiner as cr
+    from . import generation
+
+    out = canonicalize_record_topics(records, graph)
+    annotated_types = annotate_mined_types(mined_types, graph)
+    units = annotate_assignment_units(
+        generation._expand_mined_types_to_assignment_units(
+            list(annotated_types.get("types") or [])
+        ),
+        graph,
+    )
+    topic_by_id = {
+        str(row.get("topic_id") or ""): row
+        for row in graph.get("topics") or [] if isinstance(row, dict)
+    }
+    normal_topics = {
+        str(row.get("_semantic_topic_id") or "")
+        for row in out
+        if not cr.is_culmination(row.get("concept_title", ""))
+    }
+    units_by_topic: dict[str, list[dict[str, Any]]] = {}
+    for unit in units:
+        if unit.get("is_activity"):
+            continue
+        topic_ids = [str(value) for value in unit.get("_semantic_topic_ids") or []]
+        if len(topic_ids) != 1:
+            continue
+        topic_id = topic_ids[0]
+        if topic_id and topic_id not in normal_topics:
+            units_by_topic.setdefault(topic_id, []).append(unit)
+    if not units_by_topic:
+        return out
+
+    canonical_blocks = {
+        str(row.get("block_id") or ""): row
+        for row in canonical.get("blocks") or [] if isinstance(row, dict)
+    }
+    graph_blocks = [
+        row for row in graph.get("blocks") or [] if isinstance(row, dict)
+    ]
+    provider = provider or (
+        _create_missing_hosts_via_openai if semantic_api_enabled() else None
+    )
+    critic = critic or (
+        _critic_missing_hosts_via_openai if semantic_api_enabled() else None
+    )
+    if provider is None or critic is None:
+        missing_titles = [
+            str((topic_by_id.get(topic_id) or {}).get("title") or topic_id)
+            for topic_id in units_by_topic
+        ]
+        raise RuntimeError(
+            "Phase 3 Type-scope preflight requires semantic reconciliation for "
+            + ", ".join(missing_titles)
+        )
+
+    for topic_id in [
+        str(row.get("topic_id") or "") for row in graph.get("topics") or []
+        if str(row.get("topic_id") or "") in units_by_topic
+    ]:
+        topic = topic_by_id[topic_id]
+        topic_units = units_by_topic[topic_id]
+        source_blocks: list[dict[str, Any]] = []
+        for block in graph_blocks:
+            if block.get("topic_id") != topic_id or block.get("kind") in {"layout", "heading"}:
+                continue
+            source = canonical_blocks.get(str(block.get("block_id") or ""), {})
+            visible = _clean_public_text(_graph_block_text(block, source))
+            if visible:
+                source_blocks.append({
+                    "block_id": str(block.get("block_id") or ""),
+                    "subtopic_id": str(block.get("subtopic_id") or ""),
+                    "kind": str(block.get("kind") or ""),
+                    "text": visible[:2200],
+                })
+        if not source_blocks:
+            raise RuntimeError(
+                f"Phase 3 cannot create a Type host for {topic.get('title')!r}: "
+                "the canonical topic has no source blocks"
+            )
+        unit_payload: list[dict[str, Any]] = []
+        unit_ids: list[str] = []
+        for index, unit in enumerate(topic_units, start=1):
+            unit_id = str(unit.get("type_id") or f"UNIT-{index:04d}")
+            if unit_id in unit_ids:
+                unit_id = f"{unit_id}--{index:03d}"
+            unit_ids.append(unit_id)
+            unit_payload.append({
+                "assignment_unit_id": unit_id,
+                "type_title": str(unit.get("type_title") or unit.get("title") or ""),
+                "type_description": str(unit.get("type_description") or unit.get("description") or ""),
+                "source_question_ids": [
+                    str(value) for value in unit.get("source_question_ids") or []
+                ],
+                "case_title": str(unit.get("case_title") or ""),
+                "case_definition": str(unit.get("case_definition") or ""),
+            })
+        payload = {
+            "metadata": copy.deepcopy(graph.get("metadata") or {}),
+            "topic": copy.deepcopy(topic),
+            "assignment_units": unit_payload,
+            "source_blocks": source_blocks,
+        }
+        proposal = provider(copy.deepcopy(payload))
+        concepts = proposal.get("concepts") if isinstance(proposal, dict) else None
+        if not isinstance(concepts, list) or not concepts:
+            raise RuntimeError(
+                f"Phase 3 missing-host reconciliation returned no concepts for {topic.get('title')!r}"
+            )
+        allowed_units = set(unit_ids)
+        allowed_blocks = {row["block_id"] for row in source_blocks}
+        covered: list[str] = []
+        titles: set[str] = set()
+        normalized: list[dict[str, Any]] = []
+        for concept in concepts:
+            if not isinstance(concept, dict):
+                raise RuntimeError("Phase 3 missing-host reconciliation returned a non-object concept")
+            title = _plain_title(concept.get("concept_title"))
+            title_key = _normal(title)
+            block_ids = [str(value) for value in concept.get("source_block_ids") or []]
+            assigned = [str(value) for value in concept.get("assignment_unit_ids") or []]
+            if (
+                not title
+                or title_key in titles
+                or not block_ids
+                or any(value not in allowed_blocks for value in block_ids)
+                or not assigned
+                or any(value not in allowed_units for value in assigned)
+            ):
+                raise RuntimeError("Phase 3 missing-host proposal violates its bounded ID contract")
+            titles.add(title_key)
+            covered.extend(assigned)
+            description = _SPACE_RE.sub(" ", str(concept.get("description") or "")).strip()
+            mastery = _SPACE_RE.sub(" ", str(concept.get("achieving_mastery") or "")).strip()
+            parent = _plain_title(concept.get("parent_concept")) or str(topic.get("title") or "Core Concepts")
+            if not description or not mastery:
+                raise RuntimeError("Phase 3 missing-host proposal omitted pedagogical content")
+            normalized.append({
+                "topic": str(topic.get("title") or ""),
+                "parent_concept": parent,
+                "concept_title": title,
+                "concept_details": (
+                    f"Description: {description}\n"
+                    f"Achieving Mastery: {mastery}"
+                ),
+                "keywords": ", ".join(
+                    str(value).strip()
+                    for value in concept.get("keywords") or []
+                    if str(value).strip()
+                ),
+                "_semantic_topic_id": topic_id,
+                "_semantic_graph_contract": graph.get("source_contract_hash"),
+                "_source_block_ids": block_ids,
+                "_semantic_subtopic_ids": sorted({
+                    str(block.get("subtopic_id") or "")
+                    for block in graph_blocks
+                    if str(block.get("block_id") or "") in block_ids
+                    and str(block.get("subtopic_id") or "")
+                }),
+                "_source_grounding_contract": "api-created-missing-type-host",
+                "_phase3_assignment_unit_ids": assigned,
+            })
+        if sorted(covered) != sorted(allowed_units) or len(covered) != len(set(covered)):
+            raise RuntimeError(
+                "Phase 3 missing-host proposals did not cover every assignment unit exactly once"
+            )
+        review = critic({
+            **copy.deepcopy(payload),
+            "proposed_concepts": copy.deepcopy(normalized),
+        })
+        if (
+            not isinstance(review, dict)
+            or review.get("verdict") != "verified"
+            or float(review.get("confidence") or 0.0) < 0.96
+            or bool(review.get("issues"))
+        ):
+            raise RuntimeError(
+                f"Phase 3 independent critic rejected missing Type hosts for {topic.get('title')!r}"
+            )
+        # Insert immediately before that topic's culmination, or before the next
+        # topic, preserving canonical chapter order.
+        insertion = len(out)
+        topic_order = int(topic.get("order") or 0)
+        for index, row in enumerate(out):
+            row_topic = topic_by_id.get(str(row.get("_semantic_topic_id") or ""), {})
+            if (
+                str(row.get("_semantic_topic_id") or "") == topic_id
+                and cr.is_culmination(row.get("concept_title", ""))
+            ):
+                insertion = index
+                break
+            if int(row_topic.get("order") or 0) > topic_order:
+                insertion = index
+                break
+        out[insertion:insertion] = normalized
+        normal_topics.add(topic_id)
+        progress.log(
+            f"Phase 3 Type-scope preflight created {len(normalized)} "
+            f"source-grounded concept host(s) for {topic.get('title')!r}.",
+            level="success",
+        )
+    return out
+
+
+def _record_topic_schema(
+    concept_ids: list[str], topic_ids: list[str]
+) -> dict[str, Any]:
+    return {
+        "name": "aegis_phase3_concept_topic_resolution",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "assignments": {
+                    "type": "array",
+                    "minItems": len(concept_ids),
+                    "maxItems": len(concept_ids),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "concept_id": {"type": "string", "enum": concept_ids},
+                            "topic_id": {"type": "string", "enum": topic_ids},
+                            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                            "reason": {"type": "string"},
+                        },
+                        "required": ["concept_id", "topic_id", "confidence", "reason"],
+                        "additionalProperties": False,
+                    },
+                }
+            },
+            "required": ["assignments"],
+            "additionalProperties": False,
+        },
+    }
+
+
+def _record_topic_critic_schema() -> dict[str, Any]:
+    return {
+        "name": "aegis_phase3_concept_topic_resolution_critic",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "verdict": {"type": "string", "enum": ["verified", "rejected"]},
+                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                "issues": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["verdict", "confidence", "issues"],
+            "additionalProperties": False,
+        },
+    }
+
+
+def _resolve_record_topics_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
+    concept_ids = [str(row["concept_id"]) for row in payload.get("concepts") or []]
+    topic_ids = [str(row["topic_id"]) for row in payload.get("topics") or []]
+    system = (
+        "Assign each supplied pedagogical concept to exactly one canonical textbook "
+        "main-topic ID. Use the concept title, parent, description, source order, "
+        "and the supplied topic excerpts. Visible generated topic labels are hints, "
+        "not identities. Use only supplied opaque concept and topic IDs. Do not "
+        "rewrite, merge, omit, or create concepts."
+    )
+    return phase22._openai_multimodal_json(
+        system=system,
+        prompt=json.dumps(payload, ensure_ascii=False, indent=2),
+        pages=[],
+        response_schema=_record_topic_schema(concept_ids, topic_ids),
+        purpose="concept_mapping",
+        max_tokens=max(4000, min(16000, len(concept_ids) * 180)),
+    )
+
+
+def _critic_record_topics_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
+    system = (
+        "Independently verify every proposed concept-to-topic assignment against "
+        "the supplied canonical textbook topic excerpts and concept descriptions. "
+        "Reject assignments based only on heading-string similarity, source-order "
+        "convenience, or a broad culmination when a specific topic is supported. "
+        "Do not rewrite or reassign anything."
+    )
+    return phase22._openai_multimodal_json(
+        system=system,
+        prompt=json.dumps(payload, ensure_ascii=False, indent=2),
+        pages=[],
+        response_schema=_record_topic_critic_schema(),
+        purpose="concept_mapping",
+        max_tokens=4000,
+    )
+
+
+def canonicalize_record_topics(
+    records: list[dict[str, Any]],
+    graph: dict[str, Any] | None = None,
+    *,
+    provider: TopicResolutionProvider | None = None,
+    critic: TopicResolutionCritic | None = None,
+) -> list[dict[str, Any]]:
+    """Resolve concept topics by stable graph ID without silent string guessing."""
+    graph = graph or active_graph()
+    if not isinstance(graph, dict):
+        return records
+    out = copy.deepcopy(records)
+    topics = [row for row in graph.get("topics") or [] if isinstance(row, dict)]
+    topic_by_id = {
+        str(row.get("topic_id") or ""): row
+        for row in topics if str(row.get("topic_id") or "")
+    }
+    unresolved: list[int] = []
+    for index, record in enumerate(out):
+        existing_id = str(record.get("_semantic_topic_id") or "")
+        topic = topic_by_id.get(existing_id)
+        if topic is None:
+            topic = canonical_topic_for_text(graph, record.get("topic"))
+        if topic is None:
+            unresolved.append(index)
+            continue
+        record["topic"] = str(topic.get("title") or record.get("topic") or "")
+        record["_semantic_topic_id"] = str(topic.get("topic_id") or "")
+        record["_semantic_graph_contract"] = graph.get("source_contract_hash")
+
+    if unresolved and topics:
+        provider = provider or (
+            _resolve_record_topics_via_openai if semantic_api_enabled() else None
+        )
+        critic = critic or (
+            _critic_record_topics_via_openai if semantic_api_enabled() else None
+        )
+        if provider is not None and critic is not None:
+            excerpts = {
+                str(row.get("topic") or ""): str(row.get("excerpt") or "")
+                for row in graph_topic_excerpts(graph)
+            }
+            concepts: list[dict[str, Any]] = []
+            concept_index: dict[str, int] = {}
+            for local, index in enumerate(unresolved, start=1):
+                concept_id = f"CONCEPT-TOPIC-{local:04d}"
+                concept_index[concept_id] = index
+                record = out[index]
+                concepts.append({
+                    "concept_id": concept_id,
+                    "source_order": index + 1,
+                    "generated_topic_hint": str(record.get("topic") or ""),
+                    "concept_title": str(record.get("concept_title") or ""),
+                    "parent_concept": str(record.get("parent_concept") or ""),
+                    "description": str(record.get("concept_details") or "")[:2400],
+                })
+            topic_payload = [{
+                "topic_id": str(topic.get("topic_id") or ""),
+                "order": int(topic.get("order") or 0),
+                "title": str(topic.get("title") or ""),
+                "excerpt": excerpts.get(str(topic.get("title") or ""), "")[:5000],
+            } for topic in topics]
+            payload = {
+                "metadata": copy.deepcopy(graph.get("metadata") or {}),
+                "topics": topic_payload,
+                "concepts": concepts,
+            }
+            response = provider(copy.deepcopy(payload))
+            rows = response.get("assignments") if isinstance(response, dict) else None
+            if not isinstance(rows, list):
+                raise ValueError("Phase 3 concept-topic resolver returned no assignments")
+            seen: set[str] = set()
+            proposals: list[dict[str, Any]] = []
+            for row in rows:
+                if not isinstance(row, dict):
+                    raise ValueError("Phase 3 concept-topic resolver returned a non-object row")
+                concept_id = str(row.get("concept_id") or "")
+                topic_id = str(row.get("topic_id") or "")
+                confidence = float(row.get("confidence") or 0.0)
+                if (
+                    concept_id not in concept_index
+                    or concept_id in seen
+                    or topic_id not in topic_by_id
+                    or confidence < 0.96
+                ):
+                    raise ValueError("Phase 3 concept-topic resolver violated its bounded ID contract")
+                seen.add(concept_id)
+                proposals.append({
+                    "concept_id": concept_id,
+                    "topic_id": topic_id,
+                    "confidence": confidence,
+                    "reason": str(row.get("reason") or ""),
+                })
+            if seen != set(concept_index):
+                raise ValueError("Phase 3 concept-topic resolver omitted concept IDs")
+            review = critic({
+                **copy.deepcopy(payload),
+                "proposed_assignments": copy.deepcopy(proposals),
+            })
+            if (
+                not isinstance(review, dict)
+                or review.get("verdict") != "verified"
+                or float(review.get("confidence") or 0.0) < 0.96
+                or bool(review.get("issues"))
+            ):
+                raise ValueError("Phase 3 concept-topic assignments failed independent verification")
+            for proposal in proposals:
+                index = concept_index[proposal["concept_id"]]
+                topic = topic_by_id[proposal["topic_id"]]
+                out[index]["topic"] = str(topic.get("title") or "")
+                out[index]["_semantic_topic_id"] = proposal["topic_id"]
+                out[index]["_semantic_graph_contract"] = graph.get("source_contract_hash")
+                out[index]["_semantic_topic_confidence"] = proposal["confidence"]
+                out[index]["_semantic_topic_contract"] = "api-verified-topic-id"
+        else:
+            # Explicit offline/test mode retains deterministic source progression.
+            for index in unresolved:
+                previous = next(
+                    (
+                        topic_by_id.get(str(out[prior].get("_semantic_topic_id") or ""))
+                        for prior in range(index - 1, -1, -1)
+                        if str(out[prior].get("_semantic_topic_id") or "") in topic_by_id
+                    ),
+                    None,
+                )
+                topic = previous or topics[0]
+                out[index]["topic"] = str(topic.get("title") or out[index].get("topic") or "")
+                out[index]["_semantic_topic_id"] = str(topic.get("topic_id") or "")
+                out[index]["_semantic_graph_contract"] = graph.get("source_contract_hash")
+                out[index]["_semantic_topic_contract"] = "offline-source-order-fallback"
+    return out
+
+def _grounding_schema(concept_ids: list[str], block_ids: list[str]) -> dict[str, Any]:
+    return {
+        "name": "phase3_concept_source_grounding",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "concepts": {
+                    "type": "array",
+                    "minItems": len(concept_ids),
+                    "maxItems": len(concept_ids),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "concept_id": {"type": "string", "enum": concept_ids},
+                            "source_block_ids": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {"type": "string", "enum": block_ids},
+                            },
+                            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                            "reason": {"type": "string"},
+                        },
+                        "required": ["concept_id", "source_block_ids", "confidence", "reason"],
+                        "additionalProperties": False,
+                    },
+                }
+            },
+            "required": ["concepts"],
+            "additionalProperties": False,
+        },
+    }
+
+
+def _ground_records_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
+    concept_ids = [str(row["concept_id"]) for row in payload.get("concepts") or []]
+    block_ids = [str(row["block_id"]) for row in payload.get("source_blocks") or []]
+    system = (
+        "Ground every pedagogical concept to the smallest sufficient set of "
+        "source blocks from its already-fixed canonical topic. Use only supplied "
+        "opaque IDs. Do not rewrite concepts or source text. A concept must be "
+        "supported by visible textbook evidence, not merely topical similarity."
+    )
+    return phase22._openai_multimodal_json(
+        system=system,
+        prompt=json.dumps(payload, ensure_ascii=False, indent=2),
+        pages=[],
+        response_schema=_grounding_schema(concept_ids, block_ids),
+        purpose="concept_mapping",
+        max_tokens=max(4000, min(20000, len(concept_ids) * 220)),
+    )
+
+
+def _grounding_critic_schema() -> dict[str, Any]:
+    return {
+        "name": "phase3_concept_source_grounding_critic",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "verdict": {"type": "string", "enum": ["verified", "rejected"]},
+                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                "issues": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["verdict", "confidence", "issues"],
+            "additionalProperties": False,
+        },
+    }
+
+
+def _critic_ground_records_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
+    system = (
+        "Independently verify that every proposed concept-to-source-block grounding "
+        "is visibly supported, topic-bounded, minimally sufficient, and not based "
+        "on broad topical similarity. Reject omitted concepts, unrelated blocks, "
+        "or confidence unsupported by the supplied source. Do not rewrite anything."
+    )
+    return phase22._openai_multimodal_json(
+        system=system,
+        prompt=json.dumps(payload, ensure_ascii=False, indent=2),
+        pages=[],
+        response_schema=_grounding_critic_schema(),
+        purpose="concept_mapping",
+        max_tokens=4000,
+    )
+
+
+def ground_concepts(
+    records: list[dict[str, Any]],
+    *,
+    graph: dict[str, Any] | None = None,
+    canonical: dict[str, Any] | None = None,
+    provider: GroundingProvider | None = None,
+    critic: GroundingCritic | None = None,
+) -> list[dict[str, Any]]:
+    graph = graph or active_graph()
+    if not isinstance(graph, dict) or not records:
+        return records
+    out = canonicalize_record_topics(records, graph)
+    canonical = canonical or (active_session() or {}).get("canonical") or {}
+    canonical_blocks = {
+        str(row.get("block_id") or ""): row
+        for row in canonical.get("blocks") or [] if isinstance(row, dict)
+    }
+    graph_blocks = [row for row in graph.get("blocks") or [] if isinstance(row, dict)]
+    topic_by_id = {
+        str(row.get("topic_id") or ""): row for row in graph.get("topics") or []
+        if isinstance(row, dict)
+    }
+    provider = provider or (_ground_records_via_openai if semantic_api_enabled() else None)
+    critic = critic or (
+        _critic_ground_records_via_openai if semantic_api_enabled() else None
+    )
+    for topic_id, topic in topic_by_id.items():
+        indices = [
+            index for index, row in enumerate(out)
+            if str(row.get("_semantic_topic_id") or "") == topic_id
+        ]
+        if not indices:
+            continue
+        candidates = [
+            block for block in graph_blocks
+            if block.get("topic_id") == topic_id
+            and block.get("kind") not in {"layout", "heading"}
+        ]
+        candidate_payload = []
+        for block in candidates:
+            source = canonical_blocks.get(str(block.get("block_id") or ""), {})
+            text = _clean_public_text(_graph_block_text(block, source))
+            if not text:
+                continue
+            candidate_payload.append({
+                "block_id": block["block_id"],
+                "kind": block.get("kind"),
+                "subtopic_id": block.get("subtopic_id") or "",
+                "text": text[:1800],
+            })
+        if not candidate_payload:
+            continue
+        concepts_payload = []
+        concept_id_by_index: dict[str, int] = {}
+        for local, index in enumerate(indices, start=1):
+            concept_id = f"CONCEPT-GROUND-{local:04d}"
+            concept_id_by_index[concept_id] = index
+            concepts_payload.append({
+                "concept_id": concept_id,
+                "concept_title": str(out[index].get("concept_title") or ""),
+                "parent_concept": str(out[index].get("parent_concept") or ""),
+                "description": str(out[index].get("concept_details") or "")[:2200],
+            })
+        if provider is None:
+            # Deterministic bounded fallback: ground to all source blocks in the
+            # topic rather than inventing semantic precision.
+            for index in indices:
+                block_ids = [row["block_id"] for row in candidate_payload]
+                out[index]["_source_block_ids"] = block_ids
+                out[index]["_semantic_subtopic_ids"] = sorted({
+                    str(block.get("subtopic_id") or "")
+                    for block in candidates
+                    if block.get("subtopic_id")
+                })
+                out[index]["_source_grounding_contract"] = "topic-bounded-deterministic"
+            continue
+        payload = {
+            "topic": topic,
+            "concepts": concepts_payload,
+            "source_blocks": candidate_payload,
+        }
+        response = provider(payload)
+        rows = response.get("concepts") if isinstance(response, dict) else None
+        if not isinstance(rows, list):
+            raise ValueError("Phase 3 concept grounding returned no concepts array")
+        if critic is None:
+            raise ValueError("Phase 3 concept grounding requires an independent critic")
+        seen: set[str] = set()
+        allowed_blocks = {str(row["block_id"]) for row in candidate_payload}
+        proposals: list[dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                raise ValueError("Phase 3 concept grounding returned a non-object row")
+            concept_id = str(row.get("concept_id") or "")
+            confidence = float(row.get("confidence") or 0.0)
+            if concept_id not in concept_id_by_index or concept_id in seen:
+                raise ValueError("Phase 3 concept grounding changed concept identity")
+            seen.add(concept_id)
+            block_ids = [str(value) for value in row.get("source_block_ids") or []]
+            if (
+                not block_ids
+                or any(value not in allowed_blocks for value in block_ids)
+                or confidence < 0.96
+            ):
+                raise ValueError("Phase 3 concept grounding used an invalid or uncertain source block")
+            proposals.append({
+                "concept_id": concept_id,
+                "source_block_ids": block_ids,
+                "confidence": confidence,
+                "reason": str(row.get("reason") or ""),
+            })
+        if seen != set(concept_id_by_index):
+            raise ValueError("Phase 3 concept grounding omitted concept IDs")
+        review = critic({
+            **copy.deepcopy(payload),
+            "proposed_grounding": copy.deepcopy(proposals),
+        })
+        if (
+            not isinstance(review, dict)
+            or review.get("verdict") != "verified"
+            or float(review.get("confidence") or 0.0) < 0.96
+            or bool(review.get("issues"))
+        ):
+            raise ValueError("Phase 3 concept grounding failed independent verification")
+        for proposal in proposals:
+            index = concept_id_by_index[proposal["concept_id"]]
+            block_ids = proposal["source_block_ids"]
+            out[index]["_source_block_ids"] = block_ids
+            out[index]["_semantic_subtopic_ids"] = sorted({
+                str(next(
+                    (block.get("subtopic_id") for block in candidates if block.get("block_id") == block_id),
+                    "",
+                ) or "")
+                for block_id in block_ids
+            } - {""})
+            out[index]["_source_grounding_contract"] = "api-verified-source-block-ids"
+            out[index]["_source_grounding_confidence"] = proposal["confidence"]
+    return out
+
+
+def graph_topic_headings(graph: dict[str, Any] | None = None) -> list[str]:
+    graph = graph or active_graph()
+    if not isinstance(graph, dict):
+        return []
+    return [str(row.get("title") or "") for row in graph.get("topics") or [] if str(row.get("title") or "")]
+
+
+def graph_topic_excerpts(
+    graph: dict[str, Any] | None = None,
+    canonical: dict[str, Any] | None = None,
+) -> list[dict[str, str]]:
+    graph = graph or active_graph()
+    if not isinstance(graph, dict):
+        return []
+    canonical = canonical or (active_session() or {}).get("canonical") or {}
+    blocks = {
+        str(row.get("block_id") or ""): row
+        for row in canonical.get("blocks") or [] if isinstance(row, dict)
+    }
+    out: list[dict[str, str]] = []
+    for topic in graph.get("topics") or []:
+        topic_id = str(topic.get("topic_id") or "")
+        pieces: list[str] = []
+        for block in graph.get("blocks") or []:
+            if not isinstance(block, dict) or block.get("topic_id") != topic_id:
+                continue
+            source = blocks.get(str(block.get("block_id") or ""), {})
+            text = _clean_public_text(_graph_block_text(block, source))
+            if text:
+                pieces.append(text)
+        out.append({"topic": str(topic.get("title") or ""), "excerpt": "\n\n".join(pieces)})
+    return out
+
+
+def load_page_evidence(
+    source_path: Path,
+    artifact_dir: Path,
+    *,
+    job_id: int | None = None,
+) -> dict[str, Any] | None:
+    if not vision_enabled() or source_path.suffix.lower() != ".pdf":
+        return None
+    artifact_path = Path(artifact_dir) / VISION_ACSD_FILENAME
+    pdf_sha = page_acsd._pdf_sha256(source_path)
+    bundle: dict[str, Any] | None = None
+    if artifact_path.exists():
+        try:
+            cached = json.loads(artifact_path.read_text(encoding="utf-8"))
+            if (
+                isinstance(cached, dict)
+                and cached.get("pdf_sha256") == pdf_sha
+                and cached.get("compiler_version") == page_acsd.FALLBACK_COMPILER
+                and cached.get("schema_version") == "1.1.0"
+            ):
+                bundle = cached
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            bundle = None
+    if bundle is None:
+        progress.step("Canonical source — Phase 3 full PDF evidence fusion", value=0.01)
+        progress.log(
+            "Phase 3 is extracting and independently verifying every original PDF "
+            "page as a parallel semantic evidence channel.",
+            level="warning",
+        )
+        bundle = page_acsd.extract_pdf_to_page_acsd(source_path)
+    # Figure assets are needed not only by the full fallback but also when a
+    # verified PDF table cell repairs converter-only semantic markup.
+    if job_id is not None:
+        needs_assets = any(
+            block.get("kind") == "figure" and not block.get("asset_url")
+            for page in bundle.get("pages") or [] if isinstance(page, dict)
+            for block in page.get("blocks") or [] if isinstance(block, dict)
+        )
+        if needs_assets:
+            page_acsd.materialize_visual_assets(
+                source_path,
+                bundle,
+                job_id=int(job_id),
+                artifact_dir=Path(artifact_dir),
+            )
+    _atomic_write(artifact_path, _json_text(bundle))
+    return bundle
+
+
+def write_artifacts(
+    directory: Path,
+    *,
+    graph: dict[str, Any],
+    report: dict[str, Any],
+    semantic_source: str,
+    page_bundle: dict[str, Any] | None = None,
+) -> None:
+    directory = Path(directory)
+    _atomic_write(directory / GRAPH_FILENAME, _json_text(graph))
+    _atomic_write(directory / GRAPH_REPORT_FILENAME, _json_text(report))
+    _atomic_write(directory / SEMANTIC_SOURCE_FILENAME, semantic_source)
+    if page_bundle is not None:
+        _atomic_write(directory / VISION_ACSD_FILENAME, _json_text(page_bundle))
+
+
+def load_graph(directory: Path, canonical: dict[str, Any]) -> dict[str, Any] | None:
+    path = Path(directory) / GRAPH_FILENAME
+    if not path.exists():
+        return None
+    try:
+        graph = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(graph, dict):
+        return None
+    if (
+        graph.get("schema_name") != SCHEMA_NAME
+        or graph.get("schema_version") != SCHEMA_VERSION
+        or graph.get("compiler_version") != COMPILER_VERSION
+        or graph.get("phase") != PHASE
+    ):
+        return None
+    if graph.get("source_contract_hash") != source_contract_hash(canonical):
+        return None
+    return graph
+
+
+def load_verified_generation_graph(
+    directory: Path,
+    canonical: dict[str, Any],
+    metadata: dict[str, Any],
+) -> tuple[dict[str, Any], str] | None:
+    """Return only a fully verified, current, internally consistent graph.
+
+    A compatible concept checkpoint never waives source verification. The live
+    path may avoid a repeated model call only when an earlier graph for the same
+    complete ACSD/overlay contract was independently API-verified and its
+    deterministic semantic rendering still validates byte-for-byte.
+    """
+    graph = load_graph(directory, canonical)
+    if not isinstance(graph, dict):
+        return None
+    if graph.get("status") != "ready":
+        return None
+    if graph.get("classification_mode") != "api_classified_and_verified":
+        return None
+    if graph.get("semantic_context_hash") != semantic_context_hash(metadata):
+        return None
+    semantic_path = Path(directory) / SEMANTIC_SOURCE_FILENAME
+    try:
+        semantic_source = semantic_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    if graph.get("semantic_source_sha256") != _sha256_text(semantic_source):
+        return None
+    if validate_graph(
+        graph,
+        canonical=canonical,
+        semantic_source=semantic_source,
+    ):
+        return None
+    return graph, semantic_source
+
+
+def checkpoint_resume_graph_safe(
+    graph: dict[str, Any],
+    *,
+    canonical: dict[str, Any],
+) -> bool:
+    """Prove that a legacy checkpoint is attached to a verified source graph.
+
+    A checkpoint preserves already-completed concept work, inventory, and mined
+    Types.  It does not grant permission to resume on a deterministic guess.  A
+    cached graph is reusable only after API classification, independent semantic
+    criticism, current-contract validation, and complete QID/topic ownership.
+    """
+    if graph.get("status") != "ready":
+        return False
+    if graph.get("classification_mode") != "api_classified_and_verified":
+        return False
+    if not graph.get("topics"):
+        return False
+    if any(
+        row.get("severity") == "error"
+        for row in graph.get("issues") or []
+        if isinstance(row, dict)
+    ):
+        return False
+    semantic_source = render_semantic_source(graph, canonical)
+    if validate_graph(
+        graph,
+        canonical=canonical,
+        semantic_source=semantic_source,
+    ):
+        return False
+    topic_ids = {
+        str(row.get("topic_id") or "")
+        for row in graph.get("topics") or []
+        if isinstance(row, dict)
+    }
+    if not topic_ids:
+        return False
+    for task in graph.get("tasks") or []:
+        if not isinstance(task, dict):
+            return False
+        if str(task.get("topic_id") or "") not in topic_ids:
+            return False
+        if not str(task.get("qid") or ""):
+            return False
+    return True
+
+
+def prepare_generation_graph(
+    *,
+    canonical: dict[str, Any],
+    source_text: str,
+    metadata: dict[str, Any],
+    source_path: Path | None,
+    artifact_dir: Path,
+    verify_semantics: bool = True,
+) -> dict[str, Any]:
+    if verify_semantics:
+        cached = load_verified_generation_graph(artifact_dir, canonical, metadata)
+        if cached is not None:
+            graph, _semantic_source = cached
+            progress.log(
+                "Reused the API-verified Phase 3 semantic graph for the current "
+                "source contract; no hierarchy model call was repeated.",
+                level="success",
+            )
+            return graph
+
+    page_bundle = None
+    if source_path is not None and source_path.exists():
+        page_bundle = load_page_evidence(
+            source_path,
+            artifact_dir,
+            job_id=(active_session() or {}).get("job_id"),
+        )
+    hierarchy_provider = (
+        _classify_hierarchy_via_openai
+        if verify_semantics and semantic_api_enabled() else None
+    )
+    critic_provider = (
+        _critic_hierarchy_via_openai
+        if verify_semantics and semantic_api_enabled() else None
+    )
+    graph, report = compile_semantic_graph(
+        canonical,
+        source_text=source_text,
+        metadata=metadata,
+        page_bundle=page_bundle,
+        hierarchy_provider=hierarchy_provider,
+        critic_provider=critic_provider,
+    )
+    graph = reconcile_source_anomalies(
+        graph,
+        canonical=canonical,
+        page_bundle=page_bundle,
+        source_path=source_path,
+    )
+    semantic_source = render_semantic_source(graph, canonical)
+    graph["semantic_source_sha256"] = _sha256_text(semantic_source)
+    report["status"] = graph.get("status")
+    report["semantic_source_sha256"] = graph.get("semantic_source_sha256")
+    report["issues"] = copy.deepcopy(graph.get("issues") or [])
+    report.setdefault("summary", {})["errors"] = sum(
+        1 for row in graph.get("issues") or [] if row.get("severity") == "error"
+    )
+    report.setdefault("summary", {})["warnings"] = sum(
+        1 for row in graph.get("issues") or [] if row.get("severity") == "warning"
+    )
+    report.setdefault("summary", {})["source_fusion_repairs"] = len(
+        graph.get("source_fusion_repairs") or []
+    )
+    write_artifacts(
+        artifact_dir,
+        graph=graph,
+        report=report,
+        semantic_source=semantic_source,
+        page_bundle=page_bundle,
+    )
+    if graph.get("status") != "ready":
+        details = "; ".join(
+            str(row.get("message") or row.get("code") or "")
+            for row in graph.get("issues") or []
+            if row.get("severity") == "error"
+        )
+        raise ValueError(
+            "Phase 3 semantic source graph is not safe for concept generation: "
+            + (details or "source review required")
+        )
+    progress.log(
+        "Phase 3 semantic graph active: "
+        f"{len(graph.get('topics') or [])} stable topic(s), "
+        f"{len(graph.get('subtopics') or [])} subtopic(s), "
+        f"{len(graph.get('tasks') or [])} QID task(s); semantic generation now "
+        "uses graph-controlled source packets rather than flat raw MMD.",
+        level="success",
+    )
+    return graph
+
+
+@contextmanager
+def activate(graph: dict[str, Any]) -> Iterator[None]:
+    token = _ACTIVE_GRAPH.set(graph)
+    try:
+        yield
+    finally:
+        _ACTIVE_GRAPH.reset(token)
+
+
+def active_graph() -> dict[str, Any] | None:
+    value = _ACTIVE_GRAPH.get()
+    return value if isinstance(value, dict) else None
+
+
+@contextmanager
+def activate_session(session: dict[str, Any]) -> Iterator[None]:
+    token = _ACTIVE_SESSION.set(session)
+    try:
+        yield
+    finally:
+        _ACTIVE_SESSION.reset(token)
+
+
+def active_session() -> dict[str, Any] | None:
+    value = _ACTIVE_SESSION.get()
+    return value if isinstance(value, dict) else None
+
+
+def semantic_source_for_active_graph(raw_source: str) -> str:
+    graph = active_graph()
+    session = active_session()
+    if not isinstance(graph, dict) or not isinstance(session, dict):
+        return str(raw_source or "")
+    canonical = session.get("canonical")
+    if not isinstance(canonical, dict):
+        return str(raw_source or "")
+    return render_semantic_source(graph, canonical)
+
+
+def artifact_manifest(directory: Path) -> dict[str, Any]:
+    directory = Path(directory)
+    graph_path = directory / GRAPH_FILENAME
+    report_path = directory / GRAPH_REPORT_FILENAME
+    report: dict[str, Any] = {}
+    if report_path.exists():
+        try:
+            value = json.loads(report_path.read_text(encoding="utf-8"))
+            if isinstance(value, dict):
+                report = value
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            report = {}
+    files: list[dict[str, Any]] = []
+    for kind, spec in ARTIFACT_SPECS.items():
+        path = directory / spec["filename"]
+        if not path.exists():
+            continue
+        files.append({
+            "kind": kind,
+            "label": spec["label"],
+            "filename": spec["filename"],
+            "media_type": spec["media_type"],
+            "size_bytes": path.stat().st_size,
+        })
+    return {
+        "available": graph_path.exists(),
+        "status": str(report.get("status") or "unavailable"),
+        "schema_version": str(report.get("schema_version") or SCHEMA_VERSION),
+        "compiler_version": str(report.get("compiler_version") or COMPILER_VERSION),
+        "phase": PHASE,
+        "source_contract_hash": str(report.get("source_contract_hash") or ""),
+        "semantic_context_hash": str(report.get("semantic_context_hash") or ""),
+        "semantic_source_sha256": str(report.get("semantic_source_sha256") or ""),
+        "classification_mode": str(report.get("classification_mode") or ""),
+        "summary": copy.deepcopy(report.get("summary") or {}),
+        "files": files,
+    }
+
+
+def artifact_path(directory: Path, kind: str) -> tuple[Path, dict[str, str]]:
+    spec = ARTIFACT_SPECS.get(str(kind or ""))
+    if spec is None:
+        raise ValueError("unknown Phase 3 source artifact")
+    path = Path(directory) / spec["filename"]
+    if not path.exists():
+        raise ValueError("Phase 3 source artifact is unavailable")
+    return path, spec

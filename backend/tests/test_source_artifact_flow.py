@@ -32,9 +32,16 @@ def _assert_downloads(
     assert payload["shadow_mode"] is (not phase2)
     assert payload["used_for_generation"] is phase2
     assert payload["manifest_url"] == f"/source-artifacts/uploads/{job_id}"
-    assert {item["kind"] for item in payload["files"]} == {
-        "raw_mmd", "canonical_json", "aegis_mmd", "report",
-    }
+    kinds = {item["kind"] for item in payload["files"]}
+    assert {"raw_mmd", "canonical_json", "aegis_mmd", "report"} <= kinds
+    if phase2:
+        assert {
+            "semantic_graph", "semantic_graph_report", "semantic_source",
+        } <= kinds
+    else:
+        assert kinds == {
+            "raw_mmd", "canonical_json", "aegis_mmd", "report",
+        }
     if phase2:
         assert payload["phase"] == "phase-2-source-critical"
         assert payload["generation_usage"]["mode"] == "source-critical"
@@ -83,6 +90,20 @@ def _assert_downloads(
     report = client.get(f"/source-artifacts/uploads/{job_id}/report")
     assert report.status_code == 200
     assert json.loads(report.text)["used_for_generation"] is phase2
+
+    if phase2:
+        graph_response = client.get(
+            f"/source-artifacts/uploads/{job_id}/semantic_graph"
+        )
+        assert graph_response.status_code == 200
+        semantic_graph = json.loads(graph_response.text)
+        assert semantic_graph["schema_version"] == "3.0.0"
+        assert semantic_graph["source_contract_hash"]
+        semantic_source = client.get(
+            f"/source-artifacts/uploads/{job_id}/semantic_source"
+        )
+        assert semantic_source.status_code == 200
+        assert "Ordered Chapter" in semantic_source.text
 
 
 def test_concept_conversion_writes_phase2_source_critical_artifacts(client):

@@ -4,7 +4,12 @@ import io
 import pytest
 
 from app import models
-from app.services import build_concepts, openai_usage
+from app.services import (
+    build_concepts,
+    canonical_source_phase2 as phase2,
+    canonical_source_phase3 as phase3,
+    openai_usage,
+)
 from tests.conftest import convert_concept_upload, stream_events, stream_result
 
 
@@ -442,6 +447,61 @@ def test_post_learning_api_discards_invalid_final_and_completes_retry_without_ap
         history, stale_final, **checkpoint_args)
     db.commit()
 
+    # Phase 3 never resumes a concept checkpoint on a deterministic source guess.
+    # Seed the independently verified source graph so this regression can remain
+    # focused on durable concept-checkpoint recovery without another model call.
+    canonical = phase2.compile_phase2_source(
+        source,
+        source_filename=job.filename,
+        consumer_module="build_concepts",
+    ).canonical
+    metadata = {
+        "board": chapter.board,
+        "grade": chapter.grade,
+        "subject": chapter.subject,
+        "unit": chapter.unit,
+        "chapter_title": chapter.chapter_title,
+        "chapter_id": chapter.id,
+        "chapter_code": chapter.chapter_code,
+        "learning_kind": "Post",
+    }
+
+    def classify_source(payload):
+        return {
+            "sections": [
+                {
+                    "section_id": row["section_id"],
+                    "role": row["baseline_role"],
+                    "parent_section_id": "",
+                    "confidence": 0.999,
+                    "evidence": ["verified checkpoint regression source"],
+                }
+                for row in payload["sections"]
+            ]
+        }
+
+    graph, graph_report = phase3.compile_semantic_graph(
+        canonical,
+        source_text=source,
+        metadata=metadata,
+        hierarchy_provider=classify_source,
+        critic_provider=lambda _payload: {
+            "verdict": "verified",
+            "confidence": 0.999,
+            "repairs": [],
+            "issues": [],
+        },
+    )
+    assert graph_report["classification_mode"] == "api_classified_and_verified"
+
+    def use_verified_source_graph(**kwargs):
+        assert kwargs["verify_semantics"] is True
+        assert kwargs["metadata"] == metadata
+        return graph
+
+    monkeypatch.setattr(
+        phase3, "prepare_generation_graph", use_verified_source_graph
+    )
     monkeypatch.setattr(
         build_concepts.generation.config,
         "use_live_generation",
