@@ -43,6 +43,9 @@ from .canonical_source_phase33_preflight_contract import (
 from .canonical_source_phase331_host_authority_contract import (
     install as _install_canonical_source_phase331_host_authority_contract,
 )
+from .canonical_source_phase332_cache_compat_contract import (
+    install as _install_canonical_source_phase332_cache_compat_contract,
+)
 
 # Production order is intentional and fail-closed: preserve source identity first,
 # defer Type allocation to the topology freeze, restore integration boundaries,
@@ -60,8 +63,10 @@ from .canonical_source_phase331_host_authority_contract import (
 # make that adjudication resumable, feed exact-grounding rejection back into one
 # bounded topology retry, and certify every normal Type/Case to an existing or
 # necessary new source-grounded concept before final topology freeze. Phase 3.3.1
-# then makes that independently verified host identity authoritative throughout
-# the legacy assignment and semantic host-review passes.
+# makes that independently verified host identity authoritative throughout the
+# legacy assignment and semantic host-review passes. Phase 3.3.2 invalidates
+# pre-Phase3.3 whole-topology caches once and bypasses them during grounding-led
+# reconsideration without discarding the new per-concept verified decisions.
 _install_closed_inventory_contract(generation)
 _install_concept_topology_contract(generation)
 _install_concept_topology_compat(generation)
@@ -80,6 +85,7 @@ _install_canonical_source_phase31_grounding_contract(generation)
 _install_canonical_source_phase32_topology_adjudication_contract(generation)
 _install_canonical_source_phase33_preflight_contract(generation)
 _install_canonical_source_phase331_host_authority_contract(generation)
+_install_canonical_source_phase332_cache_compat_contract(generation)
 
 del _install_closed_inventory_contract
 del _install_concept_topology_contract
@@ -99,3 +105,4 @@ del _install_canonical_source_phase31_grounding_contract
 del _install_canonical_source_phase32_topology_adjudication_contract
 del _install_canonical_source_phase33_preflight_contract
 del _install_canonical_source_phase331_host_authority_contract
+del _install_canonical_source_phase332_cache_compat_contract
