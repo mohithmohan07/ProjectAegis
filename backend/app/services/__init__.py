@@ -40,6 +40,9 @@ from .canonical_source_phase32_topology_adjudication_contract import (
 from .canonical_source_phase33_preflight_contract import (
     install as _install_canonical_source_phase33_preflight_contract,
 )
+from .canonical_source_phase331_host_authority_contract import (
+    install as _install_canonical_source_phase331_host_authority_contract,
+)
 
 # Production order is intentional and fail-closed: preserve source identity first,
 # defer Type allocation to the topology freeze, restore integration boundaries,
@@ -56,7 +59,9 @@ from .canonical_source_phase33_preflight_contract import (
 # refines, or splits concepts before learner analysis. Phase 3.3 installs last to
 # make that adjudication resumable, feed exact-grounding rejection back into one
 # bounded topology retry, and certify every normal Type/Case to an existing or
-# necessary new source-grounded concept before final topology freeze.
+# necessary new source-grounded concept before final topology freeze. Phase 3.3.1
+# then makes that independently verified host identity authoritative throughout
+# the legacy assignment and semantic host-review passes.
 _install_closed_inventory_contract(generation)
 _install_concept_topology_contract(generation)
 _install_concept_topology_compat(generation)
@@ -74,6 +79,7 @@ _install_canonical_source_phase3_contract(generation)
 _install_canonical_source_phase31_grounding_contract(generation)
 _install_canonical_source_phase32_topology_adjudication_contract(generation)
 _install_canonical_source_phase33_preflight_contract(generation)
+_install_canonical_source_phase331_host_authority_contract(generation)
 
 del _install_closed_inventory_contract
 del _install_concept_topology_contract
@@ -92,3 +98,4 @@ del _install_canonical_source_phase3_contract
 del _install_canonical_source_phase31_grounding_contract
 del _install_canonical_source_phase32_topology_adjudication_contract
 del _install_canonical_source_phase33_preflight_contract
+del _install_canonical_source_phase331_host_authority_contract
