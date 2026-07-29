@@ -31,6 +31,9 @@ from .canonical_source_phase222_contract import (
 from .canonical_source_phase3_contract import (
     install as _install_canonical_source_phase3_contract,
 )
+from .canonical_source_phase31_grounding_contract import (
+    install as _install_canonical_source_phase31_grounding_contract,
+)
 
 # Production order is intentional and fail-closed: preserve source identity first,
 # defer Type allocation to the topology freeze, restore integration boundaries,
@@ -42,7 +45,9 @@ from .canonical_source_phase3_contract import (
 # Phase 2.2.1 hardens evidence addressing and adds a verified GPT PDF-to-ACSD
 # fallback only for hard or objectively unusable Mathpix conversions. Phase 2.2.2
 # classifies repeated running navigation without polluting semantic MMD. Phase 3
-# then unifies every source channel into stable semantic IDs and installs last.
+# unifies every source channel into stable semantic IDs. Phase 3.1 installs last
+# to ground only source-facing concept claims, repair critic-rejected IDs, and
+# make final-topology/grounding resume boundaries durable.
 _install_closed_inventory_contract(generation)
 _install_concept_topology_contract(generation)
 _install_concept_topology_compat(generation)
@@ -57,6 +62,7 @@ _install_canonical_source_phase22_contract(generation)
 _install_canonical_source_phase221_contract()
 _install_canonical_source_phase222_contract()
 _install_canonical_source_phase3_contract(generation)
+_install_canonical_source_phase31_grounding_contract(generation)
 
 del _install_closed_inventory_contract
 del _install_concept_topology_contract
@@ -72,3 +78,4 @@ del _install_canonical_source_phase22_contract
 del _install_canonical_source_phase221_contract
 del _install_canonical_source_phase222_contract
 del _install_canonical_source_phase3_contract
+del _install_canonical_source_phase31_grounding_contract
