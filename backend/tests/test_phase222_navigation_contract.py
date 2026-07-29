@@ -176,5 +176,5 @@ def test_prompts_treat_vertical_running_labels_as_non_semantic_navigation():
     correction = fallback._correction_system_prompt()
 
     assert "kind=navigation" in extraction
-    assert "Do not reject a candidate solely" in verification
+    assert "such navigation is omitted" in verification
     assert "Never introduce kind=sidebar or reading_order=0" in correction
