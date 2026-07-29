@@ -1,0 +1,103 @@
+name: Apply Phase 3 implementation
+
+on:
+  push:
+    branches: ["agent/phase-3-universal-semantic-graph"]
+    paths: [".github/workflows/apply-phase3-implementation.yml"]
+
+permissions:
+  contents: write
+
+env:
+  PAYLOAD_BLOB_SHA: 57f82d0767a7dd2a04edacf2dca547e0050d6de5
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/phase-3-universal-semantic-graph
+          fetch-depth: 0
+
+      - name: Download and verify Phase 3 payload
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import base64
+          import json
+          import os
+          import urllib.request
+          from pathlib import Path
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          sha = os.environ["PAYLOAD_BLOB_SHA"]
+          request = urllib.request.Request(
+              f"https://api.github.com/repos/{repo}/git/blobs/{sha}",
+              headers={
+                  "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                  "Accept": "application/vnd.github+json",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              },
+          )
+          with urllib.request.urlopen(request, timeout=60) as response:
+              payload = json.load(response)
+          first_layer = base64.b64decode(payload["content"])
+          archive = base64.b64decode(first_layer)
+          if not archive.startswith(b"\xfd7zXZ\x00"):
+              raise SystemExit("Phase 3 payload is not an XZ archive")
+          Path("/tmp/phase3-payload.tar.xz").write_bytes(archive)
+          PY
+          tar -tJf /tmp/phase3-payload.tar.xz > /tmp/phase3-files.txt
+          if grep -Eq '(^|/)\.git(/|$)|^/|(^|/)\.github/workflows/' /tmp/phase3-files.txt; then
+            echo "Payload contains a forbidden path" >&2
+            cat /tmp/phase3-files.txt >&2
+            exit 1
+          fi
+          sed -n '1,240p' /tmp/phase3-files.txt
+
+      - name: Apply implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -xJf /tmp/phase3-payload.tar.xz -C .
+          rm -f .github/workflows/export-phase3-snapshot.yml
+          rm -f .github/workflows/apply-phase3-implementation.yml
+          git status --short
+
+      - name: Verify backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -r backend/requirements.txt
+          cd backend
+          python scripts/generate_dummy_data.py
+          pytest -q
+
+      - name: Verify frontend
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd frontend
+          npm ci || npm install
+          npm run build
+          npm test -- --run
+
+      - name: Commit and push implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Payload produced no repository changes" >&2
+            exit 1
+          fi
+          git commit -m "Implement Phase 3 universal semantic graph"
+          git push origin HEAD:agent/phase-3-universal-semantic-graph
