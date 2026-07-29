@@ -1,5 +1,6 @@
 name: Apply Phase 3 implementation
 
+# Retriggered after live branch audit confirmed the implementation payload was not yet materialised.
 on:
   push:
     branches: ["agent/phase-3-universal-semantic-graph"]
