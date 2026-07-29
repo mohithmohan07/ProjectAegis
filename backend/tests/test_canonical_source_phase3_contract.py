@@ -1,18 +1,20 @@
-"""Installed Phase 3 contract and artifact integration tests."""
+"""Installed Phase 3 contract and semantic-source integration tests."""
 from __future__ import annotations
 
-import json
+import copy
 from pathlib import Path
 from types import SimpleNamespace
 
 from app.services import canonical_source_phase2 as phase2
 from app.services import canonical_source_phase3 as phase3
-from app.services import canonical_source_phase3_contract as contract
 from app.services import generation, uploads
 
 
+DATA = Path(__file__).parents[1] / "data" / "Testing"
+
+
 def _source() -> str:
-    return Path("data/Testing/RNE.mmd").read_text(encoding="utf-8")
+    return (DATA / "RNE.mmd").read_text(encoding="utf-8")
 
 
 def _canonical(source: str) -> dict:
@@ -32,48 +34,23 @@ def _metadata() -> dict[str, str]:
         "chapter_title": "The Rise of Nationalism in Europe",
         "chapter_id": "1759",
         "chapter_code": "10CBSS_TheRiseOfNat",
+        "learning_kind": "Post",
     }
 
 
 def test_contract_is_installed_after_phase2_contracts():
     assert phase2._PHASE3_CONTRACT_VERSION == 1
     assert generation._PHASE3_SEMANTIC_GRAPH_VERSION == 1
-    assert uploads._CANONICAL_SOURCE_PHASE3_VERSION == 1
 
 
-def test_prepare_job_graph_writes_optional_audit_artifacts(tmp_path, monkeypatch):
+def test_installed_inventory_wrapper_attaches_graph_ids(monkeypatch):
     source = _source()
     canonical = _canonical(source)
-    job = SimpleNamespace(id=91, mmd_text=source, filename="RNE.pdf")
-    monkeypatch.setattr(uploads, "source_artifact_directory", lambda _job_id: tmp_path)
-
-    with phase2.activate(canonical):
-        graph = contract.prepare_job_graph(job, metadata=_metadata())
-
-    graph_path = tmp_path / contract.OPTIONAL_ARTIFACT_SPECS["semantic_graph"]["filename"]
-    report_path = tmp_path / contract.OPTIONAL_ARTIFACT_SPECS["semantic_graph_report"]["filename"]
-    assert graph_path.exists()
-    assert report_path.exists()
-    assert json.loads(graph_path.read_text(encoding="utf-8"))["graph_sha256"] == graph["graph_sha256"]
-    report = json.loads(report_path.read_text(encoding="utf-8"))
-    assert report["status"] == "passed"
-    assert report["summary"]["topics"] == 6
-    assert report["summary"]["tasks"] == 26
-
-    files, manifest_report = contract.optional_artifact_manifest(tmp_path)
-    assert {item["kind"] for item in files} == {
-        "semantic_graph",
-        "semantic_graph_report",
-        "semantic_source",
-        "semantic_source_report",
-    }
-    assert manifest_report["graph_sha256"] == graph["graph_sha256"]
-
-
-def test_installed_inventory_wrapper_attaches_graph_ids_without_api(monkeypatch):
-    source = _source()
-    canonical = _canonical(source)
-    graph = phase3.build_semantic_graph(canonical, source, metadata=_metadata())
+    graph, _report = phase3.compile_semantic_graph(
+        canonical,
+        source_text=source,
+        metadata=_metadata(),
+    )
     monkeypatch.setattr(
         generation,
         "_assign_chapter_wide_inventory_topics_via_api",
@@ -85,54 +62,110 @@ def test_installed_inventory_wrapper_attaches_graph_ids_without_api(monkeypatch)
             meta=_metadata(), sections=[], records=[]
         )
 
-    assert inventory["semantic_graph"]["graph_sha256"] == graph["graph_sha256"]
     assert len(inventory["items"]) == 26
     section_two = [
         item for item in inventory["items"]
         if item.get("_semantic_topic_id") == "TOPIC-0002"
     ]
     assert section_two
-    assert all(item.get("_semantic_source_block_ids") for item in section_two)
+    assert all(item.get("_semantic_source_task_id") for item in section_two)
+    assert all(item.get("_semantic_graph_contract") == graph["source_contract_hash"] for item in section_two)
 
 
-def test_concepts_wrapper_builds_graph_for_active_upload_job(
+def test_concepts_wrapper_activates_verified_graph_and_semantic_source(
     tmp_path, monkeypatch
 ):
     source = _source()
     canonical = _canonical(source)
+    graph, _report = phase3.compile_semantic_graph(
+        canonical,
+        source_text=source,
+        metadata=_metadata(),
+    )
+    semantic = phase3.render_semantic_source(graph, canonical)
     job = SimpleNamespace(
-        id=92, mmd_text=source, filename="RNE.pdf", module="build_concepts"
+        id=92,
+        mmd_text=source,
+        filename="RNE.pdf",
+        module="build_concepts",
     )
-    monkeypatch.setattr(
-        uploads, "source_artifact_directory", lambda _job_id: tmp_path
-    )
+    session = {
+        "job_id": job.id,
+        "job": job,
+        "canonical": canonical,
+        "source_path": None,
+        "artifact_dir": tmp_path,
+        "raw_source": source,
+        "graph": None,
+    }
+    observed: dict[str, object] = {}
 
-    with phase2.activate(canonical), contract.activate_job(job):
+    def prepare_generation_graph(**kwargs):
+        observed["verify_semantics"] = kwargs["verify_semantics"]
+        observed["metadata"] = copy.deepcopy(kwargs["metadata"])
+        return graph
+
+    monkeypatch.setattr(phase3, "prepare_generation_graph", prepare_generation_graph)
+    monkeypatch.setattr(phase3, "render_semantic_source", lambda *_args: semantic)
+
+    with phase2.activate(canonical), phase3.activate_session(session):
         records = generation.concepts_from_mmd(
             source,
             **_metadata(),
-            learning_kind="Post",
             live=False,
             artifacts={},
         )
 
     assert records
-    graph_path = (
-        tmp_path
-        / contract.OPTIONAL_ARTIFACT_SPECS["semantic_graph"]["filename"]
+    assert observed["verify_semantics"] is True
+    assert observed["metadata"] == _metadata()
+    assert session["graph"] is graph
+
+
+def test_phase3_artifact_manifest_and_download_fallthrough(tmp_path, monkeypatch):
+    graph = {
+        "schema_name": phase3.SCHEMA_NAME,
+        "schema_version": phase3.SCHEMA_VERSION,
+        "compiler_version": phase3.COMPILER_VERSION,
+        "phase": phase3.PHASE,
+        "status": "ready",
+        "classification_mode": "api_classified_and_verified",
+        "source_contract_hash": "source-contract",
+        "semantic_context_hash": "semantic-context",
+        "semantic_source_sha256": "semantic-source",
+        "topics": [],
+        "subtopics": [],
+        "blocks": [],
+        "tasks": [],
+        "figures": [],
+        "images": [],
+        "math": [],
+        "issues": [],
+    }
+    report = {
+        "status": "ready",
+        "schema_version": phase3.SCHEMA_VERSION,
+        "compiler_version": phase3.COMPILER_VERSION,
+        "source_contract_hash": "source-contract",
+        "semantic_context_hash": "semantic-context",
+        "semantic_source_sha256": "semantic-source",
+        "classification_mode": "api_classified_and_verified",
+        "summary": {"topics": 0, "tasks": 0},
+    }
+    phase3.write_artifacts(
+        tmp_path,
+        graph=graph,
+        report=report,
+        semantic_source="# Semantic source\n",
     )
-    graph = json.loads(graph_path.read_text(encoding="utf-8"))
-    assert graph["metadata"]["chapter_id"] == "1759"
-    assert graph["subject_adapter"] == "social_science"
+    manifest = phase3.artifact_manifest(tmp_path)
+    assert manifest["available"] is True
+    assert {item["kind"] for item in manifest["files"]} >= {
+        "semantic_graph", "semantic_graph_report", "semantic_source"
+    }
 
-
-def test_optional_artifact_download_falls_through_to_phase3(tmp_path, monkeypatch):
-    graph_file = tmp_path / contract.OPTIONAL_ARTIFACT_SPECS["semantic_graph"]["filename"]
-    graph_file.write_text("{}\n", encoding="utf-8")
     monkeypatch.setattr(uploads, "source_artifact_directory", lambda _job_id: tmp_path)
     job = SimpleNamespace(id=55)
-
     path, spec = uploads.source_artifact_download(job, "semantic_graph")
-
-    assert path == graph_file
-    assert spec["label"] == "Aegis Phase 3 semantic source graph"
+    assert path == tmp_path / phase3.GRAPH_FILENAME
+    assert spec["label"] == "Phase 3 semantic source graph"
