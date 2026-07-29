@@ -46,6 +46,9 @@ from .canonical_source_phase331_host_authority_contract import (
 from .canonical_source_phase332_cache_compat_contract import (
     install as _install_canonical_source_phase332_cache_compat_contract,
 )
+from .canonical_source_phase333_multitopic_host_contract import (
+    install as _install_canonical_source_phase333_multitopic_host_contract,
+)
 
 # Production order is intentional and fail-closed: preserve source identity first,
 # defer Type allocation to the topology freeze, restore integration boundaries,
@@ -67,6 +70,8 @@ from .canonical_source_phase332_cache_compat_contract import (
 # legacy assignment and semantic host-review passes. Phase 3.3.2 invalidates
 # pre-Phase3.3 whole-topology caches once and bypasses them during grounding-led
 # reconsideration without discarding the new per-concept verified decisions.
+# Phase 3.3.3 namespaces locally generated host keys by topic so more than one
+# canonical topic can safely add a necessary concept in the same chapter.
 _install_closed_inventory_contract(generation)
 _install_concept_topology_contract(generation)
 _install_concept_topology_compat(generation)
@@ -86,6 +91,7 @@ _install_canonical_source_phase32_topology_adjudication_contract(generation)
 _install_canonical_source_phase33_preflight_contract(generation)
 _install_canonical_source_phase331_host_authority_contract(generation)
 _install_canonical_source_phase332_cache_compat_contract(generation)
+_install_canonical_source_phase333_multitopic_host_contract(generation)
 
 del _install_closed_inventory_contract
 del _install_concept_topology_contract
@@ -106,3 +112,4 @@ del _install_canonical_source_phase32_topology_adjudication_contract
 del _install_canonical_source_phase33_preflight_contract
 del _install_canonical_source_phase331_host_authority_contract
 del _install_canonical_source_phase332_cache_compat_contract
+del _install_canonical_source_phase333_multitopic_host_contract
