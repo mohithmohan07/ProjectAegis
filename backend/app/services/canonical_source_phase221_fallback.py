@@ -34,8 +34,8 @@ from . import canonical_source_phase22 as phase22
 from . import katex_rules as kr
 from . import progress
 
-FALLBACK_VERSION = "2.2.1"
-FALLBACK_COMPILER = "gpt-pdf-to-acsd-1"
+FALLBACK_VERSION = "2.2.2"
+FALLBACK_COMPILER = "gpt-pdf-to-acsd-2"
 FALLBACK_ORIGIN = "gpt_pdf_acsd_fallback"
 GPT_PAGE_ACSD_FILENAME = "source.gpt-page-acsd.json"
 MATHPIX_RAW_FILENAME = "source.mathpix.raw.mmd"
@@ -56,6 +56,7 @@ OPTIONAL_ARTIFACT_SPECS: dict[str, dict[str, str]] = {
 _ALLOWED_KINDS = (
     "heading",
     "paragraph",
+    "source",
     "task",
     "list",
     "table",
@@ -67,6 +68,7 @@ _BBOX_RE = re.compile(r"^[0-9a-f]{64}\.jpg$")
 _SPACE_RE = re.compile(r"\s+")
 _WORD_RE = re.compile(r"[^\W_]{3,}", re.UNICODE)
 _CACHE_DIR = config.DATA_DIR / "pdf-acsd-cache"
+_SOURCE_COMPATIBLE_KINDS = frozenset({"heading", "paragraph", "list", "other"})
 
 
 @dataclass(frozen=True)
@@ -116,6 +118,12 @@ def _max_output_tokens() -> int:
     return max(4000, int(os.environ.get(
         "AEGIS_GPT_PDF_ACSD_MAX_OUTPUT_TOKENS", "32000"
     )))
+
+
+def _max_correction_attempts() -> int:
+    return max(0, min(3, int(os.environ.get(
+        "AEGIS_GPT_PDF_ACSD_MAX_CORRECTIONS", "2"
+    ))))
 
 
 def _atomic_write_bytes(path: Path, content: bytes) -> None:
@@ -476,9 +484,14 @@ Omit only repeated running headers, footers, and bare page numbers.
 
 Block rules:
 - heading: preserve the complete visible heading and hierarchy level.
-- paragraph/list/task: preserve exact wording, punctuation, numbering, and order.
+- paragraph/list: preserve exact wording, punctuation, numbering, and order.
+- source: use only for a visibly labelled historical source, excerpt, passage,
+  case study, or source box that is not itself a learner task. Preserve the
+  exact visible cue in source_label and the body in text.
 - task: separate learner instructions/questions from surrounding narrative and
-  preserve the visible source cue (Activity, Discuss, Project, etc.).
+  preserve the visible task cue (Activity, Discuss, Project, etc.) in source_label.
+- source_label must be empty on heading, paragraph, list, table, figure, math,
+  and other blocks. Never attach a source-box cue to an ordinary paragraph.
 - table: return every visible cell in table_rows.
 - figure: return a tight normalized bbox around the visual, plus its exact
   visible caption; do not invent a caption.
@@ -500,10 +513,55 @@ You are the independent Aegis PDF-to-ACSD verification reviewer. Compare the
 candidate page/block extraction against the supplied original PDF page images.
 Approve only when every meaningful block is present, wording is verbatim,
 reading order and block roles are correct, task/figure ownership is supported,
-and no content was invented. Do not rewrite or repair the candidate. Return
-needs_correction or ambiguous when any material defect remains. Output strict
-JSON only.
+and no content was invented. A visibly labelled historical source, excerpt,
+passage, case study, or source box that is not a learner task must use
+kind=source and retain its exact cue in source_label. Do not rewrite or repair
+the candidate. Return needs_correction or ambiguous when any material defect
+remains. Output strict JSON only.
 """.strip()
+
+
+def _correction_system_prompt() -> str:
+    return """
+You are the bounded Aegis PDF-to-ACSD correction reviewer. Compare the supplied
+candidate and deterministic validation failure against the original PDF page
+images. Return the complete corrected page batch, changing only fields or block
+roles required to resolve the stated defect. Preserve every visible word,
+punctuation mark, reading-order position, bounding box, table cell, formula, and
+figure link unless the original page proves the candidate wrong.
+
+Use kind=source for a visibly labelled historical source, excerpt, passage, case
+study, or source box that is not a learner task. Put its exact visible cue in
+source_label and its body in text. Use kind=task only for learner instructions or
+questions, with the exact task cue in source_label. source_label must be empty on
+all other block kinds. Never discard a visible cue merely to satisfy the schema.
+Output the complete strict JSON pages array only.
+""".strip()
+
+
+def _correction_prompt(
+    pages: list[PdfPage],
+    *,
+    candidate: dict[str, Any],
+    reason: str,
+) -> str:
+    ledger = [
+        {
+            "page_id": page.page_id,
+            "pdf_page_number_for_audit": page.page_number,
+            "text_layer": page.text[:12000],
+        }
+        for page in pages
+    ]
+    return json.dumps({
+        "page_ledger": ledger,
+        "instruction": (
+            "Correct only the stated structural defect and return the complete "
+            "page batch. Preserve all source-visible content."
+        ),
+        "validation_failure": str(reason or "unspecified validation failure")[:4000],
+        "candidate": candidate,
+    }, ensure_ascii=False)
 
 
 def _page_prompt(pages: list[PdfPage], *, candidate: dict[str, Any] | None = None) -> str:
@@ -576,6 +634,26 @@ def _tokens(value: str) -> set[str]:
     return {token.casefold() for token in _WORD_RE.findall(value)}
 
 
+def _canonicalize_source_cue_block(raw: dict[str, Any]) -> dict[str, Any]:
+    """Normalize the model's historical-source cue into an explicit source block.
+
+    The original schema allowed source_label on every block even though the
+    validator reserved it for tasks. Source-heavy textbooks therefore produced
+    a valid JSON object that the deterministic contract could never accept. This
+    normalization is semantic-field reconciliation, not content inference: the
+    exact label, text, bbox, order, and confidence are retained.
+    """
+    block = copy.deepcopy(raw)
+    kind = str(block.get("kind") or "")
+    source_label = str(block.get("source_label") or "").strip()
+    if source_label and kind in _SOURCE_COMPATIBLE_KINDS:
+        block["kind"] = "source"
+        block["heading_level"] = 0
+    elif kind == "source":
+        block["heading_level"] = 0
+    return block
+
+
 def validate_page_extraction(
     pages: list[PdfPage],
     candidate: dict[str, Any],
@@ -604,6 +682,7 @@ def validate_page_extraction(
         for raw in blocks:
             if not isinstance(raw, dict):
                 return None, f"{page_id} contains a non-object block"
+            raw = _canonicalize_source_cue_block(raw)
             order = int(raw.get("reading_order") or 0)
             kind = str(raw.get("kind") or "")
             bbox = raw.get("bbox")
@@ -627,16 +706,20 @@ def validate_page_extraction(
             linked_visuals = list(raw.get("linked_visual_orders") or [])
             heading_level = int(raw.get("heading_level") or 0)
             source_label = str(raw.get("source_label") or "").strip()
-            if kind not in {"figure", "math", "table"} and not text:
+            if kind not in {"figure", "math", "table", "source"} and not text:
                 return None, f"{page_id} block {order} has no visible text"
+            if kind == "source" and not (source_label or text):
+                return None, f"{page_id} source block {order} has no visible content"
             if kind == "heading" and heading_level < 1:
                 return None, f"{page_id} heading block {order} has no hierarchy level"
             if kind != "heading" and heading_level != 0:
                 return None, f"{page_id} non-heading block {order} has a heading level"
             if kind == "task" and not source_label:
                 return None, f"{page_id} task block {order} has no source cue"
-            if kind != "task" and source_label:
-                return None, f"{page_id} non-task block {order} has a source cue"
+            if kind == "source" and not source_label:
+                return None, f"{page_id} source block {order} has no source cue"
+            if kind not in {"task", "source"} and source_label:
+                return None, f"{page_id} non-task/non-source block {order} has a source cue"
             if kind != "task" and linked_visuals:
                 return None, f"{page_id} non-task block {order} owns visual links"
             if kind == "math" and not latex:
@@ -693,70 +776,140 @@ def validate_page_extraction(
     return {"pages": normalized_pages}, ""
 
 
-def extract_batch_via_openai(pages: list[PdfPage]) -> dict[str, Any]:
-    extraction = phase22._openai_multimodal_json(
-        system=_extraction_system_prompt(),
-        prompt=_page_prompt(pages),
-        pages=[
-            phase22.EvidencePage(
-                evidence_id=page.page_id,
-                page_number=page.page_number,
-                text=page.text,
-                image_data_url=page.image_data_url,
-                score=1.0,
-            )
-            for page in pages
-        ],
-        response_schema=extraction_schema(pages),
-        purpose="source_adjudication",
-        max_tokens=_max_output_tokens(),
-    )
-    normalized, reason = validate_page_extraction(pages, extraction)
-    if normalized is None:
-        return {"status": "review_required", "reason": reason}
-    verification = phase22._openai_multimodal_json(
-        system=_verification_system_prompt(),
-        prompt=_page_prompt(pages, candidate=normalized),
-        pages=[
-            phase22.EvidencePage(
-                evidence_id=page.page_id,
-                page_number=page.page_number,
-                text=page.text,
-                image_data_url=page.image_data_url,
-                score=1.0,
-            )
-            for page in pages
-        ],
-        response_schema=verification_schema(pages),
-        purpose="source_adjudication",
-        max_tokens=6000,
-    )
+def _verification_rejection_reason(
+    pages: list[PdfPage],
+    verification: dict[str, Any],
+) -> str:
     verdict = str(verification.get("verdict") or "")
     approved = sorted(str(value) for value in verification.get("approved_page_ids") or [])
     expected = sorted(page.page_id for page in pages)
     confidence = float(verification.get("confidence") or 0.0)
     rejected = sorted(str(value) for value in verification.get("rejected_page_ids") or [])
-    verification_issues = [
+    issues = [
         str(value).strip() for value in verification.get("issues") or []
         if str(value).strip()
     ]
-    if (
-        verdict != "verified"
-        or approved != expected
-        or rejected
-        or verification_issues
-        or confidence < _min_page_confidence()
-    ):
-        return {
-            "status": "review_required",
-            "reason": "; ".join(verification_issues)
-            or f"verification verdict was {verdict or 'missing'}",
-            "verification": verification,
-        }
+    reasons = list(issues)
+    if verdict != "verified":
+        reasons.append(f"verification verdict was {verdict or 'missing'}")
+    if approved != expected:
+        reasons.append("verification did not approve every supplied page exactly once")
+    if rejected:
+        reasons.append(f"verification rejected page(s): {', '.join(rejected)}")
+    if confidence < _min_page_confidence():
+        reasons.append(
+            f"verification confidence {confidence:.3f} is below "
+            f"{_min_page_confidence():.3f}"
+        )
+    return "; ".join(dict.fromkeys(reasons))
+
+
+def extract_batch_via_openai(pages: list[PdfPage]) -> dict[str, Any]:
+    evidence_pages = [
+        phase22.EvidencePage(
+            evidence_id=page.page_id,
+            page_number=page.page_number,
+            text=page.text,
+            image_data_url=page.image_data_url,
+            score=1.0,
+        )
+        for page in pages
+    ]
+    candidate = phase22._openai_multimodal_json(
+        system=_extraction_system_prompt(),
+        prompt=_page_prompt(pages),
+        pages=evidence_pages,
+        response_schema=extraction_schema(pages),
+        purpose="source_adjudication",
+        max_tokens=_max_output_tokens(),
+    )
+    correction_history: list[dict[str, Any]] = []
+    max_corrections = _max_correction_attempts()
+    verification: dict[str, Any] = {}
+
+    for pass_index in range(max_corrections + 1):
+        normalized, reason = validate_page_extraction(pages, candidate)
+        if normalized is None:
+            if pass_index >= max_corrections:
+                return {
+                    "status": "review_required",
+                    "reason": reason,
+                    "correction_history": correction_history,
+                }
+            attempt = pass_index + 1
+            correction_history.append({
+                "attempt": attempt,
+                "stage": "deterministic_validation",
+                "reason": reason,
+            })
+            progress.log(
+                f"GPT PDF-to-ACSD bounded correction {attempt}/{max_corrections}: "
+                f"{reason}",
+                level="warning",
+            )
+            candidate = phase22._openai_multimodal_json(
+                system=_correction_system_prompt(),
+                prompt=_correction_prompt(
+                    pages, candidate=candidate, reason=reason
+                ),
+                pages=evidence_pages,
+                response_schema=extraction_schema(pages),
+                purpose="source_adjudication",
+                max_tokens=_max_output_tokens(),
+            )
+            continue
+
+        verification = phase22._openai_multimodal_json(
+            system=_verification_system_prompt(),
+            prompt=_page_prompt(pages, candidate=normalized),
+            pages=evidence_pages,
+            response_schema=verification_schema(pages),
+            purpose="source_adjudication",
+            max_tokens=6000,
+        )
+        reason = _verification_rejection_reason(pages, verification)
+        if not reason:
+            return {
+                "status": "verified",
+                "pages": normalized["pages"],
+                "verification": verification,
+                "correction_history": correction_history,
+            }
+        if pass_index >= max_corrections:
+            return {
+                "status": "review_required",
+                "reason": reason,
+                "verification": verification,
+                "correction_history": correction_history,
+            }
+
+        attempt = pass_index + 1
+        correction_history.append({
+            "attempt": attempt,
+            "stage": "independent_verification",
+            "reason": reason,
+        })
+        progress.log(
+            f"GPT PDF-to-ACSD bounded correction {attempt}/{max_corrections}: "
+            f"{reason}",
+            level="warning",
+        )
+        candidate = phase22._openai_multimodal_json(
+            system=_correction_system_prompt(),
+            prompt=_correction_prompt(
+                pages, candidate=normalized, reason=reason
+            ),
+            pages=evidence_pages,
+            response_schema=extraction_schema(pages),
+            purpose="source_adjudication",
+            max_tokens=_max_output_tokens(),
+        )
+
     return {
-        "status": "verified",
-        "pages": normalized["pages"],
+        "status": "review_required",
+        "reason": "bounded correction loop ended without a verified candidate",
         "verification": verification,
+        "correction_history": correction_history,
     }
 
 
@@ -992,6 +1145,20 @@ def render_page_acsd_to_mmd(page_acsd: dict[str, Any]) -> str:
                 parts.append(_markdown_heading(
                     int(block.get("heading_level") or 1), text
                 ))
+            elif kind == "source":
+                label = str(block.get("source_label") or "").strip()
+                label_key = _normal(label)
+                text_key = _normal(text)
+                text_already_contains_label = bool(
+                    label_key and (
+                        text_key == label_key
+                        or text_key.startswith(label_key + " ")
+                    )
+                )
+                if label and not text_already_contains_label:
+                    parts.append(_markdown_heading(1, label))
+                if text:
+                    parts.append(text)
             elif kind == "task":
                 # The exact publisher/language cue remains in page ACSD and is
                 # restored on the canonical task. The derived MMD uses a stable
@@ -1133,6 +1300,16 @@ def _page_context_text(block: dict[str, Any]) -> str:
     if kind == "math":
         latex = str(block.get("latex") or "").strip()
         return kr.katex(latex) if latex else ""
+    if kind == "source":
+        label = str(block.get("source_label") or "").strip()
+        text = str(block.get("text") or "").strip()
+        label_key = _normal(label)
+        text_key = _normal(text)
+        if label and not (
+            text_key == label_key or text_key.startswith(label_key + " ")
+        ):
+            return "\n".join(value for value in (label, text) if value)
+        return text or label
     return str(block.get("text") or "").strip()
 
 def apply_page_acsd_relationships(
@@ -1470,7 +1647,7 @@ def apply_page_acsd_relationships(
                     canonical_context = _match_canonical_block(
                         canonical_blocks,
                         context_block,
-                        allowed_kinds={"paragraph", "list", "table", "math", "other"},
+                        allowed_kinds={"paragraph", "source", "list", "table", "math", "other"},
                     )
                     context_parts.append(display_text)
                     context_object = {
