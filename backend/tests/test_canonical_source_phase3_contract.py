@@ -62,7 +62,10 @@ def test_prepare_job_graph_writes_optional_audit_artifacts(tmp_path, monkeypatch
 
     files, manifest_report = contract.optional_artifact_manifest(tmp_path)
     assert {item["kind"] for item in files} == {
-        "semantic_graph", "semantic_graph_report"
+        "semantic_graph",
+        "semantic_graph_report",
+        "semantic_source",
+        "semantic_source_report",
     }
     assert manifest_report["graph_sha256"] == graph["graph_sha256"]
 
