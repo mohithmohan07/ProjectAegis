@@ -1,5 +1,6 @@
 name: Apply Phase 3 backend batch
 
+# Retrigger after the workflow became part of the branch history.
 on:
   push:
     branches: ["agent/phase-3-universal-semantic-graph"]
