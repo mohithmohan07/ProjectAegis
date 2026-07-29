@@ -15,6 +15,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: agent/phase-3-universal-semantic-graph
+          fetch-depth: 0
       - uses: actions/upload-artifact@v4
         with:
           name: phase3-repository-snapshot
