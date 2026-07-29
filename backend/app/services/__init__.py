@@ -37,6 +37,9 @@ from .canonical_source_phase31_grounding_contract import (
 from .canonical_source_phase32_topology_adjudication_contract import (
     install as _install_canonical_source_phase32_topology_adjudication_contract,
 )
+from .canonical_source_phase33_preflight_contract import (
+    install as _install_canonical_source_phase33_preflight_contract,
+)
 
 # Production order is intentional and fail-closed: preserve source identity first,
 # defer Type allocation to the topology freeze, restore integration boundaries,
@@ -49,9 +52,11 @@ from .canonical_source_phase32_topology_adjudication_contract import (
 # fallback only for hard or objectively unusable Mathpix conversions. Phase 2.2.2
 # classifies repeated running navigation without polluting semantic MMD. Phase 3
 # unifies every source channel into stable semantic IDs. Phase 3.1 narrows and
-# caches exact concept-to-block grounding. Phase 3.2 installs last so concepts may
-# be source-verified, moved, refined, or split before learner analysis and final
-# topology freeze, while low confidence alone never authorises a new concept.
+# caches exact concept-to-block grounding. Phase 3.2 source-verifies, moves,
+# refines, or splits concepts before learner analysis. Phase 3.3 installs last to
+# make that adjudication resumable, feed exact-grounding rejection back into one
+# bounded topology retry, and certify every normal Type/Case to an existing or
+# necessary new source-grounded concept before final topology freeze.
 _install_closed_inventory_contract(generation)
 _install_concept_topology_contract(generation)
 _install_concept_topology_compat(generation)
@@ -68,6 +73,7 @@ _install_canonical_source_phase222_contract()
 _install_canonical_source_phase3_contract(generation)
 _install_canonical_source_phase31_grounding_contract(generation)
 _install_canonical_source_phase32_topology_adjudication_contract(generation)
+_install_canonical_source_phase33_preflight_contract(generation)
 
 del _install_closed_inventory_contract
 del _install_concept_topology_contract
@@ -85,3 +91,4 @@ del _install_canonical_source_phase222_contract
 del _install_canonical_source_phase3_contract
 del _install_canonical_source_phase31_grounding_contract
 del _install_canonical_source_phase32_topology_adjudication_contract
+del _install_canonical_source_phase33_preflight_contract
