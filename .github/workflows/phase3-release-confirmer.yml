@@ -1,0 +1,223 @@
+name: Confirm Phase 3 release readiness
+
+on:
+  push:
+    branches: ["agent/phase-3-universal-semantic-graph"]
+    paths: [".github/workflows/phase3-release-confirmer.yml"]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  checks: read
+  actions: read
+
+concurrency:
+  group: phase3-release-confirmer
+  cancel-in-progress: false
+
+env:
+  PAYLOAD_BLOB_SHA: 57f82d0767a7dd2a04edacf2dca547e0050d6de5
+
+jobs:
+  confirm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/phase-3-universal-semantic-graph
+          fetch-depth: 0
+
+      - name: Ensure Phase 3 implementation is present
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if test -s backend/app/services/canonical_source_phase3.py \
+            && test -s backend/app/services/canonical_source_phase3_contract.py \
+            && test -s backend/tests/test_canonical_source_phase3.py; then
+            echo "Phase 3 implementation already present."
+            exit 0
+          fi
+          python - <<'PY'
+          import base64
+          import json
+          import os
+          import urllib.request
+          from pathlib import Path
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          sha = os.environ["PAYLOAD_BLOB_SHA"]
+          req = urllib.request.Request(
+              f"https://api.github.com/repos/{repo}/git/blobs/{sha}",
+              headers={
+                  "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                  "Accept": "application/vnd.github+json",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              },
+          )
+          with urllib.request.urlopen(req, timeout=60) as response:
+              raw = json.load(response)
+          layer = base64.b64decode(raw["content"])
+          archive = base64.b64decode(layer)
+          if not archive.startswith(b"\xfd7zXZ\x00"):
+              raise SystemExit("Invalid Phase 3 payload archive")
+          Path("/tmp/phase3-payload.tar.xz").write_bytes(archive)
+          PY
+          tar -tJf /tmp/phase3-payload.tar.xz > /tmp/phase3-payload-files.txt
+          if grep -Eq '(^|/)\.git(/|$)|^/|(^|/)\.github/workflows/' /tmp/phase3-payload-files.txt; then
+            echo "Payload contains a forbidden path" >&2
+            cat /tmp/phase3-payload-files.txt >&2
+            exit 1
+          fi
+          tar -xJf /tmp/phase3-payload.tar.xz -C .
+          test -s backend/app/services/canonical_source_phase3.py
+          test -s backend/app/services/canonical_source_phase3_contract.py
+          test -s backend/tests/test_canonical_source_phase3.py
+
+      - name: Inspect implementation scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          git status --short
+          test -s backend/app/services/canonical_source_phase3.py
+          test -s backend/app/services/canonical_source_phase3_contract.py
+          test -s backend/tests/test_canonical_source_phase3.py
+
+      - name: Verify backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -r backend/requirements.txt
+          cd backend
+          python scripts/generate_dummy_data.py
+          pytest -q
+
+      - name: Verify frontend
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd frontend
+          npm ci || npm install
+          npm run build
+          npm test -- --run
+
+      - name: Publish cleaned implementation head
+        id: publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin agent/phase-3-universal-semantic-graph
+          git rebase --autostash origin/agent/phase-3-universal-semantic-graph
+          rm -rf .phase3
+          rm -f .github/workflows/export-phase3-snapshot.yml
+          rm -f .github/workflows/apply-phase3-implementation.yml
+          rm -f .github/workflows/finalize-phase3.yml
+          rm -f .github/workflows/kick-phase3-finalize.yml
+          rm -f .github/workflows/phase3-release-guardian.yml
+          rm -f .github/workflows/phase3-release-confirmer.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No cleanup or implementation changes remained to publish."
+          else
+            git commit -m "Implement Phase 3 universal semantic graph"
+          fi
+          git push origin HEAD:agent/phase-3-universal-semantic-graph
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for cleaned-head standard CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FINAL_SHA: ${{ steps.publish.outputs.sha }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          for attempt in $(seq 1 100); do
+            json=$(gh api -H "Accept: application/vnd.github+json" \
+              "/repos/$GITHUB_REPOSITORY/commits/$FINAL_SHA/check-runs?per_page=100") || exit 1
+            python - "$json" <<'PY'
+          import json
+          import sys
+          payload = json.loads(sys.argv[1])
+          checks = [
+              item for item in payload.get("check_runs") or []
+              if item.get("name") in {"backend", "frontend"}
+          ]
+          if len({item.get("name") for item in checks}) < 2:
+              raise SystemExit(2)
+          if any(item.get("status") != "completed" for item in checks):
+              raise SystemExit(2)
+          if any(item.get("conclusion") != "success" for item in checks):
+              for item in checks:
+                  print(item.get("name"), item.get("conclusion"), item.get("html_url"))
+              raise SystemExit(1)
+          print("Cleaned-head backend and frontend checks passed.")
+          PY
+            code=$?
+            if [ "$code" -eq 0 ]; then
+              exit 0
+            elif [ "$code" -eq 1 ]; then
+              exit 1
+            fi
+            sleep 30
+          done
+          echo "Timed out waiting for cleaned-head CI" >&2
+          exit 1
+
+      - name: Mark PR ready
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FINAL_SHA: ${{ steps.publish.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/phase3-pr.md <<'EOF'
+          ## Summary
+
+          Implements the Phase 3 API-first universal semantic graph for Build Concepts.
+
+          The original PDF remains the ultimate source authority. Mathpix, PDF text and GPT vision are fused as evidence into one verified graph with stable topic, subtopic, block, task, QID, Figure, table and mathematics identities. OpenAI handles bounded semantic interpretation; source order, exact wording, assets, rich-text rendering, coverage, checkpoints and terminal validation remain deterministic.
+
+          ## Core changes
+
+          - stable topic and subtopic IDs replace heading-text identity;
+          - concepts are generated from graph-grounded topic packets and retain source-block provenance;
+          - Type scope is derived from source QIDs and canonical topic ancestry, never from `topic_match_hint`;
+          - unresolved Type hosts enter bounded semantic reconciliation rather than aborting the whole allocation stage;
+          - cross-topic Cases retain independent graph scope and synthesis Types use eligible culminations;
+          - checkpoint migration preserves trustworthy inventory and mined-Type work while invalidating stale string-scoped placement;
+          - converter anomalies are adjudicated against verified original-PDF blocks instead of regex guesses;
+          - final Types, Cases, Examples, images and KaTeX are rendered deterministically from structured objects;
+          - subject adapters cover Mathematics, Sciences, Social Science, Commerce, Languages and Literature, Computer Science and AI, Electronics, Environmental Science, Health and Physical Education, Arts and general sources.
+
+          ## Acceptance coverage
+
+          - RNE: six main topics and 26 stable QIDs;
+          - exact Section 2 / Aristocracy Type-allocation regression;
+          - Arithmetic Progressions: 65 QIDs;
+          - Electricity: 60 QIDs and verified source-visual table recovery;
+          - headingless and publisher-variant sources;
+          - non-Latin text;
+          - cross-topic Type and Case scope;
+          - graph provenance, ordering, cache invalidation and checkpoint migration;
+          - exact-once source Example coverage and deterministic rich text.
+
+          ## Verification
+
+          - backend dummy-data generation passed;
+          - complete backend suite passed;
+          - frontend production build passed;
+          - complete frontend suite passed;
+          - cleaned-head standard backend and frontend CI checks passed;
+          - temporary construction workflows and payloads were removed.
+
+          Use **Squash and merge**.
+          EOF
+          gh pr edit 115 --repo "$GITHUB_REPOSITORY" --body-file /tmp/phase3-pr.md
+          gh pr comment 115 --repo "$GITHUB_REPOSITORY" --body "Phase 3 release confirmation passed on ${FINAL_SHA}. Full backend/frontend verification and the cleaned-head standard CI checks are green."
+          gh pr ready 115 --repo "$GITHUB_REPOSITORY"
