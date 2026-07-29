@@ -28,6 +28,9 @@ from .canonical_source_phase221_contract import (
 from .canonical_source_phase3_contract import (
     install as _install_canonical_source_phase3_contract,
 )
+from .canonical_source_phase3_topology_contract import (
+    install as _install_canonical_source_phase3_topology_contract,
+)
 
 # Production order is intentional and fail-closed: preserve source identity first,
 # defer Type allocation to the topology freeze, restore integration boundaries,
@@ -51,6 +54,7 @@ _install_canonical_source_phase211_contract(generation)
 _install_canonical_source_phase22_contract(generation)
 _install_canonical_source_phase221_contract()
 _install_canonical_source_phase3_contract(generation)
+_install_canonical_source_phase3_topology_contract(generation)
 
 del _install_closed_inventory_contract
 del _install_concept_topology_contract
@@ -65,3 +69,4 @@ del _install_canonical_source_phase211_contract
 del _install_canonical_source_phase22_contract
 del _install_canonical_source_phase221_contract
 del _install_canonical_source_phase3_contract
+del _install_canonical_source_phase3_topology_contract
