@@ -276,3 +276,12 @@ Rollback does not mutate the PDF or raw MMD. Disabling Phase 3 returns generatio
 to the previous source path while retaining the graph artifacts for diagnosis.
 No Phase 3 recovery workflow, embedded payload, or temporary branch machinery is
 part of the production runtime.
+
+## Release verification
+
+The final merge gate must run on a head that contains the materialised Phase 3
+source files and no `.phase3` payloads, temporary materialisation workflows, or
+modified CI transport jobs. Release evidence consists of the complete backend
+test suite, the frontend production build, the complete frontend test suite, and
+a final PR-diff audit on that same clean head. A transport or extraction run is
+not release evidence.
