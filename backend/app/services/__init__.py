@@ -25,6 +25,9 @@ from .canonical_source_phase22_contract import (
 from .canonical_source_phase221_contract import (
     install as _install_canonical_source_phase221_contract,
 )
+from .canonical_source_phase222_contract import (
+    install as _install_canonical_source_phase222_contract,
+)
 from .canonical_source_phase3_contract import (
     install as _install_canonical_source_phase3_contract,
 )
@@ -37,7 +40,8 @@ from .canonical_source_phase3_contract import (
 # Phase 2.1.1 normalizes task-list display and improves diagnostics; Phase 2.2
 # then adjudicates only unresolved original-document evidence before generation.
 # Phase 2.2.1 hardens evidence addressing and adds a verified GPT PDF-to-ACSD
-# fallback only for hard or objectively unusable Mathpix conversions. Phase 3
+# fallback only for hard or objectively unusable Mathpix conversions. Phase 2.2.2
+# classifies repeated running navigation without polluting semantic MMD. Phase 3
 # then unifies every source channel into stable semantic IDs and installs last.
 _install_closed_inventory_contract(generation)
 _install_concept_topology_contract(generation)
@@ -51,6 +55,7 @@ _install_canonical_source_phase21_contract(generation)
 _install_canonical_source_phase211_contract(generation)
 _install_canonical_source_phase22_contract(generation)
 _install_canonical_source_phase221_contract()
+_install_canonical_source_phase222_contract()
 _install_canonical_source_phase3_contract(generation)
 
 del _install_closed_inventory_contract
@@ -65,4 +70,5 @@ del _install_canonical_source_phase21_contract
 del _install_canonical_source_phase211_contract
 del _install_canonical_source_phase22_contract
 del _install_canonical_source_phase221_contract
+del _install_canonical_source_phase222_contract
 del _install_canonical_source_phase3_contract
