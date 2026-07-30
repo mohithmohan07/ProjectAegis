@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from app import config
 from app.services import canonical_source_phase22 as phase22
 from app.services import canonical_source_phase221_fallback as fallback
 from app.services import canonical_source_phase36_source_critical_turnover_contract as phase36
@@ -167,6 +168,7 @@ def test_resume_rebuilds_source_clears_stale_state_and_continues(
             )
         return {"phase2_inventory_ready": True, "replacement": True}
 
+    monkeypatch.setattr(config, "use_live_generation", lambda: True)
     monkeypatch.setattr(
         phase36,
         "_load_source_state",
@@ -242,6 +244,7 @@ def test_failed_turnover_preserves_existing_job_state(tmp_path: Path, monkeypatc
     def original_prepare(_db, _job):
         raise ValueError("Phase 2 source gate failed")
 
+    monkeypatch.setattr(config, "use_live_generation", lambda: True)
     monkeypatch.setattr(
         phase36,
         "_load_source_state",
@@ -285,6 +288,7 @@ def test_non_pdf_source_does_not_claim_full_pdf_recovery(tmp_path: Path, monkeyp
     def original_prepare(_db, _job):
         raise ValueError("Phase 2 source gate failed")
 
+    monkeypatch.setattr(config, "use_live_generation", lambda: True)
     monkeypatch.setattr(
         phase36,
         "_load_source_state",
