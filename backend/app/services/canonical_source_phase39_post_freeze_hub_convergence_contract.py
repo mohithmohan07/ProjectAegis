@@ -12,13 +12,16 @@ once on their independently certified hosts.
 This contract makes the compact Hub note idempotent under the Phase 2.1 final
 renderer, performs one final deterministic Hub rebuild immediately before the
 post-freeze validator, and emits exact qid/reason diagnostics if any genuine Hub
-placement defect remains. No source task, QID, Figure, Type, or concept topology
-is changed.
+placement defect remains. Numbered source identities such as ``Activity 11.1``
+remain visible even while a truly duplicated generic ``Activity — Activity —``
+prefix is collapsed. No source task, QID, Figure, Type, or concept topology is
+changed.
 """
 from __future__ import annotations
 
 from collections import Counter
 from functools import wraps
+import re
 from typing import Any, Callable
 
 from . import canonical_source_phase21_render as phase21_render
@@ -26,10 +29,44 @@ from . import progress
 
 _CONTRACT_VERSION = 1
 _HUB_CONTRACT_VERSION = "phase3.9-post-freeze-hub-convergence-1"
+_NUMBERED_REPEATED_KIND_RE = re.compile(
+    r"^\s*(?P<outer>Activity|Project|Discuss)\b\s*[—–:-]\s*"
+    r"(?P<inner>Activity|Project|Discuss)\b\s+"
+    r"(?P<identifier>\d+(?:\.\d+)*(?:\s*\([A-Za-z]\))?)"
+    r"(?P<rest>.*)$",
+    re.IGNORECASE | re.DOTALL,
+)
 
 HubNoteProvider = Callable[[dict[str, Any]], str]
+HubContentCleaner = Callable[[str], str]
 HubNormalizer = Callable[..., list[dict[str, Any]]]
 FinalValidator = Callable[..., Any]
+
+
+def _clean_activity_hub_content(
+    original: HubContentCleaner,
+    content: str,
+) -> str:
+    """Collapse only a truly generic duplicate, preserving numbered identity.
+
+    The legacy Phase 2.1 cleaner correctly turns
+    ``Activity — Activity — Observe ...`` into ``Activity — Observe ...``. Its
+    broad repeated-kind regex also turned ``Activity — Activity 11.1: ...`` into
+    ``Activity — 11.1: ...``, losing the source label expected by existing public
+    contracts. Preserve the second kind only when it is part of a numbered source
+    identity; all other cleanup remains delegated to the established renderer.
+    """
+    value = str(content or "").strip()
+    match = _NUMBERED_REPEATED_KIND_RE.match(value)
+    if match and match.group("outer").casefold() == match.group("inner").casefold():
+        kind = match.group("outer").title()
+        identity = (
+            f"{match.group('inner').title()} {match.group('identifier')}"
+            f"{match.group('rest')}"
+        )
+        identity = re.sub(r"\s+", " ", identity).strip()
+        return f"{kind} — {identity}".rstrip(" —")
+    return original(value)
 
 
 def _canonical_compact_hub_note(
@@ -47,6 +84,10 @@ def _canonical_compact_hub_note(
     Phase 2.1 removes the repeated leading kind and ships:
 
         Activity — Compare the two prints: ...
+
+    A numbered source identity remains explicit:
+
+        Activity — Activity 11.1: ...
 
     The validator must compute that same final wire value rather than comparing
     the shipped note with its pre-render predecessor.
@@ -242,13 +283,22 @@ def install(generation: Any | None = None) -> None:
     ):
         return
 
+    original_clean = phase21_render.clean_activity_hub_content
     original_note = generation._compact_activity_hub_note
     original_normalize = generation._normalize_activity_hubs_from_inventory
     original_validate = generation._validate_final_or_raise
 
+    phase21_render._PHASE39_ORIGINAL_CLEAN_ACTIVITY_HUB_CONTENT = original_clean
     generation._PHASE39_ORIGINAL_COMPACT_HUB_NOTE = original_note
     generation._PHASE39_ORIGINAL_NORMALIZE_HUBS = original_normalize
     generation._PHASE39_ORIGINAL_VALIDATE_FINAL = original_validate
+
+    @wraps(original_clean)
+    def clean_activity_hub_content(content: str) -> str:
+        return _clean_activity_hub_content(
+            phase21_render._PHASE39_ORIGINAL_CLEAN_ACTIVITY_HUB_CONTENT,
+            content,
+        )
 
     @wraps(original_note)
     def compact_activity_hub_note(item: dict[str, Any]) -> str:
@@ -290,6 +340,7 @@ def install(generation: Any | None = None) -> None:
             kwargs,
         )
 
+    phase21_render.clean_activity_hub_content = clean_activity_hub_content
     generation._compact_activity_hub_note = compact_activity_hub_note
     generation._normalize_activity_hubs_from_inventory = (
         normalize_activity_hubs_from_inventory
