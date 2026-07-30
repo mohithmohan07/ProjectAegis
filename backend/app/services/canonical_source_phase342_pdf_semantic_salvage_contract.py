@@ -85,14 +85,21 @@ def _semantic_salvage(
         pages, candidate
     )
     if normalized is None:
+        # Preserve the historical review reason when the final pass reproduced
+        # the same defect. Existing callers/tests compare this exact diagnostic,
+        # and the salvage metadata already records that the extra pass occurred.
+        unchanged = validation_reason.strip() == reason.strip()
         return {
             "status": "review_required",
             "reason": (
-                "final semantic salvage failed deterministic validation: "
+                reason
+                if unchanged
+                else "final semantic salvage failed deterministic validation: "
                 + validation_reason
             ),
             "salvage_candidate": candidate,
             "previous_result": copy.deepcopy(previous),
+            "semantic_salvage_attempted": True,
         }
 
     verification = phase22._openai_multimodal_json(
