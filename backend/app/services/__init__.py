@@ -76,6 +76,9 @@ from .canonical_source_phase37_visual_topology_convergence_contract import (
 from .canonical_source_phase371_visual_topology_compat import (
     install as _install_canonical_source_phase371_visual_topology_compat,
 )
+from .canonical_source_phase38_boundary_grounding_turnover_contract import (
+    install as _install_canonical_source_phase38_boundary_grounding_turnover_contract,
+)
 
 # Production order is intentional and fail-closed: preserve source identity first,
 # defer Type allocation to the topology freeze, restore integration boundaries,
@@ -118,7 +121,9 @@ from .canonical_source_phase371_visual_topology_compat import (
 # pre-freeze retirement only for unsupported or fully subsumed duplicate rows.
 # Phase 3.7.1 preserves exact plain-text compatibility, constrains retirement to
 # a survivor decided in the same batch, and clears provisional audit state between
-# topology convergence passes.
+# topology convergence passes. Phase 3.8 installs after every earlier topology
+# wrapper so exact grounding can inspect bounded adjacent-topic continuation
+# evidence and feed only the rejected original concept back through convergence.
 _install_closed_inventory_contract(generation)
 _install_concept_topology_contract(generation)
 _install_concept_topology_compat(generation)
@@ -148,6 +153,7 @@ _install_canonical_source_phase352_chunk_override_compat()
 _install_canonical_source_phase36_source_critical_turnover_contract()
 _install_canonical_source_phase37_visual_topology_convergence_contract()
 _install_canonical_source_phase371_visual_topology_compat()
+_install_canonical_source_phase38_boundary_grounding_turnover_contract()
 
 del _install_closed_inventory_contract
 del _install_concept_topology_contract
@@ -178,3 +184,4 @@ del _install_canonical_source_phase352_chunk_override_compat
 del _install_canonical_source_phase36_source_critical_turnover_contract
 del _install_canonical_source_phase37_visual_topology_convergence_contract
 del _install_canonical_source_phase371_visual_topology_compat
+del _install_canonical_source_phase38_boundary_grounding_turnover_contract
