@@ -164,6 +164,13 @@ def install() -> None:
         if result.get("status") == "verified":
             return result
 
+        # An explicit correction count is an operator/test instruction that the
+        # ordinary correction loop is terminal. Do not add hidden provider calls
+        # after that boundary. Production receives isolation/salvage by default
+        # when no explicit override is present.
+        if "AEGIS_GPT_PDF_ACSD_MAX_CORRECTIONS" in os.environ:
+            return result
+
         if len(pages) > 1:
             progress.log(
                 "GPT PDF-to-ACSD batch did not converge as a group; isolating "
