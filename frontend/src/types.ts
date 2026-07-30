@@ -114,6 +114,85 @@ export interface OpenAIUsage {
   pricing_complete?: boolean;
 }
 
+export type SemanticDecisionChoice =
+  | "expand_existing"
+  | "create_new"
+  | "select_existing"
+  | "custom_instruction";
+
+export interface SemanticDecisionCandidate {
+  concept_id: string;
+  title: string;
+  topic?: string;
+  coverage?: string;
+  gap?: string;
+  [key: string]: unknown;
+}
+
+export interface SemanticDecisionEvidence {
+  label: string;
+  text: string;
+  page: string;
+  [key: string]: unknown;
+}
+
+export interface SemanticDecisionItem {
+  unit_id: string;
+  type_id: string;
+  type_title: string;
+  qids: string[];
+  questions: string[];
+  topic: string;
+}
+
+export interface SemanticDecisionOption {
+  choice: SemanticDecisionChoice;
+  label: string;
+  recommended: boolean;
+  target_concept_id?: string;
+}
+
+/**
+ * A persisted semantic choice that needs a human before generation may
+ * continue. While this object is present, the backend is checkpointed and no
+ * OpenAI request is running.
+ */
+export interface PendingSemanticDecision {
+  decision_id: string;
+  kind?: string;
+  phase?: string;
+  conflict: string;
+  item: SemanticDecisionItem;
+  candidates: SemanticDecisionCandidate[];
+  evidence: SemanticDecisionEvidence[];
+  deferred_assignment_unit_ids?: string[];
+  options: SemanticDecisionOption[];
+  cumulative_usage?: OpenAIUsage;
+  // Compatibility with early decision payloads generated before the stable
+  // nested `item` contract was introduced.
+  item_id?: string;
+  qids?: string[];
+  question?: string;
+  questions?: string[];
+  type?: string | Record<string, unknown>;
+  topic?: string | Record<string, unknown>;
+  reason?: string;
+  checkpoint_progress?: number;
+  [key: string]: unknown;
+}
+
+export interface SemanticDecisionSubmission {
+  choice: SemanticDecisionChoice;
+  instruction?: string;
+  target_concept_id?: string;
+}
+
+export interface SemanticDecisionSubmissionResult {
+  status: "decision_recorded" | string;
+  resume_required: boolean;
+  resolved_decision?: Record<string, unknown>;
+}
+
 export interface BlueprintBatch {
   id: number;
   cognitive_skills: string[];
@@ -219,6 +298,8 @@ export interface UploadJob {
   checkpoint_saved_at?: string;
   checkpoint_progress?: number;
   checkpoint_target_identity?: Record<string, string>;
+  awaiting_decision?: boolean;
+  pending_decision?: PendingSemanticDecision | null;
   generation_running?: boolean;
   generation_log?: Array<{
     type: string;

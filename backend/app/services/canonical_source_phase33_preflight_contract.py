@@ -32,10 +32,11 @@ import json
 import os
 import re
 import time
+from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import wraps
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator, Mapping
 
 from .. import config
 from . import canonical_source_phase3 as phase3
@@ -45,16 +46,23 @@ from . import concept_refiner as cr
 from . import concept_topology_contract as topology
 from . import progress
 from . import semantic_confidence_policy as confidence_policy
+from .semantic_recovery import (
+    HumanDecisionRequired,
+    ProviderResponseContractError,
+)
 
 _CONTRACT_VERSION = 1
 _DECISION_CACHE_VERSION = "phase3.3-topology-decision-cache-1"
 _DECISION_CACHE_FILENAME = "source.phase33-topology-decision-cache.json"
-_HOST_VERSION = "phase3.3-type-host-preflight-1"
+_HOST_VERSION = "phase3.3-type-host-preflight-3"
 _HOST_PLAN_CACHE_FILENAME = "source.phase33-type-host-plan-cache.json"
 _HOST_RESULT_CACHE_FILENAME = "source.phase33-type-host-result-cache.json"
 
 _EXTERNAL_GROUNDING_FEEDBACK: ContextVar[dict[str, str]] = ContextVar(
     "aegis_phase33_external_grounding_feedback", default={}
+)
+_HUMAN_DECISION_RESOLUTIONS: ContextVar[Any] = ContextVar(
+    "aegis_phase33_human_decision_resolutions", default=None
 )
 
 TopologyProvider = Callable[[dict[str, Any]], dict[str, Any]]
@@ -63,8 +71,515 @@ HostProvider = Callable[[dict[str, Any]], dict[str, Any]]
 HostCritic = Callable[[dict[str, Any]], dict[str, Any]]
 
 
+@contextmanager
+def human_resolution_context(resolutions: Any) -> Iterator[None]:
+    """Expose persisted human choices to one generation attempt.
+
+    Accepted inputs are a sequence of resolution objects, a mapping keyed by
+    ``decision_id``/``context_hash``, or one resolution object. The surrounding
+    orchestration layer remains responsible for persisting and marking a
+    resolution consumed after a successful generation checkpoint.
+    """
+
+    token = _HUMAN_DECISION_RESOLUTIONS.set(copy.deepcopy(resolutions))
+    try:
+        yield
+    finally:
+        _HUMAN_DECISION_RESOLUTIONS.reset(token)
+
+
 def _normal(value: object) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip().casefold()
+
+
+def _plain_json(value: Any) -> Any:
+    """Return deterministic persistence-safe JSON data."""
+
+    return json.loads(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        )
+    )
+
+
+def _host_human_context_identity(
+    *,
+    graph: dict[str, Any],
+    topic_id: str,
+    units: list[dict[str, Any]],
+    concepts: list[dict[str, Any]],
+    source_blocks: list[dict[str, Any]],
+) -> dict[str, str]:
+    context_hash = phase3._sha256_json(
+        {
+            "version": "phase3.3-human-type-host-decision-1",
+            "source_contract_hash": str(graph.get("source_contract_hash") or ""),
+            "topic_id": topic_id,
+            "assignment_units": phase31._json_safe(units),
+            "existing_concepts": phase31._json_safe(concepts),
+            "source_blocks": [
+                {
+                    "block_id": str(row.get("block_id") or ""),
+                    "text_sha256": phase3._sha256_text(row.get("text") or ""),
+                }
+                for row in source_blocks
+            ],
+        }
+    )
+    return {
+        "context_hash": context_hash,
+        "decision_id": f"phase33-host-{context_hash[:24]}",
+    }
+
+
+def _resolution_candidates(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, Mapping):
+        row = dict(value)
+        nested = row.get("resolution")
+        if isinstance(nested, Mapping):
+            row = {**row, **dict(nested)}
+        if str(row.get("choice") or "").strip():
+            return [row]
+        out: list[dict[str, Any]] = []
+        for key, raw in value.items():
+            if isinstance(raw, str):
+                out.append({"_lookup_key": str(key), "choice": raw})
+            elif isinstance(raw, Mapping):
+                candidate = dict(raw)
+                candidate.setdefault("_lookup_key", str(key))
+                nested = candidate.get("resolution")
+                if isinstance(nested, Mapping):
+                    candidate = {**candidate, **dict(nested)}
+                out.append(candidate)
+        return out
+    if isinstance(value, (list, tuple)):
+        out: list[dict[str, Any]] = []
+        for raw in value:
+            out.extend(_resolution_candidates(raw))
+        return out
+    return []
+
+
+def _human_resolutions_for(
+    identity: Mapping[str, str],
+) -> list[dict[str, Any]]:
+    """Return the newest saved direction for each affected assignment unit."""
+
+    decision_id = str(identity.get("decision_id") or "")
+    context_hash = str(identity.get("context_hash") or "")
+    resolved: list[dict[str, Any]] = []
+    key_indexes: dict[str, int] = {}
+    for candidate in _resolution_candidates(
+        _HUMAN_DECISION_RESOLUTIONS.get()
+    ):
+        status = _normal(candidate.get("status"))
+        if status in {"pending", "awaiting_decision", "cancelled", "rejected"}:
+            continue
+        identifiers = {
+            str(candidate.get("decision_id") or ""),
+            str(candidate.get("context_hash") or ""),
+            str(candidate.get("_lookup_key") or ""),
+        }
+        if decision_id not in identifiers and context_hash not in identifiers:
+            continue
+        choice = _normal(candidate.get("choice")).replace(" ", "_")
+        aliases = {
+            "custom_instruction": "custom",
+        }
+        choice = aliases.get(choice, choice)
+        if choice not in {
+            "expand_existing",
+            "create_new",
+            "select_existing",
+            "custom",
+        }:
+            continue
+        item = candidate.get("item")
+        unit_id = (
+            str(item.get("unit_id") or "")
+            if isinstance(item, Mapping)
+            else ""
+        )
+        assignment_unit_ids = [
+            str(value)
+            for value in candidate.get("assignment_unit_ids") or []
+            if str(value)
+        ]
+        explicit_unit_id = str(
+            candidate.get("assignment_unit_id")
+            or candidate.get("unit_id")
+            or unit_id
+        )
+        if explicit_unit_id and explicit_unit_id not in assignment_unit_ids:
+            assignment_unit_ids.append(explicit_unit_id)
+        row = {
+            "decision_id": str(candidate.get("decision_id") or decision_id),
+            "context_hash": context_hash,
+            "choice": choice,
+            "instruction": str(
+                candidate.get("instruction")
+                or candidate.get("custom_instruction")
+                or ""
+            ),
+            "target_concept_id": str(
+                candidate.get("target_concept_id")
+                or candidate.get("existing_concept_id")
+                or ""
+            ),
+            "assignment_unit_id": str(
+                explicit_unit_id
+            ),
+            "assignment_unit_ids": assignment_unit_ids,
+            "deferred_assignment_unit_ids": [
+                str(value)
+                for value in (
+                    candidate.get("deferred_assignment_unit_ids") or []
+                )
+                if str(value)
+            ],
+        }
+        # A later answer for the same unit supersedes an earlier rejected
+        # direction. Choices without a unit remain independently addressable.
+        resolution_key = (
+            f"unit:{assignment_unit_ids[0]}"
+            if len(assignment_unit_ids) == 1
+            else f"decision:{row['decision_id']}"
+        )
+        if resolution_key in key_indexes:
+            resolved[key_indexes[resolution_key]] = row
+        else:
+            key_indexes[resolution_key] = len(resolved)
+            resolved.append(row)
+    return _plain_json(resolved)
+
+
+def _human_resolution_for(identity: Mapping[str, str]) -> dict[str, Any] | None:
+    """Compatibility helper returning the latest effective human direction."""
+
+    resolutions = _human_resolutions_for(identity)
+    return copy.deepcopy(resolutions[-1]) if resolutions else None
+
+
+def _resolution_unit_ids(resolution: Mapping[str, Any]) -> set[str]:
+    unit_ids = {
+        str(value)
+        for value in resolution.get("assignment_unit_ids") or []
+        if str(value)
+    }
+    explicit = str(
+        resolution.get("assignment_unit_id")
+        or resolution.get("unit_id")
+        or ""
+    )
+    if explicit:
+        unit_ids.add(explicit)
+    return unit_ids
+
+
+def _plan_source_block_ids_for_unit(
+    plan: Mapping[str, Any],
+    *,
+    unit_id: str,
+    concepts: list[dict[str, Any]],
+    target_concept_id: str,
+) -> set[str]:
+    """Select only source blocks that explain the displayed unit conflict."""
+
+    referenced: set[str] = set()
+    assignment = next(
+        (
+            row
+            for row in plan.get("assignments") or []
+            if isinstance(row, Mapping)
+            and str(row.get("assignment_unit_id") or "") == unit_id
+        ),
+        None,
+    )
+    existing_id = target_concept_id
+    new_key = ""
+    if isinstance(assignment, Mapping):
+        existing_id = str(
+            assignment.get("existing_concept_id") or existing_id
+        )
+        new_key = str(assignment.get("new_concept_key") or "")
+    if existing_id and existing_id != "NONE":
+        for concept in concepts:
+            if str(concept.get("concept_id") or "") != existing_id:
+                continue
+            referenced.update(
+                str(value)
+                for value in concept.get("source_block_ids") or []
+                if str(value)
+            )
+    for update in plan.get("existing_concept_updates") or []:
+        if not isinstance(update, Mapping):
+            continue
+        update_units = {
+            str(value)
+            for value in update.get("assignment_unit_ids") or []
+            if str(value)
+        }
+        if (
+            unit_id not in update_units
+            and str(update.get("existing_concept_id") or "") != existing_id
+        ):
+            continue
+        referenced.update(
+            str(value)
+            for value in update.get("source_block_ids") or []
+            if str(value)
+        )
+    for definition in plan.get("new_concepts") or []:
+        if not isinstance(definition, Mapping):
+            continue
+        definition_units = {
+            str(value)
+            for value in definition.get("assignment_unit_ids") or []
+            if str(value)
+        }
+        if (
+            unit_id not in definition_units
+            and str(definition.get("new_concept_key") or "") != new_key
+        ):
+            continue
+        referenced.update(
+            str(value)
+            for value in definition.get("source_block_ids") or []
+            if str(value)
+        )
+    return referenced
+
+
+def _host_pending_decision(
+    *,
+    identity: Mapping[str, str],
+    topic: dict[str, Any],
+    units: list[dict[str, Any]],
+    concepts: list[dict[str, Any]],
+    source_blocks: list[dict[str, Any]],
+    issues: list[str],
+    proposed_plan: dict[str, Any] | None = None,
+    resolved_choice: dict[str, Any] | None = None,
+    resolved_choices: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    clean_issues = [
+        re.sub(r"\s+", " ", str(issue or "")).strip()[:1200]
+        for issue in issues
+        if str(issue or "").strip()
+    ] or ["No safe Type host was certified."]
+    plan = proposed_plan if isinstance(proposed_plan, dict) else {}
+    rejected_ids = {
+        str(value)
+        for value in (plan.get("rejected_assignment_unit_ids") or [])
+        if str(value)
+    }
+    if not rejected_ids:
+        rejected_ids = {
+            str(row.get("assignment_unit_id") or "")
+            for row in units
+            if str(row.get("assignment_unit_id") or "")
+            and any(
+                str(row.get("assignment_unit_id") or "") in issue
+                for issue in clean_issues
+            )
+        }
+    if not rejected_ids:
+        rejected_ids = {
+            str(row.get("assignment_unit_id") or "")
+            for row in units
+            if str(row.get("assignment_unit_id") or "")
+        }
+    affected = [
+        copy.deepcopy(row)
+        for row in units
+        if str(row.get("assignment_unit_id") or "") in rejected_ids
+    ] or [copy.deepcopy(row) for row in units]
+    primary = affected[0] if affected else {}
+    primary_id = str(primary.get("assignment_unit_id") or "")
+    matching_issues = [
+        issue for issue in clean_issues if primary_id and primary_id in issue
+    ]
+    displayed_issues = (
+        matching_issues
+        if matching_issues
+        else clean_issues if len(affected) == 1 else clean_issues[:1]
+    )
+    topic_value = {
+        "topic_id": str(topic.get("topic_id") or primary.get("topic_id") or ""),
+        "title": str(topic.get("title") or ""),
+    }
+    item = {
+        "unit_id": str(primary.get("assignment_unit_id") or ""),
+        "type_id": str(primary.get("type_id") or ""),
+        "type_title": str(primary.get("type_title") or ""),
+        "qids": [
+            str(value)
+            for value in (primary.get("source_question_ids") or [])[:100]
+            if str(value)
+        ],
+        "questions": [
+            str(value)
+            for value in (primary.get("source_tasks") or [])[:100]
+            if str(value)
+        ],
+        "topic": copy.deepcopy(topic_value),
+    }
+    selected_ids = {
+        str(row.get("existing_concept_id") or "")
+        for row in plan.get("assignments") or []
+        if isinstance(row, dict)
+        and str(row.get("assignment_unit_id") or "") == primary_id
+        and str(row.get("decision") or "") in {"existing", "expand_existing"}
+        and str(row.get("existing_concept_id") or "") not in {"", "NONE"}
+    }
+    all_resolutions = [
+        copy.deepcopy(row)
+        for row in (resolved_choices or [])
+        if isinstance(row, dict)
+    ]
+    if (
+        isinstance(resolved_choice, dict)
+        and not any(
+            str(row.get("decision_id") or "")
+            == str(resolved_choice.get("decision_id") or "")
+            for row in all_resolutions
+        )
+    ):
+        all_resolutions.append(copy.deepcopy(resolved_choice))
+    matching_resolution = next(
+        (
+            row
+            for row in reversed(all_resolutions)
+            if primary_id in _resolution_unit_ids(row)
+        ),
+        None,
+    )
+    target_id = str(
+        (matching_resolution or {}).get("target_concept_id") or ""
+    )
+    if not target_id and len(selected_ids) == 1:
+        target_id = next(iter(selected_ids))
+    candidates = []
+    gap = "; ".join(displayed_issues[:4])
+    ordered_concepts = sorted(
+        concepts,
+        key=lambda concept: (
+            str(concept.get("concept_id") or "") != target_id,
+        ),
+    )
+    for concept in ordered_concepts[:100]:
+        concept_id = str(concept.get("concept_id") or "")
+        candidates.append(
+            {
+                "concept_id": concept_id,
+                "title": str(concept.get("concept_title") or "")[:8000],
+                "topic": str(
+                    concept.get("topic") or topic_value["title"]
+                )[:8000],
+                "coverage": str(concept.get("source_claim") or "")[:8000],
+                "gap": gap if concept_id in selected_ids or concept_id == target_id else "",
+            }
+        )
+    referenced_block_ids = _plan_source_block_ids_for_unit(
+        plan,
+        unit_id=primary_id,
+        concepts=concepts,
+        target_concept_id=target_id,
+    )
+    usable_source_blocks = [
+        row for row in source_blocks if isinstance(row, dict)
+    ]
+    evidence_rows = [
+        *[
+            row
+            for row in usable_source_blocks
+            if str(row.get("block_id") or "") in referenced_block_ids
+        ],
+        *[
+            row
+            for row in usable_source_blocks
+            if str(row.get("block_id") or "") not in referenced_block_ids
+        ],
+    ][:24]
+    evidence = [
+        {
+            "page": (
+                row.get("page_number")
+                or row.get("pdf_page")
+                or row.get("page")
+                or None
+            ),
+            "label": str(row.get("block_id") or ""),
+            "text": str(row.get("text") or ""),
+        }
+        for row in evidence_rows
+    ]
+    expand_option: dict[str, Any] = {
+        "choice": "expand_existing",
+        "label": "Expand the existing concept",
+        "recommended": bool(target_id),
+    }
+    if target_id:
+        expand_option["target_concept_id"] = target_id
+    decision_id = str(identity.get("decision_id") or "")
+    if all_resolutions:
+        rejection_hash = phase3._sha256_json(
+            {
+                "context_hash": str(identity.get("context_hash") or ""),
+                "resolved_choices": phase31._json_safe(all_resolutions),
+                "assignment_unit_id": primary_id,
+                "issues": displayed_issues,
+            }
+        )
+        decision_id = f"phase33-host-{rejection_hash[:24]}"
+    options: list[dict[str, Any]] = []
+    if concepts:
+        options.append(expand_option)
+    options.append(
+        {
+            "choice": "create_new",
+            "label": "Create a separate source-grounded concept",
+            "recommended": not concepts,
+        }
+    )
+    if concepts:
+        options.append(
+            {
+                "choice": "select_existing",
+                "label": "Select another existing concept",
+                "recommended": False,
+            }
+        )
+    options.append(
+        {
+            "choice": "custom_instruction",
+            "label": "Give a custom instruction",
+            "recommended": False,
+        }
+    )
+    pending = {
+        "decision_id": decision_id,
+        "context_hash": str(identity.get("context_hash") or ""),
+        "kind": "phase33_type_host_semantic_conflict",
+        "phase": "3.3",
+        "conflict": "; ".join(displayed_issues[:6]),
+        "topic": topic_value,
+        "assignment_unit": copy.deepcopy(item),
+        "item": item,
+        "candidates": candidates,
+        "evidence": evidence,
+        "issues": displayed_issues,
+        "deferred_assignment_unit_ids": [
+            str(row.get("assignment_unit_id") or "")
+            for row in affected[1:]
+            if str(row.get("assignment_unit_id") or "")
+        ],
+        "options": options,
+    }
+    return _plain_json(pending)
 
 
 def _artifact_dir() -> Path | None:
@@ -543,6 +1058,34 @@ def _normal_concept_payloads(
     return payload, index_by_id, cids_by_topic
 
 
+def _source_block_page_number(
+    graph_block: Mapping[str, Any],
+    canonical_block: Mapping[str, Any],
+) -> int | str | None:
+    """Preserve available audit-page provenance in the human evidence packet."""
+
+    fields = (
+        "page_number",
+        "pdf_page",
+        "page",
+        "page_number_for_audit",
+        "pdf_page_number_for_audit",
+        "pdf_page_number_for_audit_only",
+    )
+    for row in (graph_block, canonical_block):
+        for field in fields:
+            value = row.get(field)
+            if value not in (None, ""):
+                return value
+        for field in ("_source_page_numbers", "source_page_numbers"):
+            values = [
+                value for value in row.get(field) or [] if value not in (None, "")
+            ]
+            if len(values) == 1:
+                return values[0]
+    return None
+
+
 def _topic_source_blocks(
     graph: dict[str, Any],
     canonical: dict[str, Any],
@@ -567,11 +1110,13 @@ def _topic_source_blocks(
             continue
         subtopic = str(block.get("subtopic_id") or "")
         subtopic_by_block[block_id] = subtopic
+        page_number = _source_block_page_number(block, source)
         blocks_by_topic.setdefault(topic_id, []).append(
             {
                 "block_id": block_id,
                 "kind": str(block.get("kind") or ""),
                 "subtopic_id": subtopic,
+                "page_number": page_number,
                 "text": text[:2600],
             }
         )
@@ -604,7 +1149,12 @@ def _host_schema(
                             },
                             "decision": {
                                 "type": "string",
-                                "enum": ["existing", "create_new", "review_required"],
+                                "enum": [
+                                    "existing",
+                                    "expand_existing",
+                                    "create_new",
+                                    "review_required",
+                                ],
                             },
                             "existing_concept_id": {
                                 "type": "string",
@@ -684,8 +1234,60 @@ def _host_schema(
                         "additionalProperties": False,
                     },
                 },
+                "existing_concept_updates": {
+                    "type": "array",
+                    "maxItems": len(unit_ids),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "existing_concept_id": {
+                                "type": "string",
+                                "enum": ["NONE", *existing_concept_ids],
+                            },
+                            "topic_id": {"type": "string", "enum": topic_ids},
+                            "description": {"type": "string"},
+                            "achieving_mastery": {"type": "string"},
+                            "keywords": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                            "source_block_ids": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {"type": "string", "enum": block_ids},
+                            },
+                            "assignment_unit_ids": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {"type": "string", "enum": unit_ids},
+                            },
+                            "confidence": {
+                                "type": "number",
+                                "minimum": 0,
+                                "maximum": 1,
+                            },
+                            "reason": {"type": "string"},
+                        },
+                        "required": [
+                            "existing_concept_id",
+                            "topic_id",
+                            "description",
+                            "achieving_mastery",
+                            "keywords",
+                            "source_block_ids",
+                            "assignment_unit_ids",
+                            "confidence",
+                            "reason",
+                        ],
+                        "additionalProperties": False,
+                    },
+                },
             },
-            "required": ["assignments", "new_concepts"],
+            "required": [
+                "assignments",
+                "new_concepts",
+                "existing_concept_updates",
+            ],
             "additionalProperties": False,
         },
     }
@@ -733,7 +1335,15 @@ def _host_plan_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         "assignment unit is source-owned and must have one durable normal concept "
         "host before topology freeze. Choose decision=existing when an existing "
         "source-grounded concept naturally teaches and assesses the unit without "
-        "semantic distortion. Choose decision=create_new only when the unit exposes "
+        "semantic distortion. Choose decision=expand_existing when the durable "
+        "concept identity is correct but its source-facing Description must be "
+        "expanded to cover another idea explicitly supported by the supplied "
+        "same-topic source blocks. Prefer this over a near-duplicate new concept "
+        "when the existing concept already owns the durable idea. Emit one "
+        "existing_concept_updates entry for "
+        "that concept; preserve its title and parent, cite only supplied block "
+        "IDs, and do not add knowledge absent from those blocks. Choose "
+        "decision=create_new only when the unit exposes "
         "a distinct, reusable, source-supported teaching objective absent from all "
         "existing concepts. Low confidence, a narrow example, different wording, "
         "or a new question variation alone never justifies a new concept. Group "
@@ -741,9 +1351,12 @@ def _host_plan_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         "New concepts must be grade-appropriate, non-duplicative, not question- or "
         "person-shaped, and grounded only to supplied source_block_ids in the same "
         "topic. Achieving Mastery must be observable. Return every assignment unit "
-        "exactly once. Use review_required only when no safe source-supported plan "
-        "exists. On retries, use previous_plan and critic_feedback to repair the "
-        "bounded plan, not to invent broader content."
+        "exactly once. Return existing_concept_updates as an empty array when no "
+        "existing concept is expanded. Use review_required when no safe "
+        "source-supported plan exists. If human_resolution is present, follow "
+        "that directed choice exactly while still remaining source-grounded. "
+        "Never substitute a different semantic choice. On mechanical correction "
+        "retries, repair only the response contract and do not invent broader content."
     )
     return phase3.phase22._openai_multimodal_json(
         system=system,
@@ -770,10 +1383,18 @@ def _host_critic_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         "source task, Type/Case method, and the concept's source-facing claim. For "
         "new concepts, verify necessity, source-block support, durable teachability, "
         "grade appropriateness, non-duplication, and exact unit coverage. Reject a "
+        "directed expansion unless it preserves the existing concept identity, "
+        "adds only claims entailed by its cited same-topic source blocks, and "
+        "genuinely covers the assigned unit without over-merging. Reject a "
         "new concept created merely because confidence was low or because an example "
         "uses different wording. Reject over-merged hosts, micro-concepts that are "
         "only one question variation, wrong-topic plans, unused new concepts, or "
-        "units assigned more than once. Put every assignment_unit_id in exactly one "
+        "units assigned more than once. When human_resolution or "
+        "human_resolutions are present, independently verify that every directed "
+        "choice and custom instruction was followed exactly. Reject an ignored or "
+        "substituted direction, but never let a human instruction override the "
+        "authoritative source, topic, QID, or Figure constraints. Put every "
+        "assignment_unit_id in exactly one "
         "accepted_concept_ids or rejected_concept_ids list. Verified requires all "
         "accepted, none rejected, confidence at least "
         f"{confidence_policy.threshold_text()}, and no issues."
@@ -809,8 +1430,15 @@ def _parse_host_plan(
     }
     assignments = response.get("assignments") if isinstance(response, dict) else None
     new_rows = response.get("new_concepts") if isinstance(response, dict) else None
+    update_rows = (
+        response.get("existing_concept_updates", [])
+        if isinstance(response, dict)
+        else None
+    )
     if not isinstance(assignments, list) or not isinstance(new_rows, list):
         return None, ["host resolver returned no assignments/new_concepts arrays"]
+    if not isinstance(update_rows, list):
+        return None, ["host resolver returned a non-array existing_concept_updates"]
     errors: list[str] = []
     assignment_by_id: dict[str, dict[str, Any]] = {}
     for raw in assignments:
@@ -847,6 +1475,18 @@ def _parse_host_plan(
             if str(concept.get("topic_id") or "") != unit_topic[unit_id]:
                 errors.append(f"{unit_id} selected an existing concept from another topic")
                 continue
+        elif decision == "expand_existing":
+            concept = existing_by_id.get(existing_id)
+            if concept is None or new_key != "NONE":
+                errors.append(
+                    f"{unit_id} returned an invalid expand-existing decision"
+                )
+                continue
+            if str(concept.get("topic_id") or "") != unit_topic[unit_id]:
+                errors.append(
+                    f"{unit_id} selected an expandable concept from another topic"
+                )
+                continue
         elif decision == "create_new":
             if existing_id != "NONE" or not new_key or new_key == "NONE":
                 errors.append(f"{unit_id} returned an invalid create-new decision")
@@ -867,9 +1507,14 @@ def _parse_host_plan(
         errors.append("missing or invalid assignment unit ID(s): " + ", ".join(missing))
 
     referenced_new: dict[str, set[str]] = {}
+    referenced_updates: dict[str, set[str]] = {}
     for unit_id, assignment in assignment_by_id.items():
         if assignment["decision"] == "create_new":
             referenced_new.setdefault(assignment["new_concept_key"], set()).add(unit_id)
+        elif assignment["decision"] == "expand_existing":
+            referenced_updates.setdefault(
+                assignment["existing_concept_id"], set()
+            ).add(unit_id)
 
     existing_title_keys = {
         _normal(row.get("concept_title")) for row in existing_concepts
@@ -953,11 +1598,96 @@ def _parse_host_plan(
         errors.append(
             "create-new assignments lack definitions: " + ", ".join(absent_definitions)
         )
+
+    updates: dict[str, dict[str, Any]] = {}
+    for raw in update_rows:
+        if not isinstance(raw, dict):
+            errors.append("host resolver returned a non-object existing concept update")
+            continue
+        concept_id = str(raw.get("existing_concept_id") or "")
+        concept = existing_by_id.get(concept_id)
+        if concept_id not in referenced_updates or concept is None:
+            errors.append(
+                "unused or unknown existing concept update "
+                f"{concept_id or '<empty>'}"
+            )
+            continue
+        if concept_id in updates:
+            errors.append(f"duplicate existing concept update {concept_id}")
+            continue
+        topic_id = str(raw.get("topic_id") or "")
+        assigned = {
+            str(value)
+            for value in raw.get("assignment_unit_ids") or []
+            if str(value)
+        }
+        description = phase3._clean_public_text(raw.get("description") or "")
+        mastery = phase3._clean_public_text(raw.get("achieving_mastery") or "")
+        confidence = float(raw.get("confidence") or 0.0)
+        block_ids = [
+            str(value)
+            for value in raw.get("source_block_ids") or []
+            if str(value)
+        ]
+        if assigned != referenced_updates[concept_id]:
+            errors.append(
+                f"{concept_id} assignment_unit_ids do not match expansion units"
+            )
+            continue
+        if (
+            not assigned
+            or topic_id != str(concept.get("topic_id") or "")
+            or any(unit_topic[unit_id] != topic_id for unit_id in assigned)
+        ):
+            errors.append(
+                f"{concept_id} expansion mixes assignments from another topic"
+            )
+            continue
+        if not confidence_policy.accepts(confidence):
+            errors.append(
+                f"{concept_id} expansion confidence {confidence:.3f} is below "
+                f"{confidence_policy.threshold_text()}"
+            )
+            continue
+        if not description or not mastery or not block_ids:
+            errors.append(
+                f"{concept_id} expansion omitted Description, mastery, or source blocks"
+            )
+            continue
+        if any(block_topic.get(block_id) != topic_id for block_id in block_ids):
+            errors.append(
+                f"{concept_id} expansion used unknown or wrong-topic source block IDs"
+            )
+            continue
+        updates[concept_id] = {
+            "existing_concept_id": concept_id,
+            "topic_id": topic_id,
+            "description": description,
+            "achieving_mastery": mastery,
+            "keywords": [
+                phase3._clean_public_text(value)
+                for value in raw.get("keywords") or []
+                if phase3._clean_public_text(value)
+            ],
+            "source_block_ids": list(dict.fromkeys(block_ids)),
+            "assignment_unit_ids": sorted(assigned),
+            "confidence": confidence,
+            "reason": str(raw.get("reason") or ""),
+        }
+    absent_updates = sorted(set(referenced_updates) - set(updates))
+    if absent_updates:
+        errors.append(
+            "expand-existing assignments lack grounded updates: "
+            + ", ".join(absent_updates)
+        )
     if errors:
         return None, errors
     return {
         "assignments": [assignment_by_id[key] for key in sorted(assignment_by_id)],
         "new_concepts": [definitions[key] for key in sorted(definitions)],
+        "existing_concept_updates": [
+            updates[key] for key in sorted(updates)
+        ],
     }, []
 
 
@@ -1030,6 +1760,132 @@ def _write_host_plan_cache(
     _write_json(path, cache)
 
 
+def _provider_review_required_issues(
+    response: dict[str, Any],
+) -> tuple[list[str], list[str]]:
+    issues: list[str] = []
+    unit_ids: list[str] = []
+    for row in response.get("assignments") or []:
+        if not isinstance(row, dict) or row.get("decision") != "review_required":
+            continue
+        unit_id = str(row.get("assignment_unit_id") or "")
+        reason = re.sub(r"\s+", " ", str(row.get("reason") or "")).strip()
+        unit_ids.append(unit_id)
+        issues.append(
+            f"{unit_id or 'assignment unit'} requires review"
+            + (f": {reason[:1000]}" if reason else "")
+        )
+    return issues, unit_ids
+
+
+def _host_parse_errors_are_mechanical(errors: list[str]) -> bool:
+    """Only response-shape defects qualify for a bounded provider correction."""
+
+    mechanical_prefixes = (
+        "host resolver returned no assignments/new_concepts arrays",
+        "host resolver returned a non-array existing_concept_updates",
+        "host resolver returned a non-object assignment",
+        "unknown assignment unit ID ",
+        "duplicate assignment unit ID ",
+    )
+    meaningful = [
+        value
+        for value in errors
+        if not value.startswith("missing or invalid assignment unit ID(s):")
+    ]
+    return bool(meaningful) and all(
+        value.startswith(mechanical_prefixes) for value in meaningful
+    )
+
+
+def _directed_resolution_issues(
+    resolution: dict[str, Any],
+    *,
+    plan: dict[str, Any],
+    units: list[dict[str, Any]],
+    concepts: list[dict[str, Any]],
+) -> list[str]:
+    choice = str(resolution.get("choice") or "")
+    if choice == "custom":
+        if not str(
+            resolution.get("instruction")
+            or resolution.get("custom_instruction")
+            or ""
+        ).strip():
+            return ["custom resolution omitted its instruction"]
+        return []
+    target = str(
+        resolution.get("target_concept_id")
+        or resolution.get("existing_concept_id")
+        or ""
+    )
+    concept_ids = {
+        str(row.get("concept_id") or "") for row in concepts
+    }
+    if choice in {"expand_existing", "select_existing"} and target not in concept_ids:
+        return [
+            f"human resolution selected unavailable concept {target or '<empty>'}"
+        ]
+    requested_units = {
+        str(value)
+        for value in resolution.get("assignment_unit_ids") or []
+        if str(value)
+    }
+    unit_id = str(
+        resolution.get("assignment_unit_id")
+        or resolution.get("unit_id")
+        or (
+            (resolution.get("item") or {}).get("unit_id")
+            if isinstance(resolution.get("item"), Mapping)
+            else ""
+        )
+        or ""
+    )
+    if unit_id:
+        requested_units.add(unit_id)
+    if not requested_units:
+        requested_units = {
+            str(row.get("assignment_unit_id") or "")
+            for row in units
+            if str(row.get("assignment_unit_id") or "")
+        }
+    assignments = {
+        str(row.get("assignment_unit_id") or ""): row
+        for row in plan.get("assignments") or []
+        if isinstance(row, dict)
+    }
+    issues: list[str] = []
+    for requested in sorted(requested_units):
+        assignment = assignments.get(requested)
+        if assignment is None:
+            issues.append(
+                f"directed resolution omitted assignment unit {requested}"
+            )
+            continue
+        decision = str(assignment.get("decision") or "")
+        if choice == "expand_existing":
+            if (
+                decision != "expand_existing"
+                or str(assignment.get("existing_concept_id") or "") != target
+            ):
+                issues.append(
+                    f"{requested} did not apply the directed expansion to {target}"
+                )
+        elif choice == "select_existing":
+            if (
+                decision != "existing"
+                or str(assignment.get("existing_concept_id") or "") != target
+            ):
+                issues.append(
+                    f"{requested} did not use the selected existing concept {target}"
+                )
+        elif choice == "create_new" and decision != "create_new":
+            issues.append(
+                f"{requested} did not apply the directed create-new choice"
+            )
+    return issues
+
+
 def _resolve_host_plan(
     *,
     graph: dict[str, Any],
@@ -1041,6 +1897,47 @@ def _resolve_host_plan(
     provider: HostProvider,
     critic: HostCritic,
 ) -> dict[str, Any]:
+    identity = _host_human_context_identity(
+        graph=graph,
+        topic_id=topic_id,
+        units=units,
+        concepts=concepts,
+        source_blocks=source_blocks,
+    )
+    resolutions = _human_resolutions_for(identity)
+    resolution = resolutions[-1] if resolutions else None
+    resolved_unit_ids = {
+        unit_id
+        for row in resolutions
+        for unit_id in _resolution_unit_ids(row)
+    }
+    deferred_unit_ids = list(
+        dict.fromkeys(
+            unit_id
+            for row in resolutions
+            for unit_id in row.get("deferred_assignment_unit_ids") or []
+            if str(unit_id) and str(unit_id) not in resolved_unit_ids
+        )
+    )
+    if deferred_unit_ids:
+        next_unit_id = str(deferred_unit_ids[0])
+        raise HumanDecisionRequired(
+            _host_pending_decision(
+                identity=identity,
+                topic=topic,
+                units=units,
+                concepts=concepts,
+                source_blocks=source_blocks,
+                issues=[
+                    f"{next_unit_id} was also rejected in the previous "
+                    "independent review and needs your decision."
+                ],
+                proposed_plan={
+                    "rejected_assignment_unit_ids": deferred_unit_ids,
+                },
+                resolved_choices=resolutions,
+            )
+        )
     key = _host_plan_cache_key(
         graph=graph,
         topic_id=topic_id,
@@ -1057,11 +1954,11 @@ def _resolve_host_plan(
         )
         return cached
 
-    attempts = _max_host_attempts()
-    previous_plan: dict[str, Any] = {}
-    feedback: dict[str, Any] = {}
+    # One correction is enough for a strict-schema response-shape defect. This
+    # budget is separate from semantic adjudication, which never retries.
+    attempts = 1 if resolution is not None else min(2, _max_host_attempts())
     last_errors: list[str] = []
-    last_confidence = 0.0
+    contract_feedback: list[str] = []
     for attempt in range(1, attempts + 1):
         payload = {
             "metadata": copy.deepcopy(graph.get("metadata") or {}),
@@ -1071,34 +1968,97 @@ def _resolve_host_plan(
             "source_blocks": copy.deepcopy(source_blocks),
             "attempt": attempt,
             "max_attempts": attempts,
-            "previous_plan": copy.deepcopy(previous_plan),
-            "critic_feedback": copy.deepcopy(feedback),
+            "previous_plan": {},
+            "critic_feedback": {},
+            "response_contract_feedback": copy.deepcopy(contract_feedback),
         }
+        if resolution is not None:
+            payload["human_resolution"] = copy.deepcopy(resolution)
+            payload["human_resolutions"] = copy.deepcopy(resolutions)
         response = provider(copy.deepcopy(payload))
+        review_issues, review_unit_ids = _provider_review_required_issues(
+            response if isinstance(response, dict) else {}
+        )
+        if review_issues:
+            proposed = (
+                copy.deepcopy(response) if isinstance(response, dict) else {}
+            )
+            proposed["rejected_assignment_unit_ids"] = review_unit_ids
+            raise HumanDecisionRequired(
+                _host_pending_decision(
+                    identity=identity,
+                    topic=topic,
+                    units=units,
+                    concepts=concepts,
+                    source_blocks=source_blocks,
+                    issues=review_issues,
+                    proposed_plan=proposed,
+                    resolved_choice=resolution,
+                    resolved_choices=resolutions,
+                )
+            )
         plan, parse_errors = _parse_host_plan(
-            response,
+            response if isinstance(response, dict) else {},
             unit_payloads=units,
             existing_concepts=concepts,
             source_blocks=source_blocks,
         )
         if parse_errors or plan is None:
             last_errors = parse_errors
+            if (
+                resolution is not None
+                or not _host_parse_errors_are_mechanical(parse_errors)
+            ):
+                raise HumanDecisionRequired(
+                    _host_pending_decision(
+                        identity=identity,
+                        topic=topic,
+                        units=units,
+                        concepts=concepts,
+                        source_blocks=source_blocks,
+                        issues=parse_errors,
+                        proposed_plan=(
+                            copy.deepcopy(response)
+                            if isinstance(response, dict)
+                            else {}
+                        ),
+                        resolved_choice=resolution,
+                        resolved_choices=resolutions,
+                    )
+                )
             progress.log(
-                "Phase 3.3 Type-host attempt "
+                "Phase 3.3 Type-host response-contract correction "
                 f"{attempt}/{attempts} for {str(topic.get('title') or topic_id)!r} "
                 "requires correction: " + "; ".join(parse_errors[:5]),
                 level="warning",
             )
-            previous_plan = copy.deepcopy(response) if isinstance(response, dict) else {}
-            feedback = {
-                "verdict": "provider_contract_rejected",
-                "confidence": 0.0,
-                "issues": parse_errors,
-                "rejected_concept_ids": [
-                    str(row.get("assignment_unit_id") or "") for row in units
-                ],
-            }
+            contract_feedback = list(parse_errors)
             continue
+        if resolutions:
+            directed_issues = [
+                issue
+                for saved_resolution in resolutions
+                for issue in _directed_resolution_issues(
+                    saved_resolution,
+                    plan=plan,
+                    units=units,
+                    concepts=concepts,
+                )
+            ]
+            if directed_issues:
+                raise HumanDecisionRequired(
+                    _host_pending_decision(
+                        identity=identity,
+                        topic=topic,
+                        units=units,
+                        concepts=concepts,
+                        source_blocks=source_blocks,
+                        issues=directed_issues,
+                        proposed_plan=plan,
+                        resolved_choice=resolution,
+                        resolved_choices=resolutions,
+                    )
+                )
         review_payload = {
             **copy.deepcopy(payload),
             "proposed_plan": copy.deepcopy(plan),
@@ -1108,14 +2068,13 @@ def _resolve_host_plan(
             review,
             concept_ids={str(row.get("assignment_unit_id") or "") for row in units},
         )
-        last_confidence = float(state["confidence"])
         if state["verified"]:
             _write_host_plan_cache(
                 key,
                 graph=graph,
                 topic_id=topic_id,
                 plan=plan,
-                confidence=last_confidence,
+                confidence=float(state["confidence"]),
             )
             progress.log(
                 "Phase 3.3 independently verified "
@@ -1128,20 +2087,28 @@ def _resolve_host_plan(
         last_errors = list(state["issues"]) or [
             "critic verdict was " + str(state.get("verdict") or "missing")
         ]
-        previous_plan = copy.deepcopy(plan)
-        feedback = copy.deepcopy(review)
-        progress.log(
-            "Phase 3.3 Type-host attempt "
-            f"{attempt}/{attempts} for {str(topic.get('title') or topic_id)!r} "
-            "failed independent verification: " + "; ".join(last_errors[:5]),
-            level="warning",
+        pending_plan = copy.deepcopy(plan)
+        pending_plan["rejected_assignment_unit_ids"] = sorted(
+            str(value) for value in state["rejected"] if str(value)
+        )
+        raise HumanDecisionRequired(
+            _host_pending_decision(
+                identity=identity,
+                topic=topic,
+                units=units,
+                concepts=concepts,
+                source_blocks=source_blocks,
+                issues=last_errors,
+                proposed_plan=pending_plan,
+                resolved_choice=resolution,
+                resolved_choices=resolutions,
+            )
         )
     details = "; ".join(last_errors[:8])
-    raise ValueError(
-        "Phase 3.3 could not certify a durable concept host for every normal "
-        f"Type/Case unit in {str(topic.get('title') or topic_id)!r} after "
-        f"{attempts} attempt(s)"
-        + (f" (critic confidence {last_confidence:.3f})" if last_confidence else "")
+    raise ProviderResponseContractError(
+        "Phase 3.3 provider could not return a valid Type-host response contract "
+        f"for {str(topic.get('title') or topic_id)!r} after {attempts} bounded "
+        "mechanical correction attempt(s)"
         + (f": {details}" if details else "")
     )
 
@@ -1266,6 +2233,146 @@ def _attach_host_maps(
             mtype["parent_concept_match_hint"] = destination["parent_concept"]
             mtype["topic_match_hint"] = destination["topic"]
             mtype["_phase33_host_verified"] = True
+
+
+def _materialize_existing_host_updates(
+    records: list[dict[str, Any]],
+    *,
+    plans: list[dict[str, Any]],
+    concept_payload: list[dict[str, Any]],
+    concept_index: dict[str, int],
+    subtopic_by_block: dict[str, str],
+) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    int,
+]:
+    """Apply verified expansions, then normalize them to ordinary host choices.
+
+    Phase 3.3.3 replaces the downstream host materializer and intentionally
+    understands only ``existing``/``create_new``. Applying the source-grounded
+    update here keeps that adapter compatible while making the resulting host
+    assignment a normal existing-concept destination.
+    """
+
+    out = [copy.deepcopy(row) for row in records]
+    payloads = [copy.deepcopy(row) for row in concept_payload]
+    payload_by_id = {
+        str(row.get("concept_id") or ""): row for row in payloads
+    }
+    normalized_plans = [copy.deepcopy(plan) for plan in plans]
+    applied: set[str] = set()
+    for plan in normalized_plans:
+        for update in plan.get("existing_concept_updates") or []:
+            concept_id = str(update.get("existing_concept_id") or "")
+            if concept_id in applied:
+                raise ValueError(
+                    "Phase 3.3 repeated a verified existing-concept expansion: "
+                    f"{concept_id}"
+                )
+            if concept_id not in concept_index or concept_id not in payload_by_id:
+                raise ValueError(
+                    "Phase 3.3 could not materialize existing-concept expansion: "
+                    f"{concept_id or '<empty>'}"
+                )
+            applied.add(concept_id)
+            index = concept_index[concept_id]
+            record = out[index]
+            description = str(update.get("description") or "").strip()
+            mastery = str(update.get("achieving_mastery") or "").strip()
+            sections = cr.split_sections(str(record.get("concept_details") or ""))
+            description_body = (
+                description + "\nAchieving Mastery: " + mastery
+            )
+            replaced = False
+            for section_index, (label, _body) in enumerate(sections):
+                if _normal(label) != "description":
+                    continue
+                sections[section_index] = (label, description_body)
+                replaced = True
+                break
+            if not replaced:
+                sections.insert(0, ("Description", description_body))
+            record["concept_details"] = cr.join_sections(sections)
+            prior_keywords = [
+                value.strip()
+                for value in str(record.get("keywords") or "").split(",")
+                if value.strip()
+            ]
+            update_keywords = [
+                str(value).strip()
+                for value in update.get("keywords") or []
+                if str(value).strip()
+            ]
+            record["keywords"] = ", ".join(
+                dict.fromkeys([*prior_keywords, *update_keywords])
+            )
+            block_ids = list(
+                dict.fromkeys(
+                    [
+                        *[
+                            str(value)
+                            for value in record.get("_source_block_ids") or []
+                            if str(value)
+                        ],
+                        *[
+                            str(value)
+                            for value in update.get("source_block_ids") or []
+                            if str(value)
+                        ],
+                    ]
+                )
+            )
+            record["_source_block_ids"] = block_ids
+            record["_semantic_subtopic_ids"] = sorted(
+                {
+                    subtopic_by_block.get(block_id, "")
+                    for block_id in block_ids
+                }
+                - {""}
+            )
+            # Phase 3.1 already treats this contract as independently verified
+            # Type-host evidence and therefore preserves the cited block IDs
+            # without another provider/critic pair.
+            record["_source_grounding_contract"] = (
+                "api-created-missing-type-host"
+            )
+            record["_source_grounding_version"] = _HOST_VERSION
+            record["_source_grounding_confidence"] = float(
+                update.get("confidence") or 0.0
+            )
+            record["_phase33_expanded_type_host"] = True
+            record["_phase3_assignment_unit_ids"] = list(
+                dict.fromkeys(
+                    [
+                        *[
+                            str(value)
+                            for value in record.get(
+                                "_phase3_assignment_unit_ids"
+                            )
+                            or []
+                            if str(value)
+                        ],
+                        *[
+                            str(value)
+                            for value in update.get("assignment_unit_ids") or []
+                            if str(value)
+                        ],
+                    ]
+                )
+            )
+            payload = payload_by_id[concept_id]
+            payload["source_claim"] = description
+            payload["source_block_ids"] = block_ids
+        for assignment in plan.get("assignments") or []:
+            if assignment.get("decision") != "expand_existing":
+                continue
+            assignment["decision"] = "existing"
+            assignment["new_concept_key"] = "NONE"
+            assignment["resolved_via"] = "expand_existing"
+        plan["existing_concept_updates"] = []
+    return out, payloads, normalized_plans, len(applied)
 
 
 def _apply_host_plan(
@@ -1523,6 +2630,13 @@ def _reconcile_type_hosts(
             )
         )
 
+    out, concept_payload, plans, expanded = _materialize_existing_host_updates(
+        out,
+        plans=plans,
+        concept_payload=concept_payload,
+        concept_index=concept_index,
+        subtopic_by_block=subtopic_by_block,
+    )
     reconciled, host_map, qid_map, created = _apply_host_plan(
         out,
         plans=plans,
@@ -1574,6 +2688,7 @@ def _reconcile_type_hosts(
         "existing_hosts": sum(
             1 for value in host_map.values() if value.get("decision") == "existing"
         ),
+        "expanded_concepts": expanded,
         "created_concepts": created,
         "output_rows": len(reconciled),
     }
@@ -1588,6 +2703,7 @@ def _reconcile_type_hosts(
     progress.log(
         "Phase 3.3 certified every normal Type/Case unit before topology freeze: "
         f"{summary['existing_hosts']} unit(s) use existing concepts and "
+        f"{summary['expanded_concepts']} existing concept(s) were expanded; "
         f"{created} necessary source-grounded concept(s) were created; "
         f"{len(host_map)} assignment unit(s) now have independently verified hosts.",
         level="success",

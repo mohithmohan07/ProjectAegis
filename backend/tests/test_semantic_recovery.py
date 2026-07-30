@@ -192,6 +192,81 @@ def test_failure_classification_preserves_hard_boundaries(exc, kind):
         kind is recovery.FailureKind.RECOVERABLE_SEMANTIC)
 
 
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [
+        (-4, 0),
+        (0, 0),
+        (1, 1),
+        (2, 1),
+        (99, 1),
+        ("invalid", 1),
+    ],
+)
+def test_recovery_policy_clamps_every_construction_path(configured, expected):
+    assert recovery.RecoveryPolicy(max_attempts=configured).max_attempts == (
+        expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [
+        ("-1", 0),
+        ("0", 0),
+        ("1", 1),
+        ("3", 1),
+        ("invalid", 1),
+    ],
+)
+def test_recovery_policy_environment_allows_at_most_one_repair(
+    monkeypatch,
+    configured,
+    expected,
+):
+    monkeypatch.setenv("AEGIS_SEMANTIC_RECOVERY_MAX_ATTEMPTS", configured)
+    assert recovery.RecoveryPolicy.from_environment().max_attempts == expected
+
+
+def test_recovery_policy_defaults_to_one_repair(monkeypatch):
+    monkeypatch.delenv("AEGIS_SEMANTIC_RECOVERY_MAX_ATTEMPTS", raising=False)
+    assert recovery.RecoveryPolicy().max_attempts == 1
+    assert recovery.RecoveryPolicy.from_environment().max_attempts == 1
+
+
+def test_provider_response_contract_failure_is_never_semantically_repaired():
+    failure = recovery.ProviderResponseContractError(
+        "Type-host response contract failed semantic validation after "
+        "mechanical correction"
+    )
+    assessment = recovery.classify_failure(failure)
+    calls = {"operation": 0, "repair": 0}
+
+    def operation():
+        calls["operation"] += 1
+        raise failure
+
+    def repair(_checkpoint, _context):
+        calls["repair"] += 1
+        raise AssertionError(
+            "mechanical provider output must not enter semantic recovery"
+        )
+
+    with pytest.raises(recovery.ProviderResponseContractError):
+        recovery.run_with_semantic_recovery(
+            operation,
+            checkpoint_snapshot=lambda: _checkpoint([_row("Safe Row")]),
+            repair_checkpoint=repair,
+            persist_repair=lambda *_args: pytest.fail(
+                "mechanical provider output must not alter a checkpoint"
+            ),
+        )
+
+    assert assessment.kind is recovery.FailureKind.PROVIDER
+    assert assessment.recoverable is False
+    assert calls == {"operation": 1, "repair": 0}
+
+
 def test_runner_repairs_checkpoint_and_continues_same_operation():
     current = _checkpoint([_row("Incorrectly Grounded Concept")])
     calls = 0
@@ -235,7 +310,7 @@ def test_runner_repairs_checkpoint_and_continues_same_operation():
         checkpoint_snapshot=lambda: copy.deepcopy(current),
         repair_checkpoint=repair,
         persist_repair=persist,
-        policy=recovery.RecoveryPolicy(max_attempts=2),
+        policy=recovery.RecoveryPolicy(max_attempts=1),
     )
 
     assert result == "completed"
@@ -265,7 +340,7 @@ def test_runner_does_not_retry_when_repair_is_noop():
             repair_checkpoint=lambda *_args: None,
             persist_repair=lambda *_args: pytest.fail(
                 "no-op repair must not be persisted"),
-            policy=recovery.RecoveryPolicy(max_attempts=2),
+            policy=recovery.RecoveryPolicy(max_attempts=1),
         )
 
     assert calls == 1

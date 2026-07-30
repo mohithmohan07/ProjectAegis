@@ -10,10 +10,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from .. import models
+from .. import models, schemas
 from . import generation, uploads
 
 
@@ -48,6 +49,7 @@ _TARGET_FIELDS = (
     "chapter_code",
 )
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_DECISION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _BUNDLE_KEYS = {
     "format", "bundle_schema_version", "exported_at",
     "payload_sha256", "payload",
@@ -479,6 +481,108 @@ def _validate_checkpoint_entry(entry: Any, path: str) -> None:
         raise ValueError(f"{path} is not a compatible checkpoint stage")
 
 
+def _validate_human_decisions(
+    value: Any,
+    *,
+    checkpoint: dict,
+    path: str,
+) -> None:
+    try:
+        ledger = schemas.HumanDecisionLedger.model_validate(value)
+    except ValidationError as exc:
+        raise ValueError(f"{path} is invalid: {exc.errors()[0]['msg']}") from exc
+    context = ledger.context
+    if context.fingerprint != checkpoint.get("fingerprint"):
+        raise ValueError(
+            f"{path}.context.fingerprint does not match the checkpoint")
+    if (
+        checkpoint.get("target_chapter_id") is not None
+        and context.target_chapter_id != checkpoint.get("target_chapter_id")
+    ):
+        raise ValueError(
+            f"{path}.context.target_chapter_id does not match the checkpoint")
+    resolved_ids: set[str] = set()
+    pending_rows = [ledger.pending] if ledger.pending is not None else []
+    for index, pending in enumerate([
+        *pending_rows,
+        *(row.pending_decision for row in ledger.resolutions),
+    ]):
+        pending_path = (
+            f"{path}.pending" if index == 0 and ledger.pending is not None
+            else f"{path}.resolutions.pending_decision[{index}]"
+        )
+        if (
+            not _DECISION_ID_RE.fullmatch(pending.decision_id)
+            or not _SHA256_RE.fullmatch(pending.context_hash)
+        ):
+            raise ValueError(
+                f"{pending_path} has an invalid decision identity")
+        _validate_usage(
+            pending.cumulative_usage,
+            f"{pending_path}.cumulative_usage",
+        )
+        candidate_ids = {
+            row.concept_id for row in pending.candidates if row.concept_id
+        }
+        if len(candidate_ids) != sum(
+            bool(row.concept_id) for row in pending.candidates
+        ):
+            raise ValueError(
+                f"{pending_path}.candidates contains duplicate concept IDs")
+        choices = [row.choice for row in pending.options]
+        if len(choices) != len(set(choices)):
+            raise ValueError(
+                f"{pending_path}.options contains duplicate choices")
+        for option in pending.options:
+            if (
+                option.target_concept_id
+                and candidate_ids
+                and option.target_concept_id not in candidate_ids
+            ):
+                raise ValueError(
+                    f"{pending_path}.options targets a non-candidate concept")
+
+    for index, resolution in enumerate(ledger.resolutions):
+        resolution_path = f"{path}.resolutions[{index}]"
+        if resolution.decision_id in resolved_ids:
+            raise ValueError(
+                f"{path}.resolutions contains a duplicate decision_id")
+        resolved_ids.add(resolution.decision_id)
+        if (
+            resolution.choice == "custom_instruction"
+            and not resolution.instruction.strip()
+        ):
+            raise ValueError(
+                f"{resolution_path}.instruction must not be empty")
+        _timestamp(resolution.resolved_at, f"{resolution_path}.resolved_at")
+        original = resolution.pending_decision
+        if (
+            original.decision_id != resolution.decision_id
+            or original.context_hash != resolution.context_hash
+        ):
+            raise ValueError(
+                f"{resolution_path} does not match its pending decision")
+        candidate_ids = {
+            row.concept_id for row in original.candidates if row.concept_id
+        }
+        if resolution.choice in {"expand_existing", "select_existing"}:
+            if not resolution.target_concept_id:
+                raise ValueError(
+                    f"{resolution_path}.target_concept_id must not be empty")
+            if (
+                candidate_ids
+                and resolution.target_concept_id not in candidate_ids
+            ):
+                raise ValueError(
+                    f"{resolution_path}.target_concept_id is not a candidate")
+    if (
+        ledger.pending is not None
+        and ledger.pending.decision_id in resolved_ids
+    ):
+        raise ValueError(
+            f"{path}.pending has already been resolved")
+
+
 def _validate_checkpoint(
     value: Any,
     *,
@@ -536,6 +640,12 @@ def _validate_checkpoint(
         mmd_text=mmd_text,
         path=path,
     )
+    if "human_decisions" in value:
+        _validate_human_decisions(
+            value["human_decisions"],
+            checkpoint=value,
+            path=f"{path}.human_decisions",
+        )
     if not generation._valid_concept_checkpoint(value):
         raise ValueError(
             f"{path} does not contain a compatible completed stage")

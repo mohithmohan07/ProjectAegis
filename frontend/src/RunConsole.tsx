@@ -15,7 +15,7 @@ export interface RunState {
   lines: RunLine[];
   progress: number;         // 0..1
   progressLabel: string;
-  status: "idle" | "running" | "done" | "error";
+  status: "idle" | "running" | "paused" | "done" | "error";
   usage: OpenAIUsage | null;
   usagePresentation: RunUsagePresentation | null;
 }
@@ -115,7 +115,24 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
     })
       .then((data) => {
         if (runIdRef.current === runId) {
-          setState((s) => ({ ...s, active: false, status: "done", progress: 1, progressLabel: "Done" }));
+          setState((s) => {
+            if (isAwaitingDecisionResult(data)) {
+              return {
+                ...s,
+                active: false,
+                status: "paused",
+                progress: decisionCheckpointProgress(data) ?? s.progress,
+                progressLabel: "Paused for your decision",
+              };
+            }
+            return {
+              ...s,
+              active: false,
+              status: "done",
+              progress: 1,
+              progressLabel: "Done",
+            };
+          });
         }
         return data;
       })
@@ -184,4 +201,23 @@ function presentedUsage(
 
 function numericUsage(value: number | null | undefined): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function isAwaitingDecisionResult(data: unknown): boolean {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return false;
+  const result = data as Record<string, unknown>;
+  return result.status === "awaiting_decision"
+    && Boolean(result.pending_decision);
+}
+
+function decisionCheckpointProgress(data: unknown): number | null {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+  const result = data as Record<string, unknown>;
+  const pending = result.pending_decision;
+  const raw = pending && typeof pending === "object" && !Array.isArray(pending)
+    ? (pending as Record<string, unknown>).checkpoint_progress
+    : result.checkpoint_progress;
+  return typeof raw === "number" && Number.isFinite(raw)
+    ? Math.max(0, Math.min(1, raw))
+    : null;
 }

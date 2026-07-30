@@ -329,6 +329,21 @@ class UploadJob(Base):
         }
 
     @property
+    def pending_decision(self) -> dict | None:
+        """Current human semantic decision, without exposing its ledger."""
+        if not isinstance(self.generation_checkpoint, dict):
+            return None
+        ledger = self.generation_checkpoint.get("human_decisions")
+        if not isinstance(ledger, dict):
+            return None
+        pending = ledger.get("pending")
+        return pending if isinstance(pending, dict) else None
+
+    @property
+    def awaiting_decision(self) -> bool:
+        return self.pending_decision is not None
+
+    @property
     def generation_running(self) -> bool:
         """Current single-process run state for duplicate-resume prevention."""
         from .services import uploads

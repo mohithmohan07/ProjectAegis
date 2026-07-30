@@ -25,7 +25,11 @@ export default function RunConsolePanel() {
   if (!state.open) {
     return (
       <button className="console-tab" onClick={() => setOpen(true)} title="Show activity log">
-        {state.active ? "● Running…" : "Console"}
+        {state.active
+          ? "● Running…"
+          : state.status === "paused"
+            ? "● Paused"
+            : "Console"}
       </button>
     );
   }
@@ -33,6 +37,7 @@ export default function RunConsolePanel() {
   const pct = Math.round(state.progress * 100);
   const statusDot =
     state.status === "running" ? "dot-running"
+      : state.status === "paused" ? "dot-paused"
       : state.status === "error" ? "dot-error"
         : state.status === "done" ? "dot-done" : "dot-idle";
 
@@ -50,7 +55,13 @@ export default function RunConsolePanel() {
         <div className="console-progress">
           <div className="progress-track">
             <div
-              className={`progress-fill ${state.status === "error" ? "progress-err" : ""}`}
+              className={`progress-fill ${
+                state.status === "error"
+                  ? "progress-err"
+                  : state.status === "paused"
+                    ? "progress-paused"
+                    : ""
+              }`}
               style={{ width: `${pct}%` }}
             />
           </div>

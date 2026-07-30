@@ -1,4 +1,6 @@
 from datetime import datetime
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -114,6 +116,8 @@ class UploadJobOut(BaseModel):
     checkpoint_saved_at: str = ""
     checkpoint_progress: float = 0.0
     checkpoint_target_identity: dict = Field(default_factory=dict)
+    awaiting_decision: bool = False
+    pending_decision: dict | None = None
     generation_running: bool = False
     generation_log: list = Field(default_factory=list)
     openai_usage: dict = Field(default_factory=dict)
@@ -161,6 +165,109 @@ class GenerateFromUploadRequest(BaseModel):
 
 class PostLearningGenerateRequest(BaseModel):
     target_chapter_id: int
+
+
+SemanticDecisionChoice = Literal[
+    "expand_existing",
+    "create_new",
+    "select_existing",
+    "custom_instruction",
+]
+
+
+class SemanticDecisionItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    unit_id: str = Field(default="", max_length=8_000)
+    type_id: str = Field(default="", max_length=8_000)
+    type_title: str = Field(default="", max_length=8_000)
+    qids: list[str] = Field(default_factory=list, max_length=100)
+    questions: list[str] = Field(default_factory=list, max_length=100)
+    topic: str = Field(default="", max_length=8_000)
+
+
+class SemanticDecisionCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    concept_id: str = Field(default="", max_length=256)
+    title: str = Field(default="", max_length=8_000)
+    topic: str = Field(default="", max_length=8_000)
+    coverage: str = Field(default="", max_length=8_000)
+    gap: str = Field(default="", max_length=8_000)
+
+
+class SemanticDecisionEvidence(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    page: str = Field(default="", max_length=128)
+    label: str = Field(default="", max_length=512)
+    text: str = Field(default="", max_length=8_000)
+
+
+class SemanticDecisionOption(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    choice: SemanticDecisionChoice
+    label: str = Field(min_length=1, max_length=512)
+    recommended: bool = False
+    target_concept_id: str = Field(default="", max_length=256)
+
+
+class PendingSemanticDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    decision_id: str = Field(min_length=1, max_length=128)
+    context_hash: str = Field(min_length=64, max_length=64)
+    kind: str = Field(min_length=1, max_length=128)
+    phase: str = Field(min_length=1, max_length=128)
+    conflict: str = Field(min_length=1, max_length=8_000)
+    item: SemanticDecisionItem = Field(default_factory=SemanticDecisionItem)
+    candidates: list[SemanticDecisionCandidate] = Field(
+        default_factory=list, max_length=100)
+    evidence: list[SemanticDecisionEvidence] = Field(
+        default_factory=list, max_length=100)
+    deferred_assignment_unit_ids: list[str] = Field(
+        default_factory=list, max_length=5_000)
+    options: list[SemanticDecisionOption] = Field(
+        default_factory=list, max_length=16)
+    cumulative_usage: dict = Field(default_factory=dict)
+
+
+class ResolvedSemanticDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    decision_id: str = Field(min_length=1, max_length=128)
+    context_hash: str = Field(min_length=64, max_length=64)
+    choice: SemanticDecisionChoice
+    instruction: str = Field(default="", max_length=4_000)
+    target_concept_id: str = Field(default="", max_length=256)
+    resolved_at: str = Field(min_length=1, max_length=64)
+    status: Literal["ready", "consumed"] = "ready"
+    pending_decision: PendingSemanticDecision
+
+
+class HumanDecisionCheckpointContext(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    fingerprint: str = Field(min_length=64, max_length=64)
+    target_chapter_id: int = Field(gt=0)
+
+
+class HumanDecisionLedger(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    version: Literal[1] = 1
+    context: HumanDecisionCheckpointContext
+    pending: PendingSemanticDecision | None = None
+    deferred_assignment_unit_ids: list[str] = Field(
+        default_factory=list, max_length=5_000)
+    resolutions: list[ResolvedSemanticDecision] = Field(
+        default_factory=list, max_length=5_000)
+
+
+class HumanSemanticDecisionRequest(BaseModel):
+    choice: SemanticDecisionChoice
+    instruction: str = Field(default="", max_length=4_000)
+    target_concept_id: str = Field(default="", max_length=256)
+
+
+class HumanSemanticDecisionResponse(BaseModel):
+    job_id: int
+    status: Literal["decision_recorded"]
+    resume_required: bool = True
+    resolved_decision: dict = Field(default_factory=dict)
 
 
 class PreLearningExistingRequest(BaseModel):

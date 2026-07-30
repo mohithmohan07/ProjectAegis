@@ -28,6 +28,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 class FailureKind(str, Enum):
     """Disposition of a generation failure at the orchestration boundary."""
 
+    HUMAN_DECISION = "human_decision"
     RECOVERABLE_SEMANTIC = "recoverable_semantic"
     SOURCE_IDENTITY = "source_identity"
     EXPLICIT_FIGURE = "explicit_figure"
@@ -73,25 +74,86 @@ class RepairResult:
 class RecoveryPolicy:
     """Limits for one logical generation run."""
 
-    max_attempts: int = 2
+    max_attempts: int = 1
     max_rows_per_attempt: int = 12
     max_source_chars: int = 28_000
     seen_failure_signatures: set[str] = field(default_factory=set)
     seen_repair_signatures: set[str] = field(default_factory=set)
 
+    def __post_init__(self) -> None:
+        """Keep every construction path within the single-repair budget."""
+
+        try:
+            attempts = int(self.max_attempts)
+        except (TypeError, ValueError):
+            attempts = 1
+        self.max_attempts = max(0, min(1, attempts))
+
     @classmethod
     def from_environment(cls) -> "RecoveryPolicy":
-        raw = os.getenv("AEGIS_SEMANTIC_RECOVERY_MAX_ATTEMPTS", "2")
+        raw = os.getenv("AEGIS_SEMANTIC_RECOVERY_MAX_ATTEMPTS", "1")
         try:
             attempts = int(raw)
         except (TypeError, ValueError):
-            attempts = 2
-        # Recovery must be bounded even when deployment configuration is bad.
-        return cls(max_attempts=max(0, min(3, attempts)))
+            attempts = 1
+        # __post_init__ also clamps explicit callers so deployment
+        # configuration cannot opt back into a repeated semantic-repair loop.
+        return cls(max_attempts=attempts)
 
 
 class SemanticRecoveryExhausted(RuntimeError):
     """A recoverable failure could not be safely changed within the budget."""
+
+
+class ProviderResponseContractError(RuntimeError):
+    """A provider response failed mechanical parsing or schema validation.
+
+    This is intentionally distinct from semantic rejection: changing a
+    checkpoint cannot repair malformed structured output, so outer semantic
+    recovery must never send this failure through another GPT repair pass.
+    """
+
+
+class HumanDecisionRequired(RuntimeError):
+    """Generation paused until a deterministic semantic choice is supplied.
+
+    ``pending_decision`` is deliberately plain JSON data so orchestration code
+    can persist it in a checkpoint, return it through the API, and resume the
+    same semantic context without replaying exploratory model calls.
+    """
+
+    def __init__(self, pending_decision: Mapping[str, Any]):
+        try:
+            value = json.loads(
+                json.dumps(
+                    dict(pending_decision),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    default=str,
+                )
+            )
+        except (TypeError, ValueError) as exc:
+            raise TypeError(
+                "pending_decision must be JSON-serializable"
+            ) from exc
+        decision_id = str(value.get("decision_id") or "").strip()
+        context_hash = str(value.get("context_hash") or "").strip()
+        if not decision_id or not context_hash:
+            raise ValueError(
+                "pending_decision requires decision_id and context_hash"
+            )
+        self.pending_decision: dict[str, Any] = value
+        self.decision_id = decision_id
+        self.context_hash = context_hash
+        super().__init__(
+            "Generation paused for a human semantic decision "
+            f"({decision_id}). No semantic retry was attempted."
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a persistence-safe copy of the pending decision."""
+
+        return copy.deepcopy(self.pending_decision)
 
 
 _SOURCE_IDENTITY_PATTERNS = (
@@ -180,6 +242,17 @@ def classify_failure(exc: Exception) -> FailureAssessment:
     signals are recoverable; this avoids turning programmer or infrastructure
     failures into an expensive retry loop.
     """
+    if isinstance(exc, HumanDecisionRequired):
+        return FailureAssessment(
+            FailureKind.HUMAN_DECISION,
+            "a semantic choice is waiting for human input",
+        )
+    if isinstance(exc, ProviderResponseContractError):
+        return FailureAssessment(
+            FailureKind.PROVIDER,
+            "the provider response failed its mechanical output contract; "
+            "semantic repair is not applicable",
+        )
     text = re.sub(r"\s+", " ", str(exc or "")).strip()
     lowered = text.casefold()
     if isinstance(exc, (OSError, IOError)):
@@ -274,6 +347,10 @@ def run_with_semantic_recovery(
     while True:
         try:
             return operation()
+        except HumanDecisionRequired:
+            # A pause is durable workflow state, not a semantic failure. Let the
+            # caller persist/return it without invoking any recovery model.
+            raise
         except Exception as exc:
             assessment = classify_failure(exc)
             checkpoint = checkpoint_snapshot() or {}
