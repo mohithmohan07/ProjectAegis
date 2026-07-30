@@ -70,6 +70,9 @@ from .canonical_source_phase352_chunk_override_compat import (
 from .canonical_source_phase36_source_critical_turnover_contract import (
     install as _install_canonical_source_phase36_source_critical_turnover_contract,
 )
+from .canonical_source_phase37_visual_topology_convergence_contract import (
+    install as _install_canonical_source_phase37_visual_topology_convergence_contract,
+)
 
 # Production order is intentional and fail-closed: preserve source identity first,
 # defer Type allocation to the topology freeze, restore integration boundaries,
@@ -107,6 +110,9 @@ from .canonical_source_phase36_source_critical_turnover_contract import (
 # provider-maximum production default. Phase 3.6 installs after every source and
 # token contract so any remaining PDF source-critical failure is automatically
 # promoted to the full verified GPT PDF-to-ACSD lane during conversion or Resume.
+# Phase 3.7 installs last so visual captions/original-page evidence survive every
+# topology/grounding/Type-host packet. It also permits an independently verified
+# pre-freeze retirement only for unsupported or fully subsumed duplicate rows.
 _install_closed_inventory_contract(generation)
 _install_concept_topology_contract(generation)
 _install_concept_topology_compat(generation)
@@ -134,6 +140,7 @@ _install_canonical_source_phase35_provider_max_contract()
 _install_canonical_source_phase351_workbook_capacity_contract()
 _install_canonical_source_phase352_chunk_override_compat()
 _install_canonical_source_phase36_source_critical_turnover_contract()
+_install_canonical_source_phase37_visual_topology_convergence_contract()
 
 del _install_closed_inventory_contract
 del _install_concept_topology_contract
@@ -162,3 +169,4 @@ del _install_canonical_source_phase35_provider_max_contract
 del _install_canonical_source_phase351_workbook_capacity_contract
 del _install_canonical_source_phase352_chunk_override_compat
 del _install_canonical_source_phase36_source_critical_turnover_contract
+del _install_canonical_source_phase37_visual_topology_convergence_contract
