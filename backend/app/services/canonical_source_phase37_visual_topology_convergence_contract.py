@@ -46,6 +46,10 @@ _ACTIVE_CONCEPT_DIRECTORY: ContextVar[dict[str, dict[str, Any]]] = ContextVar(
     "aegis_phase37_concept_directory",
     default={},
 )
+_PENDING_RETIREMENT_AUDIT: ContextVar[dict[str, Any] | None] = ContextVar(
+    "aegis_phase37_pending_retirement_audit",
+    default=None,
+)
 
 _WORD_RE = re.compile(r"[^\W_]{3,}", re.UNICODE)
 _VISUAL_TERMS = frozenset({
@@ -748,16 +752,13 @@ def _parse_decisions(
     return parsed, list(dict.fromkeys(errors))
 
 
-def _write_retirement_audit(
+def _retirement_audit_value(
     records: list[dict[str, Any]],
     *,
     concepts: list[dict[str, Any]],
     decisions: dict[str, dict[str, Any]],
     graph: dict[str, Any],
-) -> None:
-    session = phase3.active_session()
-    if not isinstance(session, dict) or not session.get("artifact_dir"):
-        return
+) -> dict[str, Any]:
     concept_by_id = {
         str(row.get("concept_id") or ""): row
         for row in concepts
@@ -782,15 +783,24 @@ def _write_retirement_audit(
         if decision.get("decision") == "retire"
     ]
     if not retired:
-        return
-    value = {
+        return {}
+    return {
         "version": _TOPOLOGY_VERSION,
+        "status": "verified_and_grounded",
         "created_at": time.time(),
         "source_contract_hash": str(graph.get("source_contract_hash") or ""),
         "input_row_count": len(records),
         "retired_count": len(retired),
         "retired": retired,
     }
+
+
+def _write_retirement_audit(value: dict[str, Any]) -> None:
+    if not value:
+        return
+    session = phase3.active_session()
+    if not isinstance(session, dict) or not session.get("artifact_dir"):
+        return
     path = Path(session["artifact_dir"]) / _RETIREMENT_FILENAME
     phase3._atomic_write(
         path,
@@ -844,17 +854,19 @@ def _apply_decisions(
         for row in applied
         if str(row.get("_phase32_origin_concept_id") or "") not in retire_ids
     ]
-    _write_retirement_audit(
-        records,
-        concepts=concepts,
-        decisions=decisions,
-        graph=graph,
+    _PENDING_RETIREMENT_AUDIT.set(
+        _retirement_audit_value(
+            records,
+            concepts=concepts,
+            decisions=decisions,
+            graph=graph,
+        )
     )
     progress.log(
-        "Phase 3.7 independently retired "
-        f"{len(retire_ids)} unsupported/subsumed concept row(s) before topology "
-        "freeze. Type-host certification will recreate a concept if any mined "
-        "method still requires a distinct durable host.",
+        "Phase 3.7 independently selected "
+        f"{len(retire_ids)} unsupported/subsumed concept row(s) for pre-freeze "
+        "retirement. Exact grounding must still pass before the retirement is "
+        "committed.",
         level="warning",
     )
     return output
@@ -877,9 +889,23 @@ def _adjudicate_with_directory(
         if str(row.get("concept_id") or "")
     }
     token = _ACTIVE_CONCEPT_DIRECTORY.set(directory)
+    audit_token = _PENDING_RETIREMENT_AUDIT.set(None)
     try:
-        return original(records, *args, **kwargs)
+        result = original(records, *args, **kwargs)
+        audit = _PENDING_RETIREMENT_AUDIT.get()
+        if audit:
+            audit = copy.deepcopy(audit)
+            audit["output_row_count"] = len(result)
+            _write_retirement_audit(audit)
+            progress.log(
+                "Phase 3.7 retirement committed after independent topology "
+                "review and exact source-block grounding. Type-host "
+                "certification remains authoritative for every mined method.",
+                level="success",
+            )
+        return result
     finally:
+        _PENDING_RETIREMENT_AUDIT.reset(audit_token)
         _ACTIVE_CONCEPT_DIRECTORY.reset(token)
 
 
