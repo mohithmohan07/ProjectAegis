@@ -79,6 +79,9 @@ from .canonical_source_phase371_visual_topology_compat import (
 from .canonical_source_phase38_boundary_grounding_turnover_contract import (
     install as _install_canonical_source_phase38_boundary_grounding_turnover_contract,
 )
+from .canonical_source_phase39_post_freeze_hub_convergence_contract import (
+    install as _install_canonical_source_phase39_post_freeze_hub_convergence_contract,
+)
 
 # Production order is intentional and fail-closed: preserve source identity first,
 # defer Type allocation to the topology freeze, restore integration boundaries,
@@ -124,6 +127,9 @@ from .canonical_source_phase38_boundary_grounding_turnover_contract import (
 # topology convergence passes. Phase 3.8 installs after every earlier topology
 # wrapper so exact grounding can inspect bounded adjacent-topic continuation
 # evidence and feed only the rejected original concept back through convergence.
+# Phase 3.9 installs last so source-owned Activity/Info Hub notes and their private
+# qid markers are rebuilt after final Type taxonomy rendering and compared using
+# the exact idempotent wire text shipped by the Phase 2.1 normalizer.
 _install_closed_inventory_contract(generation)
 _install_concept_topology_contract(generation)
 _install_concept_topology_compat(generation)
@@ -154,6 +160,7 @@ _install_canonical_source_phase36_source_critical_turnover_contract()
 _install_canonical_source_phase37_visual_topology_convergence_contract()
 _install_canonical_source_phase371_visual_topology_compat()
 _install_canonical_source_phase38_boundary_grounding_turnover_contract()
+_install_canonical_source_phase39_post_freeze_hub_convergence_contract(generation)
 
 del _install_closed_inventory_contract
 del _install_concept_topology_contract
@@ -185,3 +192,4 @@ del _install_canonical_source_phase36_source_critical_turnover_contract
 del _install_canonical_source_phase37_visual_topology_convergence_contract
 del _install_canonical_source_phase371_visual_topology_compat
 del _install_canonical_source_phase38_boundary_grounding_turnover_contract
+del _install_canonical_source_phase39_post_freeze_hub_convergence_contract
