@@ -20,6 +20,7 @@ import os
 import re
 import shutil
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy.orm import Session
@@ -37,6 +38,7 @@ from . import (
     generation,
     mmd,
     progress,
+    semantic_recovery,
     uploads,
 )
 
@@ -67,8 +69,16 @@ def _find_or_create_topic(
     db: Session, chapter: models.Chapter, topic_title: str, pre_post: str,
 ) -> models.Topic:
     display_name = bi.strip_topic_title(topic_title) or topic_title
+    normalized_title = bi.normalize_question_text(display_name)
     for t in chapter.topics:
-        if t.topic_title == topic_title and t.pre_post_learning == pre_post:
+        stored_title = bi.strip_topic_title(t.topic_title) or t.topic_title
+        if (
+            t.pre_post_learning == pre_post
+            and bi.normalize_question_text(stored_title) == normalized_title
+        ):
+            # The accepted topology owns presentation as well as placement.
+            # Reuse the identity, but do not retain stale casing/numbering.
+            t.topic_title = topic_title
             if t.topic_display_name != display_name:
                 t.topic_display_name = display_name
             return t
@@ -257,7 +267,13 @@ def _deposit_concepts(
 
     created_ids: list[int] = []
     merged_ids: list[int] = []
+    topic_positions: dict[str, int] = {}
+    concept_positions: dict[str, int] = {}
     for rec in records:
+        topic_key = bi.normalize_question_text(rec["topic"])
+        topic_positions.setdefault(topic_key, len(topic_positions) + 1)
+        concept_positions[topic_key] = concept_positions.get(topic_key, 0) + 1
+        source_order = concept_positions[topic_key]
         existing = _find_concept_in_chapter(
             chapter, rec["concept_title"], pre_post=pre_post)
         if existing is not None:
@@ -266,19 +282,38 @@ def _deposit_concepts(
             # concept title already exists.  The incoming record has passed
             # the current final contract, so it is the authoritative version.
             topic = _find_or_create_topic(db, chapter, rec["topic"], pre_post)
+            topic.source_order = topic_positions[topic_key]
             existing.topic = topic
+            # The accepted generated topology assigns this concept to exactly
+            # one topic. Historical same-chapter ConceptTag rows are secondary
+            # placements from an older map; retaining them makes a repaired
+            # concept reappear under the wrong topic during scoped export.
+            # Cross-chapter and opposite-learning-kind tags remain legitimate
+            # reusable relationships and are preserved.
+            for tag in list(existing.tags):
+                tagged_topic = tag.topic
+                if (
+                    tagged_topic is not None
+                    and tagged_topic.chapter_id == chapter.id
+                    and tagged_topic.pre_post_learning == pre_post
+                    and tagged_topic.id != topic.id
+                ):
+                    db.delete(tag)
             existing.concept_title = rec["concept_title"]
             existing.concept_display_name = rec["concept_title"]
             existing.parent_concept = rec.get("parent_concept", "")
             existing.concept_details = rec.get("concept_details", "")
             existing.keywords = rec.get("keywords", "")
+            existing.source_order = source_order
             if source_book.strip():
                 existing.sources = bi.merge_sources(existing.sources, source_book)
             db.flush()
             merged_ids.append(existing.id)
             continue
         topic = _find_or_create_topic(db, chapter, rec["topic"], pre_post)
+        topic.source_order = topic_positions[topic_key]
         concept = _add_concept(db, topic, rec, source_book)
+        concept.source_order = source_order
         db.flush()
         created_ids.append(concept.id)
     return created_ids, merged_ids
@@ -305,7 +340,12 @@ def _parse_duration_minutes(value: str) -> int | None:
         return None
 
 
-def _chapter_meta_summary(chapter: models.Chapter) -> dict:
+def _chapter_meta_summary(
+    chapter: models.Chapter,
+    active_concept_ids: set[int] | None = None,
+    *,
+    pre_post: str | None = None,
+) -> dict:
     """API-written chapter/topic metadata (empty dict in dry mode / on failure).
 
     The deterministic summaries in ``_sync_chapter_topic_summary`` are the
@@ -319,15 +359,42 @@ def _chapter_meta_summary(chapter: models.Chapter) -> dict:
         subject=chapter.subject,
         chapter_title=chapter.chapter_title,
     )
+    active_concept_ids = set(active_concept_ids or ())
+    scoped_topics = [
+        topic for topic in chapter.topics
+        if (
+            (pre_post is None or topic.pre_post_learning == pre_post)
+            and (
+                not active_concept_ids
+                or any(c.id in active_concept_ids for c in topic.concepts)
+            )
+        )
+    ]
     topics_payload = [
         {
             "topic": t.topic_title,
             "pre_post_learning": t.pre_post_learning,
             "concepts": [
-                c.concept_title for c in sorted(t.concepts, key=lambda c: c.id)
+                c.concept_title
+                for c in sorted(
+                    (
+                        c for c in t.concepts
+                        if not active_concept_ids or c.id in active_concept_ids
+                    ),
+                    key=lambda c: (
+                        c.source_order if c.source_order > 0 else 10**9,
+                        c.id,
+                    ),
+                )
             ],
         }
-        for t in sorted(chapter.topics, key=lambda t: t.id)
+        for t in sorted(
+            scoped_topics,
+            key=lambda t: (
+                t.source_order if t.source_order > 0 else 10**9,
+                t.id,
+            ),
+        )
     ]
     meta = generation._metadata(
         subject=chapter.subject, board=chapter.board, grade=chapter.grade,
@@ -357,7 +424,11 @@ def _chapter_meta_summary(chapter: models.Chapter) -> dict:
 
 
 def _sync_chapter_topic_summary(
-    chapter: models.Chapter, meta_summary: dict | None = None,
+    chapter: models.Chapter,
+    meta_summary: dict | None = None,
+    *,
+    active_concept_ids: set[int] | None = None,
+    pre_post: str | None = None,
 ) -> None:
     """Refresh topic lists and fill the summary/duration fields.
 
@@ -369,13 +440,39 @@ def _sync_chapter_topic_summary(
     output never ships "NA" in a required column.
     """
     meta_summary = meta_summary or {}
-    topics = sorted(chapter.topics, key=lambda t: t.id)
+    active_concept_ids = set(active_concept_ids or ())
+    all_topics = sorted(
+        chapter.topics,
+        key=lambda t: (
+            t.source_order if t.source_order > 0 else 10**9,
+            t.id,
+        ),
+    )
+    active_topics = [
+        topic for topic in all_topics
+        if (
+            (pre_post is None or topic.pre_post_learning == pre_post)
+            and (
+                not active_concept_ids
+                or any(c.id in active_concept_ids for c in topic.concepts)
+            )
+        )
+    ]
+    topics = active_topics if active_topics else all_topics
     # pre/post topic columns list each topic by its tagged Topic Title (with the
     # code), matching the topic_title column exactly, so the importer links them.
-    pre = [writer.composed_topic_title(t) for t in topics if t.pre_post_learning == "Pre"]
-    post = [writer.composed_topic_title(t) for t in topics if t.pre_post_learning == "Post"]
-    chapter.pre_topics = ", ".join(pre)
-    chapter.post_topics = ", ".join(post)
+    pre = [
+        writer.composed_topic_title(t)
+        for t in topics if t.pre_post_learning == "Pre"
+    ]
+    post = [
+        writer.composed_topic_title(t)
+        for t in topics if t.pre_post_learning == "Post"
+    ]
+    if pre_post != "Post":
+        chapter.pre_topics = ", ".join(pre)
+    if pre_post != "Pre":
+        chapter.post_topics = ", ".join(post)
 
     # Per-topic description: API-written when available, else the concept list.
     topic_descriptions = meta_summary.get("topic_descriptions") or {}
@@ -383,12 +480,33 @@ def _sync_chapter_topic_summary(
         written = topic_descriptions.get(bi.normalize_question_text(t.topic_title))
         if written:
             t.topic_description = written
-        elif _is_blank(t.topic_description):
-            names = [c.concept_title for c in sorted(t.concepts, key=lambda c: c.id)]
+        else:
+            names = [
+                c.concept_title
+                for c in sorted(
+                    (
+                        c for c in t.concepts
+                        if not active_concept_ids or c.id in active_concept_ids
+                    ),
+                    key=lambda c: (
+                        c.source_order if c.source_order > 0 else 10**9,
+                        c.id,
+                    ),
+                )
+            ]
             if names:
+                # Always replace the fallback for the accepted topology. A
+                # non-blank old description can be semantically stale after
+                # concepts are moved between topics.
                 t.topic_description = "Covers " + ", ".join(names) + "."
 
-    n_concepts = sum(len(t.concepts) for t in topics)
+    n_concepts = sum(
+        sum(
+            1 for concept in topic.concepts
+            if not active_concept_ids or concept.id in active_concept_ids
+        )
+        for topic in topics
+    )
     if meta_summary.get("chapter_description"):
         chapter.chapter_description = meta_summary["chapter_description"]
     elif _is_blank(chapter.chapter_description) and topics:
@@ -702,6 +820,143 @@ def _checkpoint_mismatch_message(
     )
 
 
+def _semantic_recovery_topic_ids() -> dict[str, str]:
+    """Return current source-graph topic identity without requiring Phase 3."""
+    try:
+        from . import canonical_source_phase3 as phase3
+
+        graph = phase3.active_graph()
+        if not isinstance(graph, dict):
+            session = phase3.active_session()
+            graph = (
+                session.get("graph")
+                if isinstance(session, dict)
+                else None
+            )
+    except Exception:
+        graph = None
+    if not isinstance(graph, dict):
+        return {}
+    return {
+        str(topic.get("title") or "").strip():
+        str(topic.get("topic_id") or "").strip()
+        for topic in graph.get("topics") or []
+        if isinstance(topic, dict)
+        and str(topic.get("title") or "").strip()
+    }
+
+
+def _semantic_recovery_source_text(raw_source: str) -> str:
+    """Use the verified semantic graph rendering as GPT repair evidence."""
+    try:
+        from . import canonical_source_phase3 as phase3
+
+        session = phase3.active_session()
+        graph = (
+            phase3.active_graph()
+            or (
+                session.get("graph")
+                if isinstance(session, dict)
+                else None
+            )
+        )
+        canonical = (
+            session.get("canonical")
+            if isinstance(session, dict)
+            else None
+        )
+    except Exception:
+        graph = None
+        canonical = None
+    if isinstance(graph, dict) and isinstance(canonical, dict):
+        # Once a verified source graph exists, silently substituting an older
+        # Phase 2/raw rendering would make repair evidence disagree with the
+        # checkpoint identity. Rendering failure is therefore a hard stop.
+        rendered = phase3.render_semantic_source(graph, canonical)
+        if not str(rendered or "").strip():
+            raise RuntimeError(
+                "verified semantic source graph rendered empty during recovery"
+            )
+        return str(rendered)
+    # Phase 2.2 overlays are also verified source evidence. This helper is
+    # fail-safe: the immutable converted source remains the final fallback.
+    try:
+        semantic = canonical_source_phase22.active_semantic_source(raw_source)
+        if str(semantic or "").strip():
+            return str(semantic)
+    except Exception:
+        pass
+    return str(raw_source or "")
+
+
+def _semantic_recovery_validation_errors(
+    records: list[dict],
+) -> list[dict]:
+    """Expose row-local validator diagnostics to the recovery scope resolver."""
+    try:
+        report = concept_validator.validate_concept_rows(
+            records,
+            allow_types=True,
+            require_culmination=False,
+            allow_culmination=True,
+        )
+    except Exception:
+        return []
+    return [
+        error for error in report.get("errors") or []
+        if isinstance(error, dict) and error.get("severity") == "error"
+    ]
+
+
+def _persist_semantic_recovery_checkpoint(
+    db: Session,
+    job: models.UploadJob,
+    result: semantic_recovery.RepairResult,
+    *,
+    fingerprint: str,
+    target_identity: dict[str, str],
+    target_chapter_id: int,
+    owner_sub: str | None,
+) -> None:
+    """Replace one repaired stage and discard only its dependent later stages."""
+    repaired = copy.deepcopy(result.checkpoint)
+    repaired["saved_at"] = datetime.now(timezone.utc).isoformat()
+    if not generation._compatible_concept_checkpoint_entry(repaired):
+        raise RuntimeError(
+            "semantic recovery refused to persist an incompatible checkpoint"
+        )
+    base_order = generation._checkpoint_order(result.base_stage)
+    retained = [
+        copy.deepcopy(entry)
+        for entry in generation._concept_checkpoint_entries(
+            job.generation_checkpoint)
+        if (
+            generation._compatible_concept_checkpoint_entry(entry)
+            and generation._checkpoint_order(
+                str(entry.get("stage") or "")) < base_order
+        )
+    ]
+    durable: dict = {}
+    for entry in [*retained, repaired]:
+        durable = _merge_generation_checkpoint_history(
+            durable,
+            entry,
+            fingerprint=fingerprint,
+            target_identity=target_identity,
+            target_chapter_id=target_chapter_id,
+        )
+    job.generation_checkpoint = durable
+    job.detail = (
+        f"Semantic recovery repaired {result.changed_count} bounded unit(s) "
+        f"at '{result.base_stage}'; dependent later stages will be replayed."
+    )
+    # Checkpoint and current provider usage are committed together. A database
+    # or filesystem failure propagates and is never converted into GPT repair.
+    uploads.persist_current_openai_usage(
+        db, job.id, owner_sub=owner_sub)
+    drive_checkpoints.schedule_checkpoint_backup(job.id)
+
+
 def _stage_concept_workbook(
     db: Session,
     target: Path,
@@ -792,8 +1047,17 @@ def _deposit_and_publish_concepts(
             mined_types=mined_types,
             source_text=source_text,
         )
+        active_ids = set(created_ids + merged_ids)
         _sync_chapter_topic_summary(
-            chapter, _chapter_meta_summary(chapter))
+            chapter,
+            _chapter_meta_summary(
+                chapter,
+                active_ids,
+                pre_post=pre_post,
+            ),
+            active_concept_ids=active_ids,
+            pre_post=pre_post,
+        )
         written = _commit_and_publish_concept_workbook(
             db,
             config.BULK_IMPORT_OUTPUT,
@@ -1029,50 +1293,130 @@ def generate_post_learning(
             level="success",
         )
 
-    records = generation.concepts_from_mmd(
-        job.mmd_text,
-        subject=chapter.subject,
-        board=chapter.board,
-        grade=chapter.grade,
-        unit=chapter.unit,
-        chapter_title=chapter.chapter_title,
-        chapter_id=chapter.id,
-        chapter_code=chapter.chapter_code,
-        learning_kind="Post",
-        artifacts=artifacts,
-        resume_checkpoint=resume_checkpoint,
-        checkpoint_callback=save_checkpoint,
-    )
-    _store_inventory(job, artifacts)
-    try:
-        created_ids, merged_ids, written = _deposit_and_publish_concepts(
-            db,
-            chapter_id=target_chapter_id,
-            records=records,
-            pre_post="Post",
-            source_book=job.source_book,
-            inventory=artifacts.get("question_task_inventory"),
-            mined_types=artifacts.get("mined_types"),
-            source_text=job.mmd_text,
+    recovery_metadata = {
+        "subject": chapter.subject,
+        "board": chapter.board,
+        "grade": chapter.grade,
+        "unit": chapter.unit,
+        "chapter_title": chapter.chapter_title,
+        "chapter_id": chapter.id,
+        "chapter_code": chapter.chapter_code,
+        "learning_kind": "Post",
+    }
+    recovery_policy = semantic_recovery.RecoveryPolicy.from_environment()
+
+    def generation_attempt() -> list[dict]:
+        # Every automatic checkpoint is durable. On recovery, obtain the
+        # current envelope rather than retaining the entry captured before the
+        # first attempt, and clear only non-durable in-memory artifacts.
+        artifacts.clear()
+        current_resume = (
+            copy.deepcopy(job.generation_checkpoint)
+            if _checkpoint_matches_generation(
+                job.generation_checkpoint or {},
+                job=job,
+                chapter=chapter,
+            )
+            else resume_checkpoint
         )
-    except DepositValidationError:
-        db.rollback()
-        db.refresh(job)
-        newest = generation._newest_compatible_concept_checkpoint(
-            job.generation_checkpoint)
-        if (
-            newest
-            and newest.get("stage") == "final_content_ready"
-        ):
-            save_checkpoint({
-                "checkpoint_action": "discard_stage",
-                "stage": "final_content_ready",
-                "reason": "deterministic deposit validation failed",
-            })
-        raise
-    except Exception:
-        db.rollback()
-        raise
+        return generation.concepts_from_mmd(
+            job.mmd_text,
+            **recovery_metadata,
+            artifacts=artifacts,
+            resume_checkpoint=current_resume,
+            checkpoint_callback=save_checkpoint,
+        )
+
+    def repair_checkpoint(
+        checkpoint: dict,
+        context: semantic_recovery.RecoveryContext,
+    ) -> semantic_recovery.RepairResult | None:
+        return semantic_recovery.repair_concept_checkpoint_via_gpt(
+            checkpoint,
+            context,
+            api_call=generation._openai_json,
+            metadata=recovery_metadata,
+            source_text=_semantic_recovery_source_text(job.mmd_text),
+            topic_id_by_title=_semantic_recovery_topic_ids(),
+            validation_errors=_semantic_recovery_validation_errors,
+            max_rows=recovery_policy.max_rows_per_attempt,
+            max_source_chars=recovery_policy.max_source_chars,
+        )
+
+    def persist_repair(
+        result: semantic_recovery.RepairResult,
+        _context: semantic_recovery.RecoveryContext,
+    ) -> None:
+        _persist_semantic_recovery_checkpoint(
+            db,
+            job,
+            result,
+            fingerprint=fingerprint,
+            target_identity=target_identity,
+            target_chapter_id=target_chapter_id,
+            owner_sub=owner_sub,
+        )
+
+    def generation_and_deposit_attempt() -> tuple[
+        list[dict], list[int], list[int], dict
+    ]:
+        records = generation_attempt()
+        _store_inventory(job, artifacts)
+        try:
+            created_ids, merged_ids, written = _deposit_and_publish_concepts(
+                db,
+                chapter_id=target_chapter_id,
+                records=records,
+                pre_post="Post",
+                source_book=job.source_book,
+                inventory=artifacts.get("question_task_inventory"),
+                mined_types=artifacts.get("mined_types"),
+                source_text=job.mmd_text,
+            )
+        except DepositValidationError:
+            db.rollback()
+            db.refresh(job)
+            newest = generation._newest_compatible_concept_checkpoint(
+                job.generation_checkpoint)
+            if newest and newest.get("stage") == "final_content_ready":
+                # Never select the exact terminal payload that the deposit
+                # validator just rejected. Live recovery repairs an earlier
+                # semantic checkpoint in this run; dry/manual resume likewise
+                # starts from the newest remaining compatible stage.
+                save_checkpoint({
+                    "checkpoint_action": "discard_stage",
+                    "stage": "final_content_ready",
+                    "reason": "deterministic deposit validation failed",
+                })
+            raise
+        except Exception:
+            # A failed deposit must leave no partially materialized concepts.
+            # The durable generation checkpoint was committed separately, so
+            # refresh it after rollback for bounded same-run semantic recovery.
+            db.rollback()
+            db.refresh(job)
+            raise
+        return records, created_ids, merged_ids, written
+
+    if config.use_live_generation():
+        (
+            records,
+            created_ids,
+            merged_ids,
+            written,
+        ) = semantic_recovery.run_with_semantic_recovery(
+            generation_and_deposit_attempt,
+            checkpoint_snapshot=lambda: copy.deepcopy(
+                job.generation_checkpoint or {}),
+            repair_checkpoint=repair_checkpoint,
+            persist_repair=persist_repair,
+            policy=recovery_policy,
+            log=progress.log,
+        )
+    else:
+        # Dry mode is test/development-only and has no GPT repair provider.
+        records, created_ids, merged_ids, written = (
+            generation_and_deposit_attempt())
 
     job.status = "generated"
     job.deposit_scope_type = "chapter"
@@ -1254,40 +1598,147 @@ def generate_pre_learning_from_upload(
             level="success",
         )
 
-    base = generation.concepts_from_mmd(
-        job.mmd_text,
-        subject=chapter.subject,
-        board=chapter.board,
-        grade=chapter.grade,
-        unit=chapter.unit,
-        chapter_title=chapter.chapter_title,
-        chapter_id=chapter.id,
-        chapter_code=chapter.chapter_code,
-        learning_kind="Post",
-        artifacts=artifacts,
-        resume_checkpoint=resume_checkpoint,
-        checkpoint_callback=save_checkpoint,
-        completion_progress=0.98,
-    )
-    _store_inventory(job, artifacts)
-    pre_records = generation.pre_learning_from_rows(
-        base,
-        subject=chapter.subject, grade=chapter.grade, board=chapter.board,
-        chapter_title=chapter.chapter_title, unit=chapter.unit,
-        resume_checkpoint=resume_checkpoint,
-        checkpoint_callback=save_checkpoint,
-    )
-    try:
-        created_ids, merged_ids, written = _deposit_and_publish_concepts(
-            db,
-            chapter_id=target_chapter_id,
-            records=pre_records,
-            pre_post="Pre",
-            source_book=job.source_book,
+    recovery_metadata = {
+        "subject": chapter.subject,
+        "board": chapter.board,
+        "grade": chapter.grade,
+        "unit": chapter.unit,
+        "chapter_title": chapter.chapter_title,
+        "chapter_id": chapter.id,
+        "chapter_code": chapter.chapter_code,
+        "learning_kind": "Pre",
+    }
+    recovery_policy = semantic_recovery.RecoveryPolicy.from_environment()
+    recovery_scope = "post_generation"
+
+    def generation_attempt() -> list[dict]:
+        nonlocal recovery_scope
+        artifacts.clear()
+        current_resume = (
+            copy.deepcopy(job.generation_checkpoint)
+            if _checkpoint_matches_generation(
+                job.generation_checkpoint or {},
+                job=job,
+                chapter=chapter,
+            )
+            else resume_checkpoint
         )
-    except Exception:
-        db.rollback()
-        raise
+        recovery_scope = "post_generation"
+        base = generation.concepts_from_mmd(
+            job.mmd_text,
+            subject=chapter.subject,
+            board=chapter.board,
+            grade=chapter.grade,
+            unit=chapter.unit,
+            chapter_title=chapter.chapter_title,
+            chapter_id=chapter.id,
+            chapter_code=chapter.chapter_code,
+            learning_kind="Post",
+            artifacts=artifacts,
+            resume_checkpoint=current_resume,
+            checkpoint_callback=save_checkpoint,
+            completion_progress=0.98,
+        )
+        _store_inventory(job, artifacts)
+        # The target concept map may have advanced its checkpoint during this
+        # attempt. Pre-learning must resume from that current durable envelope,
+        # including any repaired draft/audit stage retained from a prior pass.
+        pre_resume = (
+            copy.deepcopy(job.generation_checkpoint)
+            if _checkpoint_matches_generation(
+                job.generation_checkpoint or {},
+                job=job,
+                chapter=chapter,
+            )
+            else current_resume
+        )
+        recovery_scope = "pre_generation"
+        return generation.pre_learning_from_rows(
+            base,
+            subject=chapter.subject,
+            grade=chapter.grade,
+            board=chapter.board,
+            chapter_title=chapter.chapter_title,
+            unit=chapter.unit,
+            resume_checkpoint=pre_resume,
+            checkpoint_callback=save_checkpoint,
+        )
+
+    def repair_checkpoint(
+        checkpoint: dict,
+        context: semantic_recovery.RecoveryContext,
+    ) -> semantic_recovery.RepairResult | None:
+        return semantic_recovery.repair_pre_learning_checkpoint_via_gpt(
+            checkpoint,
+            context,
+            api_call=generation._openai_json,
+            metadata=recovery_metadata,
+            source_text=_semantic_recovery_source_text(job.mmd_text),
+            topic_id_by_title=_semantic_recovery_topic_ids(),
+            validation_errors=_semantic_recovery_validation_errors,
+            max_rows=recovery_policy.max_rows_per_attempt,
+            max_source_chars=recovery_policy.max_source_chars,
+            failure_scope=recovery_scope,
+        )
+
+    def persist_repair(
+        result: semantic_recovery.RepairResult,
+        _context: semantic_recovery.RecoveryContext,
+    ) -> None:
+        _persist_semantic_recovery_checkpoint(
+            db,
+            job,
+            result,
+            fingerprint=fingerprint,
+            target_identity=target_identity,
+            target_chapter_id=target_chapter_id,
+            owner_sub=owner_sub,
+        )
+
+    def generation_and_deposit_attempt() -> tuple[
+        list[dict], list[int], list[int], dict
+    ]:
+        nonlocal recovery_scope
+        pre_records = generation_attempt()
+        recovery_scope = "pre_deposit"
+        try:
+            created_ids, merged_ids, written = _deposit_and_publish_concepts(
+                db,
+                chapter_id=target_chapter_id,
+                records=pre_records,
+                pre_post="Pre",
+                source_book=job.source_book,
+            )
+        except Exception:
+            # Preserve the separately committed generation checkpoint and
+            # remove every partially materialized prerequisite row.
+            db.rollback()
+            db.refresh(job)
+            raise
+        return pre_records, created_ids, merged_ids, written
+
+    if config.use_live_generation():
+        (
+            pre_records,
+            created_ids,
+            merged_ids,
+            written,
+        ) = semantic_recovery.run_with_semantic_recovery(
+            generation_and_deposit_attempt,
+            checkpoint_snapshot=lambda: copy.deepcopy(
+                job.generation_checkpoint or {}),
+            repair_checkpoint=repair_checkpoint,
+            persist_repair=persist_repair,
+            policy=recovery_policy,
+            log=progress.log,
+        )
+    else:
+        (
+            pre_records,
+            created_ids,
+            merged_ids,
+            written,
+        ) = generation_and_deposit_attempt()
 
     job.status = "generated"
     job.deposit_scope_type = "chapter"
@@ -1362,8 +1813,17 @@ def generate_pre_learning_from_existing(
                     db, chapter, pre_records, "Pre", source_book)
                 created_ids += created
                 merged_ids += merged
+                active_ids = set(created + merged)
                 _sync_chapter_topic_summary(
-                    chapter, _chapter_meta_summary(chapter))
+                    chapter,
+                    _chapter_meta_summary(
+                        chapter,
+                        active_ids,
+                        pre_post="Pre",
+                    ),
+                    active_concept_ids=active_ids,
+                    pre_post="Pre",
+                )
                 per_chapter[chapter.id] = len(created)
             written = _commit_and_publish_concept_workbook(
                 db,

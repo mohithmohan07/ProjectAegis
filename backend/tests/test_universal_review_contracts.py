@@ -889,9 +889,10 @@ def test_host_entailment_review_preserves_unreviewed_activity_units(
     ] == ["TYPE-0001", "TYPE-ACTIVITY"]
 
 
-def test_case_scoped_host_review_certifies_distinct_hosts_per_qid(
+def test_case_scoped_host_review_converges_reusable_type_to_one_host(
     monkeypatch,
 ):
+    monkeypatch.setattr(g.config, "use_live_generation", lambda: True)
     first_task = "Perform the requested method for source case one."
     second_task = "Perform the requested method for source case two."
     mined = {"types": [{
@@ -963,6 +964,11 @@ def test_case_scoped_host_review_certifies_distinct_hosts_per_qid(
                 },
             ]}
         assert kwargs["purpose"] == "concept_validation"
+        if "REUSABLE TYPES SPLIT ACROSS HOSTS" in user:
+            return {"assignments": [{
+                "type_id": "TYPE-0001",
+                "concept_id": "CONCEPT-0001",
+            }]}
         return {"assignments": [
             {
                 "type_id": "TYPE-0001::CASE-A::0001",
@@ -984,9 +990,18 @@ def test_case_scoped_host_review_certifies_distinct_hosts_per_qid(
 
     hosts = mined[g._PLACEMENT_CERTIFICATIONS_KEY]["hosts"]
     assert hosts["QINV-0001"]["concept"] == "Method Alpha"
-    assert hosts["QINV-0002"]["concept"] == "Method Beta"
+    assert hosts["QINV-0002"]["concept"] == "Method Alpha"
+    assert sum(
+        "Applying a Supplied Method" in row["concept_details"]
+        for row in out
+    ) == 1
+    alpha = next(
+        row for row in out if row["concept_title"] == "Method Alpha")
+    assert first_task in alpha["concept_details"]
+    assert second_task in alpha["concept_details"]
     assert first_task in g._types_body(out[0]["concept_details"])
-    assert second_task in g._types_body(out[1]["concept_details"])
+    assert second_task in g._types_body(out[0]["concept_details"])
+    assert not g._types_body(out[1]["concept_details"])
     # No blanket Type is created for a theory-only sibling with no source qid.
     assert not g._has_meaningful_types(out[2]["concept_details"])
     assert not g._placement_certification_violations(
@@ -1008,6 +1023,58 @@ def test_case_scoped_host_review_certifies_distinct_hosts_per_qid(
     assert "duplicate_type_definition" not in {
         error["code"] for error in strict_report["errors"]
     }
+
+
+def test_reusable_type_convergence_continues_with_distinct_hosts_when_review_fails(
+    monkeypatch,
+):
+    monkeypatch.setattr(g.config, "use_live_generation", lambda: True)
+    monkeypatch.setattr(
+        g,
+        "_openai_json",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("review provider unavailable")
+        ),
+    )
+    first = {
+        "type_id": "TYPE-0001::CASE-A::0001",
+        "_origin_type_id": "TYPE-0001",
+        "type_title": "Applying a shared method",
+        "is_activity": False,
+    }
+    second = {
+        "type_id": "TYPE-0001::CASE-B::0002",
+        "_origin_type_id": "TYPE-0001",
+        "type_title": "Applying a shared method",
+        "is_activity": False,
+    }
+
+    result = g._consolidate_reusable_type_hosts(
+        per_concept={
+            "CONCEPT-0001": [first],
+            "CONCEPT-0002": [second],
+        },
+        original_types_by_id={"TYPE-0001": first},
+        allowed_cids_by_tid={
+            first["type_id"]: {"CONCEPT-0001", "CONCEPT-0002"},
+            second["type_id"]: {"CONCEPT-0001", "CONCEPT-0002"},
+        },
+        concept_payload=[
+            {"concept_id": "CONCEPT-0001", "concept": "Method Alpha"},
+            {"concept_id": "CONCEPT-0002", "concept": "Method Beta"},
+        ],
+        meta={},
+    )
+
+    assert set(result) == {"CONCEPT-0001", "CONCEPT-0002"}
+    assert result["CONCEPT-0001"][0]["_origin_type_id"] == (
+        "TYPE-0001::HOST::CONCEPT-0001"
+    )
+    assert result["CONCEPT-0002"][0]["_origin_type_id"] == (
+        "TYPE-0001::HOST::CONCEPT-0002"
+    )
+    assert "Method Alpha" in result["CONCEPT-0001"][0]["type_title"]
+    assert "Method Beta" in result["CONCEPT-0002"][0]["type_title"]
 
 
 def test_mined_type_normalization_prunes_examples_without_inventory_qids():
@@ -1206,8 +1273,7 @@ def test_culmination_title_uses_only_its_topic_and_has_no_synthetic_type():
     }
     result = g._merge_culmination_rows([normal], [authored])
     culmination = result[-1]
-    assert culmination["concept_title"] == (
-        "Culmination - Recognising Fixed Changes")
+    assert culmination["concept_title"] == "Culmination - Opening Patterns"
     assert "Types:" not in culmination["concept_details"]
 
 

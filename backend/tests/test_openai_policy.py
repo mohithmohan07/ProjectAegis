@@ -163,7 +163,7 @@ def test_all_active_runtime_calls_declare_a_known_purpose():
         and isinstance(node.func, ast.Name)
         and node.func.id == "_openai_json"
     ]
-    assert len(generation_calls) == 40
+    assert len(generation_calls) == 41
     generation_purposes = [
         ast.literal_eval(keyword.value)
         for node in generation_calls

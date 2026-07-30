@@ -43,6 +43,7 @@ from . import canonical_source_phase33_preflight_contract as phase33
 from . import canonical_source_phase37_visual_topology_convergence_contract as phase37
 from . import concept_refiner as cr
 from . import progress
+from . import semantic_confidence_policy as confidence_policy
 
 _CONTRACT_VERSION = 1
 _GROUNDING_VERSION = "phase3.8-boundary-aware-source-grounding-1"
@@ -347,8 +348,9 @@ def _critic_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         "are authoritative. Do not demand source support for mastery, learner "
         "analysis, Types, hubs, keywords, or parent labels. Put every concept ID "
         "in exactly one accepted or rejected list. Verification requires all "
-        "accepted, none rejected, confidence at least 0.96, and no issues. Do not "
-        "rewrite proposals."
+        "accepted, none rejected, confidence at least "
+        f"{confidence_policy.threshold_text()}, and no issues. Do not rewrite "
+        "proposals."
     )
     return phase22._openai_multimodal_json(
         system=system,

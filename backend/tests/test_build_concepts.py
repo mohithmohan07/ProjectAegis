@@ -798,7 +798,10 @@ def test_upload_workbook_failure_rolls_back_new_concepts(
         tmp_path / "bulk_import_output.xlsx",
     )
     monkeypatch.setattr(
-        build_concepts, "_chapter_meta_summary", lambda _chapter: {})
+        build_concepts,
+        "_chapter_meta_summary",
+        lambda _chapter, *_args, **_kwargs: {},
+    )
     monkeypatch.setattr(
         build_concepts.generation,
         "concepts_from_mmd",

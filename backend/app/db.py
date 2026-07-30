@@ -44,8 +44,10 @@ def _ensure_columns() -> None:
     if not DB_URL.startswith("sqlite"):
         return
     additions = [
+        ("topics", "source_order", "INTEGER DEFAULT 0"),
         ("concepts", "parent_concept", "VARCHAR(255) DEFAULT ''"),
         ("concepts", "sources", "TEXT DEFAULT ''"),
+        ("concepts", "source_order", "INTEGER DEFAULT 0"),
         ("assessment_sessions", "owner_sub",
          "VARCHAR(255) DEFAULT 'local:default'"),
         ("upload_jobs", "owner_sub", "VARCHAR(255) DEFAULT 'local:default'"),

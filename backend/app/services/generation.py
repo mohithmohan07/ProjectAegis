@@ -28,6 +28,7 @@ from . import katex_rules as kr
 from . import concept_refiner as cr
 from . import prompts
 from . import progress
+from . import semantic_confidence_policy as confidence_policy
 # Imported for its prompt registrations (assessment.* keys used by _identify_system).
 from . import assessment_prompts as _assessment_prompts_registration  # noqa: F401
 
@@ -1823,6 +1824,27 @@ Rules:
 """)
 
 prompts.register(
+    "concepts.reusable_type_host_convergence.system",
+    category=_CONCEPTS_CAT,
+    label="Reusable Type host convergence prompt",
+    default="""\
+Consolidate every supplied original reusable Type onto exactly one semantically
+valid concept host shared by all of its Cases. Return ONLY strict JSON:
+{"assignments":[{"type_id":"TYPE-0001","concept_id":"CONCEPT-0001","reason":"this host teaches every Case's assessed method and output"}]}.
+
+Rules:
+- Return every supplied original type_id exactly once; these IDs deliberately
+  have no ``::CASE`` suffix. Invent no IDs.
+- Choose only from that Type's allowed_concept_ids.
+- The selected concept title and Description must teach the assessed action,
+  inputs, method/approach, constraints, and expected output for every Case.
+- Formula or keyword overlap alone is not entailment.
+- If no supplied concept safely teaches every Case, omit that Type. The caller
+  will preserve its already-reviewed Case hosts as explicitly distinct public
+  Types instead of forcing an unsafe move.
+""")
+
+prompts.register(
     "concepts.type_mining_delta.system", category=_CONCEPTS_CAT,
     label="Focused Type coverage delta prompt",
     default="""\
@@ -3523,7 +3545,13 @@ def _activity_hub_marker(item: dict) -> str:
             words = re.findall(r"\S+", _strip_public_source_heading(plain))
             identity = " ".join(words[:6]).strip(" .:-")
             if identity:
-                return f"{label} — {identity}"[:100].strip(" .:-")
+                # The outer public prefix already says ``Activity``. Returning
+                # ``Activity — <opening words>`` here caused both the kind and
+                # the opening words to be rendered twice:
+                # ``Activity — Activity — Look at Fig...: Look at Fig...``.
+                # Use only the source-derived identity; the note builder below
+                # removes that identity from the beginning of the gist.
+                return identity[:100].strip(" .:-")
         return label
     plain = bi.to_plain_text(_inventory_task_text(item))
     words = re.findall(r"\S+", _strip_public_source_heading(plain))
@@ -11233,6 +11261,181 @@ def _review_case_unit_hosts_via_api(
     return rebuilt
 
 
+def _consolidate_reusable_type_hosts(
+    *,
+    per_concept: dict[str, list[dict]],
+    original_types_by_id: dict[str, dict],
+    allowed_cids_by_tid: dict[str, set[str]],
+    concept_payload: list[dict],
+    meta: dict,
+) -> dict[str, list[dict]]:
+    """Converge every reusable mined Type to one reviewed concept host.
+
+    Case-scoped assignment is useful for preserving exact QIDs during review,
+    but it is an internal mechanism—not a public taxonomy. A single original
+    Type must render once with all of its Cases. If all Cases have no legal
+    common destination, they become explicitly distinct host-qualified Types
+    instead of sharing one misleading global Type number.
+    """
+    import json as _json
+
+    host_by_unit: dict[str, str] = {}
+    units_by_origin: dict[str, list[dict]] = {}
+    for cid, units in per_concept.items():
+        for unit in units:
+            unit_id = str(unit.get("type_id") or "").strip()
+            origin = str(
+                unit.get("_origin_type_id")
+                or unit_id.split("::", 1)[0]
+            ).strip()
+            if not unit_id or not origin or unit.get("is_activity"):
+                continue
+            host_by_unit[unit_id] = cid
+            units_by_origin.setdefault(origin, []).append(unit)
+
+    split_origins = {
+        origin: units
+        for origin, units in units_by_origin.items()
+        if len({
+            host_by_unit.get(str(unit.get("type_id") or "").strip(), "")
+            for unit in units
+        }) > 1
+    }
+    if not split_origins:
+        return per_concept
+
+    concept_payload_by_id = {
+        str(row.get("concept_id") or ""): row
+        for row in concept_payload
+        if str(row.get("concept_id") or "")
+    }
+    targets: dict[str, str] = {}
+    common_allowed: dict[str, tuple[str, ...]] = {}
+    irreducible: set[str] = set()
+    for origin, units in split_origins.items():
+        allowed_sets = [
+            set(allowed_cids_by_tid.get(
+                str(unit.get("type_id") or "").strip(), set()))
+            for unit in units
+        ]
+        common = set.intersection(*allowed_sets) if allowed_sets else set()
+        ordered = tuple(
+            cid for cid in concept_payload_by_id if cid in common)
+        if not ordered:
+            irreducible.add(origin)
+            continue
+        common_allowed[origin] = ordered
+    unresolved = sorted(set(common_allowed) - set(targets))
+    if unresolved and config.use_live_generation():
+        proposed: dict[str, str] = {}
+        payload = []
+        for origin in unresolved:
+            item = copy.deepcopy(
+                original_types_by_id.get(origin)
+                or split_origins[origin][0])
+            item["type_id"] = origin
+            item["allowed_concept_ids"] = list(common_allowed[origin])
+            item["current_concept_ids"] = sorted({
+                host_by_unit.get(
+                    str(unit.get("type_id") or "").strip(), "")
+                for unit in split_origins[origin]
+                if host_by_unit.get(
+                    str(unit.get("type_id") or "").strip(), "")
+            })
+            payload.append(item)
+        user = (
+            _metadata_block(meta)
+            + "\nCONCEPT HOSTS:\n"
+            + _json.dumps(
+                {"concepts": concept_payload}, ensure_ascii=False)
+            + "\n\nREUSABLE TYPES SPLIT ACROSS HOSTS:\n"
+            + _json.dumps({"types": payload}, ensure_ascii=False)
+            + "\nReturn one concept_id for an original type_id only when "
+            "that host semantically teaches every Case. Omit an unsafe "
+            "Type instead of forcing it. All Cases and Examples of an "
+            "accepted Type will be kept together on the selected host."
+        )
+        try:
+            data = _openai_json(
+                prompts.get_text(
+                    "concepts.reusable_type_host_convergence.system"
+                ),
+                user,
+                purpose="concept_validation",
+            )
+        except Exception as exc:  # noqa: BLE001
+            progress.log(
+                "Reusable Type host convergence reviewer was unavailable "
+                f"({exc}); preserving the reviewed Case hosts as distinct "
+                "public Types.",
+                level="warning",
+            )
+            data = {}
+        for assignment in (data or {}).get("assignments") or []:
+            if not isinstance(assignment, dict):
+                continue
+            origin = str(assignment.get("type_id") or "").strip()
+            cid = str(assignment.get("concept_id") or "").strip()
+            if (
+                origin in unresolved
+                and cid in common_allowed.get(origin, ())
+            ):
+                proposed[origin] = cid
+        targets.update(proposed)
+
+    # Never stop a completed generation because the bounded reviewer omitted a
+    # verdict. When one shared host was not semantically certified, retain the
+    # reviewed Case hosts but make them explicitly distinct public Types. That
+    # is safer than silently moving a formula Case onto a real-life host (or
+    # vice versa) merely because of source order.
+    unresolved_after_review = set(common_allowed) - set(targets)
+    if unresolved_after_review:
+        irreducible.update(unresolved_after_review)
+        progress.log(
+            "Reusable Type host convergence had no complete shared-host "
+            f"verdict for {len(unresolved_after_review)} Type(s); preserving "
+            "their reviewed Case hosts as explicitly host-specific Types.",
+            level="warning",
+        )
+
+    rebuilt: dict[str, list[dict]] = {}
+    moved = 0
+    for current_cid, units in per_concept.items():
+        for raw_unit in units:
+            unit = copy.deepcopy(raw_unit)
+            unit_id = str(unit.get("type_id") or "").strip()
+            origin = str(
+                unit.get("_origin_type_id")
+                or unit_id.split("::", 1)[0]
+            ).strip()
+            target = targets.get(origin, current_cid)
+            if origin in irreducible:
+                # There is no legal single host shared by every Case. Make the
+                # public taxonomy honestly distinct instead of reusing one
+                # number across hosts.
+                host = concept_payload_by_id.get(current_cid) or {}
+                host_title = str(host.get("concept") or "").strip()
+                unit["_origin_type_id"] = (
+                    f"{origin}::HOST::{current_cid}")
+                title = str(unit.get("type_title") or "").strip()
+                if host_title and host_title.casefold() not in title.casefold():
+                    unit["type_title"] = (
+                        f"{title} — {host_title}" if title else host_title)
+            rebuilt.setdefault(target, []).append(unit)
+            if target != current_cid:
+                moved += 1
+
+    progress.log(
+        "Converged "
+        f"{len(targets)} reusable Type(s) to one host "
+        f"({moved} Case assignment unit(s) moved); "
+        f"{len(irreducible)} irreducible Type(s) were made explicitly "
+        "host-specific.",
+        level="success",
+    )
+    return rebuilt
+
+
 def _assign_mined_types_via_api(
     records: list[dict], *, meta: dict, mined_types: dict, max_attempts: int = 4,
 ) -> list[dict]:
@@ -11540,6 +11743,13 @@ def _assign_mined_types_via_api(
         per_concept=per_concept,
         concept_payload=concept_payload,
         allowed_cids_by_tid=allowed_cids_by_tid,
+        meta=meta,
+    )
+    per_concept = _consolidate_reusable_type_hosts(
+        per_concept=per_concept,
+        original_types_by_id=original_types_by_id,
+        allowed_cids_by_tid=allowed_cids_by_tid,
+        concept_payload=concept_payload,
         meta=meta,
     )
     for cid, units in per_concept.items():
@@ -16543,18 +16753,26 @@ def _extract_skeleton_via_api(
 
 
 def _culmination_title(topic_records: list[dict]) -> str:
-    names = [
-        r.get("concept_title", "") for r in topic_records
-        if not cr.is_culmination(r.get("concept_title", ""))
-    ][:3]
-    if not names:
+    """Concise, complete-title contract for one topic culmination.
+
+    The Description already carries the exhaustive ``Recap of A, B, ...``
+    inventory. Repeating an arbitrary first three concept names in the title
+    made titles both very long and semantically incomplete. The stable topic
+    name is the correct public label for the complete recap.
+    """
+    topic = next((
+        re.sub(r"\s+", " ", str(record.get("topic") or "")).strip()
+        for record in topic_records
+        if str(record.get("topic") or "").strip()
+    ), "")
+    if not topic:
         return "Culmination - Topic Recap"
-    if len(names) == 1:
-        body = names[0]
-    elif len(names) == 2:
-        body = f"{names[0]} and {names[1]}"
-    else:
-        body = f"{names[0]}, {names[1]} and {names[2]}"
+    # Topic model columns allow 255 chars, but a title should stay readily
+    # scannable in the workbook. Preserve words when bounding an anomalous OCR
+    # heading rather than silently overflowing the cell with concept names.
+    body = topic
+    if len(body) > 96:
+        body = body[:96].rsplit(" ", 1)[0].rstrip(" ,;:-") or body[:96]
     return f"Culmination - {body}"
 
 
@@ -17774,6 +17992,15 @@ def _final_checkpoint_refresh_reasons(
     if not checkpoint:
         return []
     reasons: list[str] = []
+    if (
+        checkpoint.get("semantic_confidence_policy")
+        != confidence_policy.cache_identity()
+    ):
+        # A final checkpoint skips the semantic/API finalizer on resume.  It is
+        # therefore reusable only under the exact policy that approved it.
+        # Earlier checkpoints remain valuable: the caller falls back to the
+        # newest preceding stage and reruns semantic review at the current gate.
+        reasons.append("semantic confidence policy changed")
     missing_topics = _missing_source_topic_excerpts(
         checkpoint.get("records") or [], source_topic_excerpts)
     if missing_topics:
@@ -18027,6 +18254,7 @@ def _make_concept_checkpoint(
         "saved_at": datetime.now(timezone.utc).isoformat(),
         "progress": max(0.0, min(1.0, float(value))),
         "stage_label": stage_label or spec["label"],
+        "semantic_confidence_policy": confidence_policy.cache_identity(),
         **copy.deepcopy(payload),
     }
 
