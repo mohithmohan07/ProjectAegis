@@ -88,6 +88,16 @@ def test_generic_activity_note_matches_the_phase21_shipped_wire_text():
     assert not g.kr.rich_text_issues(canonical)
 
 
+def test_numbered_activity_identity_survives_phase21_cleanup():
+    item = _activity(11, generic_label=False)
+
+    canonical = g._compact_activity_hub_note(item)
+
+    assert "Activity 11.1" in canonical
+    assert canonical == phase21_render.clean_activity_hub_content(canonical)
+    assert not g.kr.rich_text_issues(canonical)
+
+
 def test_ten_rne_like_activity_items_remain_exact_after_phase21_rendering():
     records, inventory, mined, host_indices = _fixture()
 
