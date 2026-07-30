@@ -61,6 +61,9 @@ from .canonical_source_phase342_pdf_semantic_salvage_contract import (
 from .canonical_source_phase35_provider_max_contract import (
     install as _install_canonical_source_phase35_provider_max_contract,
 )
+from .canonical_source_phase351_workbook_capacity_contract import (
+    install as _install_canonical_source_phase351_workbook_capacity_contract,
+)
 
 # Production order is intentional and fail-closed: preserve source identity first,
 # defer Type allocation to the topology freeze, restore integration boundaries,
@@ -92,7 +95,8 @@ from .canonical_source_phase35_provider_max_contract import (
 # Phase 3.5 installs last and removes Aegis-local token ceilings below the model's
 # provider limits: maximum output is requested on every live call, complete source
 # evidence is retained up to the context boundary, and oversized inputs are
-# losslessly batched rather than trimmed.
+# losslessly batched rather than trimmed. Phase 3.5.1 applies the same capacity
+# policy to the vendored revision-workbook planner and authoring passes.
 _install_closed_inventory_contract(generation)
 _install_concept_topology_contract(generation)
 _install_concept_topology_compat(generation)
@@ -117,6 +121,7 @@ _install_canonical_source_phase34_structured_output_contract()
 _install_canonical_source_phase341_schema_completeness_contract()
 _install_canonical_source_phase342_pdf_semantic_salvage_contract()
 _install_canonical_source_phase35_provider_max_contract()
+_install_canonical_source_phase351_workbook_capacity_contract()
 
 del _install_closed_inventory_contract
 del _install_concept_topology_contract
@@ -142,3 +147,4 @@ del _install_canonical_source_phase34_structured_output_contract
 del _install_canonical_source_phase341_schema_completeness_contract
 del _install_canonical_source_phase342_pdf_semantic_salvage_contract
 del _install_canonical_source_phase35_provider_max_contract
+del _install_canonical_source_phase351_workbook_capacity_contract
