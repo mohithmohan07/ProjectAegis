@@ -85,6 +85,9 @@ from .canonical_source_phase39_post_freeze_hub_convergence_contract import (
 from .canonical_source_phase310_terminal_figure_inventory_convergence_contract import (
     install as _install_canonical_source_phase310_terminal_figure_inventory_convergence_contract,
 )
+from .canonical_source_phase311_acsd_visual_display_projection_contract import (
+    install as _install_canonical_source_phase311_acsd_visual_display_projection_contract,
+)
 
 # Production order is intentional and fail-closed: preserve source identity first,
 # defer Type allocation to the topology freeze, restore integration boundaries,
@@ -136,6 +139,9 @@ from .canonical_source_phase310_terminal_figure_inventory_convergence_contract i
 # installs outermost so terminal Figure repair and exact inventory coverage use
 # one source-registry projection before post-freeze, final, checkpoint, or deposit
 # validation; one deterministic retry handles presentation drift from old wrappers.
+# Phase 3.11 installs after Phase 3.10 so a verified registry projection overrides
+# the immutable Phase 2 ACSD display only for public visual tags. Raw ACSD wording,
+# qids, Figure identities, and source inventory remain untouched.
 _install_closed_inventory_contract(generation)
 _install_concept_topology_contract(generation)
 _install_concept_topology_compat(generation)
@@ -168,6 +174,7 @@ _install_canonical_source_phase371_visual_topology_compat()
 _install_canonical_source_phase38_boundary_grounding_turnover_contract()
 _install_canonical_source_phase39_post_freeze_hub_convergence_contract(generation)
 _install_canonical_source_phase310_terminal_figure_inventory_convergence_contract(generation)
+_install_canonical_source_phase311_acsd_visual_display_projection_contract(generation)
 
 del _install_closed_inventory_contract
 del _install_concept_topology_contract
@@ -201,3 +208,4 @@ del _install_canonical_source_phase371_visual_topology_compat
 del _install_canonical_source_phase38_boundary_grounding_turnover_contract
 del _install_canonical_source_phase39_post_freeze_hub_convergence_contract
 del _install_canonical_source_phase310_terminal_figure_inventory_convergence_contract
+del _install_canonical_source_phase311_acsd_visual_display_projection_contract
