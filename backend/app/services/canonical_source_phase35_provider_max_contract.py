@@ -118,6 +118,7 @@ def install() -> None:
         response_schema: dict[str, Any],
         purpose: str = "source_adjudication",
         max_tokens: int = phase22._MAX_OUTPUT_TOKENS,
+        single_attempt: bool = False,
     ) -> dict[str, Any]:
         _log_policy_once()
         effective = config.OPENAI_MAX_OUTPUT_TOKENS if _active() else max_tokens
@@ -128,6 +129,7 @@ def install() -> None:
             response_schema=response_schema,
             purpose=purpose,
             max_tokens=effective,
+            single_attempt=single_attempt,
         )
 
     phase22._openai_multimodal_json = multimodal_provider_max

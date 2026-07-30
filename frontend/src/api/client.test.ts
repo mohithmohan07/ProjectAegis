@@ -108,3 +108,36 @@ test("records a semantic decision without calling a generation endpoint", async 
   );
   expect(fetchMock.mock.calls[0][0]).not.toContain("/generate");
 });
+
+test("records an explicit Phase 3 source evidence choice by generic target id", async () => {
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      status: "decision_recorded",
+      resume_required: true,
+      resolved_decision: {},
+    }),
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  await api.submitConceptDecision(42, "phase3-source-review-def456", {
+    choice: "select_candidate",
+    target_id: "PDF-0008:BLK-0048",
+  });
+
+  expect(fetchMock).toHaveBeenCalledWith(
+    expect.stringContaining(
+      "/build-concepts/uploads/42/decisions/phase3-source-review-def456",
+    ),
+    expect.objectContaining({
+      method: "POST",
+      credentials: "include",
+      body: JSON.stringify({
+        choice: "select_candidate",
+        target_id: "PDF-0008:BLK-0048",
+      }),
+    }),
+  );
+  expect(fetchMock.mock.calls[0][0]).not.toContain("/generate");
+});

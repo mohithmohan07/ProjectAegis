@@ -207,6 +207,84 @@ function semanticDecisionFixture(
   };
 }
 
+function sourceReviewDecisionFixture(
+  overrides: Partial<PendingSemanticDecision> = {},
+): PendingSemanticDecision {
+  return {
+    decision_id: "phase3-source-review-def456",
+    kind: "phase3_source_graph_review",
+    phase: "3",
+    conflict:
+      "The extracted task points to an orphan figure reference. GPT cannot "
+      + "repair the source identity without risking a change to the textbook.",
+    diagnosis:
+      "The extracted task points to an orphan figure reference. GPT cannot "
+      + "repair the source identity without risking a change to the textbook.",
+    decision_question:
+      "Which verified PDF evidence should replace the unresolved source link?",
+    item: {
+      unit_id: "BLK-00102",
+      type_id: "phase21_orphan_task_figure",
+      type_title: "Orphan task figure reference",
+      qids: ["Q-0017"],
+      questions: ["Study Figure 6 and explain how nationalism spread."],
+      topic: "The French Revolution and the Idea of the Nation",
+    },
+    candidates: [
+      {
+        target_id: "PDF-0007:BLK-0042",
+        concept_id: "PDF-0007:BLK-0042",
+        title: "PDF page 7 · figure and caption",
+        topic: "The French Revolution and the Idea of the Nation",
+        coverage: "Figure 6 and its complete textbook caption.",
+        gap: "The converted task lost its parent-section link.",
+      },
+      {
+        target_id: "PDF-0008:BLK-0048",
+        concept_id: "PDF-0008:BLK-0048",
+        title: "PDF page 8 · following discussion",
+        topic: "The French Revolution and the Idea of the Nation",
+        coverage: "The paragraph following Figure 6.",
+        gap: "It does not include the figure caption.",
+      },
+    ],
+    evidence: [
+      {
+        page: "6",
+        label: "BLK-00102",
+        text: "Study Figure 6 and explain how nationalism spread.",
+      },
+      {
+        page: "7",
+        label: "PDF-0007:BLK-0042",
+        text: "Figure 6 — Nationalist movements in Europe.",
+      },
+    ],
+    options: [
+      {
+        choice: "accept_recommended",
+        label: "Use the recommended verified PDF evidence",
+        recommended: true,
+        target_id: "PDF-0007:BLK-0042",
+        target_concept_id: "PDF-0007:BLK-0042",
+      },
+      {
+        choice: "select_candidate",
+        label: "Choose another verified PDF evidence block",
+        recommended: false,
+      },
+      {
+        choice: "custom_instruction",
+        label: "Tell Aegis what to do",
+        recommended: false,
+      },
+    ],
+    cumulative_usage: cumulativeUsage(326731),
+    checkpoint_progress: 0.65,
+    ...overrides,
+  };
+}
+
 function savedJob(overrides: Partial<UploadJob> = {}): UploadJob {
   return {
     id: 42,
@@ -486,6 +564,9 @@ test("pauses for a semantic decision and saving it never resumes implicitly", as
   expect(screen.getByText(/does not call GPT or resume generation/)).toBeDefined();
   expect(screen.getByText(/1991461 tokens/)).toBeDefined();
 
+  fireEvent.click(screen.getByRole("radio", {
+    name: /Expand the existing concept/,
+  }));
   fireEvent.click(screen.getByRole("button", { name: "Save decision" }));
   await waitFor(() => {
     expect(apiMock.submitConceptDecision).toHaveBeenCalledWith(
@@ -605,6 +686,9 @@ test("expand existing requires an explicit target when backend supplied none", a
     name: "Resume from 91% checkpoint",
   }));
 
+  fireEvent.click(await screen.findByRole("radio", {
+    name: /Expand the existing concept/,
+  }));
   const target = await screen.findByRole("combobox", {
     name: "Concept to expand",
   });
@@ -627,4 +711,245 @@ test("expand existing requires an explicit target when backend supplied none", a
       },
     );
   });
+});
+
+test("Phase 3 source review shows GPT context and requires an explicit safe action", async () => {
+  const pendingDecision = sourceReviewDecisionFixture();
+  streamMock
+    .mockResolvedValueOnce({
+      job_id: 42,
+      status: "awaiting_decision",
+      pending_decision: pendingDecision,
+      resume_required: false,
+    })
+    .mockResolvedValueOnce({
+      job_id: 42,
+      concept_ids: [],
+      inventory_items: 0,
+    });
+
+  renderPage();
+  fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+  fireEvent.click(await screen.findByRole("button", {
+    name: "Select Electricity target",
+  }));
+  fireEvent.click(screen.getByRole("button", {
+    name: "Resume from 91% checkpoint",
+  }));
+
+  expect(await screen.findByText("GPT diagnosis")).toBeDefined();
+  expect(screen.getByText(
+    /cannot repair the source identity without risking a change/,
+  )).toBeDefined();
+  expect(screen.getByText(
+    "Which verified PDF evidence should replace the unresolved source link?",
+  )).toBeDefined();
+  expect(screen.getByText(
+    /Verified source text: Figure 6 and its complete textbook caption/,
+  )).toBeDefined();
+  expect(screen.getByText(
+    /Diagnostic issue: The converted task lost its parent-section link/,
+  )).toBeDefined();
+  expect(screen.getByText(
+    "PDF-0007:BLK-0042 · page 7: Figure 6 — Nationalist movements in Europe.",
+  )).toBeDefined();
+  expect(screen.getByText(/326731 tokens/)).toBeDefined();
+  expect(screen.getByText(
+    "No action is selected automatically. Choose one option below.",
+  )).toBeDefined();
+  expect(screen.getAllByRole("radio").every((radio) =>
+    !(radio as HTMLInputElement).checked)).toBe(true);
+  expect(screen.getByRole("button", { name: "Save decision" }))
+    .toHaveProperty("disabled", true);
+
+  fireEvent.click(screen.getByRole("radio", {
+    name: /Use the recommended verified PDF evidence/,
+  }));
+  fireEvent.click(screen.getByRole("button", { name: "Save decision" }));
+
+  await waitFor(() => {
+    expect(apiMock.submitConceptDecision).toHaveBeenCalledWith(
+      42,
+      "phase3-source-review-def456",
+      {
+        choice: "accept_recommended",
+        target_id: "PDF-0007:BLK-0042",
+      },
+    );
+  });
+  expect(streamMock).toHaveBeenCalledTimes(1);
+  expect(await screen.findByText("Decision saved.")).toBeDefined();
+
+  fireEvent.click(screen.getByRole("button", { name: "Resume generation" }));
+  await waitFor(() => expect(streamMock).toHaveBeenCalledTimes(2));
+});
+
+test("source review never guesses and submits only the candidate the user selects", async () => {
+  streamMock.mockResolvedValue({
+    job_id: 42,
+    status: "awaiting_decision",
+    pending_decision: sourceReviewDecisionFixture(),
+    resume_required: false,
+  });
+
+  renderPage();
+  fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+  fireEvent.click(await screen.findByRole("button", {
+    name: "Select Electricity target",
+  }));
+  fireEvent.click(screen.getByRole("button", {
+    name: "Resume from 91% checkpoint",
+  }));
+
+  fireEvent.click(await screen.findByRole("radio", {
+    name: /Choose another verified PDF evidence block/,
+  }));
+  const target = screen.getByRole("combobox", {
+    name: "Verified source evidence",
+  }) as HTMLSelectElement;
+  expect(target.value).toBe("");
+
+  fireEvent.click(screen.getByRole("button", { name: "Save decision" }));
+  expect(await screen.findByText(
+    "Select the verified source evidence Aegis should use.",
+  )).toBeDefined();
+  expect(apiMock.submitConceptDecision).not.toHaveBeenCalled();
+
+  fireEvent.change(target, {
+    target: { value: "PDF-0008:BLK-0048" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Save decision" }));
+
+  await waitFor(() => {
+    expect(apiMock.submitConceptDecision).toHaveBeenCalledWith(
+      42,
+      "phase3-source-review-def456",
+      {
+        choice: "select_candidate",
+        target_id: "PDF-0008:BLK-0048",
+      },
+    );
+  });
+  expect(streamMock).toHaveBeenCalledTimes(1);
+});
+
+test("source review safely stops for source replacement after choices are exhausted", async () => {
+  streamMock.mockResolvedValue({
+    job_id: 42,
+    status: "awaiting_decision",
+    pending_decision: sourceReviewDecisionFixture({
+      candidates: [],
+      options: [{
+        choice: "replace_source",
+        label: "Replace or correct the source file",
+        recommended: false,
+      }],
+      conflict:
+        "The previous custom instruction could not be grounded in the source.",
+      diagnosis:
+        "The previous custom instruction could not be grounded in the source.",
+      decision_question:
+        "Can you correct or replace the disputed source before continuing?",
+    }),
+    resume_required: false,
+  });
+
+  renderPage();
+  fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+  fireEvent.click(await screen.findByRole("button", {
+    name: "Select Electricity target",
+  }));
+  fireEvent.click(screen.getByRole("button", {
+    name: "Resume from 91% checkpoint",
+  }));
+
+  expect(await screen.findByRole("radio", {
+    name: /Replace or correct the source file/,
+  })).toHaveProperty("checked", false);
+  expect(screen.getByText(/Aegis will not change it automatically/))
+    .toBeDefined();
+  fireEvent.click(screen.getByRole("radio", {
+    name: /Replace or correct the source file/,
+  }));
+  fireEvent.click(screen.getByRole("button", { name: "Save decision" }));
+
+  await waitFor(() => {
+    expect(apiMock.submitConceptDecision).toHaveBeenCalledWith(
+      42,
+      "phase3-source-review-def456",
+      { choice: "replace_source" },
+    );
+  });
+  expect(streamMock).toHaveBeenCalledTimes(1);
+  expect(await screen.findByText(
+    /Replace or correct the source file using the upload controls above/,
+  )).toBeDefined();
+  expect(screen.queryByRole("button", { name: "Resume generation" })).toBeNull();
+});
+
+test("restores the same source-review decision flow for Pre Learning", async () => {
+  const pendingDecision = sourceReviewDecisionFixture();
+  apiMock.resumableConceptCheckpoints.mockImplementation(
+    async (kind: "post" | "pre") => ({
+      items: kind === "pre"
+        ? [savedSummary({ learning_kind: "pre" })]
+        : [],
+      total: kind === "pre" ? 1 : 0,
+    }),
+  );
+  apiMock.getUploadJob.mockResolvedValue(savedJob({
+    learning_kind: "pre",
+    pending_decision: pendingDecision,
+  }));
+  streamMock.mockResolvedValue({
+    job_id: 42,
+    concept_ids: [],
+    inventory_items: 0,
+  });
+
+  renderPage();
+  fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+
+  expect(await screen.findByText("GPT diagnosis")).toBeDefined();
+  expect(screen.getByText("Loaded electricity.pdf")).toBeDefined();
+  expect(streamMock).not.toHaveBeenCalled();
+
+  fireEvent.click(screen.getByRole("radio", {
+    name: /Tell Aegis what to do/,
+  }));
+  fireEvent.click(screen.getByRole("button", { name: "Save decision" }));
+  expect(await screen.findByText(
+    "Write the instruction Aegis should follow.",
+  )).toBeDefined();
+  expect(apiMock.submitConceptDecision).not.toHaveBeenCalled();
+  fireEvent.change(screen.getByRole("textbox", {
+    name: "Custom instruction",
+  }), {
+    target: {
+      value:
+        "Keep the task under Section 2 and use page 7 only as its figure evidence.",
+    },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Save decision" }));
+  expect(await screen.findByText("Decision saved.")).toBeDefined();
+  expect(apiMock.submitConceptDecision).toHaveBeenCalledWith(
+    42,
+    "phase3-source-review-def456",
+    {
+      choice: "custom_instruction",
+      instruction:
+        "Keep the task under Section 2 and use page 7 only as its figure evidence.",
+    },
+  );
+  expect(screen.getByRole("button", { name: "Resume generation" }))
+    .toHaveProperty("disabled", true);
+  expect(streamMock).not.toHaveBeenCalled();
+
+  fireEvent.click(screen.getByRole("button", {
+    name: "Select Electricity target",
+  }));
+  fireEvent.click(screen.getByRole("button", { name: "Resume generation" }));
+
+  await waitFor(() => expect(streamMock).toHaveBeenCalledTimes(1));
+  expect(streamMock.mock.calls[0][0]).toBe("/pre/42");
 });

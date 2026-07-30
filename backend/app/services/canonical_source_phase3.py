@@ -29,7 +29,7 @@ import tempfile
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator
+from typing import Any, Callable, Iterable, Iterator, Mapping
 
 from .. import config
 from . import canonical_source
@@ -40,6 +40,7 @@ from . import canonical_source_phase221_fallback as page_acsd
 from . import katex_rules as kr
 from . import progress
 from . import semantic_confidence_policy as confidence_policy
+from . import semantic_recovery
 
 PHASE = "phase-3-semantic-graph"
 SCHEMA_NAME = "Aegis Universal Semantic Source Graph"
@@ -80,6 +81,13 @@ _ACTIVE_GRAPH: ContextVar[dict[str, Any] | None] = ContextVar(
 _ACTIVE_SESSION: ContextVar[dict[str, Any] | None] = ContextVar(
     "aegis_phase3_active_session", default=None
 )
+_HUMAN_SOURCE_RESOLUTIONS: ContextVar[Any] = ContextVar(
+    "aegis_phase3_human_source_resolutions", default=None
+)
+
+_SOURCE_REVIEW_VERSION = "phase3-source-review-1"
+_SOURCE_REVIEW_KEY = "human_source_review"
+_DOWNSTREAM_INVALIDATION_KEY = "downstream_invalidation_required"
 
 _SPACE_RE = re.compile(r"\s+")
 _NUMBER_PREFIX_RE = re.compile(
@@ -205,6 +213,65 @@ def _sha256_json(value: object) -> str:
         value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     )
     return _sha256_text(payload)
+
+
+@contextmanager
+def human_source_resolution_context(resolutions: Any) -> Iterator[None]:
+    """Expose durable source-review answers to one explicit resume attempt."""
+
+    token = _HUMAN_SOURCE_RESOLUTIONS.set(copy.deepcopy(resolutions))
+    try:
+        yield
+    finally:
+        _HUMAN_SOURCE_RESOLUTIONS.reset(token)
+
+
+def _resolution_rows(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, Mapping):
+        row = dict(value)
+        if str(row.get("choice") or "").strip():
+            return [row]
+        result: list[dict[str, Any]] = []
+        for key, raw in value.items():
+            if not isinstance(raw, Mapping):
+                continue
+            candidate = dict(raw)
+            candidate.setdefault("_lookup_key", str(key))
+            result.append(candidate)
+        return result
+    if isinstance(value, (list, tuple)):
+        result: list[dict[str, Any]] = []
+        for raw in value:
+            result.extend(_resolution_rows(raw))
+        return result
+    return []
+
+
+def _human_source_resolution(
+    *,
+    decision_id: str,
+    context_hash: str,
+) -> dict[str, Any] | None:
+    """Return only a saved answer for this exact immutable review context."""
+
+    for candidate in reversed(
+        _resolution_rows(_HUMAN_SOURCE_RESOLUTIONS.get())
+    ):
+        if (
+            str(candidate.get("decision_id") or "") != decision_id
+            or str(candidate.get("context_hash") or "") != context_hash
+        ):
+            continue
+        choice = str(candidate.get("choice") or "").strip()
+        if choice not in {
+            "accept_recommended",
+            "select_candidate",
+            "replace_source",
+            "custom_instruction",
+        }:
+            continue
+        return copy.deepcopy(candidate)
+    return None
 
 
 def _atomic_write(path: Path, content: str) -> None:
@@ -1943,6 +2010,353 @@ def _render_verified_page_block(
     return str(block.get("text") or "").strip()
 
 
+def _resolve_verified_page_candidate(
+    canonical_block: dict[str, Any],
+    *,
+    selected_page: dict[str, Any],
+    selected_block: dict[str, Any],
+) -> str:
+    """Derive replacement text from verified page data without model prose."""
+
+    canonical_text = str(
+        canonical_block.get("display_text")
+        or canonical_block.get("raw_text")
+        or ""
+    )
+    if canonical_block.get("kind") == "table":
+        if selected_block.get("kind") != "table":
+            raise ValueError(
+                "table anomaly must be resolved by a verified table block")
+        resolved = _patch_suspicious_table(
+            canonical_text,
+            selected_block=selected_block,
+            selected_page=selected_page,
+        )
+    else:
+        resolved = _render_verified_page_block(
+            selected_page, selected_block)
+        source_tokens = _source_tokens(canonical_text)
+        resolved_tokens = _source_tokens(resolved)
+        if source_tokens and resolved_tokens:
+            overlap = len(source_tokens & resolved_tokens) / max(
+                1, min(len(source_tokens), len(resolved_tokens))
+            )
+            if overlap < 0.35:
+                raise ValueError(
+                    "verified replacement does not match the source block "
+                    "context")
+    cleaned = _clean_public_text(resolved)
+    if (
+        not cleaned
+        or _SUSPICIOUS_MARKUP_RE.search(cleaned)
+        or kr.rich_text_issues(cleaned)
+    ):
+        raise ValueError(
+            "verified replacement violates semantic rich-text contract")
+    return resolved
+
+
+def _source_review_candidate_rows(
+    canonical_block: dict[str, Any],
+    *,
+    page_bundle: dict[str, Any] | None,
+    source_chars: int,
+) -> list[dict[str, Any]]:
+    """Return only candidate page blocks that can be applied deterministically."""
+
+    if not isinstance(page_bundle, dict):
+        return []
+    packet = _candidate_anomaly_packet(
+        canonical_block,
+        page_bundle=page_bundle,
+        source_chars=max(1, source_chars),
+        limit=12,
+    )
+    candidates: list[dict[str, Any]] = []
+    for row in packet.get("candidate_blocks") or []:
+        if not isinstance(row, dict):
+            continue
+        target_id = str(row.get("block_key") or "")
+        selected_page, selected_block = _page_and_block_by_key(
+            page_bundle, target_id)
+        if (
+            not target_id
+            or not isinstance(selected_page, dict)
+            or not isinstance(selected_block, dict)
+        ):
+            continue
+        try:
+            resolved = _resolve_verified_page_candidate(
+                canonical_block,
+                selected_page=selected_page,
+                selected_block=selected_block,
+            )
+        except (TypeError, ValueError):
+            continue
+        candidates.append({
+            "target_id": target_id,
+            "page_id": str(selected_page.get("page_id") or ""),
+            "page_number": int(selected_page.get("page_number") or 0),
+            "reading_order": int(selected_block.get("reading_order") or 0),
+            "kind": str(selected_block.get("kind") or ""),
+            "visible_text": _page_block_visible_text(selected_block)[:8_000],
+            "resolved_text": resolved,
+            "resolved_sha256": _sha256_text(resolved),
+            "retrieval_score": float(row.get("retrieval_score") or 0.0),
+        })
+    return candidates[:24]
+
+
+def _has_human_selected_source_overrides(graph: Any) -> bool:
+    return bool(
+        isinstance(graph, dict)
+        and any(
+            isinstance((row or {}).get("source_override"), dict)
+            and (row["source_override"].get("mode")
+                 == "human_selected_verified_pdf_block")
+            for row in graph.get("blocks") or []
+            if isinstance(row, dict)
+        )
+    )
+
+
+def _current_human_source_overrides_valid(
+    graph: dict[str, Any],
+    *,
+    canonical: dict[str, Any],
+    page_bundle: dict[str, Any] | None,
+) -> bool:
+    """Re-derive every human override from the current verified PDF ACSD."""
+
+    overrides = [
+        row for row in graph.get("blocks") or []
+        if isinstance(row, dict)
+        and isinstance(row.get("source_override"), dict)
+        and row["source_override"].get("mode")
+        == "human_selected_verified_pdf_block"
+    ]
+    if not overrides:
+        return True
+    if not isinstance(page_bundle, dict):
+        return False
+    graph_pdf_sha256 = str(
+        (graph.get("vision_evidence") or {}).get("pdf_sha256") or "")
+    current_pdf_sha256 = str(page_bundle.get("pdf_sha256") or "")
+    if not graph_pdf_sha256 or current_pdf_sha256 != graph_pdf_sha256:
+        return False
+    canonical_by_id = {
+        str(row.get("block_id") or ""): row
+        for row in canonical.get("blocks") or []
+        if isinstance(row, dict)
+    }
+    source_chars = int(
+        (canonical.get("document") or {}).get("source_chars") or 0)
+    for graph_block in overrides:
+        block_id = str(graph_block.get("block_id") or "")
+        canonical_block = canonical_by_id.get(block_id)
+        override = graph_block["source_override"]
+        target_id = str(override.get("selected_block_key") or "")
+        if not isinstance(canonical_block, dict) or not target_id:
+            return False
+        current_candidate = next(
+            (
+                row for row in _source_review_candidate_rows(
+                    canonical_block,
+                    page_bundle=page_bundle,
+                    source_chars=source_chars,
+                )
+                if str(row.get("target_id") or "") == target_id
+            ),
+            None,
+        )
+        if not isinstance(current_candidate, dict):
+            return False
+        resolved = str(current_candidate.get("resolved_text") or "")
+        if (
+            not resolved
+            or override.get("page_id") != current_candidate.get("page_id")
+            or int(override.get("page_number") or 0)
+            != int(current_candidate.get("page_number") or 0)
+            or int(override.get("reading_order") or 0)
+            != int(current_candidate.get("reading_order") or 0)
+            or override.get("resolved_text") != resolved
+            or override.get("resolved_sha256") != _sha256_text(resolved)
+        ):
+            return False
+    return True
+
+
+def _source_review_diagnostic_schema(
+    target_ids: list[str],
+) -> dict[str, Any]:
+    return {
+        "name": "aegis_phase3_source_review_diagnostic",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "question": {"type": "string"},
+                "diagnosis": {"type": "string"},
+                "recommended_target_id": {
+                    "type": "string",
+                    "enum": ["NONE", *target_ids],
+                },
+                "candidate_reasons": {
+                    "type": "array",
+                    "maxItems": len(target_ids),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "target_id": {
+                                "type": "string",
+                                "enum": target_ids or ["NONE"],
+                            },
+                            "reason": {"type": "string"},
+                        },
+                        "required": ["target_id", "reason"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": [
+                "question",
+                "diagnosis",
+                "recommended_target_id",
+                "candidate_reasons",
+            ],
+            "additionalProperties": False,
+        },
+    }
+
+
+def _diagnose_source_review_via_openai(
+    payload: dict[str, Any],
+    *,
+    source_path: Path | None,
+) -> dict[str, Any]:
+    """Make one bounded diagnosis; never repair or rewrite source text."""
+
+    target_ids = [
+        str(row.get("target_id") or "")
+        for row in payload.get("candidates") or []
+        if str(row.get("target_id") or "")
+    ]
+    system = (
+        "You are the Aegis human-intervention diagnostician. Explain the exact "
+        "source discrepancy in plain language and ask one concrete question "
+        "that lets the user resolve it. You may recommend only one supplied "
+        "verified page-block target_id, or NONE when evidence is insufficient. "
+        "Do not transcribe, rewrite, repair, omit, merge, or invent source "
+        "content. Preserve source identity, QIDs, Figures, task wording, source "
+        "order, and the selected academic topic."
+    )
+    pages: list[phase22.EvidencePage] = []
+    page_numbers = [
+        int(row.get("page_number") or 0)
+        for row in payload.get("candidates") or []
+        if int(row.get("page_number") or 0) > 0
+    ]
+    if (
+        source_path is not None
+        and source_path.exists()
+        and source_path.suffix.lower() == ".pdf"
+        and page_numbers
+    ):
+        pages = _anomaly_evidence_pages(source_path, page_numbers)
+    return phase22._openai_multimodal_json(
+        system=system,
+        prompt=json.dumps(payload, ensure_ascii=False, indent=2),
+        pages=pages,
+        response_schema=_source_review_diagnostic_schema(target_ids),
+        purpose="source_adjudication",
+        max_tokens=4_000,
+        single_attempt=True,
+    )
+
+
+def _custom_source_instruction_schema(
+    target_ids: list[str],
+) -> dict[str, Any]:
+    return {
+        "name": "aegis_phase3_custom_source_instruction",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "decision": {
+                    "type": "string",
+                    "enum": [
+                        "use_verified_page_block",
+                        "needs_clarification",
+                        "source_replacement_required",
+                    ],
+                },
+                "selected_target_id": {
+                    "type": "string",
+                    "enum": ["NONE", *target_ids],
+                },
+                "question": {"type": "string"},
+                "reason": {"type": "string"},
+            },
+            "required": [
+                "decision", "selected_target_id", "question", "reason",
+            ],
+            "additionalProperties": False,
+        },
+    }
+
+
+def _interpret_custom_source_instruction_via_openai(
+    payload: dict[str, Any],
+    *,
+    instruction: str,
+    source_path: Path | None,
+) -> dict[str, Any]:
+    """Interpret one human instruction once within supplied candidate IDs."""
+
+    target_ids = [
+        str(row.get("target_id") or "")
+        for row in payload.get("candidates") or []
+        if str(row.get("target_id") or "")
+    ]
+    system = (
+        "Interpret the user's source-review instruction exactly once. Select "
+        "only a supplied verified page-block target_id when the instruction "
+        "unambiguously identifies it. Otherwise request clarification or say "
+        "that the source must be replaced. Never invent replacement text, "
+        "change source identity, or choose an ID that was not supplied."
+    )
+    pages: list[phase22.EvidencePage] = []
+    page_numbers = [
+        int(row.get("page_number") or 0)
+        for row in payload.get("candidates") or []
+        if int(row.get("page_number") or 0) > 0
+    ]
+    if (
+        source_path is not None
+        and source_path.exists()
+        and source_path.suffix.lower() == ".pdf"
+        and page_numbers
+    ):
+        pages = _anomaly_evidence_pages(source_path, page_numbers)
+    return phase22._openai_multimodal_json(
+        system=system,
+        prompt=json.dumps(
+            {
+                "review": payload,
+                "user_instruction": instruction,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        pages=pages,
+        response_schema=_custom_source_instruction_schema(target_ids),
+        purpose="source_adjudication",
+        max_tokens=3_000,
+        single_attempt=True,
+    )
+
+
 def reconcile_source_anomalies(
     graph: dict[str, Any],
     *,
@@ -1951,6 +2365,7 @@ def reconcile_source_anomalies(
     source_path: Path | None = None,
     provider: AnomalyProvider | None = None,
     critic: AnomalyCritic | None = None,
+    allow_automatic_reconciliation: bool = True,
 ) -> dict[str, Any]:
     """Repair converter-only semantic markup using verified PDF block IDs.
 
@@ -1959,15 +2374,12 @@ def reconcile_source_anomalies(
     improvise a formula, table cell, caption, or asset URL.
     """
     out = copy.deepcopy(graph)
-    out["issues"] = [
-        issue for issue in out.get("issues") or []
-        if issue.get("code") not in {
-            "semantic_source_rich_text",
-            "semantic_source_hash_mismatch",
-            "unresolved_source_override_markup",
-            "invalid_source_override_hash",
-        }
-    ]
+    recomputed_codes = {
+        "semantic_source_rich_text",
+        "semantic_source_hash_mismatch",
+        "unresolved_source_override_markup",
+        "invalid_source_override_hash",
+    }
     canonical_blocks = {
         str(row.get("block_id") or ""): row
         for row in canonical.get("blocks") or [] if isinstance(row, dict)
@@ -1981,8 +2393,55 @@ def reconcile_source_anomalies(
         )
     ]
     if not suspicious_ids:
+        # Do not erase the only actionable validation issue before returning.
+        # Re-render and derive status from the current graph so a stale
+        # ``failed`` flag can never survive with an empty issue ledger.
+        semantic_source = render_semantic_source(out, canonical)
+        out["semantic_source_sha256"] = _sha256_text(semantic_source)
+        retained = [
+            issue for issue in out.get("issues") or []
+            if issue.get("code") not in recomputed_codes
+        ]
+        errors = validate_graph(
+            out,
+            canonical=canonical,
+            semantic_source=semantic_source,
+        )
+        out["issues"] = [*retained, *errors]
+        out["status"] = (
+            "failed"
+            if errors
+            else (
+                "review_required"
+                if any(
+                    row.get("severity") == "error"
+                    for row in retained
+                    if isinstance(row, dict)
+                )
+                else "ready"
+            )
+        )
         return out
     if not isinstance(page_bundle, dict):
+        return out
+    if not allow_automatic_reconciliation:
+        out["status"] = "review_required"
+        out["issues"] = [
+            issue for issue in out.get("issues") or []
+            if (
+                isinstance(issue, dict)
+                and issue.get("code")
+                != "converter_semantic_markup_requires_pdf_reconciliation"
+            )
+        ] + [{
+            "code": "converter_semantic_markup_requires_pdf_reconciliation",
+            "severity": "error",
+            "block_ids": suspicious_ids,
+            "message": (
+                "Converter semantic markup requires one explicit human "
+                "decision against verified original-PDF evidence."
+            ),
+        }]
         return out
     provider = provider or (
         (lambda packet: _select_source_anomaly_via_openai(
@@ -1998,6 +2457,10 @@ def reconcile_source_anomalies(
     )
     if provider is None or critic is None:
         return out
+    out["issues"] = [
+        issue for issue in out.get("issues") or []
+        if issue.get("code") not in recomputed_codes
+    ]
     repairs: list[dict[str, Any]] = []
     unresolved: list[str] = []
     graph_block_by_id = {
@@ -2064,35 +2527,11 @@ def reconcile_source_anomalies(
                 or canonical_block.get("raw_text")
                 or ""
             )
-            if canonical_block.get("kind") == "table":
-                if selected_block.get("kind") != "table":
-                    raise ValueError("table anomaly must be resolved by a verified table block")
-                resolved = _patch_suspicious_table(
-                    canonical_text,
-                    selected_block=selected_block,
-                    selected_page=selected_page,
-                )
-            else:
-                resolved = _render_verified_page_block(
-                    selected_page, selected_block
-                )
-                source_tokens = _source_tokens(canonical_text)
-                resolved_tokens = _source_tokens(resolved)
-                if source_tokens and resolved_tokens:
-                    overlap = len(source_tokens & resolved_tokens) / max(
-                        1, min(len(source_tokens), len(resolved_tokens))
-                    )
-                    if overlap < 0.35:
-                        raise ValueError(
-                            "verified replacement does not match the source block context"
-                        )
-            cleaned = _clean_public_text(resolved)
-            if (
-                not cleaned
-                or _SUSPICIOUS_MARKUP_RE.search(cleaned)
-                or kr.rich_text_issues(cleaned)
-            ):
-                raise ValueError("verified replacement violates semantic rich-text contract")
+            resolved = _resolve_verified_page_candidate(
+                canonical_block,
+                selected_page=selected_page,
+                selected_block=selected_block,
+            )
         except (TypeError, ValueError):
             unresolved.append(block_id)
             continue
@@ -2152,6 +2591,863 @@ def reconcile_source_anomalies(
         out["status"] = "failed"
         out.setdefault("issues", []).extend(errors)
     return out
+
+
+def _source_review_block_ids(
+    graph: dict[str, Any],
+    *,
+    canonical: dict[str, Any],
+) -> list[str]:
+    """Return unresolved source-block IDs in canonical order."""
+
+    graph_blocks = {
+        str(row.get("block_id") or ""): row
+        for row in graph.get("blocks") or []
+        if isinstance(row, dict)
+    }
+
+    def unresolved_override(block_id: str) -> bool:
+        override = (graph_blocks.get(block_id) or {}).get("source_override")
+        resolved = (
+            str(override.get("resolved_text") or "")
+            if isinstance(override, dict)
+            else ""
+        )
+        return bool(
+            not resolved
+            or _SUSPICIOUS_MARKUP_RE.search(resolved)
+            or kr.rich_text_issues(_clean_public_text(resolved))
+        )
+
+    requested: set[str] = set()
+    for issue in graph.get("issues") or []:
+        if not isinstance(issue, dict) or issue.get("severity") != "error":
+            continue
+        requested.update(
+            str(value)
+            for value in issue.get("block_ids") or []
+            if str(value) and unresolved_override(str(value))
+        )
+    for block in canonical.get("blocks") or []:
+        if not isinstance(block, dict):
+            continue
+        block_id = str(block.get("block_id") or "")
+        if (
+            _SUSPICIOUS_MARKUP_RE.search(str(block.get("raw_text") or ""))
+            and unresolved_override(block_id)
+        ):
+            requested.add(block_id)
+    canonical_order = [
+        str(row.get("block_id") or "")
+        for row in sorted(
+            [
+                row for row in canonical.get("blocks") or []
+                if isinstance(row, dict)
+            ],
+            key=lambda row: int(row.get("order") or 0),
+        )
+        if str(row.get("block_id") or "")
+    ]
+    return [block_id for block_id in canonical_order if block_id in requested]
+
+
+def _rich_text_issue_block_ids(
+    graph: dict[str, Any],
+    *,
+    canonical: dict[str, Any],
+) -> list[str]:
+    """Localize semantic rich-text failures to immutable ACSD block IDs."""
+
+    graph_blocks = {
+        str(row.get("block_id") or ""): row
+        for row in graph.get("blocks") or []
+        if isinstance(row, dict)
+    }
+    affected: list[str] = []
+    for block in sorted(
+        [
+            row for row in canonical.get("blocks") or []
+            if isinstance(row, dict)
+        ],
+        key=lambda row: int(row.get("order") or 0),
+    ):
+        if str(block.get("kind") or "") in {"layout", "heading"}:
+            continue
+        block_id = str(block.get("block_id") or "")
+        text = _graph_block_text(graph_blocks.get(block_id), block)
+        cleaned = _clean_public_text(text)
+        if kr.rich_text_issues(cleaned):
+            affected.append(block_id)
+    return affected
+
+
+def _human_reviewable_source_graph(
+    graph: dict[str, Any],
+    *,
+    canonical: dict[str, Any],
+) -> bool:
+    """Only localized presentation/source-fusion issues may be overridden."""
+
+    allowed = {
+        "converter_semantic_markup_requires_pdf_reconciliation",
+        "semantic_source_rich_text",
+    }
+    errors = [
+        row for row in graph.get("issues") or []
+        if isinstance(row, dict) and row.get("severity") == "error"
+    ]
+    if not errors or any(str(row.get("code") or "") not in allowed for row in errors):
+        return False
+    localized = set(_source_review_block_ids(graph, canonical=canonical))
+    return bool(localized) and all(
+        bool({
+            str(value)
+            for value in row.get("block_ids") or []
+            if str(value)
+        } & localized)
+        for row in errors
+    )
+
+
+def _source_review_item_context(
+    graph: dict[str, Any],
+    *,
+    canonical: dict[str, Any],
+    block_id: str,
+) -> dict[str, Any]:
+    canonical_block = next(
+        (
+            row for row in canonical.get("blocks") or []
+            if isinstance(row, dict)
+            and str(row.get("block_id") or "") == block_id
+        ),
+        {},
+    )
+    graph_block = next(
+        (
+            row for row in graph.get("blocks") or []
+            if isinstance(row, dict)
+            and str(row.get("block_id") or "") == block_id
+        ),
+        {},
+    )
+    topic_id = str(graph_block.get("topic_id") or "")
+    topic = next(
+        (
+            row for row in graph.get("topics") or []
+            if isinstance(row, dict)
+            and str(row.get("topic_id") or "") == topic_id
+        ),
+        {},
+    )
+    task_ids = {
+        str(value)
+        for value in canonical_block.get("task_ids") or []
+        if str(value)
+    }
+    tasks = [
+        row for row in graph.get("tasks") or []
+        if isinstance(row, dict)
+        and (
+            str(row.get("task_id") or "") in task_ids
+            or (
+                int(canonical_block.get("source_start") or 0)
+                <= int(row.get("source_start") or 0)
+                < int(canonical_block.get("source_end") or 0)
+            )
+        )
+    ]
+    return {
+        "block_id": block_id,
+        "kind": str(canonical_block.get("kind") or ""),
+        "raw_text": str(
+            canonical_block.get("display_text")
+            or canonical_block.get("raw_text")
+            or ""
+        )[:10_000],
+        "raw_sha256": str(
+            canonical_block.get("raw_sha256")
+            or _sha256_text(canonical_block.get("raw_text") or "")
+        ),
+        "topic_id": topic_id,
+        "topic": str(topic.get("title") or ""),
+        "qids": [
+            str(row.get("qid") or "")
+            for row in tasks[:100]
+            if str(row.get("qid") or "")
+        ],
+        "questions": [
+            str(row.get("display_prompt") or "")
+            for row in tasks[:100]
+            if str(row.get("display_prompt") or "")
+        ],
+    }
+
+
+def _source_review_context_hash(
+    graph: dict[str, Any],
+    *,
+    item: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    pdf_sha256: str,
+    revision: dict[str, Any] | None = None,
+) -> str:
+    return _sha256_json({
+        "version": _SOURCE_REVIEW_VERSION,
+        "source_contract_hash": str(graph.get("source_contract_hash") or ""),
+        "semantic_context_hash": str(
+            graph.get("semantic_context_hash") or ""),
+        "pdf_sha256": pdf_sha256,
+        "item": {
+            "block_id": item.get("block_id"),
+            "raw_sha256": item.get("raw_sha256"),
+            "topic_id": item.get("topic_id"),
+            "qids": item.get("qids") or [],
+        },
+        "candidates": [
+            {
+                "target_id": row.get("target_id"),
+                "resolved_sha256": row.get("resolved_sha256"),
+            }
+            for row in candidates
+        ],
+        "revision": copy.deepcopy(revision or {}),
+    })
+
+
+def _build_source_review_state(
+    graph: dict[str, Any],
+    *,
+    canonical: dict[str, Any],
+    page_bundle: dict[str, Any] | None,
+    source_path: Path | None,
+    block_id: str,
+    revision: dict[str, Any] | None = None,
+    allow_diagnostic_call: bool = True,
+) -> dict[str, Any]:
+    canonical_block = next(
+        (
+            row for row in canonical.get("blocks") or []
+            if isinstance(row, dict)
+            and str(row.get("block_id") or "") == block_id
+        ),
+        {},
+    )
+    item = _source_review_item_context(
+        graph, canonical=canonical, block_id=block_id)
+    graph_errors = [{
+        "code": str(row.get("code") or "source_review_required"),
+        "message": str(row.get("message") or "")[:8_000],
+        "block_ids": [
+            str(value) for value in row.get("block_ids") or []
+            if str(value)
+        ][:100],
+        "page": str(
+            row.get("page_number") or row.get("page") or ""),
+    } for row in graph.get("issues") or []
+        if isinstance(row, dict)
+        and row.get("severity") == "error"
+        and (
+            not block_id
+            or not row.get("block_ids")
+            or block_id in {
+                str(value) for value in row.get("block_ids") or []
+            }
+        )
+    ][:20]
+    candidates = _source_review_candidate_rows(
+        canonical_block,
+        page_bundle=page_bundle,
+        source_chars=int(
+            (canonical.get("document") or {}).get("source_chars") or 0),
+    )
+    pdf_sha256 = str((page_bundle or {}).get("pdf_sha256") or "")
+    context_hash = _source_review_context_hash(
+        graph,
+        item=item,
+        candidates=candidates,
+        pdf_sha256=pdf_sha256,
+        revision=revision,
+    )
+    payload = {
+        "source_contract_hash": str(graph.get("source_contract_hash") or ""),
+        "semantic_context_hash": str(
+            graph.get("semantic_context_hash") or ""),
+        "issue": {
+            "code": str(
+                (graph_errors[0] if graph_errors else {}).get("code")
+                or "semantic_source_graph_requires_review"
+            ),
+            "block_id": block_id,
+            "topic": item.get("topic") or "",
+            "qids": item.get("qids") or [],
+            "questions": item.get("questions") or [],
+            "source_text": item.get("raw_text") or "",
+            "errors": graph_errors,
+        },
+        "candidates": [
+            {
+                "target_id": row["target_id"],
+                "page_number": row["page_number"],
+                "kind": row["kind"],
+                "visible_text": row["visible_text"],
+            }
+            for row in candidates
+        ],
+    }
+    diagnostic: dict[str, Any] = {}
+    if allow_diagnostic_call and semantic_api_enabled():
+        try:
+            diagnostic = _diagnose_source_review_via_openai(
+                copy.deepcopy(payload),
+                source_path=source_path,
+            )
+        except Exception as exc:
+            progress.log(
+                "The one bounded source-review diagnosis could not complete; "
+                "manual verified-evidence choices remain available and no "
+                "automatic retry will run. "
+                f"Reason: {str(exc)[:500]}",
+                level="warning",
+            )
+    target_ids = {
+        str(row.get("target_id") or "") for row in candidates
+        if str(row.get("target_id") or "")
+    }
+    recommended = str(
+        diagnostic.get("recommended_target_id") or "")
+    if recommended == "NONE" or recommended not in target_ids:
+        recommended = ""
+    reason_by_target = {
+        str(row.get("target_id") or ""): str(row.get("reason") or "")
+        for row in diagnostic.get("candidate_reasons") or []
+        if isinstance(row, dict)
+        and str(row.get("target_id") or "") in target_ids
+    }
+    for candidate in candidates:
+        candidate["reason"] = reason_by_target.get(
+            str(candidate.get("target_id") or ""),
+            (
+                "This independently extracted PDF block is a bounded "
+                "source-evidence candidate."
+            ),
+        )
+    diagnosis = str(diagnostic.get("diagnosis") or "").strip()
+    if not diagnosis:
+        exact = "; ".join(
+            f"{row['code']}: {row['message']}"
+            for row in graph_errors
+            if row.get("message")
+        )
+        diagnosis = exact or (
+            "The converted source contains content that cannot be certified "
+            "against the verified original-PDF evidence automatically."
+        )
+    question = str(diagnostic.get("question") or "").strip()
+    if not question:
+        question = (
+            "Which verified original-PDF block should replace this disputed "
+            "converter block?"
+            if candidates
+            else (
+                "No safe verified page-block candidate is available. Please "
+                "give a source-specific instruction or replace the source file."
+            )
+        )
+    return {
+        "version": _SOURCE_REVIEW_VERSION,
+        "decision_id": f"phase3-source-{context_hash[:24]}",
+        "context_hash": context_hash,
+        "pdf_sha256": pdf_sha256,
+        "item": item,
+        "graph_errors": graph_errors,
+        "diagnosis": diagnosis[:8_000],
+        "decision_question": question[:8_000],
+        "recommended_target_id": recommended,
+        "candidates": candidates,
+        "custom_interpretation_used": bool(
+            (revision or {}).get("custom_interpretation_used")),
+        "revision": copy.deepcopy(revision or {}),
+    }
+
+
+def _source_review_pending(
+    graph: dict[str, Any],
+    state: dict[str, Any],
+    *,
+    canonical: dict[str, Any],
+) -> dict[str, Any]:
+    item = dict(state.get("item") or {})
+    candidates = [
+        row for row in state.get("candidates") or []
+        if isinstance(row, dict)
+    ]
+    recommended = str(state.get("recommended_target_id") or "")
+    options: list[dict[str, Any]] = []
+    if recommended and any(
+        str(row.get("target_id") or "") == recommended
+        for row in candidates
+    ):
+        options.append({
+            "choice": "accept_recommended",
+            "label": "Use the recommended verified PDF evidence",
+            "recommended": True,
+            "target_id": recommended,
+            # Older clients display this field for candidate-backed choices.
+            "target_concept_id": recommended[:256],
+        })
+    if candidates:
+        options.append({
+            "choice": "select_candidate",
+            "label": "Choose another verified PDF evidence block",
+            "recommended": False,
+        })
+    if not state.get("custom_interpretation_used"):
+        options.append({
+            "choice": "custom_instruction",
+            "label": "Tell Aegis what to do",
+            "recommended": False,
+        })
+    options.append({
+        "choice": "replace_source",
+        "label": "Replace or correct the source file",
+        "recommended": not candidates,
+    })
+    remaining = _source_review_block_ids(graph, canonical=canonical)
+    public_candidates = [{
+        "target_id": str(row.get("target_id") or ""),
+        "concept_id": str(row.get("target_id") or "")[:256],
+        "title": (
+            f"PDF page {int(row.get('page_number') or 0)} · "
+            f"{str(row.get('kind') or 'source block')}"
+        ),
+        "topic": str(item.get("topic") or ""),
+        "coverage": str(row.get("visible_text") or "")[:8_000],
+        "gap": str(row.get("reason") or "")[:8_000],
+    } for row in candidates[:100]]
+    evidence = [{
+        "page": "",
+        "label": str(item.get("block_id") or "source graph"),
+        "text": str(item.get("raw_text") or "")[:8_000],
+    }]
+    evidence.extend({
+        "page": str(row.get("page") or ""),
+        "label": str(row.get("code") or "source graph error"),
+        "text": str(row.get("message") or "")[:8_000],
+    } for row in state.get("graph_errors") or []
+        if isinstance(row, dict)
+    )
+    evidence.extend({
+        "page": str(int(row.get("page_number") or 0) or ""),
+        "label": str(row.get("target_id") or ""),
+        "text": str(row.get("visible_text") or "")[:8_000],
+    } for row in candidates[:23])
+    issue_code = str(
+        next(
+            (
+                row.get("code")
+                for row in state.get("graph_errors") or []
+                if isinstance(row, dict) and row.get("code")
+            ),
+            "",
+        )
+        or "semantic_source_graph_requires_review"
+    )
+    return {
+        "decision_id": str(state.get("decision_id") or ""),
+        "context_hash": str(state.get("context_hash") or ""),
+        "kind": "phase3_source_graph_review",
+        "phase": "3",
+        "conflict": str(
+            state.get("decision_question")
+            or state.get("diagnosis")
+            or "Source review is required."
+        ),
+        "diagnosis": str(state.get("diagnosis") or ""),
+        "decision_question": str(state.get("decision_question") or ""),
+        "item": {
+            "unit_id": str(item.get("block_id") or ""),
+            "type_id": issue_code,
+            "type_title": "Source graph discrepancy",
+            "qids": list(item.get("qids") or [])[:100],
+            "questions": list(item.get("questions") or [])[:100],
+            "topic": str(item.get("topic") or ""),
+        },
+        "candidates": public_candidates,
+        "evidence": evidence[:100],
+        "deferred_assignment_unit_ids": [
+            value for value in remaining
+            if value != str(item.get("block_id") or "")
+        ][:5_000],
+        "options": options,
+    }
+
+
+def _apply_human_source_candidate(
+    graph: dict[str, Any],
+    state: dict[str, Any],
+    *,
+    canonical: dict[str, Any],
+    page_bundle: dict[str, Any] | None,
+    target_id: str,
+) -> dict[str, Any]:
+    """Re-derive and apply one user-selected current-PDF block API-free."""
+
+    candidate = next(
+        (
+            row for row in state.get("candidates") or []
+            if isinstance(row, dict)
+            and str(row.get("target_id") or "") == target_id
+        ),
+        None,
+    )
+    if not isinstance(candidate, dict):
+        raise ValueError(
+            "the selected source-review target is not a supplied candidate")
+    expected_pdf_sha256 = str(state.get("pdf_sha256") or "")
+    graph_pdf_sha256 = str(
+        (graph.get("vision_evidence") or {}).get("pdf_sha256") or "")
+    current_pdf_sha256 = str(
+        (page_bundle or {}).get("pdf_sha256") or "")
+    if (
+        not isinstance(page_bundle, dict)
+        or not expected_pdf_sha256
+        or current_pdf_sha256 != expected_pdf_sha256
+        or graph_pdf_sha256 != expected_pdf_sha256
+    ):
+        raise ValueError(
+            "the verified original-PDF evidence changed after the source "
+            "decision was shown")
+    block_id = str((state.get("item") or {}).get("block_id") or "")
+    canonical_block = next(
+        (
+            row for row in canonical.get("blocks") or []
+            if isinstance(row, dict)
+            and str(row.get("block_id") or "") == block_id
+        ),
+        None,
+    )
+    graph_block = next(
+        (
+            row for row in graph.get("blocks") or []
+            if isinstance(row, dict)
+            and str(row.get("block_id") or "") == block_id
+        ),
+        None,
+    )
+    if not isinstance(canonical_block, dict) or not isinstance(graph_block, dict):
+        raise ValueError(
+            "the disputed source block no longer exists in this source graph")
+    current_candidate = next(
+        (
+            row for row in _source_review_candidate_rows(
+                canonical_block,
+                page_bundle=page_bundle,
+                source_chars=int(
+                    (canonical.get("document") or {}).get(
+                        "source_chars") or 0),
+            )
+            if str(row.get("target_id") or "") == target_id
+        ),
+        None,
+    )
+    if (
+        not isinstance(current_candidate, dict)
+        or current_candidate.get("resolved_sha256")
+        != candidate.get("resolved_sha256")
+    ):
+        raise ValueError(
+            "the selected source-review target is no longer a current "
+            "deterministic evidence candidate")
+    selected_page, selected_block = _page_and_block_by_key(
+        page_bundle, target_id)
+    if (
+        not isinstance(selected_page, dict)
+        or not isinstance(selected_block, dict)
+        or str(selected_page.get("page_id") or "")
+        != str(current_candidate.get("page_id") or "")
+        or int(selected_page.get("page_number") or 0)
+        != int(current_candidate.get("page_number") or 0)
+        or int(selected_block.get("reading_order") or 0)
+        != int(current_candidate.get("reading_order") or 0)
+    ):
+        raise ValueError(
+            "the selected verified PDF block changed after the decision was "
+            "shown")
+    resolved = _resolve_verified_page_candidate(
+        canonical_block,
+        selected_page=selected_page,
+        selected_block=selected_block,
+    )
+    if (
+        not resolved
+        or candidate.get("resolved_sha256") != _sha256_text(resolved)
+        or _SUSPICIOUS_MARKUP_RE.search(resolved)
+        or kr.rich_text_issues(_clean_public_text(resolved))
+    ):
+        raise ValueError(
+            "the selected source-review candidate no longer satisfies the "
+            "verified rich-text contract")
+    expected_raw_hash = str(
+        (state.get("item") or {}).get("raw_sha256") or "")
+    actual_raw_hash = str(
+        canonical_block.get("raw_sha256")
+        or _sha256_text(canonical_block.get("raw_text") or "")
+    )
+    if not expected_raw_hash or expected_raw_hash != actual_raw_hash:
+        raise ValueError(
+            "the disputed source block changed after the decision was shown")
+    graph_block["source_override"] = {
+        "mode": "human_selected_verified_pdf_block",
+        "canonical_block_raw_sha256": actual_raw_hash,
+        "page_id": str(current_candidate.get("page_id") or ""),
+        "page_number": int(current_candidate.get("page_number") or 0),
+        "reading_order": int(current_candidate.get("reading_order") or 0),
+        "selected_block_key": target_id,
+        "resolved_text": resolved,
+        "resolved_sha256": _sha256_text(resolved),
+        "human_decision_id": str(state.get("decision_id") or ""),
+    }
+    repairs = [
+        copy.deepcopy(row)
+        for row in graph.get("source_fusion_repairs") or []
+        if isinstance(row, dict)
+        and str(row.get("block_id") or "") != block_id
+    ]
+    repairs.append({
+        "block_id": block_id,
+        "selected_block_key": target_id,
+        "page_number": int(current_candidate.get("page_number") or 0),
+        "resolved_via": "human_decision",
+    })
+    graph["source_fusion_repairs"] = repairs
+    graph.pop(_SOURCE_REVIEW_KEY, None)
+
+    remaining = _source_review_block_ids(graph, canonical=canonical)
+    retained = [
+        copy.deepcopy(issue)
+        for issue in graph.get("issues") or []
+        if isinstance(issue, dict)
+        and issue.get("code") not in {
+            "converter_semantic_markup_requires_pdf_reconciliation",
+            "semantic_source_rich_text",
+            "semantic_source_hash_mismatch",
+            "unresolved_source_override_markup",
+            "invalid_source_override_hash",
+        }
+    ]
+    if remaining:
+        retained.append({
+            "code": "converter_semantic_markup_requires_pdf_reconciliation",
+            "severity": "error",
+            "block_ids": remaining,
+            "message": (
+                "Additional converter blocks still require an explicit "
+                "verified-PDF source decision."
+            ),
+        })
+        graph["status"] = "review_required"
+    else:
+        retained.append({
+            "code": "converter_semantic_markup_repaired_from_verified_pdf",
+            "severity": "warning",
+            "block_ids": [block_id],
+            "message": (
+                "The user selected an already-verified original-PDF block; "
+                "source text was rendered deterministically."
+            ),
+        })
+        graph["status"] = "ready"
+        graph["source_review_resolution"] = {
+            "version": _SOURCE_REVIEW_VERSION,
+            "decision_id": str(state.get("decision_id") or ""),
+            "context_hash": str(state.get("context_hash") or ""),
+            "pdf_sha256": expected_pdf_sha256,
+        }
+        graph[_DOWNSTREAM_INVALIDATION_KEY] = True
+    graph["issues"] = retained
+    semantic_source = render_semantic_source(graph, canonical)
+    graph["semantic_source_sha256"] = _sha256_text(semantic_source)
+    errors = validate_graph(
+        graph,
+        canonical=canonical,
+        semantic_source=semantic_source,
+        allow_unresolved_source_anomalies=bool(remaining),
+    )
+    if errors:
+        graph["status"] = "failed"
+        graph["issues"].extend(errors)
+    return graph
+
+
+def _source_review_graph_or_raise(
+    graph: dict[str, Any],
+    *,
+    canonical: dict[str, Any],
+    page_bundle: dict[str, Any] | None,
+    source_path: Path | None,
+) -> dict[str, Any]:
+    """Resolve one saved answer or pause with one bounded diagnostic."""
+
+    if graph.get("status") == "ready":
+        return graph
+    unresolved = _source_review_block_ids(graph, canonical=canonical)
+    block_id = unresolved[0] if unresolved else ""
+    state = graph.get(_SOURCE_REVIEW_KEY)
+    if (
+        not isinstance(state, dict)
+        or state.get("version") != _SOURCE_REVIEW_VERSION
+        or str((state.get("item") or {}).get("block_id") or "") != block_id
+    ):
+        state = _build_source_review_state(
+            graph,
+            canonical=canonical,
+            page_bundle=page_bundle,
+            source_path=source_path,
+            block_id=block_id,
+        )
+        graph[_SOURCE_REVIEW_KEY] = state
+
+    decision_id = str(state.get("decision_id") or "")
+    context_hash = str(state.get("context_hash") or "")
+    resolution = _human_source_resolution(
+        decision_id=decision_id,
+        context_hash=context_hash,
+    )
+    if resolution is None:
+        raise semantic_recovery.HumanDecisionRequired(
+            _source_review_pending(
+                graph, state, canonical=canonical))
+
+    choice = str(resolution.get("choice") or "")
+    target_id = str(
+        resolution.get("target_id")
+        or resolution.get("target_concept_id")
+        or ""
+    )
+    if choice == "accept_recommended":
+        target_id = str(state.get("recommended_target_id") or target_id)
+    if choice in {"accept_recommended", "select_candidate"}:
+        updated = _apply_human_source_candidate(
+            graph,
+            state,
+            canonical=canonical,
+            page_bundle=page_bundle,
+            target_id=target_id,
+        )
+        if updated.get("status") != "ready":
+            return _source_review_graph_or_raise(
+                updated,
+                canonical=canonical,
+                page_bundle=page_bundle,
+                source_path=source_path,
+            )
+        return updated
+
+    if choice == "replace_source":
+        raise ValueError(
+            "Source replacement is required before generation can continue. "
+            "Replace or correct the uploaded file and convert it again; Aegis "
+            "will not mutate the source automatically."
+        )
+
+    instruction = str(resolution.get("instruction") or "").strip()
+    if choice != "custom_instruction" or not instruction:
+        raise ValueError("source-review custom instruction is empty")
+    if state.get("custom_interpretation_used"):
+        raise ValueError(
+            "this source-review instruction has already used its one bounded "
+            "interpretation")
+    interpretation: dict[str, Any] = {}
+    if semantic_api_enabled():
+        try:
+            interpretation = _interpret_custom_source_instruction_via_openai(
+                {
+                    "diagnosis": state.get("diagnosis"),
+                    "decision_question": state.get("decision_question"),
+                    "item": state.get("item"),
+                    "candidates": [
+                        {
+                            "target_id": row.get("target_id"),
+                            "page_number": row.get("page_number"),
+                            "kind": row.get("kind"),
+                            "visible_text": row.get("visible_text"),
+                        }
+                        for row in state.get("candidates") or []
+                        if isinstance(row, dict)
+                    ],
+                },
+                instruction=instruction,
+                source_path=source_path,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                "The source-review provider could not interpret the custom "
+                "instruction. No automatic retry ran and the custom option "
+                "was not consumed; resume explicitly after provider access "
+                "is restored."
+            ) from exc
+    selected = str(interpretation.get("selected_target_id") or "")
+    candidate_ids = {
+        str(row.get("target_id") or "")
+        for row in state.get("candidates") or []
+        if isinstance(row, dict)
+    }
+    if (
+        interpretation.get("decision") == "use_verified_page_block"
+        and selected in candidate_ids
+    ):
+        updated = _apply_human_source_candidate(
+            graph,
+            state,
+            canonical=canonical,
+            page_bundle=page_bundle,
+            target_id=selected,
+        )
+        if updated.get("status") != "ready":
+            return _source_review_graph_or_raise(
+                updated,
+                canonical=canonical,
+                page_bundle=page_bundle,
+                source_path=source_path,
+            )
+        return updated
+
+    revision = {
+        "custom_interpretation_used": True,
+        "prior_decision_id": decision_id,
+        "instruction_sha256": _sha256_text(instruction),
+        "decision": str(interpretation.get("decision") or ""),
+        "reason": str(interpretation.get("reason") or "")[:2_000],
+    }
+    next_state = _build_source_review_state(
+        graph,
+        canonical=canonical,
+        page_bundle=page_bundle,
+        source_path=source_path,
+        block_id=block_id,
+        revision=revision,
+        allow_diagnostic_call=False,
+    )
+    next_state["custom_interpretation_used"] = True
+    next_state["recommended_target_id"] = ""
+    next_state["diagnosis"] = str(
+        interpretation.get("reason")
+        or state.get("diagnosis")
+        or ""
+    )[:8_000]
+    next_state["decision_question"] = str(
+        interpretation.get("question")
+        or (
+            "Choose one verified PDF evidence block directly."
+            if next_state.get("candidates")
+            else "Replace or correct the source file before resuming."
+        )
+    )[:8_000]
+    graph[_SOURCE_REVIEW_KEY] = next_state
+    raise semantic_recovery.HumanDecisionRequired(
+        _source_review_pending(
+            graph, next_state, canonical=canonical))
 
 
 def validate_graph(
@@ -2268,9 +3564,15 @@ def validate_graph(
         )
         and set(issues).issubset({"raw_latex"})
     ):
+        affected_blocks = _rich_text_issue_block_ids(
+            graph, canonical=canonical)
         errors.append({
             "severity": "error", "code": "semantic_source_rich_text",
-            "message": "Phase 3 semantic source has non-canonical rich text: " + ", ".join(issues),
+            "block_ids": affected_blocks,
+            "message": (
+                "Phase 3 semantic source has non-canonical rich text: "
+                + ", ".join(issues)
+            ),
         })
     return errors
 
@@ -3355,6 +4657,54 @@ def write_artifacts(
         _atomic_write(directory / VISION_ACSD_FILENAME, _json_text(page_bundle))
 
 
+def _updated_graph_report(
+    graph: dict[str, Any],
+    report: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Mirror mutable review status without changing source identities."""
+
+    out = copy.deepcopy(report or {})
+    out.update({
+        "schema_name": f"{SCHEMA_NAME} Report",
+        "schema_version": SCHEMA_VERSION,
+        "compiler_version": COMPILER_VERSION,
+        "semantic_confidence_policy": confidence_policy.cache_identity(),
+        "phase": PHASE,
+        "status": graph.get("status"),
+        "source_contract_hash": graph.get("source_contract_hash"),
+        "semantic_context_hash": graph.get("semantic_context_hash"),
+        "source_sha256": graph.get("source_sha256"),
+        "semantic_source_sha256": graph.get("semantic_source_sha256"),
+        "classification_mode": graph.get("classification_mode"),
+        "issues": copy.deepcopy(graph.get("issues") or []),
+    })
+    summary = dict(out.get("summary") or {})
+    summary.update({
+        "topics": len(graph.get("topics") or []),
+        "subtopics": len(graph.get("subtopics") or []),
+        "sections": len(graph.get("sections") or []),
+        "blocks": len(graph.get("blocks") or []),
+        "tasks": len(graph.get("tasks") or []),
+        "figures": len(graph.get("figures") or []),
+        "images": len(graph.get("images") or []),
+        "math_spans": len(graph.get("math") or []),
+        "vision_pages": int(
+            (graph.get("vision_evidence") or {}).get("page_count") or 0),
+        "errors": sum(
+            1 for row in graph.get("issues") or []
+            if isinstance(row, dict) and row.get("severity") == "error"
+        ),
+        "warnings": sum(
+            1 for row in graph.get("issues") or []
+            if isinstance(row, dict) and row.get("severity") == "warning"
+        ),
+        "source_fusion_repairs": len(
+            graph.get("source_fusion_repairs") or []),
+    })
+    out["summary"] = summary
+    return out
+
+
 def load_graph(directory: Path, canonical: dict[str, Any]) -> dict[str, Any] | None:
     path = Path(directory) / GRAPH_FILENAME
     if not path.exists():
@@ -3379,10 +4729,126 @@ def load_graph(directory: Path, canonical: dict[str, Any]) -> dict[str, Any] | N
     return graph
 
 
+def _compatible_source_review_graph(
+    value: Any,
+    *,
+    canonical: dict[str, Any],
+    metadata: dict[str, Any],
+    page_bundle: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Validate a paused or corrected graph against the current source."""
+
+    if not isinstance(value, dict):
+        return None
+    graph = copy.deepcopy(value)
+    if (
+        graph.get("schema_name") != SCHEMA_NAME
+        or graph.get("schema_version") != SCHEMA_VERSION
+        or graph.get("compiler_version") != COMPILER_VERSION
+        or graph.get("phase") != PHASE
+        or graph.get("semantic_confidence_policy")
+        != confidence_policy.cache_identity()
+        or graph.get("source_contract_hash") != source_contract_hash(canonical)
+        or graph.get("semantic_context_hash") != semantic_context_hash(metadata)
+        or graph.get("classification_mode")
+        != "api_classified_and_verified"
+        or graph.get("status") not in {
+            "ready", "review_required", "failed",
+        }
+    ):
+        return None
+    graph_pdf_sha256 = str(
+        (graph.get("vision_evidence") or {}).get("pdf_sha256") or "")
+    current_pdf_sha256 = str(
+        (page_bundle or {}).get("pdf_sha256") or "")
+    if graph_pdf_sha256 and current_pdf_sha256 != graph_pdf_sha256:
+        return None
+    semantic_source = render_semantic_source(graph, canonical)
+    if graph.get("semantic_source_sha256") != _sha256_text(semantic_source):
+        return None
+    if graph.get("status") == "ready":
+        if graph.get(_SOURCE_REVIEW_KEY) is not None:
+            return None
+        if not _current_human_source_overrides_valid(
+            graph,
+            canonical=canonical,
+            page_bundle=page_bundle,
+        ):
+            return None
+        if validate_graph(
+            graph,
+            canonical=canonical,
+            semantic_source=semantic_source,
+        ):
+            return None
+        return graph
+    errors = validate_graph(
+        graph,
+        canonical=canonical,
+        semantic_source=semantic_source,
+        allow_unresolved_source_anomalies=True,
+    )
+    allowed_codes = {"semantic_source_rich_text"}
+    if any(
+        str(row.get("code") or "") not in allowed_codes
+        for row in errors
+        if isinstance(row, dict)
+    ):
+        return None
+    if not _human_reviewable_source_graph(
+        graph, canonical=canonical):
+        return None
+    review = graph.get(_SOURCE_REVIEW_KEY)
+    if review is not None:
+        if (
+            not isinstance(review, dict)
+            or review.get("version") != _SOURCE_REVIEW_VERSION
+            or not re.fullmatch(
+                r"[0-9a-f]{64}",
+                str(review.get("context_hash") or ""),
+            )
+            or not str(review.get("decision_id") or "").startswith(
+                "phase3-source-")
+            or str(review.get("pdf_sha256") or "") != graph_pdf_sha256
+            or str(review.get("pdf_sha256") or "") != current_pdf_sha256
+        ):
+            return None
+        review_candidates = review.get("candidates") or []
+        for candidate in review_candidates:
+            if not isinstance(candidate, dict):
+                return None
+            resolved = str(candidate.get("resolved_text") or "")
+            if (
+                not resolved
+                or candidate.get("resolved_sha256")
+                != _sha256_text(resolved)
+            ):
+                return None
+        expected_context_hash = _source_review_context_hash(
+            graph,
+            item=dict(review.get("item") or {}),
+            candidates=[
+                dict(row) for row in review_candidates
+                if isinstance(row, dict)
+            ],
+            pdf_sha256=str(review.get("pdf_sha256") or ""),
+            revision=dict(review.get("revision") or {}),
+        )
+        if (
+            review.get("context_hash") != expected_context_hash
+            or review.get("decision_id")
+            != f"phase3-source-{expected_context_hash[:24]}"
+        ):
+            return None
+    return graph
+
+
 def load_verified_generation_graph(
     directory: Path,
     canonical: dict[str, Any],
     metadata: dict[str, Any],
+    *,
+    page_bundle: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], str] | None:
     """Return only a fully verified, current, internally consistent graph.
 
@@ -3400,12 +4866,24 @@ def load_verified_generation_graph(
         return None
     if graph.get("semantic_context_hash") != semantic_context_hash(metadata):
         return None
+    graph_pdf_sha256 = str(
+        (graph.get("vision_evidence") or {}).get("pdf_sha256") or "")
+    current_pdf_sha256 = str(
+        (page_bundle or {}).get("pdf_sha256") or "")
+    if graph_pdf_sha256 and current_pdf_sha256 != graph_pdf_sha256:
+        return None
     semantic_path = Path(directory) / SEMANTIC_SOURCE_FILENAME
     try:
         semantic_source = semantic_path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return None
     if graph.get("semantic_source_sha256") != _sha256_text(semantic_source):
+        return None
+    if not _current_human_source_overrides_valid(
+        graph,
+        canonical=canonical,
+        page_bundle=page_bundle,
+    ):
         return None
     if validate_graph(
         graph,
@@ -3477,9 +4955,23 @@ def prepare_generation_graph(
     source_path: Path | None,
     artifact_dir: Path,
     verify_semantics: bool = True,
+    resume_review_graph: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    page_bundle = None
+    if source_path is not None and source_path.exists():
+        page_bundle = load_page_evidence(
+            source_path,
+            artifact_dir,
+            job_id=(active_session() or {}).get("job_id"),
+        )
     if verify_semantics:
-        cached = load_verified_generation_graph(artifact_dir, canonical, metadata)
+        artifact_graph = load_graph(artifact_dir, canonical)
+        cached = load_verified_generation_graph(
+            artifact_dir,
+            canonical,
+            metadata,
+            page_bundle=page_bundle,
+        )
         if cached is not None:
             graph, _semantic_source = cached
             progress.log(
@@ -3489,13 +4981,101 @@ def prepare_generation_graph(
             )
             return graph
 
-    page_bundle = None
-    if source_path is not None and source_path.exists():
-        page_bundle = load_page_evidence(
-            source_path,
-            artifact_dir,
-            job_id=(active_session() or {}).get("job_id"),
+        validated_resume = None
+        if resume_review_graph is not None:
+            validated_resume = _compatible_source_review_graph(
+                resume_review_graph,
+                canonical=canonical,
+                metadata=metadata,
+                page_bundle=page_bundle,
+            )
+            if validated_resume is None:
+                raise ValueError(
+                    "The saved source-review checkpoint no longer matches the "
+                    "current original-PDF evidence or semantic source. Restore "
+                    "the original file, or replace it and convert again; no "
+                    "model retry was started."
+                )
+        validated_artifact = _compatible_source_review_graph(
+            artifact_graph,
+            canonical=canonical,
+            metadata=metadata,
+            page_bundle=page_bundle,
         )
+        artifact_pdf_sha256 = str(
+            ((artifact_graph or {}).get("vision_evidence") or {}).get(
+                "pdf_sha256"
+            )
+            or ""
+        )
+        current_pdf_sha256 = str(
+            (page_bundle or {}).get("pdf_sha256") or "")
+        if (
+            artifact_pdf_sha256
+            and current_pdf_sha256 != artifact_pdf_sha256
+        ):
+            raise ValueError(
+                "The cached semantic graph no longer matches the current "
+                "original-PDF evidence. Restore the original file, or replace "
+                "it and convert again; no model retry was started."
+            )
+        if (
+            _has_human_selected_source_overrides(artifact_graph)
+            and validated_artifact is None
+        ):
+            raise ValueError(
+                "The human-corrected source graph no longer matches the "
+                "current original-PDF evidence. Restore the original file, "
+                "or replace it and convert again; no model retry was started."
+            )
+        unresolved_candidates = [validated_resume, validated_artifact]
+        for candidate in unresolved_candidates:
+            if not isinstance(candidate, dict):
+                continue
+            graph = candidate
+            session = active_session()
+            if isinstance(session, dict):
+                session["graph"] = graph
+            try:
+                graph = _source_review_graph_or_raise(
+                    graph,
+                    canonical=canonical,
+                    page_bundle=page_bundle,
+                    source_path=source_path,
+                )
+            except semantic_recovery.HumanDecisionRequired:
+                semantic_source = render_semantic_source(graph, canonical)
+                graph["semantic_source_sha256"] = _sha256_text(
+                    semantic_source)
+                write_artifacts(
+                    artifact_dir,
+                    graph=graph,
+                    report=_updated_graph_report(graph),
+                    semantic_source=semantic_source,
+                    page_bundle=page_bundle,
+                )
+                if isinstance(session, dict):
+                    session["graph"] = graph
+                raise
+            semantic_source = render_semantic_source(graph, canonical)
+            graph["semantic_source_sha256"] = _sha256_text(semantic_source)
+            write_artifacts(
+                artifact_dir,
+                graph=graph,
+                report=_updated_graph_report(graph),
+                semantic_source=semantic_source,
+                page_bundle=page_bundle,
+            )
+            if graph.get("status") == "ready":
+                progress.log(
+                    "Applied the saved human source decision from verified "
+                    "PDF evidence; semantic generation is continuing without "
+                    "repeating hierarchy calls.",
+                    level="success",
+                )
+                if isinstance(session, dict):
+                    session["graph"] = graph
+                return graph
     hierarchy_provider = (
         _classify_hierarchy_via_openai
         if verify_semantics and semantic_api_enabled() else None
@@ -3517,6 +5097,7 @@ def prepare_generation_graph(
         canonical=canonical,
         page_bundle=page_bundle,
         source_path=source_path,
+        allow_automatic_reconciliation=False,
     )
     semantic_source = render_semantic_source(graph, canonical)
     graph["semantic_source_sha256"] = _sha256_text(semantic_source)
@@ -3532,14 +5113,45 @@ def prepare_generation_graph(
     report.setdefault("summary", {})["source_fusion_repairs"] = len(
         graph.get("source_fusion_repairs") or []
     )
+    if graph.get("status") != "ready":
+        session = active_session()
+        if isinstance(session, dict):
+            session["graph"] = graph
+        if _human_reviewable_source_graph(graph, canonical=canonical):
+            try:
+                graph = _source_review_graph_or_raise(
+                    graph,
+                    canonical=canonical,
+                    page_bundle=page_bundle,
+                    source_path=source_path,
+                )
+            except semantic_recovery.HumanDecisionRequired:
+                semantic_source = render_semantic_source(graph, canonical)
+                graph["semantic_source_sha256"] = _sha256_text(
+                    semantic_source)
+                write_artifacts(
+                    artifact_dir,
+                    graph=graph,
+                    report=_updated_graph_report(graph, report),
+                    semantic_source=semantic_source,
+                    page_bundle=page_bundle,
+                )
+                if isinstance(session, dict):
+                    session["graph"] = graph
+                raise
+            semantic_source = render_semantic_source(graph, canonical)
+            graph["semantic_source_sha256"] = _sha256_text(semantic_source)
+            report = _updated_graph_report(graph, report)
     write_artifacts(
         artifact_dir,
         graph=graph,
-        report=report,
+        report=_updated_graph_report(graph, report),
         semantic_source=semantic_source,
         page_bundle=page_bundle,
     )
     if graph.get("status") != "ready":
+        # This should only remain reachable for integrity failures that cannot
+        # be represented as a bounded human source decision.
         details = "; ".join(
             str(row.get("message") or row.get("code") or "")
             for row in graph.get("issues") or []

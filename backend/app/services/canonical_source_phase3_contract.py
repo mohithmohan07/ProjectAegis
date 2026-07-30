@@ -168,18 +168,111 @@ def install(generation: ModuleType | None = None) -> None:
             "chapter_code": kwargs.get("chapter_code") or "",
             "learning_kind": kwargs.get("learning_kind") or "",
         }
+        resume_review = generation._newest_compatible_concept_checkpoint(
+            kwargs.get("resume_checkpoint"),
+            allowed_stages={"source_graph_review"},
+        )
+        resume_review_graph = (
+            copy.deepcopy(resume_review.get("source_review_graph"))
+            if isinstance(resume_review, dict)
+            and isinstance(resume_review.get("source_review_graph"), dict)
+            else None
+        )
         # A compatible concept checkpoint preserves completed generation work, but
         # it never waives source verification.  The hierarchy call is avoided only
         # when a matching API-classified and independently verified graph is already
         # cached for this exact ACSD/overlay and academic metadata contract.
-        graph = phase3.prepare_generation_graph(
-            canonical=canonical,
-            source_text=semantic,
-            metadata=metadata,
-            source_path=session.get("source_path"),
-            artifact_dir=Path(session["artifact_dir"]),
-            verify_semantics=True,
-        )
+        try:
+            graph = phase3.prepare_generation_graph(
+                canonical=canonical,
+                source_text=semantic,
+                metadata=metadata,
+                source_path=session.get("source_path"),
+                artifact_dir=Path(session["artifact_dir"]),
+                verify_semantics=True,
+                resume_review_graph=resume_review_graph,
+            )
+        except phase3.semantic_recovery.HumanDecisionRequired as exc:
+            graph = session.get("graph")
+            callback = kwargs.get("checkpoint_callback")
+            if isinstance(graph, dict) and callback is not None:
+                callback(generation._make_concept_checkpoint(
+                    "source_graph_review",
+                    records=[],
+                    source_review_graph=copy.deepcopy(graph),
+                    source_review_context_hash=exc.context_hash,
+                    source_review_decision_id=exc.decision_id,
+                ))
+            raise
+        if graph.get("status") == "ready" and (
+            graph.get(phase3._DOWNSTREAM_INVALIDATION_KEY)
+            or (
+                isinstance(resume_review_graph, dict)
+                and resume_review_graph.get(
+                    phase3._DOWNSTREAM_INVALIDATION_KEY)
+            )
+            or (
+                isinstance(resume_review_graph, dict)
+                and resume_review_graph.get("status") != "ready"
+            )
+        ):
+            # A human-selected verified source block changes the semantic
+            # source consumed by concept generation. Persist the now-ready
+            # Phase 3 graph, atomically prune every stale downstream concept
+            # stage, and start concept generation from its first stage. The
+            # verified hierarchy/critic graph itself remains reusable.
+            callback = kwargs.get("checkpoint_callback")
+            if callback is not None:
+                resolution_audit = (
+                    graph.get("source_review_resolution") or {})
+                review_context_hash = str(
+                    (resume_review or {}).get(
+                        "source_review_context_hash")
+                    or resolution_audit.get("context_hash")
+                    or ""
+                )
+                review_decision_id = str(
+                    (resume_review or {}).get(
+                        "source_review_decision_id")
+                    or resolution_audit.get("decision_id")
+                    or ""
+                )
+                flagged_graph = copy.deepcopy(graph)
+                flagged_graph[
+                    phase3._DOWNSTREAM_INVALIDATION_KEY
+                ] = True
+                callback(generation._make_concept_checkpoint(
+                    "source_graph_review",
+                    records=[],
+                    source_review_graph=flagged_graph,
+                    source_review_context_hash=review_context_hash,
+                    source_review_decision_id=review_decision_id,
+                    source_review_resolution_applied=True,
+                ))
+                # The first durable callback atomically pruned every concept
+                # stage while retaining this flag. Only then may the flag be
+                # cleared and the reusable ready Phase 3 graph persisted.
+                graph.pop(phase3._DOWNSTREAM_INVALIDATION_KEY, None)
+                rendered_ready = phase3.render_semantic_source(
+                    graph, canonical)
+                graph["semantic_source_sha256"] = phase3._sha256_text(
+                    rendered_ready)
+                phase3.write_artifacts(
+                    Path(session["artifact_dir"]),
+                    graph=graph,
+                    report=phase3._updated_graph_report(graph),
+                    semantic_source=rendered_ready,
+                    page_bundle=None,
+                )
+                callback(generation._make_concept_checkpoint(
+                    "source_graph_review",
+                    records=[],
+                    source_review_graph=copy.deepcopy(graph),
+                    source_review_context_hash=review_context_hash,
+                    source_review_decision_id=review_decision_id,
+                    source_review_resolution_applied=True,
+                ))
+            kwargs["resume_checkpoint"] = None
         session["graph"] = graph
         rendered = phase3.render_semantic_source(graph, canonical)
         with phase3.activate(graph):

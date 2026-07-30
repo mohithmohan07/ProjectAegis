@@ -171,6 +171,9 @@ SemanticDecisionChoice = Literal[
     "expand_existing",
     "create_new",
     "select_existing",
+    "accept_recommended",
+    "select_candidate",
+    "replace_source",
     "custom_instruction",
 ]
 
@@ -187,6 +190,10 @@ class SemanticDecisionItem(BaseModel):
 
 class SemanticDecisionCandidate(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    # ``target_id`` is the generic identity used by source-review and future
+    # non-concept decisions. ``concept_id`` remains for backwards-compatible
+    # Phase 3.3 host decisions and older clients.
+    target_id: str = Field(default="", max_length=512)
     concept_id: str = Field(default="", max_length=256)
     title: str = Field(default="", max_length=8_000)
     topic: str = Field(default="", max_length=8_000)
@@ -206,6 +213,7 @@ class SemanticDecisionOption(BaseModel):
     choice: SemanticDecisionChoice
     label: str = Field(min_length=1, max_length=512)
     recommended: bool = False
+    target_id: str = Field(default="", max_length=512)
     target_concept_id: str = Field(default="", max_length=256)
 
 
@@ -216,6 +224,9 @@ class PendingSemanticDecision(BaseModel):
     kind: str = Field(min_length=1, max_length=128)
     phase: str = Field(min_length=1, max_length=128)
     conflict: str = Field(min_length=1, max_length=8_000)
+    diagnosis: str = Field(default="", max_length=8_000)
+    decision_question: str = Field(default="", max_length=8_000)
+    checkpoint_progress: float = Field(default=0.0, ge=0.0, le=1.0)
     item: SemanticDecisionItem = Field(default_factory=SemanticDecisionItem)
     candidates: list[SemanticDecisionCandidate] = Field(
         default_factory=list, max_length=100)
@@ -234,6 +245,7 @@ class ResolvedSemanticDecision(BaseModel):
     context_hash: str = Field(min_length=64, max_length=64)
     choice: SemanticDecisionChoice
     instruction: str = Field(default="", max_length=4_000)
+    target_id: str = Field(default="", max_length=512)
     target_concept_id: str = Field(default="", max_length=256)
     resolved_at: str = Field(min_length=1, max_length=64)
     status: Literal["ready", "consumed"] = "ready"
@@ -260,6 +272,7 @@ class HumanDecisionLedger(BaseModel):
 class HumanSemanticDecisionRequest(BaseModel):
     choice: SemanticDecisionChoice
     instruction: str = Field(default="", max_length=4_000)
+    target_id: str = Field(default="", max_length=512)
     target_concept_id: str = Field(default="", max_length=256)
 
 

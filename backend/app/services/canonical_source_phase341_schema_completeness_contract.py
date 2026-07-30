@@ -110,7 +110,9 @@ def install() -> None:
         )
         current_budget = max(1000, int(kwargs.get("max_tokens") or 0))
         cap = _completion_cap(current_budget)
-        attempts = _max_retries()
+        attempts = (
+            0 if kwargs.get("single_attempt") else _max_retries()
+        )
         base_system = str(kwargs.get("system") or "")
 
         for attempt in range(1, attempts + 2):

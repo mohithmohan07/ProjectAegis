@@ -93,11 +93,12 @@ def _normalize_pending_human_decision(
             "qids", "questions", "topic",
         )
     }
-    candidates = [
-        {key: str(row.get(key) or "") for key in (
-            "concept_id", "title", "topic", "coverage", "gap")}
-        for row in rows("candidates", 100)
-    ]
+    candidates = [{
+        key: str(row.get(key) or "")
+        for key in (
+            "target_id", "concept_id", "title", "topic", "coverage", "gap",
+        )
+    } for row in rows("candidates", 100)]
     evidence = [
         {key: str(row.get(key) or "") for key in ("page", "label", "text")}
         for row in rows("evidence", 100)
@@ -110,6 +111,7 @@ def _normalize_pending_human_decision(
         ),
         "label": str(row.get("label") or ""),
         "recommended": bool(row.get("recommended")),
+        "target_id": str(row.get("target_id") or ""),
         "target_concept_id": str(row.get("target_concept_id") or ""),
     } for row in rows("options", 16)]
     deferred_unit_ids = raw.get("deferred_assignment_unit_ids") or []
@@ -123,6 +125,9 @@ def _normalize_pending_human_decision(
         "kind": str(raw.get("kind") or "semantic_host_conflict"),
         "phase": str(raw.get("phase") or "3.3"),
         "conflict": str(raw.get("conflict") or ""),
+        "diagnosis": str(raw.get("diagnosis") or ""),
+        "decision_question": str(raw.get("decision_question") or ""),
+        "checkpoint_progress": raw.get("checkpoint_progress") or 0.0,
         "item": item,
         "candidates": candidates,
         "evidence": evidence,
@@ -186,6 +191,7 @@ def _ready_human_decisions(checkpoint: dict | None) -> list[dict]:
                 "instruction": str(entry.get("instruction") or ""),
                 "target_concept_id": str(
                     entry.get("target_concept_id") or ""),
+                "target_id": str(entry.get("target_id") or ""),
                 "resolved_at": str(entry.get("resolved_at") or ""),
             })
     deferred = [
@@ -202,6 +208,7 @@ def _compact_resolved_pending_decision(
     pending: dict,
     *,
     choice: str,
+    target_id: str,
     target_concept_id: str,
 ) -> dict:
     """Keep the audit identity without copying a shrinking queue N² times."""
@@ -209,12 +216,16 @@ def _compact_resolved_pending_decision(
     snapshot = copy.deepcopy(pending)
     snapshot["evidence"] = []
     snapshot["deferred_assignment_unit_ids"] = []
-    if target_concept_id:
+    selected_target = target_id or target_concept_id
+    if selected_target:
         snapshot["candidates"] = [
             candidate
             for candidate in snapshot.get("candidates") or []
             if isinstance(candidate, dict)
-            and str(candidate.get("concept_id") or "") == target_concept_id
+            and selected_target in {
+                str(candidate.get("target_id") or ""),
+                str(candidate.get("concept_id") or ""),
+            }
         ]
     else:
         snapshot["candidates"] = []
@@ -224,9 +235,12 @@ def _compact_resolved_pending_decision(
         if isinstance(option, dict)
         and str(option.get("choice") or "") == choice
     ]
-    if target_concept_id:
+    if selected_target:
         for option in selected_options:
-            option["target_concept_id"] = target_concept_id
+            if target_id:
+                option["target_id"] = target_id
+            if target_concept_id:
+                option["target_concept_id"] = target_concept_id
     snapshot["options"] = selected_options
     return schemas.PendingSemanticDecision.model_validate(snapshot).model_dump()
 
@@ -248,9 +262,13 @@ def _human_decision_resolution_context(checkpoint: dict | None):
     if not resolutions:
         yield
         return
+    from . import canonical_source_phase3 as phase3
     from . import canonical_source_phase33_preflight_contract as phase33
-    with phase33.human_resolution_context(copy.deepcopy(resolutions)):
-        yield
+    with phase3.human_source_resolution_context(
+        copy.deepcopy(resolutions)
+    ):
+        with phase33.human_resolution_context(copy.deepcopy(resolutions)):
+            yield
 
 
 def _find_concept_in_chapter(
@@ -898,11 +916,41 @@ def _merge_generation_checkpoint_history(
         )[1]
         checkpoint = newest
     else:
+        source_resolution_applied = bool(
+            stage == "source_graph_review"
+            and checkpoint.get("source_review_resolution_applied")
+        )
+        if source_resolution_applied:
+            # Applying a verified-PDF block changes semantic_source_sha256.
+            # Every concept/pre-learning stage was derived from the old text
+            # and must be rebuilt. Keep only the ready Phase 3 graph so its
+            # already-paid hierarchy and critic work remains reusable.
+            source_order = generation._checkpoint_order(
+                "source_graph_review")
+            history = [
+                entry for entry in history
+                if generation._checkpoint_order(
+                    str(entry.get("stage") or "")
+                ) <= source_order
+            ]
         history = [
             entry for entry in history
             if str(entry.get("stage") or "") != stage
         ]
         history.append(copy.deepcopy(checkpoint))
+        # Source verification may pause before semantic generation even while
+        # later completed concept work (for example the 81% Type checkpoint)
+        # remains reusable. Keep the source-review stage in history, but mirror
+        # the furthest completed stage at the envelope top level so the UI and
+        # resume policy never appear to regress from 81% to 5%.
+        checkpoint = max(
+            enumerate(history),
+            key=lambda indexed: (
+                generation._checkpoint_order(
+                    str(indexed[1].get("stage") or "")),
+                indexed[0],
+            ),
+        )[1]
     merged = {
         "schema_version": generation._CONCEPT_CHECKPOINT_SCHEMA,
         "checkpoint_format": generation._CONCEPT_CHECKPOINT_FORMAT,
@@ -1392,6 +1440,28 @@ def _existing_human_decision_pause(
     return _awaiting_human_decision_result(job, pending)
 
 
+def _source_replacement_required(checkpoint: dict | None) -> bool:
+    """Whether a source-review answer terminally requires a new conversion."""
+
+    return any(
+        str(row.get("choice") or "") == "replace_source"
+        and str(row.get("kind") or "") == "phase3_source_graph_review"
+        for row in _ready_human_decisions(checkpoint)
+        if isinstance(row, dict)
+    )
+
+
+def _raise_if_source_replacement_required(
+    checkpoint: dict | None,
+) -> None:
+    if _source_replacement_required(checkpoint):
+        raise ValueError(
+            "Source replacement is required before generation can continue. "
+            "Replace or correct the uploaded file and convert it again; Aegis "
+            "will not mutate the source automatically."
+        )
+
+
 def _persist_pending_human_decision(
     db: Session,
     job: models.UploadJob,
@@ -1414,8 +1484,11 @@ def _persist_pending_human_decision(
             "human semantic decision context no longer matches the saved "
             "generation checkpoint")
 
+    pending_payload = copy.deepcopy(raw_pending)
+    pending_payload["checkpoint_progress"] = float(
+        job.checkpoint_progress or 0.0)
     pending = _normalize_pending_human_decision(
-        raw_pending,
+        pending_payload,
         cumulative_usage=openai_usage.visible_summary(),
     )
     ledger = _human_decision_ledger(checkpoint)
@@ -1512,6 +1585,7 @@ def record_human_semantic_decision(
     *,
     choice: str,
     instruction: str = "",
+    target_id: str = "",
     target_concept_id: str = "",
     owner_sub: str | None = None,
 ) -> dict:
@@ -1533,6 +1607,7 @@ def record_human_semantic_decision(
                 decision_id,
                 choice=choice,
                 instruction=instruction,
+                target_id=target_id,
                 target_concept_id=target_concept_id,
             )
     except uploads.JobAlreadyRunningError as exc:
@@ -1546,6 +1621,7 @@ def _record_human_semantic_decision_locked(
     *,
     choice: str,
     instruction: str,
+    target_id: str,
     target_concept_id: str,
 ) -> dict:
     """Mutate a decision ledger while ``exclusive_job_operation`` is held."""
@@ -1558,10 +1634,12 @@ def _record_human_semantic_decision_locked(
     submission = schemas.HumanSemanticDecisionRequest.model_validate({
         "choice": choice,
         "instruction": instruction,
+        "target_id": target_id,
         "target_concept_id": target_concept_id,
     })
     choice = submission.choice
     instruction = submission.instruction.strip()
+    target_id = submission.target_id.strip()
     target_concept_id = submission.target_concept_id.strip()
     if choice == "custom_instruction" and not instruction:
         raise ValueError("instruction is required for custom_instruction")
@@ -1608,6 +1686,11 @@ def _record_human_semantic_decision_locked(
         for candidate in pending.get("candidates") or []
         if isinstance(candidate, dict) and candidate.get("concept_id")
     ]
+    candidate_target_ids = {
+        str(candidate.get("target_id") or "")
+        for candidate in pending.get("candidates") or []
+        if isinstance(candidate, dict) and candidate.get("target_id")
+    }
     if choice == "expand_existing" and not target_concept_id:
         target_concept_id = str(
             (offered.get(choice) or {}).get("target_concept_id") or "")
@@ -1619,18 +1702,40 @@ def _record_human_semantic_decision_locked(
             raise ValueError(
                 "target_concept_id must identify one of the pending decision "
                 "candidates")
+    if choice == "accept_recommended":
+        recommended_target_id = str(
+            (offered.get(choice) or {}).get("target_id") or "")
+        if target_id and target_id != recommended_target_id:
+            raise ValueError(
+                "target_id must match the pending recommended candidate")
+        target_id = recommended_target_id
+    if choice in {"accept_recommended", "select_candidate"}:
+        # Transitional clients used the concept-specific field for every
+        # candidate selector. Treat it only as an alias, then enforce exact
+        # membership in the server-offered generic target set below.
+        if not target_id and target_concept_id:
+            target_id = target_concept_id
+        if not target_id:
+            raise ValueError(
+                "target_id is required for a source-review candidate choice")
+        if not candidate_target_ids or target_id not in candidate_target_ids:
+            raise ValueError(
+                "target_id must identify one of the pending decision "
+                "candidates")
 
     resolution = {
         "decision_id": decision_id,
         "context_hash": str(pending.get("context_hash") or ""),
         "choice": choice,
         "instruction": instruction,
+        "target_id": target_id,
         "target_concept_id": target_concept_id,
         "resolved_at": datetime.now(timezone.utc).isoformat(),
         "status": "ready",
         "pending_decision": _compact_resolved_pending_decision(
             pending,
             choice=choice,
+            target_id=target_id,
             target_concept_id=target_concept_id,
         ),
     }
@@ -1646,9 +1751,15 @@ def _record_human_semantic_decision_locked(
     }
     job.generation_checkpoint = checkpoint
     job.status = "converted"
+    source_replacement_required = choice == "replace_source"
     job.detail = (
-        "Semantic decision recorded. Resume generation from the saved "
-        "checkpoint when ready."
+        "Replace or correct the uploaded source, convert it again, and then "
+        "start generation. Aegis did not mutate the source."
+        if source_replacement_required
+        else (
+            "Semantic decision recorded. Resume generation from the saved "
+            "checkpoint when ready."
+        )
     )
     db.commit()
     db.refresh(job)
@@ -1656,7 +1767,7 @@ def _record_human_semantic_decision_locked(
     return {
         "job_id": job.id,
         "status": "decision_recorded",
-        "resume_required": True,
+        "resume_required": not source_replacement_required,
         "resolved_decision": {
             key: value for key, value in resolution.items()
             if key not in {"status", "pending_decision"}
@@ -1724,6 +1835,7 @@ def generate_post_learning(
     existing_pause = _existing_human_decision_pause(job, resume_checkpoint)
     if existing_pause is not None:
         return existing_pause
+    _raise_if_source_replacement_required(resume_checkpoint)
     if resume_checkpoint:
         resume_checkpoint, resumed = (
             _persist_compatible_generation_checkpoint_mirror(
@@ -1778,6 +1890,11 @@ def generate_post_learning(
                 level="warning",
             )
             return
+        if checkpoint.get("source_review_resolution_applied"):
+            # This snapshot was derived from the pre-correction semantic
+            # source and must disappear in the same durable update that
+            # invalidates downstream concept stages.
+            job.question_inventory = {}
         if (
             "question_task_inventory" in checkpoint
             or "mined_types" in checkpoint
@@ -2040,6 +2157,7 @@ def generate_pre_learning_from_upload(
     existing_pause = _existing_human_decision_pause(job, resume_checkpoint)
     if existing_pause is not None:
         return existing_pause
+    _raise_if_source_replacement_required(resume_checkpoint)
     if resume_checkpoint:
         resume_checkpoint, resumed = (
             _persist_compatible_generation_checkpoint_mirror(
@@ -2094,6 +2212,8 @@ def generate_pre_learning_from_upload(
                 level="warning",
             )
             return
+        if checkpoint.get("source_review_resolution_applied"):
+            job.question_inventory = {}
         if (
             "question_task_inventory" in checkpoint
             or "mined_types" in checkpoint
