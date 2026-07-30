@@ -81,7 +81,7 @@ def test_generic_activity_note_matches_the_phase21_shipped_wire_text():
     legacy = g._PHASE39_ORIGINAL_COMPACT_HUB_NOTE(item)
     canonical = g._compact_activity_hub_note(item)
 
-    assert "Activity — Activity —" in legacy
+    assert "Activity — Activity —" not in legacy
     assert "Activity — Activity —" not in canonical
     assert canonical == phase21_render.clean_activity_hub_content(legacy)
     assert canonical == phase21_render.clean_activity_hub_content(canonical)

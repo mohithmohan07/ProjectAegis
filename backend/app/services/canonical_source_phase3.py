@@ -39,11 +39,12 @@ from . import canonical_source_phase22 as phase22
 from . import canonical_source_phase221_fallback as page_acsd
 from . import katex_rules as kr
 from . import progress
+from . import semantic_confidence_policy as confidence_policy
 
 PHASE = "phase-3-semantic-graph"
 SCHEMA_NAME = "Aegis Universal Semantic Source Graph"
 SCHEMA_VERSION = "3.0.0"
-COMPILER_VERSION = "phase-3-semantic-graph-1"
+COMPILER_VERSION = "phase-3-semantic-graph-2"
 
 GRAPH_FILENAME = "source.semantic-graph.json"
 GRAPH_REPORT_FILENAME = "source.semantic-graph-report.json"
@@ -513,7 +514,10 @@ def _virtual_missing_main_candidates(
             row for row in evidence
             if row.get("number") == str(number)
             and _MAIN_NUMBER_RE.fullmatch(str(row.get("number") or ""))
-            and float(row.get("confidence") or 0.0) >= 0.96
+            and confidence_policy.accepts(
+                row.get("confidence"),
+                confidence_policy.ConfidenceGate.SOURCE_CRITICAL,
+            )
         ]
         titles = {_normal(row.get("title")) for row in matches if row.get("title")}
         if len(matches) != 1 or len(titles) != 1:
@@ -745,9 +749,11 @@ def _apply_critic_repairs(
     verdict = str(critic.get("verdict") or "")
     confidence = float(critic.get("confidence") or 0.0)
     issues = [str(value).strip() for value in critic.get("issues") or [] if str(value).strip()]
-    if confidence < 0.96:
+    if not confidence_policy.accepts(confidence):
         raise ValueError(
-            "Phase 3 hierarchy critic confidence is below the verification gate"
+            "Phase 3 hierarchy critic confidence "
+            f"{confidence:.3f} is below "
+            f"{confidence_policy.threshold_text()}"
         )
     if verdict == "verified" and not issues:
         return classifications
@@ -1210,6 +1216,7 @@ def compile_semantic_graph(
         "schema_name": SCHEMA_NAME,
         "schema_version": SCHEMA_VERSION,
         "compiler_version": COMPILER_VERSION,
+        "semantic_confidence_policy": confidence_policy.cache_identity(),
         "phase": PHASE,
         "status": "ready" if not suspicious_blocks else "review_required",
         "source_contract_hash": source_contract_hash(canonical),
@@ -1266,6 +1273,7 @@ def compile_semantic_graph(
         "schema_name": f"{SCHEMA_NAME} Report",
         "schema_version": SCHEMA_VERSION,
         "compiler_version": COMPILER_VERSION,
+        "semantic_confidence_policy": confidence_policy.cache_identity(),
         "phase": PHASE,
         "status": graph["status"],
         "source_contract_hash": graph["source_contract_hash"],
@@ -2021,7 +2029,10 @@ def reconcile_source_anomalies(
             not isinstance(selection, dict)
             or selection.get("decision") != "use_verified_page_block"
             or selected_key not in keys
-            or float(selection.get("confidence") or 0.0) < 0.96
+            or not confidence_policy.accepts(
+                selection.get("confidence"),
+                confidence_policy.ConfidenceGate.SOURCE_CRITICAL,
+            )
         ):
             unresolved.append(block_id)
             continue
@@ -2033,7 +2044,10 @@ def reconcile_source_anomalies(
             not isinstance(verification, dict)
             or verification.get("verdict") != "verified"
             or str(verification.get("selected_block_key") or "") != selected_key
-            or float(verification.get("confidence") or 0.0) < 0.96
+            or not confidence_policy.accepts(
+                verification.get("confidence"),
+                confidence_policy.ConfidenceGate.SOURCE_CRITICAL,
+            )
             or bool(verification.get("issues"))
         ):
             unresolved.append(block_id)
@@ -2764,7 +2778,7 @@ def ensure_type_scope_hosts(
         if (
             not isinstance(review, dict)
             or review.get("verdict") != "verified"
-            or float(review.get("confidence") or 0.0) < 0.96
+            or not confidence_policy.accepts(review.get("confidence"))
             or bool(review.get("issues"))
         ):
             raise RuntimeError(
@@ -2965,7 +2979,7 @@ def canonicalize_record_topics(
                     concept_id not in concept_index
                     or concept_id in seen
                     or topic_id not in topic_by_id
-                    or confidence < 0.96
+                    or not confidence_policy.accepts(confidence)
                 ):
                     raise ValueError("Phase 3 concept-topic resolver violated its bounded ID contract")
                 seen.add(concept_id)
@@ -2984,7 +2998,7 @@ def canonicalize_record_topics(
             if (
                 not isinstance(review, dict)
                 or review.get("verdict") != "verified"
-                or float(review.get("confidence") or 0.0) < 0.96
+                or not confidence_policy.accepts(review.get("confidence"))
                 or bool(review.get("issues"))
             ):
                 raise ValueError("Phase 3 concept-topic assignments failed independent verification")
@@ -3203,7 +3217,7 @@ def ground_concepts(
             if (
                 not block_ids
                 or any(value not in allowed_blocks for value in block_ids)
-                or confidence < 0.96
+                or not confidence_policy.accepts(confidence)
             ):
                 raise ValueError("Phase 3 concept grounding used an invalid or uncertain source block")
             proposals.append({
@@ -3221,7 +3235,7 @@ def ground_concepts(
         if (
             not isinstance(review, dict)
             or review.get("verdict") != "verified"
-            or float(review.get("confidence") or 0.0) < 0.96
+            or not confidence_policy.accepts(review.get("confidence"))
             or bool(review.get("issues"))
         ):
             raise ValueError("Phase 3 concept grounding failed independent verification")
@@ -3355,6 +3369,8 @@ def load_graph(directory: Path, canonical: dict[str, Any]) -> dict[str, Any] | N
         graph.get("schema_name") != SCHEMA_NAME
         or graph.get("schema_version") != SCHEMA_VERSION
         or graph.get("compiler_version") != COMPILER_VERSION
+        or graph.get("semantic_confidence_policy")
+        != confidence_policy.cache_identity()
         or graph.get("phase") != PHASE
     ):
         return None
@@ -3415,6 +3431,11 @@ def checkpoint_resume_graph_safe(
     if graph.get("status") != "ready":
         return False
     if graph.get("classification_mode") != "api_classified_and_verified":
+        return False
+    if (
+        graph.get("semantic_confidence_policy")
+        != confidence_policy.cache_identity()
+    ):
         return False
     if not graph.get("topics"):
         return False

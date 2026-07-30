@@ -44,6 +44,7 @@ from . import canonical_source_phase32_topology_adjudication_contract as phase32
 from . import concept_refiner as cr
 from . import concept_topology_contract as topology
 from . import progress
+from . import semantic_confidence_policy as confidence_policy
 
 _CONTRACT_VERSION = 1
 _DECISION_CACHE_VERSION = "phase3.3-topology-decision-cache-1"
@@ -128,6 +129,7 @@ def _phase32_decision_key(
         {
             "version": _DECISION_CACHE_VERSION,
             "model": str(config.OPENAI_MODEL),
+            "semantic_confidence_policy": confidence_policy.cache_identity(),
             "source_contract_hash": str(graph.get("source_contract_hash") or ""),
             "topics": _topic_evidence_fingerprint(
                 [row for row in payload.get("topics") or [] if isinstance(row, dict)]
@@ -312,16 +314,29 @@ def _phase32_critic_with_cache(
         ids = [str(row.get("concept_id") or "") for row in concepts]
         return {
             "verdict": "verified",
-            "confidence": 0.999,
+            # This is a replay of the exact decision that already cleared the
+            # configured gate, not a new probabilistic model score.  Use the
+            # identity confidence so a deliberately strict 1.0 destructive
+            # gate can still reuse its own previously verified cache entry.
+            "confidence": 1.0,
             "accepted_concept_ids": ids,
             "rejected_concept_ids": [],
             "issues": [],
         }
 
     review = original(payload)
+    review_gate = (
+        confidence_policy.ConfidenceGate.DESTRUCTIVE
+        if any(
+            row.get("decision") == "retire"
+            for row in proposed
+        )
+        else confidence_policy.ConfidenceGate.SEMANTIC
+    )
     state = phase31._review_state(
         review,
         concept_ids={str(row.get("concept_id") or "") for row in concepts},
+        confidence_gate=review_gate,
     )
     if state["verified"]:
         now = time.time()
@@ -760,7 +775,8 @@ def _host_critic_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         "only one question variation, wrong-topic plans, unused new concepts, or "
         "units assigned more than once. Put every assignment_unit_id in exactly one "
         "accepted_concept_ids or rejected_concept_ids list. Verified requires all "
-        "accepted, none rejected, confidence at least 0.96, and no issues."
+        "accepted, none rejected, confidence at least "
+        f"{confidence_policy.threshold_text()}, and no issues."
     )
     return phase3.phase22._openai_multimodal_json(
         system=system,
@@ -812,8 +828,11 @@ def _parse_host_plan(
         existing_id = str(raw.get("existing_concept_id") or "")
         new_key = str(raw.get("new_concept_key") or "")
         confidence = float(raw.get("confidence") or 0.0)
-        if confidence < 0.96:
-            errors.append(f"{unit_id} host confidence {confidence:.3f} is below 0.960")
+        if not confidence_policy.accepts(confidence):
+            errors.append(
+                f"{unit_id} host confidence {confidence:.3f} is below "
+                f"{confidence_policy.threshold_text()}"
+            )
             continue
         if decision == "review_required":
             errors.append(
@@ -887,8 +906,11 @@ def _parse_host_plan(
         if not assigned or any(unit_topic[unit_id] != topic_id for unit_id in assigned):
             errors.append(f"{key} mixes assignment units from another topic")
             continue
-        if confidence < 0.96:
-            errors.append(f"{key} concept confidence {confidence:.3f} is below 0.960")
+        if not confidence_policy.accepts(confidence):
+            errors.append(
+                f"{key} concept confidence {confidence:.3f} is below "
+                f"{confidence_policy.threshold_text()}"
+            )
             continue
         if not title or not parent or not description or not mastery or not block_ids:
             errors.append(f"{key} omitted title, parent, Description, mastery, or source blocks")
@@ -951,6 +973,7 @@ def _host_plan_cache_key(
         {
             "version": _HOST_VERSION,
             "model": str(config.OPENAI_MODEL),
+            "semantic_confidence_policy": confidence_policy.cache_identity(),
             "source_contract_hash": str(graph.get("source_contract_hash") or ""),
             "topic_id": topic_id,
             "units": phase31._json_safe(units),
@@ -1151,6 +1174,7 @@ def _host_result_cache_key(
         {
             "version": _HOST_VERSION,
             "model": str(config.OPENAI_MODEL),
+            "semantic_confidence_policy": confidence_policy.cache_identity(),
             "source_contract_hash": str(graph.get("source_contract_hash") or ""),
             "records": phase31._json_safe(records),
             "types": phase31._json_safe(clean_types),

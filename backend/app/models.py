@@ -50,6 +50,10 @@ class Topic(Base):
     pre_post_learning: Mapped[str] = mapped_column(String(16), default="Post")
     related_topics: Mapped[str] = mapped_column(Text, default="")
     topic_description: Mapped[str] = mapped_column(Text, default="")
+    # Canonical source order for the latest accepted topology of this learning
+    # kind. Database ids are creation history and must never determine textbook
+    # order (a repaired topic may pre-date topics that now precede it).
+    source_order: Mapped[int] = mapped_column(Integer, default=0)
 
     chapter = relationship("Chapter", back_populates="topics")
     concepts = relationship("Concept", back_populates="topic", cascade="all, delete-orphan")
@@ -67,6 +71,10 @@ class Concept(Base):
     keywords: Mapped[str] = mapped_column(Text, default="")
     digicards: Mapped[str] = mapped_column(Text, default="")
     related_concepts: Mapped[str] = mapped_column(Text, default="")
+    # Position inside the latest accepted topic topology. This is deliberately
+    # independent of the primary key so refreshed/reused concepts retain the
+    # source order of the current successful run.
+    source_order: Mapped[int] = mapped_column(Integer, default=0)
     # Multi-source book tags, "; "-joined (e.g. "NCERT; RD Sharma").
     sources: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

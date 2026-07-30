@@ -298,7 +298,7 @@ def test_low_confidence_does_not_authorize_creation_of_a_new_concept(monkeypatch
     monkeypatch.setenv("AEGIS_PHASE32_TOPOLOGY_MAX_ATTEMPTS", "2")
     with pytest.raises(
         ValueError,
-        match="topology confidence 0.720 is below 0.960",
+        match="topology confidence 0.720 is below 0.920",
     ):
         phase32.adjudicate_topology(
             [_combined_record()],

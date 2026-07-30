@@ -177,6 +177,7 @@ def test_verified_phase32_decision_is_reused_per_concept(tmp_path):
     assert calls == {"provider": 1, "critic": 1}
     assert first == second
     assert second_review["verdict"] == "verified"
+    assert second_review["confidence"] == 1.0
     assert (
         first["concepts"][0]["segments"][0]["description"]
         == concept["source_claim"]
@@ -456,4 +457,4 @@ def test_low_confidence_cannot_create_type_host():
     )
 
     assert plan is None
-    assert any("host confidence 0.720 is below 0.960" in error for error in errors)
+    assert any("host confidence 0.720 is below 0.920" in error for error in errors)

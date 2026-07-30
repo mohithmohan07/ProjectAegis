@@ -36,6 +36,7 @@ from . import canonical_source_phase32_topology_adjudication_contract as phase32
 from . import canonical_source_phase33_preflight_contract as phase33
 from . import concept_refiner as cr
 from . import progress
+from . import semantic_confidence_policy as confidence_policy
 
 _CONTRACT_VERSION = 1
 _TOPOLOGY_VERSION = "phase3.7-visual-evidence-retirement-1"
@@ -615,9 +616,13 @@ def _critic_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         "the target is itself retiring, or when a mined question method may need "
         "the row as a durable host. For non-retire decisions, apply the existing "
         "source-support, granularity, topic, duplication, and mastery rules. Put "
-        "every concept ID in exactly one accepted or rejected list. A verified "
-        "verdict requires all accepted, none rejected, confidence at least 0.96, "
-        "and no issues. Do not rewrite proposals."
+        "every concept ID in exactly one accepted or rejected list. For batches "
+        "containing only non-retire decisions, a verified verdict requires all "
+        "accepted, none rejected, confidence at least "
+        f"{confidence_policy.threshold_text()}, and no issues. Any batch "
+        "approving a retire decision requires confidence at least "
+        f"{confidence_policy.threshold_text(confidence_policy.ConfidenceGate.DESTRUCTIVE)}, "
+        "all accepted, none rejected, and no issues. Do not rewrite proposals."
     )
     return phase22._openai_multimodal_json(
         system=system,
@@ -686,10 +691,14 @@ def _parse_decisions(
         confidence = float(row.get("confidence") or 0.0)
         segments = row.get("segments")
         reason = str(row.get("reason") or "").strip()
-        if confidence < 0.96:
+        if not confidence_policy.accepts(
+            confidence,
+            confidence_policy.ConfidenceGate.DESTRUCTIVE,
+        ):
             retirement_errors.append(
                 f"{concept_id} retirement confidence {confidence:.3f} "
-                "is below 0.960"
+                "is below "
+                f"{confidence_policy.threshold_text(confidence_policy.ConfidenceGate.DESTRUCTIVE)}"
             )
             continue
         if not isinstance(segments, list) or segments:

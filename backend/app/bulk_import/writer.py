@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import re
+from collections import defaultdict
 from pathlib import Path
 
 import openpyxl
@@ -262,16 +263,273 @@ def _concept_placements(c: models.Concept) -> list[models.Topic]:
     return out
 
 
-def _topic_number(topic: models.Topic) -> int:
+def _source_order_key(value) -> tuple[int, int]:
+    """Canonical position first; creation id only breaks legacy/tied rows."""
+    source_order = int(getattr(value, "source_order", 0) or 0)
+    return (
+        source_order if source_order > 0 else 10**9,
+        int(getattr(value, "id", 0) or 0),
+    )
+
+
+class ConceptExportScope:
+    """The exact topology selected for one concept workbook/export.
+
+    A scoped Build Concepts download must not derive labels, topic numbers, or
+    chapter topic lists from unrelated historical rows still present in the
+    database. The accepted concept ids are the closed-world export topology.
+    """
+
+    def __init__(self, concepts: list[models.Concept]) -> None:
+        by_topic: dict[int, dict[int, models.Concept]] = defaultdict(dict)
+        topics: dict[int, models.Topic] = {}
+        for concept in concepts:
+            for topic in _concept_placements(concept):
+                topics[topic.id] = topic
+                by_topic[topic.id][concept.id] = concept
+
+        self.concepts_by_topic = {
+            topic_id: sorted(values.values(), key=_source_order_key)
+            for topic_id, values in by_topic.items()
+        }
+        grouped_topics: dict[tuple[int, str], list[models.Topic]] = defaultdict(list)
+        for topic in topics.values():
+            grouped_topics[
+                (topic.chapter_id, (topic.pre_post_learning or "").casefold())
+            ].append(topic)
+        self.topics_by_chapter_kind = {
+            key: sorted(values, key=_source_order_key)
+            for key, values in grouped_topics.items()
+        }
+        self.topic_numbers = {
+            topic.id: position
+            for topic_group in self.topics_by_chapter_kind.values()
+            for position, topic in enumerate(topic_group, start=1)
+        }
+
+    def concepts_for(self, topic: models.Topic) -> list[models.Concept]:
+        return list(self.concepts_by_topic.get(topic.id, ()))
+
+    def topics_for(
+        self, chapter: models.Chapter, learning_kind: str,
+    ) -> list[models.Topic]:
+        return list(self.topics_by_chapter_kind.get(
+            (chapter.id, (learning_kind or "").casefold()), ()))
+
+
+class ConceptWorkbookValidationError(ValueError):
+    """Serialized concept workbook disagrees with its accepted DB topology."""
+
+
+_REGULAR_TYPE_NUMBER_RE = re.compile(
+    r"(?<!Miscellaneous )\bType\s+0*(\d+)\s*:",
+    re.IGNORECASE,
+)
+_HUB_PREFIX_RE = re.compile(
+    r"\bActivity\s*[—–-]\s*(?P<marker>[^:\n]{3,100})\s*:\s*"
+    r"(?P<gist>[^.!?\n]{3,})",
+    re.IGNORECASE,
+)
+
+
+def _validate_concepts_workbook_bytes(
+    data: bytes,
+    concepts: list[models.Concept],
+    export_scope: ConceptExportScope,
+    *,
+    exact_rows: bool,
+) -> None:
+    """Read the serialized XLSX back and enforce final delivery invariants."""
+    expected: dict[tuple[str, str, str, str], dict[str, str]] = {}
+    primary_titles_by_topic: dict[
+        tuple[str, str, str], list[str]
+    ] = defaultdict(list)
+    for concept in concepts:
+        primary_key = (
+            normalize_question_text(concept.topic.chapter.chapter_title),
+            normalize_question_text(
+                strip_topic_title(concept.topic.topic_title)
+                or concept.topic.topic_title
+            ),
+            normalize_question_text(concept.topic.pre_post_learning),
+        )
+        primary_titles_by_topic[primary_key].append(concept.concept_title)
+        for topic in _concept_placements(concept):
+            key = (
+                normalize_question_text(topic.chapter.chapter_title),
+                normalize_question_text(concept.concept_title),
+                normalize_question_text(
+                    strip_topic_title(topic.topic_title) or topic.topic_title
+                ),
+                normalize_question_text(topic.pre_post_learning),
+            )
+            front = _front_bands(
+                concept,
+                topic,
+                include_group_columns=False,
+                export_scope=export_scope,
+            )
+            expected[key] = {
+                "topic_title": str(front[_IDX_TOPIC_TITLE] or ""),
+                "concept_labels": str(front[
+                    len(CHAPTER_FIELDS)
+                    + TOPIC_FIELDS.index("topic_concept_labels")
+                ] or ""),
+                "topic_description": str(front[
+                    len(CHAPTER_FIELDS)
+                    + TOPIC_FIELDS.index("topic_description")
+                ] or ""),
+            }
+
+    workbook = openpyxl.load_workbook(
+        io.BytesIO(data), data_only=True, read_only=True)
+    try:
+        ws = workbook[SHEET_BY_KIND["objective"]]
+        header = next(
+            ws.iter_rows(min_row=2, max_row=2, values_only=True), ())
+        concept_fields = _sheet_concept_fields(header)
+        details_index = (
+            _IDX_CONCEPT_TITLE + concept_fields.index("concept_details"))
+        seen: dict[tuple[str, str, str, str], int] = {}
+        type_hosts: dict[tuple[str, str], set[str]] = defaultdict(set)
+        rows_by_topic: dict[
+            tuple[str, str, str], list[tuple[str, str]]
+        ] = defaultdict(list)
+        issues: list[str] = []
+
+        for row in ws.iter_rows(min_row=3, values_only=True):
+            chapter_title = strip_title_tag(
+                _cell_str(row, _IDX_CHAPTER_TITLE))
+            concept_title = strip_title_tag(
+                _cell_str(row, _IDX_CONCEPT_TITLE))
+            topic_title = strip_topic_title(
+                _cell_str(row, _IDX_TOPIC_TITLE))
+            learning_kind = _cell_str(row, _IDX_TOPIC_PRE_POST)
+            key = (
+                normalize_question_text(chapter_title),
+                normalize_question_text(concept_title),
+                normalize_question_text(topic_title),
+                normalize_question_text(learning_kind),
+            )
+            if key not in expected:
+                continue
+            seen[key] = seen.get(key, 0) + 1
+            contract = expected[key]
+            if _cell_str(row, _IDX_TOPIC_TITLE) != contract["topic_title"]:
+                issues.append(
+                    f"{concept_title}: noncanonical topic number/title")
+            labels_index = (
+                len(CHAPTER_FIELDS)
+                + TOPIC_FIELDS.index("topic_concept_labels"))
+            if _cell_str(row, labels_index) != contract["concept_labels"]:
+                issues.append(
+                    f"{topic_title}: topic_concept_labels do not match "
+                    "the selected topology")
+            description_index = (
+                len(CHAPTER_FIELDS)
+                + TOPIC_FIELDS.index("topic_description"))
+            if _cell_str(
+                row, description_index
+            ) != contract["topic_description"]:
+                issues.append(
+                    f"{topic_title}: stale topic_description was serialized")
+
+            details = _cell_str(row, details_index)
+            # A ConceptTag repeats the same concept under another topic but
+            # does not create a second semantic Type host.
+            host = normalize_question_text(concept_title)
+            for number in _REGULAR_TYPE_NUMBER_RE.findall(details):
+                type_hosts[(
+                    normalize_question_text(chapter_title),
+                    str(int(number)),
+                )].add(host)
+            for match in _HUB_PREFIX_RE.finditer(details):
+                marker = normalize_question_text(match.group("marker"))
+                gist = normalize_question_text(match.group("gist"))
+                if marker and gist.startswith(marker):
+                    issues.append(
+                        f"{concept_title}: Activity/Info Hub repeats its "
+                        "visible marker")
+            rows_by_topic[(
+                normalize_question_text(chapter_title),
+                normalize_question_text(topic_title),
+                normalize_question_text(learning_kind),
+            )].append((concept_title, details))
+
+        missing = sorted(set(expected) - set(seen))
+        if missing:
+            issues.append(
+                f"{len(missing)} selected concept placement(s) are missing")
+        if exact_rows and any(count != 1 for count in seen.values()):
+            issues.append(
+                "fresh concept export contains duplicate selected placements")
+        split_types = sorted(
+            f"{chapter}/Type {number}"
+            for (chapter, number), hosts in type_hosts.items()
+            if len(hosts) > 1)
+        if split_types:
+            issues.append(
+                "regular Type number(s) span multiple concept hosts: "
+                + ", ".join(split_types))
+
+        for topic_key, rows in rows_by_topic.items():
+            culminations = [
+                (title, details) for title, details in rows
+                if title.casefold().startswith("culmination")]
+            if not culminations:
+                continue
+            if len(culminations) != 1:
+                issues.append(
+                    f"{topic_key[1]}: expected one culmination row")
+                continue
+            culmination_title, recap = culminations[0]
+            if len(culmination_title) > 120:
+                issues.append(
+                    f"{topic_key[1]}: culmination title exceeds 120 chars")
+            recap_key = normalize_question_text(recap)
+            omitted = [
+                title
+                for title in primary_titles_by_topic.get(topic_key, ())
+                if not title.casefold().startswith("culmination")
+                if normalize_question_text(title) not in recap_key
+            ]
+            if omitted:
+                issues.append(
+                    f"{topic_key[1]}: culmination recap omits "
+                    + ", ".join(omitted))
+
+        if issues:
+            raise ConceptWorkbookValidationError(
+                "concept workbook read-back validation failed: "
+                + "; ".join(dict.fromkeys(issues)))
+    finally:
+        workbook.close()
+
+
+def _topic_number(
+    topic: models.Topic, export_scope: ConceptExportScope | None = None,
+) -> int:
     """1-based position of the topic within its chapter (textbook order)."""
-    siblings = sorted(topic.chapter.topics, key=lambda t: t.id)
+    if export_scope is not None:
+        scoped = export_scope.topic_numbers.get(topic.id)
+        if scoped is not None:
+            return scoped
+    siblings = sorted(
+        (
+            sibling for sibling in topic.chapter.topics
+            if sibling.pre_post_learning == topic.pre_post_learning
+        ),
+        key=_source_order_key,
+    )
     try:
         return siblings.index(topic) + 1
     except ValueError:
         return 1
 
 
-def composed_topic_title(topic: models.Topic) -> str:
+def composed_topic_title(
+    topic: models.Topic, export_scope: ConceptExportScope | None = None,
+) -> str:
     """Tagged topic title cell, e.g. 'Topic 01: <Title> (<tag>)'.
 
     ``strip_topic_title`` normalizes the stored title first so an already-tagged
@@ -281,7 +539,7 @@ def composed_topic_title(topic: models.Topic) -> str:
     clean = strip_topic_title(topic.topic_title) or topic.topic_title
     t_tag = directory.topic_tag(
         chapter.board, chapter.grade, chapter.subject, chapter.chapter_title)
-    return f"Topic {_topic_number(topic):02d}: {clean} ({t_tag})"
+    return f"Topic {_topic_number(topic, export_scope):02d}: {clean} ({t_tag})"
 
 
 def composed_topic_display(topic: models.Topic) -> str:
@@ -358,7 +616,8 @@ def _chapter_book_source(chapter: models.Chapter, concept: models.Concept) -> st
 
 def _front_bands(concept: models.Concept, topic: models.Topic, *,
                  include_group_columns: bool = True,
-                 concept_fields: list[str] | None = None) -> list:
+                 concept_fields: list[str] | None = None,
+                 export_scope: ConceptExportScope | None = None) -> list:
     """Chapter + Topic + Concept bands (22 cells) with tags in the title columns.
 
     The title columns carry a human-readable tag; the display columns stay
@@ -379,16 +638,33 @@ def _front_bands(concept: models.Concept, topic: models.Topic, *,
     cp_tag = directory.concept_tag(
         chapter.board, chapter.grade, chapter.subject,
         chapter.chapter_title, topic.topic_title)
+    label_concepts = (
+        export_scope.concepts_for(topic)
+        if export_scope is not None
+        else sorted(topic.concepts, key=_source_order_key)
+    )
     concept_labels = ", ".join(
         f"{strip_title_tag(c.concept_title) or c.concept_title} ({cp_tag})"
-        for c in sorted(topic.concepts, key=lambda c: c.id))
+        for c in label_concepts)
+    if export_scope is not None:
+        pre_topics = ", ".join(
+            composed_topic_title(t, export_scope)
+            for t in export_scope.topics_for(chapter, "Pre")
+        )
+        post_topics = ", ".join(
+            composed_topic_title(t, export_scope)
+            for t in export_scope.topics_for(chapter, "Post")
+        )
+    else:
+        pre_topics = chapter.pre_topics
+        post_topics = chapter.post_topics
     return [
         # ---- Chapter band (tag in title, clean display) ----
         f"{chapter.chapter_title} ({c_tag})", chapter.chapter_title,
-        chapter.chapter_duration, chapter.pre_topics, chapter.post_topics,
+        chapter.chapter_duration, pre_topics, post_topics,
         chapter.chapter_description,
         # ---- Topic band ("Topic NN: <title> (<tag>)", display "Topic NN: <title>") ----
-        composed_topic_title(topic),
+        composed_topic_title(topic, export_scope),
         composed_topic_display(topic), topic.pre_post_learning, concept_labels,
         topic.related_topics, topic.topic_description,
     ] + [
@@ -492,7 +768,8 @@ def _question_to_row(q: models.Question, kind: str,
 
 def _concept_to_row(concept: models.Concept, kind: str = "objective",
                     topic: "models.Topic | None" = None,
-                    concept_fields: list[str] | None = None) -> list:
+                    concept_fields: list[str] | None = None,
+                    export_scope: ConceptExportScope | None = None) -> list:
     """Build a concept-catalog row (chapter/topic/concept/group filled, no question).
 
     ``topic`` selects the placement: the concept's authoring home
@@ -502,7 +779,12 @@ def _concept_to_row(concept: models.Concept, kind: str = "objective",
     topic = topic or concept.topic
     concept_fields = concept_fields or CONCEPT_FIELDS
     row: list = list(_front_bands(
-        concept, topic, include_group_columns=False, concept_fields=concept_fields))
+        concept,
+        topic,
+        include_group_columns=False,
+        concept_fields=concept_fields,
+        export_scope=export_scope,
+    ))
     expected = len(FIELDS_BY_KIND[kind]) + (len(concept_fields) - len(CONCEPT_FIELDS))
     row += [""] * (expected - len(row))
     return row[:expected]
@@ -524,6 +806,7 @@ def _refresh_concept_rows(
     locations: list[tuple],
     *,
     include_ancestors: bool,
+    export_scope: ConceptExportScope | None = None,
 ) -> int:
     """Refresh selected rows from the DB concept, retaining row identity.
 
@@ -548,6 +831,7 @@ def _refresh_concept_rows(
             topic,
             include_group_columns=include_group_columns,
             concept_fields=concept_fields,
+            export_scope=export_scope,
         )
         start = 0 if include_ancestors else _IDX_CONCEPT_TITLE
         for column_index, value in enumerate(front_values[start:], start=start):
@@ -572,15 +856,21 @@ def _refresh_concept_band(
     index: WorkbookIndex,
     concept: models.Concept,
     topic: models.Topic,
+    export_scope: ConceptExportScope | None = None,
 ) -> int:
-    """Refresh every row at one exact concept placement in place."""
+    """Refresh every row at one exact placement, including scoped metadata."""
     return _refresh_concept_rows(
         wb,
         index,
         concept,
         topic,
         list(index.concept_rows.get(concept_placement_key(concept, topic), [])),
-        include_ancestors=False,
+        # Topic numbering, topic_concept_labels, descriptions, and chapter
+        # pre/post lists belong to the accepted export topology too. Updating
+        # only the Concept band is how stale 113-label metadata survived a
+        # 42-row successful run.
+        include_ancestors=True,
+        export_scope=export_scope,
     )
 
 
@@ -609,6 +899,7 @@ def _reconcile_concept_placements(
     index: WorkbookIndex,
     concept: models.Concept,
     desired_topics: list[models.Topic],
+    export_scope: ConceptExportScope | None = None,
 ) -> int:
     """Move stale same-chapter rows to current DB placements conservatively.
 
@@ -664,6 +955,7 @@ def _reconcile_concept_placements(
                 concept.topic,
                 [location],
                 include_ancestors=True,
+                export_scope=export_scope,
             )
             _move_indexed_concept_row(
                 index, old_key, home_key, location)
@@ -704,6 +996,7 @@ def _reconcile_concept_placements(
             topic,
             [location],
             include_ancestors=True,
+            export_scope=export_scope,
         )
         _move_indexed_concept_row(index, old_key, new_key, location)
 
@@ -727,8 +1020,13 @@ def append_concepts(db: Session, path: Path, concept_ids: list[int]) -> dict[str
     concept_fields = _sheet_concept_fields(header)
     concepts = (
         db.query(models.Concept).filter(models.Concept.id.in_(concept_ids))
-        .order_by(models.Concept.id).all()
+        .all()
     )
+    concepts = sorted(concepts, key=lambda concept: (
+        _source_order_key(concept.topic),
+        _source_order_key(concept),
+    ))
+    export_scope = ConceptExportScope(concepts)
     result = {
         "written": 0,
         "sources_updated": 0,
@@ -738,17 +1036,23 @@ def append_concepts(db: Session, path: Path, concept_ids: list[int]) -> dict[str
     for c in concepts:
         desired_topics = _concept_placements(c)
         result["sources_updated"] += _reconcile_concept_placements(
-            wb, index, c, desired_topics)
+            wb, index, c, desired_topics, export_scope)
         for topic in desired_topics:
             key = concept_placement_key(c, topic)
             if key in index.c_placements:
                 result["sources_updated"] += _refresh_concept_band(
-                    wb, index, c, topic)
+                    wb, index, c, topic, export_scope)
                 continue
             index.c_placements.add(key)
             target = ws.max_row + 1 if ws.max_row >= 2 else 3
             for i, value in enumerate(
-                _concept_to_row(c, "objective", topic, concept_fields=concept_fields),
+                _concept_to_row(
+                    c,
+                    "objective",
+                    topic,
+                    concept_fields=concept_fields,
+                    export_scope=export_scope,
+                ),
                 start=1,
             ):
                 _write_cell(ws, row=target, column=i, value=value)
@@ -756,6 +1060,14 @@ def append_concepts(db: Session, path: Path, concept_ids: list[int]) -> dict[str
                 (SHEET_BY_KIND["objective"], target))
             index.concept_titles.add(key[0])
             result["written"] += 1
+    serialized = io.BytesIO()
+    wb.save(serialized)
+    _validate_concepts_workbook_bytes(
+        serialized.getvalue(),
+        concepts,
+        export_scope,
+        exact_rows=False,
+    )
     workbook_sync.atomic_save_workbook(wb, path)
     return result
 
@@ -863,17 +1175,37 @@ def write_concepts_workbook(db: Session, concept_ids: list[int]) -> bytes:
     ws = wb[SHEET_BY_KIND["objective"]]
     concepts = (
         db.query(models.Concept).filter(models.Concept.id.in_(concept_ids))
-        .order_by(models.Concept.id).all()
+        .all()
     )
+    concepts = sorted(concepts, key=lambda concept: (
+        _source_order_key(concept.topic),
+        _source_order_key(concept),
+    ))
+    export_scope = ConceptExportScope(concepts)
     next_row = 3
     for c in concepts:
-        for topic in _concept_placements(c):
-            for i, value in enumerate(_concept_to_row(c, "objective", topic), start=1):
+        for topic in sorted(_concept_placements(c), key=_source_order_key):
+            for i, value in enumerate(
+                _concept_to_row(
+                    c,
+                    "objective",
+                    topic,
+                    export_scope=export_scope,
+                ),
+                start=1,
+            ):
                 _write_cell(ws, row=next_row, column=i, value=value)
             next_row += 1
     buf = io.BytesIO()
     wb.save(buf)
-    return buf.getvalue()
+    data = buf.getvalue()
+    _validate_concepts_workbook_bytes(
+        data,
+        concepts,
+        export_scope,
+        exact_rows=True,
+    )
+    return data
 
 
 def write_subject_workbook(

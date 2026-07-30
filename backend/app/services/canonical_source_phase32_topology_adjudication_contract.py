@@ -30,6 +30,7 @@ from . import canonical_source_phase3 as phase3
 from . import canonical_source_phase31_grounding_contract as phase31
 from . import concept_refiner as cr
 from . import progress
+from . import semantic_confidence_policy as confidence_policy
 
 _CONTRACT_VERSION = 1
 _TOPOLOGY_VERSION = "phase3.2-source-verified-topology-1"
@@ -424,8 +425,9 @@ def _critic_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         "Achieving Mastery is generated pedagogy, so verify its specificity and "
         "alignment rather than requiring verbatim source wording. Put every "
         "concept ID in exactly one accepted or rejected list. A verified verdict "
-        "requires all accepted, none rejected, confidence at least 0.96, and no "
-        "issues. Do not rewrite the proposals."
+        "requires all accepted, none rejected, confidence at least "
+        f"{confidence_policy.threshold_text()}, and no issues. Do not rewrite "
+        "the proposals."
     )
     return phase3.phase22._openai_multimodal_json(
         system=system,
@@ -466,9 +468,10 @@ def _parse_decisions(
         if decision not in _ALLOWED_DECISIONS:
             errors.append(f"{concept_id} returned invalid decision {decision or '<empty>'}")
             continue
-        if confidence < 0.96:
+        if not confidence_policy.accepts(confidence):
             errors.append(
-                f"{concept_id} topology confidence {confidence:.3f} is below 0.960"
+                f"{concept_id} topology confidence {confidence:.3f} is below "
+                f"{confidence_policy.threshold_text()}"
             )
             continue
         if decision == "review_required":
@@ -521,10 +524,11 @@ def _parse_decisions(
                 )
                 invalid_segment = True
                 break
-            if segment_confidence < 0.96:
+            if not confidence_policy.accepts(segment_confidence):
                 errors.append(
                     f"{concept_id} segment {position} confidence "
-                    f"{segment_confidence:.3f} is below 0.960"
+                    f"{segment_confidence:.3f} is below "
+                    f"{confidence_policy.threshold_text()}"
                 )
                 invalid_segment = True
                 break
@@ -790,6 +794,7 @@ def _cache_key(
         {
             "version": _TOPOLOGY_VERSION,
             "model": str(config.OPENAI_MODEL),
+            "semantic_confidence_policy": confidence_policy.cache_identity(),
             "source_contract_hash": str(graph.get("source_contract_hash") or ""),
             "records": phase31._json_safe(records),
             "concepts": concepts,
@@ -990,9 +995,18 @@ def adjudicate_topology(
                 ],
             }
             review = critic(copy.deepcopy(review_payload))
+            review_gate = (
+                confidence_policy.ConfidenceGate.DESTRUCTIVE
+                if any(
+                    decision.get("decision") == "retire"
+                    for decision in accepted.values()
+                )
+                else confidence_policy.ConfidenceGate.SEMANTIC
+            )
             state = phase31._review_state(
                 review,
                 concept_ids=batch_ids,
+                confidence_gate=review_gate,
             )
             last_confidence = float(state["confidence"])
             if state["verified"]:

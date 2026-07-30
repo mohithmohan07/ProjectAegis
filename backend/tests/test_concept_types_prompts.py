@@ -2000,7 +2000,7 @@ def test_post_type_checkpoint_reallocates_on_final_topology(
     )
 
     assert records
-    assert allocations == [["C", "Culmination - C"]]
+    assert allocations == [["C", "Culmination - T"]]
     assert [item["stage"] for item in callbacks] == [
         "final_content_ready",
     ]

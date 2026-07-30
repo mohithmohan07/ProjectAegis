@@ -28,6 +28,7 @@ from .. import config
 from . import canonical_source_phase3 as phase3
 from . import concept_refiner as cr
 from . import progress
+from . import semantic_confidence_policy as confidence_policy
 
 _CONTRACT_VERSION = 1
 _GROUNDING_VERSION = "phase3.1-source-claim-grounding-1"
@@ -338,7 +339,8 @@ def _critic_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         "labels, or other generated pedagogy. Put every concept ID in exactly "
         "one of accepted_concept_ids or rejected_concept_ids. A verified verdict "
         "requires all concepts accepted, none rejected, confidence at least "
-        "0.96, and no issues. Do not rewrite proposals."
+        f"{confidence_policy.threshold_text()}, and no issues. Do not rewrite "
+        "proposals."
     )
     return phase3.phase22._openai_multimodal_json(
         system=system,
@@ -388,9 +390,10 @@ def _parse_proposals(
                 + ", ".join(invalid[:4])
             )
             continue
-        if confidence < 0.96:
+        if not confidence_policy.accepts(confidence):
             errors.append(
-                f"{concept_id} confidence {confidence:.3f} is below 0.960"
+                f"{concept_id} confidence {confidence:.3f} is below "
+                f"{confidence_policy.threshold_text()}"
             )
             continue
         proposals[concept_id] = {
@@ -409,6 +412,9 @@ def _review_state(
     review: dict[str, Any],
     *,
     concept_ids: set[str],
+    confidence_gate: confidence_policy.ConfidenceGate = (
+        confidence_policy.ConfidenceGate.SEMANTIC
+    ),
 ) -> dict[str, Any]:
     if not isinstance(review, dict):
         return {
@@ -420,6 +426,10 @@ def _review_state(
         }
     verdict = str(review.get("verdict") or "")
     confidence = float(review.get("confidence") or 0.0)
+    accepted_confidence = confidence_policy.accepts(
+        confidence,
+        confidence_gate,
+    )
     issues = [
         str(value).strip()
         for value in review.get("issues") or []
@@ -471,7 +481,7 @@ def _review_state(
             rejected |= omitted
     elif (
         verdict == "verified"
-        and confidence >= 0.96
+        and accepted_confidence
         and not issues
     ):
         # Backward-compatible injected critics used by existing tests.
@@ -483,7 +493,7 @@ def _review_state(
 
     verified = bool(
         verdict == "verified"
-        and confidence >= 0.96
+        and accepted_confidence
         and not issues
         and accepted == concept_ids
         and not rejected
@@ -511,6 +521,7 @@ def _grounding_cache_key(
         {
             "version": _GROUNDING_VERSION,
             "model": str(config.OPENAI_MODEL),
+            "semantic_confidence_policy": confidence_policy.cache_identity(),
             "source_contract_hash": str(
                 graph.get("source_contract_hash") or ""
             ),
@@ -1013,6 +1024,7 @@ def _topology_cache_key(
         {
             "version": _GROUNDING_VERSION,
             "model": str(config.OPENAI_MODEL),
+            "semantic_confidence_policy": confidence_policy.cache_identity(),
             "source_contract_hash": str(
                 graph.get("source_contract_hash") or ""
             ),

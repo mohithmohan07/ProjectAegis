@@ -299,8 +299,7 @@ def test_culmination_pass_cannot_drop_normal_rows(monkeypatch):
     }  # the rewritten fragment was ignored
     assert len(culms) == 2  # authored one for A, deterministic fallback for B
     assert culms[0]["topic"] == "Topic A"
-    assert culms[0]["concept_title"] == (
-        "Culmination - Concept 01, Concept 02 and Concept 03")
+    assert culms[0]["concept_title"] == "Culmination - Topic A"
     assert culms[1]["topic"] == "Topic B"
 
 
