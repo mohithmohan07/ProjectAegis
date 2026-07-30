@@ -62,7 +62,7 @@ def install() -> None:
             for row in rows
             if str(row.get("concept_id") or "")
         }
-        for concept_id, decision in parsed.items():
+        for concept_id, decision in list(parsed.items()):
             if decision.get("decision") != "retire":
                 continue
             target = str(decision.get("retire_into_concept_id") or "NONE")
