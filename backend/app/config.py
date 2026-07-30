@@ -1,7 +1,13 @@
 import os
 from pathlib import Path
 
-from aegis_pipeline.openai_policy import configured_openai_model
+from aegis_pipeline.openai_policy import (
+    configured_context_window_tokens,
+    configured_max_input_tokens,
+    configured_max_output_tokens,
+    configured_openai_model,
+    provider_max_tokens_enabled,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.environ.get("AEGIS_DATA_DIR", ROOT / "data"))
@@ -161,14 +167,22 @@ def require_workbooks_live() -> None:
     raise LiveRequiredError(MSG_WORKBOOKS)
 
 
-# OpenAI model for concept extraction / pre-learning derivation. The same
-# model family the Create Workbooks pipeline is validated with.
+# OpenAI model for concept extraction / pre-learning derivation. The same model
+# family the Create Workbooks pipeline is validated with. Provider-max mode is
+# enabled by default: every live call receives the model's full completion
+# allowance, and source input is preserved up to the remaining context capacity.
 OPENAI_MODEL = configured_openai_model()
-# Large concept-map passes prefer complete JSON over speed or token economy;
-# keep the default within current model completion limits and allow env override.
-OPENAI_MAX_OUTPUT_TOKENS = int(
-    os.environ.get("AEGIS_OPENAI_MAX_OUTPUT_TOKENS", "128000")
+OPENAI_PROVIDER_MAX_TOKENS = provider_max_tokens_enabled()
+OPENAI_CONTEXT_WINDOW_TOKENS = configured_context_window_tokens(OPENAI_MODEL)
+OPENAI_MAX_OUTPUT_TOKENS = configured_max_output_tokens(OPENAI_MODEL)
+OPENAI_MAX_INPUT_TOKENS = configured_max_input_tokens(
+    OPENAI_MODEL,
+    output_tokens=OPENAI_MAX_OUTPUT_TOKENS,
 )
+# Character-based legacy splitters use this only as a coarse lossless batching
+# threshold. One character per token is deliberately conservative for textbook
+# MMD; any larger input is split and merged rather than truncated.
+OPENAI_MAX_INPUT_CHARS = OPENAI_MAX_INPUT_TOKENS
 
 # ---- Multi-user safety ------------------------------------------------------
 # All users share one OPENAI_API_KEY, so concurrent generation runs compete for
@@ -182,14 +196,14 @@ OPENAI_MAX_OUTPUT_TOKENS = int(
 #     A job only fails after the API has been unavailable for several minutes.
 OPENAI_MAX_CONCURRENCY = max(
     1, int(os.environ.get("AEGIS_OPENAI_MAX_CONCURRENCY", "3")))
-# Keep each provider request finite.  The generation layer owns retries so it
+# Keep each provider request finite. The generation layer owns retries so it
 # can report them to the live console and retain a resumable checkpoint.
 OPENAI_REQUEST_TIMEOUT_SECONDS = max(
     1.0,
     float(os.environ.get("AEGIS_OPENAI_REQUEST_TIMEOUT_SECONDS", "600")),
 )
 # A queued request used to wait forever if an in-flight provider call never
-# released its shared slot.  A timeout turns that state into a clear,
+# released its shared slot. A timeout turns that state into a clear,
 # resumable failure instead of a permanently running job.
 OPENAI_SLOT_WAIT_TIMEOUT_SECONDS = max(
     0.0,
