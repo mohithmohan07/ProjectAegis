@@ -86,18 +86,25 @@ def test_unresolved_multi_page_batch_isolated_instead_of_stopping(monkeypatch):
     ]
     extraction_batch_sizes: list[int] = []
 
-    def page_ids_from_schema(schema: dict) -> list[str]:
+    def extraction_page_ids(schema: dict) -> list[str]:
         return list(
             schema["schema"]["properties"]["pages"]["items"][
                 "properties"
             ]["page_id"]["enum"]
         )
 
+    def verification_page_ids(schema: dict) -> list[str]:
+        return list(
+            schema["schema"]["properties"]["approved_page_ids"][
+                "items"
+            ]["enum"]
+        )
+
     def fake_call(**kwargs):
         schema = kwargs["response_schema"]
         name = schema["name"]
-        ids = page_ids_from_schema(schema)
         if "verify" in name:
+            ids = verification_page_ids(schema)
             return {
                 "verdict": "verified",
                 "approved_page_ids": ids,
@@ -105,6 +112,7 @@ def test_unresolved_multi_page_batch_isolated_instead_of_stopping(monkeypatch):
                 "confidence": 0.999,
                 "issues": [],
             }
+        ids = extraction_page_ids(schema)
         extraction_batch_sizes.append(len(ids))
         if len(ids) > 1:
             # Keep the page identities exact but force deterministic rejection.
