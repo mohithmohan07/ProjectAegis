@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import { useOptionalAuth } from "../Auth";
 import { useAsync } from "../hooks";
@@ -9,7 +9,12 @@ import SyllabusUploader from "../components/SyllabusUploader";
 import ApiUsageSummary from "../components/ApiUsageSummary";
 import type {
   OpenAIUsage,
+  PendingSemanticDecision,
   ResumableCheckpoint,
+  SemanticDecisionCandidate,
+  SemanticDecisionEvidence,
+  SemanticDecisionSubmission,
+  SemanticDecisionSubmissionResult,
   Scope,
   UploadJob,
 } from "../types";
@@ -248,10 +253,24 @@ function PostLearningFlow({
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
   const [resultResumed, setResultResumed] = useState(false);
   const [treeReload, setTreeReload] = useState(0);
+  const [pendingDecision, setPendingDecision] =
+    useState<PendingSemanticDecision | null>(
+      initialJob?.pending_decision ?? null,
+    );
 
   useEffect(() => {
-    if (initialJob) setJob(initialJob);
+    if (initialJob) {
+      setJob(initialJob);
+      setPendingDecision(initialJob.pending_decision ?? null);
+    }
   }, [initialJob]);
+
+  const handleJob = useCallback((nextJob: UploadJob | null) => {
+    setJob(nextJob);
+    setPendingDecision(nextJob?.pending_decision ?? null);
+    setError(null);
+    setResult(null);
+  }, []);
 
   async function generate() {
     if (!job || !scope) return;
@@ -259,6 +278,7 @@ function PostLearningFlow({
     setBusy(true);
     setError(null);
     setResult(null);
+    setPendingDecision(null);
     setResultResumed(resumedFromCheckpoint);
     try {
       const data = await run<Record<string, unknown>>(
@@ -273,22 +293,48 @@ function PostLearningFlow({
           initialUsage: job.openai_usage,
         },
       );
-      setResult(data);
+      let refreshedJob: UploadJob | null = null;
       try {
-        setJob(await api.getUploadJob("concepts", job.id));
+        refreshedJob = await api.getUploadJob("concepts", job.id);
+        setJob(refreshedJob);
       } catch {
         // The result remains usable even if refreshing the completed job fails.
       }
+      const decision = pendingDecisionFrom(data)
+        ?? refreshedJob?.pending_decision
+        ?? null;
+      if (decision) {
+        setPendingDecision(decision);
+      } else {
+        setResult(data);
+      }
     } catch (e) {
-      setError(formatGenerationError(e));
+      let refreshedJob: UploadJob | null = null;
       try {
-        setJob(await api.getUploadJob("concepts", job.id));
+        refreshedJob = await api.getUploadJob("concepts", job.id);
+        setJob(refreshedJob);
       } catch {
         // Keep the generation error visible if refreshing job state also fails.
+      }
+      if (refreshedJob?.pending_decision) {
+        setPendingDecision(refreshedJob.pending_decision);
+        setError(null);
+      } else {
+        setError(formatGenerationError(e));
       }
     } finally {
       setBusy(false);
     }
+  }
+
+  function submitDecision(
+    decisionId: string,
+    submission: SemanticDecisionSubmission,
+  ): Promise<SemanticDecisionSubmissionResult> {
+    if (!job) {
+      return Promise.reject(new Error("The saved generation job is unavailable."));
+    }
+    return api.submitConceptDecision(job.id, decisionId, submission);
   }
 
   return (
@@ -300,7 +346,7 @@ function PostLearningFlow({
         bookSources={bookSources}
         externalJob={job}
         disabled={busy}
-        onJob={setJob}
+        onJob={handleJob}
       />
       {!result && (
         <ApiUsageSummary
@@ -312,7 +358,7 @@ function PostLearningFlow({
         />
       )}
 
-      {job?.status === "converted" && (
+      {job && (job.status === "converted" || pendingDecision) && (
         <>
           <div className="section-title">2 · Deposit concepts under a chapter</div>
           <div className="card">
@@ -326,19 +372,33 @@ function PostLearningFlow({
             <div className="row" style={{ marginTop: 12 }}>
               <span className="muted">{scope ? `Chapter: ${scope.label}` : "Pick a chapter"}</span>
               <div className="spacer" />
-              <button disabled={!scope || busy} onClick={generate}>
-                {job.checkpoint_available
-                  ? `Resume from ${Math.round(
-                    (job.checkpoint_progress ?? 0) * 100,
-                  )}% checkpoint`
-                  : "Parse & generate concepts"}
-              </button>
+              {!pendingDecision && (
+                <button disabled={!scope || busy} onClick={generate}>
+                  {job.checkpoint_available
+                    ? `Resume from ${Math.round(
+                      (job.checkpoint_progress ?? 0) * 100,
+                    )}% checkpoint`
+                    : "Parse & generate concepts"}
+                </button>
+              )}
             </div>
           </div>
         </>
       )}
 
-      {error && <div className="error-box" style={{ marginTop: 16 }}>{error}</div>}
+      {pendingDecision && (
+        <SemanticDecisionPanel
+          key={pendingDecision.decision_id}
+          decision={pendingDecision}
+          busy={busy}
+          canResume={Boolean(scope)}
+          onSubmit={submitDecision}
+          onResume={generate}
+        />
+      )}
+      {error && !pendingDecision && (
+        <div className="error-box" style={{ marginTop: 16 }}>{error}</div>
+      )}
       {result && (
         <ConceptResult
           result={result}
@@ -401,10 +461,24 @@ function PreLearningUpload({
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
   const [resultResumed, setResultResumed] = useState(false);
   const [treeReload, setTreeReload] = useState(0);
+  const [pendingDecision, setPendingDecision] =
+    useState<PendingSemanticDecision | null>(
+      initialJob?.pending_decision ?? null,
+    );
 
   useEffect(() => {
-    if (initialJob) setJob(initialJob);
+    if (initialJob) {
+      setJob(initialJob);
+      setPendingDecision(initialJob.pending_decision ?? null);
+    }
   }, [initialJob]);
+
+  const handleJob = useCallback((nextJob: UploadJob | null) => {
+    setJob(nextJob);
+    setPendingDecision(nextJob?.pending_decision ?? null);
+    setError(null);
+    setResult(null);
+  }, []);
 
   async function generate() {
     if (!job || !scope) return;
@@ -412,6 +486,7 @@ function PreLearningUpload({
     setBusy(true);
     setError(null);
     setResult(null);
+    setPendingDecision(null);
     setResultResumed(resumedFromCheckpoint);
     try {
       const data = await run<Record<string, unknown>>(
@@ -426,22 +501,48 @@ function PreLearningUpload({
           initialUsage: job.openai_usage,
         },
       );
-      setResult(data);
+      let refreshedJob: UploadJob | null = null;
       try {
-        setJob(await api.getUploadJob("concepts", job.id));
+        refreshedJob = await api.getUploadJob("concepts", job.id);
+        setJob(refreshedJob);
       } catch {
         // The result remains usable even if refreshing the completed job fails.
       }
+      const decision = pendingDecisionFrom(data)
+        ?? refreshedJob?.pending_decision
+        ?? null;
+      if (decision) {
+        setPendingDecision(decision);
+      } else {
+        setResult(data);
+      }
     } catch (e) {
-      setError(formatGenerationError(e));
+      let refreshedJob: UploadJob | null = null;
       try {
-        setJob(await api.getUploadJob("concepts", job.id));
+        refreshedJob = await api.getUploadJob("concepts", job.id);
+        setJob(refreshedJob);
       } catch {
         // Keep the generation error visible if refreshing job state also fails.
+      }
+      if (refreshedJob?.pending_decision) {
+        setPendingDecision(refreshedJob.pending_decision);
+        setError(null);
+      } else {
+        setError(formatGenerationError(e));
       }
     } finally {
       setBusy(false);
     }
+  }
+
+  function submitDecision(
+    decisionId: string,
+    submission: SemanticDecisionSubmission,
+  ): Promise<SemanticDecisionSubmissionResult> {
+    if (!job) {
+      return Promise.reject(new Error("The saved generation job is unavailable."));
+    }
+    return api.submitConceptDecision(job.id, decisionId, submission);
   }
 
   return (
@@ -453,7 +554,7 @@ function PreLearningUpload({
         bookSources={bookSources}
         externalJob={job}
         disabled={busy}
-        onJob={setJob}
+        onJob={handleJob}
       />
       {!result && (
         <ApiUsageSummary
@@ -464,7 +565,7 @@ function PreLearningUpload({
           resumed={Boolean(job?.checkpoint_available)}
         />
       )}
-      {job?.status === "converted" && (
+      {job && (job.status === "converted" || pendingDecision) && (
         <>
           <div className="section-title">2 · Deposit pre-learning concepts under a chapter</div>
           <div className="card">
@@ -478,18 +579,32 @@ function PreLearningUpload({
             <div className="row" style={{ marginTop: 12 }}>
               <span className="muted">{scope ? `Chapter: ${scope.label}` : "Pick a chapter"}</span>
               <div className="spacer" />
-              <button disabled={!scope || busy} onClick={generate}>
-                {job.checkpoint_available
-                  ? `Resume from ${Math.round(
-                    (job.checkpoint_progress ?? 0) * 100,
-                  )}% checkpoint`
-                  : "Generate pre-learning concepts"}
-              </button>
+              {!pendingDecision && (
+                <button disabled={!scope || busy} onClick={generate}>
+                  {job.checkpoint_available
+                    ? `Resume from ${Math.round(
+                      (job.checkpoint_progress ?? 0) * 100,
+                    )}% checkpoint`
+                    : "Generate pre-learning concepts"}
+                </button>
+              )}
             </div>
           </div>
         </>
       )}
-      {error && <div className="error-box" style={{ marginTop: 16 }}>{error}</div>}
+      {pendingDecision && (
+        <SemanticDecisionPanel
+          key={pendingDecision.decision_id}
+          decision={pendingDecision}
+          busy={busy}
+          canResume={Boolean(scope)}
+          onSubmit={submitDecision}
+          onResume={generate}
+        />
+      )}
+      {error && !pendingDecision && (
+        <div className="error-box" style={{ marginTop: 16 }}>{error}</div>
+      )}
       {result && (
         <ConceptResult
           result={result}
@@ -560,6 +675,571 @@ function PreLearningExisting({ bookSources }: { bookSources: string[] }) {
       {result && <ConceptResult result={result} />}
     </>
   );
+}
+
+type SemanticDecisionUiChoice =
+  | "expand_existing"
+  | "create_new"
+  | "select_existing"
+  | "custom_instruction";
+
+function SemanticDecisionPanel({
+  decision,
+  busy,
+  canResume,
+  onSubmit,
+  onResume,
+}: {
+  decision: PendingSemanticDecision;
+  busy: boolean;
+  canResume: boolean;
+  onSubmit: (
+    decisionId: string,
+    submission: SemanticDecisionSubmission,
+  ) => Promise<SemanticDecisionSubmissionResult>;
+  onResume: () => void;
+}) {
+  const item = semanticDecisionItem(decision);
+  const candidates = decision.candidates ?? [];
+  const expandOption = decision.options?.find((option) =>
+    option.choice === "expand_existing");
+  const recommendedId = expandOption?.target_concept_id ?? "";
+  const recommendedCandidate = candidates.find((candidate) =>
+    candidateIdentifier(candidate) === recommendedId);
+  const selectableCandidates = candidates.filter((candidate) =>
+    Boolean(candidateIdentifier(candidate)));
+  const availableChoices = decision.options?.length
+    ? decision.options.map((option) => option.choice)
+    : [
+      "expand_existing",
+      "create_new",
+      "select_existing",
+      "custom_instruction",
+    ] satisfies SemanticDecisionUiChoice[];
+  const defaultChoice = (
+    decision.options?.find((option) => option.recommended)?.choice
+    ?? availableChoices[0]
+    ?? "custom_instruction"
+  ) as SemanticDecisionUiChoice;
+  const [choice, setChoice] =
+    useState<SemanticDecisionUiChoice>(defaultChoice);
+  const [targetConceptId, setTargetConceptId] = useState(recommendedId);
+  const [instruction, setInstruction] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [recorded, setRecorded] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const titleId = `semantic-decision-${decision.decision_id}`;
+  const questions = item.questions.length
+    ? item.questions
+    : decision.questions?.length
+      ? decision.questions
+    : decision.question
+      ? [decision.question]
+      : [];
+  const mismatch = firstNonEmptyString(
+    decision.conflict,
+    decision.reason,
+    decision.mismatch,
+  ) || "Aegis found more than one defensible concept placement.";
+
+  function choose(nextChoice: SemanticDecisionUiChoice) {
+    setChoice(nextChoice);
+    setSubmitError(null);
+    if (nextChoice === "expand_existing") {
+      setTargetConceptId(recommendedId);
+    } else if (nextChoice === "select_existing") {
+      setTargetConceptId("");
+    }
+  }
+
+  async function saveDecision() {
+    const trimmedInstruction = instruction.trim();
+    if (choice === "custom_instruction" && !trimmedInstruction) {
+      setSubmitError("Write the instruction Aegis should follow.");
+      return;
+    }
+    if (choice === "select_existing" && !targetConceptId) {
+      setSubmitError("Select the existing concept Aegis should use.");
+      return;
+    }
+    if (choice === "expand_existing" && !targetConceptId) {
+      setSubmitError("Select the existing concept Aegis should expand.");
+      return;
+    }
+
+    const submission: SemanticDecisionSubmission = choice === "custom_instruction"
+      ? {
+        choice: "custom_instruction",
+        instruction: trimmedInstruction,
+      }
+      : choice === "create_new"
+        ? { choice: "create_new" }
+        : choice === "select_existing"
+          ? {
+            choice: "select_existing",
+            target_concept_id: targetConceptId,
+          }
+          : {
+            choice: "expand_existing",
+            target_concept_id: targetConceptId,
+          };
+
+    setSaving(true);
+    setSubmitError(null);
+    try {
+      const response = await onSubmit(decision.decision_id, submission);
+      if (response.status !== "decision_recorded") {
+        throw new Error(`Unexpected decision status: ${response.status}`);
+      }
+      setRecorded(true);
+    } catch (error) {
+      setSubmitError(`Could not save this decision: ${String(error)}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section
+      className="card semantic-decision-card"
+      role="region"
+      aria-labelledby={titleId}
+    >
+      <div className="semantic-decision-head">
+        <div>
+          <span className="badge yellow">Human decision required</span>
+          <h2 id={titleId}>Paused for your decision</h2>
+          <p className="semantic-pause-assurance" role="status">
+            No API request is running while paused.
+          </p>
+        </div>
+        {typeof decision.checkpoint_progress === "number" && (
+          <span className="badge accent">
+            {Math.round(decision.checkpoint_progress * 100)}% checkpoint
+          </span>
+        )}
+      </div>
+
+      <p className="muted semantic-decision-intro">
+        Generation reached a semantic choice that cannot be resolved safely
+        from the source alone. Review the exact mismatch, save your decision,
+        and then resume explicitly.
+      </p>
+
+      <dl className="semantic-decision-details">
+        {(item.unit_id || decision.item_id) && (
+          <div>
+            <dt>Item / TYPE</dt>
+            <dd className="mono">
+              {[item.unit_id || decision.item_id, item.type_id]
+                .filter(Boolean).join(" · ")}
+            </dd>
+          </div>
+        )}
+        {(item.qids.length > 0 || (decision.qids?.length ?? 0) > 0) && (
+          <div>
+            <dt>Question IDs</dt>
+            <dd className="mono">
+              {(item.qids.length ? item.qids : decision.qids ?? []).join(", ")}
+            </dd>
+          </div>
+        )}
+        {(item.type_title || decision.type) && (
+          <div>
+            <dt>Type</dt>
+            <dd>
+              {item.type_title
+                ? item.type_title
+                : formatSemanticValue(decision.type!)}
+            </dd>
+          </div>
+        )}
+        {(item.topic || decision.topic) && (
+          <div>
+            <dt>Topic</dt>
+            <dd>
+              {item.topic
+                ? item.topic
+                : formatSemanticValue(decision.topic!)}
+            </dd>
+          </div>
+        )}
+      </dl>
+
+      {questions.length > 0 && (
+        <div className="semantic-decision-section">
+          <h3>{questions.length === 1 ? "Question" : "Questions"}</h3>
+          <ul>
+            {questions.map((question, index) => (
+              <li key={`${index}-${question}`}>{question}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <div className="semantic-mismatch">
+        <strong>What could not be matched</strong>
+        <p>{mismatch}</p>
+      </div>
+
+      {candidates.length > 0 && (
+        <div className="semantic-decision-section">
+          <h3>Candidate concepts</h3>
+          <div className="semantic-candidate-list">
+            {candidates.map((candidate, index) => (
+              <div
+                className="semantic-candidate"
+                key={candidateIdentifier(candidate) || index}
+              >
+                <div className="row">
+                  <strong>{candidateTitle(candidate)}</strong>
+                  {candidateIdentifier(candidate) === recommendedId && (
+                    <span className="badge green">Recommended</span>
+                  )}
+                  {candidateIdentifier(candidate) && (
+                    <span className="badge mono">
+                      {candidateIdentifier(candidate)}
+                    </span>
+                  )}
+                </div>
+                {candidateSummary(candidate) && (
+                  <p className="muted">{candidateSummary(candidate)}</p>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {decision.evidence && decision.evidence.length > 0 && (
+        <details className="semantic-evidence">
+          <summary>Source evidence ({decision.evidence.length})</summary>
+          <div className="semantic-evidence-list">
+            {decision.evidence.map((evidence, index) => (
+              <blockquote key={index}>
+                {formatEvidence(evidence)}
+              </blockquote>
+            ))}
+          </div>
+        </details>
+      )}
+
+      <ApiUsageSummary
+        usage={decision.cumulative_usage}
+        cumulative
+      />
+
+      {!recorded ? (
+        <>
+          <fieldset className="semantic-choice-list" disabled={saving || busy}>
+            <legend>What should Aegis do?</legend>
+            {availableChoices.includes("expand_existing") && (
+              <label className="semantic-choice">
+                <input
+                  type="radio"
+                  name={`semantic-choice-${decision.decision_id}`}
+                  checked={choice === "expand_existing"}
+                  onChange={() => choose("expand_existing")}
+                />
+                <span>
+                  <strong>
+                    {decisionOptionLabel(
+                      decision,
+                      "expand_existing",
+                      "Expand existing concept",
+                    )}
+                    {expandOption?.recommended ? " (recommended)" : ""}
+                  </strong>
+                  <small>
+                    {recommendedCandidate
+                      ? `Extend ${candidateTitle(recommendedCandidate)} so it covers the missing requirement.`
+                      : "Choose which existing concept should be extended to cover the missing requirement."}
+                  </small>
+                  {choice === "expand_existing" && !recommendedId && (
+                    selectableCandidates.length > 0
+                      ? (
+                        <select
+                          aria-label="Concept to expand"
+                          value={targetConceptId}
+                          onChange={(event) =>
+                            setTargetConceptId(event.target.value)}
+                        >
+                          <option value="">Choose a concept…</option>
+                          {selectableCandidates.map((candidate) => (
+                            <option
+                              key={candidateIdentifier(candidate)}
+                              value={candidateIdentifier(candidate)}
+                            >
+                              {candidateTitle(candidate)}
+                            </option>
+                          ))}
+                        </select>
+                      )
+                      : (
+                        <small>
+                          No eligible existing concept was supplied. Choose a
+                          different action or give a custom instruction.
+                        </small>
+                      )
+                  )}
+                </span>
+              </label>
+            )}
+            {availableChoices.includes("create_new") && (
+              <label className="semantic-choice">
+                <input
+                  type="radio"
+                  name={`semantic-choice-${decision.decision_id}`}
+                  checked={choice === "create_new"}
+                  onChange={() => choose("create_new")}
+                />
+                <span>
+                  <strong>
+                    {decisionOptionLabel(
+                      decision,
+                      "create_new",
+                      "Create separate concept",
+                    )}
+                  </strong>
+                  <small>
+                    Keep the unmatched requirement as a distinct,
+                    source-grounded concept.
+                  </small>
+                </span>
+              </label>
+            )}
+            {availableChoices.includes("select_existing")
+              && selectableCandidates.length > 0 && (
+              <label className="semantic-choice">
+                <input
+                  type="radio"
+                  name={`semantic-choice-${decision.decision_id}`}
+                  checked={choice === "select_existing"}
+                  onChange={() => choose("select_existing")}
+                />
+                <span>
+                  <strong>
+                    {decisionOptionLabel(
+                      decision,
+                      "select_existing",
+                      "Select another existing concept",
+                    )}
+                  </strong>
+                  <small>Choose a different verified host from the candidates.</small>
+                  {choice === "select_existing" && (
+                    <select
+                      aria-label="Existing concept"
+                      value={targetConceptId}
+                      onChange={(event) =>
+                        setTargetConceptId(event.target.value)}
+                    >
+                      <option value="">Choose a concept…</option>
+                      {selectableCandidates.map((candidate) => (
+                        <option
+                          key={candidateIdentifier(candidate)}
+                          value={candidateIdentifier(candidate)}
+                        >
+                          {candidateTitle(candidate)}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </span>
+              </label>
+            )}
+            {availableChoices.includes("custom_instruction") && (
+              <label className="semantic-choice">
+                <input
+                  type="radio"
+                  name={`semantic-choice-${decision.decision_id}`}
+                  checked={choice === "custom_instruction"}
+                  onChange={() => choose("custom_instruction")}
+                />
+                <span>
+                  <strong>
+                    {decisionOptionLabel(
+                      decision,
+                      "custom_instruction",
+                      "Give custom instruction",
+                    )}
+                  </strong>
+                  <small>Tell Aegis exactly how this item should be handled.</small>
+                  {choice === "custom_instruction" && (
+                    <textarea
+                      aria-label="Custom instruction"
+                      rows={4}
+                      value={instruction}
+                      onChange={(event) => setInstruction(event.target.value)}
+                      placeholder="For example: expand the Renan concept to cover both attributes and the importance of nations."
+                    />
+                  )}
+                </span>
+              </label>
+            )}
+          </fieldset>
+
+          {submitError && <div className="error-box">{submitError}</div>}
+          <div className="row semantic-decision-actions">
+            <span className="muted">
+              Saving this choice does not call GPT or resume generation.
+            </span>
+            <div className="spacer" />
+            <button
+              type="button"
+              disabled={saving || busy}
+              onClick={() => void saveDecision()}
+            >
+              {saving ? "Saving decision…" : "Save decision"}
+            </button>
+          </div>
+        </>
+      ) : (
+        <div className="semantic-decision-recorded" role="status">
+          <div>
+            <strong>Decision saved.</strong>
+            <p>
+              It is recorded at this checkpoint. No generation request has
+              started yet.
+            </p>
+            {!canResume && (
+              <p className="muted">
+                Select or restore the destination chapter above before resuming.
+              </p>
+            )}
+          </div>
+          <button
+            type="button"
+            disabled={busy || !canResume}
+            onClick={onResume}
+          >
+            {busy ? "Resuming…" : "Resume generation"}
+          </button>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function decisionOptionLabel(
+  decision: PendingSemanticDecision,
+  choice: SemanticDecisionUiChoice,
+  fallback: string,
+): string {
+  return decision.options?.find((option) => option.choice === choice)?.label
+    || fallback;
+}
+
+function semanticDecisionItem(
+  decision: PendingSemanticDecision,
+): PendingSemanticDecision["item"] {
+  return decision.item ?? {
+    unit_id: decision.item_id ?? "",
+    type_id: "",
+    type_title: typeof decision.type === "string" ? decision.type : "",
+    qids: decision.qids ?? [],
+    questions: decision.questions
+      ?? (decision.question ? [decision.question] : []),
+    topic: typeof decision.topic === "string" ? decision.topic : "",
+  };
+}
+
+function pendingDecisionFrom(
+  result: Record<string, unknown>,
+): PendingSemanticDecision | null {
+  const candidate = result.pending_decision;
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+    return null;
+  }
+  const decisionId = (candidate as Record<string, unknown>).decision_id;
+  if (typeof decisionId !== "string" || !decisionId.trim()) return null;
+  return candidate as PendingSemanticDecision;
+}
+
+function firstNonEmptyString(...values: unknown[]): string {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
+}
+
+function candidateIdentifier(
+  candidate?: SemanticDecisionCandidate,
+): string {
+  if (!candidate) return "";
+  return firstNonEmptyString(
+    candidate.concept_id,
+    candidate.id,
+    candidate.candidate_id,
+  );
+}
+
+function candidateTitle(candidate: SemanticDecisionCandidate): string {
+  return firstNonEmptyString(
+    candidate.title,
+    candidate.concept_title,
+    candidate.name,
+    candidateIdentifier(candidate),
+  ) || "Existing concept";
+}
+
+function candidateSummary(candidate: SemanticDecisionCandidate): string {
+  const explanation = firstNonEmptyString(
+    candidate.reason,
+    candidate.description,
+    candidate.match_reason,
+  );
+  const coverage = firstNonEmptyString(candidate.coverage);
+  const gap = firstNonEmptyString(candidate.gap);
+  return [
+    explanation,
+    coverage ? `Current coverage: ${coverage}.` : "",
+    gap ? `Missing requirement: ${gap}.` : "",
+  ].filter(Boolean).join(" ");
+}
+
+function formatSemanticValue(value: string | Record<string, unknown>): string {
+  if (typeof value === "string") return value;
+  const identifier = firstNonEmptyString(
+    value.id,
+    value.type_id,
+    value.topic_id,
+  );
+  const title = firstNonEmptyString(
+    value.title,
+    value.type_title,
+    value.topic_title,
+    value.name,
+  );
+  const method = firstNonEmptyString(
+    value.method,
+    value.method_summary,
+    value.description,
+  );
+  const headline = [identifier, title].filter(Boolean).join(" — ");
+  return [headline, method].filter(Boolean).join(": ")
+    || JSON.stringify(value);
+}
+
+function formatEvidence(
+  evidence: string | SemanticDecisionEvidence,
+): string {
+  if (typeof evidence === "string") return evidence;
+  const label = firstNonEmptyString(
+    evidence.label,
+    evidence.source,
+  );
+  const page = evidence.page === undefined || evidence.page === null
+    ? ""
+    : `page ${String(evidence.page)}`;
+  const text = firstNonEmptyString(
+    evidence.excerpt,
+    evidence.text,
+    evidence.quote,
+  );
+  const prefix = [label, page].filter(Boolean).join(" · ");
+  return prefix && text
+    ? `${prefix}: ${text}`
+    : prefix || text || JSON.stringify(evidence);
 }
 
 function ResumeCheckpointPrompt({

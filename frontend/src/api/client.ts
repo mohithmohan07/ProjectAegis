@@ -11,6 +11,8 @@ import type {
   Session,
   Stats,
   ResumableCheckpoints,
+  SemanticDecisionSubmission,
+  SemanticDecisionSubmissionResult,
   TagResult,
   UploadJob,
   Vocab,
@@ -217,6 +219,18 @@ export const api = {
   resumableConceptCheckpoints: (learningKind: "post" | "pre") =>
     http<ResumableCheckpoints>(
       `/build-concepts/checkpoints/resumable?learning_kind=${learningKind}`,
+    ),
+  submitConceptDecision: (
+    jobId: number,
+    decisionId: string,
+    submission: SemanticDecisionSubmission,
+  ) =>
+    http<SemanticDecisionSubmissionResult>(
+      `/build-concepts/uploads/${jobId}/decisions/${encodeURIComponent(decisionId)}`,
+      {
+        method: "POST",
+        body: JSON.stringify(submission),
+      },
     ),
 
   // Streaming endpoint paths (consumed via streamNdjson / RunConsole)

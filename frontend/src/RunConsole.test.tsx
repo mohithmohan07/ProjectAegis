@@ -57,6 +57,8 @@ function Probe() {
         {state.usagePresentation?.resumed ? " resumed" : ""}
       </output>
       <output data-testid="progress-label">{state.progressLabel}</output>
+      <output data-testid="status">{state.status}</output>
+      <output data-testid="progress">{state.progress}</output>
     </>
   );
 }
@@ -128,5 +130,31 @@ test("a stream heartbeat makes a long final step visibly active", () => {
 
   expect(screen.getByTestId("progress-label").textContent).toBe(
     "Pre-learning — deriving prerequisite map (still working...)",
+  );
+});
+
+test("an awaiting-decision result stays paused at its checkpoint", async () => {
+  pending.length = 0;
+  render(
+    <RunConsoleProvider>
+      <Probe />
+    </RunConsoleProvider>,
+  );
+
+  fireEvent.click(screen.getByText("First"));
+  await act(async () => {
+    pending[0].resolve({
+      status: "awaiting_decision",
+      pending_decision: {
+        decision_id: "phase33-host-abc123",
+        checkpoint_progress: 0.81,
+      },
+    });
+  });
+
+  expect(screen.getByTestId("status").textContent).toBe("paused");
+  expect(screen.getByTestId("progress").textContent).toBe("0.81");
+  expect(screen.getByTestId("progress-label").textContent).toBe(
+    "Paused for your decision",
   );
 });

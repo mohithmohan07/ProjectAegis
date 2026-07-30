@@ -369,11 +369,13 @@ def install() -> None:
                 continue
             subtopic = str(block.get("subtopic_id") or "")
             subtopic_by_block[block_id] = subtopic
+            page_number = phase33._source_block_page_number(block, source)
             blocks_by_topic.setdefault(topic_id, []).append(
                 {
                     "block_id": block_id,
                     "kind": str(block.get("kind") or ""),
                     "subtopic_id": subtopic,
+                    "page_number": page_number,
                     "text": text,
                 }
             )

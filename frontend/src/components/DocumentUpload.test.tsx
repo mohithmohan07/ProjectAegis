@@ -1,4 +1,11 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { useState } from "react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { RunConsoleProvider } from "../RunConsole";
 import { AuthProvider } from "../Auth";
@@ -164,6 +171,43 @@ test("continues when browser storage is disabled or full", async () => {
 
   expect(await screen.findByText("Saved checkpoint at 91%")).toBeDefined();
   expect(onJob).toHaveBeenCalledWith(expect.objectContaining({ id: 42 }));
+});
+
+test("restores a saved job only once when the parent callback changes", async () => {
+  const saved = restoredJob();
+  localStorage.setItem(
+    "aegis-upload-job:concepts:post",
+    JSON.stringify({
+      id: saved.id,
+      module: saved.module,
+      learning_kind: saved.learning_kind,
+      filename: saved.filename,
+      created_at: saved.created_at,
+    }),
+  );
+  apiMock.getUploadJob.mockImplementation(async () => ({ ...saved }));
+
+  function UnstableParent() {
+    const [restored, setRestored] = useState<UploadJob | null>(null);
+    return (
+      <RunConsoleProvider>
+        <DocumentUpload
+          module="concepts"
+          conceptKind="post"
+          onJob={(job) => setRestored(job)}
+        />
+        <span>{restored?.filename ?? "not restored"}</span>
+      </RunConsoleProvider>
+    );
+  }
+
+  render(<UnstableParent />);
+
+  expect((await screen.findAllByText("electricity.mmd")).length).toBeGreaterThan(0);
+  await act(async () => {
+    await new Promise((resolve) => window.setTimeout(resolve, 20));
+  });
+  expect(apiMock.getUploadJob).toHaveBeenCalledTimes(1);
 });
 
 test("a slow saved-job lookup cannot overwrite a new upload", async () => {

@@ -34,6 +34,36 @@ def get_upload(
         raise HTTPException(404, str(e))
 
 
+@router.post(
+    "/uploads/{job_id}/decisions/{decision_id}",
+    response_model=schemas.HumanSemanticDecisionResponse,
+)
+def record_human_semantic_decision(
+    job_id: int,
+    decision_id: str,
+    req: schemas.HumanSemanticDecisionRequest,
+    db: Session = Depends(get_db),
+    user: auth.Principal = Depends(auth.require_user),
+):
+    """Record one semantic answer; the user explicitly resumes afterward."""
+    try:
+        return svc.record_human_semantic_decision(
+            db,
+            job_id,
+            decision_id,
+            choice=req.choice,
+            instruction=req.instruction,
+            target_concept_id=req.target_concept_id,
+            owner_sub=user.sub,
+        )
+    except uploads.UploadJobNotFound as e:
+        raise HTTPException(404, str(e))
+    except svc.HumanDecisionConflictError as e:
+        raise HTTPException(409, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 @router.put("/uploads/{job_id}/file", response_model=schemas.UploadJobOut)
 async def replace_upload_file(
     job_id: int, file: UploadFile = File(...), db: Session = Depends(get_db),

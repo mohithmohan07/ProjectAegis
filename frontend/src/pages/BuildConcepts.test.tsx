@@ -1,7 +1,13 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { RunConsoleProvider } from "../RunConsole";
-import type { OpenAIUsage, ResumableCheckpoint, Scope, UploadJob } from "../types";
+import type {
+  OpenAIUsage,
+  PendingSemanticDecision,
+  ResumableCheckpoint,
+  Scope,
+  UploadJob,
+} from "../types";
 import BuildConcepts from "./BuildConcepts";
 
 const apiMock = vi.hoisted(() => ({
@@ -9,6 +15,7 @@ const apiMock = vi.hoisted(() => ({
   resumableConceptCheckpoints: vi.fn(),
   clearConceptCheckpoint: vi.fn(),
   getUploadJob: vi.fn(),
+  submitConceptDecision: vi.fn(),
   paths: {
     postLearningGenerate: vi.fn((id: number) => `/post/${id}`),
     preLearningGenerate: vi.fn((id: number) => `/pre/${id}`),
@@ -23,9 +30,44 @@ vi.mock("../api/client", () => ({
 }));
 
 vi.mock("../components/DocumentUpload", () => ({
-  default: ({ externalJob }: { externalJob?: UploadJob | null }) => (
+  default: ({
+    conceptKind,
+    externalJob,
+    onJob,
+  }: {
+    conceptKind?: "post" | "pre";
+    externalJob?: UploadJob | null;
+    onJob: (job: UploadJob | null) => void;
+  }) => (
     <div data-testid="document-upload">
       {externalJob ? `Loaded ${externalJob.filename}` : "No saved upload"}
+      {externalJob && (
+        <>
+          <button
+            type="button"
+            onClick={() => onJob({
+              ...externalJob,
+              filename: `${conceptKind}-replacement.pdf`,
+              pending_decision: null,
+            })}
+          >
+            Replace {conceptKind} upload
+          </button>
+          <button
+            type="button"
+            onClick={() => onJob({
+              ...externalJob,
+              checkpoint_available: false,
+              pending_decision: null,
+            })}
+          >
+            Discard {conceptKind} checkpoint
+          </button>
+        </>
+      )}
+      <button type="button" onClick={() => onJob(null)}>
+        Clear {conceptKind} upload
+      </button>
     </div>
   ),
 }));
@@ -96,6 +138,75 @@ function cumulativeUsage(totalTokens = 900): OpenAIUsage {
   };
 }
 
+function semanticDecisionFixture(
+  overrides: Partial<PendingSemanticDecision> = {},
+): PendingSemanticDecision {
+  return {
+    decision_id: "phase33-host-abc123",
+    kind: "phase33_type_host_semantic_conflict",
+    phase: "3.3",
+    conflict:
+      "The existing Renan concept covers attributes of nationhood but not "
+      + "why nations safeguard liberty.",
+    item: {
+      unit_id: "ASSIGNMENT-0002",
+      type_id: "TYPE-0002",
+      type_title: "Explain Renan's idea of a nation",
+      qids: ["Q-0002"],
+      questions: ["Why, in Renan's view, are nations important?"],
+      topic: "The French Revolution and the Idea of the Nation",
+    },
+    candidates: [
+      {
+        concept_id: "HOST-CONCEPT-0001",
+        title: "Renan's Attributes of Nationhood",
+        topic: "The French Revolution and the Idea of the Nation",
+        coverage: "Attributes of a nation",
+        gap: "Importance of nations as safeguards of liberty",
+      },
+      {
+        concept_id: "HOST-CONCEPT-0007",
+        title: "Liberty and the Nation State",
+        topic: "The French Revolution and the Idea of the Nation",
+        coverage: "Liberty",
+        gap: "",
+      },
+    ],
+    evidence: [
+      {
+        page: "8",
+        label: "BLK-00102",
+        text: "Their existence is a guarantee of liberty.",
+      },
+    ],
+    options: [
+      {
+        choice: "expand_existing",
+        label: "Expand the existing concept",
+        recommended: true,
+        target_concept_id: "HOST-CONCEPT-0001",
+      },
+      {
+        choice: "create_new",
+        label: "Create a separate source-grounded concept",
+        recommended: false,
+      },
+      {
+        choice: "select_existing",
+        label: "Select another existing concept",
+        recommended: false,
+      },
+      {
+        choice: "custom_instruction",
+        label: "Give a custom instruction",
+        recommended: false,
+      },
+    ],
+    cumulative_usage: cumulativeUsage(1991461),
+    ...overrides,
+  };
+}
+
 function savedJob(overrides: Partial<UploadJob> = {}): UploadJob {
   return {
     id: 42,
@@ -162,6 +273,11 @@ beforeEach(() => {
   apiMock.getUploadJob.mockImplementation(
     async (_module: string, id: number) => savedJob({ id }),
   );
+  apiMock.submitConceptDecision.mockResolvedValue({
+    status: "decision_recorded",
+    resume_required: true,
+    resolved_decision: {},
+  });
 });
 
 afterEach(() => {
@@ -330,4 +446,185 @@ test("refreshes a rejected 98% checkpoint to the retained 91% stage", async () =
     name: "Resume from 91% checkpoint",
   })).toBeDefined();
   expect(apiMock.getUploadJob).toHaveBeenCalledTimes(2);
+});
+
+test("pauses for a semantic decision and saving it never resumes implicitly", async () => {
+  const pendingDecision = semanticDecisionFixture();
+  streamMock
+    .mockResolvedValueOnce({
+      job_id: 42,
+      status: "awaiting_decision",
+      pending_decision: pendingDecision,
+      resume_required: false,
+    })
+    .mockResolvedValueOnce({
+      job_id: 42,
+      concept_ids: [],
+      inventory_items: 0,
+    });
+
+  renderPage();
+  fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+  fireEvent.click(await screen.findByRole("button", {
+    name: "Select Electricity target",
+  }));
+  fireEvent.click(screen.getByRole("button", {
+    name: "Resume from 91% checkpoint",
+  }));
+
+  expect(await screen.findByRole("heading", {
+    name: "Paused for your decision",
+  })).toBeDefined();
+  expect(screen.getByText("No API request is running while paused.")).toBeDefined();
+  expect(screen.getByText(/TYPE-0002/)).toBeDefined();
+  expect(screen.getByText(
+    "Why, in Renan's view, are nations important?",
+  )).toBeDefined();
+  expect(screen.getByText(
+    /Current coverage: Attributes of a nation.*Missing requirement: Importance/,
+  )).toBeDefined();
+  expect(screen.getByText(/does not call GPT or resume generation/)).toBeDefined();
+  expect(screen.getByText(/1991461 tokens/)).toBeDefined();
+
+  fireEvent.click(screen.getByRole("button", { name: "Save decision" }));
+  await waitFor(() => {
+    expect(apiMock.submitConceptDecision).toHaveBeenCalledWith(
+      42,
+      "phase33-host-abc123",
+      {
+        choice: "expand_existing",
+        target_concept_id: "HOST-CONCEPT-0001",
+      },
+    );
+  });
+  expect(streamMock).toHaveBeenCalledTimes(1);
+  expect(await screen.findByText("Decision saved.")).toBeDefined();
+
+  fireEvent.click(screen.getByRole("button", {
+    name: "Resume generation",
+  }));
+  await waitFor(() => expect(streamMock).toHaveBeenCalledTimes(2));
+});
+
+test("a replacement post-learning job clears a stale pending decision", async () => {
+  apiMock.getUploadJob.mockResolvedValue(savedJob({
+    pending_decision: semanticDecisionFixture(),
+  }));
+  renderPage();
+
+  fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+  expect(await screen.findByRole("heading", {
+    name: "Paused for your decision",
+  })).toBeDefined();
+
+  fireEvent.click(screen.getByRole("button", {
+    name: "Replace post upload",
+  }));
+
+  await waitFor(() => {
+    expect(screen.queryByRole("heading", {
+      name: "Paused for your decision",
+    })).toBeNull();
+  });
+  expect(screen.getByText("Loaded post-replacement.pdf")).toBeDefined();
+});
+
+test("discarding a checkpoint clears its stale pending decision", async () => {
+  apiMock.getUploadJob.mockResolvedValue(savedJob({
+    pending_decision: semanticDecisionFixture(),
+  }));
+  renderPage();
+
+  fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+  expect(await screen.findByRole("heading", {
+    name: "Paused for your decision",
+  })).toBeDefined();
+
+  fireEvent.click(screen.getByRole("button", {
+    name: "Discard post checkpoint",
+  }));
+
+  await waitFor(() => {
+    expect(screen.queryByRole("heading", {
+      name: "Paused for your decision",
+    })).toBeNull();
+  });
+});
+
+test("starting over in pre-learning clears a stale pending decision", async () => {
+  apiMock.resumableConceptCheckpoints.mockImplementation(
+    async (kind: "post" | "pre") => ({
+      items: kind === "pre"
+        ? [savedSummary({ learning_kind: "pre" })]
+        : [],
+      total: kind === "pre" ? 1 : 0,
+    }),
+  );
+  apiMock.getUploadJob.mockResolvedValue(savedJob({
+    learning_kind: "pre",
+    pending_decision: semanticDecisionFixture(),
+  }));
+  renderPage();
+
+  fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+  expect(await screen.findByRole("heading", {
+    name: "Paused for your decision",
+  })).toBeDefined();
+
+  fireEvent.click(screen.getByRole("button", {
+    name: "Clear pre upload",
+  }));
+
+  await waitFor(() => {
+    expect(screen.queryByRole("heading", {
+      name: "Paused for your decision",
+    })).toBeNull();
+  });
+  expect(screen.getByText("No saved upload")).toBeDefined();
+});
+
+test("expand existing requires an explicit target when backend supplied none", async () => {
+  const pendingDecision = semanticDecisionFixture({
+    options: semanticDecisionFixture().options.map((option) =>
+      option.choice === "expand_existing"
+        ? { ...option, target_concept_id: undefined }
+        : option),
+  });
+  streamMock.mockResolvedValue({
+    job_id: 42,
+    status: "awaiting_decision",
+    pending_decision: pendingDecision,
+    resume_required: false,
+  });
+  renderPage();
+  fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+  fireEvent.click(await screen.findByRole("button", {
+    name: "Select Electricity target",
+  }));
+  fireEvent.click(screen.getByRole("button", {
+    name: "Resume from 91% checkpoint",
+  }));
+
+  const target = await screen.findByRole("combobox", {
+    name: "Concept to expand",
+  });
+  expect(screen.queryByText("Recommended")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Save decision" }));
+  expect(await screen.findByText(
+    "Select the existing concept Aegis should expand.",
+  )).toBeDefined();
+  expect(apiMock.submitConceptDecision).not.toHaveBeenCalled();
+
+  fireEvent.change(target, { target: { value: "HOST-CONCEPT-0007" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save decision" }));
+  await waitFor(() => {
+    expect(apiMock.submitConceptDecision).toHaveBeenCalledWith(
+      42,
+      "phase33-host-abc123",
+      {
+        choice: "expand_existing",
+        target_concept_id: "HOST-CONCEPT-0007",
+      },
+    );
+  });
 });

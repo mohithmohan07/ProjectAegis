@@ -335,6 +335,182 @@ input, select, textarea {
   white-space: pre-wrap;
 }
 
+.semantic-decision-card {
+  display: grid;
+  gap: 16px;
+  margin-top: 16px;
+  border-color: rgba(210, 153, 34, .75);
+  background:
+    linear-gradient(180deg, rgba(210, 153, 34, .07), transparent 140px),
+    var(--panel);
+}
+.semantic-decision-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+.semantic-decision-head h2 {
+  margin: 8px 0 4px;
+  font-size: 20px;
+}
+.semantic-pause-assurance {
+  margin: 0;
+  color: var(--green);
+  font-weight: 600;
+}
+.semantic-decision-intro {
+  margin: 0;
+  line-height: 1.55;
+}
+.semantic-decision-details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+.semantic-decision-details > div {
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+}
+.semantic-decision-details dt {
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .035em;
+}
+.semantic-decision-details dd {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
+.semantic-decision-section {
+  display: grid;
+  gap: 8px;
+}
+.semantic-decision-section h3 {
+  margin: 0;
+  font-size: 13px;
+}
+.semantic-decision-section ul {
+  margin: 0;
+  padding-left: 20px;
+  line-height: 1.55;
+}
+.semantic-mismatch {
+  padding: 12px;
+  border: 1px solid rgba(210, 153, 34, .6);
+  border-radius: 8px;
+  background: rgba(210, 153, 34, .08);
+}
+.semantic-mismatch p {
+  margin: 6px 0 0;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+.semantic-candidate-list {
+  display: grid;
+  gap: 8px;
+}
+.semantic-candidate {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--panel-2);
+}
+.semantic-candidate p {
+  margin: 6px 0 0;
+  line-height: 1.45;
+}
+.semantic-evidence {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.semantic-evidence summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.semantic-evidence-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+.semantic-evidence blockquote {
+  margin: 0;
+  padding: 9px 10px;
+  border-left: 3px solid var(--accent);
+  background: var(--panel-2);
+  color: var(--muted);
+  white-space: pre-wrap;
+}
+.semantic-choice-list {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.semantic-choice-list legend {
+  margin-bottom: 8px;
+  font-weight: 700;
+}
+.semantic-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+  cursor: pointer;
+}
+.semantic-choice:has(input:checked) {
+  border-color: var(--accent);
+  background: rgba(91, 141, 239, .08);
+}
+.semantic-choice > input {
+  width: auto;
+  margin-top: 2px;
+}
+.semantic-choice > span {
+  display: grid;
+  flex: 1;
+  gap: 4px;
+  min-width: 0;
+}
+.semantic-choice small {
+  color: var(--muted);
+  line-height: 1.4;
+}
+.semantic-choice select,
+.semantic-choice textarea {
+  width: 100%;
+  margin-top: 6px;
+}
+.semantic-choice textarea { resize: vertical; }
+.semantic-decision-actions {
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.semantic-decision-recorded {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  justify-content: space-between;
+  padding: 12px;
+  border: 1px solid rgba(63, 185, 80, .6);
+  border-radius: 8px;
+  background: rgba(63, 185, 80, .07);
+}
+.semantic-decision-recorded p {
+  margin: 4px 0 0;
+  line-height: 1.45;
+}
+
 .success-card { border-color: var(--green); }
 .success-card pre { font-size: 11px; max-height: 240px; overflow: auto; }
 
@@ -450,6 +626,7 @@ input, select, textarea {
 }
 .progress-fill { transition: width .25s ease; }
 .progress-fill.progress-err { background: var(--red); }
+.progress-fill.progress-paused { background: var(--yellow); }
 .console-body {
   flex: 1; overflow-y: auto; padding: 8px 10px;
   font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11.5px;
@@ -468,6 +645,7 @@ input, select, textarea {
 .status-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
 .dot-idle { background: #59616f; }
 .dot-running { background: var(--accent); animation: pulse 1.2s infinite; }
+.dot-paused { background: var(--yellow); }
 .dot-done { background: var(--green); }
 .dot-error { background: var(--red); }
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
@@ -477,6 +655,16 @@ input, select, textarea {
   writing-mode: vertical-rl; background: var(--panel-2); color: var(--text);
   border: 1px solid var(--border); border-right: none;
   border-radius: 8px 0 0 8px; padding: 12px 6px; font-size: 12px; z-index: 50;
+}
+
+@media (max-width: 700px) {
+  .semantic-decision-details { grid-template-columns: 1fr; }
+  .semantic-decision-head,
+  .semantic-decision-recorded {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .semantic-decision-recorded button { align-self: flex-start; }
 }
 
 /* ------------------------------- Admin tab -------------------------------- */

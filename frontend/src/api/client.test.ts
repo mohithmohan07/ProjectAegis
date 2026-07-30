@@ -75,3 +75,36 @@ test("sends the admin token when clearing shared data", async () => {
     }),
   );
 });
+
+test("records a semantic decision without calling a generation endpoint", async () => {
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      status: "decision_recorded",
+      resume_required: true,
+      resolved_decision: {},
+    }),
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  await api.submitConceptDecision(42, "phase33-host-abc123", {
+    choice: "expand_existing",
+    target_concept_id: "HOST-CONCEPT-0001",
+  });
+
+  expect(fetchMock).toHaveBeenCalledWith(
+    expect.stringContaining(
+      "/build-concepts/uploads/42/decisions/phase33-host-abc123",
+    ),
+    expect.objectContaining({
+      method: "POST",
+      credentials: "include",
+      body: JSON.stringify({
+        choice: "expand_existing",
+        target_concept_id: "HOST-CONCEPT-0001",
+      }),
+    }),
+  );
+  expect(fetchMock.mock.calls[0][0]).not.toContain("/generate");
+});

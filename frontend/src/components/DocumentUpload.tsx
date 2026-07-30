@@ -78,6 +78,10 @@ export default function DocumentUpload({
   const inputRef = useRef<HTMLInputElement>(null);
   const checkpointInputRef = useRef<HTMLInputElement>(null);
   const savedJobRequestGenerationRef = useRef(0);
+  const onJobRef = useRef(onJob);
+  useEffect(() => {
+    onJobRef.current = onJob;
+  }, [onJob]);
   const ownerSuffix = auth?.config?.mode === "google" && auth.user?.sub
     ? `:${encodeURIComponent(auth.user.sub)}`
     : "";
@@ -109,7 +113,7 @@ export default function DocumentUpload({
   function emit(j: UploadJob | null) {
     invalidateSavedJobRestore();
     setJob(j);
-    onJob(j);
+    onJobRef.current(j);
     if (j) {
       safeStorageSetItem(storageKey, JSON.stringify({
         id: j.id,
@@ -157,7 +161,7 @@ export default function DocumentUpload({
           return;
         }
         setJob(saved);
-        onJob(saved);
+        onJobRef.current(saved);
       })
       .catch(() => {
         if (
@@ -177,7 +181,7 @@ export default function DocumentUpload({
         savedJobRequestGenerationRef.current += 1;
       }
     };
-  }, [module, onJob, storageKey]);
+  }, [module, storageKey]);
 
   useEffect(() => {
     if (!externalJob) return;

@@ -16,16 +16,18 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 import os
 import re
 import shutil
 import tempfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy.orm import Session
 
-from .. import config, models
+from .. import config, models, schemas
 from .. import bulk_import as bi
 from ..bulk_import import workbook_sync, writer
 from . import (
@@ -37,6 +39,7 @@ from . import (
     drive_checkpoints,
     generation,
     mmd,
+    openai_usage,
     progress,
     semantic_recovery,
     uploads,
@@ -45,6 +48,209 @@ from . import (
 
 class DepositValidationError(ValueError):
     """Deterministic content validation rejected deposit-ready concept rows."""
+
+
+class HumanDecisionConflictError(ValueError):
+    """A semantic decision is stale, already answered, or not currently open."""
+
+
+_HUMAN_DECISIONS_KEY = "human_decisions"
+_HUMAN_DECISIONS_VERSION = 1
+_HUMAN_DECISION_ID_RE = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+_HUMAN_DECISION_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
+_MAX_HUMAN_DECISIONS = 5_000
+_MAX_DEFERRED_HUMAN_DECISIONS = 5_000
+
+
+def _normalize_pending_human_decision(
+    raw: dict,
+    *,
+    cumulative_usage: dict | None = None,
+) -> dict:
+    """Project Phase 3.3's rich pause packet into the stable public schema."""
+    if not isinstance(raw, dict):
+        raise ValueError("human semantic decision payload must be an object")
+    def rows(key: str, maximum: int) -> list[dict]:
+        value = raw.get(key) or []
+        if (
+            not isinstance(value, list)
+            or len(value) > maximum
+            or any(not isinstance(row, dict) for row in value)
+        ):
+            raise ValueError(f"pending decision {key} is not bounded")
+        return value
+
+    item = dict(raw.get("item") or {})
+    topic = item.get("topic")
+    if isinstance(topic, dict):
+        topic = topic.get("title") or topic.get("topic_id") or ""
+    item["topic"] = str(topic or "")
+    item = {
+        key: item.get(key, [] if key in {"qids", "questions"} else "")
+        for key in (
+            "unit_id", "type_id", "type_title",
+            "qids", "questions", "topic",
+        )
+    }
+    candidates = [
+        {key: str(row.get(key) or "") for key in (
+            "concept_id", "title", "topic", "coverage", "gap")}
+        for row in rows("candidates", 100)
+    ]
+    evidence = [
+        {key: str(row.get(key) or "") for key in ("page", "label", "text")}
+        for row in rows("evidence", 100)
+    ]
+    options = [{
+        "choice": (
+            "custom_instruction"
+            if row.get("choice") == "custom"
+            else row.get("choice")
+        ),
+        "label": str(row.get("label") or ""),
+        "recommended": bool(row.get("recommended")),
+        "target_concept_id": str(row.get("target_concept_id") or ""),
+    } for row in rows("options", 16)]
+    deferred_unit_ids = raw.get("deferred_assignment_unit_ids") or []
+    if (
+        not isinstance(deferred_unit_ids, list)
+        or len(deferred_unit_ids) > _MAX_DEFERRED_HUMAN_DECISIONS
+    ):
+        raise ValueError(
+            "pending decision deferred_assignment_unit_ids is not bounded")
+    stable = {
+        "kind": str(raw.get("kind") or "semantic_host_conflict"),
+        "phase": str(raw.get("phase") or "3.3"),
+        "conflict": str(raw.get("conflict") or ""),
+        "item": item,
+        "candidates": candidates,
+        "evidence": evidence,
+        "deferred_assignment_unit_ids": [
+            str(value)
+            for value in deferred_unit_ids
+            if str(value)
+        ],
+        "options": options,
+    }
+    computed_hash = hashlib.sha256(json.dumps(
+        stable,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
+    context_hash = str(raw.get("context_hash") or computed_hash).strip().lower()
+    if not _HUMAN_DECISION_HASH_RE.fullmatch(context_hash):
+        raise ValueError(
+            "pending decision context_hash must be a lowercase SHA-256")
+    decision_id = str(
+        raw.get("decision_id") or f"semantic-{context_hash[:24]}").strip()
+    if not _HUMAN_DECISION_ID_RE.fullmatch(decision_id):
+        raise ValueError("pending decision decision_id has an invalid format")
+    usage = raw.get("cumulative_usage")
+    if not isinstance(usage, dict):
+        usage = cumulative_usage if isinstance(cumulative_usage, dict) else {}
+    payload = schemas.PendingSemanticDecision.model_validate({
+        "decision_id": decision_id,
+        "context_hash": context_hash,
+        **stable,
+        "cumulative_usage": copy.deepcopy(usage),
+    }).model_dump()
+    return payload
+
+
+def _human_decision_ledger(checkpoint: dict | None) -> dict:
+    if not isinstance(checkpoint, dict):
+        return {}
+    value = checkpoint.get(_HUMAN_DECISIONS_KEY)
+    return copy.deepcopy(value) if isinstance(value, dict) else {}
+
+
+def _pending_human_decision(checkpoint: dict | None) -> dict | None:
+    pending = _human_decision_ledger(checkpoint).get("pending")
+    return copy.deepcopy(pending) if isinstance(pending, dict) else None
+
+
+def _ready_human_decisions(checkpoint: dict | None) -> list[dict]:
+    ledger = _human_decision_ledger(checkpoint)
+    result = []
+    for entry in ledger.get("resolutions") or []:
+        if (
+            isinstance(entry, dict)
+            and entry.get("status") == "ready"
+            and isinstance(entry.get("pending_decision"), dict)
+        ):
+            result.append({
+                **copy.deepcopy(entry["pending_decision"]),
+                "choice": str(entry.get("choice") or ""),
+                "instruction": str(entry.get("instruction") or ""),
+                "target_concept_id": str(
+                    entry.get("target_concept_id") or ""),
+                "resolved_at": str(entry.get("resolved_at") or ""),
+            })
+    deferred = [
+        str(value)
+        for value in ledger.get("deferred_assignment_unit_ids") or []
+        if str(value)
+    ]
+    if result and deferred:
+        result[-1]["deferred_assignment_unit_ids"] = deferred
+    return result
+
+
+def _compact_resolved_pending_decision(
+    pending: dict,
+    *,
+    choice: str,
+    target_concept_id: str,
+) -> dict:
+    """Keep the audit identity without copying a shrinking queue N² times."""
+
+    snapshot = copy.deepcopy(pending)
+    snapshot["evidence"] = []
+    snapshot["deferred_assignment_unit_ids"] = []
+    if target_concept_id:
+        snapshot["candidates"] = [
+            candidate
+            for candidate in snapshot.get("candidates") or []
+            if isinstance(candidate, dict)
+            and str(candidate.get("concept_id") or "") == target_concept_id
+        ]
+    else:
+        snapshot["candidates"] = []
+    selected_options = [
+        copy.deepcopy(option)
+        for option in snapshot.get("options") or []
+        if isinstance(option, dict)
+        and str(option.get("choice") or "") == choice
+    ]
+    if target_concept_id:
+        for option in selected_options:
+            option["target_concept_id"] = target_concept_id
+    snapshot["options"] = selected_options
+    return schemas.PendingSemanticDecision.model_validate(snapshot).model_dump()
+
+
+def _copy_human_decision_ledger(
+    target: dict,
+    source: dict | None,
+) -> dict:
+    result = copy.deepcopy(target)
+    ledger = _human_decision_ledger(source)
+    if ledger:
+        result[_HUMAN_DECISIONS_KEY] = ledger
+    return result
+
+
+@contextmanager
+def _human_decision_resolution_context(checkpoint: dict | None):
+    resolutions = _ready_human_decisions(checkpoint)
+    if not resolutions:
+        yield
+        return
+    from . import canonical_source_phase33_preflight_contract as phase33
+    with phase33.human_resolution_context(copy.deepcopy(resolutions)):
+        yield
 
 
 def _find_concept_in_chapter(
@@ -697,7 +903,7 @@ def _merge_generation_checkpoint_history(
             if str(entry.get("stage") or "") != stage
         ]
         history.append(copy.deepcopy(checkpoint))
-    return {
+    merged = {
         "schema_version": generation._CONCEPT_CHECKPOINT_SCHEMA,
         "checkpoint_format": generation._CONCEPT_CHECKPOINT_FORMAT,
         "fingerprint": fingerprint,
@@ -713,6 +919,7 @@ def _merge_generation_checkpoint_history(
         "progress": checkpoint.get("progress", 0.0),
         "checkpoints": history,
     }
+    return _copy_human_decision_ledger(merged, stored)
 
 
 def _compatible_generation_checkpoint_envelope(
@@ -739,7 +946,7 @@ def _compatible_generation_checkpoint_envelope(
     if newest is None:
         return {}
     stage = str(newest.get("stage") or "")
-    return {
+    normalized = {
         "schema_version": generation._CONCEPT_CHECKPOINT_SCHEMA,
         "checkpoint_format": generation._CONCEPT_CHECKPOINT_FORMAT,
         "fingerprint": fingerprint,
@@ -754,6 +961,7 @@ def _compatible_generation_checkpoint_envelope(
         "progress": newest.get("progress", 0.0),
         "checkpoints": history,
     }
+    return _copy_human_decision_ledger(normalized, stored)
 
 
 def _persist_compatible_generation_checkpoint_mirror(
@@ -945,7 +1153,8 @@ def _persist_semantic_recovery_checkpoint(
             target_identity=target_identity,
             target_chapter_id=target_chapter_id,
         )
-    job.generation_checkpoint = durable
+    job.generation_checkpoint = _copy_human_decision_ledger(
+        durable, job.generation_checkpoint)
     job.detail = (
         f"Semantic recovery repaired {result.changed_count} bounded unit(s) "
         f"at '{result.base_stage}'; dependent later stages will be replayed."
@@ -1151,6 +1360,310 @@ def inventory_csv(
 # Post Learning
 # --------------------------------------------------------------------------- #
 
+def _awaiting_human_decision_result(
+    job: models.UploadJob,
+    pending: dict,
+) -> dict:
+    return {
+        "job_id": job.id,
+        "status": "awaiting_decision",
+        "pending_decision": copy.deepcopy(pending),
+        "resume_required": False,
+    }
+
+
+def _existing_human_decision_pause(
+    job: models.UploadJob,
+    checkpoint: dict | None,
+) -> dict | None:
+    """Return the durable pause without starting another provider request."""
+    pending = _pending_human_decision(checkpoint)
+    if pending is None:
+        return None
+    progress.set_progress(
+        job.checkpoint_progress,
+        label="Paused for your decision",
+    )
+    progress.log(
+        "This generation is waiting for the saved semantic decision; "
+        "no API request was started.",
+        level="warning",
+    )
+    return _awaiting_human_decision_result(job, pending)
+
+
+def _persist_pending_human_decision(
+    db: Session,
+    job: models.UploadJob,
+    raw_pending: dict,
+    *,
+    fingerprint: str,
+    target_chapter_id: int,
+    owner_sub: str | None,
+) -> dict:
+    """Pause durably without replacing the latest completed stage."""
+    db.rollback()
+    db.refresh(job)
+    checkpoint = copy.deepcopy(job.generation_checkpoint or {})
+    if not generation._valid_concept_checkpoint(checkpoint):
+        raise RuntimeError(
+            "human semantic decision could not be paused because no "
+            "compatible generation checkpoint is available")
+    if str(checkpoint.get("fingerprint") or "") != fingerprint:
+        raise RuntimeError(
+            "human semantic decision context no longer matches the saved "
+            "generation checkpoint")
+
+    pending = _normalize_pending_human_decision(
+        raw_pending,
+        cumulative_usage=openai_usage.visible_summary(),
+    )
+    ledger = _human_decision_ledger(checkpoint)
+    resolutions = [
+        copy.deepcopy(entry)
+        for entry in ledger.get("resolutions") or []
+        if isinstance(entry, dict)
+    ]
+    if len(resolutions) >= _MAX_HUMAN_DECISIONS:
+        raise RuntimeError(
+            "human semantic decision history reached its safety limit")
+    for entry in resolutions:
+        if entry.get("decision_id") == pending["decision_id"]:
+            raise RuntimeError(
+                "a previously resolved human decision was requested again; "
+                "the saved resolution was not consumed")
+
+    existing_pending = ledger.get("pending")
+    if (
+        isinstance(existing_pending, dict)
+        and existing_pending.get("decision_id") != pending["decision_id"]
+    ):
+        raise RuntimeError(
+            "another human semantic decision is already pending")
+
+    checkpoint[_HUMAN_DECISIONS_KEY] = {
+        "version": _HUMAN_DECISIONS_VERSION,
+        "context": {
+            "fingerprint": fingerprint,
+            "target_chapter_id": target_chapter_id,
+        },
+        "pending": pending,
+        "deferred_assignment_unit_ids": copy.deepcopy(
+            pending.get("deferred_assignment_unit_ids") or []
+        ),
+        "resolutions": resolutions,
+    }
+    job.generation_checkpoint = checkpoint
+    job.status = "converted"
+    job.detail = (
+        "Generation paused for your semantic decision. No API request is "
+        "running while paused."
+    )
+    # This commits both the decision state and all billable usage observed
+    # before the pause. The outer run wrapper may safely persist once more.
+    usage = uploads.persist_current_openai_usage(
+        db, job.id, owner_sub=owner_sub)
+    pending["cumulative_usage"] = copy.deepcopy(usage)
+    checkpoint = copy.deepcopy(job.generation_checkpoint or {})
+    checkpoint[_HUMAN_DECISIONS_KEY]["pending"] = copy.deepcopy(pending)
+    job.generation_checkpoint = checkpoint
+    db.commit()
+    drive_checkpoints.schedule_checkpoint_backup(job.id)
+    progress.set_progress(
+        job.checkpoint_progress,
+        label="Paused for your decision",
+    )
+    progress.log(
+        "Generation paused at the saved checkpoint for a semantic decision; "
+        "no automatic semantic retry will run.",
+        level="warning",
+    )
+    return pending
+
+
+def _run_with_human_decision_pause(
+    operation,
+    *,
+    db: Session,
+    job: models.UploadJob,
+    fingerprint: str,
+    target_chapter_id: int,
+    owner_sub: str | None,
+) -> tuple[dict | None, object | None]:
+    """Run one post/pre pipeline and convert only the typed pause exception."""
+    try:
+        return None, operation()
+    except semantic_recovery.HumanDecisionRequired as exc:
+        pending = _persist_pending_human_decision(
+            db,
+            job,
+            exc.pending_decision,
+            fingerprint=fingerprint,
+            target_chapter_id=target_chapter_id,
+            owner_sub=owner_sub,
+        )
+        return _awaiting_human_decision_result(job, pending), None
+
+
+def record_human_semantic_decision(
+    db: Session,
+    job_id: int,
+    decision_id: str,
+    *,
+    choice: str,
+    instruction: str = "",
+    target_concept_id: str = "",
+    owner_sub: str | None = None,
+) -> dict:
+    """Atomically record one owner-authorized answer; resume remains explicit."""
+    job = uploads.get_job(
+        db,
+        job_id,
+        owner_sub=owner_sub,
+        module="build_concepts",
+    )
+    if job.learning_kind not in {"post", "pre"}:
+        raise uploads.UploadJobNotFound("upload job not found")
+    try:
+        with uploads.exclusive_job_operation(job_id):
+            db.refresh(job)
+            return _record_human_semantic_decision_locked(
+                db,
+                job,
+                decision_id,
+                choice=choice,
+                instruction=instruction,
+                target_concept_id=target_concept_id,
+            )
+    except uploads.JobAlreadyRunningError as exc:
+        raise HumanDecisionConflictError(str(exc)) from exc
+
+
+def _record_human_semantic_decision_locked(
+    db: Session,
+    job: models.UploadJob,
+    decision_id: str,
+    *,
+    choice: str,
+    instruction: str,
+    target_concept_id: str,
+) -> dict:
+    """Mutate a decision ledger while ``exclusive_job_operation`` is held."""
+    if job.status == "generated":
+        raise HumanDecisionConflictError(
+            "this upload has already been generated")
+    decision_id = str(decision_id or "").strip()
+    if not _HUMAN_DECISION_ID_RE.fullmatch(decision_id):
+        raise ValueError("decision_id has an invalid format")
+    submission = schemas.HumanSemanticDecisionRequest.model_validate({
+        "choice": choice,
+        "instruction": instruction,
+        "target_concept_id": target_concept_id,
+    })
+    choice = submission.choice
+    instruction = submission.instruction.strip()
+    target_concept_id = submission.target_concept_id.strip()
+    if choice == "custom_instruction" and not instruction:
+        raise ValueError("instruction is required for custom_instruction")
+
+    checkpoint = copy.deepcopy(job.generation_checkpoint or {})
+    ledger = _human_decision_ledger(checkpoint)
+    resolutions = [
+        copy.deepcopy(entry)
+        for entry in ledger.get("resolutions") or []
+        if isinstance(entry, dict)
+    ]
+    pending = ledger.get("pending")
+    if not isinstance(pending, dict):
+        already_recorded = any(
+            row.get("decision_id") == decision_id for row in resolutions)
+        raise HumanDecisionConflictError(
+            "this semantic decision has already been recorded"
+            if already_recorded
+            else "this semantic decision is stale or is no longer pending")
+    if pending.get("decision_id") != decision_id:
+        raise HumanDecisionConflictError(
+            "this semantic decision is stale; answer the current decision")
+
+    context = ledger.get("context")
+    if (
+        not isinstance(context, dict)
+        or context.get("fingerprint") != checkpoint.get("fingerprint")
+        or context.get("target_chapter_id")
+        != checkpoint.get("target_chapter_id")
+    ):
+        raise HumanDecisionConflictError(
+            "the semantic decision context is stale; reopen the current job")
+
+    offered: dict[str, dict] = {
+        str(option.get("choice") or ""): option
+        for option in pending.get("options") or []
+        if isinstance(option, dict)
+    }
+    if offered and choice not in offered:
+        raise ValueError(
+            f"choice {choice!r} is not available for this decision")
+    candidate_ids = [
+        str(candidate.get("concept_id") or "")
+        for candidate in pending.get("candidates") or []
+        if isinstance(candidate, dict) and candidate.get("concept_id")
+    ]
+    if choice == "expand_existing" and not target_concept_id:
+        target_concept_id = str(
+            (offered.get(choice) or {}).get("target_concept_id") or "")
+    if choice in {"expand_existing", "select_existing"}:
+        if not target_concept_id:
+            raise ValueError(
+                "target_concept_id is required for an existing-concept choice")
+        if candidate_ids and target_concept_id not in set(candidate_ids):
+            raise ValueError(
+                "target_concept_id must identify one of the pending decision "
+                "candidates")
+
+    resolution = {
+        "decision_id": decision_id,
+        "context_hash": str(pending.get("context_hash") or ""),
+        "choice": choice,
+        "instruction": instruction,
+        "target_concept_id": target_concept_id,
+        "resolved_at": datetime.now(timezone.utc).isoformat(),
+        "status": "ready",
+        "pending_decision": _compact_resolved_pending_decision(
+            pending,
+            choice=choice,
+            target_concept_id=target_concept_id,
+        ),
+    }
+    resolutions.append(resolution)
+    checkpoint[_HUMAN_DECISIONS_KEY] = {
+        "version": _HUMAN_DECISIONS_VERSION,
+        "context": copy.deepcopy(context),
+        "pending": None,
+        "deferred_assignment_unit_ids": copy.deepcopy(
+            pending.get("deferred_assignment_unit_ids") or []
+        ),
+        "resolutions": resolutions,
+    }
+    job.generation_checkpoint = checkpoint
+    job.status = "converted"
+    job.detail = (
+        "Semantic decision recorded. Resume generation from the saved "
+        "checkpoint when ready."
+    )
+    db.commit()
+    db.refresh(job)
+    drive_checkpoints.schedule_checkpoint_backup(job.id)
+    return {
+        "job_id": job.id,
+        "status": "decision_recorded",
+        "resume_required": True,
+        "resolved_decision": {
+            key: value for key, value in resolution.items()
+            if key not in {"status", "pending_decision"}
+        },
+    }
+
+
 def create_post_learning_job(
     db: Session, *, filename: str, raw_bytes: bytes, source_book: str = "",
     owner_sub: str | None = None,
@@ -1208,6 +1721,9 @@ def generate_post_learning(
         )
         progress.log(message, level="error")
         raise ValueError(message)
+    existing_pause = _existing_human_decision_pause(job, resume_checkpoint)
+    if existing_pause is not None:
+        return existing_pause
     if resume_checkpoint:
         resume_checkpoint, resumed = (
             _persist_compatible_generation_checkpoint_mirror(
@@ -1319,13 +1835,14 @@ def generate_post_learning(
             )
             else resume_checkpoint
         )
-        return generation.concepts_from_mmd(
-            job.mmd_text,
-            **recovery_metadata,
-            artifacts=artifacts,
-            resume_checkpoint=current_resume,
-            checkpoint_callback=save_checkpoint,
-        )
+        with _human_decision_resolution_context(current_resume):
+            return generation.concepts_from_mmd(
+                job.mmd_text,
+                **recovery_metadata,
+                artifacts=artifacts,
+                resume_checkpoint=current_resume,
+                checkpoint_callback=save_checkpoint,
+            )
 
     def repair_checkpoint(
         checkpoint: dict,
@@ -1398,25 +1915,31 @@ def generate_post_learning(
             raise
         return records, created_ids, merged_ids, written
 
-    if config.use_live_generation():
-        (
-            records,
-            created_ids,
-            merged_ids,
-            written,
-        ) = semantic_recovery.run_with_semantic_recovery(
-            generation_and_deposit_attempt,
-            checkpoint_snapshot=lambda: copy.deepcopy(
-                job.generation_checkpoint or {}),
-            repair_checkpoint=repair_checkpoint,
-            persist_repair=persist_repair,
-            policy=recovery_policy,
-            log=progress.log,
-        )
-    else:
+    def run_pipeline():
+        if config.use_live_generation():
+            return semantic_recovery.run_with_semantic_recovery(
+                generation_and_deposit_attempt,
+                checkpoint_snapshot=lambda: copy.deepcopy(
+                    job.generation_checkpoint or {}),
+                repair_checkpoint=repair_checkpoint,
+                persist_repair=persist_repair,
+                policy=recovery_policy,
+                log=progress.log,
+            )
         # Dry mode is test/development-only and has no GPT repair provider.
-        records, created_ids, merged_ids, written = (
-            generation_and_deposit_attempt())
+        return generation_and_deposit_attempt()
+
+    paused, pipeline_result = _run_with_human_decision_pause(
+        run_pipeline,
+        db=db,
+        job=job,
+        fingerprint=fingerprint,
+        target_chapter_id=target_chapter_id,
+        owner_sub=owner_sub,
+    )
+    if paused is not None:
+        return paused
+    records, created_ids, merged_ids, written = pipeline_result
 
     job.status = "generated"
     job.deposit_scope_type = "chapter"
@@ -1514,6 +2037,9 @@ def generate_pre_learning_from_upload(
         )
         progress.log(message, level="error")
         raise ValueError(message)
+    existing_pause = _existing_human_decision_pause(job, resume_checkpoint)
+    if existing_pause is not None:
+        return existing_pause
     if resume_checkpoint:
         resume_checkpoint, resumed = (
             _persist_compatible_generation_checkpoint_mirror(
@@ -1624,21 +2150,22 @@ def generate_pre_learning_from_upload(
             else resume_checkpoint
         )
         recovery_scope = "post_generation"
-        base = generation.concepts_from_mmd(
-            job.mmd_text,
-            subject=chapter.subject,
-            board=chapter.board,
-            grade=chapter.grade,
-            unit=chapter.unit,
-            chapter_title=chapter.chapter_title,
-            chapter_id=chapter.id,
-            chapter_code=chapter.chapter_code,
-            learning_kind="Post",
-            artifacts=artifacts,
-            resume_checkpoint=current_resume,
-            checkpoint_callback=save_checkpoint,
-            completion_progress=0.98,
-        )
+        with _human_decision_resolution_context(current_resume):
+            base = generation.concepts_from_mmd(
+                job.mmd_text,
+                subject=chapter.subject,
+                board=chapter.board,
+                grade=chapter.grade,
+                unit=chapter.unit,
+                chapter_title=chapter.chapter_title,
+                chapter_id=chapter.id,
+                chapter_code=chapter.chapter_code,
+                learning_kind="Post",
+                artifacts=artifacts,
+                resume_checkpoint=current_resume,
+                checkpoint_callback=save_checkpoint,
+                completion_progress=0.98,
+            )
         _store_inventory(job, artifacts)
         # The target concept map may have advanced its checkpoint during this
         # attempt. Pre-learning must resume from that current durable envelope,
@@ -1717,28 +2244,30 @@ def generate_pre_learning_from_upload(
             raise
         return pre_records, created_ids, merged_ids, written
 
-    if config.use_live_generation():
-        (
-            pre_records,
-            created_ids,
-            merged_ids,
-            written,
-        ) = semantic_recovery.run_with_semantic_recovery(
-            generation_and_deposit_attempt,
-            checkpoint_snapshot=lambda: copy.deepcopy(
-                job.generation_checkpoint or {}),
-            repair_checkpoint=repair_checkpoint,
-            persist_repair=persist_repair,
-            policy=recovery_policy,
-            log=progress.log,
-        )
-    else:
-        (
-            pre_records,
-            created_ids,
-            merged_ids,
-            written,
-        ) = generation_and_deposit_attempt()
+    def run_pipeline():
+        if config.use_live_generation():
+            return semantic_recovery.run_with_semantic_recovery(
+                generation_and_deposit_attempt,
+                checkpoint_snapshot=lambda: copy.deepcopy(
+                    job.generation_checkpoint or {}),
+                repair_checkpoint=repair_checkpoint,
+                persist_repair=persist_repair,
+                policy=recovery_policy,
+                log=progress.log,
+            )
+        return generation_and_deposit_attempt()
+
+    paused, pipeline_result = _run_with_human_decision_pause(
+        run_pipeline,
+        db=db,
+        job=job,
+        fingerprint=fingerprint,
+        target_chapter_id=target_chapter_id,
+        owner_sub=owner_sub,
+    )
+    if paused is not None:
+        return paused
+    pre_records, created_ids, merged_ids, written = pipeline_result
 
     job.status = "generated"
     job.deposit_scope_type = "chapter"
