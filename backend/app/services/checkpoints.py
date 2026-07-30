@@ -432,10 +432,27 @@ def _validate_checkpoint_entry(entry: Any, path: str) -> None:
                         f"{path}.{field}[{index}].row must be an object")
     for field in (
         "question_task_inventory", "mined_types",
-        "pre_draft", "pre_audited",
+        "pre_draft", "pre_audited", "source_review_graph",
     ):
         if field in entry and not isinstance(entry[field], dict):
             raise ValueError(f"{path}.{field} must be an object")
+    if "source_review_context_hash" in entry:
+        context_hash = _string(
+            entry["source_review_context_hash"],
+            f"{path}.source_review_context_hash",
+            64,
+            nonempty=True,
+        )
+        if not _SHA256_RE.fullmatch(context_hash):
+            raise ValueError(
+                f"{path}.source_review_context_hash must be a lowercase "
+                "SHA-256")
+    if (
+        "source_review_resolution_applied" in entry
+        and not isinstance(entry["source_review_resolution_applied"], bool)
+    ):
+        raise ValueError(
+            f"{path}.source_review_resolution_applied must be a boolean")
     certification_key = generation._PLACEMENT_CERTIFICATIONS_KEY
     mined_types = entry.get("mined_types")
     if (
@@ -524,11 +541,19 @@ def _validate_human_decisions(
         candidate_ids = {
             row.concept_id for row in pending.candidates if row.concept_id
         }
+        candidate_target_ids = {
+            row.target_id for row in pending.candidates if row.target_id
+        }
         if len(candidate_ids) != sum(
             bool(row.concept_id) for row in pending.candidates
         ):
             raise ValueError(
                 f"{pending_path}.candidates contains duplicate concept IDs")
+        if len(candidate_target_ids) != sum(
+            bool(row.target_id) for row in pending.candidates
+        ):
+            raise ValueError(
+                f"{pending_path}.candidates contains duplicate target IDs")
         choices = [row.choice for row in pending.options]
         if len(choices) != len(set(choices)):
             raise ValueError(
@@ -541,6 +566,13 @@ def _validate_human_decisions(
             ):
                 raise ValueError(
                     f"{pending_path}.options targets a non-candidate concept")
+            if (
+                option.target_id
+                and candidate_target_ids
+                and option.target_id not in candidate_target_ids
+            ):
+                raise ValueError(
+                    f"{pending_path}.options targets a non-candidate item")
 
     for index, resolution in enumerate(ledger.resolutions):
         resolution_path = f"{path}.resolutions[{index}]"
@@ -565,6 +597,9 @@ def _validate_human_decisions(
         candidate_ids = {
             row.concept_id for row in original.candidates if row.concept_id
         }
+        candidate_target_ids = {
+            row.target_id for row in original.candidates if row.target_id
+        }
         if resolution.choice in {"expand_existing", "select_existing"}:
             if not resolution.target_concept_id:
                 raise ValueError(
@@ -575,6 +610,18 @@ def _validate_human_decisions(
             ):
                 raise ValueError(
                     f"{resolution_path}.target_concept_id is not a candidate")
+        if resolution.choice in {
+            "accept_recommended", "select_candidate",
+        }:
+            if not resolution.target_id:
+                raise ValueError(
+                    f"{resolution_path}.target_id must not be empty")
+            if (
+                not candidate_target_ids
+                or resolution.target_id not in candidate_target_ids
+            ):
+                raise ValueError(
+                    f"{resolution_path}.target_id is not a candidate")
     if (
         ledger.pending is not None
         and ledger.pending.decision_id in resolved_ids
@@ -926,10 +973,24 @@ def _portable_payload(job: models.UploadJob) -> dict:
     }
 
 
+def _contains_unresolved_source_review(checkpoint: Any) -> bool:
+    return any(
+        str(entry.get("stage") or "") == "source_graph_review"
+        for entry in generation._concept_checkpoint_entries(checkpoint)
+        if isinstance(entry, dict)
+    )
+
+
 def _export_bundle_for_job(job: models.UploadJob) -> tuple[str, bytes]:
     """Serialize a job already authorized by its caller."""
     if not (job.mmd_text or "").strip():
         raise ValueError("convert the upload to MMD before exporting a checkpoint")
+    if _contains_unresolved_source_review(job.generation_checkpoint):
+        raise ValueError(
+            "an unresolved source-review checkpoint cannot be exported: "
+            "its verified original-PDF evidence is machine-bound. Resolve the "
+            "source decision or replace the source before exporting."
+        )
 
     payload = _portable_payload(job)
     _validate_json_budget({"payload": payload})
@@ -1040,6 +1101,14 @@ def import_bundle(
     owner_sub: str | None = None,
 ) -> models.UploadJob:
     payload = _read_bundle(raw_bytes)
+    if _contains_unresolved_source_review(
+        payload.get("generation_checkpoint")
+    ):
+        raise ValueError(
+            "an unresolved source-review checkpoint cannot be imported "
+            "without its verified original-PDF evidence. Resolve it on the "
+            "original job or replace and reconvert the source."
+        )
     job_data, learning_kind, mmd_text = _validate_payload(payload)
     expected_kind = expected_learning_kind.strip().lower()
     if expected_kind and expected_kind not in {"post", "pre"}:

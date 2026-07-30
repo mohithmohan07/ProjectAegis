@@ -118,9 +118,13 @@ export type SemanticDecisionChoice =
   | "expand_existing"
   | "create_new"
   | "select_existing"
+  | "accept_recommended"
+  | "select_candidate"
+  | "replace_source"
   | "custom_instruction";
 
 export interface SemanticDecisionCandidate {
+  target_id?: string;
   concept_id: string;
   title: string;
   topic?: string;
@@ -150,6 +154,7 @@ export interface SemanticDecisionOption {
   label: string;
   recommended: boolean;
   target_concept_id?: string;
+  target_id?: string;
 }
 
 /**
@@ -162,6 +167,8 @@ export interface PendingSemanticDecision {
   kind?: string;
   phase?: string;
   conflict: string;
+  diagnosis?: string;
+  decision_question?: string;
   item: SemanticDecisionItem;
   candidates: SemanticDecisionCandidate[];
   evidence: SemanticDecisionEvidence[];
@@ -185,6 +192,7 @@ export interface SemanticDecisionSubmission {
   choice: SemanticDecisionChoice;
   instruction?: string;
   target_concept_id?: string;
+  target_id?: string;
 }
 
 export interface SemanticDecisionSubmissionResult {

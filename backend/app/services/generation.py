@@ -17653,6 +17653,17 @@ _CONCEPT_CHECKPOINT_STAGE = "pre_type_assignment"
 # checkpoint when its stage contract is still accepted.  Bump only the stage
 # whose payload or meaning becomes incompatible.
 _CONCEPT_CHECKPOINT_STAGES = {
+    # Phase 3 source verification runs before concept parsing. This bootstrap
+    # stage exists only so a source discrepancy and its bounded candidate
+    # packet can be paused durably. It is deliberately excluded from
+    # ``_POST_CONCEPT_CHECKPOINT_STAGES`` below: after the source decision is
+    # resolved, ordinary concept generation starts at the skeleton stage.
+    "source_graph_review": {
+        "order": 5,
+        "version": 1,
+        "progress": 0.05,
+        "label": "Source graph paused for your decision",
+    },
     "skeleton_chunks": {
         "order": 10,
         "version": 1,
@@ -17829,6 +17840,17 @@ def _compatible_concept_checkpoint_entry(checkpoint: dict | None) -> bool:
     if stage == "skeleton_chunks":
         return _valid_completed_skeleton_chunks(
             checkpoint.get("completed_chunks"))
+    if stage == "source_graph_review":
+        graph = checkpoint.get("source_review_graph")
+        context_hash = str(
+            checkpoint.get("source_review_context_hash") or "")
+        return bool(
+            isinstance(graph, dict)
+            and graph.get("source_contract_hash")
+            and graph.get("semantic_context_hash")
+            and re.fullmatch(r"[0-9a-f]{64}", context_hash)
+            and _checkpoint_has_fields(checkpoint, ("records", list))
+        )
     if stage == "pre_derivation_draft":
         return _checkpoint_has_fields(
             checkpoint, ("records", list), ("pre_draft", dict))

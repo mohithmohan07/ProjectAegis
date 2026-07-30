@@ -53,6 +53,7 @@ def record_human_semantic_decision(
             decision_id,
             choice=req.choice,
             instruction=req.instruction,
+            target_id=req.target_id,
             target_concept_id=req.target_concept_id,
             owner_sub=user.sub,
         )

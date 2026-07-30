@@ -575,6 +575,7 @@ def _openai_multimodal_json(
     response_schema: dict[str, Any],
     purpose: str = "source_adjudication",
     max_tokens: int = _MAX_OUTPUT_TOKENS,
+    single_attempt: bool = False,
 ) -> dict[str, Any]:
     """One bounded strict-schema multimodal call using Aegis controls."""
     from openai import (
@@ -651,6 +652,11 @@ def _openai_multimodal_json(
             code = generation._openai_error_code(exc)
             if code == "insufficient_quota":
                 raise RuntimeError("OpenAI quota exhausted during source adjudication") from exc
+            if single_attempt:
+                raise RuntimeError(
+                    "OpenAI source adjudication single attempt failed: "
+                    f"{exc!r}"
+                ) from exc
             transient += 1
             last_error = exc
             if transient > config.OPENAI_TRANSIENT_RETRIES:
@@ -666,6 +672,11 @@ def _openai_multimodal_json(
             )
             time.sleep(delay)
         except Exception as exc:
+            if single_attempt:
+                raise RuntimeError(
+                    "OpenAI source adjudication single attempt failed: "
+                    f"{exc!r}"
+                ) from exc
             hard += 1
             last_error = exc
             if hard >= 3:

@@ -410,6 +410,35 @@ input, select, textarea {
   line-height: 1.55;
   white-space: pre-wrap;
 }
+.semantic-diagnosis {
+  border-color: rgba(91, 141, 239, .55);
+  background: rgba(91, 141, 239, .08);
+}
+.semantic-decision-question,
+.semantic-missing-context {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+.semantic-decision-question p {
+  margin: 6px 0 0;
+  line-height: 1.55;
+  font-size: 15px;
+}
+.semantic-missing-context {
+  border-color: rgba(248, 81, 73, .65);
+  background: rgba(248, 81, 73, .07);
+}
+.semantic-missing-context ul {
+  margin: 7px 0 0;
+  padding-left: 20px;
+  line-height: 1.5;
+}
+.semantic-missing-context p {
+  margin: 7px 0 0;
+  line-height: 1.5;
+}
 .semantic-candidate-list {
   display: grid;
   gap: 8px;
@@ -458,6 +487,9 @@ input, select, textarea {
   margin-bottom: 8px;
   font-weight: 700;
 }
+.semantic-choice-instruction {
+  margin: -2px 0 2px;
+}
 .semantic-choice {
   display: flex;
   align-items: flex-start;
@@ -492,6 +524,9 @@ input, select, textarea {
   margin-top: 6px;
 }
 .semantic-choice textarea { resize: vertical; }
+.semantic-required-warning {
+  color: var(--red) !important;
+}
 .semantic-decision-actions {
   padding-top: 12px;
   border-top: 1px solid var(--border);

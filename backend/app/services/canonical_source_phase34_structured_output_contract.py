@@ -120,6 +120,7 @@ def _resilient_openai_multimodal_json(
     response_schema: dict[str, Any],
     purpose: str = "source_adjudication",
     max_tokens: int = phase22._MAX_OUTPUT_TOKENS,
+    single_attempt: bool = False,
 ) -> dict[str, Any]:
     """Strict-schema call with adaptive completion-limit turnover.
 
@@ -163,7 +164,7 @@ def _resilient_openai_multimodal_json(
     gate = generation._get_openai_gate()
     current_budget = max(1000, int(max_tokens or 0))
     completion_cap = _completion_cap(current_budget)
-    max_turnovers = _max_truncation_retries()
+    max_turnovers = 0 if single_attempt else _max_truncation_retries()
     truncations = 0
     transient = 0
     hard = 0
@@ -294,6 +295,10 @@ def _resilient_openai_multimodal_json(
                 raise RuntimeError(
                     f"OpenAI quota exhausted during {label}"
                 ) from exc
+            if single_attempt:
+                raise RuntimeError(
+                    f"OpenAI {label} single attempt failed: {exc!r}"
+                ) from exc
             transient += 1
             last_error = exc
             if transient > config.OPENAI_TRANSIENT_RETRIES:
@@ -309,6 +314,11 @@ def _resilient_openai_multimodal_json(
             )
             time.sleep(delay)
         except Exception as exc:
+            if single_attempt:
+                raise RuntimeError(
+                    f"OpenAI {label} schema {schema} single attempt failed: "
+                    f"{exc!r}"
+                ) from exc
             hard += 1
             last_error = exc
             if hard >= 3:

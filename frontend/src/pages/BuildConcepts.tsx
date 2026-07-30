@@ -11,8 +11,10 @@ import type {
   OpenAIUsage,
   PendingSemanticDecision,
   ResumableCheckpoint,
+  SemanticDecisionChoice,
   SemanticDecisionCandidate,
   SemanticDecisionEvidence,
+  SemanticDecisionOption,
   SemanticDecisionSubmission,
   SemanticDecisionSubmissionResult,
   Scope,
@@ -677,11 +679,7 @@ function PreLearningExisting({ bookSources }: { bookSources: string[] }) {
   );
 }
 
-type SemanticDecisionUiChoice =
-  | "expand_existing"
-  | "create_new"
-  | "select_existing"
-  | "custom_instruction";
+type SemanticDecisionUiChoice = SemanticDecisionChoice;
 
 function SemanticDecisionPanel({
   decision,
@@ -700,30 +698,54 @@ function SemanticDecisionPanel({
   onResume: () => void;
 }) {
   const item = semanticDecisionItem(decision);
+  const sourceReview = isSourceReviewDecision(decision);
   const candidates = decision.candidates ?? [];
-  const expandOption = decision.options?.find((option) =>
+  const suppliedOptions = (decision.options ?? []).filter((option) =>
+    Boolean(option?.choice && option?.label));
+  const fallbackOptions: SemanticDecisionOption[] = sourceReview
+    ? []
+    : [
+      {
+        choice: "expand_existing",
+        label: "Expand existing concept",
+        recommended: false,
+      },
+      {
+        choice: "create_new",
+        label: "Create separate concept",
+        recommended: false,
+      },
+      {
+        choice: "select_existing",
+        label: "Select another existing concept",
+        recommended: false,
+      },
+    ];
+  const optionSeed = suppliedOptions.length ? suppliedOptions : fallbackOptions;
+  const customInstructionOption: SemanticDecisionOption = {
+    choice: "custom_instruction",
+    label: "Give a custom instruction",
+    recommended: false,
+  };
+  const availableOptions: SemanticDecisionOption[] = sourceReview
+    ? optionSeed
+    : optionSeed.some((option) => option.choice === "custom_instruction")
+      ? optionSeed
+      : [...optionSeed, customInstructionOption];
+  const expandOption = availableOptions.find((option) =>
     option.choice === "expand_existing");
-  const recommendedId = expandOption?.target_concept_id ?? "";
+  const recommendedOption = availableOptions.find((option) =>
+    option.recommended);
+  const recommendedId = optionTargetIdentifier(
+    recommendedOption ?? expandOption,
+  );
   const recommendedCandidate = candidates.find((candidate) =>
     candidateIdentifier(candidate) === recommendedId);
   const selectableCandidates = candidates.filter((candidate) =>
     Boolean(candidateIdentifier(candidate)));
-  const availableChoices = decision.options?.length
-    ? decision.options.map((option) => option.choice)
-    : [
-      "expand_existing",
-      "create_new",
-      "select_existing",
-      "custom_instruction",
-    ] satisfies SemanticDecisionUiChoice[];
-  const defaultChoice = (
-    decision.options?.find((option) => option.recommended)?.choice
-    ?? availableChoices[0]
-    ?? "custom_instruction"
-  ) as SemanticDecisionUiChoice;
   const [choice, setChoice] =
-    useState<SemanticDecisionUiChoice>(defaultChoice);
-  const [targetConceptId, setTargetConceptId] = useState(recommendedId);
+    useState<SemanticDecisionUiChoice | "">("");
+  const [targetId, setTargetId] = useState("");
   const [instruction, setInstruction] = useState("");
   const [saving, setSaving] = useState(false);
   const [recorded, setRecorded] = useState(false);
@@ -733,55 +755,73 @@ function SemanticDecisionPanel({
     ? item.questions
     : decision.questions?.length
       ? decision.questions
-    : decision.question
-      ? [decision.question]
-      : [];
-  const mismatch = firstNonEmptyString(
+      : decision.question
+        ? [decision.question]
+        : [];
+  const diagnosis = firstNonEmptyString(
+    decision.diagnosis,
     decision.conflict,
     decision.reason,
     decision.mismatch,
-  ) || "Aegis found more than one defensible concept placement.";
-
+  ) || (
+    sourceReview
+      ? "The Phase 3 source graph needs human review before it can be used safely."
+      : "Aegis found more than one defensible concept placement."
+  );
+  const decisionQuestion = firstNonEmptyString(
+    decision.decision_question,
+    decision.prompt,
+    decision.review_question,
+    sourceReview ? item.type_title : "",
+  ) || (
+    sourceReview
+      ? "Which verified source evidence should Aegis use to resolve this discrepancy?"
+      : "How should Aegis handle this semantic mismatch?"
+  );
+  const sourceReplacementRequired = choice === "replace_source";
   function choose(nextChoice: SemanticDecisionUiChoice) {
     setChoice(nextChoice);
     setSubmitError(null);
-    if (nextChoice === "expand_existing") {
-      setTargetConceptId(recommendedId);
-    } else if (nextChoice === "select_existing") {
-      setTargetConceptId("");
-    }
+    const option = availableOptions.find((candidate) =>
+      candidate.choice === nextChoice);
+    const suppliedTarget = optionTargetIdentifier(option);
+    setTargetId(suppliedTarget);
   }
 
   async function saveDecision() {
+    if (!choice) {
+      setSubmitError("Choose what Aegis should do before saving.");
+      return;
+    }
     const trimmedInstruction = instruction.trim();
     if (choice === "custom_instruction" && !trimmedInstruction) {
       setSubmitError("Write the instruction Aegis should follow.");
       return;
     }
-    if (choice === "select_existing" && !targetConceptId) {
-      setSubmitError("Select the existing concept Aegis should use.");
-      return;
-    }
-    if (choice === "expand_existing" && !targetConceptId) {
-      setSubmitError("Select the existing concept Aegis should expand.");
+    if (decisionChoiceRequiresTarget(choice) && !targetId) {
+      setSubmitError(sourceReview
+        ? "Select the verified source evidence Aegis should use."
+        : choice === "expand_existing"
+          ? "Select the existing concept Aegis should expand."
+          : "Select the existing concept Aegis should use.");
       return;
     }
 
     const submission: SemanticDecisionSubmission = choice === "custom_instruction"
       ? {
-        choice: "custom_instruction",
+        choice,
         instruction: trimmedInstruction,
       }
       : choice === "create_new"
         ? { choice: "create_new" }
-        : choice === "select_existing"
+        : choice === "select_existing" || choice === "expand_existing"
           ? {
-            choice: "select_existing",
-            target_concept_id: targetConceptId,
+            choice,
+            target_concept_id: targetId,
           }
           : {
-            choice: "expand_existing",
-            target_concept_id: targetConceptId,
+            choice,
+            ...(targetId ? { target_id: targetId } : {}),
           };
 
     setSaving(true);
@@ -821,9 +861,14 @@ function SemanticDecisionPanel({
       </div>
 
       <p className="muted semantic-decision-intro">
-        Generation reached a semantic choice that cannot be resolved safely
-        from the source alone. Review the exact mismatch, save your decision,
-        and then resume explicitly.
+        {sourceReview
+          ? "GPT found a source-graph discrepancy it could not resolve without "
+            + "risking the source meaning. Review its diagnosis and the "
+            + "verified source evidence, choose what should happen, save that "
+            + "decision, and then resume explicitly."
+          : "Generation reached a semantic choice that cannot be resolved "
+            + "safely from the source alone. Review the exact mismatch, choose "
+            + "what should happen, save your decision, and then resume explicitly."}
       </p>
 
       <dl className="semantic-decision-details">
@@ -844,7 +889,7 @@ function SemanticDecisionPanel({
             </dd>
           </div>
         )}
-        {(item.type_title || decision.type) && (
+        {!sourceReview && (item.type_title || decision.type) && (
           <div>
             <dt>Type</dt>
             <dd>
@@ -877,14 +922,21 @@ function SemanticDecisionPanel({
         </div>
       )}
 
-      <div className="semantic-mismatch">
-        <strong>What could not be matched</strong>
-        <p>{mismatch}</p>
+      <div className="semantic-mismatch semantic-diagnosis">
+        <strong>{sourceReview ? "GPT diagnosis" : "What could not be matched"}</strong>
+        <p>{diagnosis}</p>
+      </div>
+
+      <div className="semantic-decision-question">
+        <strong>Decision needed</strong>
+        <p>{decisionQuestion}</p>
       </div>
 
       {candidates.length > 0 && (
         <div className="semantic-decision-section">
-          <h3>Candidate concepts</h3>
+          <h3>
+            {sourceReview ? "Verified source candidates" : "Candidate concepts"}
+          </h3>
           <div className="semantic-candidate-list">
             {candidates.map((candidate, index) => (
               <div
@@ -902,8 +954,10 @@ function SemanticDecisionPanel({
                     </span>
                   )}
                 </div>
-                {candidateSummary(candidate) && (
-                  <p className="muted">{candidateSummary(candidate)}</p>
+                {candidateSummary(candidate, sourceReview) && (
+                  <p className="muted">
+                    {candidateSummary(candidate, sourceReview)}
+                  </p>
                 )}
               </div>
             ))}
@@ -912,7 +966,7 @@ function SemanticDecisionPanel({
       )}
 
       {decision.evidence && decision.evidence.length > 0 && (
-        <details className="semantic-evidence">
+        <details className="semantic-evidence" open={sourceReview}>
           <summary>Source evidence ({decision.evidence.length})</summary>
           <div className="semantic-evidence-list">
             {decision.evidence.map((evidence, index) => (
@@ -930,41 +984,58 @@ function SemanticDecisionPanel({
       />
 
       {!recorded ? (
-        <>
-          <fieldset className="semantic-choice-list" disabled={saving || busy}>
-            <legend>What should Aegis do?</legend>
-            {availableChoices.includes("expand_existing") && (
-              <label className="semantic-choice">
-                <input
-                  type="radio"
-                  name={`semantic-choice-${decision.decision_id}`}
-                  checked={choice === "expand_existing"}
-                  onChange={() => choose("expand_existing")}
-                />
-                <span>
-                  <strong>
-                    {decisionOptionLabel(
-                      decision,
-                      "expand_existing",
-                      "Expand existing concept",
-                    )}
-                    {expandOption?.recommended ? " (recommended)" : ""}
-                  </strong>
-                  <small>
-                    {recommendedCandidate
-                      ? `Extend ${candidateTitle(recommendedCandidate)} so it covers the missing requirement.`
-                      : "Choose which existing concept should be extended to cover the missing requirement."}
-                  </small>
-                  {choice === "expand_existing" && !recommendedId && (
-                    selectableCandidates.length > 0
-                      ? (
+        availableOptions.length > 0 ? (
+          <>
+            <fieldset className="semantic-choice-list" disabled={saving || busy}>
+              <legend>What should Aegis do?</legend>
+              <p className="muted semantic-choice-instruction">
+                No action is selected automatically. Choose one option below.
+              </p>
+              {availableOptions.map((option) => {
+                const optionSelected = choice === option.choice;
+                const suppliedTarget = optionTargetIdentifier(option);
+                const needsTarget = decisionChoiceRequiresTarget(
+                  option.choice,
+                );
+                const showTargetPicker = optionSelected
+                  && needsTarget
+                  && !suppliedTarget;
+                const needsInstruction = option.choice === "custom_instruction";
+                return (
+                  <label className="semantic-choice" key={option.choice}>
+                    <input
+                      type="radio"
+                      name={`semantic-choice-${decision.decision_id}`}
+                      value={option.choice}
+                      checked={optionSelected}
+                      onChange={() => choose(option.choice)}
+                    />
+                    <span>
+                      <strong>
+                        {option.label}
+                        {option.recommended ? " (recommended)" : ""}
+                      </strong>
+                      <small>
+                        {decisionOptionDescription(
+                          option,
+                          sourceReview,
+                          recommendedCandidate,
+                        )}
+                      </small>
+                      {showTargetPicker
+                        && selectableCandidates.length > 0 && (
                         <select
-                          aria-label="Concept to expand"
-                          value={targetConceptId}
-                          onChange={(event) =>
-                            setTargetConceptId(event.target.value)}
+                          aria-label={decisionTargetLabel(
+                            option.choice,
+                            sourceReview,
+                          )}
+                          value={targetId}
+                          onChange={(event) => {
+                            setTargetId(event.target.value);
+                            setSubmitError(null);
+                          }}
                         >
-                          <option value="">Choose a concept…</option>
+                          <option value="">Choose an option…</option>
                           {selectableCandidates.map((candidate) => (
                             <option
                               key={candidateIdentifier(candidate)}
@@ -974,173 +1045,201 @@ function SemanticDecisionPanel({
                             </option>
                           ))}
                         </select>
-                      )
-                      : (
-                        <small>
-                          No eligible existing concept was supplied. Choose a
-                          different action or give a custom instruction.
+                      )}
+                      {showTargetPicker
+                        && selectableCandidates.length === 0 && (
+                        <small className="semantic-required-warning">
+                          No safe candidate was supplied. Choose another action
+                          or give a custom instruction; Aegis will not guess a
+                          target.
                         </small>
-                      )
-                  )}
-                </span>
-              </label>
-            )}
-            {availableChoices.includes("create_new") && (
-              <label className="semantic-choice">
-                <input
-                  type="radio"
-                  name={`semantic-choice-${decision.decision_id}`}
-                  checked={choice === "create_new"}
-                  onChange={() => choose("create_new")}
-                />
-                <span>
-                  <strong>
-                    {decisionOptionLabel(
-                      decision,
-                      "create_new",
-                      "Create separate concept",
-                    )}
-                  </strong>
-                  <small>
-                    Keep the unmatched requirement as a distinct,
-                    source-grounded concept.
-                  </small>
-                </span>
-              </label>
-            )}
-            {availableChoices.includes("select_existing")
-              && selectableCandidates.length > 0 && (
-              <label className="semantic-choice">
-                <input
-                  type="radio"
-                  name={`semantic-choice-${decision.decision_id}`}
-                  checked={choice === "select_existing"}
-                  onChange={() => choose("select_existing")}
-                />
-                <span>
-                  <strong>
-                    {decisionOptionLabel(
-                      decision,
-                      "select_existing",
-                      "Select another existing concept",
-                    )}
-                  </strong>
-                  <small>Choose a different verified host from the candidates.</small>
-                  {choice === "select_existing" && (
-                    <select
-                      aria-label="Existing concept"
-                      value={targetConceptId}
-                      onChange={(event) =>
-                        setTargetConceptId(event.target.value)}
-                    >
-                      <option value="">Choose a concept…</option>
-                      {selectableCandidates.map((candidate) => (
-                        <option
-                          key={candidateIdentifier(candidate)}
-                          value={candidateIdentifier(candidate)}
-                        >
-                          {candidateTitle(candidate)}
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                </span>
-              </label>
-            )}
-            {availableChoices.includes("custom_instruction") && (
-              <label className="semantic-choice">
-                <input
-                  type="radio"
-                  name={`semantic-choice-${decision.decision_id}`}
-                  checked={choice === "custom_instruction"}
-                  onChange={() => choose("custom_instruction")}
-                />
-                <span>
-                  <strong>
-                    {decisionOptionLabel(
-                      decision,
-                      "custom_instruction",
-                      "Give custom instruction",
-                    )}
-                  </strong>
-                  <small>Tell Aegis exactly how this item should be handled.</small>
-                  {choice === "custom_instruction" && (
-                    <textarea
-                      aria-label="Custom instruction"
-                      rows={4}
-                      value={instruction}
-                      onChange={(event) => setInstruction(event.target.value)}
-                      placeholder="For example: expand the Renan concept to cover both attributes and the importance of nations."
-                    />
-                  )}
-                </span>
-              </label>
-            )}
-          </fieldset>
+                      )}
+                      {optionSelected && needsInstruction && (
+                        <textarea
+                          aria-label="Custom instruction"
+                          rows={4}
+                          value={instruction}
+                          onChange={(event) => {
+                            setInstruction(event.target.value);
+                            setSubmitError(null);
+                          }}
+                          placeholder={sourceReview
+                            ? "Describe exactly how Aegis should resolve this source discrepancy."
+                            : "For example: expand the Renan concept to cover both attributes and the importance of nations."}
+                        />
+                      )}
+                    </span>
+                  </label>
+                );
+              })}
+            </fieldset>
 
-          {submitError && <div className="error-box">{submitError}</div>}
-          <div className="row semantic-decision-actions">
-            <span className="muted">
-              Saving this choice does not call GPT or resume generation.
-            </span>
-            <div className="spacer" />
-            <button
-              type="button"
-              disabled={saving || busy}
-              onClick={() => void saveDecision()}
-            >
-              {saving ? "Saving decision…" : "Save decision"}
-            </button>
+            {submitError && <div className="error-box">{submitError}</div>}
+            <div className="row semantic-decision-actions">
+              <span className="muted">
+                Saving this choice does not call GPT or resume generation.
+              </span>
+              <div className="spacer" />
+              <button
+                type="button"
+                disabled={saving || busy || !choice}
+                onClick={() => void saveDecision()}
+              >
+                {saving ? "Saving decision…" : "Save decision"}
+              </button>
+            </div>
+          </>
+        ) : (
+          <div className="semantic-missing-context" role="alert">
+            <strong>No safe action remains for this checkpoint.</strong>
+            <p>
+              Aegis could not safely apply the previous guidance. Correct or
+              replace the identified source material before continuing; it
+              will not invent another decision or retry in a loop.
+            </p>
           </div>
-        </>
+        )
       ) : (
         <div className="semantic-decision-recorded" role="status">
           <div>
             <strong>Decision saved.</strong>
-            <p>
-              It is recorded at this checkpoint. No generation request has
-              started yet.
-            </p>
-            {!canResume && (
+            {sourceReplacementRequired ? (
+              <p>
+                Generation remains stopped. Replace or correct the source file
+                using the upload controls above, convert it again, and then
+                start or resume from the new verified source. Aegis will not
+                alter the file automatically.
+              </p>
+            ) : (
+              <p>
+                It is recorded at this checkpoint. No generation request has
+                started yet.
+              </p>
+            )}
+            {!sourceReplacementRequired && !canResume && (
               <p className="muted">
                 Select or restore the destination chapter above before resuming.
               </p>
             )}
           </div>
-          <button
-            type="button"
-            disabled={busy || !canResume}
-            onClick={onResume}
-          >
-            {busy ? "Resuming…" : "Resume generation"}
-          </button>
+          {!sourceReplacementRequired && (
+            <button
+              type="button"
+              disabled={busy || !canResume}
+              onClick={onResume}
+            >
+              {busy ? "Resuming…" : "Resume generation"}
+            </button>
+          )}
         </div>
       )}
     </section>
   );
 }
 
-function decisionOptionLabel(
-  decision: PendingSemanticDecision,
-  choice: SemanticDecisionUiChoice,
-  fallback: string,
-): string {
-  return decision.options?.find((option) => option.choice === choice)?.label
-    || fallback;
-}
+type NormalizedSemanticDecisionItem = {
+  unit_id: string;
+  type_id: string;
+  type_title: string;
+  qids: string[];
+  questions: string[];
+  topic: string;
+};
 
 function semanticDecisionItem(
   decision: PendingSemanticDecision,
-): PendingSemanticDecision["item"] {
-  return decision.item ?? {
-    unit_id: decision.item_id ?? "",
-    type_id: "",
-    type_title: typeof decision.type === "string" ? decision.type : "",
-    qids: decision.qids ?? [],
-    questions: decision.questions
-      ?? (decision.question ? [decision.question] : []),
-    topic: typeof decision.topic === "string" ? decision.topic : "",
+): NormalizedSemanticDecisionItem {
+  const item = decision.item;
+  return {
+    unit_id: item?.unit_id ?? decision.item_id ?? "",
+    type_id: item?.type_id ?? "",
+    type_title: item?.type_title
+      ?? (typeof decision.type === "string" ? decision.type : ""),
+    qids: item?.qids ?? decision.qids ?? [],
+    questions: item?.questions
+      ?? decision.questions
+      ?? (
+        decision.question && !isSourceReviewDecision(decision)
+          ? [decision.question]
+          : []
+      ),
+    topic: item?.topic
+      ?? (typeof decision.topic === "string" ? decision.topic : ""),
   };
+}
+
+function isSourceReviewDecision(decision: PendingSemanticDecision): boolean {
+  const kind = firstNonEmptyString(decision.kind).toLowerCase();
+  return kind.includes("source_graph")
+    || kind.includes("source_review")
+    || decision.options?.some((option) =>
+      option.choice === "accept_recommended"
+      || option.choice === "select_candidate")
+    || false;
+}
+
+function optionTargetIdentifier(
+  option?: SemanticDecisionOption,
+): string {
+  if (!option) return "";
+  return firstNonEmptyString(
+    option.target_id,
+    option.target_concept_id,
+  );
+}
+
+function decisionChoiceRequiresTarget(
+  choice: SemanticDecisionUiChoice,
+): boolean {
+  return choice === "expand_existing"
+    || choice === "select_existing"
+    || choice === "accept_recommended"
+    || choice === "select_candidate";
+}
+
+function decisionTargetLabel(
+  choice: SemanticDecisionUiChoice,
+  sourceReview: boolean,
+): string {
+  if (sourceReview) return "Verified source evidence";
+  return choice === "expand_existing"
+    ? "Concept to expand"
+    : "Existing concept";
+}
+
+function decisionOptionDescription(
+  option: SemanticDecisionOption,
+  sourceReview: boolean,
+  recommendedCandidate?: SemanticDecisionCandidate,
+): string {
+  if (option.choice === "accept_recommended") {
+    return recommendedCandidate
+      ? `Use ${candidateTitle(recommendedCandidate)} as the verified source evidence.`
+      : "Use the exact verified source evidence recommended by GPT.";
+  }
+  if (option.choice === "select_candidate") {
+    return "Choose a different verified page or source block; Aegis will not pick one for you.";
+  }
+  if (option.choice === "replace_source") {
+    return "Stop at this checkpoint so you can correct or replace the source file; Aegis will not change it automatically.";
+  }
+  if (option.choice === "expand_existing") {
+    return recommendedCandidate
+      ? `Extend ${candidateTitle(recommendedCandidate)} so it covers the missing requirement.`
+      : "Choose which existing concept should be extended to cover the missing requirement.";
+  }
+  if (option.choice === "create_new") {
+    return "Keep the unmatched requirement as a distinct, source-grounded concept.";
+  }
+  if (option.choice === "select_existing") {
+    return "Choose a different verified concept host from the candidates.";
+  }
+  if (option.choice === "custom_instruction") {
+    return sourceReview
+      ? "Tell Aegis exactly how to resolve this source discrepancy."
+      : "Tell Aegis exactly how this item should be handled.";
+  }
+  return "Apply this action to the paused generation checkpoint.";
 }
 
 function pendingDecisionFrom(
@@ -1167,22 +1266,29 @@ function candidateIdentifier(
 ): string {
   if (!candidate) return "";
   return firstNonEmptyString(
+    candidate.target_id,
     candidate.concept_id,
-    candidate.id,
     candidate.candidate_id,
+    candidate.id,
+    candidate.source_id,
+    candidate.section_id,
   );
 }
 
 function candidateTitle(candidate: SemanticDecisionCandidate): string {
   return firstNonEmptyString(
     candidate.title,
+    candidate.label,
     candidate.concept_title,
     candidate.name,
     candidateIdentifier(candidate),
   ) || "Existing concept";
 }
 
-function candidateSummary(candidate: SemanticDecisionCandidate): string {
+function candidateSummary(
+  candidate: SemanticDecisionCandidate,
+  sourceReview = false,
+): string {
   const explanation = firstNonEmptyString(
     candidate.reason,
     candidate.description,
@@ -1192,9 +1298,25 @@ function candidateSummary(candidate: SemanticDecisionCandidate): string {
   const gap = firstNonEmptyString(candidate.gap);
   return [
     explanation,
-    coverage ? `Current coverage: ${coverage}.` : "",
-    gap ? `Missing requirement: ${gap}.` : "",
+    coverage
+      ? labeledSemanticText(
+        sourceReview ? "Verified source text" : "Current coverage",
+        coverage,
+      )
+      : "",
+    gap
+      ? labeledSemanticText(
+        sourceReview ? "Diagnostic issue" : "Missing requirement",
+        gap,
+      )
+      : "",
   ].filter(Boolean).join(" ");
+}
+
+function labeledSemanticText(label: string, value: string): string {
+  const trimmed = value.trim();
+  const punctuation = /[.!?]$/.test(trimmed) ? "" : ".";
+  return `${label}: ${trimmed}${punctuation}`;
 }
 
 function formatSemanticValue(value: string | Record<string, unknown>): string {
