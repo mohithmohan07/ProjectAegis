@@ -73,6 +73,9 @@ from .canonical_source_phase36_source_critical_turnover_contract import (
 from .canonical_source_phase37_visual_topology_convergence_contract import (
     install as _install_canonical_source_phase37_visual_topology_convergence_contract,
 )
+from .canonical_source_phase371_visual_topology_compat import (
+    install as _install_canonical_source_phase371_visual_topology_compat,
+)
 
 # Production order is intentional and fail-closed: preserve source identity first,
 # defer Type allocation to the topology freeze, restore integration boundaries,
@@ -113,6 +116,9 @@ from .canonical_source_phase37_visual_topology_convergence_contract import (
 # Phase 3.7 installs last so visual captions/original-page evidence survive every
 # topology/grounding/Type-host packet. It also permits an independently verified
 # pre-freeze retirement only for unsupported or fully subsumed duplicate rows.
+# Phase 3.7.1 preserves exact plain-text compatibility, constrains retirement to
+# a survivor decided in the same batch, and clears provisional audit state between
+# topology convergence passes.
 _install_closed_inventory_contract(generation)
 _install_concept_topology_contract(generation)
 _install_concept_topology_compat(generation)
@@ -141,6 +147,7 @@ _install_canonical_source_phase351_workbook_capacity_contract()
 _install_canonical_source_phase352_chunk_override_compat()
 _install_canonical_source_phase36_source_critical_turnover_contract()
 _install_canonical_source_phase37_visual_topology_convergence_contract()
+_install_canonical_source_phase371_visual_topology_compat()
 
 del _install_closed_inventory_contract
 del _install_concept_topology_contract
@@ -170,3 +177,4 @@ del _install_canonical_source_phase351_workbook_capacity_contract
 del _install_canonical_source_phase352_chunk_override_compat
 del _install_canonical_source_phase36_source_critical_turnover_contract
 del _install_canonical_source_phase37_visual_topology_convergence_contract
+del _install_canonical_source_phase371_visual_topology_compat
