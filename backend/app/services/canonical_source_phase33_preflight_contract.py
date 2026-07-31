@@ -1416,6 +1416,10 @@ def _host_plan_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         ),
         purpose="concept_mapping",
         max_tokens=max(6000, min(28000, len(unit_ids) * 1000)),
+        single_attempt=bool(
+            payload.get("human_resolution")
+            or payload.get("human_resolutions")
+        ),
     )
 
 
@@ -1451,6 +1455,10 @@ def _host_critic_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         response_schema=_host_critic_schema(unit_ids),
         purpose="concept_mapping",
         max_tokens=max(4000, min(12000, len(unit_ids) * 320)),
+        single_attempt=bool(
+            payload.get("human_resolution")
+            or payload.get("human_resolutions")
+        ),
     )
 
 

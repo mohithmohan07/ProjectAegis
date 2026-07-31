@@ -3,9 +3,43 @@ from __future__ import annotations
 
 import copy
 
+import pytest
+
 from app.services import canonical_source_phase3 as phase3
 from app.services import canonical_source_phase33_preflight_contract as phase33
 from app.services import generation as g
+
+
+@pytest.mark.parametrize(
+    "function_name",
+    ["_host_plan_via_openai", "_host_critic_via_openai"],
+)
+def test_human_directed_phase33_openai_pair_disables_transport_retries(
+    monkeypatch,
+    function_name,
+):
+    calls: list[dict] = []
+
+    def fake_openai(**kwargs):
+        calls.append(kwargs)
+        return {}
+
+    monkeypatch.setattr(
+        phase3.phase22,
+        "_openai_multimodal_json",
+        fake_openai,
+    )
+    payload = {
+        "assignment_units": [{"assignment_unit_id": "ASSIGN-0001"}],
+        "existing_concepts": [{"concept_id": "CONCEPT-0001"}],
+        "source_blocks": [{"block_id": "BLK-0001"}],
+        "human_resolution": {"choice": "select_existing"},
+    }
+
+    getattr(phase33, function_name)(payload)
+
+    assert len(calls) == 1
+    assert calls[0]["single_attempt"] is True
 
 
 def _verified_review(ids: list[str]) -> dict:
