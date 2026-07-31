@@ -9644,7 +9644,12 @@ def _type_qid_semantic_contracts(
             for field in _TYPE_ONLY_IMMUTABLE_FIELDS
         }
 
-        def contract_for(qid: str, case_signature: object = "") -> dict:
+        def contract_for(
+            qid: str,
+            case_signature: object = "",
+            case_id: object = "",
+            case_title: object = "",
+        ) -> dict:
             requires_visual: object = visual_by_qid.get(qid, False)
             if honor_emitted_requires_visual:
                 for raw_case in mtype.get("case_prompts") or []:
@@ -9669,6 +9674,8 @@ def _type_qid_semantic_contracts(
                             )
             return {
                 **copy.deepcopy(shared),
+                "case_id": copy.deepcopy(case_id or ""),
+                "case_title": copy.deepcopy(case_title or ""),
                 "case_signature": copy.deepcopy(case_signature or ""),
                 "requires_visual": requires_visual,
             }
@@ -9680,7 +9687,12 @@ def _type_qid_semantic_contracts(
                 continue
             case_signature = raw_case.get("case_signature") or ""
             for qid in _assignment_case_qids(raw_case):
-                contracts[qid] = contract_for(qid, case_signature)
+                contracts[qid] = contract_for(
+                    qid,
+                    case_signature,
+                    raw_case.get("case_id") or "",
+                    raw_case.get("case_title") or "",
+                )
     return contracts
 
 

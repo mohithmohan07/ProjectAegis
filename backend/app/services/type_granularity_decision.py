@@ -24,7 +24,7 @@ from . import semantic_confidence_policy as confidence_policy
 from .semantic_recovery import HumanDecisionRequired
 
 
-_GATE_VERSION = "type-granularity-human-gate-2"
+_GATE_VERSION = "type-granularity-human-gate-3"
 _MIN_INVENTORY_ITEMS = 12
 _MIN_TYPE_COUNT = 10
 _HIGH_TYPE_QID_RATIO = 0.80
@@ -99,6 +99,11 @@ def _inventory_identity(inventory: Mapping[str, Any] | None) -> list[dict]:
             "wording_sha256": hashlib.sha256(
                 wording.encode("utf-8")
             ).hexdigest(),
+            # Bind every source-owned task attribute without persisting its
+            # prose in the decision ledger.  Visual/context objects, source
+            # block/page/order bindings, options, normalized task text, and
+            # future inventory fields can all affect a safe Type/Case merge.
+            "source_item_sha256": _sha256_json(dict(item)),
         })
     return out
 

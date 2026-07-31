@@ -215,6 +215,8 @@ def test_applied_result_identity_rejects_source_or_taxonomy_drift():
         ("type", "difficulty_hint"),
         ("type", "cognitive_skill_hint"),
         ("type", "subject_skill_hint"),
+        ("case", "case_id"),
+        ("case", "case_title"),
         ("case", "case_signature"),
         ("inventory", "requires_visual"),
     ],
@@ -432,6 +434,35 @@ def test_human_directed_consolidation_rejects_type_semantic_drift_before_critic(
     assert calls == 1
 
 
+@pytest.mark.parametrize("field", ["case_id", "case_title"])
+def test_human_directed_consolidation_rejects_case_identity_drift_before_critic(
+    monkeypatch,
+    field,
+):
+    original = _types(2)
+    candidate = _merged_candidate(original)
+    candidate[0]["case_prompts"][1][field] += " rewritten"
+    calls = 0
+
+    def fake_openai(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return {"types": candidate}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    result, failure, audit = g._human_directed_type_consolidation_via_api(
+        original,
+        inventory=_inventory(2),
+        meta={"subject": "History"},
+        instruction="Merge only identical assessed methods.",
+    )
+
+    assert result is None
+    assert "immutable semantic drift" in failure
+    assert audit["semantic_drift"] == 1
+    assert calls == 1
+
+
 def test_human_directed_consolidation_rejects_collapsed_case_signature(
     monkeypatch,
 ):
@@ -457,6 +488,54 @@ def test_human_directed_consolidation_rejects_collapsed_case_signature(
     assert "immutable semantic drift" in failure
     assert audit["semantic_drift"] == 1
     assert calls == 1
+
+
+@pytest.mark.parametrize(
+    ("field", "changed_value"),
+    [
+        ("normalized_task", "Normalized task changed."),
+        ("shared_context", "Changed source passage context."),
+        ("source_kind", "diagram_task"),
+        ("parent_source_label", "Changed parent label"),
+        ("page_hint", "42"),
+        ("block_ids", ["BLK-CHANGED"]),
+        ("options", ["A", "B", "C"]),
+        ("image_urls", ["https://example.invalid/changed.png"]),
+        ("content_objects", {"figures": ["Figure changed"]}),
+        ("requires_context", True),
+        ("order_index", 99),
+    ],
+)
+def test_type_replay_identity_binds_complete_source_inventory_item(
+    field,
+    changed_value,
+):
+    review = _review()
+    inventory = _inventory()
+    mined_types = _types()
+    baseline_context = gate.applied_result_context_hash(
+        review=review,
+        inventory=inventory,
+        mined_types=mined_types,
+        meta={"subject": "History"},
+    )
+    baseline_semantics = gate.applied_result_semantic_hash(
+        inventory=inventory,
+        mined_types=mined_types,
+    )
+    changed = copy.deepcopy(inventory)
+    changed["items"][0][field] = changed_value
+
+    assert gate.applied_result_context_hash(
+        review=review,
+        inventory=changed,
+        mined_types=mined_types,
+        meta={"subject": "History"},
+    ) != baseline_context
+    assert gate.applied_result_semantic_hash(
+        inventory=changed,
+        mined_types=mined_types,
+    ) != baseline_semantics
 
 
 def test_human_directed_consolidation_rejects_emitted_visual_semantic_drift(
