@@ -140,7 +140,7 @@ def _candidate_payload_row(
         "kind": str(block.get("kind") or ""),
         "subtopic_id": str(block.get("subtopic_id") or ""),
         "figure_id": str(block.get("figure_id") or source.get("figure_id") or ""),
-        "text": text,
+        "text": phase37._bounded_visual_evidence(text, limit=3000),
         "source_order": int(block.get("order") or 0),
         "source_start": int(block.get("source_start") or 0),
         "source_topic_id": source_topic_id,

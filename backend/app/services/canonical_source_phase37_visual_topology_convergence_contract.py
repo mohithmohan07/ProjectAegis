@@ -14,6 +14,8 @@ independently reviewed, happens before topology freeze and Type allocation, and
 is permitted only when no distinct source-supported teaching objective is lost.
 The later Type-host preflight remains authoritative and will create a necessary
 source-grounded concept if a mined method would otherwise be left without a host.
+Visual packets retain both source openings and caption-rich endings within a
+bounded per-block view; the exact canonical blocks remain unchanged.
 """
 from __future__ import annotations
 
@@ -184,6 +186,18 @@ def _evidence_text(
     return "\n".join(parts).strip()
 
 
+def _bounded_visual_evidence(value: object, *, limit: int) -> str:
+    """Bound a repeated packet while retaining source and visual-caption cues."""
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    marker = "\n[AEGIS BOUNDED VISUAL EVIDENCE]\n"
+    available = max(2, limit - len(marker))
+    tail = max(1, available // 3)
+    head = max(1, available - tail)
+    return text[:head].rstrip() + marker + text[-tail:].lstrip()
+
+
 def _graph_topic_excerpts(
     graph: dict[str, Any] | None = None,
     canonical: dict[str, Any] | None = None,
@@ -264,7 +278,7 @@ def _candidate_blocks(
                 "kind": str(block.get("kind") or ""),
                 "subtopic_id": str(block.get("subtopic_id") or ""),
                 "figure_id": figure_id,
-                "text": text,
+                "text": _bounded_visual_evidence(text, limit=3000),
             }
         )
     return usable, payload
@@ -304,10 +318,13 @@ def _topic_evidence(
             str(row.get("topic_id") or ""),
         ),
     )
+    limit = phase32._topic_evidence_limit()
     output: list[dict[str, Any]] = []
     for topic in topics:
         topic_id = str(topic.get("topic_id") or "")
         pieces: list[str] = []
+        used = 0
+        omitted = 0
         for block in graph_blocks:
             if str(block.get("topic_id") or "") != topic_id:
                 continue
@@ -318,10 +335,23 @@ def _topic_evidence(
                 continue
             figure_id = str(block.get("figure_id") or source.get("figure_id") or "")
             figure_suffix = f" | {figure_id}" if figure_id else ""
-            pieces.append(
+            rendered = (
                 f"[{block_id} | "
                 f"{str(block.get('subtopic_id') or 'NO-SUBTOPIC')} | "
-                f"{str(block.get('kind') or 'content')}{figure_suffix}] {text}"
+                f"{str(block.get('kind') or 'content')}{figure_suffix}] "
+                f"{_bounded_visual_evidence(text, limit=3000)}"
+            )
+            if used + len(rendered) > limit and pieces:
+                omitted += 1
+                continue
+            pieces.append(rendered)
+            used += len(rendered)
+        evidence = "\n\n".join(pieces)
+        if omitted:
+            evidence += (
+                f"\n\n[AEGIS NOTE: {omitted} later block(s) exceeded the "
+                "bounded visual topic-routing packet. Exact Phase 3.1 block "
+                "grounding remains mandatory before topology freeze.]"
             )
         output.append(
             {
@@ -329,7 +359,7 @@ def _topic_evidence(
                 "order": int(topic.get("order") or 0),
                 "title": str(topic.get("title") or ""),
                 "structural_number": str(topic.get("structural_number") or ""),
-                "evidence": "\n\n".join(pieces),
+                "evidence": evidence,
             }
         )
     return output, block_order
@@ -373,7 +403,7 @@ def _topic_source_blocks(
                 "figure_id": str(
                     block.get("figure_id") or source.get("figure_id") or ""
                 ),
-                "text": text,
+                "text": _bounded_visual_evidence(text, limit=3000),
             }
         )
     return blocks_by_topic, subtopic_by_block
@@ -935,9 +965,8 @@ def install() -> None:
     phase32._TOPOLOGY_VERSION = _TOPOLOGY_VERSION
     phase33._DECISION_CACHE_VERSION = _DECISION_CACHE_VERSION
 
-    # Install after Phase 3.5 so these full-evidence readers supersede the older
-    # provider-max wrappers that removed character clipping but still lost
-    # Figure captions during layout cleaning.
+    # Install after Phase 3.5 so these bounded visual readers preserve Figure
+    # captions that ordinary layout cleaning would otherwise remove.
     phase3.graph_topic_excerpts = _graph_topic_excerpts
     phase31._candidate_blocks = _candidate_blocks
     phase32._topic_evidence = _topic_evidence

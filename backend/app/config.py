@@ -168,9 +168,9 @@ def require_workbooks_live() -> None:
 
 
 # OpenAI model for concept extraction / pre-learning derivation. The same model
-# family the Create Workbooks pipeline is validated with. Provider-max mode is
-# enabled by default: every live call receives the model's full completion
-# allowance, and source input is preserved up to the remaining context capacity.
+# family the Create Workbooks pipeline is validated with. Provider-capacity mode
+# is enabled by default: live calls retain their purpose-specific budgets, capped
+# by the model's documented limits, and oversized source is losslessly batched.
 OPENAI_MODEL = configured_openai_model()
 OPENAI_PROVIDER_MAX_TOKENS = provider_max_tokens_enabled()
 OPENAI_CONTEXT_WINDOW_TOKENS = configured_context_window_tokens(OPENAI_MODEL)
@@ -179,9 +179,9 @@ OPENAI_MAX_INPUT_TOKENS = configured_max_input_tokens(
     OPENAI_MODEL,
     output_tokens=OPENAI_MAX_OUTPUT_TOKENS,
 )
-# Character-based legacy splitters use this only as a coarse lossless batching
-# threshold. One character per token is deliberately conservative for textbook
-# MMD; any larger input is split and merged rather than truncated.
+# Character-based capacity checks use this as a conservative upper boundary.
+# Purpose-specific splitters may choose smaller packets to improve coverage;
+# their concatenated source remains lossless.
 OPENAI_MAX_INPUT_CHARS = OPENAI_MAX_INPUT_TOKENS
 
 # ---- Multi-user safety ------------------------------------------------------

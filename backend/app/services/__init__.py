@@ -116,13 +116,13 @@ from .canonical_source_phase311_acsd_visual_display_projection_contract import (
 # schema-incomplete objects before they can masquerade as completed output. Phase
 # 3.4.2 isolates unresolved PDF batches and permits one final evidence-bound GPT
 # semantic reconstruction before the unchanged source verifier can stop the run.
-# Phase 3.5 installs last and removes Aegis-local token ceilings below the model's
-# provider limits: maximum output is requested on every live call, complete source
-# evidence is retained up to the context boundary, and oversized inputs are
-# losslessly batched rather than trimmed. Phase 3.5.1 applies the same capacity
-# policy to the vendored revision-workbook planner and authoring passes. Phase
-# 3.5.2 retains an explicit caller/test chunk boundary without changing the
-# provider-maximum production default. Phase 3.6 installs after every source and
+# Phase 3.5 treats model limits as ceilings while retaining purpose-specific
+# completion budgets and bounded semantic evidence views; the durable canonical
+# source remains available for targeted expansion, and oversized inputs are
+# losslessly batched. Phase 3.5.1 applies its workbook capacity policy to the
+# vendored revision-workbook planner and authoring passes. Phase 3.5.2 retains an
+# explicit caller/test chunk boundary without changing the production default.
+# Phase 3.6 installs after every source and
 # token contract so any remaining PDF source-critical failure is automatically
 # promoted to the full verified GPT PDF-to-ACSD lane during conversion or Resume.
 # Phase 3.7 installs last so visual captions/original-page evidence survive every
