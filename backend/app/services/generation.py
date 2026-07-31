@@ -1754,6 +1754,12 @@ Rules:
 - Every supplied source_question_id must remain exactly once in exactly one
   Example and one Type. Never add, remove, duplicate, paraphrase, or truncate
   an Example.
+- This is Type-only consolidation. Preserve concept_match_hint,
+  parent_concept_match_hint, difficulty_hint, cognitive_skill_hint, and
+  subject_skill_hint exactly for every owned QID. Preserve each QID's
+  case_signature and source-owned requires_visual value exactly. Because the
+  five hint fields are Type-level, merge only Types whose values are identical;
+  never average, generalize, or rewrite them to make a merge possible.
 - Merge Types when their verb/action, assessed object, required method,
   representation, constraints, and expected output describe the same reusable
   assessment pattern, even when their titles are paraphrases.
@@ -1782,9 +1788,12 @@ constraint, expected output, source topic, activity status, or placement
 scope. Reject one-Type-per-question renaming, superficial title-only changes,
 generic catch-all Types, and over-merging based only on shared context,
 difficulty, notation, person, country, or formula. Every supplied QID and Case
-must remain semantically accounted for. Treat the human direction as the goal,
-not as evidence that the proposed merge is correct. Confidence is your
-confidence in the verdict, from 0 to 1.
+must remain semantically accounted for. Reject any change to a QID's
+concept_match_hint, parent_concept_match_hint, difficulty_hint,
+cognitive_skill_hint, subject_skill_hint, case_signature, or source-owned
+requires_visual value. Treat the human direction as the goal, not as evidence
+that the proposed merge is correct. Confidence is your confidence in the
+verdict, from 0 to 1.
 """)
 
 prompts.register(
@@ -2460,14 +2469,19 @@ def _openai_json(
     retries: int = 3,
     *,
     purpose: OpenAIPurpose = "source_extraction",
+    single_attempt: bool = False,
 ) -> dict:
     """One JSON-mode chat call; returns the parsed object.
 
     Concurrency-safe for multiple simultaneous users on one shared API key:
     calls queue on a process-wide gate (never stampede the API), and
     transient failures — rate limits, timeouts, connection errors, 5xx —
-    are retried patiently with exponential backoff + Retry-After, so heavy
-    load makes jobs slower but never changes their output quality.
+    are normally retried patiently with exponential backoff + Retry-After, so
+    heavy load makes jobs slower but never changes their output quality.
+
+    ``single_attempt`` is reserved for explicitly human-authorized bounded
+    calls.  It guarantees at most one physical provider request by disabling
+    both this function's parse/transient retry loops and the SDK retry layer.
     """
     import json
     import time
@@ -2493,6 +2507,10 @@ def _openai_json(
     last_err: Exception | None = None
     attempt = 0  # hard failures (bad JSON, truncation, 4xx)
     transient = 0  # rate limits / timeouts / 5xx — retried patiently
+    hard_attempt_limit = 1 if single_attempt else max(1, int(retries))
+    transient_retry_limit = (
+        0 if single_attempt else config.OPENAI_TRANSIENT_RETRIES
+    )
     while True:
         try:
             _acquire_openai_slot(gate, purpose=purpose)
@@ -2539,7 +2557,12 @@ def _openai_json(
                 ) from e
             transient += 1
             last_err = e
-            if transient > config.OPENAI_TRANSIENT_RETRIES:
+            if transient > transient_retry_limit:
+                if single_attempt:
+                    raise RuntimeError(
+                        "OpenAI unavailable after 1 physical request "
+                        f"({type(e).__name__}): {e!r}"
+                    ) from e
                 raise RuntimeError(
                     f"OpenAI unavailable after {transient - 1} transient retries "
                     f"(rate limit/timeout): {e!r}"
@@ -2547,17 +2570,25 @@ def _openai_json(
             delay = _transient_backoff(e, transient)
             progress.log(
                 f"OpenAI busy ({type(e).__name__}) — waiting {delay:.0f}s before "
-                f"retry {transient}/{config.OPENAI_TRANSIENT_RETRIES}.",
+                f"retry {transient}/{transient_retry_limit}.",
                 level="warning",
             )
             time.sleep(delay)
         except Exception as e:  # noqa: BLE001 — retry then surface
             last_err = e
             attempt += 1
-            if attempt >= retries:
+            if attempt >= hard_attempt_limit:
                 break
             time.sleep(2)
-    raise RuntimeError(f"OpenAI extraction failed after {retries} retries: {last_err!r}")
+    if single_attempt:
+        raise RuntimeError(
+            "OpenAI extraction failed after 1 physical request: "
+            f"{last_err!r}"
+        )
+    raise RuntimeError(
+        f"OpenAI extraction failed after {hard_attempt_limit} retries: "
+        f"{last_err!r}"
+    )
 
 
 def _trim(text: str, max_chars: int = 220_000) -> str:
@@ -8540,9 +8571,11 @@ def _merge_equivalent_mined_types(types: list[dict]) -> list[dict]:
             bi.normalize_question_text(title),
             bi.normalize_question_text(mtype.get("type_description") or ""),
             bi.normalize_question_text(mtype.get("task_pattern") or ""),
-            bi.normalize_question_text(mtype.get("concept_match_hint") or ""),
-            bi.normalize_question_text(
-                mtype.get("parent_concept_match_hint") or ""),
+            str(mtype.get("concept_match_hint") or "").strip(),
+            str(mtype.get("parent_concept_match_hint") or "").strip(),
+            str(mtype.get("difficulty_hint") or "").strip(),
+            str(mtype.get("cognitive_skill_hint") or "").strip(),
+            str(mtype.get("subject_skill_hint") or "").strip(),
             bool(mtype.get("is_activity")),
             (mtype.get("placement_scope") or "").strip().lower(),
         )
@@ -8565,7 +8598,7 @@ def _merge_equivalent_mined_types(types: list[dict]) -> list[dict]:
         case_by_key = {
             (
                 bi.normalize_question_text(case.get("case_title") or ""),
-                bi.normalize_question_text(case.get("case_signature") or ""),
+                str(case.get("case_signature") or "").strip(),
                 (case.get("placement_scope") or "").strip().lower(),
             ): case
             for case in target_cases
@@ -8578,7 +8611,7 @@ def _merge_equivalent_mined_types(types: list[dict]) -> list[dict]:
             case = copy.deepcopy(raw_case)
             case_key = (
                 bi.normalize_question_text(case.get("case_title") or ""),
-                bi.normalize_question_text(case.get("case_signature") or ""),
+                str(case.get("case_signature") or "").strip(),
                 (case.get("placement_scope") or "").strip().lower(),
             )
             existing_case = case_by_key.get(case_key)
@@ -9571,6 +9604,86 @@ def _type_qid_contracts(types: list[dict]) -> dict[str, tuple[str, bool, str]]:
     return contracts
 
 
+_TYPE_ONLY_IMMUTABLE_FIELDS = (
+    "concept_match_hint",
+    "parent_concept_match_hint",
+    "difficulty_hint",
+    "cognitive_skill_hint",
+    "subject_skill_hint",
+)
+
+
+def _type_qid_semantic_contracts(
+    types: list[dict],
+    inventory: dict,
+    *,
+    honor_emitted_requires_visual: bool = False,
+) -> dict[str, dict]:
+    """Bind Type-only consolidation to each QID's immutable semantics.
+
+    Type hint fields are shared by every QID owned by that Type.  A merge can
+    therefore be safe only when the source Types agree on all of them.  Case
+    signatures remain QID-local, while ``requires_visual`` is authoritative in
+    the source inventory.  Candidate Examples may echo that visual flag; an
+    echoed mismatch is treated as drift instead of overriding the inventory.
+    """
+
+    visual_by_qid = {
+        str(item.get("qid") or "").strip(): bool(
+            item.get("requires_visual") is True
+        )
+        for item in (inventory or {}).get("items") or []
+        if isinstance(item, dict) and str(item.get("qid") or "").strip()
+    }
+    contracts: dict[str, dict] = {}
+    for mtype in types:
+        if not isinstance(mtype, dict):
+            continue
+        shared = {
+            field: copy.deepcopy(mtype.get(field, ""))
+            for field in _TYPE_ONLY_IMMUTABLE_FIELDS
+        }
+
+        def contract_for(qid: str, case_signature: object = "") -> dict:
+            requires_visual: object = visual_by_qid.get(qid, False)
+            if honor_emitted_requires_visual:
+                for raw_case in mtype.get("case_prompts") or []:
+                    if not isinstance(raw_case, dict):
+                        continue
+                    for example in _case_examples(raw_case):
+                        if (
+                            str(example.get("source_question_id") or "").strip()
+                            == qid
+                            and "requires_visual" in example
+                        ):
+                            emitted_visual = example.get("requires_visual")
+                            requires_visual = (
+                                emitted_visual
+                                if isinstance(emitted_visual, bool)
+                                else {
+                                    "invalid_type": type(
+                                        emitted_visual
+                                    ).__name__,
+                                    "value": copy.deepcopy(emitted_visual),
+                                }
+                            )
+            return {
+                **copy.deepcopy(shared),
+                "case_signature": copy.deepcopy(case_signature or ""),
+                "requires_visual": requires_visual,
+            }
+
+        for qid in _type_source_qids(mtype):
+            contracts.setdefault(qid, contract_for(qid))
+        for raw_case in mtype.get("case_prompts") or []:
+            if not isinstance(raw_case, dict):
+                continue
+            case_signature = raw_case.get("case_signature") or ""
+            for qid in _assignment_case_qids(raw_case):
+                contracts[qid] = contract_for(qid, case_signature)
+    return contracts
+
+
 def _consolidate_semantic_types_via_api(
     mined_types: dict, *, inventory: dict, meta: dict,
 ) -> dict:
@@ -9614,17 +9727,33 @@ def _consolidate_semantic_types_via_api(
         for qid in set(original_contracts) | set(candidate_contracts)
         if original_contracts.get(qid) != candidate_contracts.get(qid)
     }
+    original_semantics = _type_qid_semantic_contracts(original, inventory)
+    candidate_semantics = _type_qid_semantic_contracts(
+        candidate,
+        inventory,
+        honor_emitted_requires_visual=True,
+    )
+    semantic_drift = {
+        qid: {
+            "expected": original_semantics.get(qid),
+            "candidate": candidate_semantics.get(qid),
+        }
+        for qid in set(original_semantics) | set(candidate_semantics)
+        if original_semantics.get(qid) != candidate_semantics.get(qid)
+    }
     if (
         not candidate
         or len(candidate) > len(original)
         or missed
         or duplicates
         or contract_drift
+        or semantic_drift
     ):
         progress.log(
             "Rejected semantic Type consolidation: "
             f"{len(missed)} missing, {len(duplicates)} duplicate, "
             f"{len(contract_drift)} topic/activity/scope drift, "
+            f"{len(semantic_drift)} immutable semantic drift, "
             f"{len(candidate)} candidate vs {len(original)} original Types.",
             level="warning",
         )
@@ -9666,22 +9795,42 @@ def _type_sufficiency_payload(mtype: dict) -> dict:
     }
 
 
-def _type_granularity_critic_payload(mtype: dict) -> dict:
+def _type_granularity_critic_payload(
+    mtype: dict, *, inventory: dict,
+) -> dict:
     """Compact evidence for one independent consolidation review."""
 
+    visual_by_qid = {
+        str(item.get("qid") or "").strip(): bool(
+            item.get("requires_visual") is True
+        )
+        for item in (inventory or {}).get("items") or []
+        if isinstance(item, dict) and str(item.get("qid") or "").strip()
+    }
     return {
         "type_id": mtype.get("type_id", ""),
         "type_title": _trim(mtype.get("type_title", ""), 800),
         "type_description": _trim(
             mtype.get("type_description", ""), 1_600),
         "task_pattern": _trim(mtype.get("task_pattern", ""), 1_200),
+        "source_question_ids": [
+            str(qid) for qid in mtype.get("source_question_ids") or []
+        ],
+        "concept_match_hint": mtype.get("concept_match_hint", ""),
+        "parent_concept_match_hint": mtype.get(
+            "parent_concept_match_hint", ""
+        ),
         "topic_match_hint": mtype.get("topic_match_hint", ""),
+        "difficulty_hint": mtype.get("difficulty_hint", ""),
+        "cognitive_skill_hint": mtype.get("cognitive_skill_hint", ""),
+        "subject_skill_hint": mtype.get("subject_skill_hint", ""),
         "is_activity": bool(mtype.get("is_activity")),
         "placement_scope": mtype.get("placement_scope", ""),
         "cases": [
             {
                 "case_id": case.get("case_id", ""),
                 "case_title": _trim(case.get("case_title", ""), 800),
+                "case_signature": case.get("case_signature", ""),
                 "placement_scope": case.get("placement_scope", ""),
                 "examples": [
                     {
@@ -9689,6 +9838,12 @@ def _type_granularity_critic_payload(mtype: dict) -> dict:
                             "source_question_id", ""),
                         "example_prompt": _trim(
                             example.get("example_prompt", ""), 800),
+                        "requires_visual": visual_by_qid.get(
+                            str(example.get(
+                                "source_question_id", ""
+                            )).strip(),
+                            False,
+                        ),
                     }
                     for example in _case_examples(case)
                 ],
@@ -9723,9 +9878,9 @@ def _human_directed_type_consolidation_via_api(
     """Run exactly one human-authorized proposal and one independent critic.
 
     The provider pair can only reduce Type count. Deterministic gates retain
-    authority over exact QID coverage, Example wording, and every
-    topic/activity/scope contract; the independent critic then checks whether
-    the proposed semantic merges are genuinely reusable rather than generic.
+    authority over exact QID coverage, Example wording, and every immutable
+    QID/Case semantic contract; the independent critic then checks whether the
+    proposed semantic merges are genuinely reusable rather than generic.
     """
     import json as _json
 
@@ -9742,10 +9897,16 @@ def _human_directed_type_consolidation_via_api(
         + direction
         + "\n\nCURRENT COMPLETE TYPE TAXONOMY:\n"
         + _json.dumps({"types": original}, ensure_ascii=False)
+        + "\n\nSOURCE-OWNED PER-QID SEMANTICS (immutable):\n"
+        + _json.dumps(
+            _type_qid_semantic_contracts(original, inventory),
+            ensure_ascii=False,
+        )
         + "\n\nReturn one COMPLETE replacement {\"types\": [...]} list. "
         "Preserve every QID exactly once, every Example word-for-word, and "
-        "every topic/activity/placement-scope contract. Merge only genuinely "
-        "reusable assessment patterns. This is the sole proposal attempt."
+        "every topic/activity/placement-scope and immutable per-QID semantic "
+        "contract. Merge only genuinely reusable assessment patterns. This "
+        "is the sole physical proposal request."
     )
     progress.log(
         "Applying the saved Type-granularity direction with one bounded "
@@ -9755,13 +9916,14 @@ def _human_directed_type_consolidation_via_api(
         data = _openai_json(
             prompts.get_text("concepts.type_semantic_consolidation.system"),
             proposal_user,
-            retries=2,
+            retries=1,
             purpose="concept_mapping",
+            single_attempt=True,
         )
     except Exception:
         # Authentication, quota, transport exhaustion, and malformed provider
         # output are operational/mechanical failures, not semantic choices.
-        # ``retries=2`` already permits one bounded mechanical correction.
+        # The saved human choice authorizes one physical proposal request.
         raise
 
     from .semantic_recovery import ProviderResponseContractError
@@ -9798,6 +9960,20 @@ def _human_directed_type_consolidation_via_api(
         for qid in original_wording
         if candidate_wording.get(qid) != original_wording[qid]
     }
+    original_semantics = _type_qid_semantic_contracts(original, inventory)
+    candidate_semantics = _type_qid_semantic_contracts(
+        candidate,
+        inventory,
+        honor_emitted_requires_visual=True,
+    )
+    semantic_drift = {
+        qid: {
+            "expected": original_semantics.get(qid),
+            "candidate": candidate_semantics.get(qid),
+        }
+        for qid in set(original_semantics) | set(candidate_semantics)
+        if original_semantics.get(qid) != candidate_semantics.get(qid)
+    }
     if (
         not candidate
         or len(candidate) >= len(original)
@@ -9805,13 +9981,15 @@ def _human_directed_type_consolidation_via_api(
         or duplicates
         or contract_drift
         or wording_drift
+        or semantic_drift
     ):
         reason = (
             "The proposed taxonomy failed deterministic safety gates: "
             f"{len(candidate)} candidate vs {len(original)} current Types, "
             f"{len(missed)} missing QID(s), {len(duplicates)} duplicate "
             f"assignment(s), {len(contract_drift)} topic/activity/scope "
-            f"drift(s), and {len(wording_drift)} changed Example(s)."
+            f"drift(s), {len(wording_drift)} changed Example(s), and "
+            f"{len(semantic_drift)} immutable semantic drift(s)."
         )
         progress.log(reason, level="warning")
         return None, reason, {
@@ -9820,6 +9998,7 @@ def _human_directed_type_consolidation_via_api(
             "duplicate_qids": len(duplicates),
             "contract_drift": len(contract_drift),
             "wording_drift": len(wording_drift),
+            "semantic_drift": len(semantic_drift),
         }
 
     critic_user = (
@@ -9829,20 +10008,25 @@ def _human_directed_type_consolidation_via_api(
         + "\n\nCURRENT TYPES:\n"
         + _json.dumps({
             "types": [
-                _type_granularity_critic_payload(mtype)
+                _type_granularity_critic_payload(
+                    mtype, inventory=inventory
+                )
                 for mtype in original
             ],
         }, ensure_ascii=False)
         + "\n\nPROPOSED CONSOLIDATED TYPES:\n"
         + _json.dumps({
             "types": [
-                _type_granularity_critic_payload(mtype)
+                _type_granularity_critic_payload(
+                    mtype, inventory=inventory
+                )
                 for mtype in candidate
             ],
         }, ensure_ascii=False)
         + "\n\nDeterministic exact-QID, Example wording, and "
-        "topic/activity/scope checks have passed. Independently decide "
-        "whether the semantic merges themselves are valid."
+        "topic/activity/scope and immutable per-QID semantic checks have "
+        "passed. Independently decide whether the semantic merges themselves "
+        "are valid."
     )
     progress.log(
         "Independently reviewing the human-directed Type consolidation."
@@ -9851,13 +10035,14 @@ def _human_directed_type_consolidation_via_api(
         critic = _openai_json(
             prompts.get_text("concepts.type_granularity_critic.system"),
             critic_user,
-            retries=2,
+            retries=1,
             purpose="concept_validation",
+            single_attempt=True,
         )
     except Exception:
         # A missing/invalid critic response cannot be converted into a human
         # semantic answer. Preserve the checkpoint and fail at the provider
-        # boundary after the one allowed mechanical correction.
+        # boundary without spending a second physical request.
         raise
     verdict = str((critic or {}).get("verdict") or "").strip().casefold()
     confidence = (critic or {}).get("confidence")
@@ -18067,6 +18252,28 @@ def _valid_completed_skeleton_chunks(value) -> bool:
     return True
 
 
+def _type_granularity_replay_seal_valid(checkpoint: dict) -> bool:
+    """Validate an applied human Type decision at every resumable stage."""
+
+    mined_types = checkpoint.get("mined_types")
+    if not isinstance(mined_types, dict):
+        return True
+    review = mined_types.get("_granularity_review")
+    if not isinstance(review, dict):
+        return True
+    applied = review.get("human_resolution")
+    if not isinstance(applied, dict) or not applied.get("decision_id"):
+        return True
+    stored = str(applied.get("semantic_contract_hash") or "")
+    if not re.fullmatch(r"[0-9a-f]{64}", stored):
+        return False
+    expected = type_granularity_decision.applied_result_semantic_hash(
+        inventory=checkpoint.get("question_task_inventory"),
+        mined_types=mined_types,
+    )
+    return stored == expected
+
+
 def _compatible_concept_checkpoint_entry(checkpoint: dict | None) -> bool:
     """Whether this deployment can safely consume one serialized stage."""
     if not isinstance(checkpoint, dict):
@@ -18086,6 +18293,7 @@ def _compatible_concept_checkpoint_entry(checkpoint: dict | None) -> bool:
             and not _invalid_inventory_items(
                 checkpoint.get("question_task_inventory")
             )
+            and _type_granularity_replay_seal_valid(checkpoint)
         )
     spec = _CONCEPT_CHECKPOINT_STAGES.get(stage)
     if schema != _CONCEPT_CHECKPOINT_SCHEMA or spec is None:
@@ -18156,6 +18364,12 @@ def _compatible_concept_checkpoint_entry(checkpoint: dict | None) -> bool:
         "post_type_assignment",
         "final_content_ready",
     } and not _checkpoint_has_fields(checkpoint, ("mined_types", dict)):
+        return False
+    if stage in {
+        _CONCEPT_CHECKPOINT_STAGE,
+        "post_type_assignment",
+        "final_content_ready",
+    } and not _type_granularity_replay_seal_valid(checkpoint):
         return False
     if (
         stage in {"post_type_assignment", "final_content_ready"}
@@ -19029,6 +19243,12 @@ def _run_live_concept_pre_final_stages(
                         inventory=question_task_inventory,
                         mined_types=mined_types,
                         meta=meta,
+                    )
+                )
+                review["human_resolution"]["semantic_contract_hash"] = (
+                    type_granularity_decision.applied_result_semantic_hash(
+                        inventory=question_task_inventory,
+                        mined_types=mined_types,
                     )
                 )
                 mined_types["_granularity_review"] = copy.deepcopy(review)

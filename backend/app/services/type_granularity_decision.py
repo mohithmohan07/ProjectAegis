@@ -24,7 +24,7 @@ from . import semantic_confidence_policy as confidence_policy
 from .semantic_recovery import HumanDecisionRequired
 
 
-_GATE_VERSION = "type-granularity-human-gate-1"
+_GATE_VERSION = "type-granularity-human-gate-2"
 _MIN_INVENTORY_ITEMS = 12
 _MIN_TYPE_COUNT = 10
 _HIGH_TYPE_QID_RATIO = 0.80
@@ -95,6 +95,7 @@ def _inventory_identity(inventory: Mapping[str, Any] | None) -> list[dict]:
             "task_kind": str(item.get("task_kind") or ""),
             "is_activity": bool(item.get("is_activity")),
             "placement_scope": str(item.get("placement_scope") or ""),
+            "requires_visual": bool(item.get("requires_visual") is True),
             "wording_sha256": hashlib.sha256(
                 wording.encode("utf-8")
             ).hexdigest(),
@@ -135,6 +136,7 @@ def _type_identity(mined_types: Mapping[str, Any] | None) -> list[dict]:
             cases.append({
                 "case_id": str(case.get("case_id") or ""),
                 "case_title": str(case.get("case_title") or ""),
+                "case_signature": str(case.get("case_signature") or ""),
                 "placement_scope": str(case.get("placement_scope") or ""),
                 "examples": examples,
             })
@@ -143,10 +145,23 @@ def _type_identity(mined_types: Mapping[str, Any] | None) -> list[dict]:
             "type_title": str(mtype.get("type_title") or ""),
             "type_description": str(mtype.get("type_description") or ""),
             "task_pattern": str(mtype.get("task_pattern") or ""),
+            "concept_match_hint": str(
+                mtype.get("concept_match_hint") or ""
+            ),
+            "parent_concept_match_hint": str(
+                mtype.get("parent_concept_match_hint") or ""
+            ),
             "source_question_ids": [
                 str(qid) for qid in mtype.get("source_question_ids") or []
             ],
             "topic_match_hint": str(mtype.get("topic_match_hint") or ""),
+            "difficulty_hint": str(mtype.get("difficulty_hint") or ""),
+            "cognitive_skill_hint": str(
+                mtype.get("cognitive_skill_hint") or ""
+            ),
+            "subject_skill_hint": str(
+                mtype.get("subject_skill_hint") or ""
+            ),
             "is_activity": bool(mtype.get("is_activity")),
             "placement_scope": str(mtype.get("placement_scope") or ""),
             "cases": cases,
@@ -324,7 +339,7 @@ def applied_result_context_hash(
         )
     }
     return _sha256_json({
-        "version": "type-granularity-applied-result-1",
+        "version": "type-granularity-applied-result-2",
         "semantic_confidence_policy": confidence_policy.cache_identity(),
         "metadata": {
             key: str((meta or {}).get(key) or "")
@@ -334,6 +349,28 @@ def applied_result_context_hash(
             )
         },
         "review": stable_review,
+        "inventory": _inventory_identity(inventory),
+        "types": _type_identity(mined_types),
+    })
+
+
+def applied_result_semantic_hash(
+    *,
+    inventory: Mapping[str, Any] | None,
+    mined_types: Mapping[str, Any] | None,
+) -> str:
+    """Metadata-independent replay seal for every later checkpoint stage.
+
+    Post-assignment and final checkpoints resume after the interactive gate,
+    where runtime metadata is no longer available to the shape-compatibility
+    selector.  This seal still binds every source task, immutable Type/Case
+    field, and visual requirement so a changed/tampered result cannot bypass
+    the approved Type-only consolidation on a later-stage replay.
+    """
+
+    return _sha256_json({
+        "version": "type-granularity-applied-semantics-1",
+        "semantic_confidence_policy": confidence_policy.cache_identity(),
         "inventory": _inventory_identity(inventory),
         "types": _type_identity(mined_types),
     })
@@ -477,6 +514,7 @@ def resolve_or_pause(
 
 __all__ = [
     "applied_result_context_hash",
+    "applied_result_semantic_hash",
     "build_review",
     "human_resolution_context",
     "is_anomalously_fragmented",

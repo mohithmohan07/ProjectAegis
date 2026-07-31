@@ -33,7 +33,7 @@ from . import canonical_source_phase34_structured_output_contract as phase34
 from . import generation
 from . import progress
 
-_CONTRACT_VERSION = 2
+_CONTRACT_VERSION = 3
 
 
 def _active() -> bool:
@@ -95,15 +95,23 @@ def install() -> None:
         retries: int = 3,
         *,
         purpose="source_extraction",
+        single_attempt: bool = False,
     ) -> dict:
         _log_policy_once()
         effective = _bounded_completion(max_tokens) if _active() else max_tokens
+        kwargs = {
+            "max_tokens": effective,
+            "retries": retries,
+            "purpose": purpose,
+        }
+        if single_attempt:
+            # Preserve compatibility with older injected callables while
+            # forwarding the bounded-call contract whenever it is active.
+            kwargs["single_attempt"] = True
         return generation._PHASE35_ORIGINAL_OPENAI_JSON(
             system,
             user,
-            max_tokens=effective,
-            retries=retries,
-            purpose=purpose,
+            **kwargs,
         )
 
     generation._openai_json = openai_json_provider_ceiling
