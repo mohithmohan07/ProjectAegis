@@ -285,6 +285,56 @@ function sourceReviewDecisionFixture(
   };
 }
 
+function typeGranularityDecisionFixture(): PendingSemanticDecision {
+  return {
+    decision_id: "type-granularity-abc123",
+    kind: "type_granularity_review",
+    phase: "type_mining",
+    conflict: "The mined assessment taxonomy may be too fragmented.",
+    diagnosis:
+      "Aegis found 25 Types for 26 source questions/tasks (96%). The normal "
+      + "consolidation pass merged 0.",
+    decision_question:
+      "Should Aegis keep these distinct Types, or run one bounded "
+      + "proposal-and-critic pair?",
+    item: {
+      unit_id: "",
+      type_id: "TYPE-GRANULARITY-REVIEW",
+      type_title: "25 Types for 26 QIDs",
+      qids: ["QINV-0001", "QINV-0002"],
+      questions: [],
+      topic: "Chapter-wide Type taxonomy",
+    },
+    candidates: [],
+    evidence: [
+      { page: "", label: "Type-to-QID ratio", text: "25/26 (96.2%)" },
+      {
+        page: "",
+        label: "Ordinary consolidation result",
+        text: "0 Type(s) merged",
+      },
+    ],
+    options: [
+      {
+        choice: "consolidate_types",
+        label: "Consolidate into fewer reusable Types",
+        recommended: true,
+      },
+      {
+        choice: "keep_distinct_types",
+        label: "Keep the current distinct Types",
+        recommended: false,
+      },
+      {
+        choice: "custom_instruction",
+        label: "Specify a grouping rule or target range",
+        recommended: false,
+      },
+    ],
+    cumulative_usage: cumulativeUsage(1781587),
+  };
+}
+
 function savedJob(overrides: Partial<UploadJob> = {}): UploadJob {
   return {
     id: 42,
@@ -585,6 +635,47 @@ test("pauses for a semantic decision and saving it never resumes implicitly", as
     name: "Resume generation",
   }));
   await waitFor(() => expect(streamMock).toHaveBeenCalledTimes(2));
+});
+
+test("Type granularity pause offers quality-safe consolidation or keep choices", async () => {
+  streamMock.mockResolvedValueOnce({
+    job_id: 42,
+    status: "awaiting_decision",
+    pending_decision: typeGranularityDecisionFixture(),
+    resume_required: false,
+  });
+
+  renderPage();
+  fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+  fireEvent.click(await screen.findByRole("button", {
+    name: "Select Electricity target",
+  }));
+  fireEvent.click(screen.getByRole("button", {
+    name: "Resume from 91% checkpoint",
+  }));
+
+  expect(await screen.findByText(/25 Types for 26 source questions/))
+    .toBeDefined();
+  expect(screen.getByText(/one bounded GPT proposal plus an independent critic/))
+    .toBeDefined();
+  expect(screen.getByText(/exact QID coverage, source wording, topic/))
+    .toBeDefined();
+  expect(screen.getAllByRole("radio").every((radio) =>
+    !(radio as HTMLInputElement).checked)).toBe(true);
+
+  fireEvent.click(screen.getByRole("radio", {
+    name: /Consolidate into fewer reusable Types/,
+  }));
+  fireEvent.click(screen.getByRole("button", { name: "Save decision" }));
+
+  await waitFor(() => {
+    expect(apiMock.submitConceptDecision).toHaveBeenCalledWith(
+      42,
+      "type-granularity-abc123",
+      { choice: "consolidate_types" },
+    );
+  });
+  expect(streamMock).toHaveBeenCalledTimes(1);
 });
 
 test("a replacement post-learning job clears a stale pending decision", async () => {

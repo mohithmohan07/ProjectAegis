@@ -1223,6 +1223,12 @@ function decisionOptionDescription(
   if (option.choice === "replace_source") {
     return "Stop at this checkpoint so you can correct or replace the source file; Aegis will not change it automatically.";
   }
+  if (option.choice === "consolidate_types") {
+    return "Run one bounded GPT proposal plus an independent critic; exact QID coverage, source wording, topic, activity, and scope checks still apply.";
+  }
+  if (option.choice === "keep_distinct_types") {
+    return "Keep the current source-complete taxonomy and continue to the normal Type-host and final validation gates.";
+  }
   if (option.choice === "expand_existing") {
     return recommendedCandidate
       ? `Extend ${candidateTitle(recommendedCandidate)} so it covers the missing requirement.`

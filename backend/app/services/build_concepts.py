@@ -42,6 +42,7 @@ from . import (
     openai_usage,
     progress,
     semantic_recovery,
+    type_granularity_decision,
     uploads,
 )
 
@@ -268,7 +269,10 @@ def _human_decision_resolution_context(checkpoint: dict | None):
         copy.deepcopy(resolutions)
     ):
         with phase33.human_resolution_context(copy.deepcopy(resolutions)):
-            yield
+            with type_granularity_decision.human_resolution_context(
+                copy.deepcopy(resolutions)
+            ):
+                yield
 
 
 def _find_concept_in_chapter(

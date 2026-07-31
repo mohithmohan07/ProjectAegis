@@ -121,6 +121,8 @@ export type SemanticDecisionChoice =
   | "accept_recommended"
   | "select_candidate"
   | "replace_source"
+  | "consolidate_types"
+  | "keep_distinct_types"
   | "custom_instruction";
 
 export interface SemanticDecisionCandidate {
