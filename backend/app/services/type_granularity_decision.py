@@ -175,6 +175,7 @@ def build_review(
     consolidated_type_count: int,
     inventory_count: int,
     sufficiency_added_concepts: int,
+    sufficiency_audit_complete: bool = True,
 ) -> dict[str, Any]:
     """Return the deterministic metrics saved beside the mined taxonomy."""
 
@@ -190,6 +191,7 @@ def build_review(
             0, raw_type_count - consolidated_type_count),
         "sufficiency_added_concepts": max(
             0, int(sufficiency_added_concepts or 0)),
+        "sufficiency_audit_complete": bool(sufficiency_audit_complete),
         "type_qid_ratio": (
             consolidated_type_count / inventory_count
             if inventory_count else 0.0
@@ -335,6 +337,7 @@ def applied_result_context_hash(
             "inventory_count",
             "consolidation_merged_count",
             "sufficiency_added_concepts",
+            "sufficiency_audit_complete",
             "type_qid_ratio",
         )
     }
@@ -388,6 +391,8 @@ def _pending_decision(
     ratio = float(review.get("type_qid_ratio") or 0.0)
     merged = int(review.get("consolidation_merged_count") or 0)
     additions = int(review.get("sufficiency_added_concepts") or 0)
+    sufficiency_complete = bool(
+        review.get("sufficiency_audit_complete", True))
     qids = [
         str(item.get("qid") or "")
         for item in (inventory or {}).get("items") or []
@@ -401,8 +406,16 @@ def _pending_decision(
         if follow_up else (
             f"Aegis found {type_count} Types for {inventory_count} source "
             f"questions/tasks ({ratio:.0%}). The normal consolidation pass "
-            f"merged {merged}; the concept-sufficiency audit added "
-            f"{additions} method concept(s). This can be valid, but it is "
+            f"merged {merged}. "
+            + (
+                "The concept-sufficiency audit will run once after this "
+                "decision. "
+                if not sufficiency_complete else (
+                    "The concept-sufficiency audit added "
+                    f"{additions} method concept(s). "
+                )
+            )
+            + "This can be valid, but it is "
             "also the deterministic signature of one-Type-per-question "
             "fragmentation."
         )
@@ -422,7 +435,7 @@ def _pending_decision(
             "proposal-and-critic pair to consolidate only genuinely reusable "
             "assessment patterns?"
         ),
-        "checkpoint_progress": 0.81,
+        "checkpoint_progress": 0.76,
         "item": {
             "type_id": "TYPE-GRANULARITY-REVIEW",
             "type_title": f"{type_count} Types for {inventory_count} QIDs",
@@ -442,11 +455,15 @@ def _pending_decision(
                 "label": "Ordinary consolidation result",
                 "text": f"{merged} Type(s) merged",
             },
-            {
+            ({
+                "page": "",
+                "label": "Concept sufficiency timing",
+                "text": "Runs once after this decision",
+            } if not sufficiency_complete else {
                 "page": "",
                 "label": "Concept sufficiency result",
                 "text": f"{additions} method concept(s) added",
-            },
+            }),
         ],
         "deferred_assignment_unit_ids": qids,
         "options": [

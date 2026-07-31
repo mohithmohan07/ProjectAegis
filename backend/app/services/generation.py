@@ -18086,6 +18086,7 @@ def chapter_meta_via_api(
 _LEGACY_CONCEPT_CHECKPOINT_SCHEMA = 2
 _CONCEPT_CHECKPOINT_SCHEMA = 3
 _CONCEPT_CHECKPOINT_FORMAT = "aegis-concept-stage-history"
+_TYPE_TAXONOMY_CHECKPOINT_STAGE = "type_taxonomy_ready"
 _CONCEPT_CHECKPOINT_STAGE = "pre_type_assignment"
 
 # Stage versions describe the serialized artifact contract, not the git
@@ -18134,6 +18135,12 @@ _CONCEPT_CHECKPOINT_STAGES = {
         "progress": 0.70,
         "label": "Question and task inventory complete",
     },
+    _TYPE_TAXONOMY_CHECKPOINT_STAGE: {
+        "order": 55,
+        "version": 1,
+        "progress": 0.76,
+        "label": "Reusable Type taxonomy ready for granularity review",
+    },
     _CONCEPT_CHECKPOINT_STAGE: {
         "order": 60,
         "version": 1,
@@ -18177,6 +18184,7 @@ _POST_CONCEPT_CHECKPOINT_STAGES = {
     "canonical_skeleton",
     "description_method_snapshot",
     "question_inventory",
+    _TYPE_TAXONOMY_CHECKPOINT_STAGE,
     _CONCEPT_CHECKPOINT_STAGE,
     "post_type_assignment",
     "final_content_ready",
@@ -18331,6 +18339,7 @@ def _compatible_concept_checkpoint_entry(checkpoint: dict | None) -> bool:
     if stage in {
         "description_method_snapshot",
         "question_inventory",
+        _TYPE_TAXONOMY_CHECKPOINT_STAGE,
         _CONCEPT_CHECKPOINT_STAGE,
         "post_type_assignment",
         "final_content_ready",
@@ -18340,6 +18349,7 @@ def _compatible_concept_checkpoint_entry(checkpoint: dict | None) -> bool:
         return False
     if stage in {
         "question_inventory",
+        _TYPE_TAXONOMY_CHECKPOINT_STAGE,
         _CONCEPT_CHECKPOINT_STAGE,
         "post_type_assignment",
         "final_content_ready",
@@ -18349,6 +18359,7 @@ def _compatible_concept_checkpoint_entry(checkpoint: dict | None) -> bool:
         return False
     if stage in {
         "question_inventory",
+        _TYPE_TAXONOMY_CHECKPOINT_STAGE,
         _CONCEPT_CHECKPOINT_STAGE,
         "post_type_assignment",
         "final_content_ready",
@@ -18360,6 +18371,7 @@ def _compatible_concept_checkpoint_entry(checkpoint: dict | None) -> bool:
         # would otherwise fail at 98% on every retry.
         return False
     if stage in {
+        _TYPE_TAXONOMY_CHECKPOINT_STAGE,
         _CONCEPT_CHECKPOINT_STAGE,
         "post_type_assignment",
         "final_content_ready",
@@ -18833,7 +18845,9 @@ def _run_live_concept_pre_final_stages(
         if saved_order >= _checkpoint_order("question_inventory"):
             question_task_inventory = copy.deepcopy(
                 saved.get("question_task_inventory") or {})
-        if saved_order >= _checkpoint_order(_CONCEPT_CHECKPOINT_STAGE):
+        if saved_order >= _checkpoint_order(
+            _TYPE_TAXONOMY_CHECKPOINT_STAGE
+        ):
             mined_types = copy.deepcopy(saved.get("mined_types") or {})
         if saved_order >= _checkpoint_order("question_inventory"):
             restored_inventory = copy.deepcopy(question_task_inventory)
@@ -18851,7 +18865,7 @@ def _run_live_concept_pre_final_stages(
                 )
             if (
                 saved_order >= _checkpoint_order(
-                    _CONCEPT_CHECKPOINT_STAGE)
+                    _TYPE_TAXONOMY_CHECKPOINT_STAGE)
                 and (
                     inventory_refreshed
                     or (
@@ -18864,7 +18878,13 @@ def _run_live_concept_pre_final_stages(
                     mined_types,
                     inventory=question_task_inventory,
                     meta=meta,
-                    use_api=True,
+                    # The early taxonomy checkpoint was already exact-covered
+                    # before it was persisted. Revalidate it deterministically,
+                    # but never insert an unapproved paid repair before applying
+                    # the saved human direction.
+                    use_api=(
+                        saved_stage != _TYPE_TAXONOMY_CHECKPOINT_STAGE
+                    ),
                 )
                 if (
                     inventory_refreshed
@@ -18876,7 +18896,7 @@ def _run_live_concept_pre_final_stages(
                     _reset_placement_certifications(mined_types)
             if (
                 saved_order >= _checkpoint_order(
-                    _CONCEPT_CHECKPOINT_STAGE)
+                    _TYPE_TAXONOMY_CHECKPOINT_STAGE)
                 and bool((mined_types or {}).get("types"))
             ):
                 # This optional model hint is not part of semantic inventory
@@ -19058,7 +19078,8 @@ def _run_live_concept_pre_final_stages(
                 method_row_snapshot),
         )
 
-    if saved_order < _checkpoint_order(_CONCEPT_CHECKPOINT_STAGE):
+    review: dict = {}
+    if saved_order < _checkpoint_order(_TYPE_TAXONOMY_CHECKPOINT_STAGE):
         progress.step(
             "Concept extraction — mining reusable Types", value=0.72)
         mined_types = _mine_types_from_inventory_via_api(
@@ -19068,29 +19089,26 @@ def _run_live_concept_pre_final_stages(
             mined_types, inventory=question_task_inventory, meta=meta)
         consolidated_type_count = len(
             (mined_types or {}).get("types") or [])
-        concept_count_before_sufficiency = len(out)
-        out = _add_missing_type_method_concepts_via_api(
-            out, mined_types=mined_types, meta=meta)
-        mined_types["_granularity_review"] = (
-            type_granularity_decision.build_review(
-                raw_type_count=raw_type_count,
-                consolidated_type_count=consolidated_type_count,
-                inventory_count=len(
-                    (question_task_inventory or {}).get("items") or []),
-                sufficiency_added_concepts=(
-                    len(out) - concept_count_before_sufficiency),
-            )
+        review = type_granularity_decision.build_review(
+            raw_type_count=raw_type_count,
+            consolidated_type_count=consolidated_type_count,
+            inventory_count=len(
+                (question_task_inventory or {}).get("items") or []),
+            sufficiency_added_concepts=0,
+            sufficiency_audit_complete=False,
         )
-        if len(out) > concept_count_before_sufficiency:
-            out = _ensure_mastery_lines_via_api(out, meta=meta)
+        mined_types["_granularity_review"] = copy.deepcopy(review)
         progress.set_progress(
-            0.79, label="Concept extraction — reusable Types mined")
-        progress.step(
-            "Concept extraction — building culminations", value=0.81)
-        out = _build_culminations_via_api(out, meta=meta)
+            0.76,
+            label="Concept extraction — Type taxonomy ready for review",
+        )
+        # This checkpoint is intentionally before concept sufficiency, mastery,
+        # and culmination authoring. A fragmentation pause therefore incurs none
+        # of those downstream calls, and the accepted taxonomy becomes their
+        # single source of truth on explicit resume.
         _emit_concept_checkpoint(
             checkpoint_callback,
-            _CONCEPT_CHECKPOINT_STAGE,
+            _TYPE_TAXONOMY_CHECKPOINT_STAGE,
             records=out,
             question_task_inventory=question_task_inventory,
             mined_types=mined_types,
@@ -19099,13 +19117,13 @@ def _run_live_concept_pre_final_stages(
         )
 
     if saved_order <= _checkpoint_order(_CONCEPT_CHECKPOINT_STAGE):
-        review = copy.deepcopy(
-            (mined_types or {}).get("_granularity_review") or {})
+        if not review:
+            review = copy.deepcopy(
+                (mined_types or {}).get("_granularity_review") or {})
         if not review:
             # Checkpoints created before this gate did not persist raw-vs-
             # consolidated counts. Treat the saved taxonomy as the baseline;
-            # a strong near-one-Type-per-QID signal still merits one human
-            # look before the expensive post-81% work resumes.
+            # a strong near-one-Type-per-QID signal still merits one human look.
             current_type_count = len(
                 (mined_types or {}).get("types") or [])
             review = type_granularity_decision.build_review(
@@ -19114,6 +19132,10 @@ def _run_live_concept_pre_final_stages(
                 inventory_count=len(
                     (question_task_inventory or {}).get("items") or []),
                 sufficiency_added_concepts=0,
+                sufficiency_audit_complete=(
+                    saved_order
+                    >= _checkpoint_order(_CONCEPT_CHECKPOINT_STAGE)
+                ),
             )
             mined_types["_granularity_review"] = copy.deepcopy(review)
 
@@ -19146,6 +19168,8 @@ def _run_live_concept_pre_final_stages(
                         (question_task_inventory or {}).get("items") or []),
                     sufficiency_added_concepts=int(
                         review.get("sufficiency_added_concepts") or 0),
+                    sufficiency_audit_complete=bool(
+                        review.get("sufficiency_audit_complete", True)),
                 )
                 mined_types["_granularity_review"] = copy.deepcopy(review)
                 applied = None
@@ -19184,7 +19208,12 @@ def _run_live_concept_pre_final_stages(
                         review)
                     _emit_concept_checkpoint(
                         checkpoint_callback,
-                        _CONCEPT_CHECKPOINT_STAGE,
+                        (
+                            _CONCEPT_CHECKPOINT_STAGE
+                            if saved_order >= _checkpoint_order(
+                                _CONCEPT_CHECKPOINT_STAGE)
+                            else _TYPE_TAXONOMY_CHECKPOINT_STAGE
+                        ),
                         records=out,
                         question_task_inventory=question_task_inventory,
                         mined_types=mined_types,
@@ -19252,18 +19281,64 @@ def _run_live_concept_pre_final_stages(
                     )
                 )
                 mined_types["_granularity_review"] = copy.deepcopy(review)
-                # Replace the same durable 81% stage. If a later unrelated
-                # failure resumes here, the accepted human direction is not
-                # billed or requested a second time.
+                # Persist the accepted direction before any downstream API pass.
+                # If a later unrelated failure resumes here, the direction is
+                # neither billed nor requested a second time. Legacy 81%
+                # checkpoints retain their already-completed downstream rows.
                 _emit_concept_checkpoint(
                     checkpoint_callback,
-                    _CONCEPT_CHECKPOINT_STAGE,
+                    (
+                        _CONCEPT_CHECKPOINT_STAGE
+                        if saved_order >= _checkpoint_order(
+                            _CONCEPT_CHECKPOINT_STAGE)
+                        else _TYPE_TAXONOMY_CHECKPOINT_STAGE
+                    ),
                     records=out,
                     question_task_inventory=question_task_inventory,
                     mined_types=mined_types,
                     method_row_snapshot=_serialize_method_row_snapshot(
                         method_row_snapshot),
                 )
+
+    if saved_order < _checkpoint_order(_CONCEPT_CHECKPOINT_STAGE):
+        # These calls must observe the final taxonomy (automatic, explicitly
+        # kept, or human-consolidated) and must not run before a human pause.
+        review = copy.deepcopy(
+            (mined_types or {}).get("_granularity_review") or review)
+        concept_count_before_sufficiency = len(out)
+        out = _add_missing_type_method_concepts_via_api(
+            out, mined_types=mined_types, meta=meta)
+        review["sufficiency_added_concepts"] = max(
+            0, len(out) - concept_count_before_sufficiency)
+        review["sufficiency_audit_complete"] = True
+        if len(out) > concept_count_before_sufficiency:
+            out = _ensure_mastery_lines_via_api(out, meta=meta)
+        progress.set_progress(
+            0.79, label="Concept extraction — reusable Types mined")
+        progress.step(
+            "Concept extraction — building culminations", value=0.81)
+        out = _build_culminations_via_api(out, meta=meta)
+        mined_types["_granularity_review"] = copy.deepcopy(review)
+        applied = review.get("human_resolution")
+        if isinstance(applied, dict) and applied.get("decision_id"):
+            review["human_resolution"]["result_context_hash"] = (
+                type_granularity_decision.applied_result_context_hash(
+                    review=review,
+                    inventory=question_task_inventory,
+                    mined_types=mined_types,
+                    meta=meta,
+                )
+            )
+            mined_types["_granularity_review"] = copy.deepcopy(review)
+        _emit_concept_checkpoint(
+            checkpoint_callback,
+            _CONCEPT_CHECKPOINT_STAGE,
+            records=out,
+            question_task_inventory=question_task_inventory,
+            mined_types=mined_types,
+            method_row_snapshot=_serialize_method_row_snapshot(
+                method_row_snapshot),
+        )
 
     if artifacts is not None:
         artifacts["question_task_inventory"] = copy.deepcopy(
