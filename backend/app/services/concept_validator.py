@@ -387,6 +387,23 @@ _ERROR_ANALYSIS_ONLY_ACTION_RE = re.compile(
     r"only\s+(?:the\s+|a\s+|an\s+)?[a-z]",
     re.IGNORECASE,
 )
+# The generation contract also permits concise arithmetic/procedural actions
+# when the sentence names both the faulty execution and its consequence.  Keep
+# this narrower than the bare verb list: "Students may add the values" remains
+# generic, while "add ... before ..., producing an incorrect ..." is a
+# concrete, testable learner error.
+_ERROR_ANALYSIS_ACTION_CONSEQUENCE_RE = re.compile(
+    r"\b(?:add|subtract|multiply|divide|count|group)"
+    r"(?:s|d|ed|ing|ies|ied)?\b"
+    r"[^.!?]{0,180}?"
+    r"(?:\btwice\b[^.!?]{0,120}?(?:caus|produc|result|increas|decreas)"
+    r"(?:e|es|ed|ing)?\b|"
+    r"\b(?:before|after)\b[^.!?]{0,120}?(?:caus|produc|result)"
+    r"(?:e|es|ed|ing)?\b|"
+    r"\b(?:caus|produc|result)(?:e|es|ed|ing)?\b[^.!?]{0,120}?"
+    r"\b(?:incorrect|wrong|invalid|extra|missing|reversed?)\b)",
+    re.IGNORECASE,
+)
 _ERROR_ANALYSIS_CORRECTION_RE = re.compile(
     r"\b(?:should|must|correct(?:ly)?|remember\s+that|"
     r"in\s+fact|actually|the\s+correct\s+(?:idea|rule|answer|method))\b",
@@ -756,6 +773,7 @@ def _is_plausible_error_analysis(text: str) -> bool:
             or _ERROR_ANALYSIS_SPECIFIC_MISTAKE_RE.search(value)
             or _ERROR_ANALYSIS_PROCEDURAL_MISTAKE_RE.search(value)
             or _ERROR_ANALYSIS_ONLY_ACTION_RE.search(value)
+            or _ERROR_ANALYSIS_ACTION_CONSEQUENCE_RE.search(value)
             or _ERROR_ANALYSIS_NEGATED_ACTION_RE.search(value)
         )
     )
