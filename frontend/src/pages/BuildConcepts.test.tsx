@@ -335,6 +335,45 @@ function typeGranularityDecisionFixture(): PendingSemanticDecision {
   };
 }
 
+function topologyDecisionFixture(): PendingSemanticDecision {
+  return sourceReviewDecisionFixture({
+    decision_id: "phase32-blueprint-abc456",
+    kind: "phase32_concept_blueprint_semantic_conflict",
+    phase: "3.2",
+    decision_question: "How should Aegis repair this concept boundary?",
+    candidates: [
+      {
+        target_id: "3.2:refine:aaa",
+        concept_id: "",
+        title: "Refine this concept to its verified source claim",
+        topic: "The French Revolution and the Idea of the Nation",
+        coverage: "Narrow the unsupported clause.",
+        gap: "Remove only the unsupported portion.",
+      },
+      {
+        target_id: "3.2:split:bbb",
+        concept_id: "",
+        title: "Split distinct source-supported concepts",
+        topic: "Across verified source topics",
+        coverage: "Separate two durable ideas.",
+        gap: "Independent criticism remains mandatory.",
+      },
+    ],
+    options: [
+      {
+        choice: "select_candidate",
+        label: "Choose refinement, move, split, or keep",
+        recommended: true,
+      },
+      {
+        choice: "custom_instruction",
+        label: "Give a custom instruction",
+        recommended: false,
+      },
+    ],
+  });
+}
+
 function savedJob(overrides: Partial<UploadJob> = {}): UploadJob {
   return {
     id: 42,
@@ -925,6 +964,38 @@ test("source review never guesses and submits only the candidate the user select
     );
   });
   expect(streamMock).toHaveBeenCalledTimes(1);
+});
+
+test("topology decisions label actions without calling them source evidence", async () => {
+  streamMock.mockResolvedValue({
+    job_id: 42,
+    status: "awaiting_decision",
+    pending_decision: topologyDecisionFixture(),
+    resume_required: false,
+  });
+
+  renderPage();
+  fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+  fireEvent.click(await screen.findByRole("button", {
+    name: "Select Electricity target",
+  }));
+  fireEvent.click(screen.getByRole("button", {
+    name: "Resume from 91% checkpoint",
+  }));
+
+  fireEvent.click(await screen.findByRole("radio", {
+    name: /Choose refinement, move, split, or keep/,
+  }));
+  const target = screen.getByRole("combobox", {
+    name: "Source-supported concept action",
+  });
+  expect(target).toBeDefined();
+  expect(screen.getByText(
+    /Choose refine, move, split, keep, or retire/,
+  )).toBeDefined();
+  expect(screen.queryByRole("combobox", {
+    name: "Verified source evidence",
+  })).toBeNull();
 });
 
 test("source review safely stops for source replacement after choices are exhausted", async () => {

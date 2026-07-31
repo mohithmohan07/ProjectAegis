@@ -689,7 +689,9 @@ def test_concept_source_grounding_requires_high_confidence_and_critic():
         "api-verified-source-block-ids"
     )
 
-    with pytest.raises(ValueError, match="invalid or uncertain"):
+    with pytest.raises(
+        phase3.semantic_recovery.HumanDecisionRequired
+    ) as paused:
         phase3.ground_concepts(
             records,
             graph=graph,
@@ -702,6 +704,7 @@ def test_concept_source_grounding_requires_high_confidence_and_critic():
             }]},
             critic=critic,
         )
+    assert "confidence 0.500" in paused.value.pending_decision["conflict"]
 
 
 def test_missing_type_host_preflight_adds_only_source_grounded_topic_two_host():
@@ -1018,4 +1021,3 @@ def test_matching_api_verified_graph_is_reused_without_new_model_call(
             "board": "CBSE",
         },
     ) is None
-

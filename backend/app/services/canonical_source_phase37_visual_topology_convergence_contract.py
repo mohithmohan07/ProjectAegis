@@ -613,7 +613,10 @@ def _adjudicate_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         "keep/move/refine return one segment; for split return two to four. Use "
         "only supplied opaque IDs. Return every requested concept exactly once. "
         "On retries repair only rejected IDs using previous_decisions and "
-        "critic_feedback."
+        "critic_feedback. If human_resolutions is supplied, apply its selected "
+        "refine/move/split/keep direction or custom instruction exactly, then "
+        "return the ordinary proposal for independent criticism; the human "
+        "direction is not verification."
     )
     return phase22._openai_multimodal_json(
         system=system,

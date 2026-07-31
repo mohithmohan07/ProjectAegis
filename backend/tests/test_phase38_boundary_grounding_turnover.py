@@ -7,6 +7,7 @@ from app.services import canonical_source_phase31_grounding_contract as phase31
 from app.services import canonical_source_phase32_topology_adjudication_contract as phase32
 from app.services import canonical_source_phase33_preflight_contract as phase33
 from app.services import canonical_source_phase38_boundary_grounding_turnover_contract as phase38
+from app.services import early_semantic_gate as early_gate
 
 
 def _boundary_source() -> tuple[dict, dict]:
@@ -317,6 +318,37 @@ def test_targeted_convergence_retries_the_failed_origin_beyond_two_passes():
     assert "Returning the same effective" in seen_feedback[3][
         "TOPOLOGY-CONCEPT-0002"
     ]
+
+
+def test_human_topology_handoff_is_consumed_once_before_directed_pass():
+    records = [{
+        "topic": "Topic A",
+        "_semantic_topic_id": "TOPIC-0001",
+        "parent_concept": "Parent",
+        "concept_title": "Concept A",
+        "concept_details": "Description: Unsupported compound claim",
+    }]
+    decision_id = "phase31-ground-1234567890abcdef12345678"
+    calls = 0
+
+    def original(_records, *_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise early_gate.TopologyRepairRequired(
+                "failed exact source-block grounding before freeze: "
+                "CONCEPT-GROUND-0001 HUMAN DIRECTION requires topology action refine",
+                decision_id=decision_id,
+            )
+        assert decision_id in early_gate._SUPPRESSED_RESOLUTION_IDS.get()
+        assert phase33._EXTERNAL_GROUNDING_FEEDBACK.get()
+        return _records
+
+    assert phase38._phase32_adjudicate_with_targeted_convergence(
+        original,
+        records,
+    ) == records
+    assert calls == 2
 
 
 def test_old_final_topology_cache_is_rejected_but_current_grounding_is_reused(

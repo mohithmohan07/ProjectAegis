@@ -42,6 +42,7 @@ from . import canonical_source_phase32_topology_adjudication_contract as phase32
 from . import canonical_source_phase33_preflight_contract as phase33
 from . import canonical_source_phase37_visual_topology_convergence_contract as phase37
 from . import concept_refiner as cr
+from . import early_semantic_gate as early_gate
 from . import progress
 from . import semantic_confidence_policy as confidence_policy
 
@@ -316,7 +317,10 @@ def _ground_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         "Achieving Mastery, learner analysis, Types, hubs, or other generated "
         "pedagogy. Use only supplied IDs, do not rewrite text, and return every "
         "requested concept exactly once. On retries, repair only unresolved IDs "
-        "using critic_feedback and previous_grounding."
+        "using critic_feedback and previous_grounding. If human_resolutions is "
+        "supplied, include its selected verified evidence or follow its custom "
+        "instruction exactly, then return the ordinary proposal for independent "
+        "criticism; the human direction is not verification."
     )
     return phase22._openai_multimodal_json(
         system=system,
@@ -508,13 +512,17 @@ def _phase32_adjudicate_with_targeted_convergence(
     passes = _max_convergence_passes()
     feedback: dict[str, str] = {}
     signatures: dict[str, int] = {}
+    suppressed_resolutions: set[str] = set()
     repaired_token = _LAST_REPAIRED_TOPOLOGY.set(None)
     try:
         for convergence_pass in range(1, passes + 1):
             _LAST_REPAIRED_TOPOLOGY.set(None)
             feedback_token = phase33._EXTERNAL_GROUNDING_FEEDBACK.set(feedback)
             try:
-                return original(records, *args, **kwargs)
+                with early_gate.suppress_resolution_ids(
+                    suppressed_resolutions
+                ):
+                    return original(records, *args, **kwargs)
             except ValueError as exc:
                 message = str(exc)
                 if "failed exact source-block grounding before freeze" not in message:
@@ -527,6 +535,8 @@ def _phase32_adjudicate_with_targeted_convergence(
                 )
                 signatures[signature] = signatures.get(signature, 0) + 1
                 repeated = signatures[signature] > 1
+                if isinstance(exc, early_gate.TopologyRepairRequired):
+                    suppressed_resolutions.add(exc.decision_id)
                 if convergence_pass >= passes:
                     raise
                 repaired = _LAST_REPAIRED_TOPOLOGY.get()

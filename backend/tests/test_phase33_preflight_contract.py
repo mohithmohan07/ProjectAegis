@@ -185,6 +185,92 @@ def test_verified_phase32_decision_is_reused_per_concept(tmp_path):
     assert (tmp_path / phase33._DECISION_CACHE_FILENAME).exists()
 
 
+def test_partial_phase32_critic_accepts_survive_human_pause(tmp_path):
+    graph = {"source_contract_hash": "SOURCE-PARTIAL"}
+    session = {"artifact_dir": tmp_path}
+    concepts = [
+        {
+            "concept_id": f"TOPOLOGY-CONCEPT-{index:04d}",
+            "current_topic_id": "TOPIC-0001",
+            "concept_title": title,
+            "parent_concept": "Idea of the Nation",
+            "source_claim": claim,
+            "existing_mastery": "Explain the source claim.",
+        }
+        for index, title, claim in (
+            (1, "Nation-State", "Citizens develop a common identity."),
+            (2, "Dynastic Europe", "Dynastic territories remained divided."),
+        )
+    ]
+    decisions = [
+        {
+            "concept_id": row["concept_id"],
+            "decision": "keep",
+            "segments": [{
+                "topic_id": "TOPIC-0001",
+                "concept_title": row["concept_title"],
+                "parent_concept": row["parent_concept"],
+                "description": row["source_claim"],
+                "achieving_mastery": row["existing_mastery"],
+                "keywords": [],
+                "confidence": 0.999,
+                "reason": "Keep",
+            }],
+            "confidence": 0.999,
+            "reason": "Keep",
+        }
+        for row in concepts
+    ]
+    payload = {
+        "topics": [{
+            "topic_id": "TOPIC-0001",
+            "title": "The Nation",
+            "evidence": "Canonical source evidence",
+        }],
+        "concepts": concepts,
+        "proposed_decisions": decisions,
+    }
+    critic_batches: list[list[str]] = []
+
+    def partial_critic(value):
+        ids = [row["concept_id"] for row in value["concepts"]]
+        critic_batches.append(ids)
+        return {
+            "verdict": "rejected",
+            "confidence": 0.999,
+            "accepted_concept_ids": [ids[0]],
+            "rejected_concept_ids": [ids[1]],
+            "issues": [f"{ids[1]} needs human review."],
+        }
+
+    def resumed_critic(value):
+        ids = [row["concept_id"] for row in value["concepts"]]
+        critic_batches.append(ids)
+        return _verified_review(ids)
+
+    with phase3.activate_session(session), phase3.activate(graph):
+        first = phase33._phase32_critic_with_cache(
+            partial_critic,
+            copy.deepcopy(payload),
+        )
+        second = phase33._phase32_critic_with_cache(
+            resumed_critic,
+            copy.deepcopy(payload),
+        )
+
+    assert first["accepted_concept_ids"] == ["TOPOLOGY-CONCEPT-0001"]
+    assert first["rejected_concept_ids"] == ["TOPOLOGY-CONCEPT-0002"]
+    assert second["verdict"] == "verified"
+    assert second["accepted_concept_ids"] == [
+        "TOPOLOGY-CONCEPT-0001",
+        "TOPOLOGY-CONCEPT-0002",
+    ]
+    assert critic_batches == [
+        ["TOPOLOGY-CONCEPT-0001", "TOPOLOGY-CONCEPT-0002"],
+        ["TOPOLOGY-CONCEPT-0002"],
+    ]
+
+
 def _host_graph() -> tuple[dict, dict]:
     graph = {
         "source_contract_hash": "HOST-SOURCE-1",

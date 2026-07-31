@@ -27,12 +27,17 @@ from typing import Any, Callable
 from .. import config
 from . import canonical_source_phase3 as phase3
 from . import concept_refiner as cr
+from . import early_semantic_gate as early_gate
 from . import progress
 from . import semantic_confidence_policy as confidence_policy
+from .semantic_recovery import (
+    HumanDecisionRequired,
+    ProviderResponseContractError,
+)
 
 _CONTRACT_VERSION = 2
 _GROUNDING_VERSION = "phase3.1-source-claim-grounding-1"
-_CONCEPT_GROUNDING_CACHE_VERSION = "phase3.1-per-concept-grounding-2"
+_CONCEPT_GROUNDING_CACHE_VERSION = "phase3.1-per-concept-grounding-3"
 _GROUNDING_CACHE_FILENAME = "source.phase31-concept-grounding-cache.json"
 _TOPOLOGY_CACHE_FILENAME = "source.phase31-final-topology-cache.json"
 _MASTERY_TAIL_RE = re.compile(
@@ -186,6 +191,13 @@ def _concept_payload(
                 "parent_concept": str(
                     records[index].get("parent_concept") or ""
                 ),
+                "current_topic_id": str(
+                    records[index].get("_semantic_topic_id") or ""
+                ),
+                "current_topic_title": str(records[index].get("topic") or ""),
+                "origin_concept_id": str(
+                    records[index].get("_phase32_origin_concept_id") or ""
+                ),
                 # Keep ``description`` for backward-compatible injected providers,
                 # while making the bounded evidence field explicit.
                 "description": claim,
@@ -314,7 +326,10 @@ def _ground_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         "required; verbatim wording is not. Use only opaque IDs, do not rewrite "
         "text, and return every requested concept exactly once. On a correction "
         "attempt, use critic_feedback and previous_grounding to repair only the "
-        "requested unresolved concepts."
+        "requested unresolved concepts. If human_resolutions is supplied, treat "
+        "its selected verified evidence or custom instruction as binding, then "
+        "return the ordinary proposal for independent criticism; the human "
+        "direction is not verification."
     )
     return phase3.phase22._openai_multimodal_json(
         system=system,
@@ -474,12 +489,27 @@ def _review_state(
                 "critic both accepted and rejected: "
                 + ", ".join(sorted(overlap))
             )
+            # A contradictory ID is never a durable partial acceptance.
+            accepted -= overlap
+            rejected |= overlap
         if omitted:
             issues.append(
                 "critic omitted concept ID(s): "
                 + ", ".join(sorted(omitted))
             )
             rejected |= omitted
+        issue_named = {
+            concept_id
+            for concept_id in accepted
+            if any(concept_id in issue for issue in issues)
+        }
+        if issue_named:
+            # An ID called out by the critic's problem list is not an
+            # unaffected sibling, even if the critic accidentally also placed
+            # it in accepted_concept_ids.
+            accepted -= issue_named
+            rejected |= issue_named
+        accepted -= rejected
     elif (
         verdict == "verified"
         and accepted_confidence
@@ -593,6 +623,7 @@ def _concept_cache_contexts(
             "semantic_confidence_policy": _json_safe(
                 confidence_policy.cache_identity()
             ),
+            "source": early_gate.source_identity(graph),
             "source_contract_hash": str(
                 graph.get("source_contract_hash") or ""
             ),
@@ -642,6 +673,9 @@ def _read_cached_concept_proposals(
             or not confidence_policy.accepts(
                 entry.get("review_confidence")
             )
+            or early_gate.confidence_band(
+                entry.get("review_confidence")
+            ) != "accepted"
         ):
             continue
         proposal = entry.get("proposal")
@@ -722,6 +756,321 @@ def _write_cached_concept_proposals(
             ],
         }
     _write_json(path, cache)
+
+
+def _grounding_candidates(
+    *,
+    graph: dict[str, Any],
+    concept: dict[str, Any],
+    source_blocks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    for block in source_blocks[:100]:
+        block_id = str(block.get("block_id") or "")
+        if not block_id:
+            continue
+        candidate_seed = {
+            "action": "use_verified_evidence",
+            "block_ids": [block_id],
+            "text_sha256": phase3._sha256_text(block.get("text") or ""),
+        }
+        candidates.append(
+            {
+                "target_id": early_gate.candidate_target_id(
+                    phase="3.1",
+                    action="evidence",
+                    graph=graph,
+                    unit=concept,
+                    candidate=candidate_seed,
+                ),
+                "concept_id": "",
+                "title": f"Use verified evidence {block_id}",
+                "topic": "",
+                "coverage": str(block.get("text") or "")[:8000],
+                "gap": "",
+                "action": "use_verified_evidence",
+                "source_block_ids": [block_id],
+            }
+        )
+    current_topic_id = str(concept.get("current_topic_id") or "")
+    topology_seeds: list[dict[str, Any]] = [
+        {
+            "action": "refine",
+            "target_topic_id": current_topic_id,
+            "title": "Refine the unsupported source claim",
+            "topic": str(concept.get("current_topic_title") or ""),
+            "coverage": str(concept.get("source_claim") or ""),
+            "gap": (
+                "Return this concept to topology and narrow the unsupported "
+                "clause."
+            ),
+        },
+        {
+            "action": "split",
+            "target_topic_id": "",
+            "title": "Split distinct source-supported claims",
+            "topic": "Across verified source topics",
+            "coverage": str(concept.get("source_claim") or ""),
+            "gap": (
+                "Return this concept to topology and separate durable claims."
+            ),
+        },
+        {
+            "action": "retire",
+            "target_topic_id": "",
+            "title": "Retire an unsupported or fully duplicated claim",
+            "topic": str(concept.get("current_topic_title") or ""),
+            "coverage": str(concept.get("source_claim") or ""),
+            "gap": (
+                "Destructive retirement still requires the stricter "
+                "independent gate."
+            ),
+        },
+    ]
+    for topic in graph.get("topics") or []:
+        if not isinstance(topic, dict):
+            continue
+        topic_id = str(topic.get("topic_id") or "")
+        if not topic_id or topic_id == current_topic_id:
+            continue
+        topology_seeds.append(
+            {
+                "action": "move",
+                "target_topic_id": topic_id,
+                "title": "Move the complete claim to a different source topic",
+                "topic": str(topic.get("title") or topic_id),
+                "coverage": str(concept.get("source_claim") or ""),
+                "gap": (
+                    "Move without changing the claim; independent review "
+                    "remains mandatory."
+                ),
+            }
+        )
+    for seed in topology_seeds:
+        candidates.append(
+            {
+                "target_id": early_gate.candidate_target_id(
+                    phase="3.1",
+                    action=str(seed["action"]),
+                    graph=graph,
+                    unit=concept,
+                    candidate=seed,
+                ),
+                "concept_id": str(concept.get("origin_concept_id") or ""),
+                **seed,
+                "source_block_ids": [],
+            }
+        )
+    return candidates
+
+
+def _grounding_identity(
+    *,
+    graph: dict[str, Any],
+    topic: dict[str, Any],
+    concept: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    source_blocks: list[dict[str, Any]],
+) -> dict[str, str]:
+    return early_gate.context_identity(
+        phase="3.1",
+        kind="phase31_source_grounding_semantic_conflict",
+        graph=graph,
+        unit=concept,
+        evidence_fingerprint={
+            "topic_id": str(topic.get("topic_id") or ""),
+            "blocks": [
+                {
+                    "block_id": str(row.get("block_id") or ""),
+                    "text_sha256": phase3._sha256_text(row.get("text") or ""),
+                }
+                for row in source_blocks
+            ],
+        },
+        candidates=candidates,
+    )
+
+
+def _grounding_pending_decision(
+    *,
+    identity: dict[str, str],
+    graph: dict[str, Any],
+    topic: dict[str, Any],
+    concept: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    source_blocks: list[dict[str, Any]],
+    issues: list[str],
+    rejected_ids: list[str],
+    resolution: dict[str, Any] | None = None,
+    proposal: Any = None,
+    diagnostic_source: str = "critic",
+) -> dict[str, Any]:
+    clean_issues = [
+        re.sub(r"\s+", " ", str(value or "")).strip()[:1200]
+        for value in issues
+        if str(value or "").strip()
+    ] or ["The selected evidence did not independently verify the source claim."]
+    # Free-form critic prose is not a structured recommendation.  A sentence
+    # such as “BLK-1 does not support this; use BLK-2” must never recommend the
+    # first source-order block merely because it was mentioned.
+    recommended = None
+    packet_identity = early_gate.followup_identity(
+        identity,
+        resolution=resolution,
+        issues=clean_issues,
+        proposal=proposal,
+    )
+    public_candidates = [
+        {
+            key: str(row.get(key) or "")
+            for key in (
+                "target_id", "concept_id", "title", "topic", "coverage", "gap"
+            )
+        }
+        for row in candidates
+    ]
+    options: list[dict[str, Any]] = []
+    if recommended is not None:
+        options.append(
+            {
+                "choice": "accept_recommended",
+                "label": "Use the recommended verified evidence",
+                "recommended": True,
+                "target_id": str(recommended.get("target_id") or ""),
+            }
+        )
+    options.extend(
+        [
+            {
+                "choice": "select_candidate",
+                "label": "Select evidence or a topology repair",
+                "recommended": recommended is None,
+            },
+            {
+                "choice": "replace_source",
+                "label": "Correct or replace the source",
+                "recommended": False,
+            },
+        ]
+    )
+    if resolution is None:
+        options.append(
+            {
+                "choice": "custom_instruction",
+                "label": "Give a custom instruction",
+                "recommended": False,
+            }
+        )
+    confidence = next(
+        (
+            float(match.group(1))
+            for issue in clean_issues
+            for match in [re.search(r"confidence\s+([01](?:\.\d+)?)", issue)]
+            if match
+        ),
+        None,
+    )
+    review_band = (
+        confidence is not None
+        and early_gate.confidence_band(confidence) == "human_review"
+    )
+    return early_gate.plain_json(
+        {
+            **packet_identity,
+            "kind": "phase31_source_grounding_semantic_conflict",
+            "phase": "3.1",
+            "conflict": "; ".join(clean_issues[:6]),
+            "diagnosis": (
+                (
+                    "The grounding provider placed this result in the "
+                    "0.900–0.919 human-review band before independent review."
+                    if diagnostic_source == "provider"
+                    else "The independent grounding critic placed this result "
+                    "in the 0.900–0.919 human-review band."
+                )
+                if review_band
+                else (
+                    "The grounding provider returned a genuine semantic "
+                    "source-support discrepancy before independent review."
+                    if diagnostic_source == "provider"
+                    else "The first independent grounding review found a "
+                    "genuine source-support discrepancy."
+                )
+            ),
+            "decision_question": (
+                "Should Aegis use different verified evidence, or return the "
+                "claim to topology to refine, move, split, or retire it before "
+                "independent review?"
+            ),
+            "item": {
+                "unit_id": str(concept.get("concept_id") or ""),
+                "type_id": "",
+                "type_title": str(concept.get("concept_title") or ""),
+                "qids": [],
+                "questions": [str(concept.get("source_claim") or "")],
+                "topic": str(topic.get("title") or ""),
+            },
+            "candidates": public_candidates,
+            "evidence": [
+                {
+                    "page": str(
+                        row.get("page_number")
+                        or row.get("pdf_page")
+                        or row.get("page")
+                        or ""
+                    ),
+                    "label": str(row.get("block_id") or ""),
+                    "text": str(row.get("text") or "")[:8000],
+                }
+                for row in source_blocks[:24]
+            ],
+            "deferred_assignment_unit_ids": [
+                value
+                for value in rejected_ids
+                if value != str(concept.get("concept_id") or "")
+            ],
+            "options": options,
+        }
+    )
+
+
+def _grounding_parse_errors_are_mechanical(errors: list[str]) -> bool:
+    semantic_fragments = (
+        " confidence ",
+        "requires human review",
+    )
+    meaningful = [
+        value
+        for value in errors
+        if not value.startswith("missing or invalid concept ID(s):")
+    ]
+    if not meaningful:
+        return True
+    if any(fragment in value for value in meaningful for fragment in semantic_fragments):
+        return False
+    prefixes = (
+        "grounding provider returned no concepts array",
+        "grounding provider returned a non-object row",
+        "unknown concept ID ",
+        "duplicate concept ID ",
+        "CONCEPT-GROUND-",
+    )
+    return all(value.startswith(prefixes) for value in meaningful)
+
+
+def _grounding_resolution_for(
+    *,
+    identity: dict[str, str],
+    concept: dict[str, Any],
+    candidates: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    return early_gate.resolution_for(
+        identity=identity,
+        kind="phase31_source_grounding_semantic_conflict",
+        phase="3.1",
+        unit_id=str(concept.get("concept_id") or ""),
+        candidates=candidates,
+    )
 
 
 def _apply_proposals(
@@ -981,62 +1330,255 @@ def ground_concepts(
             )
         unresolved = concept_ids - set(proposals)
         if unresolved:
-            previous_grounding: list[dict[str, Any]] = []
-            critic_feedback: dict[str, Any] = {}
-            last_errors: list[str] = []
-            last_confidence = 0.0
-            attempts = _max_grounding_attempts()
+            concept_by_id = {
+                str(row.get("concept_id") or ""): row for row in concepts
+            }
+            gate_candidates: dict[str, list[dict[str, Any]]] = {}
+            gate_identities: dict[str, dict[str, str]] = {}
+            resolutions: dict[str, dict[str, Any]] = {}
+            deferred: set[str] = set()
+            for concept_id in sorted(unresolved):
+                concept = concept_by_id[concept_id]
+                candidate_rows = _grounding_candidates(
+                    graph=graph,
+                    concept=concept,
+                    source_blocks=source_blocks,
+                )
+                identity = _grounding_identity(
+                    graph=graph,
+                    topic=topic,
+                    concept=concept,
+                    candidates=candidate_rows,
+                    source_blocks=source_blocks,
+                )
+                resolution = _grounding_resolution_for(
+                    identity=identity,
+                    concept=concept,
+                    candidates=candidate_rows,
+                )
+                gate_candidates[concept_id] = candidate_rows
+                gate_identities[concept_id] = identity
+                if resolution is not None:
+                    resolutions[concept_id] = resolution
+                    deferred.update(
+                        resolution.get("deferred_assignment_unit_ids") or []
+                    )
 
-            for attempt in range(1, attempts + 1):
+            if any(
+                resolution.get("choice") == "replace_source"
+                for resolution in resolutions.values()
+            ):
+                raise ValueError(
+                    "Source replacement is required before Phase 3.1 can "
+                    "continue. Replace or correct the uploaded source and "
+                    "convert it again; no model request was started."
+                )
+
+            for concept_id, resolution in resolutions.items():
+                selected = resolution.get("selected_candidate")
+                action = (
+                    str(selected.get("action") or "")
+                    if isinstance(selected, dict)
+                    else ""
+                )
+                if resolution.get("choice") == "custom_instruction":
+                    instruction = str(resolution.get("instruction") or "")
+                    match = re.search(
+                        r"\b(refine|split|move|retire)\b",
+                        instruction,
+                        re.IGNORECASE,
+                    )
+                    if match:
+                        action = match.group(1).casefold()
+                if action not in {"refine", "split", "move", "retire"}:
+                    continue
+                target = (
+                    str(selected.get("target_topic_id") or "")
+                    if isinstance(selected, dict)
+                    else ""
+                )
+                feedback = resolution.get("critic_feedback")
+                conflict = (
+                    str(feedback.get("conflict") or "")
+                    if isinstance(feedback, dict)
+                    else ""
+                )
+                raise early_gate.TopologyRepairRequired(
+                    "failed exact source-block grounding before freeze: "
+                    f"{concept_id} HUMAN DIRECTION requires topology action "
+                    f"{action}"
+                    + (f" into {target}" if target else "")
+                    + (f". Prior critic: {conflict}" if conflict else ""),
+                    decision_id=str(resolution.get("decision_id") or ""),
+                )
+
+            # A critic can reject several IDs at once. Ask for the remaining
+            # bounded choices before starting the single directed retry pair.
+            undecided_deferred = [
+                concept_id
+                for concept_id in sorted(unresolved & deferred)
+                if concept_id not in resolutions
+            ]
+            if undecided_deferred:
+                concept_id = undecided_deferred[0]
+                raise HumanDecisionRequired(
+                    _grounding_pending_decision(
+                        identity=gate_identities[concept_id],
+                        graph=graph,
+                        topic=topic,
+                        concept=concept_by_id[concept_id],
+                        candidates=gate_candidates[concept_id],
+                        source_blocks=source_blocks,
+                        issues=[
+                            "This concept was also rejected by the first "
+                            "independent grounding review and needs your "
+                            "bounded evidence decision."
+                        ],
+                        rejected_ids=undecided_deferred,
+                    )
+                )
+
+            if unresolved:
                 requested = [
-                    row
-                    for row in concepts
+                    row for row in concepts
                     if str(row.get("concept_id") or "") in unresolved
                 ]
-                attempt_payload = {
-                    "topic": copy.deepcopy(topic),
-                    "concepts": copy.deepcopy(requested),
-                    "source_blocks": copy.deepcopy(source_blocks),
-                    "attempt": attempt,
-                    "max_attempts": attempts,
-                    "previous_grounding": copy.deepcopy(
-                        previous_grounding
-                    ),
-                    "critic_feedback": copy.deepcopy(critic_feedback),
-                }
-                response = provider(copy.deepcopy(attempt_payload))
-                parsed, parse_errors = _parse_proposals(
-                    response,
-                    expected_ids=set(unresolved),
-                    allowed_blocks=allowed_blocks,
-                )
-                if parse_errors:
-                    last_errors = parse_errors
-                    progress.log(
-                        "Phase 3 source-grounding attempt "
-                        f"{attempt}/{attempts} for {topic_title!r} requires "
-                        "correction: "
-                        + "; ".join(parse_errors[:4]),
-                        level="warning",
-                    )
-                    previous_grounding = [
-                        copy.deepcopy(row)
-                        for row in (
-                            response.get("concepts")
-                            if isinstance(response, dict)
-                            and isinstance(response.get("concepts"), list)
-                            else []
-                        )
-                        if isinstance(row, dict)
-                        and str(row.get("concept_id") or "") in unresolved
-                    ]
-                    critic_feedback = {
-                        "verdict": "provider_contract_rejected",
-                        "confidence": 0.0,
-                        "issues": parse_errors,
-                        "rejected_concept_ids": sorted(unresolved),
+                # A saved semantic direction receives one provider request and
+                # one independent critic request. Fresh mechanical schema/ID
+                # defects may receive one correction; semantic defects never do.
+                max_provider_attempts = 1 if resolutions else 2
+                response: dict[str, Any] | None = None
+                parsed: dict[str, dict[str, Any]] = {}
+                parse_errors: list[str] = []
+                for attempt in range(1, max_provider_attempts + 1):
+                    attempt_payload = {
+                        "topic": copy.deepcopy(topic),
+                        "concepts": copy.deepcopy(requested),
+                        "source_blocks": copy.deepcopy(source_blocks),
+                        "attempt": attempt,
+                        "max_attempts": max_provider_attempts,
+                        "previous_grounding": [],
+                        "critic_feedback": (
+                            {
+                                "verdict": "provider_contract_rejected",
+                                "issues": copy.deepcopy(parse_errors),
+                                "rejected_concept_ids": sorted(unresolved),
+                            }
+                            if parse_errors
+                            else {}
+                        ),
                     }
-                    continue
+                    if resolutions:
+                        attempt_payload["human_resolutions"] = [
+                            copy.deepcopy(resolutions[concept_id])
+                            for concept_id in sorted(resolutions)
+                        ]
+                    response = provider(copy.deepcopy(attempt_payload))
+                    parsed, parse_errors = _parse_proposals(
+                        response,
+                        expected_ids=set(unresolved),
+                        allowed_blocks=allowed_blocks,
+                    )
+                    review_band_ids = [
+                        concept_id
+                        for concept_id, proposal in parsed.items()
+                        if early_gate.confidence_band(
+                            proposal.get("confidence")
+                        ) == "human_review"
+                    ]
+                    if not parse_errors and review_band_ids:
+                        parse_errors = [
+                            f"{concept_id} confidence "
+                            f"{float(parsed[concept_id]['confidence']):.3f} is "
+                            "in the 0.900–0.919 human-review band"
+                            for concept_id in review_band_ids
+                        ]
+                    if not parse_errors:
+                        break
+                    if (
+                        resolutions
+                        or not _grounding_parse_errors_are_mechanical(parse_errors)
+                    ):
+                        concept_id = next(
+                            (
+                                value for value in sorted(unresolved)
+                                if any(value in error for error in parse_errors)
+                            ),
+                            sorted(unresolved)[0],
+                        )
+                        raise HumanDecisionRequired(
+                            _grounding_pending_decision(
+                                identity=gate_identities[concept_id],
+                                graph=graph,
+                                topic=topic,
+                                concept=concept_by_id[concept_id],
+                                candidates=gate_candidates[concept_id],
+                                source_blocks=source_blocks,
+                                issues=parse_errors,
+                                rejected_ids=sorted(unresolved),
+                                resolution=resolutions.get(concept_id),
+                                proposal=response,
+                                diagnostic_source="provider",
+                            )
+                        )
+                    if attempt < max_provider_attempts:
+                        progress.log(
+                            "Phase 3.1 grounding response had a mechanical "
+                            "schema/opaque-ID defect; making its one bounded "
+                            "contract correction.",
+                            level="warning",
+                        )
+                        continue
+                    details = "; ".join(parse_errors[:6])
+                    raise ProviderResponseContractError(
+                        "Phase 3.1 grounding provider failed its response "
+                        "contract after one bounded correction"
+                        + (f": {details}" if details else "")
+                    )
+
+                # A human-selected evidence block is a direction to the mapper,
+                # never an approval. Enforce the direction before the critic.
+                directed_issues: list[str] = []
+                for concept_id, resolution in resolutions.items():
+                    selected = resolution.get("selected_candidate")
+                    if not isinstance(selected, dict):
+                        continue
+                    required_blocks = {
+                        str(value)
+                        for value in selected.get("source_block_ids") or []
+                        if str(value)
+                    }
+                    proposed_blocks = set(
+                        (parsed.get(concept_id) or {}).get("source_block_ids") or []
+                    )
+                    if not required_blocks.issubset(proposed_blocks):
+                        directed_issues.append(
+                            f"{concept_id} omitted the human-selected verified "
+                            "evidence block(s): " + ", ".join(sorted(required_blocks))
+                        )
+                if directed_issues:
+                    concept_id = next(
+                        (
+                            value for value in sorted(unresolved)
+                            if any(value in issue for issue in directed_issues)
+                        ),
+                        sorted(unresolved)[0],
+                    )
+                    raise HumanDecisionRequired(
+                        _grounding_pending_decision(
+                            identity=gate_identities[concept_id],
+                            graph=graph,
+                            topic=topic,
+                            concept=concept_by_id[concept_id],
+                            candidates=gate_candidates[concept_id],
+                            source_blocks=source_blocks,
+                            issues=directed_issues,
+                            rejected_ids=sorted(unresolved),
+                            resolution=resolutions.get(concept_id),
+                            proposal=response,
+                            diagnostic_source="provider",
+                        )
+                    )
 
                 review_payload = {
                     "topic": copy.deepcopy(topic),
@@ -1047,98 +1589,81 @@ def ground_concepts(
                         for concept_id in sorted(unresolved)
                     ],
                 }
+                if resolutions:
+                    review_payload["human_resolutions"] = [
+                        copy.deepcopy(resolutions[concept_id])
+                        for concept_id in sorted(resolutions)
+                    ]
                 review = critic(copy.deepcopy(review_payload))
-                state = _review_state(
-                    review,
-                    concept_ids=set(unresolved),
+                state = _review_state(review, concept_ids=set(unresolved))
+                accepted_ids = (
+                    set(state["accepted"])
+                    if confidence_policy.accepts(state["confidence"])
+                    and early_gate.confidence_band(state["confidence"])
+                    == "accepted"
+                    else set()
                 )
-                last_confidence = float(state["confidence"])
-                if state["verified"]:
-                    accepted = set(unresolved)
-                elif (
-                    state.get("verdict") == "rejected"
-                    and confidence_policy.accepts(last_confidence)
-                ):
-                    accepted = set(state["accepted"]) - set(
-                        state["rejected"]
-                    )
-                else:
-                    accepted = set()
                 accepted_proposals = {
                     concept_id: parsed[concept_id]
-                    for concept_id in accepted
+                    for concept_id in accepted_ids
+                    if concept_id in parsed
                 }
-                # Persist this independently verified subset before another
-                # concept is retried or the run can fail. A later resume then
-                # pays only for the still-rejected source claims.
+                # Persist each independently accepted concept before pausing.
+                # Resume then pays only for still-rejected source claims.
                 _write_cached_concept_proposals(
                     cache_contexts,
                     proposals=accepted_proposals,
-                    review_confidence=last_confidence,
+                    review_confidence=float(state["confidence"]),
                 )
                 proposals.update(accepted_proposals)
-                rejected = set(unresolved) - accepted
-                if not rejected:
-                    progress.log(
-                        "Phase 3 source grounding independently verified "
-                        f"{len(unresolved)} new concept(s) for {topic_title!r}"
-                        + (
-                            f" after {attempt} attempt(s)."
-                            if attempt > 1
-                            else "."
-                        ),
-                        level="success",
-                    )
-                    unresolved = set()
-                    break
-
-                last_errors = list(state["issues"]) or [
-                    "critic verdict was "
-                    + str(state.get("verdict") or "missing")
-                ]
-                progress.log(
-                    "Phase 3 source-grounding attempt "
-                    f"{attempt}/{attempts} for {topic_title!r} accepted "
-                    f"{len(proposals)}/{len(concept_ids)} concept(s); "
-                    f"{len(rejected)} require correction"
-                    + (
-                        ": " + "; ".join(last_errors[:4])
-                        if last_errors
-                        else "."
-                    ),
-                    level="warning",
+                critic_review_band = (
+                    early_gate.confidence_band(state["confidence"])
+                    == "human_review"
                 )
-                previous_grounding = [
-                    copy.deepcopy(parsed[concept_id])
-                    for concept_id in sorted(rejected)
-                ]
-                critic_feedback = {
-                    "verdict": "rejected",
-                    "confidence": last_confidence,
-                    "issues": copy.deepcopy(last_errors),
-                    "accepted_concept_ids": [],
-                    "rejected_concept_ids": sorted(rejected),
-                }
-                unresolved = rejected
-            else:
-                details = "; ".join(last_errors[:6])
-                raise ValueError(
-                    "Phase 3 concept grounding failed independent verification "
-                    f"for topic {topic_title!r} after {attempts} attempt(s)"
-                    + (
-                        f" (critic confidence {last_confidence:.3f})"
-                        if last_confidence
-                        else ""
+                if not state["verified"] or critic_review_band:
+                    rejected = set(state["rejected"]) or set(unresolved)
+                    issues = list(state["issues"]) or [
+                        "critic verdict was "
+                        + str(state.get("verdict") or "missing")
+                    ]
+                    confidence = float(state["confidence"])
+                    if early_gate.confidence_band(confidence) == "human_review":
+                        issues.insert(
+                            0,
+                            f"independent critic confidence {confidence:.3f} "
+                            "is in the 0.900–0.919 human-review band",
+                        )
+                    concept_id = sorted(rejected)[0]
+                    progress.log(
+                        "Phase 3.1 stopped after the first genuine semantic "
+                        "grounding disagreement; accepted concept IDs were "
+                        "cached and no semantic retry was started.",
+                        level="warning",
                     )
-                    + (f": {details}" if details else "")
-                    + ". Grounding was invalid or uncertain."
+                    raise HumanDecisionRequired(
+                        _grounding_pending_decision(
+                            identity=gate_identities[concept_id],
+                            graph=graph,
+                            topic=topic,
+                            concept=concept_by_id[concept_id],
+                            candidates=gate_candidates[concept_id],
+                            source_blocks=source_blocks,
+                            issues=issues,
+                            rejected_ids=sorted(rejected),
+                            resolution=resolutions.get(concept_id),
+                            proposal=parsed,
+                        )
+                    )
+                progress.log(
+                    "Phase 3 source grounding independently verified "
+                    f"{len(unresolved)} concept(s) for {topic_title!r}.",
+                    level="success",
                 )
 
             if set(proposals) != concept_ids:
-                details = "; ".join(last_errors[:6])
-                raise ValueError(
-                    "Phase 3 concept grounding remained invalid or uncertain "
-                    f"for topic {topic_title!r}: {details}"
+                raise ProviderResponseContractError(
+                    "Phase 3.1 grounding ended without every concept after "
+                    "bounded cache and decision resolution"
                 )
 
         _apply_proposals(

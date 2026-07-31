@@ -700,6 +700,8 @@ function SemanticDecisionPanel({
   const item = semanticDecisionItem(decision);
   const sourceReview = isSourceReviewDecision(decision);
   const typeGranularity = isTypeGranularityDecision(decision);
+  const topologyReview = isTopologyReviewDecision(decision);
+  const groundingReview = isGroundingReviewDecision(decision);
   const candidates = decision.candidates ?? [];
   const suppliedOptions = (decision.options ?? []).filter((option) =>
     Boolean(option?.choice && option?.label));
@@ -800,8 +802,12 @@ function SemanticDecisionPanel({
       return;
     }
     if (decisionChoiceRequiresTarget(choice) && !targetId) {
-      setSubmitError(sourceReview
-        ? "Select the verified source evidence Aegis should use."
+      setSubmitError(topologyReview
+        ? "Select the source-supported concept action Aegis should use."
+        : groundingReview
+          ? "Select verified evidence or a topology repair."
+          : sourceReview
+            ? "Select the verified source evidence Aegis should use."
         : choice === "expand_existing"
           ? "Select the existing concept Aegis should expand."
           : "Select the existing concept Aegis should use.");
@@ -867,14 +873,23 @@ function SemanticDecisionPanel({
             + "the expensive host and topology stages. Review the counts, "
             + "choose whether to keep or consolidate the taxonomy, save that "
             + "decision, and then resume explicitly."
-          : sourceReview
-            ? "GPT found a source-graph discrepancy it could not resolve without "
-            + "risking the source meaning. Review its diagnosis and the "
-            + "verified source evidence, choose what should happen, save that "
-            + "decision, and then resume explicitly."
-            : "Generation reached a semantic choice that cannot be resolved "
-              + "safely from the source alone. Review the exact mismatch, choose "
-              + "what should happen, save your decision, and then resume explicitly."}
+          : topologyReview
+            ? "GPT and its independent critic disagreed about a concept "
+              + "boundary. Choose a source-supported refine, move, split, keep, "
+              + "or retire action; the resumed proposal is independently "
+              + "reviewed once before it can continue."
+            : groundingReview
+              ? "The independent grounding check could not certify this claim. "
+                + "Choose verified evidence, send it to one bounded topology "
+                + "repair, replace the source, or give a custom instruction."
+              : sourceReview
+                ? "GPT found a source-graph discrepancy it could not resolve without "
+                  + "risking the source meaning. Review its diagnosis and the "
+                  + "verified source evidence, choose what should happen, save that "
+                  + "decision, and then resume explicitly."
+                : "Generation reached a semantic choice that cannot be resolved "
+                  + "safely from the source alone. Review the exact mismatch, choose "
+                  + "what should happen, save your decision, and then resume explicitly."}
       </p>
 
       <dl className="semantic-decision-details">
@@ -932,9 +947,13 @@ function SemanticDecisionPanel({
         <strong>
           {typeGranularity
             ? "Aegis quality check"
-            : sourceReview
-              ? "GPT diagnosis"
-              : "What could not be matched"}
+            : topologyReview
+              ? "Concept-boundary diagnosis"
+              : groundingReview
+                ? "Grounding-critic diagnosis"
+                : sourceReview
+                  ? "GPT diagnosis"
+                  : "What could not be matched"}
         </strong>
         <p>{diagnosis}</p>
       </div>
@@ -947,7 +966,13 @@ function SemanticDecisionPanel({
       {candidates.length > 0 && (
         <div className="semantic-decision-section">
           <h3>
-            {sourceReview ? "Verified source candidates" : "Candidate concepts"}
+            {topologyReview
+              ? "Source-supported concept actions"
+              : groundingReview
+                ? "Verified evidence and topology repairs"
+                : sourceReview
+                  ? "Verified source candidates"
+                  : "Candidate concepts"}
           </h3>
           <div className="semantic-candidate-list">
             {candidates.map((candidate, index) => (
@@ -966,9 +991,15 @@ function SemanticDecisionPanel({
                     </span>
                   )}
                 </div>
-                {candidateSummary(candidate, sourceReview) && (
+                {candidateSummary(
+                  candidate,
+                  sourceReview && !topologyReview && !groundingReview,
+                ) && (
                   <p className="muted">
-                    {candidateSummary(candidate, sourceReview)}
+                    {candidateSummary(
+                      candidate,
+                      sourceReview && !topologyReview && !groundingReview,
+                    )}
                   </p>
                 )}
               </div>
@@ -1030,7 +1061,7 @@ function SemanticDecisionPanel({
                       <small>
                         {decisionOptionDescription(
                           option,
-                          sourceReview,
+                          decision,
                           recommendedCandidate,
                         )}
                       </small>
@@ -1039,7 +1070,7 @@ function SemanticDecisionPanel({
                         <select
                           aria-label={decisionTargetLabel(
                             option.choice,
-                            sourceReview,
+                            decision,
                           )}
                           value={targetId}
                           onChange={(event) => {
@@ -1075,9 +1106,13 @@ function SemanticDecisionPanel({
                             setInstruction(event.target.value);
                             setSubmitError(null);
                           }}
-                          placeholder={sourceReview
-                            ? "Describe exactly how Aegis should resolve this source discrepancy."
-                            : "For example: expand the Renan concept to cover both attributes and the importance of nations."}
+                          placeholder={typeGranularity
+                            ? "For example: target 12-16 reusable Types, keeping genuinely different methods separate."
+                            : topologyReview || groundingReview
+                              ? "Describe the exact source-supported refine, move, split, keep, retire, or evidence action to review."
+                              : sourceReview
+                                ? "Describe exactly how Aegis should resolve this source discrepancy."
+                                : "For example: expand the Renan concept to cover both attributes and the importance of nations."}
                         />
                       )}
                     </span>
@@ -1197,6 +1232,22 @@ function isTypeGranularityDecision(
     === "type_granularity_review";
 }
 
+function isTopologyReviewDecision(
+  decision: PendingSemanticDecision,
+): boolean {
+  return firstNonEmptyString(decision.kind).toLowerCase().includes(
+    "phase32_concept_blueprint",
+  );
+}
+
+function isGroundingReviewDecision(
+  decision: PendingSemanticDecision,
+): boolean {
+  return firstNonEmptyString(decision.kind).toLowerCase().includes(
+    "phase31_source_grounding",
+  );
+}
+
 function optionTargetIdentifier(
   option?: SemanticDecisionOption,
 ): string {
@@ -1218,8 +1269,13 @@ function decisionChoiceRequiresTarget(
 
 function decisionTargetLabel(
   choice: SemanticDecisionUiChoice,
-  sourceReview: boolean,
+  decision: PendingSemanticDecision,
 ): string {
+  if (isTopologyReviewDecision(decision)) {
+    return "Source-supported concept action";
+  }
+  if (isGroundingReviewDecision(decision)) return "Evidence or topology repair";
+  const sourceReview = isSourceReviewDecision(decision);
   if (sourceReview) return "Verified source evidence";
   return choice === "expand_existing"
     ? "Concept to expand"
@@ -1228,15 +1284,29 @@ function decisionTargetLabel(
 
 function decisionOptionDescription(
   option: SemanticDecisionOption,
-  sourceReview: boolean,
+  decision: PendingSemanticDecision,
   recommendedCandidate?: SemanticDecisionCandidate,
 ): string {
+  const topologyReview = isTopologyReviewDecision(decision);
+  const groundingReview = isGroundingReviewDecision(decision);
+  const sourceReview = isSourceReviewDecision(decision);
   if (option.choice === "accept_recommended") {
+    if (topologyReview) {
+      return recommendedCandidate
+        ? `Use ${candidateTitle(recommendedCandidate)} as the source-supported concept action.`
+        : "Use GPT's proposed concept action, then require independent criticism.";
+    }
     return recommendedCandidate
       ? `Use ${candidateTitle(recommendedCandidate)} as the verified source evidence.`
       : "Use the exact verified source evidence recommended by GPT.";
   }
   if (option.choice === "select_candidate") {
+    if (topologyReview) {
+      return "Choose refine, move, split, keep, or retire; Aegis will still require independent criticism.";
+    }
+    if (groundingReview) {
+      return "Choose verified evidence or send the claim back for refine, move, split, or retirement.";
+    }
     return "Choose a different verified page or source block; Aegis will not pick one for you.";
   }
   if (option.choice === "replace_source") {
@@ -1260,6 +1330,9 @@ function decisionOptionDescription(
     return "Choose a different verified concept host from the candidates.";
   }
   if (option.choice === "custom_instruction") {
+    if (topologyReview || groundingReview) {
+      return "Tell Aegis the exact source-supported evidence or concept action to review once on Resume.";
+    }
     return sourceReview
       ? "Tell Aegis exactly how to resolve this source discrepancy."
       : "Tell Aegis exactly how this item should be handled.";
