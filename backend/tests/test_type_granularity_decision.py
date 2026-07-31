@@ -141,6 +141,47 @@ def test_fragmentation_gate_does_not_pause_small_or_already_merged_taxonomy():
     ) == {"action": "continue"}
 
 
+def test_applied_result_identity_rejects_source_or_taxonomy_drift():
+    review = _review()
+    inventory = _inventory()
+    mined_types = _types()
+    baseline = gate.applied_result_context_hash(
+        review=review,
+        inventory=inventory,
+        mined_types=mined_types,
+        meta={"subject": "History"},
+    )
+    with_audit = copy.deepcopy(review)
+    with_audit["human_resolution"] = {
+        "decision_id": "type-granularity-example",
+        "audit": {"critic_confidence": 0.95},
+    }
+    assert gate.applied_result_context_hash(
+        review=with_audit,
+        inventory=inventory,
+        mined_types=mined_types,
+        meta={"subject": "History"},
+    ) == baseline
+
+    changed_inventory = copy.deepcopy(inventory)
+    changed_inventory["items"][0]["raw_task"] += " Added source condition."
+    assert gate.applied_result_context_hash(
+        review=review,
+        inventory=changed_inventory,
+        mined_types=mined_types,
+        meta={"subject": "History"},
+    ) != baseline
+
+    changed_types = copy.deepcopy(mined_types)
+    changed_types["types"][0]["task_pattern"] += " Different output."
+    assert gate.applied_result_context_hash(
+        review=review,
+        inventory=inventory,
+        mined_types=changed_types,
+        meta={"subject": "History"},
+    ) != baseline
+
+
 def test_human_directed_consolidation_requires_independent_confident_acceptance(
     monkeypatch,
 ):
@@ -210,3 +251,49 @@ def test_human_directed_consolidation_repauses_on_critic_review_band(
     assert result is None
     assert "threshold 0.920" in failure
     assert audit["critic_confidence"] == 0.91
+
+
+def test_human_directed_consolidation_keeps_quota_failure_as_a_hard_stop(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        g,
+        "_openai_json",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("OpenAI quota exhausted (insufficient_quota)")),
+    )
+
+    with pytest.raises(RuntimeError, match="quota exhausted"):
+        g._human_directed_type_consolidation_via_api(
+            _types(2),
+            inventory=_inventory(2),
+            meta={"subject": "History"},
+            instruction="Merge only identical assessed methods.",
+        )
+
+
+def test_human_directed_consolidation_treats_bad_confidence_as_mechanical(
+    monkeypatch,
+):
+    original = _types(2)
+    candidate = copy.deepcopy(original["types"][:1])
+    candidate[0]["source_question_ids"] = ["QINV-0001", "QINV-0002"]
+    candidate[0]["case_prompts"].append(copy.deepcopy(
+        original["types"][1]["case_prompts"][0]))
+    responses = [
+        {"types": candidate},
+        {"verdict": "accept", "confidence": "very sure", "reason": ""},
+    ]
+    monkeypatch.setattr(
+        g, "_openai_json", lambda *_args, **_kwargs: responses.pop(0))
+
+    with pytest.raises(
+        semantic_recovery.ProviderResponseContractError,
+        match="invalid verdict/confidence",
+    ):
+        g._human_directed_type_consolidation_via_api(
+            original,
+            inventory=_inventory(2),
+            meta={"subject": "History"},
+            instruction="Merge only identical assessed methods.",
+        )

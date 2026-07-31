@@ -9755,10 +9755,22 @@ def _human_directed_type_consolidation_via_api(
         data = _openai_json(
             prompts.get_text("concepts.type_semantic_consolidation.system"),
             proposal_user,
+            retries=2,
             purpose="concept_mapping",
         )
-    except Exception as exc:  # noqa: BLE001 - a human follow-up is required
-        return None, f"The bounded consolidation proposal failed: {exc}", {}
+    except Exception:
+        # Authentication, quota, transport exhaustion, and malformed provider
+        # output are operational/mechanical failures, not semantic choices.
+        # ``retries=2`` already permits one bounded mechanical correction.
+        raise
+
+    from .semantic_recovery import ProviderResponseContractError
+
+    if not isinstance(data, dict) or not isinstance(data.get("types"), list):
+        raise ProviderResponseContractError(
+            "human-directed Type consolidation returned valid JSON but not "
+            "the required complete types array"
+        )
 
     candidate = _normalize_mined_type_candidate(
         list((data or {}).get("types") or []), inventory)
@@ -9839,31 +9851,53 @@ def _human_directed_type_consolidation_via_api(
         critic = _openai_json(
             prompts.get_text("concepts.type_granularity_critic.system"),
             critic_user,
+            retries=2,
             purpose="concept_validation",
         )
-    except Exception as exc:  # noqa: BLE001 - uncertainty returns to human
-        return None, f"The independent consolidation critic failed: {exc}", {}
+    except Exception:
+        # A missing/invalid critic response cannot be converted into a human
+        # semantic answer. Preserve the checkpoint and fail at the provider
+        # boundary after the one allowed mechanical correction.
+        raise
     verdict = str((critic or {}).get("verdict") or "").strip().casefold()
     confidence = (critic or {}).get("confidence")
     reason = str((critic or {}).get("reason") or "").strip()
-    if verdict != "accept" or not confidence_policy.accepts(confidence):
+    try:
+        import math
+
+        critic_confidence = float(confidence)
+    except (TypeError, ValueError):
+        critic_confidence = float("nan")
+    if (
+        not isinstance(critic, dict)
+        or verdict not in {"accept", "reject"}
+        or not math.isfinite(critic_confidence)
+        or not 0.0 <= critic_confidence <= 1.0
+    ):
+        raise ProviderResponseContractError(
+            "Type-granularity critic returned valid JSON but an invalid "
+            "verdict/confidence schema"
+        )
+    if verdict != "accept" or not confidence_policy.accepts(
+        critic_confidence
+    ):
         minimum = confidence_policy.threshold_text()
         failure = (
             "The independent critic did not certify the merge at the ordinary "
             f"semantic threshold {minimum}: verdict={verdict or '<missing>'}, "
-            f"confidence={confidence!r}. {reason}"
+            f"confidence={critic_confidence!r}. {reason}"
         ).strip()
         progress.log(failure, level="warning")
         return None, failure, {
             "critic_verdict": verdict,
-            "critic_confidence": confidence,
+            "critic_confidence": critic_confidence,
             "critic_reason": reason,
         }
     audit = {
         "proposal_type_count": len(candidate),
         "merged_type_count": len(original) - len(candidate),
         "critic_verdict": verdict,
-        "critic_confidence": float(confidence),
+        "critic_confidence": critic_confidence,
         "critic_reason": reason,
     }
     progress.log(
@@ -18870,6 +18904,37 @@ def _run_live_concept_pre_final_stages(
             mined_types["_granularity_review"] = copy.deepcopy(review)
 
         applied = review.get("human_resolution")
+        if isinstance(applied, dict) and applied.get("decision_id"):
+            expected_result_hash = (
+                type_granularity_decision.applied_result_context_hash(
+                    review=review,
+                    inventory=question_task_inventory,
+                    mined_types=mined_types,
+                    meta=meta,
+                )
+            )
+            if str(applied.get("result_context_hash") or "") != (
+                expected_result_hash
+            ):
+                progress.log(
+                    "Saved Type-granularity direction no longer matches the "
+                    "current source inventory, taxonomy, metadata, or "
+                    "confidence policy; requiring a fresh exact-context "
+                    "decision only if the anomaly still exists.",
+                    level="warning",
+                )
+                current_type_count = len(
+                    (mined_types or {}).get("types") or [])
+                review = type_granularity_decision.build_review(
+                    raw_type_count=current_type_count,
+                    consolidated_type_count=current_type_count,
+                    inventory_count=len(
+                        (question_task_inventory or {}).get("items") or []),
+                    sufficiency_added_concepts=int(
+                        review.get("sufficiency_added_concepts") or 0),
+                )
+                mined_types["_granularity_review"] = copy.deepcopy(review)
+                applied = None
         if not isinstance(applied, dict) or not applied.get("decision_id"):
             pending_followup = review.get("pending_followup")
             if not isinstance(pending_followup, dict):
@@ -18957,6 +19022,15 @@ def _run_live_concept_pre_final_stages(
                     "action": action,
                     "audit": copy.deepcopy(resolution_audit),
                 }
+                mined_types["_granularity_review"] = copy.deepcopy(review)
+                review["human_resolution"]["result_context_hash"] = (
+                    type_granularity_decision.applied_result_context_hash(
+                        review=review,
+                        inventory=question_task_inventory,
+                        mined_types=mined_types,
+                        meta=meta,
+                    )
+                )
                 mined_types["_granularity_review"] = copy.deepcopy(review)
                 # Replace the same durable 81% stage. If a later unrelated
                 # failure resumes here, the accepted human direction is not

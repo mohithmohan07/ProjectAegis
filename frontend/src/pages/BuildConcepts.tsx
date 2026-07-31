@@ -699,6 +699,7 @@ function SemanticDecisionPanel({
 }) {
   const item = semanticDecisionItem(decision);
   const sourceReview = isSourceReviewDecision(decision);
+  const typeGranularity = isTypeGranularityDecision(decision);
   const candidates = decision.candidates ?? [];
   const suppliedOptions = (decision.options ?? []).filter((option) =>
     Boolean(option?.choice && option?.label));
@@ -861,14 +862,19 @@ function SemanticDecisionPanel({
       </div>
 
       <p className="muted semantic-decision-intro">
-        {sourceReview
-          ? "GPT found a source-graph discrepancy it could not resolve without "
+        {typeGranularity
+          ? "Aegis detected a deterministic Type-fragmentation risk before "
+            + "the expensive host and topology stages. Review the counts, "
+            + "choose whether to keep or consolidate the taxonomy, save that "
+            + "decision, and then resume explicitly."
+          : sourceReview
+            ? "GPT found a source-graph discrepancy it could not resolve without "
             + "risking the source meaning. Review its diagnosis and the "
             + "verified source evidence, choose what should happen, save that "
             + "decision, and then resume explicitly."
-          : "Generation reached a semantic choice that cannot be resolved "
-            + "safely from the source alone. Review the exact mismatch, choose "
-            + "what should happen, save your decision, and then resume explicitly."}
+            : "Generation reached a semantic choice that cannot be resolved "
+              + "safely from the source alone. Review the exact mismatch, choose "
+              + "what should happen, save your decision, and then resume explicitly."}
       </p>
 
       <dl className="semantic-decision-details">
@@ -923,7 +929,13 @@ function SemanticDecisionPanel({
       )}
 
       <div className="semantic-mismatch semantic-diagnosis">
-        <strong>{sourceReview ? "GPT diagnosis" : "What could not be matched"}</strong>
+        <strong>
+          {typeGranularity
+            ? "Aegis quality check"
+            : sourceReview
+              ? "GPT diagnosis"
+              : "What could not be matched"}
+        </strong>
         <p>{diagnosis}</p>
       </div>
 
@@ -1176,6 +1188,13 @@ function isSourceReviewDecision(decision: PendingSemanticDecision): boolean {
       option.choice === "accept_recommended"
       || option.choice === "select_candidate")
     || false;
+}
+
+function isTypeGranularityDecision(
+  decision: PendingSemanticDecision,
+): boolean {
+  return firstNonEmptyString(decision.kind).toLowerCase()
+    === "type_granularity_review";
 }
 
 function optionTargetIdentifier(

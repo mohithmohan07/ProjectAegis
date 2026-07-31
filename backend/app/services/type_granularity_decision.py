@@ -296,6 +296,49 @@ def _identity(
     }
 
 
+def applied_result_context_hash(
+    *,
+    review: Mapping[str, Any],
+    inventory: Mapping[str, Any] | None,
+    mined_types: Mapping[str, Any] | None,
+    meta: Mapping[str, Any] | None,
+) -> str:
+    """Fingerprint the exact accepted output state for safe checkpoint replay.
+
+    The original decision hash binds the pre-decision taxonomy. A successful
+    consolidation necessarily changes that taxonomy, so resumed checkpoints
+    need a second identity for the accepted result. Human/audit bookkeeping is
+    excluded; policy, source-task semantics, and Type semantics are not.
+    """
+
+    stable_review = {
+        key: copy.deepcopy(review.get(key))
+        for key in (
+            "version",
+            "raw_type_count",
+            "type_count",
+            "inventory_count",
+            "consolidation_merged_count",
+            "sufficiency_added_concepts",
+            "type_qid_ratio",
+        )
+    }
+    return _sha256_json({
+        "version": "type-granularity-applied-result-1",
+        "semantic_confidence_policy": confidence_policy.cache_identity(),
+        "metadata": {
+            key: str((meta or {}).get(key) or "")
+            for key in (
+                "board", "grade", "subject", "unit", "chapter_title",
+                "chapter_code", "learning_kind",
+            )
+        },
+        "review": stable_review,
+        "inventory": _inventory_identity(inventory),
+        "types": _type_identity(mined_types),
+    })
+
+
 def _pending_decision(
     *,
     identity: Mapping[str, str],
@@ -433,6 +476,7 @@ def resolve_or_pause(
 
 
 __all__ = [
+    "applied_result_context_hash",
     "build_review",
     "human_resolution_context",
     "is_anomalously_fragmented",

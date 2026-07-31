@@ -656,6 +656,9 @@ test("Type granularity pause offers quality-safe consolidation or keep choices",
 
   expect(await screen.findByText(/25 Types for 26 source questions/))
     .toBeDefined();
+  expect(screen.getByText("Aegis quality check")).toBeDefined();
+  expect(screen.getByText(/deterministic Type-fragmentation risk/))
+    .toBeDefined();
   expect(screen.getByText(/one bounded GPT proposal plus an independent critic/))
     .toBeDefined();
   expect(screen.getByText(/exact QID coverage, source wording, topic/))
