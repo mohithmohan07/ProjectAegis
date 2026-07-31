@@ -9618,6 +9618,7 @@ def _type_qid_semantic_contracts(
     inventory: dict,
     *,
     honor_emitted_requires_visual: bool = False,
+    include_case_identity: bool = False,
 ) -> dict[str, dict]:
     """Bind Type-only consolidation to each QID's immutable semantics.
 
@@ -9626,6 +9627,11 @@ def _type_qid_semantic_contracts(
     signatures remain QID-local, while ``requires_visual`` is authoritative in
     the source inventory.  Candidate Examples may echo that visual flag; an
     echoed mismatch is treated as drift instead of overriding the inventory.
+
+    Human-directed consolidation additionally seals Case IDs and titles so the
+    bounded proposal cannot reinterpret the saved operator decision.  The
+    ordinary paraphrase consolidator may legitimately create a clearer Case
+    partition, so it keeps its established signature-level contract.
     """
 
     visual_by_qid = {
@@ -9672,13 +9678,17 @@ def _type_qid_semantic_contracts(
                                     "value": copy.deepcopy(emitted_visual),
                                 }
                             )
-            return {
+            contract = {
                 **copy.deepcopy(shared),
-                "case_id": copy.deepcopy(case_id or ""),
-                "case_title": copy.deepcopy(case_title or ""),
                 "case_signature": copy.deepcopy(case_signature or ""),
                 "requires_visual": requires_visual,
             }
+            if include_case_identity:
+                contract.update({
+                    "case_id": copy.deepcopy(case_id or ""),
+                    "case_title": copy.deepcopy(case_title or ""),
+                })
+            return contract
 
         for qid in _type_source_qids(mtype):
             contracts.setdefault(qid, contract_for(qid))
@@ -9911,7 +9921,11 @@ def _human_directed_type_consolidation_via_api(
         + _json.dumps({"types": original}, ensure_ascii=False)
         + "\n\nSOURCE-OWNED PER-QID SEMANTICS (immutable):\n"
         + _json.dumps(
-            _type_qid_semantic_contracts(original, inventory),
+            _type_qid_semantic_contracts(
+                original,
+                inventory,
+                include_case_identity=True,
+            ),
             ensure_ascii=False,
         )
         + "\n\nReturn one COMPLETE replacement {\"types\": [...]} list. "
@@ -9972,11 +9986,16 @@ def _human_directed_type_consolidation_via_api(
         for qid in original_wording
         if candidate_wording.get(qid) != original_wording[qid]
     }
-    original_semantics = _type_qid_semantic_contracts(original, inventory)
+    original_semantics = _type_qid_semantic_contracts(
+        original,
+        inventory,
+        include_case_identity=True,
+    )
     candidate_semantics = _type_qid_semantic_contracts(
         candidate,
         inventory,
         honor_emitted_requires_visual=True,
+        include_case_identity=True,
     )
     semantic_drift = {
         qid: {
