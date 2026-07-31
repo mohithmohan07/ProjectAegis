@@ -318,6 +318,219 @@ def test_verified_topic_grounding_is_reused_from_artifact_cache(tmp_path):
     assert (tmp_path / phase31._GROUNDING_CACHE_FILENAME).exists()
 
 
+def test_partial_acceptance_survives_failure_and_only_rejected_ids_resume(
+    tmp_path,
+    monkeypatch,
+):
+    graph, canonical = _source_graph()
+    records = [
+        _record(
+            title=f"Independent concept {number}",
+            details=f"Description: Independently grounded source claim {number}.",
+        )
+        for number in range(1, 8)
+    ]
+    provider_batches: list[list[str]] = []
+    critic_calls = 0
+
+    def provider(payload: dict) -> dict:
+        ids = [row["concept_id"] for row in payload["concepts"]]
+        provider_batches.append(ids)
+        return {"concepts": [
+            {
+                "concept_id": concept_id,
+                "source_block_ids": [
+                    "BLK-0001" if concept_id.endswith(tuple("12345"))
+                    else "BLK-0002"
+                ],
+                "confidence": 0.999,
+                "reason": "The selected block supports this source claim.",
+            }
+            for concept_id in ids
+        ]}
+
+    def critic(payload: dict) -> dict:
+        nonlocal critic_calls
+        critic_calls += 1
+        ids = [row["concept_id"] for row in payload["concepts"]]
+        if critic_calls == 1:
+            assert len(ids) == 7
+            return {
+                "verdict": "rejected",
+                "confidence": 0.999,
+                "accepted_concept_ids": ids[:5],
+                "rejected_concept_ids": ids[5:],
+                "issues": ["The final two concepts need different evidence."],
+            }
+        assert ids == provider_batches[0][5:]
+        return _verified_review(payload)
+
+    monkeypatch.setenv("AEGIS_PHASE3_GROUNDING_MAX_ATTEMPTS", "1")
+    session = {
+        "artifact_dir": tmp_path,
+        "canonical": canonical,
+    }
+    with phase3.activate_session(session), phase3.activate(graph):
+        with pytest.raises(ValueError, match="failed independent verification"):
+            phase31.ground_concepts(
+                copy.deepcopy(records),
+                graph=graph,
+                canonical=canonical,
+                provider=provider,
+                critic=critic,
+            )
+        resumed = phase31.ground_concepts(
+            copy.deepcopy(records),
+            graph=graph,
+            canonical=canonical,
+            provider=provider,
+            critic=critic,
+        )
+
+    assert len(provider_batches) == 2
+    assert len(provider_batches[0]) == 7
+    assert provider_batches[1] == provider_batches[0][5:]
+    assert critic_calls == 2
+    assert [row["_source_block_ids"] for row in resumed[:5]] == [
+        ["BLK-0001"]
+    ] * 5
+    assert [row["_source_block_ids"] for row in resumed[5:]] == [
+        ["BLK-0002"]
+    ] * 2
+
+
+def test_later_learner_analysis_does_not_invalidate_source_claim_cache(
+    tmp_path,
+):
+    graph, canonical = _source_graph()
+    original = _record(details=(
+        "Description: A landed aristocracy dominated social and political life "
+        "while most people belonged to the peasantry.\n"
+        "Achieving Mastery: Explain the class relationship."
+    ))
+    enriched = copy.deepcopy(original)
+    enriched["concept_details"] = (
+        "Description: A landed aristocracy dominated social and political life "
+        "while most people belonged to the peasantry.\n"
+        "Achieving Mastery: Compare political power across both groups. // "
+        "Misconception/ Error Analysis: A learner confuses their roles."
+    )
+    calls = 0
+
+    def provider(payload: dict) -> dict:
+        nonlocal calls
+        calls += 1
+        return {"concepts": [{
+            "concept_id": payload["concepts"][0]["concept_id"],
+            "source_block_ids": ["BLK-0001"],
+            "confidence": 0.999,
+            "reason": "The source explicitly supports the Description claim.",
+        }]}
+
+    session = {
+        "artifact_dir": tmp_path,
+        "canonical": canonical,
+    }
+    with phase3.activate_session(session), phase3.activate(graph):
+        first = phase31.ground_concepts(
+            [original],
+            graph=graph,
+            canonical=canonical,
+            provider=provider,
+            critic=_verified_review,
+        )
+        second = phase31.ground_concepts(
+            [enriched],
+            graph=graph,
+            canonical=canonical,
+            provider=lambda _payload: (_ for _ in ()).throw(
+                AssertionError("generated pedagogy must not invalidate grounding")
+            ),
+            critic=lambda _payload: (_ for _ in ()).throw(
+                AssertionError("cached source-claim review should be reused")
+            ),
+        )
+
+    assert calls == 1
+    assert first[0]["_source_block_ids"] == second[0]["_source_block_ids"]
+
+
+@pytest.mark.parametrize(
+    "drift",
+    [
+        "source_claim",
+        "source_contract",
+        "semantic_context",
+        "pdf",
+        "source_block_text",
+        "topic",
+    ],
+)
+def test_grounding_cache_invalidates_on_source_or_context_drift(
+    tmp_path,
+    drift,
+):
+    graph, canonical = _source_graph()
+    graph.update({
+        "semantic_context_hash": "SEMANTIC-CONTEXT-1",
+        "source_sha256": "SOURCE-SHA-1",
+        "vision_evidence": {"pdf_sha256": "PDF-SHA-1"},
+    })
+    records = [_record()]
+    calls = 0
+
+    def provider(payload: dict) -> dict:
+        nonlocal calls
+        calls += 1
+        return {"concepts": [{
+            "concept_id": payload["concepts"][0]["concept_id"],
+            "source_block_ids": ["BLK-0001"],
+            "confidence": 0.999,
+            "reason": "Freshly reviewed against the current source identity.",
+        }]}
+
+    session = {
+        "artifact_dir": tmp_path,
+        "canonical": canonical,
+    }
+    with phase3.activate_session(session), phase3.activate(graph):
+        phase31.ground_concepts(
+            copy.deepcopy(records),
+            graph=graph,
+            canonical=canonical,
+            provider=provider,
+            critic=_verified_review,
+        )
+
+        changed_graph = copy.deepcopy(graph)
+        changed_canonical = copy.deepcopy(canonical)
+        changed_records = copy.deepcopy(records)
+        if drift == "source_claim":
+            changed_records[0]["concept_details"] = (
+                "Description: A materially changed source claim."
+            )
+        elif drift == "source_contract":
+            changed_graph["source_contract_hash"] = "SOURCE-CONTRACT-2"
+        elif drift == "semantic_context":
+            changed_graph["semantic_context_hash"] = "SEMANTIC-CONTEXT-2"
+        elif drift == "pdf":
+            changed_graph["vision_evidence"]["pdf_sha256"] = "PDF-SHA-2"
+        elif drift == "source_block_text":
+            changed_canonical["blocks"][0]["display_text"] += " Changed."
+        elif drift == "topic":
+            changed_graph["topics"][0]["order"] = 2
+
+        phase31.ground_concepts(
+            changed_records,
+            graph=changed_graph,
+            canonical=changed_canonical,
+            provider=provider,
+            critic=_verified_review,
+        )
+
+    assert calls == 2
+
+
 def test_validated_final_topology_cache_skips_repeated_learner_analysis(
     tmp_path,
 ):

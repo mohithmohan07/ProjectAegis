@@ -9,9 +9,9 @@ an otherwise valid concept-to-block mapping forever.
 
 This contract narrows grounding to the source-facing Description claim, derives
 culmination grounding from already-verified normal concepts, retries only
-critic-rejected concept IDs, persists verified per-topic grounding, and caches
-the validated pre-allocation topology so a resume does not repeat learner-
-analysis calls after a later allocation failure.
+critic-rejected concept IDs, persists each independently accepted concept, and
+caches the validated pre-allocation topology so a resume does not repeat
+grounding or learner-analysis calls after a later allocation failure.
 """
 from __future__ import annotations
 
@@ -30,8 +30,9 @@ from . import concept_refiner as cr
 from . import progress
 from . import semantic_confidence_policy as confidence_policy
 
-_CONTRACT_VERSION = 1
+_CONTRACT_VERSION = 2
 _GROUNDING_VERSION = "phase3.1-source-claim-grounding-1"
+_CONCEPT_GROUNDING_CACHE_VERSION = "phase3.1-per-concept-grounding-2"
 _GROUNDING_CACHE_FILENAME = "source.phase31-concept-grounding-cache.json"
 _TOPOLOGY_CACHE_FILENAME = "source.phase31-final-topology-cache.json"
 _MASTERY_TAIL_RE = re.compile(
@@ -510,95 +511,216 @@ def _review_state(
     }
 
 
-def _grounding_cache_key(
+def _source_block_directory(
+    source_blocks: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    """Describe exactly the provider-visible block directory.
+
+    Reuse is intentionally invalidated by any ID, binding, ordering, kind,
+    subtopic, or provider-visible text change. The cache never trusts a block ID
+    alone.
+    """
+    return [
+        {
+            "block_id": str(row.get("block_id") or ""),
+            "kind": str(row.get("kind") or ""),
+            "subtopic_id": str(row.get("subtopic_id") or ""),
+            "text_sha256": phase3._sha256_text(row.get("text") or ""),
+        }
+        for row in source_blocks
+    ]
+
+
+def _concept_cache_contexts(
     *,
     graph: dict[str, Any],
     topic_id: str,
     concepts: list[dict[str, Any]],
     source_blocks: list[dict[str, Any]],
-) -> str:
-    return phase3._sha256_json(
-        {
-            "version": _GROUNDING_VERSION,
+) -> dict[str, dict[str, Any]]:
+    topic = next(
+        (
+            row
+            for row in graph.get("topics") or []
+            if isinstance(row, dict)
+            and str(row.get("topic_id") or "") == topic_id
+        ),
+        {"topic_id": topic_id},
+    )
+    block_directory = _source_block_directory(source_blocks)
+    block_directory_sha256 = phase3._sha256_json(block_directory)
+    block_bindings_by_id = {
+        row["block_id"]: row
+        for row in block_directory
+        if row["block_id"]
+    }
+    concept_bases: list[dict[str, Any]] = []
+    base_hashes: list[str] = []
+    for concept in concepts:
+        base = {
+            "concept_title": phase3._clean_public_text(
+                concept.get("concept_title") or ""
+            ),
+            "parent_concept": phase3._clean_public_text(
+                concept.get("parent_concept") or ""
+            ),
+            "source_claim": phase3._clean_public_text(
+                concept.get("source_claim") or ""
+            ),
+        }
+        concept_bases.append(base)
+        base_hashes.append(phase3._sha256_json(base))
+    base_counts: dict[str, int] = {}
+    for value in base_hashes:
+        base_counts[value] = base_counts.get(value, 0) + 1
+    seen_duplicates: dict[str, int] = {}
+    contexts: dict[str, dict[str, Any]] = {}
+    for concept, base, base_hash in zip(
+        concepts,
+        concept_bases,
+        base_hashes,
+    ):
+        if base_counts[base_hash] > 1:
+            duplicate_ordinal = seen_duplicates.get(base_hash, 0) + 1
+            seen_duplicates[base_hash] = duplicate_ordinal
+            base = {
+                **base,
+                "duplicate_ordinal": duplicate_ordinal,
+            }
+        identity = {
+            "version": _CONCEPT_GROUNDING_CACHE_VERSION,
             "model": str(config.OPENAI_MODEL),
-            "semantic_confidence_policy": confidence_policy.cache_identity(),
+            "semantic_confidence_policy": _json_safe(
+                confidence_policy.cache_identity()
+            ),
             "source_contract_hash": str(
                 graph.get("source_contract_hash") or ""
             ),
-            "topic_id": topic_id,
-            "concepts": concepts,
-            "source_blocks": [
-                {
-                    "block_id": row.get("block_id"),
-                    "kind": row.get("kind"),
-                    "subtopic_id": row.get("subtopic_id"),
-                    "text_sha256": phase3._sha256_text(row.get("text")),
-                }
-                for row in source_blocks
-            ],
+            "semantic_context_hash": str(
+                graph.get("semantic_context_hash") or ""
+            ),
+            "source_sha256": str(graph.get("source_sha256") or ""),
+            "pdf_sha256": str(
+                (graph.get("vision_evidence") or {}).get("pdf_sha256")
+                or ""
+            ),
+            "topic": _json_safe(topic),
+            "concept": base,
+            "block_directory_sha256": block_directory_sha256,
         }
-    )
+        concept_id = str(concept.get("concept_id") or "")
+        contexts[concept_id] = {
+            "cache_key": phase3._sha256_json(identity),
+            "identity": identity,
+            "block_bindings_by_id": block_bindings_by_id,
+        }
+    return contexts
 
 
-def _read_cached_proposals(
-    cache_key: str,
+def _read_cached_concept_proposals(
+    contexts: dict[str, dict[str, Any]],
     *,
-    concept_ids: set[str],
     allowed_blocks: set[str],
-) -> dict[str, dict[str, Any]] | None:
+) -> dict[str, dict[str, Any]]:
     directory = _artifact_dir()
     if directory is None:
-        return None
+        return {}
     cache = _read_json(directory / _GROUNDING_CACHE_FILENAME)
-    if cache.get("version") != _GROUNDING_VERSION:
-        return None
-    entry = (cache.get("entries") or {}).get(cache_key)
-    if not isinstance(entry, dict) or entry.get("status") != "verified":
-        return None
-    proposals = entry.get("proposals")
-    if not isinstance(proposals, list):
-        return None
-    parsed, errors = _parse_proposals(
-        {"concepts": proposals},
-        expected_ids=concept_ids,
-        allowed_blocks=allowed_blocks,
-    )
-    return parsed if not errors else None
+    if cache.get("version") != _CONCEPT_GROUNDING_CACHE_VERSION:
+        return {}
+    entries = cache.get("entries")
+    if not isinstance(entries, dict):
+        return {}
+
+    cached: dict[str, dict[str, Any]] = {}
+    for concept_id, context in contexts.items():
+        entry = entries.get(context["cache_key"])
+        if (
+            not isinstance(entry, dict)
+            or entry.get("status") != "accepted"
+            or entry.get("identity") != context["identity"]
+            or not confidence_policy.accepts(
+                entry.get("review_confidence")
+            )
+        ):
+            continue
+        proposal = entry.get("proposal")
+        if not isinstance(proposal, dict):
+            continue
+        block_ids = [
+            str(value)
+            for value in proposal.get("source_block_ids") or []
+            if str(value)
+        ]
+        bindings_by_id = context["block_bindings_by_id"]
+        if any(block_id not in bindings_by_id for block_id in block_ids):
+            continue
+        current_bindings = [
+            bindings_by_id[block_id]
+            for block_id in block_ids
+        ]
+        if entry.get("source_block_bindings") != current_bindings:
+            continue
+        rebound = {
+            **copy.deepcopy(proposal),
+            "concept_id": concept_id,
+        }
+        parsed, errors = _parse_proposals(
+            {"concepts": [rebound]},
+            expected_ids={concept_id},
+            allowed_blocks=allowed_blocks,
+        )
+        if not errors:
+            cached[concept_id] = parsed[concept_id]
+    return cached
 
 
-def _write_cached_proposals(
-    cache_key: str,
+def _write_cached_concept_proposals(
+    contexts: dict[str, dict[str, Any]],
     *,
-    graph: dict[str, Any],
-    topic_id: str,
     proposals: dict[str, dict[str, Any]],
     review_confidence: float,
 ) -> None:
     directory = _artifact_dir()
-    if directory is None:
+    if directory is None or not proposals:
         return
     path = directory / _GROUNDING_CACHE_FILENAME
     cache = _read_json(path)
-    if cache.get("version") != _GROUNDING_VERSION:
+    if cache.get("version") != _CONCEPT_GROUNDING_CACHE_VERSION:
         cache = {
-            "version": _GROUNDING_VERSION,
+            "version": _CONCEPT_GROUNDING_CACHE_VERSION,
             "entries": {},
         }
-    entries = cache.setdefault("entries", {})
-    entries[cache_key] = {
-        "status": "verified",
-        "created_at": time.time(),
-        "model": str(config.OPENAI_MODEL),
-        "source_contract_hash": str(
-            graph.get("source_contract_hash") or ""
-        ),
-        "topic_id": topic_id,
-        "review_confidence": float(review_confidence),
-        "proposals": [
-            copy.deepcopy(proposals[key])
-            for key in sorted(proposals)
-        ],
-    }
+    entries = cache.get("entries")
+    if not isinstance(entries, dict):
+        entries = {}
+        cache["entries"] = entries
+    for concept_id, proposal in proposals.items():
+        context = contexts[concept_id]
+        stored_proposal = copy.deepcopy(proposal)
+        stored_proposal.pop("concept_id", None)
+        block_ids = [
+            str(value)
+            for value in stored_proposal.get("source_block_ids") or []
+            if str(value)
+        ]
+        bindings_by_id = context["block_bindings_by_id"]
+        if not block_ids or any(
+            block_id not in bindings_by_id
+            for block_id in block_ids
+        ):
+            continue
+        entries[context["cache_key"]] = {
+            "status": "accepted",
+            "created_at": time.time(),
+            "identity": copy.deepcopy(context["identity"]),
+            "review_confidence": float(review_confidence),
+            "proposal": stored_proposal,
+            "source_block_bindings": [
+                copy.deepcopy(bindings_by_id[block_id])
+                for block_id in block_ids
+            ],
+        }
     _write_json(path, cache)
 
 
@@ -838,28 +960,27 @@ def ground_concepts(
                 "Phase 3 concept grounding requires an independent critic"
             )
 
-        cache_key = _grounding_cache_key(
+        cache_contexts = _concept_cache_contexts(
             graph=graph,
             topic_id=topic_id,
             concepts=concepts,
             source_blocks=source_blocks,
         )
-        proposals = _read_cached_proposals(
-            cache_key,
-            concept_ids=concept_ids,
+        proposals = _read_cached_concept_proposals(
+            cache_contexts,
             allowed_blocks=allowed_blocks,
         )
-        review_confidence = 0.999
-        if proposals is not None:
+        cached_count = len(proposals)
+        if cached_count:
             progress.log(
                 "Reused API-verified Phase 3 concept grounding for "
-                f"{topic_title!r} ({len(proposals)} concept(s)); no grounding "
-                "model call was repeated.",
+                f"{topic_title!r} ({cached_count}/{len(concept_ids)} "
+                "independently accepted concept(s)); only uncached or changed "
+                "source claims require model review.",
                 level="success",
             )
-        else:
-            proposals = {}
-            unresolved = set(concept_ids)
+        unresolved = concept_ids - set(proposals)
+        if unresolved:
             previous_grounding: list[dict[str, Any]] = []
             critic_feedback: dict[str, Any] = {}
             last_errors: list[str] = []
@@ -899,8 +1020,15 @@ def ground_concepts(
                         level="warning",
                     )
                     previous_grounding = [
-                        copy.deepcopy(value)
-                        for value in proposals.values()
+                        copy.deepcopy(row)
+                        for row in (
+                            response.get("concepts")
+                            if isinstance(response, dict)
+                            and isinstance(response.get("concepts"), list)
+                            else []
+                        )
+                        if isinstance(row, dict)
+                        and str(row.get("concept_id") or "") in unresolved
                     ]
                     critic_feedback = {
                         "verdict": "provider_contract_rejected",
@@ -910,34 +1038,50 @@ def ground_concepts(
                     }
                     continue
 
-                proposals.update(parsed)
-                if set(proposals) != concept_ids:
-                    unresolved = concept_ids - set(proposals)
-                    last_errors = [
-                        "grounding provider did not yet cover every concept"
-                    ]
-                    continue
-
-                full_payload = {
+                review_payload = {
                     "topic": copy.deepcopy(topic),
-                    "concepts": copy.deepcopy(concepts),
+                    "concepts": copy.deepcopy(requested),
                     "source_blocks": copy.deepcopy(source_blocks),
                     "proposed_grounding": [
-                        copy.deepcopy(proposals[concept_id])
-                        for concept_id in sorted(concept_ids)
+                        copy.deepcopy(parsed[concept_id])
+                        for concept_id in sorted(unresolved)
                     ],
                 }
-                review = critic(copy.deepcopy(full_payload))
+                review = critic(copy.deepcopy(review_payload))
                 state = _review_state(
                     review,
-                    concept_ids=concept_ids,
+                    concept_ids=set(unresolved),
                 )
                 last_confidence = float(state["confidence"])
                 if state["verified"]:
-                    review_confidence = last_confidence
+                    accepted = set(unresolved)
+                elif (
+                    state.get("verdict") == "rejected"
+                    and confidence_policy.accepts(last_confidence)
+                ):
+                    accepted = set(state["accepted"]) - set(
+                        state["rejected"]
+                    )
+                else:
+                    accepted = set()
+                accepted_proposals = {
+                    concept_id: parsed[concept_id]
+                    for concept_id in accepted
+                }
+                # Persist this independently verified subset before another
+                # concept is retried or the run can fail. A later resume then
+                # pays only for the still-rejected source claims.
+                _write_cached_concept_proposals(
+                    cache_contexts,
+                    proposals=accepted_proposals,
+                    review_confidence=last_confidence,
+                )
+                proposals.update(accepted_proposals)
+                rejected = set(unresolved) - accepted
+                if not rejected:
                     progress.log(
                         "Phase 3 source grounding independently verified "
-                        f"{len(concept_ids)} concept(s) for {topic_title!r}"
+                        f"{len(unresolved)} new concept(s) for {topic_title!r}"
                         + (
                             f" after {attempt} attempt(s)."
                             if attempt > 1
@@ -945,19 +1089,18 @@ def ground_concepts(
                         ),
                         level="success",
                     )
+                    unresolved = set()
                     break
 
-                unresolved = set(state["rejected"]) or set(concept_ids)
                 last_errors = list(state["issues"]) or [
                     "critic verdict was "
                     + str(state.get("verdict") or "missing")
                 ]
-                accepted_count = len(concept_ids - unresolved)
                 progress.log(
                     "Phase 3 source-grounding attempt "
                     f"{attempt}/{attempts} for {topic_title!r} accepted "
-                    f"{accepted_count}/{len(concept_ids)} concept(s); "
-                    f"{len(unresolved)} require correction"
+                    f"{len(proposals)}/{len(concept_ids)} concept(s); "
+                    f"{len(rejected)} require correction"
                     + (
                         ": " + "; ".join(last_errors[:4])
                         if last_errors
@@ -966,12 +1109,17 @@ def ground_concepts(
                     level="warning",
                 )
                 previous_grounding = [
-                    copy.deepcopy(proposals[concept_id])
-                    for concept_id in sorted(concept_ids)
+                    copy.deepcopy(parsed[concept_id])
+                    for concept_id in sorted(rejected)
                 ]
-                critic_feedback = copy.deepcopy(review)
-                for concept_id in unresolved:
-                    proposals.pop(concept_id, None)
+                critic_feedback = {
+                    "verdict": "rejected",
+                    "confidence": last_confidence,
+                    "issues": copy.deepcopy(last_errors),
+                    "accepted_concept_ids": [],
+                    "rejected_concept_ids": sorted(rejected),
+                }
+                unresolved = rejected
             else:
                 details = "; ".join(last_errors[:6])
                 raise ValueError(
@@ -992,13 +1140,6 @@ def ground_concepts(
                     "Phase 3 concept grounding remained invalid or uncertain "
                     f"for topic {topic_title!r}: {details}"
                 )
-            _write_cached_proposals(
-                cache_key,
-                graph=graph,
-                topic_id=topic_id,
-                proposals=proposals,
-                review_confidence=review_confidence,
-            )
 
         _apply_proposals(
             out,
