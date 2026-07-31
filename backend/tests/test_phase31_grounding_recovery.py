@@ -687,7 +687,10 @@ def test_partial_acceptance_survives_failure_and_only_rejected_ids_resume(
         "canonical": canonical,
     }
     with phase3.activate_session(session), phase3.activate(graph):
-        with pytest.raises(ValueError, match="failed independent verification"):
+        with pytest.raises(
+            semantic_recovery.HumanDecisionRequired,
+            match="paused for a human semantic decision",
+        ):
             phase31.ground_concepts(
                 copy.deepcopy(records),
                 graph=graph,
