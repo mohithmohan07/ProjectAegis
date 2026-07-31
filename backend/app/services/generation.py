@@ -29,6 +29,7 @@ from . import concept_refiner as cr
 from . import prompts
 from . import progress
 from . import semantic_confidence_policy as confidence_policy
+from . import type_granularity_decision
 # Imported for its prompt registrations (assessment.* keys used by _identify_system).
 from . import assessment_prompts as _assessment_prompts_registration  # noqa: F401
 
@@ -1753,6 +1754,12 @@ Rules:
 - Every supplied source_question_id must remain exactly once in exactly one
   Example and one Type. Never add, remove, duplicate, paraphrase, or truncate
   an Example.
+- This is Type-only consolidation. Preserve concept_match_hint,
+  parent_concept_match_hint, difficulty_hint, cognitive_skill_hint, and
+  subject_skill_hint exactly for every owned QID. Preserve each QID's
+  case_signature and source-owned requires_visual value exactly. Because the
+  five hint fields are Type-level, merge only Types whose values are identical;
+  never average, generalize, or rewrite them to make a merge possible.
 - Merge Types when their verb/action, assessed object, required method,
   representation, constraints, and expected output describe the same reusable
   assessment pattern, even when their titles are paraphrases.
@@ -1765,6 +1772,28 @@ Rules:
   preserve all distinct Cases in source order.
 - Do not create generic fallback titles such as "Answering a Checkpoint
   Question", "Direct Questions", "Word Problems", or "Miscellaneous".
+""")
+
+prompts.register(
+    "concepts.type_granularity_critic.system", category=_CONCEPTS_CAT,
+    label="Human-directed Type consolidation critic prompt",
+    default="""\
+Independently review a human-directed consolidation of assessment Types.
+Return ONLY strict JSON:
+{"verdict":"accept|reject","confidence":0.0,"reason":""}.
+
+Accept only when the candidate merges genuinely reusable assessment patterns
+without erasing a different method, assessed object, representation,
+constraint, expected output, source topic, activity status, or placement
+scope. Reject one-Type-per-question renaming, superficial title-only changes,
+generic catch-all Types, and over-merging based only on shared context,
+difficulty, notation, person, country, or formula. Every supplied QID and Case
+must remain semantically accounted for. Reject any change to a QID's
+concept_match_hint, parent_concept_match_hint, difficulty_hint,
+cognitive_skill_hint, subject_skill_hint, case_signature, or source-owned
+requires_visual value. Treat the human direction as the goal, not as evidence
+that the proposed merge is correct. Confidence is your confidence in the
+verdict, from 0 to 1.
 """)
 
 prompts.register(
@@ -2440,14 +2469,19 @@ def _openai_json(
     retries: int = 3,
     *,
     purpose: OpenAIPurpose = "source_extraction",
+    single_attempt: bool = False,
 ) -> dict:
     """One JSON-mode chat call; returns the parsed object.
 
     Concurrency-safe for multiple simultaneous users on one shared API key:
     calls queue on a process-wide gate (never stampede the API), and
     transient failures — rate limits, timeouts, connection errors, 5xx —
-    are retried patiently with exponential backoff + Retry-After, so heavy
-    load makes jobs slower but never changes their output quality.
+    are normally retried patiently with exponential backoff + Retry-After, so
+    heavy load makes jobs slower but never changes their output quality.
+
+    ``single_attempt`` is reserved for explicitly human-authorized bounded
+    calls.  It guarantees at most one physical provider request by disabling
+    both this function's parse/transient retry loops and the SDK retry layer.
     """
     import json
     import time
@@ -2473,6 +2507,10 @@ def _openai_json(
     last_err: Exception | None = None
     attempt = 0  # hard failures (bad JSON, truncation, 4xx)
     transient = 0  # rate limits / timeouts / 5xx — retried patiently
+    hard_attempt_limit = 1 if single_attempt else max(1, int(retries))
+    transient_retry_limit = (
+        0 if single_attempt else config.OPENAI_TRANSIENT_RETRIES
+    )
     while True:
         try:
             _acquire_openai_slot(gate, purpose=purpose)
@@ -2519,7 +2557,12 @@ def _openai_json(
                 ) from e
             transient += 1
             last_err = e
-            if transient > config.OPENAI_TRANSIENT_RETRIES:
+            if transient > transient_retry_limit:
+                if single_attempt:
+                    raise RuntimeError(
+                        "OpenAI unavailable after 1 physical request "
+                        f"({type(e).__name__}): {e!r}"
+                    ) from e
                 raise RuntimeError(
                     f"OpenAI unavailable after {transient - 1} transient retries "
                     f"(rate limit/timeout): {e!r}"
@@ -2527,17 +2570,25 @@ def _openai_json(
             delay = _transient_backoff(e, transient)
             progress.log(
                 f"OpenAI busy ({type(e).__name__}) — waiting {delay:.0f}s before "
-                f"retry {transient}/{config.OPENAI_TRANSIENT_RETRIES}.",
+                f"retry {transient}/{transient_retry_limit}.",
                 level="warning",
             )
             time.sleep(delay)
         except Exception as e:  # noqa: BLE001 — retry then surface
             last_err = e
             attempt += 1
-            if attempt >= retries:
+            if attempt >= hard_attempt_limit:
                 break
             time.sleep(2)
-    raise RuntimeError(f"OpenAI extraction failed after {retries} retries: {last_err!r}")
+    if single_attempt:
+        raise RuntimeError(
+            "OpenAI extraction failed after 1 physical request: "
+            f"{last_err!r}"
+        )
+    raise RuntimeError(
+        f"OpenAI extraction failed after {hard_attempt_limit} retries: "
+        f"{last_err!r}"
+    )
 
 
 def _trim(text: str, max_chars: int = 220_000) -> str:
@@ -8520,9 +8571,11 @@ def _merge_equivalent_mined_types(types: list[dict]) -> list[dict]:
             bi.normalize_question_text(title),
             bi.normalize_question_text(mtype.get("type_description") or ""),
             bi.normalize_question_text(mtype.get("task_pattern") or ""),
-            bi.normalize_question_text(mtype.get("concept_match_hint") or ""),
-            bi.normalize_question_text(
-                mtype.get("parent_concept_match_hint") or ""),
+            str(mtype.get("concept_match_hint") or "").strip(),
+            str(mtype.get("parent_concept_match_hint") or "").strip(),
+            str(mtype.get("difficulty_hint") or "").strip(),
+            str(mtype.get("cognitive_skill_hint") or "").strip(),
+            str(mtype.get("subject_skill_hint") or "").strip(),
             bool(mtype.get("is_activity")),
             (mtype.get("placement_scope") or "").strip().lower(),
         )
@@ -8545,7 +8598,7 @@ def _merge_equivalent_mined_types(types: list[dict]) -> list[dict]:
         case_by_key = {
             (
                 bi.normalize_question_text(case.get("case_title") or ""),
-                bi.normalize_question_text(case.get("case_signature") or ""),
+                str(case.get("case_signature") or "").strip(),
                 (case.get("placement_scope") or "").strip().lower(),
             ): case
             for case in target_cases
@@ -8558,7 +8611,7 @@ def _merge_equivalent_mined_types(types: list[dict]) -> list[dict]:
             case = copy.deepcopy(raw_case)
             case_key = (
                 bi.normalize_question_text(case.get("case_title") or ""),
-                bi.normalize_question_text(case.get("case_signature") or ""),
+                str(case.get("case_signature") or "").strip(),
                 (case.get("placement_scope") or "").strip().lower(),
             )
             existing_case = case_by_key.get(case_key)
@@ -9551,6 +9604,108 @@ def _type_qid_contracts(types: list[dict]) -> dict[str, tuple[str, bool, str]]:
     return contracts
 
 
+_TYPE_ONLY_IMMUTABLE_FIELDS = (
+    "concept_match_hint",
+    "parent_concept_match_hint",
+    "difficulty_hint",
+    "cognitive_skill_hint",
+    "subject_skill_hint",
+)
+
+
+def _type_qid_semantic_contracts(
+    types: list[dict],
+    inventory: dict,
+    *,
+    honor_emitted_requires_visual: bool = False,
+    include_case_identity: bool = False,
+) -> dict[str, dict]:
+    """Bind Type-only consolidation to each QID's immutable semantics.
+
+    Type hint fields are shared by every QID owned by that Type.  A merge can
+    therefore be safe only when the source Types agree on all of them.  Case
+    signatures remain QID-local, while ``requires_visual`` is authoritative in
+    the source inventory.  Candidate Examples may echo that visual flag; an
+    echoed mismatch is treated as drift instead of overriding the inventory.
+
+    Human-directed consolidation additionally seals Case IDs and titles so the
+    bounded proposal cannot reinterpret the saved operator decision.  The
+    ordinary paraphrase consolidator may legitimately create a clearer Case
+    partition, so it keeps its established signature-level contract.
+    """
+
+    visual_by_qid = {
+        str(item.get("qid") or "").strip(): bool(
+            item.get("requires_visual") is True
+        )
+        for item in (inventory or {}).get("items") or []
+        if isinstance(item, dict) and str(item.get("qid") or "").strip()
+    }
+    contracts: dict[str, dict] = {}
+    for mtype in types:
+        if not isinstance(mtype, dict):
+            continue
+        shared = {
+            field: copy.deepcopy(mtype.get(field, ""))
+            for field in _TYPE_ONLY_IMMUTABLE_FIELDS
+        }
+
+        def contract_for(
+            qid: str,
+            case_signature: object = "",
+            case_id: object = "",
+            case_title: object = "",
+        ) -> dict:
+            requires_visual: object = visual_by_qid.get(qid, False)
+            if honor_emitted_requires_visual:
+                for raw_case in mtype.get("case_prompts") or []:
+                    if not isinstance(raw_case, dict):
+                        continue
+                    for example in _case_examples(raw_case):
+                        if (
+                            str(example.get("source_question_id") or "").strip()
+                            == qid
+                            and "requires_visual" in example
+                        ):
+                            emitted_visual = example.get("requires_visual")
+                            requires_visual = (
+                                emitted_visual
+                                if isinstance(emitted_visual, bool)
+                                else {
+                                    "invalid_type": type(
+                                        emitted_visual
+                                    ).__name__,
+                                    "value": copy.deepcopy(emitted_visual),
+                                }
+                            )
+            contract = {
+                **copy.deepcopy(shared),
+                "case_signature": copy.deepcopy(case_signature or ""),
+                "requires_visual": requires_visual,
+            }
+            if include_case_identity:
+                contract.update({
+                    "case_id": copy.deepcopy(case_id or ""),
+                    "case_title": copy.deepcopy(case_title or ""),
+                })
+            return contract
+
+        for qid in _type_source_qids(mtype):
+            contracts.setdefault(qid, contract_for(qid))
+        for raw_case in mtype.get("case_prompts") or []:
+            if not isinstance(raw_case, dict):
+                continue
+            case_signature = raw_case.get("case_signature") or ""
+            for qid in _assignment_case_qids(raw_case):
+                contracts[qid] = contract_for(
+                    qid,
+                    case_signature,
+                    raw_case.get("case_id") or "",
+                    raw_case.get("case_title") or "",
+                )
+    return contracts
+
+
 def _consolidate_semantic_types_via_api(
     mined_types: dict, *, inventory: dict, meta: dict,
 ) -> dict:
@@ -9594,17 +9749,33 @@ def _consolidate_semantic_types_via_api(
         for qid in set(original_contracts) | set(candidate_contracts)
         if original_contracts.get(qid) != candidate_contracts.get(qid)
     }
+    original_semantics = _type_qid_semantic_contracts(original, inventory)
+    candidate_semantics = _type_qid_semantic_contracts(
+        candidate,
+        inventory,
+        honor_emitted_requires_visual=True,
+    )
+    semantic_drift = {
+        qid: {
+            "expected": original_semantics.get(qid),
+            "candidate": candidate_semantics.get(qid),
+        }
+        for qid in set(original_semantics) | set(candidate_semantics)
+        if original_semantics.get(qid) != candidate_semantics.get(qid)
+    }
     if (
         not candidate
         or len(candidate) > len(original)
         or missed
         or duplicates
         or contract_drift
+        or semantic_drift
     ):
         progress.log(
             "Rejected semantic Type consolidation: "
             f"{len(missed)} missing, {len(duplicates)} duplicate, "
             f"{len(contract_drift)} topic/activity/scope drift, "
+            f"{len(semantic_drift)} immutable semantic drift, "
             f"{len(candidate)} candidate vs {len(original)} original Types.",
             level="warning",
         )
@@ -9644,6 +9815,313 @@ def _type_sufficiency_payload(mtype: dict) -> dict:
             for case in (mtype.get("case_prompts") or [])
         ],
     }
+
+
+def _type_granularity_critic_payload(
+    mtype: dict, *, inventory: dict,
+) -> dict:
+    """Compact evidence for one independent consolidation review."""
+
+    visual_by_qid = {
+        str(item.get("qid") or "").strip(): bool(
+            item.get("requires_visual") is True
+        )
+        for item in (inventory or {}).get("items") or []
+        if isinstance(item, dict) and str(item.get("qid") or "").strip()
+    }
+    return {
+        "type_id": mtype.get("type_id", ""),
+        "type_title": _trim(mtype.get("type_title", ""), 800),
+        "type_description": _trim(
+            mtype.get("type_description", ""), 1_600),
+        "task_pattern": _trim(mtype.get("task_pattern", ""), 1_200),
+        "source_question_ids": [
+            str(qid) for qid in mtype.get("source_question_ids") or []
+        ],
+        "concept_match_hint": mtype.get("concept_match_hint", ""),
+        "parent_concept_match_hint": mtype.get(
+            "parent_concept_match_hint", ""
+        ),
+        "topic_match_hint": mtype.get("topic_match_hint", ""),
+        "difficulty_hint": mtype.get("difficulty_hint", ""),
+        "cognitive_skill_hint": mtype.get("cognitive_skill_hint", ""),
+        "subject_skill_hint": mtype.get("subject_skill_hint", ""),
+        "is_activity": bool(mtype.get("is_activity")),
+        "placement_scope": mtype.get("placement_scope", ""),
+        "cases": [
+            {
+                "case_id": case.get("case_id", ""),
+                "case_title": _trim(case.get("case_title", ""), 800),
+                "case_signature": case.get("case_signature", ""),
+                "placement_scope": case.get("placement_scope", ""),
+                "examples": [
+                    {
+                        "source_question_id": example.get(
+                            "source_question_id", ""),
+                        "example_prompt": _trim(
+                            example.get("example_prompt", ""), 800),
+                        "requires_visual": visual_by_qid.get(
+                            str(example.get(
+                                "source_question_id", ""
+                            )).strip(),
+                            False,
+                        ),
+                    }
+                    for example in _case_examples(case)
+                ],
+            }
+            for case in mtype.get("case_prompts") or []
+            if isinstance(case, dict)
+        ],
+    }
+
+
+def _qid_example_wording(types: list[dict]) -> dict[str, str]:
+    """Return exact authored Example wording for QIDs that materialize it."""
+
+    wording: dict[str, str] = {}
+    for mtype in types:
+        if not isinstance(mtype, dict):
+            continue
+        for case in mtype.get("case_prompts") or []:
+            if not isinstance(case, dict):
+                continue
+            for example in _case_examples(case):
+                qid = str(example.get("source_question_id") or "").strip()
+                prompt = str(example.get("example_prompt") or "").strip()
+                if qid and prompt:
+                    wording[qid] = prompt
+    return wording
+
+
+def _human_directed_type_consolidation_via_api(
+    mined_types: dict, *, inventory: dict, meta: dict, instruction: str,
+) -> tuple[dict | None, str, dict]:
+    """Run exactly one human-authorized proposal and one independent critic.
+
+    The provider pair can only reduce Type count. Deterministic gates retain
+    authority over exact QID coverage, Example wording, and every immutable
+    QID/Case semantic contract; the independent critic then checks whether the
+    proposed semantic merges are genuinely reusable rather than generic.
+    """
+    import json as _json
+
+    original = copy.deepcopy((mined_types or {}).get("types") or [])
+    if len(original) < 2:
+        return None, "Fewer than two Types remain, so no merge is possible.", {}
+    direction = str(instruction or "").strip() or (
+        "Consolidate as far as the supplied semantics genuinely allow. "
+        "Prefer fewer reusable Types, but do not force a merge or target count."
+    )
+    proposal_user = (
+        _metadata_block(meta)
+        + "\nHUMAN-APPROVED GRANULARITY DIRECTION:\n"
+        + direction
+        + "\n\nCURRENT COMPLETE TYPE TAXONOMY:\n"
+        + _json.dumps({"types": original}, ensure_ascii=False)
+        + "\n\nSOURCE-OWNED PER-QID SEMANTICS (immutable):\n"
+        + _json.dumps(
+            _type_qid_semantic_contracts(
+                original,
+                inventory,
+                include_case_identity=True,
+            ),
+            ensure_ascii=False,
+        )
+        + "\n\nReturn one COMPLETE replacement {\"types\": [...]} list. "
+        "Preserve every QID exactly once, every Example word-for-word, and "
+        "every topic/activity/placement-scope and immutable per-QID semantic "
+        "contract. Merge only genuinely reusable assessment patterns. This "
+        "is the sole physical proposal request."
+    )
+    progress.log(
+        "Applying the saved Type-granularity direction with one bounded "
+        "consolidation proposal."
+    )
+    try:
+        data = _openai_json(
+            prompts.get_text("concepts.type_semantic_consolidation.system"),
+            proposal_user,
+            retries=1,
+            purpose="concept_mapping",
+            single_attempt=True,
+        )
+    except Exception:
+        # Authentication, quota, transport exhaustion, and malformed provider
+        # output are operational/mechanical failures, not semantic choices.
+        # The saved human choice authorizes one physical proposal request.
+        raise
+
+    from .semantic_recovery import ProviderResponseContractError
+
+    if not isinstance(data, dict) or not isinstance(data.get("types"), list):
+        raise ProviderResponseContractError(
+            "human-directed Type consolidation returned valid JSON but not "
+            "the required complete types array"
+        )
+
+    candidate = _normalize_mined_type_candidate(
+        list((data or {}).get("types") or []), inventory)
+    for index, mtype in enumerate(candidate, start=1):
+        mtype["type_id"] = f"TYPE-{index:04d}"
+    missed = _uncovered_inventory_items(inventory, candidate)
+    duplicates = _duplicate_inventory_assignments(inventory, candidate)
+    original_contracts = _type_qid_contracts(original)
+    candidate_contracts = _type_qid_contracts(candidate)
+    contract_drift = {
+        qid: {
+            "expected": original_contracts.get(qid),
+            "candidate": candidate_contracts.get(qid),
+        }
+        for qid in set(original_contracts) | set(candidate_contracts)
+        if original_contracts.get(qid) != candidate_contracts.get(qid)
+    }
+    original_wording = _qid_example_wording(original)
+    candidate_wording = _qid_example_wording(candidate)
+    wording_drift = {
+        qid: {
+            "expected": original_wording[qid],
+            "candidate": candidate_wording.get(qid, ""),
+        }
+        for qid in original_wording
+        if candidate_wording.get(qid) != original_wording[qid]
+    }
+    original_semantics = _type_qid_semantic_contracts(
+        original,
+        inventory,
+        include_case_identity=True,
+    )
+    candidate_semantics = _type_qid_semantic_contracts(
+        candidate,
+        inventory,
+        honor_emitted_requires_visual=True,
+        include_case_identity=True,
+    )
+    semantic_drift = {
+        qid: {
+            "expected": original_semantics.get(qid),
+            "candidate": candidate_semantics.get(qid),
+        }
+        for qid in set(original_semantics) | set(candidate_semantics)
+        if original_semantics.get(qid) != candidate_semantics.get(qid)
+    }
+    if (
+        not candidate
+        or len(candidate) >= len(original)
+        or missed
+        or duplicates
+        or contract_drift
+        or wording_drift
+        or semantic_drift
+    ):
+        reason = (
+            "The proposed taxonomy failed deterministic safety gates: "
+            f"{len(candidate)} candidate vs {len(original)} current Types, "
+            f"{len(missed)} missing QID(s), {len(duplicates)} duplicate "
+            f"assignment(s), {len(contract_drift)} topic/activity/scope "
+            f"drift(s), {len(wording_drift)} changed Example(s), and "
+            f"{len(semantic_drift)} immutable semantic drift(s)."
+        )
+        progress.log(reason, level="warning")
+        return None, reason, {
+            "proposal_type_count": len(candidate),
+            "missing_qids": len(missed),
+            "duplicate_qids": len(duplicates),
+            "contract_drift": len(contract_drift),
+            "wording_drift": len(wording_drift),
+            "semantic_drift": len(semantic_drift),
+        }
+
+    critic_user = (
+        _metadata_block(meta)
+        + "\nHUMAN DIRECTION:\n"
+        + direction
+        + "\n\nCURRENT TYPES:\n"
+        + _json.dumps({
+            "types": [
+                _type_granularity_critic_payload(
+                    mtype, inventory=inventory
+                )
+                for mtype in original
+            ],
+        }, ensure_ascii=False)
+        + "\n\nPROPOSED CONSOLIDATED TYPES:\n"
+        + _json.dumps({
+            "types": [
+                _type_granularity_critic_payload(
+                    mtype, inventory=inventory
+                )
+                for mtype in candidate
+            ],
+        }, ensure_ascii=False)
+        + "\n\nDeterministic exact-QID, Example wording, and "
+        "topic/activity/scope and immutable per-QID semantic checks have "
+        "passed. Independently decide whether the semantic merges themselves "
+        "are valid."
+    )
+    progress.log(
+        "Independently reviewing the human-directed Type consolidation."
+    )
+    try:
+        critic = _openai_json(
+            prompts.get_text("concepts.type_granularity_critic.system"),
+            critic_user,
+            retries=1,
+            purpose="concept_validation",
+            single_attempt=True,
+        )
+    except Exception:
+        # A missing/invalid critic response cannot be converted into a human
+        # semantic answer. Preserve the checkpoint and fail at the provider
+        # boundary without spending a second physical request.
+        raise
+    verdict = str((critic or {}).get("verdict") or "").strip().casefold()
+    confidence = (critic or {}).get("confidence")
+    reason = str((critic or {}).get("reason") or "").strip()
+    try:
+        import math
+
+        critic_confidence = float(confidence)
+    except (TypeError, ValueError):
+        critic_confidence = float("nan")
+    if (
+        not isinstance(critic, dict)
+        or verdict not in {"accept", "reject"}
+        or not math.isfinite(critic_confidence)
+        or not 0.0 <= critic_confidence <= 1.0
+    ):
+        raise ProviderResponseContractError(
+            "Type-granularity critic returned valid JSON but an invalid "
+            "verdict/confidence schema"
+        )
+    critic_band = confidence_policy.semantic_band(critic_confidence)
+    if verdict != "accept" or critic_band != "accepted":
+        minimum = confidence_policy.threshold_text()
+        failure = (
+            "The independent critic did not certify the merge at the ordinary "
+            f"semantic threshold {minimum}: verdict={verdict or '<missing>'}, "
+            f"confidence={critic_confidence!r}. {reason}"
+        ).strip()
+        progress.log(failure, level="warning")
+        return None, failure, {
+            "critic_verdict": verdict,
+            "critic_confidence": critic_confidence,
+            "critic_reason": reason,
+        }
+    audit = {
+        "proposal_type_count": len(candidate),
+        "merged_type_count": len(original) - len(candidate),
+        "critic_verdict": verdict,
+        "critic_confidence": critic_confidence,
+        "critic_reason": reason,
+    }
+    progress.log(
+        "Human-directed Type consolidation accepted: "
+        f"{len(original)} to {len(candidate)} Type(s), with exact source "
+        "contracts preserved and independent semantic approval.",
+        level="success",
+    )
+    return {"types": candidate}, "", audit
 
 
 _DERIVATION_ADDITION_RE = re.compile(
@@ -10371,8 +10849,21 @@ def _ensure_misconceptions_via_api(
             ]
             user = (
                 _metadata_block(meta)
-                + "\nRows missing usable Misconceptions and/or Error Analysis "
-                "sections:\n"
+                + (
+                    "\n\nACTION-ONLY ERROR_ANALYSIS CONTRACT: For every "
+                    "row, start error_analysis with 'Students may' and then "
+                    "name a concrete faulty step using an action such as "
+                    "omit, skip, reverse, swap, misread, miscopy, "
+                    "miscalculate, mislabel, misplace, misapply, add, "
+                    "subtract, multiply, divide, count, group, or fail to "
+                    "check. State the specific input, representation, "
+                    "operation, or inference that the learner handles "
+                    "wrongly and its consequence. Do not use believe, think, "
+                    "assume, expect, interpret, misinterpret, misunderstand, "
+                    "confuse, mistake, or treat anywhere in error_analysis."
+                )
+                + "\n\nRows missing usable Misconceptions and/or Error "
+                "Analysis sections:\n"
                 + _json.dumps({"rows": rows}, ensure_ascii=False)
             )
             if rejection_reasons:
@@ -10389,27 +10880,6 @@ def _ensure_misconceptions_via_api(
                         ensure_ascii=False,
                     )
                 )
-                if any(
-                    any(
-                        reason.startswith("Error Analysis must")
-                        for reason in rejection_reasons.get(key, [])
-                    )
-                    for key in batch_keys
-                ):
-                    user += (
-                        "\n\nACTION-ONLY ERROR_ANALYSIS RETRY CONTRACT: For "
-                        "every row flagged for Error Analysis, start the field "
-                        "with 'Students may' and then name a concrete faulty "
-                        "step using an action such as omit, skip, reverse, "
-                        "swap, misread, miscopy, miscalculate, mislabel, "
-                        "misplace, misapply, add, subtract, multiply, divide, "
-                        "count, group, or fail to check. State the specific "
-                        "input, representation, operation, or inference that "
-                        "the learner handles wrongly and its consequence. Do "
-                        "not use believe, think, assume, expect, interpret, "
-                        "misinterpret, misunderstand, confuse, mistake, or "
-                        "treat anywhere in error_analysis."
-                    )
             try:
                 data = _openai_json(
                     system, user, purpose="concept_detailing")
@@ -17646,6 +18116,7 @@ def chapter_meta_via_api(
 _LEGACY_CONCEPT_CHECKPOINT_SCHEMA = 2
 _CONCEPT_CHECKPOINT_SCHEMA = 3
 _CONCEPT_CHECKPOINT_FORMAT = "aegis-concept-stage-history"
+_TYPE_TAXONOMY_CHECKPOINT_STAGE = "type_taxonomy_ready"
 _CONCEPT_CHECKPOINT_STAGE = "pre_type_assignment"
 
 # Stage versions describe the serialized artifact contract, not the git
@@ -17694,6 +18165,12 @@ _CONCEPT_CHECKPOINT_STAGES = {
         "progress": 0.70,
         "label": "Question and task inventory complete",
     },
+    _TYPE_TAXONOMY_CHECKPOINT_STAGE: {
+        "order": 55,
+        "version": 1,
+        "progress": 0.76,
+        "label": "Reusable Type taxonomy ready for granularity review",
+    },
     _CONCEPT_CHECKPOINT_STAGE: {
         "order": 60,
         "version": 1,
@@ -17737,6 +18214,7 @@ _POST_CONCEPT_CHECKPOINT_STAGES = {
     "canonical_skeleton",
     "description_method_snapshot",
     "question_inventory",
+    _TYPE_TAXONOMY_CHECKPOINT_STAGE,
     _CONCEPT_CHECKPOINT_STAGE,
     "post_type_assignment",
     "final_content_ready",
@@ -17812,6 +18290,28 @@ def _valid_completed_skeleton_chunks(value) -> bool:
     return True
 
 
+def _type_granularity_replay_seal_valid(checkpoint: dict) -> bool:
+    """Validate an applied human Type decision at every resumable stage."""
+
+    mined_types = checkpoint.get("mined_types")
+    if not isinstance(mined_types, dict):
+        return True
+    review = mined_types.get("_granularity_review")
+    if not isinstance(review, dict):
+        return True
+    applied = review.get("human_resolution")
+    if not isinstance(applied, dict) or not applied.get("decision_id"):
+        return True
+    stored = str(applied.get("semantic_contract_hash") or "")
+    if not re.fullmatch(r"[0-9a-f]{64}", stored):
+        return False
+    expected = type_granularity_decision.applied_result_semantic_hash(
+        inventory=checkpoint.get("question_task_inventory"),
+        mined_types=mined_types,
+    )
+    return stored == expected
+
+
 def _compatible_concept_checkpoint_entry(checkpoint: dict | None) -> bool:
     """Whether this deployment can safely consume one serialized stage."""
     if not isinstance(checkpoint, dict):
@@ -17831,6 +18331,7 @@ def _compatible_concept_checkpoint_entry(checkpoint: dict | None) -> bool:
             and not _invalid_inventory_items(
                 checkpoint.get("question_task_inventory")
             )
+            and _type_granularity_replay_seal_valid(checkpoint)
         )
     spec = _CONCEPT_CHECKPOINT_STAGES.get(stage)
     if schema != _CONCEPT_CHECKPOINT_SCHEMA or spec is None:
@@ -17868,6 +18369,7 @@ def _compatible_concept_checkpoint_entry(checkpoint: dict | None) -> bool:
     if stage in {
         "description_method_snapshot",
         "question_inventory",
+        _TYPE_TAXONOMY_CHECKPOINT_STAGE,
         _CONCEPT_CHECKPOINT_STAGE,
         "post_type_assignment",
         "final_content_ready",
@@ -17877,6 +18379,7 @@ def _compatible_concept_checkpoint_entry(checkpoint: dict | None) -> bool:
         return False
     if stage in {
         "question_inventory",
+        _TYPE_TAXONOMY_CHECKPOINT_STAGE,
         _CONCEPT_CHECKPOINT_STAGE,
         "post_type_assignment",
         "final_content_ready",
@@ -17886,6 +18389,7 @@ def _compatible_concept_checkpoint_entry(checkpoint: dict | None) -> bool:
         return False
     if stage in {
         "question_inventory",
+        _TYPE_TAXONOMY_CHECKPOINT_STAGE,
         _CONCEPT_CHECKPOINT_STAGE,
         "post_type_assignment",
         "final_content_ready",
@@ -17897,10 +18401,17 @@ def _compatible_concept_checkpoint_entry(checkpoint: dict | None) -> bool:
         # would otherwise fail at 98% on every retry.
         return False
     if stage in {
+        _TYPE_TAXONOMY_CHECKPOINT_STAGE,
         _CONCEPT_CHECKPOINT_STAGE,
         "post_type_assignment",
         "final_content_ready",
     } and not _checkpoint_has_fields(checkpoint, ("mined_types", dict)):
+        return False
+    if stage in {
+        _CONCEPT_CHECKPOINT_STAGE,
+        "post_type_assignment",
+        "final_content_ready",
+    } and not _type_granularity_replay_seal_valid(checkpoint):
         return False
     if (
         stage in {"post_type_assignment", "final_content_ready"}
@@ -18215,6 +18726,10 @@ def _reconcile_resumed_mined_types(
             f"{len(remaining_duplicates)} duplicate assignment(s)"
         )
     reconciled = {"types": types}
+    granularity_review = copy.deepcopy(
+        (mined_types or {}).get("_granularity_review"))
+    if isinstance(granularity_review, dict):
+        reconciled["_granularity_review"] = granularity_review
     ledger = _placement_certification_ledger(mined_types)
     if ledger:
         current_qids = {
@@ -18360,7 +18875,9 @@ def _run_live_concept_pre_final_stages(
         if saved_order >= _checkpoint_order("question_inventory"):
             question_task_inventory = copy.deepcopy(
                 saved.get("question_task_inventory") or {})
-        if saved_order >= _checkpoint_order(_CONCEPT_CHECKPOINT_STAGE):
+        if saved_order >= _checkpoint_order(
+            _TYPE_TAXONOMY_CHECKPOINT_STAGE
+        ):
             mined_types = copy.deepcopy(saved.get("mined_types") or {})
         if saved_order >= _checkpoint_order("question_inventory"):
             restored_inventory = copy.deepcopy(question_task_inventory)
@@ -18378,7 +18895,7 @@ def _run_live_concept_pre_final_stages(
                 )
             if (
                 saved_order >= _checkpoint_order(
-                    _CONCEPT_CHECKPOINT_STAGE)
+                    _TYPE_TAXONOMY_CHECKPOINT_STAGE)
                 and (
                     inventory_refreshed
                     or (
@@ -18391,7 +18908,13 @@ def _run_live_concept_pre_final_stages(
                     mined_types,
                     inventory=question_task_inventory,
                     meta=meta,
-                    use_api=True,
+                    # The early taxonomy checkpoint was already exact-covered
+                    # before it was persisted. Revalidate it deterministically,
+                    # but never insert an unapproved paid repair before applying
+                    # the saved human direction.
+                    use_api=(
+                        saved_stage != _TYPE_TAXONOMY_CHECKPOINT_STAGE
+                    ),
                 )
                 if (
                     inventory_refreshed
@@ -18403,7 +18926,7 @@ def _run_live_concept_pre_final_stages(
                     _reset_placement_certifications(mined_types)
             if (
                 saved_order >= _checkpoint_order(
-                    _CONCEPT_CHECKPOINT_STAGE)
+                    _TYPE_TAXONOMY_CHECKPOINT_STAGE)
                 and bool((mined_types or {}).get("types"))
             ):
                 # This optional model hint is not part of semantic inventory
@@ -18585,16 +19108,239 @@ def _run_live_concept_pre_final_stages(
                 method_row_snapshot),
         )
 
-    if saved_order < _checkpoint_order(_CONCEPT_CHECKPOINT_STAGE):
+    review: dict = {}
+    if saved_order < _checkpoint_order(_TYPE_TAXONOMY_CHECKPOINT_STAGE):
         progress.step(
             "Concept extraction — mining reusable Types", value=0.72)
         mined_types = _mine_types_from_inventory_via_api(
             meta=meta, inventory=question_task_inventory)
+        raw_type_count = len((mined_types or {}).get("types") or [])
         mined_types = _consolidate_semantic_types_via_api(
             mined_types, inventory=question_task_inventory, meta=meta)
+        consolidated_type_count = len(
+            (mined_types or {}).get("types") or [])
+        review = type_granularity_decision.build_review(
+            raw_type_count=raw_type_count,
+            consolidated_type_count=consolidated_type_count,
+            inventory_count=len(
+                (question_task_inventory or {}).get("items") or []),
+            sufficiency_added_concepts=0,
+            sufficiency_audit_complete=False,
+        )
+        mined_types["_granularity_review"] = copy.deepcopy(review)
+        progress.set_progress(
+            0.76,
+            label="Concept extraction — Type taxonomy ready for review",
+        )
+        # This checkpoint is intentionally before concept sufficiency, mastery,
+        # and culmination authoring. A fragmentation pause therefore incurs none
+        # of those downstream calls, and the accepted taxonomy becomes their
+        # single source of truth on explicit resume.
+        _emit_concept_checkpoint(
+            checkpoint_callback,
+            _TYPE_TAXONOMY_CHECKPOINT_STAGE,
+            records=out,
+            question_task_inventory=question_task_inventory,
+            mined_types=mined_types,
+            method_row_snapshot=_serialize_method_row_snapshot(
+                method_row_snapshot),
+        )
+
+    if saved_order <= _checkpoint_order(_CONCEPT_CHECKPOINT_STAGE):
+        if not review:
+            review = copy.deepcopy(
+                (mined_types or {}).get("_granularity_review") or {})
+        if not review:
+            # Checkpoints created before this gate did not persist raw-vs-
+            # consolidated counts. Treat the saved taxonomy as the baseline;
+            # a strong near-one-Type-per-QID signal still merits one human look.
+            current_type_count = len(
+                (mined_types or {}).get("types") or [])
+            review = type_granularity_decision.build_review(
+                raw_type_count=current_type_count,
+                consolidated_type_count=current_type_count,
+                inventory_count=len(
+                    (question_task_inventory or {}).get("items") or []),
+                sufficiency_added_concepts=0,
+                sufficiency_audit_complete=(
+                    saved_order
+                    >= _checkpoint_order(_CONCEPT_CHECKPOINT_STAGE)
+                ),
+            )
+            mined_types["_granularity_review"] = copy.deepcopy(review)
+
+        applied = review.get("human_resolution")
+        if isinstance(applied, dict) and applied.get("decision_id"):
+            expected_result_hash = (
+                type_granularity_decision.applied_result_context_hash(
+                    review=review,
+                    inventory=question_task_inventory,
+                    mined_types=mined_types,
+                    meta=meta,
+                )
+            )
+            if str(applied.get("result_context_hash") or "") != (
+                expected_result_hash
+            ):
+                progress.log(
+                    "Saved Type-granularity direction no longer matches the "
+                    "current source inventory, taxonomy, metadata, or "
+                    "confidence policy; requiring a fresh exact-context "
+                    "decision only if the anomaly still exists.",
+                    level="warning",
+                )
+                current_type_count = len(
+                    (mined_types or {}).get("types") or [])
+                review = type_granularity_decision.build_review(
+                    raw_type_count=current_type_count,
+                    consolidated_type_count=current_type_count,
+                    inventory_count=len(
+                        (question_task_inventory or {}).get("items") or []),
+                    sufficiency_added_concepts=int(
+                        review.get("sufficiency_added_concepts") or 0),
+                    sufficiency_audit_complete=bool(
+                        review.get("sufficiency_audit_complete", True)),
+                )
+                mined_types["_granularity_review"] = copy.deepcopy(review)
+                applied = None
+        if not isinstance(applied, dict) or not applied.get("decision_id"):
+            pending_followup = review.get("pending_followup")
+            if not isinstance(pending_followup, dict):
+                pending_followup = {}
+            directive = type_granularity_decision.resolve_or_pause(
+                review=review,
+                inventory=question_task_inventory,
+                mined_types=mined_types,
+                meta=meta,
+                prior_decision_id=str(
+                    pending_followup.get("prior_decision_id") or ""),
+                failure=str(pending_followup.get("failure") or ""),
+            )
+            action = str(directive.get("action") or "continue")
+            resolution_audit: dict = {}
+            if action == "consolidate":
+                consolidated, failure, resolution_audit = (
+                    _human_directed_type_consolidation_via_api(
+                        mined_types,
+                        inventory=question_task_inventory,
+                        meta=meta,
+                        instruction=str(
+                            directive.get("instruction") or ""),
+                    )
+                )
+                if consolidated is None:
+                    review["pending_followup"] = {
+                        "prior_decision_id": str(
+                            directive.get("decision_id") or ""),
+                        "failure": str(failure or "")[:4_000],
+                    }
+                    mined_types["_granularity_review"] = copy.deepcopy(
+                        review)
+                    _emit_concept_checkpoint(
+                        checkpoint_callback,
+                        (
+                            _CONCEPT_CHECKPOINT_STAGE
+                            if saved_order >= _checkpoint_order(
+                                _CONCEPT_CHECKPOINT_STAGE)
+                            else _TYPE_TAXONOMY_CHECKPOINT_STAGE
+                        ),
+                        records=out,
+                        question_task_inventory=question_task_inventory,
+                        mined_types=mined_types,
+                        method_row_snapshot=_serialize_method_row_snapshot(
+                            method_row_snapshot),
+                    )
+                    # The first call always raises a new durable decision.
+                    type_granularity_decision.resolve_or_pause(
+                        review=review,
+                        inventory=question_task_inventory,
+                        mined_types=mined_types,
+                        meta=meta,
+                        prior_decision_id=str(
+                            directive.get("decision_id") or ""),
+                        failure=str(failure or ""),
+                    )
+                    raise RuntimeError(
+                        "human-directed Type consolidation failed without "
+                        "creating its required follow-up decision"
+                    )
+                preserved = {
+                    key: copy.deepcopy(value)
+                    for key, value in (mined_types or {}).items()
+                    if key != "types"
+                }
+                mined_types = {
+                    **preserved,
+                    "types": copy.deepcopy(consolidated.get("types") or []),
+                }
+                review["type_count"] = len(mined_types["types"])
+                inventory_count = int(review.get("inventory_count") or 0)
+                review["type_qid_ratio"] = (
+                    len(mined_types["types"]) / inventory_count
+                    if inventory_count else 0.0
+                )
+                review["consolidation_merged_count"] = max(
+                    int(review.get("consolidation_merged_count") or 0),
+                    int(review.get("raw_type_count") or 0)
+                    - len(mined_types["types"]),
+                )
+            if action in {"keep", "consolidate"}:
+                review.pop("pending_followup", None)
+                review["human_resolution"] = {
+                    "decision_id": str(
+                        directive.get("decision_id") or ""),
+                    "context_hash": str(
+                        directive.get("context_hash") or ""),
+                    "choice": str(directive.get("choice") or ""),
+                    "action": action,
+                    "audit": copy.deepcopy(resolution_audit),
+                }
+                mined_types["_granularity_review"] = copy.deepcopy(review)
+                review["human_resolution"]["result_context_hash"] = (
+                    type_granularity_decision.applied_result_context_hash(
+                        review=review,
+                        inventory=question_task_inventory,
+                        mined_types=mined_types,
+                        meta=meta,
+                    )
+                )
+                review["human_resolution"]["semantic_contract_hash"] = (
+                    type_granularity_decision.applied_result_semantic_hash(
+                        inventory=question_task_inventory,
+                        mined_types=mined_types,
+                    )
+                )
+                mined_types["_granularity_review"] = copy.deepcopy(review)
+                # Persist the accepted direction before any downstream API pass.
+                # If a later unrelated failure resumes here, the direction is
+                # neither billed nor requested a second time. Legacy 81%
+                # checkpoints retain their already-completed downstream rows.
+                _emit_concept_checkpoint(
+                    checkpoint_callback,
+                    (
+                        _CONCEPT_CHECKPOINT_STAGE
+                        if saved_order >= _checkpoint_order(
+                            _CONCEPT_CHECKPOINT_STAGE)
+                        else _TYPE_TAXONOMY_CHECKPOINT_STAGE
+                    ),
+                    records=out,
+                    question_task_inventory=question_task_inventory,
+                    mined_types=mined_types,
+                    method_row_snapshot=_serialize_method_row_snapshot(
+                        method_row_snapshot),
+                )
+
+    if saved_order < _checkpoint_order(_CONCEPT_CHECKPOINT_STAGE):
+        # These calls must observe the final taxonomy (automatic, explicitly
+        # kept, or human-consolidated) and must not run before a human pause.
+        review = copy.deepcopy(
+            (mined_types or {}).get("_granularity_review") or review)
         concept_count_before_sufficiency = len(out)
         out = _add_missing_type_method_concepts_via_api(
             out, mined_types=mined_types, meta=meta)
+        review["sufficiency_added_concepts"] = max(
+            0, len(out) - concept_count_before_sufficiency)
+        review["sufficiency_audit_complete"] = True
         if len(out) > concept_count_before_sufficiency:
             out = _ensure_mastery_lines_via_api(out, meta=meta)
         progress.set_progress(
@@ -18602,6 +19348,18 @@ def _run_live_concept_pre_final_stages(
         progress.step(
             "Concept extraction — building culminations", value=0.81)
         out = _build_culminations_via_api(out, meta=meta)
+        mined_types["_granularity_review"] = copy.deepcopy(review)
+        applied = review.get("human_resolution")
+        if isinstance(applied, dict) and applied.get("decision_id"):
+            review["human_resolution"]["result_context_hash"] = (
+                type_granularity_decision.applied_result_context_hash(
+                    review=review,
+                    inventory=question_task_inventory,
+                    mined_types=mined_types,
+                    meta=meta,
+                )
+            )
+            mined_types["_granularity_review"] = copy.deepcopy(review)
         _emit_concept_checkpoint(
             checkpoint_callback,
             _CONCEPT_CHECKPOINT_STAGE,

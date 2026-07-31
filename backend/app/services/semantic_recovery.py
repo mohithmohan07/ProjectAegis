@@ -465,6 +465,7 @@ _PROTECTED_PRIVATE_FIELDS = {
 }
 _POST_RECOVERY_STAGES = (
     "pre_type_assignment",
+    "type_taxonomy_ready",
     "question_inventory",
     "description_method_snapshot",
     "canonical_skeleton",
@@ -1207,6 +1208,7 @@ _PRE_BASE_STAGES = (
     "final_content_ready",
     "post_type_assignment",
     "pre_type_assignment",
+    "type_taxonomy_ready",
     "question_inventory",
     "description_method_snapshot",
     "canonical_skeleton",

@@ -1,4 +1,4 @@
-"""Regression coverage for Phase 3.5 provider-maximum token capacity."""
+"""Regression coverage for Phase 3.5 provider-capacity ceilings."""
 from __future__ import annotations
 
 from app import config
@@ -36,39 +36,60 @@ def test_gpt56_provider_capacity_defaults(monkeypatch):
     assert openai_policy.effective_completion_tokens(
         4_000,
         model="gpt-5.6-luna",
+    ) == 4_000
+    assert openai_policy.effective_completion_tokens(
+        256_000,
+        model="gpt-5.6-luna",
+    ) == 128_000
+    assert openai_policy.effective_completion_tokens(
+        None,
+        model="gpt-5.6-luna",
     ) == 128_000
 
 
-def test_live_json_calls_ignore_smaller_local_completion_budget(monkeypatch):
+def test_live_json_calls_preserve_smaller_budget_and_clamp_oversize(monkeypatch):
     _activate(monkeypatch)
-    captured: dict = {}
+    captured: list[dict] = []
 
     def original(system, user, max_tokens=None, retries=3, *, purpose="source_extraction"):
-        captured.update(
-            system=system,
-            user=user,
-            max_tokens=max_tokens,
-            retries=retries,
-            purpose=purpose,
-        )
+        captured.append({
+            "system": system,
+            "user": user,
+            "max_tokens": max_tokens,
+            "retries": retries,
+            "purpose": purpose,
+        })
         return {"ok": True}
 
     monkeypatch.setattr(generation, "_PHASE35_ORIGINAL_OPENAI_JSON", original)
 
-    result = generation._openai_json(
+    first = generation._openai_json(
         "system",
         "user",
         max_tokens=321,
         purpose="concept_validation",
     )
+    second = generation._openai_json(
+        "system",
+        "user",
+        max_tokens=256_000,
+        purpose="concept_validation",
+    )
+    defaulted = generation._openai_json(
+        "system",
+        "user",
+        max_tokens=None,
+        purpose="concept_validation",
+    )
 
-    assert result == {"ok": True}
-    assert captured["max_tokens"] == 128_000
-    assert captured["purpose"] == "concept_validation"
+    assert first == second == defaulted == {"ok": True}
+    assert [row["max_tokens"] for row in captured] == [321, 128_000, 128_000]
+    assert all(row["purpose"] == "concept_validation" for row in captured)
 
 
-def test_live_strict_schema_calls_use_provider_maximum(monkeypatch):
+def test_live_strict_schema_budget_and_retry_cap_use_provider_ceiling(monkeypatch):
     _activate(monkeypatch)
+    monkeypatch.setenv("AEGIS_STRUCTURED_JSON_MAX_COMPLETION_TOKENS", "16000")
     captured: dict = {}
 
     def original(**kwargs):
@@ -91,17 +112,22 @@ def test_live_strict_schema_calls_use_provider_maximum(monkeypatch):
     )
 
     assert result == {"ok": True}
-    assert captured["max_tokens"] == 128_000
-    assert phase34._completion_cap(4_000) == 128_000
+    assert captured["max_tokens"] == 4_000
+    assert phase34._completion_cap(4_000) == 16_000
+    assert phase34._completion_cap(200_000) == 128_000
 
 
-def test_live_source_evidence_is_not_character_clipped(monkeypatch):
+def test_live_source_views_stay_bounded_while_mmd_batching_is_lossless(monkeypatch):
     _activate(monkeypatch)
     long_text = "Visible source sentence. " * 500
 
-    assert phase22._compact(long_text, limit=20) == " ".join(long_text.split())
-    assert generation._trim(long_text, max_chars=20) == long_text
-    assert generation._split_mmd_into_chunks(long_text) == [long_text]
+    assert len(phase22._compact(long_text, limit=20)) <= 20
+    assert "TRIMMED" in generation._trim(long_text, max_chars=20)
+
+    mmd_text = "# Source\n\n" + ("Lossless source paragraph. " * 2_000)
+    chunks = generation._split_mmd_into_chunks(mmd_text)
+    assert len(chunks) > 1
+    assert "".join(chunks) == generation.normalize_mmd_headings(mmd_text)
 
     excerpt = phase3._section_excerpt(
         {"block_ids": ["BLK-1"]},
@@ -113,13 +139,17 @@ def test_live_source_evidence_is_not_character_clipped(monkeypatch):
         },
         limit=20,
     )
-    assert len(excerpt) > 9_000
+    assert len(excerpt) <= 20
     assert "TRIMMED" not in excerpt
 
 
-def test_grounding_topology_and_host_payloads_keep_full_blocks(monkeypatch):
+def test_grounding_topology_and_host_packets_bound_bodies_not_source(monkeypatch):
     _activate(monkeypatch)
-    long_text = "Source evidence detail " * 400
+    long_text = (
+        "SOURCE_OPENING_SENTINEL "
+        + ("Source evidence detail " * 400)
+        + "SOURCE_ENDING_SENTINEL"
+    )
     graph = {
         "topics": [{"topic_id": "TOPIC-1", "order": 1, "title": "Topic"}],
         "blocks": [
@@ -145,10 +175,16 @@ def test_grounding_topology_and_host_payloads_keep_full_blocks(monkeypatch):
     topics, _order = phase32._topic_evidence(graph, canonical)
     hosts, _subtopics = phase33._topic_source_blocks(graph, canonical)
 
-    assert grounding[0]["text"] == long_text.strip()
-    assert long_text.strip() in topics[0]["evidence"]
-    assert "AEGIS NOTE" not in topics[0]["evidence"]
-    assert hosts["TOPIC-1"][0]["text"] == long_text.strip()
+    assert len(grounding[0]["text"]) <= 3_000
+    assert "SOURCE_OPENING_SENTINEL" in grounding[0]["text"]
+    assert "SOURCE_ENDING_SENTINEL" in grounding[0]["text"]
+    assert len(topics[0]["evidence"]) <= 3_200
+    assert "SOURCE_OPENING_SENTINEL" in topics[0]["evidence"]
+    assert "SOURCE_ENDING_SENTINEL" in topics[0]["evidence"]
+    assert len(hosts["TOPIC-1"][0]["text"]) <= 3_000
+    assert "SOURCE_OPENING_SENTINEL" in hosts["TOPIC-1"][0]["text"]
+    assert "SOURCE_ENDING_SENTINEL" in hosts["TOPIC-1"][0]["text"]
+    assert canonical["blocks"][0]["display_text"] == long_text
 
 
 def test_workbook_writer_receives_same_provider_capacity(monkeypatch):

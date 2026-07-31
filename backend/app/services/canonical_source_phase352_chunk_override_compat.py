@@ -1,7 +1,8 @@
 """Phase 3.5.2 compatibility for explicit MMD chunk overrides.
 
-Provider-max mode owns the production default, but a caller/test that explicitly
-changes ``_MMD_CHUNK_CHARS`` still receives that exact lossless chunk boundary.
+Provider-capacity mode retains the section-focused production default. A caller
+or test that explicitly changes ``_MMD_CHUNK_CHARS`` still receives that exact
+lossless chunk boundary.
 """
 from __future__ import annotations
 

@@ -285,6 +285,95 @@ function sourceReviewDecisionFixture(
   };
 }
 
+function typeGranularityDecisionFixture(): PendingSemanticDecision {
+  return {
+    decision_id: "type-granularity-abc123",
+    kind: "type_granularity_review",
+    phase: "type_mining",
+    conflict: "The mined assessment taxonomy may be too fragmented.",
+    diagnosis:
+      "Aegis found 25 Types for 26 source questions/tasks (96%). The normal "
+      + "consolidation pass merged 0.",
+    decision_question:
+      "Should Aegis keep these distinct Types, or run one bounded "
+      + "proposal-and-critic pair?",
+    item: {
+      unit_id: "",
+      type_id: "TYPE-GRANULARITY-REVIEW",
+      type_title: "25 Types for 26 QIDs",
+      qids: ["QINV-0001", "QINV-0002"],
+      questions: [],
+      topic: "Chapter-wide Type taxonomy",
+    },
+    candidates: [],
+    evidence: [
+      { page: "", label: "Type-to-QID ratio", text: "25/26 (96.2%)" },
+      {
+        page: "",
+        label: "Ordinary consolidation result",
+        text: "0 Type(s) merged",
+      },
+    ],
+    options: [
+      {
+        choice: "consolidate_types",
+        label: "Consolidate into fewer reusable Types",
+        recommended: true,
+      },
+      {
+        choice: "keep_distinct_types",
+        label: "Keep the current distinct Types",
+        recommended: false,
+      },
+      {
+        choice: "custom_instruction",
+        label: "Specify a grouping rule or target range",
+        recommended: false,
+      },
+    ],
+    cumulative_usage: cumulativeUsage(1781587),
+  };
+}
+
+function topologyDecisionFixture(): PendingSemanticDecision {
+  return sourceReviewDecisionFixture({
+    decision_id: "phase32-blueprint-abc456",
+    kind: "phase32_concept_blueprint_semantic_conflict",
+    phase: "3.2",
+    decision_question: "How should Aegis repair this concept boundary?",
+    candidates: [
+      {
+        target_id: "3.2:refine:aaa",
+        concept_id: "",
+        title: "Refine this concept to its verified source claim",
+        topic: "The French Revolution and the Idea of the Nation",
+        coverage: "Narrow the unsupported clause.",
+        gap: "Remove only the unsupported portion.",
+      },
+      {
+        target_id: "3.2:split:bbb",
+        concept_id: "",
+        title: "Split distinct source-supported concepts",
+        topic: "Across verified source topics",
+        coverage: "Separate two durable ideas.",
+        gap: "Independent criticism remains mandatory.",
+      },
+    ],
+    options: [
+      {
+        choice: "select_candidate",
+        label: "Choose refinement, move, split, or keep",
+        recommended: true,
+      },
+      {
+        choice: "custom_instruction",
+        label: "Give a custom instruction",
+        recommended: false,
+      },
+    ],
+  });
+}
+
 function savedJob(overrides: Partial<UploadJob> = {}): UploadJob {
   return {
     id: 42,
@@ -587,6 +676,50 @@ test("pauses for a semantic decision and saving it never resumes implicitly", as
   await waitFor(() => expect(streamMock).toHaveBeenCalledTimes(2));
 });
 
+test("Type granularity pause offers quality-safe consolidation or keep choices", async () => {
+  streamMock.mockResolvedValueOnce({
+    job_id: 42,
+    status: "awaiting_decision",
+    pending_decision: typeGranularityDecisionFixture(),
+    resume_required: false,
+  });
+
+  renderPage();
+  fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+  fireEvent.click(await screen.findByRole("button", {
+    name: "Select Electricity target",
+  }));
+  fireEvent.click(screen.getByRole("button", {
+    name: "Resume from 91% checkpoint",
+  }));
+
+  expect(await screen.findByText(/25 Types for 26 source questions/))
+    .toBeDefined();
+  expect(screen.getByText("Aegis quality check")).toBeDefined();
+  expect(screen.getByText(/deterministic Type-fragmentation risk/))
+    .toBeDefined();
+  expect(screen.getByText(/one bounded GPT proposal plus an independent critic/))
+    .toBeDefined();
+  expect(screen.getByText(/exact QID coverage, source wording, topic/))
+    .toBeDefined();
+  expect(screen.getAllByRole("radio").every((radio) =>
+    !(radio as HTMLInputElement).checked)).toBe(true);
+
+  fireEvent.click(screen.getByRole("radio", {
+    name: /Consolidate into fewer reusable Types/,
+  }));
+  fireEvent.click(screen.getByRole("button", { name: "Save decision" }));
+
+  await waitFor(() => {
+    expect(apiMock.submitConceptDecision).toHaveBeenCalledWith(
+      42,
+      "type-granularity-abc123",
+      { choice: "consolidate_types" },
+    );
+  });
+  expect(streamMock).toHaveBeenCalledTimes(1);
+});
+
 test("a replacement post-learning job clears a stale pending decision", async () => {
   apiMock.getUploadJob.mockResolvedValue(savedJob({
     pending_decision: semanticDecisionFixture(),
@@ -831,6 +964,38 @@ test("source review never guesses and submits only the candidate the user select
     );
   });
   expect(streamMock).toHaveBeenCalledTimes(1);
+});
+
+test("topology decisions label actions without calling them source evidence", async () => {
+  streamMock.mockResolvedValue({
+    job_id: 42,
+    status: "awaiting_decision",
+    pending_decision: topologyDecisionFixture(),
+    resume_required: false,
+  });
+
+  renderPage();
+  fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+  fireEvent.click(await screen.findByRole("button", {
+    name: "Select Electricity target",
+  }));
+  fireEvent.click(screen.getByRole("button", {
+    name: "Resume from 91% checkpoint",
+  }));
+
+  fireEvent.click(await screen.findByRole("radio", {
+    name: /Choose refinement, move, split, or keep/,
+  }));
+  const target = screen.getByRole("combobox", {
+    name: "Source-supported concept action",
+  });
+  expect(target).toBeDefined();
+  expect(screen.getByText(
+    /Choose refine, move, split, keep, or retire/,
+  )).toBeDefined();
+  expect(screen.queryByRole("combobox", {
+    name: "Verified source evidence",
+  })).toBeNull();
 });
 
 test("source review safely stops for source replacement after choices are exhausted", async () => {

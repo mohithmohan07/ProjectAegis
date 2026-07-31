@@ -81,6 +81,65 @@ def _pending_packet() -> dict:
     }
 
 
+def _early_blueprint_pending_packet() -> dict:
+    context_hash = "b" * 64
+    target_id = "3.2:refine:" + "c" * 64
+    return {
+        "decision_id": f"phase32-blueprint-{context_hash[:24]}",
+        "context_hash": context_hash,
+        "kind": "phase32_concept_blueprint_semantic_conflict",
+        "phase": "3.2",
+        "conflict": "The independent critic rejected an overbroad source claim.",
+        "diagnosis": "The first semantic review found a source discrepancy.",
+        "decision_question": "How should this concept be repaired?",
+        "item": {
+            "unit_id": "TOPOLOGY-CONCEPT-0002",
+            "type_id": "",
+            "type_title": "Nation-State Definition",
+            "qids": [],
+            "questions": ["A nation-state is a centralised sovereign state."],
+            "topic": "The Making of Nationalism in Europe",
+        },
+        "candidates": [{
+            "target_id": target_id,
+            "concept_id": "",
+            "title": "Refine this concept to its verified source claim",
+            "topic": "The Making of Nationalism in Europe",
+            "coverage": "Citizens develop a common identity.",
+            "gap": "Remove the unsupported centralised-sovereign wording.",
+        }],
+        "evidence": [{
+            "page": "6",
+            "label": "TOPIC-0002",
+            "text": "Citizens developed a sense of common identity.",
+        }],
+        "deferred_assignment_unit_ids": [],
+        "options": [
+            {
+                "choice": "accept_recommended",
+                "label": "Use GPT's recommended source-supported action",
+                "recommended": True,
+                "target_id": target_id,
+            },
+            {
+                "choice": "select_candidate",
+                "label": "Choose another bounded action",
+                "recommended": False,
+            },
+            {
+                "choice": "replace_source",
+                "label": "Correct or replace the source",
+                "recommended": False,
+            },
+            {
+                "choice": "custom_instruction",
+                "label": "Give a custom instruction",
+                "recommended": False,
+            },
+        ],
+    }
+
+
 def _job_at_81_percent(db, first_chapter, *, learning_kind="post"):
     chapter = db.get(models.Chapter, first_chapter["id"])
     job = models.UploadJob(
@@ -229,6 +288,64 @@ def test_decision_submission_is_owner_scoped_one_time_and_api_free(
             choice="expand_existing",
             owner_sub="google:another-user",
         )
+
+
+def test_early_blueprint_pending_replay_and_save_are_api_free(
+    client,
+    db,
+    first_chapter,
+    monkeypatch,
+):
+    job, chapter = _job_at_81_percent(db, first_chapter)
+    monkeypatch.setattr(
+        build_concepts.drive_checkpoints,
+        "schedule_checkpoint_backup",
+        lambda *_args, **_kwargs: None,
+    )
+    fingerprint = job.generation_checkpoint["fingerprint"]
+    pending = build_concepts._persist_pending_human_decision(
+        db,
+        job,
+        _early_blueprint_pending_packet(),
+        fingerprint=fingerprint,
+        target_chapter_id=chapter.id,
+        owner_sub=auth.LOCAL_OWNER_SUB,
+    )
+    generation_calls = 0
+
+    def must_not_generate(*_args, **_kwargs):
+        nonlocal generation_calls
+        generation_calls += 1
+        pytest.fail("a saved pending decision must not re-enter generation")
+
+    monkeypatch.setattr(
+        build_concepts.config, "use_live_generation", lambda: True)
+    monkeypatch.setattr(
+        build_concepts.generation, "concepts_from_mmd", must_not_generate)
+    monkeypatch.setattr(
+        generation,
+        "_openai_json",
+        lambda *_args, **_kwargs: pytest.fail(
+            "saving an early semantic decision must not call OpenAI"
+        ),
+    )
+
+    replay = build_concepts.generate_post_learning(
+        db, job.id, chapter.id, owner_sub=auth.LOCAL_OWNER_SUB)
+    assert replay["status"] == "awaiting_decision"
+    assert replay["pending_decision"]["decision_id"] == pending["decision_id"]
+    assert generation_calls == 0
+
+    response = client.post(
+        f"/build-concepts/uploads/{job.id}/decisions/{pending['decision_id']}",
+        json={
+            "choice": "accept_recommended",
+            "target_id": pending["candidates"][0]["target_id"],
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "decision_recorded"
+    assert generation_calls == 0
 
 
 def test_resolution_context_and_checkpoint_bundle_round_trip(

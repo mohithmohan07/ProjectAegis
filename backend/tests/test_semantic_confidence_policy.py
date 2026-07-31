@@ -57,6 +57,30 @@ def test_policy_overrides_are_validated_and_cache_sensitive(monkeypatch):
         policy.minimum(policy.ConfidenceGate.DESTRUCTIVE)
 
 
+def test_lower_override_cannot_weaken_fixed_semantic_bands(monkeypatch):
+    _clear_overrides(monkeypatch)
+    baseline = policy.cache_identity()
+    monkeypatch.setenv(policy.SEMANTIC_ACCEPTANCE_ENV, "0.85")
+
+    assert policy.minimum() == 0.92
+    assert policy.cache_identity() == baseline
+    assert policy.semantic_band(0.92) == "accepted"
+    assert policy.semantic_band(0.91) == "human_review"
+    assert policy.semantic_band(0.899) == "rejected"
+    assert not policy.accepts(0.919)
+
+
+def test_stricter_override_only_raises_auto_accept_boundary(monkeypatch):
+    _clear_overrides(monkeypatch)
+    monkeypatch.setenv(policy.SEMANTIC_ACCEPTANCE_ENV, "0.94")
+
+    assert policy.semantic_band(0.94) == "accepted"
+    assert policy.semantic_band(0.93) == "rejected"
+    assert policy.semantic_band(0.91) == "human_review"
+    assert policy.minimum(policy.ConfidenceGate.DESTRUCTIVE) == 0.96
+    assert policy.minimum(policy.ConfidenceGate.SOURCE_CRITICAL) == 0.96
+
+
 def test_final_checkpoint_replays_semantics_when_policy_changes(monkeypatch):
     _clear_overrides(monkeypatch)
     checkpoint = generation._make_concept_checkpoint(

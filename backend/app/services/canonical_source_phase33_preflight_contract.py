@@ -44,6 +44,7 @@ from . import canonical_source_phase31_grounding_contract as phase31
 from . import canonical_source_phase32_topology_adjudication_contract as phase32
 from . import concept_refiner as cr
 from . import concept_topology_contract as topology
+from . import early_semantic_gate as early_gate
 from . import progress
 from . import semantic_confidence_policy as confidence_policy
 from .semantic_recovery import (
@@ -629,6 +630,8 @@ def _topic_evidence_fingerprint(topics: list[dict[str, Any]]) -> list[dict[str, 
         {
             "topic_id": str(row.get("topic_id") or ""),
             "title": str(row.get("title") or ""),
+            "order": int(row.get("order") or 0),
+            "structural_number": str(row.get("structural_number") or ""),
             "evidence_sha256": phase3._sha256_text(row.get("evidence") or ""),
         }
         for row in topics
@@ -645,7 +648,7 @@ def _phase32_decision_key(
             "version": _DECISION_CACHE_VERSION,
             "model": str(config.OPENAI_MODEL),
             "semantic_confidence_policy": confidence_policy.cache_identity(),
-            "source_contract_hash": str(graph.get("source_contract_hash") or ""),
+            "source": early_gate.source_identity(graph),
             "topics": _topic_evidence_fingerprint(
                 [row for row in payload.get("topics") or [] if isinstance(row, dict)]
             ),
@@ -811,21 +814,25 @@ def _phase32_critic_with_cache(
     cache = _read_phase32_decision_cache()
     entries = cache.setdefault("entries", {})
     by_id = {str(row.get("concept_id") or ""): row for row in proposed}
-    all_cached = bool(concepts)
+    cached_ids: set[str] = set()
     for concept in concepts:
         concept_id = str(concept.get("concept_id") or "")
         key = _phase32_decision_key(payload, concept)
         entry = entries.get(key)
         if (
-            concept_id in feedback
-            or not isinstance(entry, dict)
-            or entry.get("status") != "verified"
-            or phase3._sha256_json(entry.get("decision"))
-            != phase3._sha256_json(by_id.get(concept_id))
+            concept_id not in feedback
+            and isinstance(entry, dict)
+            and entry.get("status") == "verified"
+            and phase3._sha256_json(entry.get("decision"))
+            == phase3._sha256_json(by_id.get(concept_id))
         ):
-            all_cached = False
-            break
-    if all_cached:
+            cached_ids.add(concept_id)
+    fresh_concepts = [
+        row
+        for row in concepts
+        if str(row.get("concept_id") or "") not in cached_ids
+    ]
+    if not fresh_concepts:
         ids = [str(row.get("concept_id") or "") for row in concepts]
         return {
             "verdict": "verified",
@@ -839,24 +846,46 @@ def _phase32_critic_with_cache(
             "issues": [],
         }
 
-    review = original(payload)
+    fresh_ids = {
+        str(row.get("concept_id") or "") for row in fresh_concepts
+    }
+    fresh_payload = copy.deepcopy(payload)
+    fresh_payload["concepts"] = copy.deepcopy(fresh_concepts)
+    fresh_payload["proposed_decisions"] = [
+        copy.deepcopy(row)
+        for row in proposed
+        if str(row.get("concept_id") or "") in fresh_ids
+    ]
+    review = original(fresh_payload)
     review_gate = (
         confidence_policy.ConfidenceGate.DESTRUCTIVE
         if any(
             row.get("decision") == "retire"
-            for row in proposed
+            for row in fresh_payload["proposed_decisions"]
         )
         else confidence_policy.ConfidenceGate.SEMANTIC
     )
     state = phase31._review_state(
         review,
-        concept_ids={str(row.get("concept_id") or "") for row in concepts},
+        concept_ids=fresh_ids,
         confidence_gate=review_gate,
     )
-    if state["verified"]:
+    accepted_fresh = (
+        set(state["accepted"])
+        if confidence_policy.accepts(state["confidence"], review_gate)
+        and (
+            review_gate is confidence_policy.ConfidenceGate.DESTRUCTIVE
+            or early_gate.confidence_band(state["confidence"])
+            == "accepted"
+        )
+        else set()
+    )
+    if accepted_fresh:
         now = time.time()
-        for concept in concepts:
+        for concept in fresh_concepts:
             concept_id = str(concept.get("concept_id") or "")
+            if concept_id not in accepted_fresh:
+                continue
             decision = by_id.get(concept_id)
             if decision is None:
                 continue
@@ -873,7 +902,18 @@ def _phase32_critic_with_cache(
                 "decision": copy.deepcopy(decision),
             }
         _write_phase32_decision_cache(cache)
-    return review
+    # Already verified IDs are replayed as deterministic accepts. The live
+    # critic sees only uncached IDs, and a partial rejection still persists its
+    # explicitly accepted siblings before the typed human pause unwinds.
+    accepted = cached_ids | accepted_fresh
+    rejected = set(state["rejected"])
+    return {
+        "verdict": "verified" if state["verified"] else "rejected",
+        "confidence": float(state["confidence"]),
+        "accepted_concept_ids": sorted(accepted),
+        "rejected_concept_ids": sorted(rejected),
+        "issues": list(state["issues"]),
+    }
 
 
 _GROUNDING_ID_RE = re.compile(r"CONCEPT-GROUND-(?P<number>\d{4})")
@@ -927,6 +967,11 @@ def _phase32_adjudicate_with_convergence(
         token = _EXTERNAL_GROUNDING_FEEDBACK.set(feedback)
         try:
             return original(records, *args, **kwargs)
+        except early_gate.TopologyRepairRequired:
+            # A saved human direction is not an automatic convergence failure.
+            # Let Phase 3.8 suppress that exact one-shot resolution and carry
+            # its bounded action into the next independently reviewed pass.
+            raise
         except ValueError as exc:
             message = str(exc)
             if (
@@ -1371,6 +1416,10 @@ def _host_plan_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         ),
         purpose="concept_mapping",
         max_tokens=max(6000, min(28000, len(unit_ids) * 1000)),
+        single_attempt=bool(
+            payload.get("human_resolution")
+            or payload.get("human_resolutions")
+        ),
     )
 
 
@@ -1406,6 +1455,10 @@ def _host_critic_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         response_schema=_host_critic_schema(unit_ids),
         purpose="concept_mapping",
         max_tokens=max(4000, min(12000, len(unit_ids) * 320)),
+        single_attempt=bool(
+            payload.get("human_resolution")
+            or payload.get("human_resolutions")
+        ),
     )
 
 
@@ -2068,7 +2121,8 @@ def _resolve_host_plan(
             review,
             concept_ids={str(row.get("assignment_unit_id") or "") for row in units},
         )
-        if state["verified"]:
+        critic_band = confidence_policy.semantic_band(state["confidence"])
+        if state["verified"] and critic_band == "accepted":
             _write_host_plan_cache(
                 key,
                 graph=graph,
@@ -2087,6 +2141,20 @@ def _resolve_host_plan(
         last_errors = list(state["issues"]) or [
             "critic verdict was " + str(state.get("verdict") or "missing")
         ]
+        if critic_band == "human_review":
+            last_errors.insert(
+                0,
+                "independent critic confidence "
+                f"{float(state['confidence']):.3f} is in the "
+                "0.900–0.919 human-review band",
+            )
+        elif critic_band == "rejected":
+            last_errors.insert(
+                0,
+                "independent critic confidence "
+                f"{float(state['confidence']):.3f} is below the "
+                f"{confidence_policy.threshold_text()} semantic threshold",
+            )
         pending_plan = copy.deepcopy(plan)
         pending_plan["rejected_assignment_unit_ids"] = sorted(
             str(value) for value in state["rejected"] if str(value)

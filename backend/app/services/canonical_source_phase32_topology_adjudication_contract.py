@@ -29,8 +29,13 @@ from .. import config
 from . import canonical_source_phase3 as phase3
 from . import canonical_source_phase31_grounding_contract as phase31
 from . import concept_refiner as cr
+from . import early_semantic_gate as early_gate
 from . import progress
 from . import semantic_confidence_policy as confidence_policy
+from .semantic_recovery import (
+    HumanDecisionRequired,
+    ProviderResponseContractError,
+)
 
 _CONTRACT_VERSION = 1
 _TOPOLOGY_VERSION = "phase3.2-source-verified-topology-1"
@@ -395,7 +400,10 @@ def _adjudicate_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         "observable learner capability. Use only supplied opaque topic and concept "
         "IDs. Do not create culmination rows, Types, Cases, questions, activities, "
         "or unsupported facts. On retries, repair only requested rejected IDs "
-        "using critic_feedback and previous_decisions."
+        "using critic_feedback and previous_decisions. If human_resolutions is "
+        "supplied, apply its selected refine/move/split/keep direction or custom "
+        "instruction exactly, then return the ordinary proposal for independent "
+        "criticism; the human direction is not verification."
     )
     return phase3.phase22._openai_multimodal_json(
         system=system,
@@ -404,6 +412,7 @@ def _adjudicate_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         response_schema=_adjudication_schema(concept_ids, topic_ids),
         purpose="concept_mapping",
         max_tokens=max(6000, min(32000, len(concept_ids) * 1100)),
+        single_attempt=bool(payload.get("human_resolutions")),
     )
 
 
@@ -436,6 +445,7 @@ def _critic_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         response_schema=_critic_schema(concept_ids),
         purpose="concept_mapping",
         max_tokens=max(4000, min(12000, len(concept_ids) * 300)),
+        single_attempt=bool(payload.get("human_resolutions")),
     )
 
 
@@ -795,17 +805,10 @@ def _cache_key(
             "version": _TOPOLOGY_VERSION,
             "model": str(config.OPENAI_MODEL),
             "semantic_confidence_policy": confidence_policy.cache_identity(),
-            "source_contract_hash": str(graph.get("source_contract_hash") or ""),
+            "source": early_gate.source_identity(graph),
             "records": phase31._json_safe(records),
             "concepts": concepts,
-            "topics": [
-                {
-                    "topic_id": row.get("topic_id"),
-                    "title": row.get("title"),
-                    "evidence_sha256": phase3._sha256_text(row.get("evidence")),
-                }
-                for row in topics
-            ],
+            "topics": phase31._json_safe(topics),
         }
     )
 
@@ -849,6 +852,383 @@ def _write_cached_records(
             "records": copy.deepcopy(records),
         },
     )
+
+
+def _topology_candidates(
+    *,
+    graph: dict[str, Any],
+    concept: dict[str, Any],
+    topics: list[dict[str, Any]],
+    all_concepts: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    current_topic_id = str(concept.get("current_topic_id") or "")
+    topic_by_id = {
+        str(row.get("topic_id") or ""): row
+        for row in topics
+        if str(row.get("topic_id") or "")
+    }
+    seeds: list[dict[str, Any]] = [
+        {
+            "action": "refine",
+            "target_topic_id": current_topic_id,
+            "title": "Refine this concept to its verified source claim",
+            "topic": str((topic_by_id.get(current_topic_id) or {}).get("title") or ""),
+            "coverage": str(concept.get("source_claim") or ""),
+            "gap": "Remove or narrow only the unsupported part.",
+        },
+        {
+            "action": "split",
+            "target_topic_id": "",
+            "title": "Split distinct source-supported concepts",
+            "topic": "Across verified source topics",
+            "coverage": str(concept.get("source_claim") or ""),
+            "gap": "Use only if the claim contains multiple durable ideas.",
+        },
+        {
+            "action": "keep",
+            "target_topic_id": current_topic_id,
+            "title": "Keep the current source claim and topic",
+            "topic": str((topic_by_id.get(current_topic_id) or {}).get("title") or ""),
+            "coverage": str(concept.get("source_claim") or ""),
+            "gap": "Use only when the independent review can verify it unchanged.",
+        },
+    ]
+    for topic_id, topic in topic_by_id.items():
+        if topic_id == current_topic_id:
+            continue
+        seeds.append(
+            {
+                "action": "move",
+                "target_topic_id": topic_id,
+                "title": "Move the complete source claim",
+                "topic": str(topic.get("title") or topic_id),
+                "coverage": str(concept.get("source_claim") or ""),
+                "gap": "Move without changing the claim; the critic must verify the target.",
+            }
+        )
+    if "retire" in _ALLOWED_DECISIONS:
+        seeds.append(
+            {
+                "action": "retire",
+                "retire_into_concept_id": "NONE",
+                "target_topic_id": "",
+                "title": "Retire an unsupported claim with no survivor",
+                "topic": str(concept.get("current_topic_title") or ""),
+                "coverage": str(concept.get("source_claim") or ""),
+                "gap": "Use only when no distinct source-supported objective is lost.",
+            }
+        )
+        for survivor in all_concepts or []:
+            survivor_id = str(survivor.get("concept_id") or "")
+            if not survivor_id or survivor_id == str(concept.get("concept_id") or ""):
+                continue
+            seeds.append(
+                {
+                    "action": "retire",
+                    "retire_into_concept_id": survivor_id,
+                    "target_topic_id": "",
+                    "title": "Retire this duplicate into a verified survivor",
+                    "topic": str(survivor.get("current_topic_title") or ""),
+                    "coverage": str(survivor.get("source_claim") or ""),
+                    "gap": (
+                        "Destructive retirement requires the stricter independent "
+                        f"gate and must preserve {survivor_id}."
+                    ),
+                }
+            )
+    candidates: list[dict[str, Any]] = []
+    for seed in seeds[:100]:
+        candidates.append(
+            {
+                "target_id": early_gate.candidate_target_id(
+                    phase="3.2",
+                    action=str(seed["action"]),
+                    graph=graph,
+                    unit=concept,
+                    candidate=seed,
+                ),
+                "concept_id": "",
+                **seed,
+            }
+        )
+    return candidates
+
+
+def _topology_identity(
+    *,
+    graph: dict[str, Any],
+    concept: dict[str, Any],
+    topics: list[dict[str, Any]],
+    candidates: list[dict[str, Any]],
+) -> dict[str, str]:
+    return early_gate.context_identity(
+        phase="3.2",
+        kind="phase32_concept_blueprint_semantic_conflict",
+        graph=graph,
+        unit=concept,
+        evidence_fingerprint=[
+            {
+                "topic_id": str(row.get("topic_id") or ""),
+                "title": str(row.get("title") or ""),
+                "evidence_sha256": phase3._sha256_text(row.get("evidence") or ""),
+            }
+            for row in topics
+        ],
+        candidates=candidates,
+    )
+
+
+def _topology_resolution_for(
+    *,
+    identity: dict[str, str],
+    concept: dict[str, Any],
+    candidates: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    return early_gate.resolution_for(
+        identity=identity,
+        kind="phase32_concept_blueprint_semantic_conflict",
+        phase="3.2",
+        unit_id=str(concept.get("concept_id") or ""),
+        candidates=candidates,
+    )
+
+
+def _proposed_decision_for(
+    response: Any,
+    concept_id: str,
+) -> dict[str, Any] | None:
+    if not isinstance(response, dict):
+        return None
+    return next(
+        (
+            copy.deepcopy(row)
+            for row in response.get("concepts") or []
+            if isinstance(row, dict)
+            and str(row.get("concept_id") or "") == concept_id
+        ),
+        None,
+    )
+
+
+def _topology_pending_decision(
+    *,
+    identity: dict[str, str],
+    graph: dict[str, Any],
+    concept: dict[str, Any],
+    topics: list[dict[str, Any]],
+    candidates: list[dict[str, Any]],
+    issues: list[str],
+    rejected_ids: list[str],
+    proposed_decision: dict[str, Any] | None = None,
+    resolution: dict[str, Any] | None = None,
+    diagnostic_source: str = "critic",
+) -> dict[str, Any]:
+    clean_issues = [
+        re.sub(r"\s+", " ", str(value or "")).strip()[:1200]
+        for value in issues
+        if str(value or "").strip()
+    ] or ["The independent topology critic did not verify this concept."]
+    proposed_action = str((proposed_decision or {}).get("decision") or "")
+    proposed_topic = ""
+    segments = (proposed_decision or {}).get("segments")
+    if isinstance(segments, list) and len(segments) == 1 and isinstance(segments[0], dict):
+        proposed_topic = str(segments[0].get("topic_id") or "")
+    recommended = next(
+        (
+            row
+            for row in candidates
+            if str(row.get("action") or "") == proposed_action
+            and (
+                proposed_action != "move"
+                or str(row.get("target_topic_id") or "") == proposed_topic
+            )
+        ),
+        None,
+    )
+    packet_identity = early_gate.followup_identity(
+        identity,
+        resolution=resolution,
+        issues=clean_issues,
+        proposal=proposed_decision,
+    )
+    options: list[dict[str, Any]] = []
+    if recommended is not None:
+        options.append(
+            {
+                "choice": "accept_recommended",
+                "label": "Use GPT's recommended source-supported action",
+                "recommended": True,
+                "target_id": str(recommended.get("target_id") or ""),
+            }
+        )
+    options.extend(
+        [
+            {
+                "choice": "select_candidate",
+                "label": "Choose refinement, move, split, or keep",
+                "recommended": recommended is None,
+            },
+            {
+                "choice": "replace_source",
+                "label": "Correct or replace the source",
+                "recommended": False,
+            },
+        ]
+    )
+    if resolution is None:
+        options.append(
+            {
+                "choice": "custom_instruction",
+                "label": "Give a custom instruction",
+                "recommended": False,
+            }
+        )
+    confidence = next(
+        (
+            float(match.group(1))
+            for issue in clean_issues
+            for match in [re.search(r"confidence\s+([01](?:\.\d+)?)", issue)]
+            if match
+        ),
+        None,
+    )
+    return early_gate.plain_json(
+        {
+            **packet_identity,
+            "kind": "phase32_concept_blueprint_semantic_conflict",
+            "phase": "3.2",
+            "conflict": "; ".join(clean_issues[:6]),
+            "diagnosis": (
+                (
+                    "The topology provider placed this result in the "
+                    "0.900–0.919 human-review band before independent review."
+                    if diagnostic_source == "provider"
+                    else "The independent topology critic placed this result "
+                    "in the 0.900–0.919 human-review band."
+                )
+                if confidence is not None
+                and early_gate.confidence_band(confidence) == "human_review"
+                else (
+                    "The topology provider returned a genuine semantic "
+                    "concept/source discrepancy before independent review."
+                    if diagnostic_source == "provider"
+                    else "The first independent topology review found a "
+                    "genuine concept/source discrepancy."
+                )
+            ),
+            "decision_question": (
+                "Should Aegis refine this source claim, move it, split it, "
+                "keep it unchanged, replace the source, or follow your "
+                "instruction? The selected direction will still receive one "
+                "independent verification."
+            ),
+            "item": {
+                "unit_id": str(concept.get("concept_id") or ""),
+                "type_id": "",
+                "type_title": str(concept.get("concept_title") or ""),
+                "qids": [],
+                "questions": [str(concept.get("source_claim") or "")],
+                "topic": str(concept.get("current_topic_title") or ""),
+            },
+            "candidates": [
+                {
+                    key: str(row.get(key) or "")
+                    for key in (
+                        "target_id", "concept_id", "title", "topic", "coverage", "gap"
+                    )
+                }
+                for row in candidates
+            ],
+            "evidence": [
+                {
+                    "page": "",
+                    "label": str(row.get("topic_id") or ""),
+                    "text": str(row.get("evidence") or "")[:8000],
+                }
+                for row in topics[:24]
+            ],
+            "deferred_assignment_unit_ids": [
+                value
+                for value in rejected_ids
+                if value != str(concept.get("concept_id") or "")
+            ],
+            "options": options,
+        }
+    )
+
+
+def _topology_parse_errors_are_mechanical(errors: list[str]) -> bool:
+    semantic_fragments = (
+        " confidence ",
+        "requires human review",
+        "rewrote the existing concept",
+        "keep decision changed its topic",
+        "move decision retained its current topic",
+        "refine decision changed its topic",
+        "returned duplicate split segments",
+    )
+    meaningful = [
+        value
+        for value in errors
+        if not value.startswith("missing or invalid concept ID(s):")
+    ]
+    if not meaningful:
+        return True
+    if any(fragment in value for value in meaningful for fragment in semantic_fragments):
+        return False
+    prefixes = (
+        "topology adjudicator returned no concepts array",
+        "topology adjudicator returned a non-object row",
+        "unknown concept ID ",
+        "duplicate concept ID ",
+        "TOPOLOGY-CONCEPT-",
+    )
+    return all(value.startswith(prefixes) for value in meaningful)
+
+
+def _topology_directed_issues(
+    resolutions: dict[str, dict[str, Any]],
+    decisions: dict[str, dict[str, Any]],
+) -> list[str]:
+    issues: list[str] = []
+    for concept_id, resolution in resolutions.items():
+        selected = resolution.get("selected_candidate")
+        if not isinstance(selected, dict):
+            continue
+        expected_action = str(selected.get("action") or "")
+        decision = decisions.get(concept_id) or {}
+        if str(decision.get("decision") or "") != expected_action:
+            issues.append(
+                f"{concept_id} did not apply the human-selected "
+                f"{expected_action or 'semantic'} action"
+            )
+            continue
+        if expected_action == "move":
+            segments = decision.get("segments") or []
+            actual_topic = (
+                str(segments[0].get("topic_id") or "")
+                if len(segments) == 1 and isinstance(segments[0], dict)
+                else ""
+            )
+            expected_topic = str(selected.get("target_topic_id") or "")
+            if actual_topic != expected_topic:
+                issues.append(
+                    f"{concept_id} moved to {actual_topic or '<empty>'} instead "
+                    f"of the human-selected topic {expected_topic}"
+                )
+        elif expected_action == "retire":
+            expected_survivor = str(
+                selected.get("retire_into_concept_id") or "NONE"
+            )
+            actual_survivor = str(
+                decision.get("retire_into_concept_id") or "NONE"
+            )
+            if actual_survivor != expected_survivor:
+                issues.append(
+                    f"{concept_id} retired into {actual_survivor} instead of "
+                    f"the human-selected survivor {expected_survivor}"
+                )
+    return issues
 
 
 def adjudicate_topology(
@@ -919,7 +1299,6 @@ def adjudicate_topology(
     )
 
     decisions: dict[str, dict[str, Any]] = {}
-    attempts = _max_attempts()
     size = _batch_size()
     concept_by_id = {
         str(row.get("concept_id") or ""): row for row in concepts
@@ -929,143 +1308,273 @@ def adjudicate_topology(
         batch_ids = {
             str(row.get("concept_id") or "") for row in batch
         }
+        gate_candidates: dict[str, list[dict[str, Any]]] = {}
+        gate_identities: dict[str, dict[str, str]] = {}
+        resolutions: dict[str, dict[str, Any]] = {}
+        deferred: set[str] = set()
+        for concept in batch:
+            concept_id = str(concept.get("concept_id") or "")
+            candidate_rows = _topology_candidates(
+                graph=graph,
+                concept=concept,
+                topics=topics,
+                all_concepts=concepts,
+            )
+            identity = _topology_identity(
+                graph=graph,
+                concept=concept,
+                topics=topics,
+                candidates=candidate_rows,
+            )
+            resolution = _topology_resolution_for(
+                identity=identity,
+                concept=concept,
+                candidates=candidate_rows,
+            )
+            gate_candidates[concept_id] = candidate_rows
+            gate_identities[concept_id] = identity
+            if resolution is not None:
+                resolutions[concept_id] = resolution
+                deferred.update(
+                    resolution.get("deferred_assignment_unit_ids") or []
+                )
+
+        undecided_deferred = [
+            concept_id
+            for concept_id in sorted(batch_ids & deferred)
+            if concept_id not in resolutions
+        ]
+        if undecided_deferred:
+            concept_id = undecided_deferred[0]
+            raise HumanDecisionRequired(
+                _topology_pending_decision(
+                    identity=gate_identities[concept_id],
+                    graph=graph,
+                    concept=concept_by_id[concept_id],
+                    topics=topics,
+                    candidates=gate_candidates[concept_id],
+                    issues=[
+                        "This concept was also rejected by the first "
+                        "independent topology review and needs your bounded "
+                        "semantic direction."
+                    ],
+                    rejected_ids=undecided_deferred,
+                )
+            )
+
+        if any(
+            resolution.get("choice") == "replace_source"
+            for resolution in resolutions.values()
+        ):
+            raise ValueError(
+                "Source replacement is required before Phase 3.2 can "
+                "continue. Replace or correct the uploaded source and convert "
+                "it again; no model request was started."
+            )
+
+        # A directed resume is exactly one provider/critic pair. Only a fresh
+        # mechanical schema or opaque-ID defect may receive one correction.
+        max_provider_attempts = 1 if resolutions else 2
         accepted: dict[str, dict[str, Any]] = {}
-        unresolved = set(batch_ids)
-        previous_decisions: list[dict[str, Any]] = []
-        critic_feedback: dict[str, Any] = {}
-        last_errors: list[str] = []
-        last_confidence = 0.0
-        for attempt in range(1, attempts + 1):
-            requested = [
-                row
-                for row in batch
-                if str(row.get("concept_id") or "") in unresolved
-            ]
+        response: dict[str, Any] | None = None
+        parse_errors: list[str] = []
+        for attempt in range(1, max_provider_attempts + 1):
             payload = {
                 "metadata": copy.deepcopy(graph.get("metadata") or {}),
                 "topics": copy.deepcopy(topics),
-                "concepts": copy.deepcopy(requested),
+                "concepts": copy.deepcopy(batch),
                 "batch": batch_index,
                 "attempt": attempt,
-                "max_attempts": attempts,
-                "previous_decisions": copy.deepcopy(previous_decisions),
-                "critic_feedback": copy.deepcopy(critic_feedback),
+                "max_attempts": max_provider_attempts,
+                "previous_decisions": [],
+                "critic_feedback": (
+                    {
+                        "verdict": "provider_contract_rejected",
+                        "issues": copy.deepcopy(parse_errors),
+                        "rejected_concept_ids": sorted(batch_ids),
+                    }
+                    if parse_errors
+                    else {}
+                ),
             }
+            if resolutions:
+                payload["human_resolutions"] = [
+                    copy.deepcopy(resolutions[concept_id])
+                    for concept_id in sorted(resolutions)
+                ]
             response = provider(copy.deepcopy(payload))
             parsed, parse_errors = _parse_decisions(
                 response,
                 concepts={
                     concept_id: concept_by_id[concept_id]
-                    for concept_id in unresolved
+                    for concept_id in batch_ids
                 },
                 topic_ids=topic_ids,
             )
+            review_band_ids = [
+                concept_id
+                for concept_id, decision in parsed.items()
+                if early_gate.confidence_band(decision.get("confidence"))
+                == "human_review"
+                or any(
+                    early_gate.confidence_band(segment.get("confidence"))
+                    == "human_review"
+                    for segment in decision.get("segments") or []
+                    if isinstance(segment, dict)
+                )
+            ]
+            if not parse_errors and review_band_ids:
+                parse_errors = [
+                    f"{concept_id} topology confidence is in the "
+                    "0.900–0.919 human-review band"
+                    for concept_id in review_band_ids
+                ]
             if parse_errors:
-                last_errors = parse_errors
-                progress.log(
-                    "Phase 3.2 topology attempt "
-                    f"{attempt}/{attempts} for batch {batch_index} requires "
-                    "correction: " + "; ".join(parse_errors[:4]),
-                    level="warning",
+                if (
+                    resolutions
+                    or not _topology_parse_errors_are_mechanical(parse_errors)
+                ):
+                    concept_id = next(
+                        (
+                            value for value in sorted(batch_ids)
+                            if any(value in error for error in parse_errors)
+                        ),
+                        sorted(batch_ids)[0],
+                    )
+                    raise HumanDecisionRequired(
+                        _topology_pending_decision(
+                            identity=gate_identities[concept_id],
+                            graph=graph,
+                            concept=concept_by_id[concept_id],
+                            topics=topics,
+                            candidates=gate_candidates[concept_id],
+                            issues=parse_errors,
+                            rejected_ids=sorted(batch_ids),
+                            proposed_decision=_proposed_decision_for(
+                                response, concept_id
+                            ),
+                            resolution=resolutions.get(concept_id),
+                            diagnostic_source="provider",
+                        )
+                    )
+                if attempt < max_provider_attempts:
+                    progress.log(
+                        "Phase 3.2 topology response had a mechanical "
+                        "schema/opaque-ID defect; making its one bounded "
+                        "contract correction.",
+                        level="warning",
+                    )
+                    continue
+                details = "; ".join(parse_errors[:6])
+                raise ProviderResponseContractError(
+                    "Phase 3.2 topology provider failed its response contract "
+                    "after one bounded correction"
+                    + (f": {details}" if details else "")
                 )
-                previous_decisions = [
-                    copy.deepcopy(value) for value in accepted.values()
-                ]
-                critic_feedback = {
-                    "verdict": "provider_contract_rejected",
-                    "confidence": 0.0,
-                    "issues": parse_errors,
-                    "rejected_concept_ids": sorted(unresolved),
-                }
-                continue
-            accepted.update(parsed)
-            if set(accepted) != batch_ids:
-                unresolved = batch_ids - set(accepted)
-                last_errors = [
-                    "topology adjudicator did not yet cover every concept"
-                ]
-                continue
-            review_payload = {
-                "metadata": copy.deepcopy(graph.get("metadata") or {}),
-                "topics": copy.deepcopy(topics),
-                "concepts": copy.deepcopy(batch),
-                "proposed_decisions": [
-                    copy.deepcopy(accepted[concept_id])
-                    for concept_id in sorted(batch_ids)
-                ],
-            }
-            review = critic(copy.deepcopy(review_payload))
-            review_gate = (
-                confidence_policy.ConfidenceGate.DESTRUCTIVE
-                if any(
-                    decision.get("decision") == "retire"
-                    for decision in accepted.values()
-                )
-                else confidence_policy.ConfidenceGate.SEMANTIC
+            accepted = parsed
+            break
+
+        if set(accepted) != batch_ids:
+            raise ProviderResponseContractError(
+                "Phase 3.2 topology adjudication ended without every concept "
+                "after its bounded provider contract correction"
             )
-            state = phase31._review_state(
-                review,
-                concept_ids=batch_ids,
-                confidence_gate=review_gate,
+
+        directed_issues = _topology_directed_issues(resolutions, accepted)
+        if directed_issues:
+            concept_id = next(
+                (
+                    value for value in sorted(batch_ids)
+                    if any(value in issue for issue in directed_issues)
+                ),
+                sorted(batch_ids)[0],
             )
-            last_confidence = float(state["confidence"])
-            if state["verified"]:
-                progress.log(
-                    "Phase 3.2 independently verified topology decisions for "
-                    f"{len(batch_ids)} concept(s) in batch {batch_index}"
-                    + (
-                        f" after {attempt} attempt(s)."
-                        if attempt > 1
-                        else "."
-                    ),
-                    level="success",
+            raise HumanDecisionRequired(
+                _topology_pending_decision(
+                    identity=gate_identities[concept_id],
+                    graph=graph,
+                    concept=concept_by_id[concept_id],
+                    topics=topics,
+                    candidates=gate_candidates[concept_id],
+                    issues=directed_issues,
+                    rejected_ids=sorted(batch_ids),
+                    proposed_decision=accepted.get(concept_id),
+                    resolution=resolutions.get(concept_id),
+                    diagnostic_source="provider",
                 )
-                break
-            unresolved = set(state["rejected"]) or set(batch_ids)
-            last_errors = list(state["issues"]) or [
+            )
+
+        review_payload = {
+            "metadata": copy.deepcopy(graph.get("metadata") or {}),
+            "topics": copy.deepcopy(topics),
+            "concepts": copy.deepcopy(batch),
+            "proposed_decisions": [
+                copy.deepcopy(accepted[concept_id])
+                for concept_id in sorted(batch_ids)
+            ],
+        }
+        if resolutions:
+            review_payload["human_resolutions"] = [
+                copy.deepcopy(resolutions[concept_id])
+                for concept_id in sorted(resolutions)
+            ]
+        review = critic(copy.deepcopy(review_payload))
+        review_gate = (
+            confidence_policy.ConfidenceGate.DESTRUCTIVE
+            if any(
+                decision.get("decision") == "retire"
+                for decision in accepted.values()
+            )
+            else confidence_policy.ConfidenceGate.SEMANTIC
+        )
+        state = phase31._review_state(
+            review,
+            concept_ids=batch_ids,
+            confidence_gate=review_gate,
+        )
+        critic_review_band = (
+            review_gate is confidence_policy.ConfidenceGate.SEMANTIC
+            and early_gate.confidence_band(state["confidence"])
+            == "human_review"
+        )
+        if not state["verified"] or critic_review_band:
+            rejected = set(state["rejected"]) or set(batch_ids)
+            issues = list(state["issues"]) or [
                 "critic verdict was "
                 + str(state.get("verdict") or "missing")
             ]
+            confidence = float(state["confidence"])
+            if early_gate.confidence_band(confidence) == "human_review":
+                issues.insert(
+                    0,
+                    f"independent critic confidence {confidence:.3f} is in "
+                    "the 0.900–0.919 human-review band",
+                )
+            concept_id = sorted(rejected)[0]
             progress.log(
-                "Phase 3.2 topology attempt "
-                f"{attempt}/{attempts} for batch {batch_index} accepted "
-                f"{len(batch_ids - unresolved)}/{len(batch_ids)} concept(s); "
-                f"{len(unresolved)} require correction"
-                + (
-                    ": " + "; ".join(last_errors[:4])
-                    if last_errors
-                    else "."
-                ),
+                "Phase 3.2 stopped after the first genuine semantic topology "
+                "disagreement; independently accepted IDs remain cached and "
+                "no semantic retry or convergence pass was started.",
                 level="warning",
             )
-            previous_decisions = [
-                copy.deepcopy(accepted[concept_id])
-                for concept_id in sorted(batch_ids)
-            ]
-            critic_feedback = copy.deepcopy(review)
-            for concept_id in unresolved:
-                accepted.pop(concept_id, None)
-        else:
-            titles = [
-                str(concept_by_id[concept_id].get("concept_title") or concept_id)
-                for concept_id in sorted(unresolved)
-            ]
-            details = "; ".join(last_errors[:6])
-            raise ValueError(
-                "Phase 3.2 could not source-verify concept topology for "
-                + ", ".join(repr(title) for title in titles[:6])
-                + f" after {attempts} attempt(s)"
-                + (
-                    f" (critic confidence {last_confidence:.3f})"
-                    if last_confidence
-                    else ""
+            raise HumanDecisionRequired(
+                _topology_pending_decision(
+                    identity=gate_identities[concept_id],
+                    graph=graph,
+                    concept=concept_by_id[concept_id],
+                    topics=topics,
+                    candidates=gate_candidates[concept_id],
+                    issues=issues,
+                    rejected_ids=sorted(rejected),
+                    proposed_decision=accepted.get(concept_id),
+                    resolution=resolutions.get(concept_id),
                 )
-                + (f": {details}" if details else "")
             )
-        if set(accepted) != batch_ids:
-            raise ValueError(
-                "Phase 3.2 topology adjudication ended without every concept"
-            )
+        progress.log(
+            "Phase 3.2 independently verified topology decisions for "
+            f"{len(batch_ids)} concept(s) in batch {batch_index}.",
+            level="success",
+        )
         decisions.update(accepted)
 
     repaired = _apply_decisions(
@@ -1085,6 +1594,8 @@ def adjudicate_topology(
             provider=grounding_provider,
             critic=grounding_critic,
         )
+    except early_gate.TopologyRepairRequired:
+        raise
     except ValueError as exc:
         raise ValueError(
             "Phase 3.2 topology decisions passed independent topic review, but "

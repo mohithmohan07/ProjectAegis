@@ -1769,6 +1769,7 @@ def test_pipeline_builds_culminations_before_types(monkeypatch):
         "canonical_skeleton",
         "description_method_snapshot",
         "question_inventory",
+        "type_taxonomy_ready",
         "pre_type_assignment",
         # The former 91% checkpoint claimed allocation before topology was
         # final. The next durable artifact is now the validated 98% map.

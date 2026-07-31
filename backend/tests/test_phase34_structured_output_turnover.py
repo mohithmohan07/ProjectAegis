@@ -141,6 +141,120 @@ def _hierarchy_payload(count: int) -> dict:
     }
 
 
+def _long_hierarchy_payload(count: int) -> dict:
+    payload = _hierarchy_payload(count)
+    for index, section in enumerate(payload["sections"], start=1):
+        sentinel = f"BODY_ONLY_{index:04d}"
+        section["excerpt"] = (f"{sentinel} source detail. " * 180).strip()
+    return payload
+
+
+def test_classifier_packet_keeps_full_directory_but_only_local_bodies(
+    monkeypatch,
+):
+    payload = _long_hierarchy_payload(8)
+    monkeypatch.setenv("AEGIS_PHASE34_TARGET_SECTION_EVIDENCE_CHARS", "900")
+    monkeypatch.setenv("AEGIS_PHASE34_CONTEXT_SECTION_EVIDENCE_CHARS", "300")
+
+    packet = phase34._classification_payload_for_batch(
+        payload,
+        ["SEC-0004"],
+    )
+
+    assert [row["section_id"] for row in packet["section_directory"]] == [
+        f"SEC-{index:04d}" for index in range(1, 9)
+    ]
+    assert all(
+        "excerpt" not in row and "body_evidence" not in row
+        for row in packet["section_directory"]
+    )
+    evidence = {
+        row["section_id"]: row for row in packet["section_evidence"]
+    }
+    assert set(evidence) == {"SEC-0001", "SEC-0003", "SEC-0004", "SEC-0005"}
+    assert evidence["SEC-0004"]["relationship"] == "target"
+    assert len(evidence["SEC-0004"]["body_evidence"]) <= 900
+    assert all(
+        len(row["body_evidence"]) <= 300
+        for section_id, row in evidence.items()
+        if section_id != "SEC-0004"
+    )
+    serialized = json.dumps(packet, ensure_ascii=False)
+    for index in (2, 6, 7, 8):
+        assert f"BODY_ONLY_{index:04d}" not in serialized
+
+
+def test_critic_packet_adds_distant_proposed_parent_without_other_bodies(
+    monkeypatch,
+):
+    payload = _long_hierarchy_payload(8)
+    payload["proposed_hierarchy"] = [
+        {
+            "section_id": f"SEC-{index:04d}",
+            "role": "subtopic",
+            "parent_section_id": "SEC-0007" if index == 4 else "SEC-0001",
+            "confidence": 0.999,
+            "evidence": [f"PROPOSAL_EVIDENCE_{index:04d}"],
+        }
+        for index in range(1, 9)
+    ]
+    monkeypatch.setenv("AEGIS_PHASE34_TARGET_SECTION_EVIDENCE_CHARS", "900")
+    monkeypatch.setenv("AEGIS_PHASE34_CONTEXT_SECTION_EVIDENCE_CHARS", "300")
+
+    packet = phase34._critic_payload_for_batch(payload, ["SEC-0004"])
+
+    evidence_ids = {
+        row["section_id"] for row in packet["section_evidence"]
+    }
+    assert evidence_ids == {
+        "SEC-0001",
+        "SEC-0003",
+        "SEC-0004",
+        "SEC-0005",
+        "SEC-0007",
+    }
+    assert [
+        row["section_id"] for row in packet["proposed_hierarchy"]
+    ] == [f"SEC-{index:04d}" for index in range(1, 9)]
+    assert all(
+        "evidence" not in row
+        for row in packet["proposed_hierarchy"]
+        if row["section_id"] != "SEC-0004"
+    )
+    serialized = json.dumps(packet, ensure_ascii=False)
+    assert "PROPOSAL_EVIDENCE_0004" in serialized
+    assert "PROPOSAL_EVIDENCE_0002" not in serialized
+    for index in (2, 6, 8):
+        assert f"BODY_ONLY_{index:04d}" not in serialized
+
+
+def test_bounded_batches_keep_exact_identity_and_parent_integrity():
+    all_ids = {"SEC-0001", "SEC-0002"}
+    with pytest.raises(ValueError, match="omitted section IDs"):
+        phase34._validate_hierarchy_batch(
+            {"sections": []},
+            target_ids=["SEC-0002"],
+            all_ids=all_ids,
+        )
+
+    with pytest.raises(ValueError, match="invented a parent section"):
+        phase34._validate_hierarchy_batch(
+            {
+                "sections": [
+                    {
+                        "section_id": "SEC-0002",
+                        "role": "subtopic",
+                        "parent_section_id": "SEC-9999",
+                        "confidence": 0.999,
+                        "evidence": [],
+                    }
+                ]
+            },
+            target_ids=["SEC-0002"],
+            all_ids=all_ids,
+        )
+
+
 def _classification_response(kwargs: dict) -> dict:
     payload = json.loads(kwargs["prompt"])
     target_ids = payload["target_section_ids"]

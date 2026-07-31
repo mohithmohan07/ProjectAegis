@@ -1,11 +1,10 @@
 """Central OpenAI model, reasoning, and token-capacity policy for Aegis.
 
 Callers identify the business purpose of a request; this module owns the
-quality/cost policy and the provider-capacity contract.  Production defaults to
-using the configured model's full documented context and completion capacity.
-Smaller caller-local token budgets are advisory only while provider-max mode is
-active; input that cannot fit one request must be losslessly batched rather than
-trimmed.
+quality/cost policy and the provider-capacity contract.  Production treats the
+configured model's documented context and completion capacity as hard ceilings.
+Smaller purpose-specific budgets remain authoritative; input that cannot fit a
+bounded request must be losslessly batched rather than silently dropped.
 """
 from __future__ import annotations
 
@@ -93,7 +92,7 @@ def _positive_int_env(name: str) -> int | None:
 
 
 def provider_max_tokens_enabled() -> bool:
-    """Whether local callers must use the provider's full token capacity.
+    """Whether provider-documented token ceilings are enforced.
 
     This is enabled by default. Operators may disable it only for deliberate
     compatibility testing with an OpenAI-compatible endpoint whose model limits
@@ -153,9 +152,9 @@ def effective_completion_tokens(
     *,
     model: str | None = None,
 ) -> int:
-    """Resolve a call's completion allowance under the provider-max contract."""
+    """Clamp a purpose-specific allowance to the provider output ceiling."""
     maximum = configured_max_output_tokens(model)
-    if provider_max_tokens_enabled() or requested is None:
+    if requested is None:
         return maximum
     return max(1, min(int(requested), maximum))
 

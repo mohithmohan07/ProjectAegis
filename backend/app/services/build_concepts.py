@@ -42,6 +42,7 @@ from . import (
     openai_usage,
     progress,
     semantic_recovery,
+    type_granularity_decision,
     uploads,
 )
 
@@ -268,7 +269,10 @@ def _human_decision_resolution_context(checkpoint: dict | None):
         copy.deepcopy(resolutions)
     ):
         with phase33.human_resolution_context(copy.deepcopy(resolutions)):
-            yield
+            with type_granularity_decision.human_resolution_context(
+                copy.deepcopy(resolutions)
+            ):
+                yield
 
 
 def _find_concept_in_chapter(
@@ -1445,7 +1449,11 @@ def _source_replacement_required(checkpoint: dict | None) -> bool:
 
     return any(
         str(row.get("choice") or "") == "replace_source"
-        and str(row.get("kind") or "") == "phase3_source_graph_review"
+        and str(row.get("kind") or "") in {
+            "phase3_source_graph_review",
+            "phase31_source_grounding_semantic_conflict",
+            "phase32_concept_blueprint_semantic_conflict",
+        }
         for row in _ready_human_decisions(checkpoint)
         if isinstance(row, dict)
     )

@@ -1690,7 +1690,10 @@ def test_learner_analysis_action_only_retry_recovers_stubborn_error(
         records, meta=g._metadata(subject="Mathematics"))
 
     assert len(calls) == 4
-    assert "ACTION-ONLY ERROR_ANALYSIS RETRY CONTRACT" in calls[1]
+    assert all(
+        "ACTION-ONLY ERROR_ANALYSIS CONTRACT" in call
+        for call in calls
+    )
     assert not g._learner_analysis_needs_rewrite(
         repaired[0]["concept_details"])
     assert "adding one odd term twice" in repaired[0]["concept_details"]

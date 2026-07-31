@@ -3,9 +3,43 @@ from __future__ import annotations
 
 import copy
 
+import pytest
+
 from app.services import canonical_source_phase3 as phase3
 from app.services import canonical_source_phase33_preflight_contract as phase33
 from app.services import generation as g
+
+
+@pytest.mark.parametrize(
+    "function_name",
+    ["_host_plan_via_openai", "_host_critic_via_openai"],
+)
+def test_human_directed_phase33_openai_pair_disables_transport_retries(
+    monkeypatch,
+    function_name,
+):
+    calls: list[dict] = []
+
+    def fake_openai(**kwargs):
+        calls.append(kwargs)
+        return {}
+
+    monkeypatch.setattr(
+        phase3.phase22,
+        "_openai_multimodal_json",
+        fake_openai,
+    )
+    payload = {
+        "assignment_units": [{"assignment_unit_id": "ASSIGN-0001"}],
+        "existing_concepts": [{"concept_id": "CONCEPT-0001"}],
+        "source_blocks": [{"block_id": "BLK-0001"}],
+        "human_resolution": {"choice": "select_existing"},
+    }
+
+    getattr(phase33, function_name)(payload)
+
+    assert len(calls) == 1
+    assert calls[0]["single_attempt"] is True
 
 
 def _verified_review(ids: list[str]) -> dict:
@@ -183,6 +217,92 @@ def test_verified_phase32_decision_is_reused_per_concept(tmp_path):
         == concept["source_claim"]
     )
     assert (tmp_path / phase33._DECISION_CACHE_FILENAME).exists()
+
+
+def test_partial_phase32_critic_accepts_survive_human_pause(tmp_path):
+    graph = {"source_contract_hash": "SOURCE-PARTIAL"}
+    session = {"artifact_dir": tmp_path}
+    concepts = [
+        {
+            "concept_id": f"TOPOLOGY-CONCEPT-{index:04d}",
+            "current_topic_id": "TOPIC-0001",
+            "concept_title": title,
+            "parent_concept": "Idea of the Nation",
+            "source_claim": claim,
+            "existing_mastery": "Explain the source claim.",
+        }
+        for index, title, claim in (
+            (1, "Nation-State", "Citizens develop a common identity."),
+            (2, "Dynastic Europe", "Dynastic territories remained divided."),
+        )
+    ]
+    decisions = [
+        {
+            "concept_id": row["concept_id"],
+            "decision": "keep",
+            "segments": [{
+                "topic_id": "TOPIC-0001",
+                "concept_title": row["concept_title"],
+                "parent_concept": row["parent_concept"],
+                "description": row["source_claim"],
+                "achieving_mastery": row["existing_mastery"],
+                "keywords": [],
+                "confidence": 0.999,
+                "reason": "Keep",
+            }],
+            "confidence": 0.999,
+            "reason": "Keep",
+        }
+        for row in concepts
+    ]
+    payload = {
+        "topics": [{
+            "topic_id": "TOPIC-0001",
+            "title": "The Nation",
+            "evidence": "Canonical source evidence",
+        }],
+        "concepts": concepts,
+        "proposed_decisions": decisions,
+    }
+    critic_batches: list[list[str]] = []
+
+    def partial_critic(value):
+        ids = [row["concept_id"] for row in value["concepts"]]
+        critic_batches.append(ids)
+        return {
+            "verdict": "rejected",
+            "confidence": 0.999,
+            "accepted_concept_ids": [ids[0]],
+            "rejected_concept_ids": [ids[1]],
+            "issues": [f"{ids[1]} needs human review."],
+        }
+
+    def resumed_critic(value):
+        ids = [row["concept_id"] for row in value["concepts"]]
+        critic_batches.append(ids)
+        return _verified_review(ids)
+
+    with phase3.activate_session(session), phase3.activate(graph):
+        first = phase33._phase32_critic_with_cache(
+            partial_critic,
+            copy.deepcopy(payload),
+        )
+        second = phase33._phase32_critic_with_cache(
+            resumed_critic,
+            copy.deepcopy(payload),
+        )
+
+    assert first["accepted_concept_ids"] == ["TOPOLOGY-CONCEPT-0001"]
+    assert first["rejected_concept_ids"] == ["TOPOLOGY-CONCEPT-0002"]
+    assert second["verdict"] == "verified"
+    assert second["accepted_concept_ids"] == [
+        "TOPOLOGY-CONCEPT-0001",
+        "TOPOLOGY-CONCEPT-0002",
+    ]
+    assert critic_batches == [
+        ["TOPOLOGY-CONCEPT-0001", "TOPOLOGY-CONCEPT-0002"],
+        ["TOPOLOGY-CONCEPT-0002"],
+    ]
 
 
 def _host_graph() -> tuple[dict, dict]:
@@ -458,3 +578,133 @@ def test_low_confidence_cannot_create_type_host():
 
     assert plan is None
     assert any("host confidence 0.720 is below 0.920" in error for error in errors)
+
+
+def test_lowered_env_cannot_send_rejected_host_plan_to_critic(monkeypatch):
+    graph = {
+        "source_contract_hash": "HOST-LOW-CONFIDENCE",
+        "metadata": {"subject": "History"},
+    }
+    topic = {"topic_id": "TOPIC-0001", "title": "Nationalism"}
+    units = [{
+        "assignment_unit_id": "TYPE-0001",
+        "topic_id": "TOPIC-0001",
+        "type_id": "TYPE-0001",
+        "type_title": "Explain national identity",
+        "source_question_ids": ["QINV-0001"],
+        "source_tasks": ["Explain national identity."],
+    }]
+    concepts = [{
+        "concept_id": "CONCEPT-0001",
+        "topic_id": "TOPIC-0001",
+        "concept_title": "National Identity",
+        "description": "Citizens developed a shared national identity.",
+    }]
+    provider_calls = 0
+    critic_calls = 0
+
+    def provider(_payload: dict) -> dict:
+        nonlocal provider_calls
+        provider_calls += 1
+        return {
+            "assignments": [{
+                "assignment_unit_id": "TYPE-0001",
+                "decision": "existing",
+                "existing_concept_id": "CONCEPT-0001",
+                "new_concept_key": "NONE",
+                "confidence": 0.88,
+                "reason": "Uncertain host match.",
+            }],
+            "new_concepts": [],
+            "existing_concept_updates": [],
+        }
+
+    def critic(_payload: dict) -> dict:
+        nonlocal critic_calls
+        critic_calls += 1
+        raise AssertionError("critic must not rescue a rejected host plan")
+
+    monkeypatch.setenv("AEGIS_SEMANTIC_ACCEPTANCE_MIN_CONFIDENCE", "0.85")
+    with pytest.raises(phase33.HumanDecisionRequired) as paused:
+        phase33._resolve_host_plan(
+            graph=graph,
+            topic_id="TOPIC-0001",
+            topic=topic,
+            units=units,
+            concepts=concepts,
+            source_blocks=[],
+            provider=provider,
+            critic=critic,
+        )
+
+    assert provider_calls == 1
+    assert critic_calls == 0
+    assert "host confidence 0.880 is below 0.920" in (
+        paused.value.pending_decision["conflict"]
+    )
+
+
+def test_lowered_env_cannot_auto_accept_review_band_host_critic(monkeypatch):
+    graph = {
+        "source_contract_hash": "HOST-REVIEW-BAND",
+        "metadata": {"subject": "History"},
+    }
+    topic = {"topic_id": "TOPIC-0001", "title": "Nationalism"}
+    units = [{
+        "assignment_unit_id": "TYPE-0001",
+        "topic_id": "TOPIC-0001",
+        "type_id": "TYPE-0001",
+        "type_title": "Explain national identity",
+        "source_question_ids": ["QINV-0001"],
+        "source_tasks": ["Explain national identity."],
+    }]
+    concepts = [{
+        "concept_id": "CONCEPT-0001",
+        "topic_id": "TOPIC-0001",
+        "concept_title": "National Identity",
+        "description": "Citizens developed a shared national identity.",
+    }]
+    calls = {"provider": 0, "critic": 0}
+
+    def provider(_payload: dict) -> dict:
+        calls["provider"] += 1
+        return {
+            "assignments": [{
+                "assignment_unit_id": "TYPE-0001",
+                "decision": "existing",
+                "existing_concept_id": "CONCEPT-0001",
+                "new_concept_key": "NONE",
+                "confidence": 0.95,
+                "reason": "The concept entails the assessed method.",
+            }],
+            "new_concepts": [],
+            "existing_concept_updates": [],
+        }
+
+    def critic(_payload: dict) -> dict:
+        calls["critic"] += 1
+        return {
+            "verdict": "verified",
+            "confidence": 0.91,
+            "accepted_concept_ids": ["TYPE-0001"],
+            "rejected_concept_ids": [],
+            "issues": [],
+        }
+
+    monkeypatch.setenv("AEGIS_SEMANTIC_ACCEPTANCE_MIN_CONFIDENCE", "0.90")
+    with pytest.raises(phase33.HumanDecisionRequired) as paused:
+        phase33._resolve_host_plan(
+            graph=graph,
+            topic_id="TOPIC-0001",
+            topic=topic,
+            units=units,
+            concepts=concepts,
+            source_blocks=[],
+            provider=provider,
+            critic=critic,
+        )
+
+    assert calls == {"provider": 1, "critic": 1}
+    assert "0.900–0.919 human-review band" in (
+        paused.value.pending_decision["conflict"]
+    )

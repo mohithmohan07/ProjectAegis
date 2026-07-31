@@ -19,7 +19,7 @@ from enum import Enum
 from typing import Final
 
 
-POLICY_VERSION: Final = "semantic-confidence-policy-1"
+POLICY_VERSION: Final = "semantic-confidence-policy-2"
 
 SEMANTIC_ACCEPTANCE_ENV: Final = (
     "AEGIS_SEMANTIC_ACCEPTANCE_MIN_CONFIDENCE"
@@ -31,6 +31,8 @@ DESTRUCTIVE_SEMANTIC_ENV: Final = (
 DEFAULT_SEMANTIC_ACCEPTANCE: Final = 0.92
 DEFAULT_DESTRUCTIVE_SEMANTIC: Final = 0.96
 SOURCE_CRITICAL_MINIMUM: Final = 0.96
+SEMANTIC_REVIEW_BAND_MINIMUM: Final = 0.90
+SEMANTIC_AUTO_ACCEPT_FLOOR: Final = DEFAULT_SEMANTIC_ACCEPTANCE
 
 # Ordinary semantic acceptance may be tuned modestly without turning a model
 # score into permission to accept guesses.  Destructive acceptance can only be
@@ -79,10 +81,16 @@ def minimum(gate: ConfidenceGate | str = ConfidenceGate.SEMANTIC) -> float:
     except ValueError as exc:
         raise ValueError(f"Unknown semantic confidence gate: {gate!r}") from exc
     if resolved is ConfidenceGate.SEMANTIC:
-        return _configured_threshold(
-            env_name=SEMANTIC_ACCEPTANCE_ENV,
-            default=DEFAULT_SEMANTIC_ACCEPTANCE,
-            allowed=_SEMANTIC_RANGE,
+        # The environment may preserve a historical lower setting without
+        # making it an acceptance bypass.  Ordinary semantic decisions never
+        # auto-accept below 0.92; an override can only make that gate stricter.
+        return max(
+            SEMANTIC_AUTO_ACCEPT_FLOOR,
+            _configured_threshold(
+                env_name=SEMANTIC_ACCEPTANCE_ENV,
+                default=DEFAULT_SEMANTIC_ACCEPTANCE,
+                allowed=_SEMANTIC_RANGE,
+            ),
         )
     if resolved is ConfidenceGate.DESTRUCTIVE:
         return _configured_threshold(
@@ -106,6 +114,32 @@ def accepts(
     return math.isfinite(value) and value >= minimum(gate)
 
 
+def semantic_band(confidence: object) -> str:
+    """Classify an ordinary semantic score under the fixed decision bands.
+
+    A configured threshold can raise the auto-accept boundary, but can never
+    lower it.  The narrow 0.900--0.919 interval remains explicitly reserved
+    for human review; scores below 0.900 are rejected, as are scores that fail
+    an operator-configured stricter auto-accept threshold.
+    """
+
+    try:
+        value = float(confidence)
+    except (TypeError, ValueError):
+        return "invalid"
+    if not math.isfinite(value):
+        return "invalid"
+    if value >= minimum(ConfidenceGate.SEMANTIC):
+        return "accepted"
+    if (
+        SEMANTIC_REVIEW_BAND_MINIMUM
+        <= value
+        < SEMANTIC_AUTO_ACCEPT_FLOOR
+    ):
+        return "human_review"
+    return "rejected"
+
+
 def threshold_text(
     gate: ConfidenceGate | str = ConfidenceGate.SEMANTIC,
     *,
@@ -119,8 +153,9 @@ def threshold_text(
 def cache_identity() -> dict[str, object]:
     """Fingerprint policy-sensitive semantic caches.
 
-    Environment overrides are deliberately included.  A cache approved under a
-    lower threshold must never be reused after an operator raises the gate.
+    Effective environment overrides are deliberately included.  A cache
+    approved under one gate must never be reused after an operator raises it;
+    lowering the setting below the fixed 0.92 floor does not change the policy.
     """
 
     return {

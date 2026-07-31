@@ -251,6 +251,28 @@ def test_error_analysis_accepts_subject_specific_actions_with_mistake_cues():
         assert cv.is_valid_error_analysis(text)
 
 
+def test_error_analysis_accepts_prompted_actions_only_with_named_consequences():
+    for text in (
+        "Students may count the endpoint twice, increasing the interval "
+        "total by one.",
+        "Students may add the numerator and denominator before simplifying, "
+        "producing an incorrect fraction.",
+        "Students may divide by the scale factor before converting units, "
+        "producing the wrong magnitude.",
+        "Students may group nonadjacent clauses before checking their link, "
+        "resulting in an invalid interpretation.",
+    ):
+        assert cv.is_valid_error_analysis(text)
+
+    for text in (
+        "Students may count the endpoints.",
+        "Students may add the numerator and denominator.",
+        "Students may divide by the scale factor.",
+        "Students may group the clauses.",
+    ):
+        assert not cv.is_valid_error_analysis(text)
+
+
 def test_error_analysis_rejects_correct_procedural_action_without_a_defect():
     assert not cv.is_valid_error_analysis(
         "Students may record all observations accurately.")

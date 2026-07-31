@@ -13,8 +13,12 @@ This contract makes structured output resumable rather than brittle:
 * a fully parsed strict-schema object is accepted even when the provider reports
   ``finish_reason=length`` after the final closing brace;
 * Phase 3 hierarchy classification and criticism are split into contiguous,
-  independently cached batches, while every batch still sees the complete
-  chapter section directory and may point to any canonical parent section ID;
+  independently cached batches.  Every batch sees a compact, complete section
+  directory, while body evidence is limited to its targets and the adjacent or
+  ancestor sections needed to interpret them.  Any canonical section ID remains
+  available as a parent without repeatedly sending every non-target body;
+* every section is still classified and independently criticised exactly once;
+  payload bounding does not substitute a deterministic role guess for review;
 * successful batches survive a later failure, so Resume starts at the first
   uncached batch rather than replaying the chapter;
 * progress and terminal errors name the actual purpose/schema instead of calling
@@ -38,8 +42,8 @@ from . import canonical_source_phase22 as phase22
 from . import canonical_source_phase3 as phase3
 from . import progress
 
-_CONTRACT_VERSION = 1
-_TURNOVER_VERSION = "phase3.4-structured-output-turnover-1"
+_CONTRACT_VERSION = 2
+_TURNOVER_VERSION = "phase3.4-structured-output-turnover-2"
 _HIERARCHY_CACHE_FILENAME = "source.phase34-hierarchy-batch-cache.json"
 _ALLOWED_HIERARCHY_ROLES = (
     "chapter_heading",
@@ -101,6 +105,40 @@ def _hierarchy_batch_size() -> int:
         min(
             24,
             int(os.environ.get("AEGIS_PHASE3_HIERARCHY_BATCH_SECTIONS", "10")),
+        ),
+    )
+
+
+def _target_evidence_chars() -> int:
+    return max(
+        900,
+        min(
+            24_000,
+            int(os.environ.get(
+                "AEGIS_PHASE34_TARGET_SECTION_EVIDENCE_CHARS", "6000"
+            )),
+        ),
+    )
+
+
+def _context_evidence_chars() -> int:
+    return max(
+        300,
+        min(
+            6_000,
+            int(os.environ.get(
+                "AEGIS_PHASE34_CONTEXT_SECTION_EVIDENCE_CHARS", "1600"
+            )),
+        ),
+    )
+
+
+def _adjacent_section_count() -> int:
+    return max(
+        0,
+        min(
+            2,
+            int(os.environ.get("AEGIS_PHASE34_ADJACENT_SECTIONS", "1")),
         ),
     )
 
@@ -595,14 +633,279 @@ def _validate_critic_batch(
     }
 
 
+_SECTION_DIRECTORY_FIELDS = (
+    "section_id",
+    "title",
+    "level",
+    "source_order",
+    "source_start",
+    "baseline_role",
+    "parent_section_id",
+    "phase3_virtual",
+    "structural_number",
+)
+
+
+def _ordered_payload_sections(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return the exact ordered hierarchy directory carried by Phase 3."""
+    return [
+        copy.deepcopy(row)
+        for row in payload.get("sections") or []
+        if isinstance(row, dict) and str(row.get("section_id") or "")
+    ]
+
+
+def _section_directory(
+    sections: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Project every section to identity/structure only, never body text."""
+    directory: list[dict[str, Any]] = []
+    for position, section in enumerate(sections, start=1):
+        row = {
+            key: copy.deepcopy(section[key])
+            for key in _SECTION_DIRECTORY_FIELDS
+            if key in section
+        }
+        row["section_id"] = str(section.get("section_id") or "")
+        row.setdefault("title", str(section.get("title") or ""))
+        row.setdefault("level", int(section.get("level") or 1))
+        row.setdefault(
+            "source_order", int(section.get("source_order") or position)
+        )
+        row.setdefault("source_start", int(section.get("source_start") or 0))
+        row.setdefault(
+            "baseline_role", str(section.get("baseline_role") or "other")
+        )
+        directory.append(row)
+    return directory
+
+
+def _canonical_section_bodies(
+    sections: list[dict[str, Any]],
+    selected_ids: set[str],
+) -> dict[str, str]:
+    """Read durable section bodies without embedding them in the directory.
+
+    The ordinary classification payload intentionally carries only a short
+    excerpt.  When a live canonical session is available, this helper projects
+    the exact durable block text for the small target/context set selected
+    below.  The canonical artifact is never modified or clipped.
+    """
+    bodies = {
+        str(section.get("section_id") or ""): str(section.get("excerpt") or "")
+        for section in sections
+        if str(section.get("section_id") or "") in selected_ids
+    }
+    session = phase3.active_session()
+    canonical = (
+        session.get("canonical")
+        if isinstance(session, dict) and isinstance(session.get("canonical"), dict)
+        else None
+    )
+    if not isinstance(canonical, dict):
+        return bodies
+    blocks_by_id = {
+        str(block.get("block_id") or ""): block
+        for block in canonical.get("blocks") or []
+        if isinstance(block, dict) and str(block.get("block_id") or "")
+    }
+    canonical_sections = {
+        str(section.get("section_id") or ""): section
+        for section in canonical.get("sections") or []
+        if isinstance(section, dict) and str(section.get("section_id") or "")
+    }
+    for section_id in bodies:
+        canonical_section = canonical_sections.get(section_id)
+        if canonical_section is None:
+            continue
+        pieces: list[str] = []
+        for block_id in canonical_section.get("block_ids") or []:
+            block = blocks_by_id.get(str(block_id))
+            if not block or str(block.get("kind") or "") in {
+                "layout",
+                "heading",
+                "navigation",
+            }:
+                continue
+            text = str(
+                block.get("display_text") or block.get("raw_text") or ""
+            ).strip()
+            if text:
+                pieces.append(" ".join(text.split()))
+        if pieces:
+            bodies[section_id] = " ".join(pieces)
+    return bodies
+
+
+def _ancestor_by_section_id(
+    sections: list[dict[str, Any]],
+) -> dict[str, list[str]]:
+    """Infer physical heading ancestors without making a semantic decision."""
+    ancestors: dict[str, list[str]] = {}
+    stack: list[tuple[int, str]] = []
+    known = {
+        str(section.get("section_id") or "")
+        for section in sections
+    }
+    for section in sections:
+        section_id = str(section.get("section_id") or "")
+        level = max(1, int(section.get("level") or 1))
+        while stack and stack[-1][0] >= level:
+            stack.pop()
+        lineage = [value for _depth, value in stack]
+        declared = str(section.get("parent_section_id") or "")
+        if declared and declared in known and declared not in lineage:
+            lineage.append(declared)
+        ancestors[section_id] = lineage
+        stack.append((level, section_id))
+    return ancestors
+
+
+def _context_section_ids(
+    sections: list[dict[str, Any]],
+    target_ids: list[str],
+    *,
+    proposed_hierarchy: list[dict[str, Any]] | None = None,
+) -> tuple[set[str], set[str]]:
+    """Return target-adjacent and ancestor/declared-parent evidence IDs."""
+    ordered_ids = [str(row.get("section_id") or "") for row in sections]
+    index_by_id = {section_id: index for index, section_id in enumerate(ordered_ids)}
+    target = set(target_ids)
+    adjacent: set[str] = set()
+    ancestors: set[str] = set()
+    lineage_by_id = _ancestor_by_section_id(sections)
+    radius = _adjacent_section_count()
+    for section_id in target_ids:
+        index = index_by_id.get(section_id)
+        if index is None:
+            continue
+        for offset in range(1, radius + 1):
+            if index - offset >= 0:
+                adjacent.add(ordered_ids[index - offset])
+            if index + offset < len(ordered_ids):
+                adjacent.add(ordered_ids[index + offset])
+        ancestors.update(lineage_by_id.get(section_id) or [])
+
+    # A critic must see the body evidence for a proposed parent even when it is
+    # outside the immediate physical window.  The full directory still makes
+    # every other ID available as a legal parent.
+    for row in proposed_hierarchy or []:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("section_id") or "") not in target:
+            continue
+        parent_id = str(row.get("parent_section_id") or "")
+        if parent_id in index_by_id:
+            ancestors.add(parent_id)
+            ancestors.update(lineage_by_id.get(parent_id) or [])
+    adjacent -= target
+    ancestors -= target
+    adjacent -= ancestors
+    return adjacent, ancestors
+
+
+def _bounded_body(value: object, *, limit: int) -> tuple[str, bool]:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text, True
+    # Retain both the opening role cue and terminal continuation.  The exact
+    # durable body remains addressable by section ID and hash for a targeted
+    # follow-up/human decision; unrelated section bodies are never sent.
+    tail = max(120, limit // 4)
+    head = max(120, limit - tail - 45)
+    return (
+        text[:head].rstrip()
+        + " [AEGIS BOUNDED SECTION EVIDENCE] "
+        + text[-tail:].lstrip(),
+        False,
+    )
+
+
+def _section_evidence(
+    sections: list[dict[str, Any]],
+    target_ids: list[str],
+    *,
+    proposed_hierarchy: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    target = set(target_ids)
+    adjacent, ancestors = _context_section_ids(
+        sections,
+        target_ids,
+        proposed_hierarchy=proposed_hierarchy,
+    )
+    selected = target | adjacent | ancestors
+    bodies = _canonical_section_bodies(sections, selected)
+    evidence: list[dict[str, Any]] = []
+    for section in sections:
+        section_id = str(section.get("section_id") or "")
+        if section_id not in selected:
+            continue
+        body = bodies.get(section_id, "")
+        normalized_body = " ".join(str(body or "").split())
+        is_target = section_id in target
+        bounded, complete = _bounded_body(
+            normalized_body,
+            limit=(
+                _target_evidence_chars()
+                if is_target
+                else _context_evidence_chars()
+            ),
+        )
+        relationship = (
+            "target"
+            if is_target
+            else "ancestor_or_proposed_parent"
+            if section_id in ancestors
+            else "adjacent"
+        )
+        evidence.append({
+            "section_id": section_id,
+            "relationship": relationship,
+            "title": str(section.get("title") or ""),
+            "level": int(section.get("level") or 1),
+            "baseline_role": str(section.get("baseline_role") or "other"),
+            "body_evidence": bounded,
+            "body_chars": len(normalized_body),
+            "body_sha256": phase3._sha256_text(normalized_body),
+            "body_complete": complete,
+        })
+    return evidence
+
+
+def _compact_proposed_hierarchy(
+    rows: list[dict[str, Any]],
+    target_ids: list[str],
+) -> list[dict[str, Any]]:
+    target = set(target_ids)
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        compact = {
+            "section_id": str(row.get("section_id") or ""),
+            "role": str(row.get("role") or ""),
+            "parent_section_id": str(row.get("parent_section_id") or ""),
+            "confidence": float(row.get("confidence") or 0.0),
+        }
+        if compact["section_id"] in target:
+            compact["evidence"] = [
+                str(value)
+                for value in row.get("evidence") or []
+                if str(value)
+            ][:4]
+        out.append(compact)
+    return out
+
+
 def _classification_payload_for_batch(
     payload: dict[str, Any],
     target_ids: list[str],
 ) -> dict[str, Any]:
+    sections = _ordered_payload_sections(payload)
     return {
         "metadata": copy.deepcopy(payload.get("metadata") or {}),
-        # Full chapter context remains visible. Only the bounded response is split.
-        "sections": copy.deepcopy(payload.get("sections") or []),
+        "section_directory": _section_directory(sections),
+        "section_evidence": _section_evidence(sections, target_ids),
         "verified_pdf_headings": copy.deepcopy(
             payload.get("verified_pdf_headings") or []
         ),
@@ -610,8 +913,10 @@ def _classification_payload_for_batch(
         "target_section_ids": list(target_ids),
         "instruction": (
             "Classify only target_section_ids and return each target exactly once. "
-            "Use the complete ordered sections list for context. A target may use "
-            "any canonical section_id from the full list as parent_section_id."
+            "section_directory is the complete ordered identity/structure map; "
+            "section_evidence contains body text only for targets and necessary "
+            "adjacent/ancestor context. A target may use any canonical section_id "
+            "from section_directory as parent_section_id."
         ),
     }
 
@@ -620,22 +925,34 @@ def _critic_payload_for_batch(
     payload: dict[str, Any],
     target_ids: list[str],
 ) -> dict[str, Any]:
+    sections = _ordered_payload_sections(payload)
+    proposed = [
+        row for row in payload.get("proposed_hierarchy") or []
+        if isinstance(row, dict)
+    ]
     return {
         "metadata": copy.deepcopy(payload.get("metadata") or {}),
-        "sections": copy.deepcopy(payload.get("sections") or []),
+        "section_directory": _section_directory(sections),
+        "section_evidence": _section_evidence(
+            sections,
+            target_ids,
+            proposed_hierarchy=proposed,
+        ),
         "verified_pdf_headings": copy.deepcopy(
             payload.get("verified_pdf_headings") or []
         ),
         "allowed_roles": list(_ALLOWED_HIERARCHY_ROLES),
-        "proposed_hierarchy": copy.deepcopy(
-            payload.get("proposed_hierarchy") or []
+        "proposed_hierarchy": _compact_proposed_hierarchy(
+            proposed,
+            target_ids,
         ),
         "target_section_ids": list(target_ids),
         "instruction": (
-            "Audit only target_section_ids while using the complete ordered "
-            "chapter and proposed hierarchy as context. Return repairs only for "
-            "targets. Parent IDs may refer to any canonical section in the full "
-            "directory."
+            "Audit only target_section_ids. Use the complete compact directory "
+            "and proposed hierarchy for identity/order/parent context, and use "
+            "section_evidence for target plus necessary adjacent/ancestor body "
+            "evidence. Return repairs only for targets. Parent IDs may refer to "
+            "any canonical section in section_directory."
         ),
     }
 
@@ -659,8 +976,9 @@ def _classify_hierarchy_batched(payload: dict[str, Any]) -> dict[str, Any]:
     all_id_set = set(all_ids)
     system = (
         "You are the Aegis Phase 3.4 semantic hierarchy classifier. Classify "
-        "only the supplied target_section_ids, but use the complete ordered "
-        "chapter section list and verified PDF headings as context. Main topics "
+        "only the supplied target_section_ids. Use section_directory as the "
+        "complete ordered identity/structure map and section_evidence as the "
+        "target plus adjacent/ancestor body context. Main topics "
         "are durable teaching divisions. Activity, Discuss, Source, glossary, "
         "boxes, review questions, and editorial labels are not main topics. "
         "Preserve physical order, use only opaque IDs, and return every target "
@@ -731,8 +1049,9 @@ def _critic_hierarchy_batched(payload: dict[str, Any]) -> dict[str, Any]:
     needs_repair = False
     system = (
         "You are the independent Aegis Phase 3.4 hierarchy critic. Audit only "
-        "target_section_ids against the complete canonical chapter and proposed "
-        "hierarchy. Detect promoted activities/sources/glossaries, lost numbered "
+        "target_section_ids against the complete compact section_directory, "
+        "selected section_evidence, and proposed hierarchy. Detect promoted "
+        "activities/sources/glossaries, lost numbered "
         "parents, wrong parent links, and order drift. Use only supplied IDs. "
         "Return concise repairs only for targeted IDs and never rewrite source."
     )
