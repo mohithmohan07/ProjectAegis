@@ -266,3 +266,90 @@ def test_fragmentation_resume_runs_downstream_once_then_promotes_checkpoint(
     # three paid passes moved behind this gate must not replay.
     assert calls == ["sufficiency", "mastery", "culmination"]
     assert replay_emitted == []
+
+
+def test_consolidation_resume_feeds_only_accepted_taxonomy_downstream(
+    monkeypatch,
+):
+    mined = _types()
+    _preserve_inventory(monkeypatch)
+    monkeypatch.setattr(
+        g,
+        "_mine_types_from_inventory_via_api",
+        lambda **_kwargs: copy.deepcopy(mined),
+    )
+    monkeypatch.setattr(
+        g,
+        "_consolidate_semantic_types_via_api",
+        lambda current, **_kwargs: copy.deepcopy(current),
+    )
+    first_emitted: list[dict] = []
+    with pytest.raises(semantic_recovery.HumanDecisionRequired) as caught:
+        _run_pre_final(
+            checkpoint=_question_inventory_checkpoint(),
+            emitted=first_emitted,
+        )
+
+    pending = caught.value.pending_decision
+    resolution = {
+        **copy.deepcopy(pending),
+        "status": "ready",
+        "choice": "consolidate_types",
+        "instruction": "Use one reusable assessment method.",
+    }
+    merged_type = copy.deepcopy(mined["types"][0])
+    merged_type["source_question_ids"] = [
+        qid
+        for mtype in mined["types"]
+        for qid in mtype["source_question_ids"]
+    ]
+    merged_type["case_prompts"] = [
+        case
+        for mtype in copy.deepcopy(mined["types"])
+        for case in mtype["case_prompts"]
+    ]
+    accepted = {"types": [merged_type]}
+    monkeypatch.setattr(
+        g,
+        "_human_directed_type_consolidation_via_api",
+        lambda *_args, **_kwargs: (
+            copy.deepcopy(accepted),
+            "",
+            {"critic_verdict": "accept", "critic_confidence": 0.95},
+        ),
+    )
+    monkeypatch.setattr(
+        g,
+        "_reconcile_resumed_mined_types",
+        lambda current, **_kwargs: copy.deepcopy(current),
+    )
+
+    downstream_type_counts: list[int] = []
+
+    def sufficiency(records, *, mined_types, **_kwargs):
+        downstream_type_counts.append(len(mined_types["types"]))
+        return records
+
+    monkeypatch.setattr(
+        g, "_add_missing_type_method_concepts_via_api", sufficiency)
+    monkeypatch.setattr(
+        g, "_build_culminations_via_api", lambda records, **_kwargs: records)
+    monkeypatch.setattr(
+        g, "_assign_types_via_api", lambda records, **_kwargs: records)
+    monkeypatch.setattr(
+        g,
+        "_populate_activity_hubs_via_api",
+        lambda records, *_args, **_kwargs: records,
+    )
+    monkeypatch.setattr(
+        g, "_placement_certification_contract_complete", lambda *_args: True)
+
+    with gate.human_resolution_context([resolution]):
+        _rows, _inventory_result, accepted_types, _snapshot = _run_pre_final(
+            checkpoint=first_emitted[-1],
+            emitted=[],
+        )
+
+    assert downstream_type_counts == [1]
+    assert len(accepted_types["types"]) == 1
+    assert accepted_types["_granularity_review"]["type_count"] == 1
