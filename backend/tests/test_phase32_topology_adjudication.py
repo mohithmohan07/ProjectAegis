@@ -436,6 +436,42 @@ def test_low_confidence_does_not_authorize_creation_of_a_new_concept(monkeypatch
     }
 
 
+def test_lowered_env_cannot_send_rejected_topology_to_critic(monkeypatch):
+    graph, canonical = _graph_and_canonical()
+    provider_calls = 0
+    critic_calls = 0
+
+    def provider(payload: dict) -> dict:
+        nonlocal provider_calls
+        provider_calls += 1
+        response = _split_response(payload)
+        response["concepts"][0]["confidence"] = 0.88
+        return response
+
+    def critic(_payload: dict) -> dict:
+        nonlocal critic_calls
+        critic_calls += 1
+        raise AssertionError("critic must not rescue a rejected topology")
+
+    monkeypatch.setenv("AEGIS_SEMANTIC_ACCEPTANCE_MIN_CONFIDENCE", "0.85")
+    with pytest.raises(semantic_recovery.HumanDecisionRequired) as paused:
+        phase32.adjudicate_topology(
+            [_combined_record()],
+            graph=graph,
+            canonical=canonical,
+            provider=provider,
+            critic=critic,
+            grounding_provider=_grounding_provider,
+            grounding_critic=_verified_grounding_review,
+        )
+
+    assert provider_calls == 1
+    assert critic_calls == 0
+    assert "topology confidence 0.880 is below 0.920" in (
+        paused.value.pending_decision["conflict"]
+    )
+
+
 def test_low_segment_confidence_pauses_without_a_retry_or_critic(monkeypatch):
     graph, canonical = _graph_and_canonical()
     provider_calls = 0

@@ -380,6 +380,7 @@ def test_human_directed_consolidation_repauses_on_critic_review_band(
     ]
     monkeypatch.setattr(
         g, "_openai_json", lambda *_args, **_kwargs: responses.pop(0))
+    monkeypatch.setenv("AEGIS_SEMANTIC_ACCEPTANCE_MIN_CONFIDENCE", "0.90")
 
     result, failure, audit = g._human_directed_type_consolidation_via_api(
         original,

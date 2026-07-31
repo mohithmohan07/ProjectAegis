@@ -2121,7 +2121,8 @@ def _resolve_host_plan(
             review,
             concept_ids={str(row.get("assignment_unit_id") or "") for row in units},
         )
-        if state["verified"]:
+        critic_band = confidence_policy.semantic_band(state["confidence"])
+        if state["verified"] and critic_band == "accepted":
             _write_host_plan_cache(
                 key,
                 graph=graph,
@@ -2140,6 +2141,20 @@ def _resolve_host_plan(
         last_errors = list(state["issues"]) or [
             "critic verdict was " + str(state.get("verdict") or "missing")
         ]
+        if critic_band == "human_review":
+            last_errors.insert(
+                0,
+                "independent critic confidence "
+                f"{float(state['confidence']):.3f} is in the "
+                "0.900–0.919 human-review band",
+            )
+        elif critic_band == "rejected":
+            last_errors.insert(
+                0,
+                "independent critic confidence "
+                f"{float(state['confidence']):.3f} is below the "
+                f"{confidence_policy.threshold_text()} semantic threshold",
+            )
         pending_plan = copy.deepcopy(plan)
         pending_plan["rejected_assignment_unit_ids"] = sorted(
             str(value) for value in state["rejected"] if str(value)

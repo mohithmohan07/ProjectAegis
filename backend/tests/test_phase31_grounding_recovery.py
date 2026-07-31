@@ -335,6 +335,43 @@ def test_review_band_grounding_pauses_after_one_pair(monkeypatch):
     assert "causal claim" in paused.value.pending_decision["conflict"]
 
 
+def test_lowered_env_cannot_send_rejected_grounding_to_critic(monkeypatch):
+    graph, canonical = _source_graph()
+    provider_calls = 0
+    critic_calls = 0
+
+    def rejected_provider(payload: dict) -> dict:
+        nonlocal provider_calls
+        provider_calls += 1
+        return {"concepts": [{
+            "concept_id": payload["concepts"][0]["concept_id"],
+            "source_block_ids": ["BLK-0001"],
+            "confidence": 0.88,
+            "reason": "Uncertain source match.",
+        }]}
+
+    def critic_must_not_run(_payload: dict) -> dict:
+        nonlocal critic_calls
+        critic_calls += 1
+        raise AssertionError("critic must not rescue a rejected proposal")
+
+    monkeypatch.setenv("AEGIS_SEMANTIC_ACCEPTANCE_MIN_CONFIDENCE", "0.85")
+    with pytest.raises(semantic_recovery.HumanDecisionRequired) as paused:
+        phase31.ground_concepts(
+            [_record()],
+            graph=graph,
+            canonical=canonical,
+            provider=rejected_provider,
+            critic=critic_must_not_run,
+        )
+
+    assert provider_calls == 1
+    assert critic_calls == 0
+    assert "confidence 0.880 is below 0.920" in (
+        paused.value.pending_decision["conflict"]
+    )
+
+
 def test_critic_partition_contradiction_is_never_cached_as_accepted():
     concept_id = "CONCEPT-GROUND-0001"
     state = phase31._review_state(

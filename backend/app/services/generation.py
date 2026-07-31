@@ -10063,9 +10063,8 @@ def _human_directed_type_consolidation_via_api(
             "Type-granularity critic returned valid JSON but an invalid "
             "verdict/confidence schema"
         )
-    if verdict != "accept" or not confidence_policy.accepts(
-        critic_confidence
-    ):
+    critic_band = confidence_policy.semantic_band(critic_confidence)
+    if verdict != "accept" or critic_band != "accepted":
         minimum = confidence_policy.threshold_text()
         failure = (
             "The independent critic did not certify the merge at the ordinary "

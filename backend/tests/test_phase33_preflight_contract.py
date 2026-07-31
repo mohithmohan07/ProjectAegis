@@ -578,3 +578,133 @@ def test_low_confidence_cannot_create_type_host():
 
     assert plan is None
     assert any("host confidence 0.720 is below 0.920" in error for error in errors)
+
+
+def test_lowered_env_cannot_send_rejected_host_plan_to_critic(monkeypatch):
+    graph = {
+        "source_contract_hash": "HOST-LOW-CONFIDENCE",
+        "metadata": {"subject": "History"},
+    }
+    topic = {"topic_id": "TOPIC-0001", "title": "Nationalism"}
+    units = [{
+        "assignment_unit_id": "TYPE-0001",
+        "topic_id": "TOPIC-0001",
+        "type_id": "TYPE-0001",
+        "type_title": "Explain national identity",
+        "source_question_ids": ["QINV-0001"],
+        "source_tasks": ["Explain national identity."],
+    }]
+    concepts = [{
+        "concept_id": "CONCEPT-0001",
+        "topic_id": "TOPIC-0001",
+        "concept_title": "National Identity",
+        "description": "Citizens developed a shared national identity.",
+    }]
+    provider_calls = 0
+    critic_calls = 0
+
+    def provider(_payload: dict) -> dict:
+        nonlocal provider_calls
+        provider_calls += 1
+        return {
+            "assignments": [{
+                "assignment_unit_id": "TYPE-0001",
+                "decision": "existing",
+                "existing_concept_id": "CONCEPT-0001",
+                "new_concept_key": "NONE",
+                "confidence": 0.88,
+                "reason": "Uncertain host match.",
+            }],
+            "new_concepts": [],
+            "existing_concept_updates": [],
+        }
+
+    def critic(_payload: dict) -> dict:
+        nonlocal critic_calls
+        critic_calls += 1
+        raise AssertionError("critic must not rescue a rejected host plan")
+
+    monkeypatch.setenv("AEGIS_SEMANTIC_ACCEPTANCE_MIN_CONFIDENCE", "0.85")
+    with pytest.raises(phase33.HumanDecisionRequired) as paused:
+        phase33._resolve_host_plan(
+            graph=graph,
+            topic_id="TOPIC-0001",
+            topic=topic,
+            units=units,
+            concepts=concepts,
+            source_blocks=[],
+            provider=provider,
+            critic=critic,
+        )
+
+    assert provider_calls == 1
+    assert critic_calls == 0
+    assert "host confidence 0.880 is below 0.920" in (
+        paused.value.pending_decision["conflict"]
+    )
+
+
+def test_lowered_env_cannot_auto_accept_review_band_host_critic(monkeypatch):
+    graph = {
+        "source_contract_hash": "HOST-REVIEW-BAND",
+        "metadata": {"subject": "History"},
+    }
+    topic = {"topic_id": "TOPIC-0001", "title": "Nationalism"}
+    units = [{
+        "assignment_unit_id": "TYPE-0001",
+        "topic_id": "TOPIC-0001",
+        "type_id": "TYPE-0001",
+        "type_title": "Explain national identity",
+        "source_question_ids": ["QINV-0001"],
+        "source_tasks": ["Explain national identity."],
+    }]
+    concepts = [{
+        "concept_id": "CONCEPT-0001",
+        "topic_id": "TOPIC-0001",
+        "concept_title": "National Identity",
+        "description": "Citizens developed a shared national identity.",
+    }]
+    calls = {"provider": 0, "critic": 0}
+
+    def provider(_payload: dict) -> dict:
+        calls["provider"] += 1
+        return {
+            "assignments": [{
+                "assignment_unit_id": "TYPE-0001",
+                "decision": "existing",
+                "existing_concept_id": "CONCEPT-0001",
+                "new_concept_key": "NONE",
+                "confidence": 0.95,
+                "reason": "The concept entails the assessed method.",
+            }],
+            "new_concepts": [],
+            "existing_concept_updates": [],
+        }
+
+    def critic(_payload: dict) -> dict:
+        calls["critic"] += 1
+        return {
+            "verdict": "verified",
+            "confidence": 0.91,
+            "accepted_concept_ids": ["TYPE-0001"],
+            "rejected_concept_ids": [],
+            "issues": [],
+        }
+
+    monkeypatch.setenv("AEGIS_SEMANTIC_ACCEPTANCE_MIN_CONFIDENCE", "0.90")
+    with pytest.raises(phase33.HumanDecisionRequired) as paused:
+        phase33._resolve_host_plan(
+            graph=graph,
+            topic_id="TOPIC-0001",
+            topic=topic,
+            units=units,
+            concepts=concepts,
+            source_blocks=[],
+            provider=provider,
+            critic=critic,
+        )
+
+    assert calls == {"provider": 1, "critic": 1}
+    assert "0.900–0.919 human-review band" in (
+        paused.value.pending_decision["conflict"]
+    )

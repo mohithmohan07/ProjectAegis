@@ -10,17 +10,17 @@ from __future__ import annotations
 
 import copy
 import json
-import math
 import re
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, Iterator, Mapping
 
 from . import canonical_source_phase3 as phase3
+from . import semantic_confidence_policy as confidence_policy
 
 
-REVIEW_BAND_MIN = 0.90
-AUTO_ACCEPT_MIN = 0.92
+REVIEW_BAND_MIN = confidence_policy.SEMANTIC_REVIEW_BAND_MINIMUM
+AUTO_ACCEPT_MIN = confidence_policy.SEMANTIC_AUTO_ACCEPT_FLOOR
 _SUPPRESSED_RESOLUTION_IDS: ContextVar[frozenset[str]] = ContextVar(
     "aegis_suppressed_early_resolution_ids", default=frozenset()
 )
@@ -274,17 +274,7 @@ def resolution_for(
 
 
 def confidence_band(confidence: object) -> str:
-    try:
-        value = float(confidence)
-    except (TypeError, ValueError):
-        return "invalid"
-    if not math.isfinite(value):
-        return "invalid"
-    if value >= AUTO_ACCEPT_MIN:
-        return "accepted"
-    if value >= REVIEW_BAND_MIN:
-        return "human_review"
-    return "rejected"
+    return confidence_policy.semantic_band(confidence)
 
 
 def block_ids_from_issues(issues: list[str]) -> set[str]:
