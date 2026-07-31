@@ -329,6 +329,7 @@ def _ground_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         response_schema=phase31._grounding_schema(concept_ids, block_ids),
         purpose="concept_mapping",
         max_tokens=config.OPENAI_MAX_OUTPUT_TOKENS,
+        single_attempt=bool(payload.get("human_resolutions")),
     )
 
 
@@ -363,6 +364,7 @@ def _critic_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         response_schema=phase31._critic_schema(concept_ids),
         purpose="concept_mapping",
         max_tokens=config.OPENAI_MAX_OUTPUT_TOKENS,
+        single_attempt=bool(payload.get("human_resolutions")),
     )
 
 

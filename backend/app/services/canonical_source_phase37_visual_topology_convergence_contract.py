@@ -625,6 +625,7 @@ def _adjudicate_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         response_schema=_adjudication_schema(concept_ids, topic_ids),
         purpose="concept_mapping",
         max_tokens=config.OPENAI_MAX_OUTPUT_TOKENS,
+        single_attempt=bool(payload.get("human_resolutions")),
     )
 
 
@@ -666,6 +667,7 @@ def _critic_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         response_schema=phase32._critic_schema(concept_ids),
         purpose="concept_mapping",
         max_tokens=config.OPENAI_MAX_OUTPUT_TOKENS,
+        single_attempt=bool(payload.get("human_resolutions")),
     )
 
 

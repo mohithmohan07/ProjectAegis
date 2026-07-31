@@ -78,6 +78,37 @@ def _graph_and_canonical() -> tuple[dict, dict]:
     return graph, canonical
 
 
+@pytest.mark.parametrize(
+    "function_name",
+    ["_adjudicate_via_openai", "_critic_via_openai"],
+)
+def test_human_directed_phase32_openai_pair_disables_transport_retries(
+    monkeypatch,
+    function_name,
+):
+    calls: list[dict] = []
+
+    def fake_openai(**kwargs):
+        calls.append(kwargs)
+        return {}
+
+    monkeypatch.setattr(
+        phase3.phase22,
+        "_openai_multimodal_json",
+        fake_openai,
+    )
+    payload = {
+        "concepts": [{"concept_id": "CONCEPT-0001"}],
+        "topics": [{"topic_id": "TOPIC-0001"}],
+        "human_resolutions": [{"choice": "select_candidate"}],
+    }
+
+    getattr(phase32, function_name)(payload)
+
+    assert len(calls) == 1
+    assert calls[0]["single_attempt"] is True
+
+
 def _combined_record() -> dict:
     return {
         "topic": "The French Revolution and the Idea of the Nation",

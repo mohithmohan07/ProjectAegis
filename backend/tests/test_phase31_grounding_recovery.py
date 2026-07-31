@@ -61,6 +61,34 @@ def _source_graph() -> tuple[dict, dict]:
     return graph, canonical
 
 
+@pytest.mark.parametrize("function_name", ["_ground_via_openai", "_critic_via_openai"])
+def test_human_directed_phase31_openai_pair_disables_transport_retries(
+    monkeypatch,
+    function_name,
+):
+    calls: list[dict] = []
+
+    def fake_openai(**kwargs):
+        calls.append(kwargs)
+        return {}
+
+    monkeypatch.setattr(
+        phase3.phase22,
+        "_openai_multimodal_json",
+        fake_openai,
+    )
+    payload = {
+        "concepts": [{"concept_id": "CONCEPT-GROUND-0001"}],
+        "source_blocks": [{"block_id": "BLK-0001"}],
+        "human_resolutions": [{"choice": "select_candidate"}],
+    }
+
+    getattr(phase31, function_name)(payload)
+
+    assert len(calls) == 1
+    assert calls[0]["single_attempt"] is True
+
+
 def _record(
     *,
     title: str = "Landed Aristocracy and Peasant Society",
