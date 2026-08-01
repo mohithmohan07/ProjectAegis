@@ -66,6 +66,7 @@ _HUMAN_DECISION_ID_RE = re.compile(
 _HUMAN_DECISION_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 _MAX_HUMAN_DECISIONS = 5_000
 _MAX_DEFERRED_HUMAN_DECISIONS = 5_000
+_MAX_AGENT_REVIEW_HISTORY = 100
 _SEMANTIC_RECOVERY_DISPATCHES_KEY = "semantic_recovery_dispatches"
 _SEMANTIC_RECOVERY_DISPATCHES_VERSION = 1
 _SEMANTIC_RECOVERY_ISSUE_KEY_VERSION = 1
@@ -106,12 +107,37 @@ def _normalize_pending_human_decision(
             "qids", "questions", "topic",
         )
     }
-    candidates = [{
-        key: str(row.get(key) or "")
-        for key in (
-            "target_id", "concept_id", "title", "topic", "coverage", "gap",
-        )
-    } for row in rows("candidates", 100)]
+    candidates = []
+    for row in rows("candidates", 100):
+        source_block_ids = row.get("source_block_ids") or []
+        if not isinstance(source_block_ids, list):
+            raise ValueError(
+                "pending decision candidate source_block_ids is not a list"
+            )
+        candidates.append({
+            **{
+                key: str(row.get(key) or "")
+                for key in (
+                    "target_id",
+                    "concept_id",
+                    "title",
+                    "topic",
+                    "coverage",
+                    "gap",
+                    "action",
+                    "source_topic_id",
+                    "target_topic_id",
+                    "boundary_relation",
+                    "source_kind",
+                    "source_page",
+                    "text_sha256",
+                    "binding_hash",
+                )
+            },
+            "source_block_ids": [
+                str(value) for value in source_block_ids if str(value)
+            ],
+        })
     evidence = [
         {
             key: str(row.get(key) or "")
@@ -1923,8 +1949,9 @@ def _existing_human_decision_pause(
     checkpoint: dict | None,
     *,
     agent_resolution_ids: set[str] | None = None,
+    owner_sub: str | None = None,
 ) -> dict | None:
-    """Return the durable pause without starting another provider request."""
+    """Resume a saved directive, try one upgraded resolver, or return pause."""
     pending = _pending_human_decision(checkpoint)
     if pending is None:
         return None
@@ -1954,8 +1981,11 @@ def _existing_human_decision_pause(
             resolution["resolved_decision"]["decision_id"]
         ))
         if isinstance(checkpoint, dict):
+            refreshed_checkpoint = copy.deepcopy(
+                job.generation_checkpoint or {}
+            )
             checkpoint.clear()
-            checkpoint.update(copy.deepcopy(job.generation_checkpoint or {}))
+            checkpoint.update(refreshed_checkpoint)
         progress.log(
             "Reused the saved autonomous semantic resolution; no second "
             "resolution-agent request was started.",
@@ -1972,6 +2002,37 @@ def _existing_human_decision_pause(
     pending = _pending_human_decision(checkpoint)
     if pending is None:
         return None
+    # A newly created pause gets its first bounded review in
+    # _run_with_human_decision_pause. Resume only upgrades a terminal legacy
+    # review; it must not turn an intentionally agent-disabled pause into a
+    # surprise paid request later.
+    if agent_resolution_ids is not None and isinstance(
+        pending.get("agent_review"), dict
+    ):
+        resolved_id = _autonomously_resolve_pending_decision(
+            db,
+            job,
+            pending,
+            owner_sub=owner_sub,
+        )
+        if resolved_id:
+            agent_resolution_ids.add(resolved_id)
+            if isinstance(checkpoint, dict):
+                refreshed_checkpoint = copy.deepcopy(
+                    job.generation_checkpoint or {}
+                )
+                checkpoint.clear()
+                checkpoint.update(refreshed_checkpoint)
+            return None
+        if isinstance(checkpoint, dict):
+            refreshed_checkpoint = copy.deepcopy(
+                job.generation_checkpoint or {}
+            )
+            checkpoint.clear()
+            checkpoint.update(refreshed_checkpoint)
+        pending = _pending_human_decision(job.generation_checkpoint)
+        if pending is None:
+            return None
     progress.set_progress(
         job.checkpoint_progress,
         label="Paused for your decision",
@@ -1988,14 +2049,23 @@ def _agent_review_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _agent_review_history(checkpoint: dict | None) -> list[dict]:
+def _agent_review_history(
+    checkpoint: dict | None,
+    *,
+    include_pending: bool = True,
+) -> list[dict]:
     rows: list[dict] = []
     ledger = _human_decision_ledger(checkpoint)
     pending = ledger.get("pending")
-    if isinstance(pending, dict):
+    if include_pending and isinstance(pending, dict):
         review = pending.get("agent_review")
         if isinstance(review, dict):
             rows.append(copy.deepcopy(review))
+    rows.extend(
+        copy.deepcopy(review)
+        for review in ledger.get("agent_review_history") or []
+        if isinstance(review, dict)
+    )
     for resolution in ledger.get("resolutions") or []:
         if not isinstance(resolution, dict):
             continue
@@ -2047,22 +2117,55 @@ def _persist_pending_agent_review(
     ).model_dump()
     next_status = str(validated_review.get("status") or "")
     next_issue_key = str(validated_review.get("issue_key") or "")
+    next_capability_key = str(
+        validated_review.get("capability_key") or ""
+    )
     current_review = pending.get("agent_review")
     if next_status == "request_started" and isinstance(current_review, dict):
-        raise HumanDecisionConflictError(
-            "this semantic review was already claimed"
+        current_status = str(current_review.get("status") or "")
+        current_capability_key = str(
+            current_review.get("capability_key") or ""
         )
+        if (
+            current_status not in {"escalated", "unavailable"}
+            or not next_capability_key
+            or next_capability_key == current_capability_key
+        ):
+            raise HumanDecisionConflictError(
+                "this semantic review was already claimed"
+            )
+        review_history = [
+            copy.deepcopy(row)
+            for row in ledger.get("agent_review_history") or []
+            if isinstance(row, dict)
+        ]
+        if len(review_history) >= _MAX_AGENT_REVIEW_HISTORY:
+            raise HumanDecisionConflictError(
+                "the autonomous semantic review history is full"
+            )
+        review_history.append(copy.deepcopy(current_review))
+        ledger["agent_review_history"] = review_history
     if next_status in {"resolved", "unavailable"}:
         if (
             not isinstance(current_review, dict)
             or current_review.get("status") != "request_started"
             or str(current_review.get("issue_key") or "") != next_issue_key
+            or (
+                str(current_review.get("capability_key") or "")
+                != next_capability_key
+            )
         ):
             raise HumanDecisionConflictError(
                 "the semantic review result has no matching dispatch claim"
             )
     if next_status == "escalated" and isinstance(current_review, dict):
-        if str(current_review.get("issue_key") or "") != next_issue_key:
+        if (
+            str(current_review.get("issue_key") or "") != next_issue_key
+            or (
+                str(current_review.get("capability_key") or "")
+                != next_capability_key
+            )
+        ):
             raise HumanDecisionConflictError(
                 "the semantic escalation does not match the claimed issue"
             )
@@ -2110,11 +2213,6 @@ def _autonomously_resolve_pending_decision(
 ) -> str | None:
     """Resolve one distinct issue or leave its existing human pause intact."""
 
-    if isinstance(pending.get("agent_review"), dict):
-        # Any persisted review state means this exact decision already used or
-        # claimed its one autonomous attempt. This includes an unknown-outcome
-        # crash fallback restored by _persist_pending_human_decision.
-        return None
     deterministic_result = (
         autonomous_resolution.verified_source_patch_resolution(pending)
     )
@@ -2122,10 +2220,62 @@ def _autonomously_resolve_pending_decision(
         return None
     checkpoint = copy.deepcopy(job.generation_checkpoint or {})
     issue_key = autonomous_resolution.issue_key(pending)
+    capability_key = autonomous_resolution.capability_key(pending)
+    offered_candidate_count = len([
+        row for row in pending.get("candidates") or []
+        if isinstance(row, dict)
+    ])
+    workspace_audit = {
+        "capability_key": capability_key,
+        "workspace_hash": capability_key,
+        "offered_candidate_count": offered_candidate_count,
+        # request_started proves the dispatch claim, not how much of the
+        # packet the provider ultimately received. The terminal review stores
+        # the actual post-compaction detail count.
+        "inspected_candidate_count": 0,
+    }
+    current_review = pending.get("agent_review")
+    upgrading_current_review = False
+    if isinstance(current_review, dict):
+        current_status = str(current_review.get("status") or "")
+        current_capability_key = str(
+            current_review.get("capability_key") or ""
+        )
+        if current_status in {"request_started", "resolved"}:
+            # Unknown outcomes and saved directives are never replayed.
+            return None
+        if (
+            current_status not in {"escalated", "unavailable"}
+            or current_capability_key == capability_key
+        ):
+            return None
+        upgrading_current_review = True
     history = _agent_review_history(checkpoint)
     attempted = [row for row in history if isinstance(row, dict)]
+    prior_history = _agent_review_history(
+        checkpoint,
+        include_pending=False,
+    )
+    if upgrading_current_review and any(
+        str(row.get("issue_key") or "") == issue_key
+        and (
+            str(row.get("capability_key") or "") == capability_key
+            or str(row.get("status") or "") in {
+                "request_started", "resolved"
+            }
+        )
+        for row in prior_history
+    ):
+        progress.log(
+            "The upgraded resolver workspace was already used, or a prior "
+            "agent action for this semantic scope already ran. Aegis kept "
+            "the saved pause without another request.",
+            level="warning",
+        )
+        return None
     if (
         deterministic_result is None
+        and not upgrading_current_review
         and any(
             str(row.get("issue_key") or "") == issue_key
             for row in attempted
@@ -2145,6 +2295,7 @@ def _autonomously_resolve_pending_decision(
                 "status": "escalated",
                 "resolver_version": autonomous_resolution.RESOLVER_VERSION,
                 "issue_key": issue_key,
+                **workspace_audit,
                 "started_at": now,
                 "completed_at": now,
                 "reason": reason,
@@ -2162,21 +2313,25 @@ def _autonomously_resolve_pending_decision(
             "This run reached its autonomous decision safety cap. The next "
             "semantic choice is saved for you without another model request."
         )
-        _persist_pending_agent_review(
-            db,
-            job,
-            decision_id=pending["decision_id"],
-            context_hash=pending["context_hash"],
-            review={
-                "status": "escalated",
-                "resolver_version": autonomous_resolution.RESOLVER_VERSION,
-                "issue_key": issue_key,
-                "started_at": now,
-                "completed_at": now,
-                "reason": reason,
-            },
-            owner_sub=owner_sub,
-        )
+        if not upgrading_current_review:
+            _persist_pending_agent_review(
+                db,
+                job,
+                decision_id=pending["decision_id"],
+                context_hash=pending["context_hash"],
+                review={
+                    "status": "escalated",
+                    "resolver_version": (
+                        autonomous_resolution.RESOLVER_VERSION
+                    ),
+                    "issue_key": issue_key,
+                    **workspace_audit,
+                    "started_at": now,
+                    "completed_at": now,
+                    "reason": reason,
+                },
+                owner_sub=owner_sub,
+            )
         progress.log(reason, level="warning")
         return None
 
@@ -2191,6 +2346,7 @@ def _autonomously_resolve_pending_decision(
                 "status": "request_started",
                 "resolver_version": autonomous_resolution.RESOLVER_VERSION,
                 "issue_key": issue_key,
+                **workspace_audit,
                 "started_at": started_at,
                 "reason": (
                     (
@@ -2252,10 +2408,19 @@ def _autonomously_resolve_pending_decision(
             checkpoint=copy.deepcopy(job.generation_checkpoint or {}),
         )
     completed_at = _agent_review_timestamp()
+    final_workspace_audit = {
+        "capability_key": capability_key,
+        "workspace_hash": result.workspace_hash or capability_key,
+        "offered_candidate_count": (
+            result.offered_candidate_count or offered_candidate_count
+        ),
+        "inspected_candidate_count": result.inspected_candidate_count,
+    }
     final_review = {
         "status": result.status,
         "resolver_version": autonomous_resolution.RESOLVER_VERSION,
         "issue_key": issue_key,
+        **final_workspace_audit,
         "started_at": started_at,
         "completed_at": completed_at,
         "reason": result.reason,
@@ -2456,6 +2621,17 @@ def _persist_pending_human_decision(
         retained_resolutions.append(entry)
     resolutions = retained_resolutions
     if replayed_agent_review is not None:
+        review_history = [
+            copy.deepcopy(row)
+            for row in ledger.get("agent_review_history") or []
+            if isinstance(row, dict)
+        ]
+        if len(review_history) < _MAX_AGENT_REVIEW_HISTORY:
+            # Preserve proof that an agent action already ran. The escalated
+            # pending clone below is a crash-safe human fallback, not an
+            # invitation for a newer resolver to repeat the action.
+            review_history.append(copy.deepcopy(replayed_agent_review))
+        ledger["agent_review_history"] = review_history
         now = _agent_review_timestamp()
         replayed_agent_review.update({
             "status": "escalated",
@@ -2487,6 +2663,9 @@ def _persist_pending_human_decision(
         "pending": pending,
         "deferred_assignment_unit_ids": copy.deepcopy(
             pending.get("deferred_assignment_unit_ids") or []
+        ),
+        "agent_review_history": copy.deepcopy(
+            ledger.get("agent_review_history") or []
         ),
         "resolutions": resolutions,
     }
@@ -2739,6 +2918,9 @@ def _record_human_semantic_decision_locked(
         "deferred_assignment_unit_ids": copy.deepcopy(
             pending.get("deferred_assignment_unit_ids") or []
         ),
+        "agent_review_history": copy.deepcopy(
+            ledger.get("agent_review_history") or []
+        ),
         "resolutions": resolutions,
     }
     job.generation_checkpoint = checkpoint
@@ -2845,6 +3027,7 @@ def generate_post_learning(
         job,
         resume_checkpoint,
         agent_resolution_ids=initial_agent_resolution_ids,
+        owner_sub=owner_sub,
     )
     if existing_pause is not None:
         return existing_pause
@@ -3194,6 +3377,7 @@ def generate_pre_learning_from_upload(
         job,
         resume_checkpoint,
         agent_resolution_ids=initial_agent_resolution_ids,
+        owner_sub=owner_sub,
     )
     if existing_pause is not None:
         return existing_pause

@@ -545,6 +545,15 @@ def _validate_human_decisions(
                     f"{pending_path}.agent_review.issue_key must be a "
                     "lowercase SHA-256"
                 )
+            for field, digest in (
+                ("capability_key", review.capability_key),
+                ("workspace_hash", review.workspace_hash),
+            ):
+                if digest and not _SHA256_RE.fullmatch(digest):
+                    raise ValueError(
+                        f"{pending_path}.agent_review.{field} must be a "
+                        "lowercase SHA-256 when present"
+                    )
             _timestamp(
                 review.started_at,
                 f"{pending_path}.agent_review.started_at",
@@ -605,6 +614,35 @@ def _validate_human_decisions(
             ):
                 raise ValueError(
                     f"{pending_path}.options targets a non-candidate item")
+
+    for index, review in enumerate(ledger.agent_review_history):
+        review_path = f"{path}.agent_review_history[{index}]"
+        if not _SHA256_RE.fullmatch(review.issue_key):
+            raise ValueError(
+                f"{review_path}.issue_key must be a lowercase SHA-256"
+            )
+        for field, digest in (
+            ("capability_key", review.capability_key),
+            ("workspace_hash", review.workspace_hash),
+        ):
+            if digest and not _SHA256_RE.fullmatch(digest):
+                raise ValueError(
+                    f"{review_path}.{field} must be a lowercase SHA-256 "
+                    "when present"
+                )
+        _timestamp(review.started_at, f"{review_path}.started_at")
+        if review.status == "request_started":
+            if review.completed_at:
+                raise ValueError(
+                    f"{review_path}.completed_at must be empty while "
+                    "request_started"
+                )
+        elif not review.completed_at:
+            raise ValueError(
+                f"{review_path}.completed_at must not be empty after review"
+            )
+        else:
+            _timestamp(review.completed_at, f"{review_path}.completed_at")
 
     for index, resolution in enumerate(ledger.resolutions):
         resolution_path = f"{path}.resolutions[{index}]"

@@ -323,7 +323,10 @@ def test_opaque_target_identity_at_contract_limit_is_never_truncated():
     )
 
     assert packet["pending_decision"]["options"][0]["target_id"] == target_id
-    assert packet["pending_decision"]["candidates"][0]["target_id"] == target_id
+    packet_candidates = resolver._model_candidate_rows(
+        packet["pending_decision"]
+    )
+    assert packet_candidates[0]["target_id"] == target_id
     assert target_id in schema["schema"]["properties"]["target_id"]["enum"]
 
 
@@ -431,15 +434,18 @@ def test_huge_packet_stays_within_hard_json_budget_without_losing_ids():
     choices = {
         row["choice"] for row in packet["pending_decision"]["options"]
     }
-    target_ids = {
-        row["target_id"]
-        for row in packet["pending_decision"]["candidates"]
-    }
+    packet_candidates = resolver._model_candidate_rows(
+        packet["pending_decision"]
+    )
+    target_ids = {row["target_id"] for row in packet_candidates}
     packet_evidence_ids = {
         row["evidence_id"]
         for key in ("source_evidence", "mmd_windows")
         for row in packet[key]
     }
+    packet_evidence_ids.update(
+        row["binding_hash"] for row in packet_candidates
+    )
     assert choices == {"select_candidate"}
     assert target_ids == {"TARGET-LARGE-0001"}
     assert "PENDING-EVIDENCE-001" in evidence_refs
@@ -447,6 +453,440 @@ def test_huge_packet_stays_within_hard_json_budget_without_losing_ids():
     assert evidence_refs <= packet_evidence_ids
     encoded = json.dumps(packet, ensure_ascii=False, default=str)
     assert len(encoded) <= resolver._MAX_PACKET_CHARS
+
+
+def test_candidate_beyond_expanded_detail_is_selectable_from_complete_catalog():
+    candidates = [{
+        "target_id": f"TARGET-{index:04d}",
+        "title": f"Use verified evidence BLK-{index:04d}",
+        "coverage": (
+            "Unrelated source block."
+            if index != 12
+            else "Cavour engineered a diplomatic alliance with France."
+        ),
+    } for index in range(1, 15)]
+    pending = _pending(
+        kind="phase31_source_grounding_semantic_conflict",
+        options=[{
+            "choice": "select_candidate",
+            "label": "Select verified evidence",
+            "recommended": True,
+        }],
+        candidates=candidates,
+    )
+    pending["phase"] = "3.1"
+    pending["conflict"] = "One disputed claim needs exact canonical support."
+
+    def provider(*, packet, **_kwargs):
+        catalog = resolver._model_candidate_rows(packet["pending_decision"])
+        assert len(catalog) == 14
+        selected = catalog[11]
+        assert selected["target_id"] not in {
+            row["target_id"]
+            for row in packet["pending_decision"]["candidate_details"]
+        }
+        assert [11, ["MMD-WINDOW-001"]] in packet[
+            "pending_decision"
+        ]["legacy_exact_source_matches"]["rows"]
+        mmd_ref = next(
+            row["evidence_id"]
+            for row in packet["mmd_windows"]
+            if row["issue_match"] is True
+        )
+        return _response(
+            choice="select_candidate",
+            target_id=selected["target_id"],
+            confidence=0.99,
+            evidence_refs=[selected["binding_hash"], mmd_ref],
+        )
+
+    result = resolver.resolve_pending(
+        pending,
+        source_text=(
+            "BLK-0012 Cavour engineered a diplomatic alliance with France."
+        ),
+        checkpoint={},
+        provider=provider,
+    )
+
+    assert result.resolved is True
+    assert result.target_id == "TARGET-0012"
+
+
+def test_legacy_exact_match_map_uses_only_final_transmitted_mmd_text():
+    coverage = (
+        "Through a diplomatic alliance with France engineered by Cavour, "
+        "Sardinia-Piedmont defeated Austria."
+    )
+    pending = _pending(candidates=[{
+        "target_id": "TARGET-CAVOUR",
+        "title": "Use verified evidence BLK-00249",
+        "coverage": coverage,
+    }])
+    full = resolver._legacy_exact_source_matches(
+        pending,
+        [{
+            "evidence_id": "MMD-WINDOW-001",
+            "issue_match": True,
+            "text": f"BLK-00249 {coverage}",
+        }],
+    )
+    truncated = resolver._legacy_exact_source_matches(
+        pending,
+        [{
+            "evidence_id": "MMD-WINDOW-001",
+            "issue_match": True,
+            "text": "BLK-00249 Through a diplomatic alliance with France",
+        }],
+    )
+
+    assert full["rows"] == [[0, ["MMD-WINDOW-001"]]]
+    assert truncated["rows"] == []
+
+
+def test_legacy_blk_text_must_match_and_cite_exact_canonical_window():
+    pending = _pending(
+        kind="phase31_source_grounding_semantic_conflict",
+        options=[{
+            "choice": "select_candidate",
+            "label": "Select bound source evidence",
+            "recommended": True,
+        }],
+        candidates=[{
+            "target_id": "TARGET-CAVOUR",
+            "title": "Use verified evidence BLK-00249",
+            "coverage": (
+                "Through a diplomatic alliance with France engineered by "
+                "Cavour, Sardinia-Piedmont defeated Austria."
+            ),
+        }],
+    )
+    pending["phase"] = "3.1"
+    pending["conflict"] = (
+        "The critic mentioned BLK-00249 for Cavour's alliance."
+    )
+
+    def provider(*, packet, **_kwargs):
+        candidate = resolver._model_candidate_rows(
+            packet["pending_decision"]
+        )[0]
+        mmd_ref = next(
+            row["evidence_id"] for row in packet["mmd_windows"]
+            if row["issue_match"] is True
+        )
+        return _response(
+            choice="select_candidate",
+            target_id=candidate["target_id"],
+            confidence=0.99,
+            evidence_refs=[candidate["binding_hash"], mmd_ref],
+        )
+
+    rejected = resolver.resolve_pending(
+        pending,
+        source_text=(
+            "BLK-00249 appears in the conversion index, but this source "
+            "window contains no diplomatic-alliance text."
+        ),
+        checkpoint={},
+        provider=provider,
+    )
+    assert rejected.status == "escalated"
+    assert "exact saved text" in rejected.reason
+
+    accepted = resolver.resolve_pending(
+        pending,
+        source_text=(
+            "BLK-00249 Through a diplomatic alliance with France engineered "
+            "by Cavour, Sardinia-Piedmont defeated Austria."
+        ),
+        checkpoint={},
+        provider=provider,
+    )
+    assert accepted.resolved is True
+
+
+def test_all_topology_actions_remain_visible_after_many_evidence_candidates():
+    evidence = [{
+        "target_id": f"3.1:evidence:{index:04d}",
+        "title": f"Use verified evidence BLK-{index:05d}",
+        "coverage": f"Bound source text for block {index}.",
+    } for index in range(1, 91)]
+    topology = [{
+        "target_id": f"3.1:topology:{action}",
+        "concept_id": "CONCEPT-0001",
+        "action": action,
+        "title": f"{action.title()} the source claim",
+        "topic": "The Making of Nationalism in Europe",
+        "coverage": "The complete source claim.",
+        "gap": f"Return to topology for {action}.",
+    } for action in ("refine", "split", "move", "retire")]
+    pending = _pending(
+        kind="phase31_source_grounding_semantic_conflict",
+        options=[{
+            "choice": "select_candidate",
+            "label": "Select evidence or topology repair",
+            "recommended": True,
+        }],
+        candidates=[*evidence, *topology],
+    )
+    pending["phase"] = "3.1"
+
+    packet, evidence_refs = resolver.build_packet(
+        pending,
+        source_text=(
+            "CONCEPT-0001 belongs to The Making of Nationalism in Europe."
+        ),
+        checkpoint={},
+    )
+    catalog = resolver._model_candidate_rows(packet["pending_decision"])
+    schema = resolver._response_schema(
+        packet["pending_decision"], evidence_refs
+    )
+
+    assert len(catalog) == 94
+    assert {row["action"] for row in catalog} >= {
+        "refine", "split", "move", "retire",
+    }
+    assert {
+        row["target_id"] for row in catalog
+    } <= set(schema["schema"]["properties"]["target_id"]["enum"])
+    assert packet["pending_decision"]["candidates"]["count"] == 94
+    assert packet["pending_decision"]["candidates"]["complete"] is True
+    assert len(json.dumps(packet, ensure_ascii=False)) <= resolver._MAX_PACKET_CHARS
+
+
+def test_full_100_row_bound_catalog_keeps_top_relevant_text_under_cap():
+    candidates = []
+    for index in range(95):
+        block_id = f"BLK-{index:05d}"
+        coverage = f"Verified canonical paragraph {index} about nationalism."
+        binding = resolver.early_semantic_gate.bind_candidate({
+            "action": "use_verified_evidence",
+            "source_block_ids": [block_id],
+            "source_topic_id": "TOPIC-0002",
+            "target_topic_id": "TOPIC-0002",
+            "boundary_relation": "within_fixed_source_topic",
+            "source_kind": "paragraph",
+            "source_page": str(index + 1),
+            "text_sha256": hashlib.sha256(
+                coverage.encode("utf-8")
+            ).hexdigest(),
+        })
+        candidates.append({
+            "target_id": (
+                "3.1:use_verified_evidence:"
+                + hashlib.sha256(block_id.encode("utf-8")).hexdigest()
+            ),
+            "title": f"Use verified evidence {block_id}",
+            "topic": "The Making of Nationalism in Europe",
+            "coverage": coverage,
+            "gap": "Mapper and critic must still verify this binding.",
+            **binding,
+        })
+    for action in ("refine", "split", "retire", "move", "keep"):
+        binding = resolver.early_semantic_gate.bind_candidate({
+            "action": action,
+            "source_block_ids": [],
+            "source_topic_id": "TOPIC-0002",
+            "target_topic_id": (
+                "TOPIC-0003" if action == "move" else "TOPIC-0002"
+            ),
+            "boundary_relation": f"{action}_source_claim",
+            "source_kind": "",
+            "source_page": "",
+            "text_sha256": "",
+        })
+        candidates.append({
+            "target_id": (
+                f"3.1:{action}:"
+                + hashlib.sha256(action.encode("utf-8")).hexdigest()
+            ),
+            "concept_id": "CONCEPT-0001",
+            "title": f"{action.title()} the complete source claim",
+            "topic": "The Making of Nationalism in Europe",
+            "coverage": "The complete disputed source claim.",
+            "gap": "Independent verification remains mandatory.",
+            **binding,
+        })
+    pending = _pending(
+        kind="phase31_source_grounding_semantic_conflict",
+        options=[{
+            "choice": "select_candidate",
+            "label": "Select evidence or a topology repair",
+            "recommended": True,
+        }],
+        candidates=candidates,
+    )
+    pending["phase"] = "3.1"
+    pending["conflict"] = "The critic mentioned BLK-00094."
+
+    packet, _refs = resolver.build_packet(
+        pending,
+        source_text=(
+            "BLK-00094 Verified canonical paragraph 94 about nationalism."
+        ),
+        checkpoint={},
+    )
+    catalog = resolver._model_candidate_rows(packet["pending_decision"])
+    details = packet["pending_decision"]["candidate_details"]
+
+    assert len(catalog) == 100
+    assert details
+    assert details[0]["target_id"] == candidates[94]["target_id"]
+    assert "paragraph 94" in details[0]["coverage"]
+    assert len(json.dumps(packet, ensure_ascii=False)) <= resolver._MAX_PACKET_CHARS
+
+
+def test_critic_block_mention_exposes_bound_text_but_is_not_recommended():
+    def bound_candidate(
+        *, target_id: str, block_id: str, page: str, coverage: str
+    ) -> dict:
+        binding = resolver.early_semantic_gate.bind_candidate({
+            "action": "use_verified_evidence",
+            "source_block_ids": [block_id],
+            "source_topic_id": "TOPIC-ITALY",
+            "target_topic_id": "TOPIC-ITALY",
+            "boundary_relation": "within_fixed_source_topic",
+            "source_kind": "paragraph",
+            "source_page": page,
+            "text_sha256": hashlib.sha256(coverage.encode("utf-8")).hexdigest(),
+        })
+        return {
+            "target_id": target_id,
+            "title": f"Use verified evidence {block_id}",
+            "topic": "The Making of Nationalism in Europe",
+            "coverage": coverage,
+            **binding,
+        }
+
+    candidates = [bound_candidate(
+        target_id="TARGET-CAVOUR",
+        block_id="BLK-00249",
+        page="16",
+        coverage=(
+            "Through a diplomatic alliance with France engineered by Cavour, "
+            "Sardinia-Piedmont defeated Austria."
+        ),
+    ), bound_candidate(
+        target_id="TARGET-LAYOUT",
+        block_id="BLK-00256",
+        page="17",
+        coverage=(
+            "Activity: locate Sardinia-Piedmont on the map and discuss the "
+            "layout illustration."
+        ),
+    )]
+    pending = _pending(
+        kind="phase31_source_grounding_semantic_conflict",
+        options=[{
+            "choice": "select_candidate",
+            "label": "Select verified evidence",
+            "recommended": True,
+        }],
+        candidates=candidates,
+    )
+    pending["phase"] = "3.1"
+    pending["conflict"] = (
+        "The critic mentioned BLK-00256 while discussing Cavour's alliance."
+    )
+
+    packet, _refs = resolver.build_packet(
+        pending,
+        source_text=(
+            "BLK-00249 Through a diplomatic alliance with France engineered "
+            "by Cavour, Sardinia-Piedmont defeated Austria. BLK-00256 Activity: "
+            "locate Sardinia-Piedmont on the map."
+        ),
+        checkpoint={},
+    )
+    details = packet["pending_decision"]["candidate_details"]
+    layout = next(row for row in details if row["target_id"] == "TARGET-LAYOUT")
+    catalog_layout = next(
+        row for row in resolver._model_candidate_rows(packet["pending_decision"])
+        if row["target_id"] == "TARGET-LAYOUT"
+    )
+
+    assert "Activity:" in layout["coverage"]
+    assert "not" in layout["retrieval_note"].casefold()
+    assert layout["binding_hash"] == catalog_layout["binding_hash"]
+    assert catalog_layout["source_block_ids"] == ["BLK-00256"]
+    assert catalog_layout["source_topic_id"] == "TOPIC-ITALY"
+    assert catalog_layout["target_topic_id"] == "TOPIC-ITALY"
+    assert catalog_layout["boundary_relation"] == "within_fixed_source_topic"
+    assert catalog_layout["source_kind"] == "paragraph"
+    assert catalog_layout["source_page"] == "17"
+    assert catalog_layout["text_sha256"] == hashlib.sha256(
+        candidates[1]["coverage"].encode("utf-8")
+    ).hexdigest()
+    assert catalog_layout["binding_hash"] == candidates[1]["binding_hash"]
+    assert catalog_layout["server_binding_valid"] is True
+    assert "recommended" not in catalog_layout
+    assert packet["constraints"][
+        "critic_id_mentions_are_retrieval_priority_not_support"
+    ] is True
+
+
+def test_many_full_opaque_ids_survive_packet_cap_and_schema():
+    target_ids = [
+        f"TARGET-{index:03d}-" + (chr(97 + index % 26) * 180)
+        for index in range(60)
+    ]
+    pending = _pending(
+        options=[{
+            "choice": "select_candidate",
+            "label": "Select a candidate",
+            "recommended": True,
+        }],
+        candidates=[{
+            "target_id": target_id,
+            "concept_id": f"CONCEPT-{index:03d}",
+            "title": f"Candidate {index}",
+            "coverage": f"Exact coverage {index}",
+        } for index, target_id in enumerate(target_ids)],
+    )
+
+    packet, evidence_refs = resolver.build_packet(
+        pending,
+        source_text="TYPE-0001 exact source context.",
+        checkpoint={},
+    )
+    schema = resolver._response_schema(
+        packet["pending_decision"], evidence_refs
+    )
+    packet_ids = [
+        row["target_id"]
+        for row in resolver._model_candidate_rows(packet["pending_decision"])
+    ]
+
+    assert packet_ids == target_ids
+    assert set(target_ids) <= set(
+        schema["schema"]["properties"]["target_id"]["enum"]
+    )
+    assert len(json.dumps(packet, ensure_ascii=False)) <= resolver._MAX_PACKET_CHARS
+
+
+def test_capability_key_tracks_full_binding_but_not_candidate_order():
+    first = _pending(candidates=[{
+        "target_id": "TARGET-A",
+        "title": "Use verified evidence BLK-0001",
+        "coverage": "First exact bound text.",
+    }, {
+        "target_id": "TARGET-B",
+        "title": "Use verified evidence BLK-0002",
+        "coverage": "Second exact bound text.",
+    }])
+    reordered = {**first, "candidates": list(reversed(first["candidates"]))}
+    changed = {
+        **first,
+        "candidates": [
+            first["candidates"][0],
+            {**first["candidates"][1], "coverage": "Changed bound text."},
+        ],
+    }
+
+    assert resolver.RESOLVER_VERSION == "semantic-resolution-agent-2"
+    assert resolver.capability_key(first) == resolver.capability_key(reordered)
+    assert resolver.capability_key(first) != resolver.capability_key(changed)
 
 
 def test_source_critical_action_requires_issue_matched_mmd_evidence():

@@ -25,6 +25,18 @@ _SUPPRESSED_RESOLUTION_IDS: ContextVar[frozenset[str]] = ContextVar(
     "aegis_suppressed_early_resolution_ids", default=frozenset()
 )
 
+_CANDIDATE_BINDING_FIELDS = (
+    "action",
+    "source_block_ids",
+    "source_topic_id",
+    "target_topic_id",
+    "boundary_relation",
+    "source_kind",
+    "source_page",
+    "text_sha256",
+)
+_BLOCK_ID_RE = re.compile(r"\bBLK-[A-Za-z0-9_-]+\b")
+
 
 class TopologyRepairRequired(ValueError):
     """Signal a human-directed grounding conflict back to topology."""
@@ -47,6 +59,10 @@ def plain_json(value: Any) -> Any:
     return json.loads(
         json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
     )
+
+
+def _normal(value: object) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip().casefold()
 
 
 def source_identity(graph: Mapping[str, Any]) -> dict[str, str]:
@@ -72,6 +88,169 @@ def source_identity(graph: Mapping[str, Any]) -> dict[str, str]:
     }
 
 
+def candidate_binding_material(
+    candidate: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Return the stable semantic fields sealed into a candidate binding.
+
+    A block ID is intentionally not meaningful on its own.  Evidence actions
+    bind that ID to the exact provider-visible text digest and source boundary;
+    topology actions bind their action and source/target topic relation.  The
+    public candidate can therefore be compacted without asking a model to infer
+    an opaque ``BLK`` identity from nearby prose.
+    """
+
+    material = {
+        key: plain_json(candidate.get(key))
+        for key in _CANDIDATE_BINDING_FIELDS
+    }
+    material["source_block_ids"] = [
+        str(value)
+        for value in material.get("source_block_ids") or []
+        if str(value)
+    ]
+    return {
+        "version": "early-human-semantic-binding-1",
+        **material,
+    }
+
+
+def bind_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
+    """Copy a candidate and attach its deterministic exact-source seal."""
+
+    row = plain_json(candidate)
+    row.pop("binding_hash", None)
+    row["binding_hash"] = phase3._sha256_json(
+        candidate_binding_material(row)
+    )
+    return row
+
+
+def candidate_binding_is_valid(candidate: Mapping[str, Any]) -> bool:
+    """Validate a supplied binding while retaining legacy candidate support."""
+
+    binding_hash = str(candidate.get("binding_hash") or "")
+    if not binding_hash:
+        return True
+    binding_valid = bool(
+        re.fullmatch(r"[0-9a-f]{64}", binding_hash)
+        and binding_hash
+        == phase3._sha256_json(candidate_binding_material(candidate))
+    )
+    if not binding_valid:
+        return False
+    if str(candidate.get("action") or "") != "use_verified_evidence":
+        return True
+    block_ids = [
+        str(value)
+        for value in candidate.get("source_block_ids") or []
+        if str(value)
+    ]
+    text_sha256 = str(candidate.get("text_sha256") or "")
+    coverage = str(candidate.get("coverage") or "")
+    return bool(
+        block_ids
+        and str(candidate.get("source_topic_id") or "")
+        and str(candidate.get("boundary_relation") or "")
+        and re.fullmatch(r"[0-9a-f]{64}", text_sha256)
+        and (
+            not coverage
+            or phase3._sha256_text(coverage) == text_sha256
+        )
+    )
+
+
+def _candidate_action(candidate: Mapping[str, Any]) -> str:
+    action = str(candidate.get("action") or "").strip().casefold()
+    if action:
+        return action
+    title = _normal(candidate.get("title"))
+    if title.startswith("use verified evidence"):
+        return "use_verified_evidence"
+    for value in ("refine", "split", "retire", "move", "keep"):
+        if title.startswith(value):
+            return value
+    return ""
+
+
+def _candidate_block_ids(candidate: Mapping[str, Any]) -> list[str]:
+    raw = candidate.get("source_block_ids") or []
+    if isinstance(raw, str) or not isinstance(raw, (list, tuple, set)):
+        raw = [raw]
+    explicit = [str(value) for value in raw if str(value)]
+    if explicit:
+        return list(dict.fromkeys(explicit))
+    return list(dict.fromkeys(
+        _BLOCK_ID_RE.findall(str(candidate.get("title") or ""))
+    ))
+
+
+def _legacy_candidate_matches_current(
+    saved: Mapping[str, Any],
+    current: Mapping[str, Any],
+) -> bool:
+    """Match one v1 candidate to v2 without trusting its regenerated ID."""
+
+    action = _candidate_action(saved)
+    if not action or action != _candidate_action(current):
+        return False
+    if action == "use_verified_evidence":
+        saved_blocks = _candidate_block_ids(saved)
+        current_blocks = _candidate_block_ids(current)
+        if not saved_blocks or saved_blocks != current_blocks:
+            return False
+        saved_text = str(saved.get("coverage") or "")
+        current_text = str(current.get("coverage") or "")
+        current_text_hash = str(current.get("text_sha256") or "")
+        return bool(
+            saved_text
+            and (
+                phase3._sha256_text(saved_text) == current_text_hash
+                or saved_text == current_text
+            )
+        )
+    return all(
+        _normal(saved.get(field)) == _normal(current.get(field))
+        for field in ("title", "topic", "coverage", "gap")
+    )
+
+
+def _v2_agent_upgrade_candidate(
+    resolution: Mapping[str, Any],
+    candidates: list[Mapping[str, Any]],
+) -> dict[str, Any] | None:
+    """Map a v1 saved target only after the v2 resolver sealed its answer."""
+
+    review = resolution.get("agent_review")
+    if not (
+        str(resolution.get("resolved_by") or "") == "agent"
+        and isinstance(review, Mapping)
+        and str(review.get("status") or "") == "resolved"
+        and str(review.get("resolver_version") or "")
+        == "semantic-resolution-agent-2"
+        and re.fullmatch(
+            r"[0-9a-f]{64}", str(review.get("capability_key") or "")
+        )
+    ):
+        return None
+    saved_target_id = str(resolution.get("target_id") or "")
+    saved_candidates = [
+        row
+        for row in resolution.get("candidates") or []
+        if isinstance(row, Mapping)
+        and str(row.get("target_id") or "") == saved_target_id
+    ]
+    if len(saved_candidates) != 1:
+        return None
+    matches = [
+        plain_json(row)
+        for row in candidates
+        if candidate_binding_is_valid(row)
+        and _legacy_candidate_matches_current(saved_candidates[0], row)
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
 def candidate_target_id(
     *,
     phase: str,
@@ -82,7 +261,7 @@ def candidate_target_id(
 ) -> str:
     digest = phase3._sha256_json(
         {
-            "version": "early-human-semantic-candidate-1",
+            "version": "early-human-semantic-candidate-2",
             "phase": phase,
             "action": action,
             "source": source_identity(graph),
@@ -189,6 +368,7 @@ def resolution_for(
         str(row.get("target_id") or ""): plain_json(row)
         for row in candidates
         if str(row.get("target_id") or "")
+        and candidate_binding_is_valid(row)
     }
     expected_context = str(identity.get("context_hash") or "")
     expected_decision = str(identity.get("decision_id") or "")
@@ -226,6 +406,17 @@ def resolution_for(
             str(raw.get("context_hash") or "")
             == expected_context
         )
+        upgraded_candidate = None
+        if (
+            not exact_context
+            and choice in {"accept_recommended", "select_candidate"}
+        ):
+            upgraded_candidate = _v2_agent_upgrade_candidate(
+                raw,
+                candidates,
+            )
+            if upgraded_candidate is not None:
+                target_id = str(upgraded_candidate.get("target_id") or "")
         saved_decision = str(raw.get("decision_id") or "")
         if saved_decision in _SUPPRESSED_RESOLUTION_IDS.get():
             continue
@@ -236,7 +427,10 @@ def resolution_for(
         # Every choice, including replace_source, is bound to the exact
         # current source/evidence/candidate context.  A follow-up pause retains
         # that context while receiving a fresh decision ID in the same family.
-        if not exact_context or not exact_decision_family:
+        if (
+            (not exact_context and upgraded_candidate is None)
+            or not exact_decision_family
+        ):
             continue
         if choice in {"accept_recommended", "select_candidate"}:
             if target_id not in by_target:

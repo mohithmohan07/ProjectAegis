@@ -897,6 +897,8 @@ test("explains that a recorded autonomous attempt will not be repeated", async (
         instruction: "",
         target_id: "",
         target_concept_id: "",
+        offered_candidate_count: 3,
+        inspected_candidate_count: 0,
       },
     }),
     resume_required: false,
@@ -915,6 +917,165 @@ test("explains that a recorded autonomous attempt will not be repeated", async (
   expect(screen.getByText(
     /avoid a duplicate paid request.*will not repeat the review/s,
   )).toBeDefined();
+  expect(screen.getByText(
+    /3 sealed candidates catalogued; detail inspection outcome unknown/,
+  )).toBeDefined();
+  expect(screen.queryByText(/0 expanded with source detail/)).toBeNull();
+  expect(streamMock).toHaveBeenCalledTimes(1);
+});
+
+test("grounding escalation shows the bounded search and exact candidate bindings", async () => {
+  const textHash = "1".repeat(64);
+  const bindingHash = "2".repeat(64);
+  streamMock.mockResolvedValueOnce({
+    job_id: 42,
+    status: "awaiting_decision",
+    pending_decision: sourceReviewDecisionFixture({
+      decision_id: "phase31-grounding-bound-candidates",
+      kind: "phase31_source_grounding_semantic_conflict",
+      candidates: [
+        {
+          target_id: "3.1:evidence:cavour",
+          concept_id: "",
+          title: "Use verified evidence BLK-00249",
+          topic: "The Making of Nationalism in Europe",
+          coverage:
+            "Through a tactful diplomatic alliance with France engineered by Cavour.",
+          gap: "",
+          action: "use_verified_evidence",
+          source_block_ids: ["BLK-00249"],
+          source_topic_id: "TOPIC-0002",
+          source_kind: "paragraph",
+          source_page: 15,
+          text_sha256: textHash,
+          binding_hash: bindingHash,
+        },
+        {
+          target_id: "3.1:move:revolutions",
+          concept_id: "CONCEPT-0017",
+          title: "Move the complete claim to a different source topic",
+          topic: "The Age of Revolutions: 1830–1848",
+          coverage: "Move without changing the claim.",
+          gap: "Independent review remains mandatory.",
+          action: "move",
+          source_topic_id: "TOPIC-0002",
+          target_topic_id: "TOPIC-0003",
+          boundary_relation: "cross_topic",
+        },
+        {
+          target_id: "3.1:move:nationalism",
+          concept_id: "CONCEPT-0017",
+          title: "Move the complete claim to a different source topic",
+          topic: "The Making of Nationalism in Europe",
+          coverage: "Move without changing the claim.",
+          gap: "Independent review remains mandatory.",
+          action: "move",
+          source_topic_id: "TOPIC-0003",
+          target_topic_id: "TOPIC-0002",
+          boundary_relation: "cross_topic",
+        },
+      ],
+      options: [{
+        choice: "select_candidate",
+        label: "Select evidence or a topology repair",
+        recommended: true,
+      }],
+      agent_review: {
+        status: "escalated",
+        resolver_version: "aegis-autonomous-resolution-v2",
+        issue_key: "3".repeat(64),
+        started_at: "2026-08-01T10:00:00Z",
+        completed_at: "2026-08-01T10:00:04Z",
+        reason: "No single action passed every deterministic source gate.",
+        confidence: 0.74,
+        evidence_refs: ["BLK-00249", "MMD-WINDOW-0002"],
+        choice: null,
+        instruction: "",
+        target_id: "",
+        target_concept_id: "",
+        offered_candidate_count: 3,
+        inspected_candidate_count: 1,
+      },
+    }),
+    resume_required: false,
+  });
+
+  renderPage();
+  fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+  fireEvent.click(await screen.findByRole("button", {
+    name: "Select Electricity target",
+  }));
+  fireEvent.click(screen.getByRole("button", {
+    name: "Resume from 91% checkpoint",
+  }));
+
+  expect(await screen.findByText(/searched the saved source and candidate packet once/))
+    .toBeDefined();
+  expect(screen.getByText(
+    /one saved search over 3 sealed candidates catalogued; 1 expanded with source detail/,
+  ))
+    .toBeDefined();
+  expect(screen.getByText(/does not run the resolver or make another API request/))
+    .toBeDefined();
+  expect(apiMock.submitConceptDecision).not.toHaveBeenCalled();
+  expect(streamMock).toHaveBeenCalledTimes(1);
+  expect(screen.getAllByRole("radio").every((radio) =>
+    !(radio as HTMLInputElement).checked)).toBe(true);
+
+  const evidenceGroup = screen.getByRole("region", {
+    name: "Bound source candidates",
+  });
+  expect(within(evidenceGroup).getByText("BLK-00249")).toBeDefined();
+  expect(within(evidenceGroup).getByText("15")).toBeDefined();
+  expect(evidenceGroup.textContent).toContain("TOPIC-0002");
+  expect(within(evidenceGroup).getByText(
+    "Through a tactful diplomatic alliance with France engineered by Cavour.",
+  )).toBeDefined();
+  expect(within(evidenceGroup).getByText(textHash)).toBeDefined();
+  expect(within(evidenceGroup).getByText(bindingHash)).toBeDefined();
+  expect(screen.getByRole("region", { name: "Topology repairs" }))
+    .toBeDefined();
+
+  fireEvent.click(screen.getByRole("radio", {
+    name: /Select evidence or a topology repair/,
+  }));
+  const target = screen.getByRole("combobox", {
+    name: "Evidence or topology repair",
+  });
+  expect(within(target).getByRole("option", {
+    name: /Move the complete claim.*→ The Age of Revolutions: 1830–1848/,
+  })).toBeDefined();
+  expect(within(target).getByRole("option", {
+    name: /Move the complete claim.*→ The Making of Nationalism in Europe/,
+  })).toBeDefined();
+});
+
+test("a successfully agent-resolved run completes without rendering a pause", async () => {
+  streamMock.mockResolvedValueOnce({
+    job_id: 42,
+    concept_ids: [],
+    inventory_items: 0,
+    autonomous_resolution: {
+      status: "resolved",
+      resolver_version: "aegis-autonomous-resolution-v2",
+    },
+  });
+
+  renderPage();
+  fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+  fireEvent.click(await screen.findByRole("button", {
+    name: "Select Electricity target",
+  }));
+  fireEvent.click(screen.getByRole("button", {
+    name: "Resume from 91% checkpoint",
+  }));
+
+  expect(await screen.findByText(
+    "Concepts written to the Bulk Import workbook (append-only)",
+  )).toBeDefined();
+  expect(screen.queryByRole("heading", { name: "Paused for your decision" }))
+    .toBeNull();
+  expect(apiMock.submitConceptDecision).not.toHaveBeenCalled();
   expect(streamMock).toHaveBeenCalledTimes(1);
 });
 

@@ -33,6 +33,11 @@ google-drive-credentials.json
 # Aegis runtime
 backend/aegis.db
 backend/aegis_test.db
+backend/aegis_test.db-*
+aegis_test_data_*/
+backend/aegis_test_data_*/
+pytest-of-root/
+backend/pytest-of-root/
 backend/data/aegis.db*
 backend/data/uploads/
 # The append-only generation output is runtime state, not source.

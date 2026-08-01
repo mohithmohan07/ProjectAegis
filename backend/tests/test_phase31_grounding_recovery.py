@@ -215,6 +215,15 @@ def test_critic_rejection_pauses_then_one_directed_pair_resumes(monkeypatch):
             assert payload["human_resolutions"][0]["choice"] == (
                 "select_candidate"
             )
+            selected_candidate = payload["human_resolutions"][0][
+                "selected_candidate"
+            ]
+            assert selected_candidate["action"] == "use_verified_evidence"
+            assert selected_candidate["source_block_ids"] == ["BLK-0002"]
+            assert selected_candidate["source_topic_id"] == "TOPIC-0001"
+            assert phase31.early_gate.candidate_binding_is_valid(
+                selected_candidate
+            )
         return {"concepts": [{
             "concept_id": concept_id,
             "source_block_ids": [block],
@@ -239,6 +248,9 @@ def test_critic_rejection_pauses_then_one_directed_pair_resumes(monkeypatch):
                 ],
             }
         assert selected == ["BLK-0002"]
+        assert payload["human_resolutions"][0]["selected_candidate"][
+            "source_block_ids"
+        ] == ["BLK-0002"]
         return {
             "verdict": "verified",
             "confidence": 0.999,
@@ -432,6 +444,152 @@ def test_negative_block_mention_is_not_treated_as_a_recommendation():
     )["recommended"] is True
 
 
+def test_many_evidence_candidates_keep_repairs_and_exact_block_bindings():
+    graph, canonical = _source_graph()
+    graph["topics"].extend([
+        {
+            "topic_id": "TOPIC-0002",
+            "order": 2,
+            "title": "The Age of Revolutions",
+        },
+        {
+            "topic_id": "TOPIC-0003",
+            "order": 3,
+            "title": "Visualising the Nation",
+        },
+    ])
+    for number in range(3, 18):
+        block_id = f"BLK-{number:04d}"
+        graph["blocks"].append({
+            "block_id": block_id,
+            "topic_id": "TOPIC-0001",
+            "subtopic_id": f"TOPIC-0001-SUB-{number:03d}",
+            "kind": "paragraph",
+            "page_number": number,
+        })
+        canonical["blocks"].append({
+            "block_id": block_id,
+            "kind": "paragraph",
+            "display_text": f"Verified source paragraph number {number}.",
+            "page_number": number,
+        })
+
+    _usable, source_blocks = phase31._candidate_blocks(
+        graph, canonical, "TOPIC-0001"
+    )
+    concepts, _ = phase31._concept_payload([_record()], [0])
+    concept = concepts[0]
+    candidates = phase31._grounding_candidates(
+        graph=graph,
+        concept=concept,
+        source_blocks=source_blocks,
+    )
+
+    assert sum(
+        row["action"] == "use_verified_evidence" for row in candidates
+    ) > 8
+    assert {row["action"] for row in candidates[:8]} >= {
+        "refine",
+        "split",
+        "retire",
+    }
+    assert {row["action"] for row in candidates} >= {
+        "use_verified_evidence",
+        "refine",
+        "split",
+        "move",
+        "retire",
+    }
+    assert len(candidates) <= phase31._PUBLIC_GROUNDING_CANDIDATE_LIMIT
+
+    evidence = next(
+        row for row in candidates
+        if row["source_block_ids"] == ["BLK-0017"]
+    )
+    assert evidence["source_topic_id"] == "TOPIC-0001"
+    assert evidence["source_page"] == "17"
+    assert evidence["text_sha256"] == phase3._sha256_text(
+        evidence["coverage"]
+    )
+    assert phase31.early_gate.candidate_binding_is_valid(evidence)
+
+    identity = phase31._grounding_identity(
+        graph=graph,
+        topic=graph["topics"][0],
+        concept=concept,
+        candidates=candidates,
+        source_blocks=source_blocks,
+    )
+    pending = phase31._grounding_pending_decision(
+        identity=identity,
+        graph=graph,
+        topic=graph["topics"][0],
+        concept=concept,
+        candidates=candidates,
+        source_blocks=source_blocks,
+        issues=["The first mapping was not minimally sufficient."],
+        rejected_ids=[concept["concept_id"]],
+    )
+    public_evidence = next(
+        row for row in pending["candidates"]
+        if row["source_block_ids"] == ["BLK-0017"]
+    )
+    assert public_evidence["action"] == "use_verified_evidence"
+    assert public_evidence["binding_hash"] == evidence["binding_hash"]
+    assert public_evidence["boundary_relation"] == evidence[
+        "boundary_relation"
+    ]
+
+
+def test_wrong_block_prose_cannot_rebind_a_sealed_evidence_candidate():
+    graph, canonical = _source_graph()
+    _usable, source_blocks = phase31._candidate_blocks(
+        graph, canonical, "TOPIC-0001"
+    )
+    concepts, _ = phase31._concept_payload([_record()], [0])
+    candidates = phase31._grounding_candidates(
+        graph=graph,
+        concept=concepts[0],
+        source_blocks=source_blocks,
+    )
+    zollverein = next(
+        row for row in candidates
+        if row["source_block_ids"] == ["BLK-0002"]
+    )
+    assert "Zollverein" in zollverein["coverage"]
+    assert phase31.early_gate.candidate_binding_is_valid(zollverein)
+
+    tampered = copy.deepcopy(zollverein)
+    tampered["coverage"] = next(
+        row["text"] for row in source_blocks
+        if row["block_id"] == "BLK-0001"
+    )
+    assert not phase31.early_gate.candidate_binding_is_valid(tampered)
+
+    identity = phase31._grounding_identity(
+        graph=graph,
+        topic=graph["topics"][0],
+        concept=concepts[0],
+        candidates=candidates,
+        source_blocks=source_blocks,
+    )
+    pending = phase31._grounding_pending_decision(
+        identity=identity,
+        graph=graph,
+        topic=graph["topics"][0],
+        concept=concepts[0],
+        candidates=candidates,
+        source_blocks=source_blocks,
+        issues=[
+            "BLK-0001 is not sufficient; perhaps BLK-0002 supports the claim."
+        ],
+        rejected_ids=[concepts[0]["concept_id"]],
+    )
+    assert not any(
+        row["choice"] == "accept_recommended" for row in pending["options"]
+    )
+
+
 def test_stale_grounding_resolution_requires_exact_context():
     graph, canonical = _source_graph()
     records = [_record()]
@@ -486,6 +644,79 @@ def test_stale_grounding_resolution_requires_exact_context():
                 candidates=candidates,
             ) is None
     assert source_blocks
+
+
+def test_v2_agent_upgrade_maps_one_legacy_blk_to_exact_current_binding():
+    graph, canonical = _source_graph()
+    records = [_record()]
+    _source_blocks, payload_blocks = phase31._candidate_blocks(
+        graph, canonical, "TOPIC-0001"
+    )
+    concepts, _ = phase31._concept_payload(records, [0])
+    candidates = phase31._grounding_candidates(
+        graph=graph,
+        concept=concepts[0],
+        source_blocks=payload_blocks,
+    )
+    identity = phase31._grounding_identity(
+        graph=graph,
+        topic=graph["topics"][0],
+        concept=concepts[0],
+        candidates=candidates,
+        source_blocks=payload_blocks,
+    )
+    current = next(
+        row for row in candidates
+        if row.get("source_block_ids") == ["BLK-0001"]
+    )
+    legacy_target = "3.1:evidence:" + ("1" * 64)
+    legacy_candidate = {
+        "target_id": legacy_target,
+        "concept_id": "",
+        "title": "Use verified evidence BLK-0001",
+        "topic": current["topic"],
+        "coverage": current["coverage"],
+        "gap": "",
+    }
+    upgraded = {
+        "decision_id": "phase31-ground-" + ("0" * 24),
+        "context_hash": "0" * 64,
+        "kind": "phase31_source_grounding_semantic_conflict",
+        "phase": "3.1",
+        "item": {"unit_id": concepts[0]["concept_id"]},
+        "candidates": [legacy_candidate],
+        "choice": "select_candidate",
+        "target_id": legacy_target,
+        "resolved_by": "agent",
+        "agent_review": {
+            "status": "resolved",
+            "resolver_version": "semantic-resolution-agent-2",
+            "capability_key": "c" * 64,
+        },
+    }
+
+    with phase33.human_resolution_context([upgraded]):
+        mapped = phase31._grounding_resolution_for(
+            identity=identity,
+            concept=concepts[0],
+            candidates=candidates,
+        )
+    assert mapped is not None
+    assert mapped["target_id"] == current["target_id"]
+    assert mapped["selected_candidate"]["binding_hash"] == current[
+        "binding_hash"
+    ]
+
+    tampered = copy.deepcopy(upgraded)
+    tampered["candidates"][0]["coverage"] = (
+        "This text belongs to a different BLK."
+    )
+    with phase33.human_resolution_context([tampered]):
+        assert phase31._grounding_resolution_for(
+            identity=identity,
+            concept=concepts[0],
+            candidates=candidates,
+        ) is None
 
 
 def test_unsupported_claim_can_be_sent_back_to_topology_without_grounding_retry():

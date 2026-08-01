@@ -443,15 +443,107 @@ input, select, textarea {
   display: grid;
   gap: 8px;
 }
+.semantic-candidate-groups,
+.semantic-candidate-group {
+  display: grid;
+  gap: 10px;
+}
+.semantic-candidate-group {
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: rgba(15, 17, 21, .25);
+}
+.semantic-candidate-group > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.semantic-candidate-group > summary .muted {
+  margin-left: auto;
+  font-size: 11px;
+}
+.semantic-candidate-group[open] > summary {
+  padding-bottom: 9px;
+  border-bottom: 1px solid var(--border);
+}
+.semantic-candidate-verification-note {
+  margin: -2px 0 10px;
+  line-height: 1.45;
+}
 .semantic-candidate {
   padding: 10px;
   border: 1px solid var(--border);
   border-radius: 7px;
   background: var(--panel-2);
 }
+.semantic-candidate-heading {
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
 .semantic-candidate p {
   margin: 6px 0 0;
   line-height: 1.45;
+}
+.semantic-candidate-binding {
+  display: grid;
+  gap: 8px;
+  margin-top: 9px;
+  padding-top: 9px;
+  border-top: 1px solid var(--border);
+}
+.semantic-candidate-binding dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 7px 12px;
+  margin: 0;
+}
+.semantic-candidate-binding dl > div {
+  min-width: 0;
+}
+.semantic-candidate-binding dt {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .03em;
+  text-transform: uppercase;
+}
+.semantic-candidate-binding dd {
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+}
+.semantic-candidate-snippet {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 9px 10px;
+  border-left: 3px solid var(--accent);
+  background: var(--panel);
+  white-space: pre-wrap;
+}
+.semantic-candidate-snippet span {
+  color: var(--muted);
+  line-height: 1.45;
+}
+.semantic-candidate-seal summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+}
+.semantic-candidate-seal p {
+  display: grid;
+  gap: 3px;
+}
+.semantic-candidate-seal code {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.semantic-agent-boundary {
+  padding-top: 7px;
+  border-top: 1px solid rgba(210, 153, 34, .28);
 }
 .semantic-source-patch {
   display: grid;

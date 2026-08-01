@@ -36,10 +36,12 @@ from .semantic_recovery import (
 )
 
 _CONTRACT_VERSION = 2
-_GROUNDING_VERSION = "phase3.1-source-claim-grounding-1"
-_CONCEPT_GROUNDING_CACHE_VERSION = "phase3.1-per-concept-grounding-3"
+_GROUNDING_VERSION = "phase3.1-source-claim-grounding-2"
+_CONCEPT_GROUNDING_CACHE_VERSION = "phase3.1-per-concept-grounding-4"
 _GROUNDING_CACHE_FILENAME = "source.phase31-concept-grounding-cache.json"
 _TOPOLOGY_CACHE_FILENAME = "source.phase31-final-topology-cache.json"
+_PUBLIC_GROUNDING_CANDIDATE_LIMIT = 100
+_PRIORITY_EVIDENCE_CANDIDATE_COUNT = 4
 _MASTERY_TAIL_RE = re.compile(
     r"(?:\r?\n|\\n)\s*Achieving\s+Mastery\s*:\s*.*\Z",
     re.IGNORECASE | re.DOTALL,
@@ -137,6 +139,16 @@ def _candidate_blocks(
         for row in canonical.get("blocks") or []
         if isinstance(row, dict)
     }
+    topic = next(
+        (
+            row
+            for row in graph.get("topics") or []
+            if isinstance(row, dict)
+            and str(row.get("topic_id") or "") == topic_id
+        ),
+        {},
+    )
+    topic_title = str(topic.get("title") or topic_id)
     graph_blocks = [
         row
         for row in graph.get("blocks") or []
@@ -158,12 +170,33 @@ def _candidate_blocks(
         if not text:
             continue
         usable.append(block)
+        source_page = str(
+            block.get("page_number")
+            or block.get("pdf_page")
+            or block.get("page")
+            or source.get("page_number")
+            or source.get("pdf_page")
+            or source.get("page")
+            or ""
+        )
+        boundary_relation = str(
+            block.get("boundary_relation")
+            or block.get("relation")
+            or "within_fixed_source_topic"
+        )
+        provider_text = text[:1800]
+        text_sha256 = phase3._sha256_text(provider_text)
         payload.append(
             {
                 "block_id": str(block.get("block_id") or ""),
                 "kind": str(block.get("kind") or ""),
                 "subtopic_id": str(block.get("subtopic_id") or ""),
-                "text": text[:1800],
+                "source_topic_id": topic_id,
+                "source_topic_title": topic_title,
+                "boundary_relation": boundary_relation,
+                "source_page": source_page,
+                "text_sha256": text_sha256,
+                "text": provider_text,
             }
         )
     return usable, payload
@@ -557,7 +590,13 @@ def _source_block_directory(
             "block_id": str(row.get("block_id") or ""),
             "kind": str(row.get("kind") or ""),
             "subtopic_id": str(row.get("subtopic_id") or ""),
-            "text_sha256": phase3._sha256_text(row.get("text") or ""),
+            "source_topic_id": str(row.get("source_topic_id") or ""),
+            "boundary_relation": str(row.get("boundary_relation") or ""),
+            "source_page": str(row.get("source_page") or ""),
+            "text_sha256": str(
+                row.get("text_sha256")
+                or phase3._sha256_text(row.get("text") or "")
+            ),
         }
         for row in source_blocks
     ]
@@ -766,42 +805,89 @@ def _grounding_candidates(
     concept: dict[str, Any],
     source_blocks: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    candidates: list[dict[str, Any]] = []
-    for block in source_blocks[:100]:
+    current_topic_id = str(concept.get("current_topic_id") or "")
+    source_claim = str(concept.get("source_claim") or "")
+    claim_tokens = set(re.findall(r"[a-z0-9]{3,}", _normal(source_claim)))
+
+    # Relevance affects only packet order/capping; it never accepts evidence.
+    # The mapper and independent critic remain the semantic authority.  Stable
+    # source order is the fallback for non-Latin text and equal overlap.
+    ranked_blocks = sorted(
+        enumerate(source_blocks),
+        key=lambda pair: (
+            -len(
+                claim_tokens
+                & set(
+                    re.findall(
+                        r"[a-z0-9]{3,}",
+                        _normal(pair[1].get("text") or ""),
+                    )
+                )
+            ),
+            pair[0],
+        ),
+    )
+    evidence_candidates: list[dict[str, Any]] = []
+    for _source_order, block in ranked_blocks:
         block_id = str(block.get("block_id") or "")
         if not block_id:
             continue
-        candidate_seed = {
+        candidate_seed = early_gate.bind_candidate({
             "action": "use_verified_evidence",
-            "block_ids": [block_id],
-            "text_sha256": phase3._sha256_text(block.get("text") or ""),
-        }
-        candidates.append(
+            "source_block_ids": [block_id],
+            "source_topic_id": str(
+                block.get("source_topic_id") or current_topic_id
+            ),
+            "target_topic_id": current_topic_id,
+            "boundary_relation": str(
+                block.get("boundary_relation")
+                or "within_fixed_source_topic"
+            ),
+            "source_kind": str(block.get("kind") or ""),
+            "source_page": str(block.get("source_page") or ""),
+            "text_sha256": str(
+                block.get("text_sha256")
+                or phase3._sha256_text(block.get("text") or "")
+            ),
+        })
+        evidence_candidates.append(
             {
                 "target_id": early_gate.candidate_target_id(
                     phase="3.1",
-                    action="evidence",
+                    action="use_verified_evidence",
                     graph=graph,
                     unit=concept,
                     candidate=candidate_seed,
                 ),
                 "concept_id": "",
                 "title": f"Use verified evidence {block_id}",
-                "topic": "",
+                "topic": str(
+                    block.get("source_topic_title")
+                    or concept.get("current_topic_title")
+                    or ""
+                ),
                 "coverage": str(block.get("text") or "")[:8000],
-                "gap": "",
-                "action": "use_verified_evidence",
-                "source_block_ids": [block_id],
+                "gap": (
+                    "Binding inclusion only; the mapper must still produce a "
+                    "minimal sufficient evidence set and the independent "
+                    "critic must verify it."
+                ),
+                **candidate_seed,
             }
         )
-    current_topic_id = str(concept.get("current_topic_id") or "")
     topology_seeds: list[dict[str, Any]] = [
         {
             "action": "refine",
+            "source_block_ids": [],
+            "source_topic_id": current_topic_id,
             "target_topic_id": current_topic_id,
+            "boundary_relation": "refine_within_source_topic",
+            "source_kind": "",
+            "source_page": "",
+            "text_sha256": "",
             "title": "Refine the unsupported source claim",
             "topic": str(concept.get("current_topic_title") or ""),
-            "coverage": str(concept.get("source_claim") or ""),
+            "coverage": source_claim,
             "gap": (
                 "Return this concept to topology and narrow the unsupported "
                 "clause."
@@ -809,20 +895,32 @@ def _grounding_candidates(
         },
         {
             "action": "split",
+            "source_block_ids": [],
+            "source_topic_id": current_topic_id,
             "target_topic_id": "",
+            "boundary_relation": "split_across_verified_source_boundaries",
+            "source_kind": "",
+            "source_page": "",
+            "text_sha256": "",
             "title": "Split distinct source-supported claims",
             "topic": "Across verified source topics",
-            "coverage": str(concept.get("source_claim") or ""),
+            "coverage": source_claim,
             "gap": (
                 "Return this concept to topology and separate durable claims."
             ),
         },
         {
             "action": "retire",
+            "source_block_ids": [],
+            "source_topic_id": current_topic_id,
             "target_topic_id": "",
+            "boundary_relation": "retire_if_unsupported_or_duplicate",
+            "source_kind": "",
+            "source_page": "",
+            "text_sha256": "",
             "title": "Retire an unsupported or fully duplicated claim",
             "topic": str(concept.get("current_topic_title") or ""),
-            "coverage": str(concept.get("source_claim") or ""),
+            "coverage": source_claim,
             "gap": (
                 "Destructive retirement still requires the stricter "
                 "independent gate."
@@ -838,32 +936,73 @@ def _grounding_candidates(
         topology_seeds.append(
             {
                 "action": "move",
+                "source_block_ids": [],
+                "source_topic_id": current_topic_id,
                 "target_topic_id": topic_id,
+                "boundary_relation": "move_to_verified_source_topic",
+                "source_kind": "",
+                "source_page": "",
+                "text_sha256": "",
                 "title": "Move the complete claim to a different source topic",
                 "topic": str(topic.get("title") or topic_id),
-                "coverage": str(concept.get("source_claim") or ""),
+                "coverage": source_claim,
                 "gap": (
                     "Move without changing the claim; independent review "
                     "remains mandatory."
                 ),
             }
         )
-    for seed in topology_seeds:
-        candidates.append(
+    topology_candidates: list[dict[str, Any]] = []
+    for raw_seed in topology_seeds:
+        display = {
+            key: raw_seed[key]
+            for key in ("title", "topic", "coverage", "gap")
+        }
+        binding_seed = early_gate.bind_candidate({
+            key: value
+            for key, value in raw_seed.items()
+            if key not in display
+        })
+        topology_candidates.append(
             {
                 "target_id": early_gate.candidate_target_id(
                     phase="3.1",
-                    action=str(seed["action"]),
+                    action=str(binding_seed["action"]),
                     graph=graph,
                     unit=concept,
-                    candidate=seed,
+                    candidate=binding_seed,
                 ),
                 "concept_id": str(concept.get("origin_concept_id") or ""),
-                **seed,
-                "source_block_ids": [],
+                **display,
+                **binding_seed,
             }
         )
-    return candidates
+
+    # PendingSemanticDecision has a deliberate 100-row ceiling.  Reserve every
+    # topology repair action first, then use the remaining capacity for the
+    # highest-overlap evidence blocks.  Core repair actions are interleaved
+    # after four evidence rows so even a legacy compact packet cannot contain
+    # evidence-only choices.  This is candidate routing, not semantic approval.
+    if len(topology_candidates) >= _PUBLIC_GROUNDING_CANDIDATE_LIMIT:
+        topology_candidates = topology_candidates[
+            : _PUBLIC_GROUNDING_CANDIDATE_LIMIT - 1
+        ]
+    evidence_capacity = max(
+        1,
+        _PUBLIC_GROUNDING_CANDIDATE_LIMIT - len(topology_candidates),
+    )
+    evidence_candidates = evidence_candidates[:evidence_capacity]
+    priority_count = min(
+        _PRIORITY_EVIDENCE_CANDIDATE_COUNT,
+        len(evidence_candidates),
+    )
+    core_repairs = topology_candidates[:3]
+    return [
+        *evidence_candidates[:priority_count],
+        *core_repairs,
+        *evidence_candidates[priority_count:],
+        *topology_candidates[3:],
+    ]
 
 
 def _grounding_identity(
@@ -884,7 +1023,17 @@ def _grounding_identity(
             "blocks": [
                 {
                     "block_id": str(row.get("block_id") or ""),
-                    "text_sha256": phase3._sha256_text(row.get("text") or ""),
+                    "source_topic_id": str(
+                        row.get("source_topic_id") or ""
+                    ),
+                    "boundary_relation": str(
+                        row.get("boundary_relation") or ""
+                    ),
+                    "source_page": str(row.get("source_page") or ""),
+                    "text_sha256": str(
+                        row.get("text_sha256")
+                        or phase3._sha256_text(row.get("text") or "")
+                    ),
                 }
                 for row in source_blocks
             ],
@@ -922,15 +1071,36 @@ def _grounding_pending_decision(
         issues=clean_issues,
         proposal=proposal,
     )
-    public_candidates = [
-        {
-            key: str(row.get(key) or "")
-            for key in (
-                "target_id", "concept_id", "title", "topic", "coverage", "gap"
-            )
-        }
-        for row in candidates
-    ]
+    public_candidates = []
+    for row in candidates:
+        public_candidates.append(
+            {
+                **{
+                    key: str(row.get(key) or "")
+                    for key in (
+                        "target_id",
+                        "concept_id",
+                        "title",
+                        "topic",
+                        "coverage",
+                        "gap",
+                        "action",
+                        "source_topic_id",
+                        "target_topic_id",
+                        "boundary_relation",
+                        "source_kind",
+                        "source_page",
+                        "text_sha256",
+                        "binding_hash",
+                    )
+                },
+                "source_block_ids": [
+                    str(value)
+                    for value in row.get("source_block_ids") or []
+                    if str(value)
+                ],
+            }
+        )
     options: list[dict[str, Any]] = []
     if recommended is not None:
         options.append(
