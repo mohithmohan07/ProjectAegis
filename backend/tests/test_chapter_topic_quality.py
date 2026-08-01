@@ -218,6 +218,37 @@ def test_topic_headings_prefer_main_heading_level_over_micro_subheadings():
     ]
 
 
+def test_topic_headings_keep_two_numbered_mains_above_three_subtopics():
+    sections = g.parse_mmd_sections(
+        "## 1 Main A\nParent A.\n\n"
+        "### 1.1 A One\nDetail.\n\n"
+        "### 1.2 A Two\nDetail.\n\n"
+        "## 2 Main B\nParent B.\n\n"
+        "### 2.1 B One\nDetail.\n"
+    )
+
+    assert g._topic_headings(sections) == ["Main A", "Main B"]
+
+
+def test_topic_headings_do_not_promote_one_subtopic_to_a_peer_main():
+    sections = g.parse_mmd_sections(
+        "## 1 Main Topic\nParent material.\n\n"
+        "### 1.1 Only Subtopic\nChild material.\n"
+    )
+
+    assert g._topic_headings(sections) == ["Main Topic"]
+
+
+def test_topic_headings_keep_one_numbered_parent_above_two_subtopics():
+    sections = g.parse_mmd_sections(
+        "## 1 Main Topic\nParent material.\n\n"
+        "### 1.1 First Subtopic\nChild A.\n\n"
+        "### 1.2 Second Subtopic\nChild B.\n"
+    )
+
+    assert g._topic_headings(sections) == ["Main Topic"]
+
+
 def test_topic_headings_do_not_return_single_chapter_title_as_topic():
     sections = [
         {"heading": "Landforms: Earth's Living Canvas", "heading_level": 1},

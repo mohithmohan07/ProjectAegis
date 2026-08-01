@@ -699,6 +699,7 @@ function SemanticDecisionPanel({
 }) {
   const item = semanticDecisionItem(decision);
   const sourceReview = isSourceReviewDecision(decision);
+  const sourceTopicReview = isSourceTopicReviewDecision(decision);
   const typeGranularity = isTypeGranularityDecision(decision);
   const topologyReview = isTopologyReviewDecision(decision);
   const groundingReview = isGroundingReviewDecision(decision);
@@ -802,15 +803,19 @@ function SemanticDecisionPanel({
       return;
     }
     if (decisionChoiceRequiresTarget(choice) && !targetId) {
-      setSubmitError(topologyReview
-        ? "Select the source-supported concept action Aegis should use."
-        : groundingReview
-          ? "Select verified evidence or a topology repair."
-          : sourceReview
-            ? "Select the verified source evidence Aegis should use."
-        : choice === "expand_existing"
-          ? "Select the existing concept Aegis should expand."
-          : "Select the existing concept Aegis should use.");
+      setSubmitError(
+        sourceTopicReview
+          ? "Select the source-topic recovery plan Aegis should use."
+          : topologyReview
+            ? "Select the source-supported concept action Aegis should use."
+            : groundingReview
+              ? "Select verified evidence or a topology repair."
+              : sourceReview
+                ? "Select the verified source evidence Aegis should use."
+                : choice === "expand_existing"
+                  ? "Select the existing concept Aegis should expand."
+                  : "Select the existing concept Aegis should use.",
+      );
       return;
     }
 
@@ -873,6 +878,12 @@ function SemanticDecisionPanel({
             + "the expensive host and topology stages. Review the counts, "
             + "choose whether to keep or consolidate the taxonomy, save that "
             + "decision, and then resume explicitly."
+          : sourceTopicReview
+            ? "Aegis found a numbered main topic in the source that has no "
+              + "normal concept in the generated map. Review the exact source "
+              + "and generated topic lists, choose one recovery direction, "
+              + "save it, and then resume explicitly. One answer authorizes "
+              + "at most one bounded recovery request."
           : topologyReview
             ? "GPT and its independent critic disagreed about a concept "
               + "boundary. Choose a source-supported refine, move, split, keep, "
@@ -934,7 +945,15 @@ function SemanticDecisionPanel({
 
       {questions.length > 0 && (
         <div className="semantic-decision-section">
-          <h3>{questions.length === 1 ? "Question" : "Questions"}</h3>
+          <h3>
+            {sourceTopicReview
+              ? questions.length === 1
+                ? "Missing source topic"
+                : "Missing source topics"
+              : questions.length === 1
+                ? "Question"
+                : "Questions"}
+          </h3>
           <ul>
             {questions.map((question, index) => (
               <li key={`${index}-${question}`}>{question}</li>
@@ -947,13 +966,15 @@ function SemanticDecisionPanel({
         <strong>
           {typeGranularity
             ? "Aegis quality check"
-            : topologyReview
-              ? "Concept-boundary diagnosis"
-              : groundingReview
-                ? "Grounding-critic diagnosis"
-                : sourceReview
-                  ? "GPT diagnosis"
-                  : "What could not be matched"}
+            : sourceTopicReview
+              ? "Source-topic integrity diagnosis"
+              : topologyReview
+                ? "Concept-boundary diagnosis"
+                : groundingReview
+                  ? "Grounding-critic diagnosis"
+                  : sourceReview
+                    ? "GPT diagnosis"
+                    : "What could not be matched"}
         </strong>
         <p>{diagnosis}</p>
       </div>
@@ -968,11 +989,13 @@ function SemanticDecisionPanel({
           <h3>
             {topologyReview
               ? "Source-supported concept actions"
-              : groundingReview
-                ? "Verified evidence and topology repairs"
-                : sourceReview
-                  ? "Verified source candidates"
-                  : "Candidate concepts"}
+              : sourceTopicReview
+                ? "Source-topic recovery plan"
+                : groundingReview
+                  ? "Verified evidence and topology repairs"
+                  : sourceReview
+                    ? "Verified source candidates"
+                    : "Candidate concepts"}
           </h3>
           <div className="semantic-candidate-list">
             {candidates.map((candidate, index) => (
@@ -993,12 +1016,18 @@ function SemanticDecisionPanel({
                 </div>
                 {candidateSummary(
                   candidate,
-                  sourceReview && !topologyReview && !groundingReview,
+                  sourceReview
+                    && !sourceTopicReview
+                    && !topologyReview
+                    && !groundingReview,
                 ) && (
                   <p className="muted">
                     {candidateSummary(
                       candidate,
-                      sourceReview && !topologyReview && !groundingReview,
+                      sourceReview
+                        && !sourceTopicReview
+                        && !topologyReview
+                        && !groundingReview,
                     )}
                   </p>
                 )}
@@ -1219,10 +1248,18 @@ function isSourceReviewDecision(decision: PendingSemanticDecision): boolean {
   const kind = firstNonEmptyString(decision.kind).toLowerCase();
   return kind.includes("source_graph")
     || kind.includes("source_review")
+    || isSourceTopicReviewDecision(decision)
     || decision.options?.some((option) =>
       option.choice === "accept_recommended"
       || option.choice === "select_candidate")
     || false;
+}
+
+function isSourceTopicReviewDecision(
+  decision: PendingSemanticDecision,
+): boolean {
+  return firstNonEmptyString(decision.kind).toLowerCase()
+    === "source_topic_coverage_review";
 }
 
 function isTypeGranularityDecision(
@@ -1271,6 +1308,9 @@ function decisionTargetLabel(
   choice: SemanticDecisionUiChoice,
   decision: PendingSemanticDecision,
 ): string {
+  if (isSourceTopicReviewDecision(decision)) {
+    return "Source-topic recovery plan";
+  }
   if (isTopologyReviewDecision(decision)) {
     return "Source-supported concept action";
   }
@@ -1289,8 +1329,12 @@ function decisionOptionDescription(
 ): string {
   const topologyReview = isTopologyReviewDecision(decision);
   const groundingReview = isGroundingReviewDecision(decision);
+  const sourceTopicReview = isSourceTopicReviewDecision(decision);
   const sourceReview = isSourceReviewDecision(decision);
   if (option.choice === "accept_recommended") {
+    if (sourceTopicReview) {
+      return "Preserve every numbered main topic and authorize one bounded recovery request.";
+    }
     if (topologyReview) {
       return recommendedCandidate
         ? `Use ${candidateTitle(recommendedCandidate)} as the source-supported concept action.`
@@ -1332,6 +1376,9 @@ function decisionOptionDescription(
   if (option.choice === "custom_instruction") {
     if (topologyReview || groundingReview) {
       return "Tell Aegis the exact source-supported evidence or concept action to review once on Resume.";
+    }
+    if (sourceTopicReview) {
+      return "Tell Aegis how to recover the missing source topics without silently merging or dropping them.";
     }
     return sourceReview
       ? "Tell Aegis exactly how to resolve this source discrepancy."

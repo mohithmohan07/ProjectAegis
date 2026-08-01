@@ -32,7 +32,17 @@ def _use_specific_dry_learner_analysis(monkeypatch):
     )
 
 
-def test_post_learning_creates_concepts(client, first_chapter, monkeypatch):
+def test_filename_source_fallback_cannot_create_fake_delimited_sources():
+    job = models.UploadJob(filename="History, Grade 10; Part 1.pdf")
+
+    label = build_concepts._job_source_label(job)
+
+    assert label == "History - Grade 10 - Part 1"
+    assert "," not in label
+    assert ";" not in label
+
+
+def test_post_learning_creates_concepts(client, db, first_chapter, monkeypatch):
     _use_specific_dry_learner_analysis(monkeypatch)
     files = {"file": ("notes.txt", io.BytesIO(
         b"## Trigonometry Basics\nSine ratio: opposite over hypotenuse\n"
@@ -48,6 +58,14 @@ def test_post_learning_creates_concepts(client, first_chapter, monkeypatch):
         json={"target_chapter_id": first_chapter["id"]}))
     assert result["concepts_created"] >= 2
     assert result["rows_appended"] >= 2
+    db.expire_all()
+    concepts = (
+        db.query(models.Concept)
+        .filter(models.Concept.id.in_(result["concept_ids"]))
+        .all()
+    )
+    assert concepts
+    assert {concept.sources for concept in concepts} == {"notes"}
 
 
 def test_post_learning_groups_concepts_under_one_topic(
@@ -91,23 +109,21 @@ def test_post_learning_failure_persists_and_resumes_type_checkpoint(
     db.add(job)
     db.commit()
     db.refresh(job)
-    checkpoint = {
-            "schema_version": (
-                build_concepts.generation._CONCEPT_CHECKPOINT_SCHEMA),
-        "stage": "pre_type_assignment",
-        "records": [{"topic": "T", "concept_title": "C"}],
-            "question_task_inventory": {
-                "items": [{
-                    "qid": "QINV-0001",
-                    "raw_task": (
-                        "Explain how the source supports the stated conclusion."
-                    ),
-                }],
-                "stats": {"total_inventory_items": 1},
-            },
-        "mined_types": {"types": [{"type_id": "TYPE-0001"}]},
-        "method_row_snapshot": [],
-    }
+    checkpoint = build_concepts.generation._make_concept_checkpoint(
+        "pre_type_assignment",
+        records=[{"topic": "T", "concept_title": "C"}],
+        question_task_inventory={
+            "items": [{
+                "qid": "QINV-0001",
+                "raw_task": (
+                    "Explain how the source supports the stated conclusion."
+                ),
+            }],
+            "stats": {"total_inventory_items": 1},
+        },
+        mined_types={"types": [{"type_id": "TYPE-0001"}]},
+        method_row_snapshot=[],
+    )
 
     def fail_after_checkpoint(*args, checkpoint_callback=None, **kwargs):
         assert checkpoint_callback is not None
@@ -211,6 +227,52 @@ def test_checkpoint_without_inventory_does_not_erase_saved_inventory(
     saved = db.get(models.UploadJob, job.id)
     assert saved.question_inventory["items"][0]["qid"] == "QINV-KEEP"
     assert saved.question_inventory["mined_types"][0]["type_id"] == "TYPE-KEEP"
+
+
+def test_source_topic_review_checkpoint_clears_stale_inventory_atomically(
+    db, first_chapter, monkeypatch,
+):
+    job = models.UploadJob(
+        module="build_concepts",
+        upload_type="document",
+        learning_kind="post",
+        filename="source-topic-review.mmd",
+        mmd_text="## 1. Topic One\nBody\n## 2. Topic Two\nBody",
+        status="converted",
+        question_inventory={
+            "items": [{"qid": "QINV-STALE"}],
+            "stats": {"total_inventory_items": 1},
+            "mined_types": [{"type_id": "TYPE-STALE"}],
+        },
+    )
+    db.add(job)
+    db.commit()
+    checkpoint = build_concepts.generation._make_concept_checkpoint(
+        "source_topic_review",
+        records=[{"topic": "Topic One", "concept_title": "Concept One"}],
+        source_topic_recovery={},
+        skeleton_method_row_snapshot=[],
+    )
+
+    def pause_after_review(*args, checkpoint_callback=None, **kwargs):
+        assert checkpoint_callback is not None
+        checkpoint_callback(checkpoint)
+        raise RuntimeError("pause after source-topic review")
+
+    monkeypatch.setattr(
+        build_concepts.generation,
+        "concepts_from_mmd",
+        pause_after_review,
+    )
+
+    with pytest.raises(RuntimeError, match="pause after source-topic review"):
+        build_concepts.generate_post_learning(
+            db, job.id, first_chapter["id"])
+
+    db.expire_all()
+    saved = db.get(models.UploadJob, job.id)
+    assert saved.generation_checkpoint["stage"] == "source_topic_review"
+    assert saved.question_inventory == {}
 
 
 def test_store_inventory_preserves_placement_certifications_after_success():

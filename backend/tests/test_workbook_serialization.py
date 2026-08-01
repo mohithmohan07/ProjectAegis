@@ -224,6 +224,61 @@ def test_public_question_export_keeps_formula_leading_content_literal(db):
         db.rollback()
 
 
+def test_concept_export_rejects_cell_text_above_excel_limit(db):
+    concept = db.query(models.Concept).order_by(models.Concept.id).first()
+    assert concept is not None
+    original = concept.concept_details
+    try:
+        concept.concept_details = "x" * (
+            writer.EXCEL_CELL_CHARACTER_LIMIT + 1
+        )
+        db.flush()
+
+        with pytest.raises(writer.ExcelCellLimitError) as caught:
+            writer.write_concepts_workbook(db, [concept.id])
+
+        message = str(caught.value)
+        assert "Excel export blocked to prevent data loss" in message
+        assert "field 'concept_details'" in message
+        assert "32,768 characters" in message
+        assert "32,767-character cell limit" in message
+        assert "split it across multiple cells or records" in message
+    finally:
+        concept.concept_details = original
+        db.rollback()
+
+
+def test_concept_export_allows_text_at_exact_excel_limit(db):
+    concept = db.query(models.Concept).order_by(models.Concept.id).first()
+    assert concept is not None
+    original = concept.concept_details
+    exact_value = "x" * writer.EXCEL_CELL_CHARACTER_LIMIT
+    try:
+        concept.concept_details = exact_value
+        db.flush()
+
+        output = writer.write_concepts_workbook(db, [concept.id])
+        workbook = openpyxl.load_workbook(
+            io.BytesIO(output), data_only=True, read_only=True
+        )
+        try:
+            worksheet = workbook[SHEET_OBJECTIVE]
+            headers = next(
+                worksheet.iter_rows(
+                    min_row=2,
+                    max_row=2,
+                    values_only=True,
+                )
+            )
+            details_column = headers.index("concept_details") + 1
+            assert worksheet.cell(row=3, column=details_column).value == exact_value
+        finally:
+            workbook.close()
+    finally:
+        concept.concept_details = original
+        db.rollback()
+
+
 @pytest.mark.parametrize("value", ["=cmd()", "+cmd()", "-cmd()", "@cmd()"])
 def test_concept_inventory_csv_formula_values_are_escaped(value):
     assert build_concepts._csv_safe_cell(value) == f"'{value}"

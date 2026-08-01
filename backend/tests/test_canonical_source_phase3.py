@@ -223,6 +223,42 @@ def test_rne_graph_restores_six_topics_and_qid_ancestry():
     )
 
 
+def test_rne_cached_graph_cannot_absorb_numbered_section_two_into_section_one():
+    _source, canonical, graph, _report, _semantic = _compile_fixture(
+        "RNE.mmd",
+        subject="History",
+        chapter_title="The Rise of Nationalism in Europe",
+    )
+    collapsed = copy.deepcopy(graph)
+    removed_topic = next(
+        row for row in collapsed["topics"]
+        if row["title"] == "The Making of Nationalism in Europe"
+    )
+    removed_id = removed_topic["topic_id"]
+    replacement_id = collapsed["topics"][0]["topic_id"]
+    collapsed["topics"] = [
+        row for row in collapsed["topics"]
+        if row["topic_id"] != removed_id
+    ]
+    for collection in ("blocks", "tasks", "subtopics", "sections"):
+        for row in collapsed.get(collection) or []:
+            if row.get("topic_id") == removed_id:
+                row["topic_id"] = replacement_id
+    semantic = phase3.render_semantic_source(collapsed, canonical)
+    collapsed["semantic_source_sha256"] = phase3._sha256_text(semantic)
+
+    codes = {
+        row["code"]
+        for row in phase3.validate_graph(
+            collapsed,
+            canonical=canonical,
+            semantic_source=semantic,
+        )
+    }
+
+    assert "numbered_main_topic_coverage" in codes
+
+
 def test_verified_pdf_missing_parent_heading_is_rendered_in_source_order():
     source = (DATA / "RNE.mmd").read_text(encoding="utf-8")
     section_two = "\\section*{2 The Making of Nationalism in Europe}\n\n"

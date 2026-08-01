@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from app import schemas
+from app.services import build_concepts
 from app.services import generation as g
 from app.services import semantic_recovery
 from app.services import type_granularity_decision as gate
@@ -139,7 +140,48 @@ def test_fragmentation_gate_applies_only_the_exact_saved_resolution():
     }
 
 
-def test_fragmentation_gate_does_not_pause_small_or_already_merged_taxonomy():
+def test_consumed_type_resolution_requires_fresh_decision_through_orchestrator():
+    with pytest.raises(semantic_recovery.HumanDecisionRequired) as caught:
+        gate.resolve_or_pause(
+            review=_review(),
+            inventory=_inventory(),
+            mined_types=_types(),
+            meta={"subject": "History"},
+        )
+    pending = caught.value.pending_decision
+    consumed = {
+        "decision_id": pending["decision_id"],
+        "context_hash": pending["context_hash"],
+        "choice": "consolidate_types",
+        "instruction": "Merge only genuinely reusable task patterns.",
+        "target_id": "",
+        "target_concept_id": "",
+        "resolved_at": "2026-08-01T00:00:00+00:00",
+        "consumed_at": "2026-08-01T00:01:00+00:00",
+        "status": "consumed",
+        "pending_decision": copy.deepcopy(pending),
+    }
+    checkpoint = {
+        build_concepts._HUMAN_DECISIONS_KEY: {
+            "resolutions": [consumed],
+        },
+    }
+
+    with build_concepts._human_decision_resolution_context(checkpoint):
+        with pytest.raises(semantic_recovery.HumanDecisionRequired) as replay:
+            gate.resolve_or_pause(
+                review=_review(),
+                inventory=_inventory(),
+                mined_types=_types(),
+                meta={"subject": "History"},
+            )
+
+    fresh = replay.value.pending_decision
+    assert fresh["decision_id"] != pending["decision_id"]
+    assert "already used" in fresh["diagnosis"]
+
+
+def test_fragmentation_gate_does_not_pause_small_or_materially_merged_taxonomy():
     small = gate.build_review(
         raw_type_count=8,
         consolidated_type_count=8,
@@ -148,7 +190,7 @@ def test_fragmentation_gate_does_not_pause_small_or_already_merged_taxonomy():
     )
     merged = gate.build_review(
         raw_type_count=12,
-        consolidated_type_count=10,
+        consolidated_type_count=7,
         inventory_count=12,
         sufficiency_added_concepts=0,
     )
@@ -161,9 +203,32 @@ def test_fragmentation_gate_does_not_pause_small_or_already_merged_taxonomy():
     assert gate.resolve_or_pause(
         review=merged,
         inventory=_inventory(),
-        mined_types=_types(),
+        mined_types=_types(7),
         meta={},
     ) == {"action": "continue"}
+
+
+def test_fragmentation_gate_pauses_when_one_of_24_raw_types_was_merged():
+    review = gate.build_review(
+        raw_type_count=24,
+        consolidated_type_count=23,
+        inventory_count=24,
+        sufficiency_added_concepts=0,
+    )
+
+    assert review["consolidation_merged_count"] == 1
+    assert gate.is_anomalously_fragmented(review)
+    with pytest.raises(semantic_recovery.HumanDecisionRequired) as caught:
+        gate.resolve_or_pause(
+            review=review,
+            inventory=_inventory(24),
+            mined_types=_types(23),
+            meta={"subject": "History"},
+        )
+
+    pending = caught.value.pending_decision
+    assert pending["kind"] == "type_granularity_review"
+    assert pending["item"]["type_title"] == "23 Types for 24 QIDs"
 
 
 def test_applied_result_identity_rejects_source_or_taxonomy_drift():

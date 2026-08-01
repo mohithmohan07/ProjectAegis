@@ -587,6 +587,17 @@ def _validate_human_decisions(
             raise ValueError(
                 f"{resolution_path}.instruction must not be empty")
         _timestamp(resolution.resolved_at, f"{resolution_path}.resolved_at")
+        if resolution.status == "consumed":
+            if not resolution.consumed_at:
+                raise ValueError(
+                    f"{resolution_path}.consumed_at must not be empty")
+            _timestamp(
+                resolution.consumed_at,
+                f"{resolution_path}.consumed_at",
+            )
+        elif resolution.consumed_at:
+            raise ValueError(
+                f"{resolution_path}.consumed_at requires consumed status")
         original = resolution.pending_decision
         if (
             original.decision_id != resolution.decision_id

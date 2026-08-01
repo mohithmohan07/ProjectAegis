@@ -1900,7 +1900,7 @@ def test_invalid_inventory_checkpoint_rewinds_before_question_inventory():
     assert restored["stage"] == "description_method_snapshot"
 
 
-def test_late_v1_checkpoints_fall_back_to_81_percent_and_v2_requires_ledger():
+def test_legacy_81_percent_checkpoint_is_reused_and_v3_requires_ledger():
     question = (
         "Apply the supplied procedure and report the requested numerical "
         "value."
@@ -1945,6 +1945,9 @@ def test_late_v1_checkpoints_fall_back_to_81_percent_and_v2_requires_ledger():
         mined_types={"types": types},
         method_row_snapshot=[],
     )
+    # Pin the current-main 81% contract explicitly. A future broad version
+    # bump must not silently replay paid canonical/inventory/Type work from 24%.
+    pre_type["stage_schema_version"] = 1
     legacy_post = g._make_concept_checkpoint(
         "post_type_assignment",
         records=records,
@@ -1952,7 +1955,7 @@ def test_late_v1_checkpoints_fall_back_to_81_percent_and_v2_requires_ledger():
         mined_types={"types": types},
         method_row_snapshot=[],
     )
-    legacy_post["stage_schema_version"] = 1
+    legacy_post["stage_schema_version"] = 2
     legacy_final = g._make_concept_checkpoint(
         "final_content_ready",
         records=records,
@@ -1960,7 +1963,7 @@ def test_late_v1_checkpoints_fall_back_to_81_percent_and_v2_requires_ledger():
         mined_types={"types": types},
         method_row_snapshot=[],
     )
-    legacy_final["stage_schema_version"] = 1
+    legacy_final["stage_schema_version"] = 2
     history = {
         "checkpoint_format": g._CONCEPT_CHECKPOINT_FORMAT,
         "schema_version": g._CONCEPT_CHECKPOINT_SCHEMA,
@@ -1972,14 +1975,14 @@ def test_late_v1_checkpoints_fall_back_to_81_percent_and_v2_requires_ledger():
     assert restored["stage"] == g._CONCEPT_CHECKPOINT_STAGE
     assert restored["progress"] == pytest.approx(0.81)
 
-    incomplete_v2 = g._make_concept_checkpoint(
+    incomplete_v3 = g._make_concept_checkpoint(
         "post_type_assignment",
         records=records,
         question_task_inventory=inventory,
         mined_types={"types": types},
         method_row_snapshot=[],
     )
-    assert not g._compatible_concept_checkpoint_entry(incomplete_v2)
+    assert not g._compatible_concept_checkpoint_entry(incomplete_v3)
 
     certified_mined = {"types": types}
     g._reset_placement_certifications(certified_mined)
@@ -1989,17 +1992,17 @@ def test_late_v1_checkpoints_fall_back_to_81_percent_and_v2_requires_ledger():
         records[0],
         basis="type_host_review",
     )
-    current_v2 = g._make_concept_checkpoint(
+    current_v3 = g._make_concept_checkpoint(
         "post_type_assignment",
         records=records,
         question_task_inventory=inventory,
         mined_types=certified_mined,
         method_row_snapshot=[],
     )
-    history["checkpoints"].append(current_v2)
+    history["checkpoints"].append(current_v3)
 
-    assert current_v2["stage_schema_version"] == 2
-    assert g._compatible_concept_checkpoint_entry(current_v2)
+    assert current_v3["stage_schema_version"] == 3
+    assert g._compatible_concept_checkpoint_entry(current_v3)
     assert g._newest_compatible_concept_checkpoint(
         history)["stage"] == "post_type_assignment"
 

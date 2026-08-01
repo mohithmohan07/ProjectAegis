@@ -1317,7 +1317,7 @@ def test_parent_anchor_removes_model_children_without_subpart_metadata():
     assert "(b)" in merged[0]["raw_task"]
 
 
-def test_activity_hub_note_is_concise_and_heading_free():
+def test_activity_hub_note_preserves_complete_task_and_removes_heading():
     long_task = (
         "## Activity\nObserve the setup and record what changes. "
         + "Repeat the full procedure carefully with every supplied material. " * 30
@@ -1330,8 +1330,10 @@ def test_activity_hub_note_is_concise_and_heading_free():
     )
     note = g._compact_activity_hub_note(item)
     assert "## Activity" not in note
-    assert len(note.split()) <= g._ACTIVITY_PUBLIC_WORD_LIMIT + 6
-    assert len(note) <= g._ACTIVITY_PUBLIC_CHAR_LIMIT + 80
+    assert note.count(
+        "Repeat the full procedure carefully with every supplied material."
+    ) == 30
+    assert "…" not in note
 
 
 def test_activity_hub_matching_avoids_label_prefix_and_generic_collisions():

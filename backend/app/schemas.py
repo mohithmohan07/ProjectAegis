@@ -251,6 +251,7 @@ class ResolvedSemanticDecision(BaseModel):
     target_concept_id: str = Field(default="", max_length=256)
     resolved_at: str = Field(min_length=1, max_length=64)
     status: Literal["ready", "consumed"] = "ready"
+    consumed_at: str = Field(default="", max_length=64)
     pending_decision: PendingSemanticDecision
 
 

@@ -374,6 +374,63 @@ function topologyDecisionFixture(): PendingSemanticDecision {
   });
 }
 
+function sourceTopicDecisionFixture(): PendingSemanticDecision {
+  return sourceReviewDecisionFixture({
+    decision_id: "source-topology-abc456",
+    kind: "source_topic_coverage_review",
+    phase: "concept_topology",
+    conflict:
+      "The generated concept topology does not preserve every numbered "
+      + "main topic in the source.",
+    diagnosis:
+      "The source contains 6 structurally proven main topics, but the "
+      + "current concept map has no normal concept under 1 of them.",
+    decision_question:
+      "Should Aegis keep every source topic separate and make one bounded "
+      + "recovery request, or should the source/topology direction change?",
+    checkpoint_progress: 0.35,
+    item: {
+      unit_id: "",
+      type_id: "SOURCE-TOPIC-COVERAGE",
+      type_title: "1 missing of 6 source topics",
+      qids: [],
+      questions: ["The Making of Nationalism in Europe"],
+      topic: "Chapter source topology",
+    },
+    candidates: [{
+      target_id: "preserve-all-source-topics",
+      concept_id: "",
+      title: "Keep every source topic separate",
+      topic: "All six numbered main topics",
+      coverage: "The Making of Nationalism in Europe",
+      gap: "No normal concept currently represents this source topic.",
+    }],
+    evidence: [{
+      page: "",
+      label: "Missing source topics",
+      text: "The Making of Nationalism in Europe",
+    }],
+    options: [
+      {
+        choice: "accept_recommended",
+        label: "Keep all source topics separate and recover",
+        recommended: true,
+        target_id: "preserve-all-source-topics",
+      },
+      {
+        choice: "replace_source",
+        label: "Replace or correct the source",
+        recommended: false,
+      },
+      {
+        choice: "custom_instruction",
+        label: "Specify source-topic recovery guidance",
+        recommended: false,
+      },
+    ],
+  });
+}
+
 function savedJob(overrides: Partial<UploadJob> = {}): UploadJob {
   return {
     id: 42,
@@ -996,6 +1053,52 @@ test("topology decisions label actions without calling them source evidence", as
   expect(screen.queryByRole("combobox", {
     name: "Verified source evidence",
   })).toBeNull();
+});
+
+test("missing source-topic decisions use topology wording and one-click recovery", async () => {
+  streamMock.mockResolvedValue({
+    job_id: 42,
+    status: "awaiting_decision",
+    pending_decision: sourceTopicDecisionFixture(),
+    resume_required: false,
+  });
+
+  renderPage();
+  fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+  fireEvent.click(await screen.findByRole("button", {
+    name: "Select Electricity target",
+  }));
+  fireEvent.click(screen.getByRole("button", {
+    name: "Resume from 91% checkpoint",
+  }));
+
+  expect(await screen.findByRole("heading", {
+    name: "Missing source topic",
+  })).toBeDefined();
+  expect(screen.getByRole("heading", {
+    name: "Source-topic recovery plan",
+  })).toBeDefined();
+  expect(screen.getByText("Source-topic integrity diagnosis")).toBeDefined();
+  expect(screen.getByText(
+    /Preserve every numbered main topic and authorize one bounded recovery request/,
+  )).toBeDefined();
+  expect(screen.queryByText("Verified source candidates")).toBeNull();
+
+  fireEvent.click(screen.getByRole("radio", {
+    name: /Keep all source topics separate and recover/,
+  }));
+  fireEvent.click(screen.getByRole("button", { name: "Save decision" }));
+
+  await waitFor(() => {
+    expect(apiMock.submitConceptDecision).toHaveBeenCalledWith(
+      42,
+      "source-topology-abc456",
+      {
+        choice: "accept_recommended",
+        target_id: "preserve-all-source-topics",
+      },
+    );
+  });
 });
 
 test("source review safely stops for source replacement after choices are exhausted", async () => {

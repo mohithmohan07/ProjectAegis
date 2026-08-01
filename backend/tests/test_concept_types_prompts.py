@@ -1812,10 +1812,9 @@ def test_pipeline_resume_checkpoint_skips_expensive_gpt_stages(monkeypatch):
         g, "_validate_final_or_raise",
         lambda records, **kw: {"ok": True, "errors": [], "summary": {}},
     )
-    checkpoint = {
-        "schema_version": g._CONCEPT_CHECKPOINT_SCHEMA,
-        "stage": "pre_type_assignment",
-        "records": [
+    checkpoint = g._make_concept_checkpoint(
+        "pre_type_assignment",
+        records=[
             {
                 "topic": "T",
                 "parent_concept": "P",
@@ -1836,14 +1835,14 @@ def test_pipeline_resume_checkpoint_skips_expensive_gpt_stages(monkeypatch):
                 "concept_details": "Description: Recap",
                 "keywords": "",
             },
-            ],
-            "question_task_inventory": {
-                "items": [],
-                "stats": {"total_inventory_items": 0},
-            },
-        "mined_types": {"types": []},
-        "method_row_snapshot": [],
-    }
+        ],
+        question_task_inventory={
+            "items": [],
+            "stats": {"total_inventory_items": 0},
+        },
+        mined_types={"types": []},
+        method_row_snapshot=[],
+    )
     callbacks = []
     out = g.concepts_from_mmd(
         "## T\nbody",
