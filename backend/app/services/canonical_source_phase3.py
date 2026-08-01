@@ -90,6 +90,7 @@ _SOURCE_REVIEW_KEY = "human_source_review"
 _DOWNSTREAM_INVALIDATION_KEY = "downstream_invalidation_required"
 _MACHINE_METADATA_MIGRATION_KEY = "machine_metadata_sanitization"
 _MACHINE_METADATA_MIGRATION_VERSION = 1
+_NUMBERED_TOPIC_PATCH_VERSION = "phase3-canonical-topic-patch-1"
 
 _SPACE_RE = re.compile(r"\s+")
 _NUMBER_PREFIX_RE = re.compile(
@@ -628,6 +629,125 @@ def _virtual_missing_main_candidates(
     return virtual
 
 
+def _numbered_main_binding_rows(
+    canonical: dict[str, Any],
+    sections: list[dict[str, Any]] | None = None,
+    *,
+    materialize_projections: bool = False,
+) -> list[dict[str, Any]]:
+    """Bind numbered heading evidence to one stable semantic section.
+
+    Phase 2 source blocks occasionally retain a stale ``section_id`` after a
+    verified overlay or PDF-to-ACSD turnover.  The numbered heading itself is
+    still exact canonical evidence, so Phase 3 first checks the claimed
+    section, then an exact-title/source-position match, and finally projects a
+    graph-only section from the canonical heading.  No raw MMD or ACSD record
+    is mutated.
+    """
+
+    working_sections = sections if sections is not None else [
+        copy.deepcopy(row)
+        for row in canonical.get("sections") or []
+        if isinstance(row, dict) and str(row.get("section_id") or "")
+    ]
+    by_id = {
+        str(row.get("section_id") or ""): row
+        for row in working_sections
+        if isinstance(row, dict) and str(row.get("section_id") or "")
+    }
+    mains, _subsections = structure.numbered_heading_inventory(canonical)
+    bindings: list[dict[str, Any]] = []
+    for number, block in sorted(mains.items()):
+        raw_text = str(block.get("raw_text") or "")
+        heading_title = str(
+            (block.get("heading") or {}).get("title") or ""
+        ).strip()
+        _raw_number, raw_title = _title_number(heading_title, raw_text)
+        expected_title = _plain_title(raw_title or heading_title or raw_text)
+        expected_key = _semantic_title_key(expected_title)
+        claimed_id = str(block.get("section_id") or "")
+        claimed = by_id.get(claimed_id)
+        resolved: dict[str, Any] | None = None
+        mode = ""
+        if (
+            isinstance(claimed, dict)
+            and expected_key
+            and _semantic_title_key(claimed.get("title")) == expected_key
+        ):
+            resolved = claimed
+            mode = "claimed_section"
+        if resolved is None and expected_key:
+            exact = [
+                row for row in working_sections
+                if isinstance(row, dict)
+                and str(row.get("section_id") or "")
+                and _semantic_title_key(row.get("title")) == expected_key
+            ]
+            if exact:
+                position = int(block.get("source_start") or 0)
+
+                def rank(row: dict[str, Any]) -> tuple[int, int]:
+                    start = int(row.get("source_start") or 0)
+                    end = int(row.get("source_end") or start)
+                    contains = start <= position <= max(start, end)
+                    return (0 if contains else 1, abs(start - position))
+
+                ranked = sorted(exact, key=lambda row: (
+                    *rank(row), str(row.get("section_id") or "")
+                ))
+                best_rank = rank(ranked[0])
+                best = [row for row in ranked if rank(row) == best_rank]
+                if len(best) == 1:
+                    resolved = best[0]
+                    mode = "exact_title_position_rebind"
+        if resolved is None:
+            source_start = int(block.get("source_start") or 0)
+            source_end = max(
+                source_start,
+                int(block.get("source_end") or source_start),
+            )
+            projection_key = _sha256_json({
+                "version": _NUMBERED_TOPIC_PATCH_VERSION,
+                "number": int(number),
+                "block_id": str(block.get("block_id") or ""),
+                "title": expected_title,
+                "source_start": source_start,
+            })
+            projection_id = (
+                f"PHASE3-NUMBERED-{int(number):04d}-"
+                f"{projection_key[:12].upper()}"
+            )
+            resolved = by_id.get(projection_id)
+            if not isinstance(resolved, dict):
+                resolved = {
+                    "section_id": projection_id,
+                    "order": int(block.get("order") or 0),
+                    "parent_section_id": "",
+                    "level": 1,
+                    "depth": 1,
+                    "title": f"{number} {expected_title}".strip(),
+                    "source_start": source_start,
+                    "source_end": source_end,
+                    "block_ids": [str(block.get("block_id") or "")],
+                    "phase3_numbered_projection": True,
+                    "number": str(number),
+                }
+                if materialize_projections:
+                    working_sections.append(resolved)
+                    by_id[projection_id] = resolved
+            mode = "canonical_heading_projection"
+        bindings.append({
+            "number": str(number),
+            "block_id": str(block.get("block_id") or ""),
+            "claimed_section_id": claimed_id,
+            "resolved_section_id": str(resolved.get("section_id") or ""),
+            "expected_title": expected_title,
+            "source_start": int(block.get("source_start") or 0),
+            "resolution_mode": mode,
+        })
+    return bindings
+
+
 def _classification_payload(
     canonical: dict[str, Any],
     *,
@@ -873,6 +993,7 @@ def _forced_structural_roles(
     *,
     numbered_hierarchy_active: bool = True,
     fallback_main_section_ids: set[str] | None = None,
+    numbered_main_bindings: list[dict[str, Any]] | None = None,
 ) -> None:
     """Protect proven source hierarchy without mistaking chapter numbers for topics."""
     fallback_main_section_ids = set(fallback_main_section_ids or set())
@@ -884,8 +1005,17 @@ def _forced_structural_roles(
         return
     mains, subs = structure.numbered_heading_inventory(canonical)
     main_section_by_number = {
-        number: str(block.get("section_id") or "") for number, block in mains.items()
+        int(str(row.get("number") or 0)): str(
+            row.get("resolved_section_id") or ""
+        )
+        for row in numbered_main_bindings or []
+        if str(row.get("number") or "").isdigit()
     }
+    if not main_section_by_number:
+        main_section_by_number = {
+            number: str(block.get("section_id") or "")
+            for number, block in mains.items()
+        }
     for number, section_id in main_section_by_number.items():
         if section_id in classifications:
             classifications[section_id]["role"] = "main_topic"
@@ -926,6 +1056,11 @@ def compile_semantic_graph(
         if isinstance(row, dict) and str(row.get("section_id") or "")
     ]
     sections.extend(_virtual_missing_main_candidates(canonical, page_bundle))
+    numbered_main_bindings = _numbered_main_binding_rows(
+        canonical,
+        sections,
+        materialize_projections=True,
+    )
     sections.sort(key=lambda row: (
         int(row.get("source_start") or 0),
         int(row.get("order") or 0),
@@ -971,8 +1106,9 @@ def compile_semantic_graph(
                 fallback_main_section_ids.add(matches[-1][2])
     numbered_main_ids = (
         {
-            str(block.get("section_id") or "") for block in mains.values()
-            if str(block.get("section_id") or "")
+            str(row.get("resolved_section_id") or "")
+            for row in numbered_main_bindings
+            if str(row.get("resolved_section_id") or "")
         }
         if numbered_hierarchy_active else set()
     ) | fallback_main_section_ids
@@ -1074,6 +1210,7 @@ def compile_semantic_graph(
         fallback_main_section_ids=(
             fallback_main_section_ids if hierarchy_provider is None else set()
         ),
+        numbered_main_bindings=numbered_main_bindings,
     )
     if hierarchy_provider is None:
         for sid, parent_sid in fallback_subtopic_parent.items():
@@ -1127,9 +1264,18 @@ def compile_semantic_graph(
 
     topics: list[dict[str, Any]] = []
     topic_by_section: dict[str, dict[str, Any]] = {}
+    numbered_binding_by_section = {
+        str(row.get("resolved_section_id") or ""): row
+        for row in numbered_main_bindings
+        if str(row.get("resolved_section_id") or "")
+    }
     for index, section in enumerate(main_sections, start=1):
         section_id = str(section.get("section_id") or "")
         number, title = _title_number(section.get("title"), section.get("raw_text"))
+        numbered_binding = numbered_binding_by_section.get(section_id)
+        if isinstance(numbered_binding, dict):
+            number = str(numbered_binding.get("number") or number)
+            title = str(numbered_binding.get("expected_title") or title)
         title = _plain_title(title or section.get("title")) or f"Topic {index}"
         topic = {
             "topic_id": f"TOPIC-{index:04d}",
@@ -1140,7 +1286,15 @@ def compile_semantic_graph(
             "section_id": section_id,
             "source_start": int(section.get("source_start") or 0),
             "source_end": int(section.get("source_end") or 0),
-            "source": "verified_pdf" if section.get("phase3_virtual") else "acsd",
+            "source": (
+                "verified_pdf"
+                if section.get("phase3_virtual")
+                else (
+                    "canonical_heading_projection"
+                    if section.get("phase3_numbered_projection")
+                    else "acsd"
+                )
+            ),
         }
         topics.append(topic)
         topic_by_section[section_id] = topic
@@ -1230,16 +1384,31 @@ def compile_semantic_graph(
             "confidence": float(classifications[sid].get("confidence") or 0.0),
             "evidence": list(classifications[sid].get("evidence") or []),
             "phase3_virtual": bool(section.get("phase3_virtual")),
+            "phase3_numbered_projection": bool(
+                section.get("phase3_numbered_projection")
+            ),
         })
 
     section_graph_by_id = {row["section_id"]: row for row in sections_out}
+    numbered_binding_by_block = {
+        str(row.get("block_id") or ""): row
+        for row in numbered_main_bindings
+        if str(row.get("block_id") or "")
+    }
     blocks: list[dict[str, Any]] = []
     suspicious_blocks: list[str] = []
     for block in sorted(
         [row for row in canonical.get("blocks") or [] if isinstance(row, dict)],
         key=lambda row: int(row.get("order") or 0),
     ):
-        sid = str(block.get("section_id") or "")
+        block_id = str(block.get("block_id") or "")
+        kind = str(block.get("kind") or "")
+        binding = numbered_binding_by_block.get(block_id)
+        sid = str(
+            (binding or {}).get("resolved_section_id")
+            or block.get("section_id")
+            or ""
+        )
         section_node = section_graph_by_id.get(sid)
         position = int(block.get("source_start") or 0)
         topic = (
@@ -1255,9 +1424,9 @@ def compile_semantic_graph(
         if _SUSPICIOUS_MARKUP_RE.search(raw_text):
             suspicious_blocks.append(str(block.get("block_id") or ""))
         blocks.append({
-            "block_id": str(block.get("block_id") or ""),
+            "block_id": block_id,
             "order": int(block.get("order") or 0),
-            "kind": str(block.get("kind") or "other"),
+            "kind": kind or "other",
             "section_id": sid,
             "topic_id": topic["topic_id"],
             "subtopic_id": subtopic["subtopic_id"] if subtopic else "",
@@ -1311,6 +1480,7 @@ def compile_semantic_graph(
         ),
         "semantic_source_sha256": "",
         "classification_mode": classification_mode,
+        "numbered_main_bindings": copy.deepcopy(numbered_main_bindings),
         "metadata": {
             **metadata,
             "subject_adapter": subject_adapter(metadata.get("subject")),
@@ -1680,7 +1850,12 @@ def render_semantic_source(
         key=lambda row: int(row.get("order") or 0),
     ):
         emit_virtual_sections_through(int(block.get("source_start") or 0))
-        sid = str(block.get("section_id") or "")
+        graph_block = graph_block_by_id.get(str(block.get("block_id") or ""))
+        sid = str(
+            (graph_block or {}).get("section_id")
+            or block.get("section_id")
+            or ""
+        )
         section = graph_sections.get(sid)
         kind = str(block.get("kind") or "")
         if kind == "layout":
@@ -1738,7 +1913,7 @@ def render_semantic_source(
                 pieces.append(caption)
             continue
         pending_text.append(_graph_block_text(
-            graph_block_by_id.get(str(block.get("block_id") or "")), block
+            graph_block, block
         ))
     flush_pending()
     emit_virtual_sections_through(10**18)
@@ -2460,10 +2635,12 @@ def _interpret_custom_source_instruction_via_openai(
     ]
     system = (
         "Interpret the user's source-review instruction exactly once. Select "
-        "only a supplied verified page-block target_id when the instruction "
-        "unambiguously identifies it. Otherwise request clarification or say "
-        "that the source must be replaced. Never invent replacement text, "
-        "change source identity, or choose an ID that was not supplied."
+        "only a supplied verified source-candidate target_id when the "
+        "instruction unambiguously identifies it. A candidate may be a "
+        "verified PDF block or a hash-sealed canonical-topic patch. Otherwise "
+        "request clarification or say that the source must be replaced. Never "
+        "invent replacement text, change raw source identity, or choose an ID "
+        "that was not supplied."
     )
     pages: list[phase22.EvidencePage] = []
     page_numbers = [
@@ -2514,6 +2691,7 @@ def reconcile_source_anomalies(
     """
     out = copy.deepcopy(graph)
     recomputed_codes = {
+        "numbered_main_topic_coverage",
         "semantic_source_rich_text",
         "semantic_source_hash_mismatch",
         "unresolved_source_override_markup",
@@ -2820,12 +2998,254 @@ def _rich_text_issue_block_ids(
     return affected
 
 
+def _topic_heading_preview(graph: dict[str, Any]) -> str:
+    """Render a compact, reviewable view of the working MMD topic spine."""
+
+    lines: list[str] = []
+    for topic in sorted(
+        [row for row in graph.get("topics") or [] if isinstance(row, dict)],
+        key=lambda row: (
+            int(row.get("source_start") or 0),
+            int(row.get("order") or 0),
+        ),
+    ):
+        number = str(topic.get("structural_number") or "").strip()
+        title = str(topic.get("title") or "").strip()
+        if title:
+            lines.append(f"## {number + ' ' if number else ''}{title}")
+    return "\n".join(lines)[:16_000]
+
+
+def _graph_source_identity_inventory(graph: dict[str, Any]) -> dict[str, Any]:
+    """Return identities a derived-source topology patch may never change."""
+
+    return {
+        "source_contract_hash": str(graph.get("source_contract_hash") or ""),
+        "semantic_context_hash": str(
+            graph.get("semantic_context_hash") or ""
+        ),
+        "source_sha256": str(graph.get("source_sha256") or ""),
+        "blocks": [
+            {
+                key: copy.deepcopy(row.get(key))
+                for key in (
+                    "block_id", "order", "kind", "source_start", "source_end",
+                    "raw_sha256", "figure_id", "image_ids", "math_ids",
+                    "task_ids",
+                )
+            }
+            for row in graph.get("blocks") or []
+            if isinstance(row, dict)
+        ],
+        "tasks": [
+            {
+                key: copy.deepcopy(row.get(key))
+                for key in (
+                    "task_id", "qid", "order", "section_id", "source_start",
+                    "source_end", "source_label", "source_kind",
+                    "identity_key", "display_prompt", "figure_ids",
+                    "image_urls", "requires_visual", "chapter_wide",
+                )
+            }
+            for row in graph.get("tasks") or []
+            if isinstance(row, dict)
+        ],
+        "figures": copy.deepcopy(graph.get("figures") or []),
+        "images": copy.deepcopy(graph.get("images") or []),
+        "math": copy.deepcopy(graph.get("math") or []),
+    }
+
+
+def _numbered_topic_patch_preview(
+    graph: dict[str, Any],
+    *,
+    canonical: dict[str, Any],
+    page_bundle: dict[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """Rebuild only topic ownership from sealed canonical heading evidence.
+
+    Existing API/critic classifications are replayed as opaque section roles;
+    no provider call runs. The rebuild must preserve every source-owned block,
+    task, QID, Figure, image, math span and raw-source hash, then pass the full
+    graph validator before it can become a selectable patch.
+    """
+
+    mismatches = _numbered_main_topic_mismatches(
+        graph, canonical=canonical)
+    if not mismatches:
+        return None
+    current_errors = validate_graph(
+        graph,
+        canonical=canonical,
+        semantic_source=render_semantic_source(graph, canonical),
+        allow_unresolved_source_anomalies=True,
+    )
+    error_codes = {
+        str(row.get("code") or "")
+        for row in current_errors
+        if isinstance(row, dict)
+    }
+    if error_codes != {"numbered_main_topic_coverage"}:
+        return None
+
+    existing_sections = {
+        str(row.get("section_id") or ""): copy.deepcopy(row)
+        for row in graph.get("sections") or []
+        if isinstance(row, dict) and str(row.get("section_id") or "")
+    }
+
+    def preserved_hierarchy(payload: dict[str, Any]) -> dict[str, Any]:
+        rows = [
+            row for row in payload.get("sections") or []
+            if isinstance(row, dict) and str(row.get("section_id") or "")
+        ]
+        allowed_ids = {str(row.get("section_id") or "") for row in rows}
+        preserved: list[dict[str, Any]] = []
+        for row in rows:
+            section_id = str(row.get("section_id") or "")
+            prior = existing_sections.get(section_id, {})
+            parent = str(prior.get("parent_section_id") or "")
+            if parent not in allowed_ids:
+                parent = ""
+            preserved.append({
+                "section_id": section_id,
+                "role": str(
+                    prior.get("role") or row.get("baseline_role") or "other"
+                ),
+                "parent_section_id": parent,
+                "confidence": float(prior.get("confidence") or 1.0),
+                "evidence": list(
+                    prior.get("evidence") or ["preserved verified hierarchy"]
+                )[:4],
+            })
+        return {"sections": preserved}
+
+    source_length = max(
+        int((canonical.get("document") or {}).get("source_chars") or 0),
+        max(
+            [
+                int(row.get("source_end") or 0)
+                for row in canonical.get("blocks") or []
+                if isinstance(row, dict)
+            ]
+            or [0]
+        ),
+        1,
+    )
+    rebuilt, _report = compile_semantic_graph(
+        canonical,
+        source_text=" " * source_length,
+        metadata=copy.deepcopy(graph.get("metadata") or {}),
+        page_bundle=page_bundle,
+        hierarchy_provider=preserved_hierarchy,
+        critic_provider=None,
+    )
+    rebuilt["classification_mode"] = str(
+        graph.get("classification_mode") or rebuilt.get("classification_mode")
+    )
+    if (
+        _sha256_json(_graph_source_identity_inventory(rebuilt))
+        != _sha256_json(_graph_source_identity_inventory(graph))
+    ):
+        raise ValueError(
+            "canonical topic patch changed a source-owned identity inventory"
+        )
+
+    prior_blocks = {
+        str(row.get("block_id") or ""): row
+        for row in graph.get("blocks") or []
+        if isinstance(row, dict) and str(row.get("block_id") or "")
+    }
+    for row in rebuilt.get("blocks") or []:
+        prior = prior_blocks.get(str(row.get("block_id") or ""), {})
+        if isinstance(prior.get("source_override"), dict):
+            row["source_override"] = copy.deepcopy(prior["source_override"])
+    for key in (
+        "source_fusion_repairs",
+        "source_review_resolution",
+        _MACHINE_METADATA_MIGRATION_KEY,
+    ):
+        if key in graph:
+            rebuilt[key] = copy.deepcopy(graph[key])
+
+    before_source = render_semantic_source(graph, canonical)
+    after_source = render_semantic_source(rebuilt, canonical)
+    rebuilt["semantic_source_sha256"] = _sha256_text(after_source)
+    errors = validate_graph(
+        rebuilt,
+        canonical=canonical,
+        semantic_source=after_source,
+    )
+    if errors:
+        raise ValueError(
+            "canonical topic patch did not pass full semantic graph validation: "
+            + "; ".join(str(row.get("code") or "") for row in errors)
+        )
+    retained_warnings = [
+        copy.deepcopy(row)
+        for row in graph.get("issues") or []
+        if isinstance(row, dict) and row.get("severity") != "error"
+    ]
+    operations = [
+        (
+            f"Restore numbered main topic {row.get('number')} "
+            f"{row.get('expected_title')} at canonical section "
+            f"{row.get('resolved_section_id')}"
+        ).strip()
+        for row in mismatches
+    ]
+    patch_material = {
+        "version": _NUMBERED_TOPIC_PATCH_VERSION,
+        "kind": "canonical_topic_binding",
+        "target": "working_derived_source",
+        "raw_source_mutated": False,
+        "source_contract_hash": str(graph.get("source_contract_hash") or ""),
+        "semantic_context_hash": str(
+            graph.get("semantic_context_hash") or ""
+        ),
+        "before_sha256": _sha256_text(before_source),
+        "after_sha256": _sha256_text(after_source),
+        "operations": operations,
+    }
+    patch_hash = _sha256_json(patch_material)
+    target_id = f"canonical-topic-patch-{patch_hash[:24]}"
+    source_patch = {
+        **patch_material,
+        "verified": True,
+        "patch_hash": patch_hash,
+        "target_id": target_id,
+        "before": _topic_heading_preview(graph),
+        "after": _topic_heading_preview(rebuilt),
+    }
+    rebuilt["issues"] = [
+        *retained_warnings,
+        {
+            "severity": "warning",
+            "code": "numbered_main_topic_coverage_repaired",
+            "message": (
+                "The working semantic source topic spine was rebound from "
+                "sealed canonical heading evidence; the raw MMD was unchanged."
+            ),
+            "operations": operations,
+        },
+    ]
+    rebuilt["status"] = "ready"
+    rebuilt["numbered_topic_patch_resolution"] = {
+        **copy.deepcopy(source_patch),
+        "before": "",
+        "after": "",
+    }
+    rebuilt[_DOWNSTREAM_INVALIDATION_KEY] = True
+    return rebuilt, source_patch
+
+
 def _human_reviewable_source_graph(
     graph: dict[str, Any],
     *,
     canonical: dict[str, Any],
+    page_bundle: dict[str, Any] | None = None,
 ) -> bool:
-    """Only localized presentation/source-fusion issues may be overridden."""
+    """Only sealed source candidates may enter the decision workflow."""
 
     allowed = {
         "converter_semantic_markup_requires_pdf_reconciliation",
@@ -2835,7 +3255,19 @@ def _human_reviewable_source_graph(
         row for row in graph.get("issues") or []
         if isinstance(row, dict) and row.get("severity") == "error"
     ]
-    if not errors or any(str(row.get("code") or "") not in allowed for row in errors):
+    if not errors:
+        return False
+    error_codes = {str(row.get("code") or "") for row in errors}
+    if error_codes == {"numbered_main_topic_coverage"}:
+        try:
+            return _numbered_topic_patch_preview(
+                graph,
+                canonical=canonical,
+                page_bundle=page_bundle,
+            ) is not None
+        except (TypeError, ValueError):
+            return False
+    if any(code not in allowed for code in error_codes):
         return False
     localized = set(_source_review_block_ids(graph, canonical=canonical))
     return bool(localized) and all(
@@ -3110,6 +3542,104 @@ def _build_source_review_state(
     }
 
 
+def _build_numbered_topic_patch_review_state(
+    graph: dict[str, Any],
+    *,
+    canonical: dict[str, Any],
+    page_bundle: dict[str, Any] | None,
+    revision: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build one hash-sealed working-source patch decision."""
+
+    preview = _numbered_topic_patch_preview(
+        graph,
+        canonical=canonical,
+        page_bundle=page_bundle,
+    )
+    if preview is None:
+        raise ValueError(
+            "numbered main-topic coverage has no safe canonical patch"
+        )
+    _repaired, source_patch = preview
+    mismatches = _numbered_main_topic_mismatches(
+        graph, canonical=canonical)
+    missing_names = [
+        f"{row.get('number')} {row.get('expected_title')}".strip()
+        for row in mismatches
+    ]
+    first = mismatches[0] if mismatches else {}
+    item = {
+        "block_id": str(first.get("block_id") or "CANONICAL-TOPIC-SPINE"),
+        "kind": "canonical_topic_binding",
+        "raw_text": str(source_patch.get("before") or ""),
+        "raw_sha256": _sha256_text(source_patch.get("before") or ""),
+        "topic_id": "",
+        "topic": "Canonical chapter topic spine",
+        "qids": [],
+        "questions": missing_names,
+    }
+    target_id = str(source_patch.get("target_id") or "")
+    after_preview = str(source_patch.get("after") or "")
+    candidates = [{
+        "target_id": target_id,
+        "page_id": "",
+        "page_number": 0,
+        "reading_order": 0,
+        "kind": "canonical_topic_patch",
+        "visible_text": after_preview,
+        "resolved_text": after_preview,
+        "resolved_sha256": _sha256_text(after_preview),
+        "reason": (
+            "This patch is derived from the existing numbered canonical "
+            "headings and preserves every raw-source identity inventory."
+        ),
+    }]
+    pdf_sha256 = str(
+        (page_bundle or {}).get("pdf_sha256")
+        or (graph.get("vision_evidence") or {}).get("pdf_sha256")
+        or ""
+    )
+    context_hash = _source_review_context_hash(
+        graph,
+        item=item,
+        candidates=candidates,
+        pdf_sha256=pdf_sha256,
+        revision=revision,
+    )
+    return {
+        "version": _SOURCE_REVIEW_VERSION,
+        "review_kind": "canonical_topic_patch",
+        "decision_id": f"phase3-source-{context_hash[:24]}",
+        "context_hash": context_hash,
+        "pdf_sha256": pdf_sha256,
+        "item": item,
+        "graph_errors": [
+            copy.deepcopy(row)
+            for row in graph.get("issues") or []
+            if isinstance(row, dict)
+            and row.get("severity") == "error"
+            and row.get("code") == "numbered_main_topic_coverage"
+        ][:20],
+        "diagnosis": (
+            "The working Phase 3 graph lost or misbound a numbered main "
+            "topic even though the sealed canonical source still identifies "
+            "it. The proposed patch restores only the derived topic spine; "
+            "the uploaded raw MMD remains byte-for-byte unchanged."
+        ),
+        "decision_question": (
+            "Apply the verified canonical-source patch to the working MMD and "
+            "resume, give different repair guidance, or replace the source?"
+        ),
+        "recommended_target_id": target_id,
+        "candidates": candidates,
+        "custom_interpretation_used": bool(
+            (revision or {}).get("custom_interpretation_used")
+        ),
+        "revision": copy.deepcopy(revision or {}),
+        "source_patch": copy.deepcopy(source_patch),
+    }
+
+
 def _source_review_pending(
     graph: dict[str, Any],
     state: dict[str, Any],
@@ -3122,6 +3652,78 @@ def _source_review_pending(
         if isinstance(row, dict)
     ]
     recommended = str(state.get("recommended_target_id") or "")
+    if state.get("review_kind") == "canonical_topic_patch":
+        source_patch = copy.deepcopy(state.get("source_patch") or {})
+        public_candidates = [{
+            "target_id": str(row.get("target_id") or ""),
+            "concept_id": str(row.get("target_id") or "")[:256],
+            "title": "Repair the working MMD topic spine",
+            "topic": "Canonical chapter topic spine",
+            "coverage": str(source_patch.get("after") or "")[:8_000],
+            "gap": (
+                "The current working MMD topic spine is missing or misbinding "
+                "a numbered main topic."
+            ),
+        } for row in candidates[:1]]
+        options = [{
+            "choice": "accept_recommended",
+            "label": "Apply the verified working-source patch",
+            "recommended": True,
+            "target_id": recommended,
+            "target_concept_id": recommended[:256],
+        }]
+        if not state.get("custom_interpretation_used"):
+            options.append({
+                "choice": "custom_instruction",
+                "label": "Tell Aegis how to correct the working source",
+                "recommended": False,
+            })
+        options.append({
+            "choice": "replace_source",
+            "label": "Upload a different source instead",
+            "recommended": False,
+        })
+        evidence_id = (
+            "CANONICAL-PATCH-"
+            + str(source_patch.get("patch_hash") or "")[:24].upper()
+        )
+        return {
+            "decision_id": str(state.get("decision_id") or ""),
+            "context_hash": str(state.get("context_hash") or ""),
+            "kind": "phase3_source_graph_review",
+            "phase": "3",
+            "conflict": str(state.get("decision_question") or ""),
+            "diagnosis": str(state.get("diagnosis") or ""),
+            "decision_question": str(
+                state.get("decision_question") or ""
+            ),
+            "item": {
+                "unit_id": str(item.get("block_id") or ""),
+                "type_id": "numbered_main_topic_coverage",
+                "type_title": "Working-source topic patch",
+                "qids": [],
+                "questions": list(item.get("questions") or [])[:100],
+                "topic": "Canonical chapter topic spine",
+            },
+            "candidates": public_candidates,
+            "evidence": [
+                {
+                    "evidence_id": evidence_id,
+                    "page": "",
+                    "label": "Current working MMD topic spine",
+                    "text": str(source_patch.get("before") or "")[:8_000],
+                },
+                {
+                    "evidence_id": evidence_id + "-AFTER",
+                    "page": "",
+                    "label": "Verified patched topic spine",
+                    "text": str(source_patch.get("after") or "")[:8_000],
+                },
+            ],
+            "deferred_assignment_unit_ids": [],
+            "options": options,
+            "source_patch": source_patch,
+        }
     options: list[dict[str, Any]] = []
     if recommended and any(
         str(row.get("target_id") or "") == recommended
@@ -3419,6 +4021,68 @@ def _apply_human_source_candidate(
     return graph
 
 
+def _apply_verified_numbered_topic_patch(
+    graph: dict[str, Any],
+    state: dict[str, Any],
+    *,
+    canonical: dict[str, Any],
+    page_bundle: dict[str, Any] | None,
+    target_id: str,
+) -> dict[str, Any]:
+    """Re-derive and apply one selected canonical topic patch API-free."""
+
+    expected_pdf_sha256 = str(state.get("pdf_sha256") or "")
+    current_pdf_sha256 = str((page_bundle or {}).get("pdf_sha256") or "")
+    if expected_pdf_sha256 and current_pdf_sha256 != expected_pdf_sha256:
+        raise ValueError(
+            "the verified PDF identity changed after the source patch was shown"
+        )
+    preview = _numbered_topic_patch_preview(
+        graph,
+        canonical=canonical,
+        page_bundle=page_bundle,
+    )
+    if preview is None:
+        raise ValueError(
+            "the numbered-topic source patch is stale or no longer required"
+        )
+    repaired, current_patch = preview
+    saved_patch = state.get("source_patch")
+    if not isinstance(saved_patch, dict):
+        raise ValueError("the saved source patch preview is unavailable")
+    sealed_fields = (
+        "version", "kind", "target", "verified", "raw_source_mutated",
+        "source_contract_hash", "semantic_context_hash", "before_sha256",
+        "after_sha256", "patch_hash", "target_id", "before", "after",
+        "operations",
+    )
+    if any(
+        current_patch.get(field) != saved_patch.get(field)
+        for field in sealed_fields
+    ):
+        raise ValueError(
+            "the canonical source patch changed after the decision was shown"
+        )
+    if (
+        not target_id
+        or target_id != str(current_patch.get("target_id") or "")
+    ):
+        raise ValueError(
+            "the selected source patch is not the current verified candidate"
+        )
+    resolution = copy.deepcopy(
+        repaired.get("numbered_topic_patch_resolution") or {}
+    )
+    resolution.update({
+        "human_decision_id": str(state.get("decision_id") or ""),
+        "human_decision_context_hash": str(state.get("context_hash") or ""),
+        "resolved_via": "agent_or_human_decision",
+    })
+    repaired["numbered_topic_patch_resolution"] = resolution
+    repaired.pop(_SOURCE_REVIEW_KEY, None)
+    return repaired
+
+
 def _source_review_graph_or_raise(
     graph: dict[str, Any],
     *,
@@ -3430,10 +4094,28 @@ def _source_review_graph_or_raise(
 
     if graph.get("status") == "ready":
         return graph
+    numbered_topic_review = any(
+        isinstance(row, dict)
+        and row.get("severity") == "error"
+        and row.get("code") == "numbered_main_topic_coverage"
+        for row in graph.get("issues") or []
+    )
     unresolved = _source_review_block_ids(graph, canonical=canonical)
     block_id = unresolved[0] if unresolved else ""
     state = graph.get(_SOURCE_REVIEW_KEY)
-    if (
+    if numbered_topic_review:
+        if (
+            not isinstance(state, dict)
+            or state.get("version") != _SOURCE_REVIEW_VERSION
+            or state.get("review_kind") != "canonical_topic_patch"
+        ):
+            state = _build_numbered_topic_patch_review_state(
+                graph,
+                canonical=canonical,
+                page_bundle=page_bundle,
+            )
+            graph[_SOURCE_REVIEW_KEY] = state
+    elif (
         not isinstance(state, dict)
         or state.get("version") != _SOURCE_REVIEW_VERSION
         or str((state.get("item") or {}).get("block_id") or "") != block_id
@@ -3467,13 +4149,22 @@ def _source_review_graph_or_raise(
     if choice == "accept_recommended":
         target_id = str(state.get("recommended_target_id") or target_id)
     if choice in {"accept_recommended", "select_candidate"}:
-        updated = _apply_human_source_candidate(
-            graph,
-            state,
-            canonical=canonical,
-            page_bundle=page_bundle,
-            target_id=target_id,
-        )
+        if state.get("review_kind") == "canonical_topic_patch":
+            updated = _apply_verified_numbered_topic_patch(
+                graph,
+                state,
+                canonical=canonical,
+                page_bundle=page_bundle,
+                target_id=target_id,
+            )
+        else:
+            updated = _apply_human_source_candidate(
+                graph,
+                state,
+                canonical=canonical,
+                page_bundle=page_bundle,
+                target_id=target_id,
+            )
         if updated.get("status") != "ready":
             return _source_review_graph_or_raise(
                 updated,
@@ -3536,13 +4227,22 @@ def _source_review_graph_or_raise(
         interpretation.get("decision") == "use_verified_page_block"
         and selected in candidate_ids
     ):
-        updated = _apply_human_source_candidate(
-            graph,
-            state,
-            canonical=canonical,
-            page_bundle=page_bundle,
-            target_id=selected,
-        )
+        if state.get("review_kind") == "canonical_topic_patch":
+            updated = _apply_verified_numbered_topic_patch(
+                graph,
+                state,
+                canonical=canonical,
+                page_bundle=page_bundle,
+                target_id=selected,
+            )
+        else:
+            updated = _apply_human_source_candidate(
+                graph,
+                state,
+                canonical=canonical,
+                page_bundle=page_bundle,
+                target_id=selected,
+            )
         if updated.get("status") != "ready":
             return _source_review_graph_or_raise(
                 updated,
@@ -3559,15 +4259,23 @@ def _source_review_graph_or_raise(
         "decision": str(interpretation.get("decision") or ""),
         "reason": str(interpretation.get("reason") or "")[:2_000],
     }
-    next_state = _build_source_review_state(
-        graph,
-        canonical=canonical,
-        page_bundle=page_bundle,
-        source_path=source_path,
-        block_id=block_id,
-        revision=revision,
-        allow_diagnostic_call=False,
-    )
+    if state.get("review_kind") == "canonical_topic_patch":
+        next_state = _build_numbered_topic_patch_review_state(
+            graph,
+            canonical=canonical,
+            page_bundle=page_bundle,
+            revision=revision,
+        )
+    else:
+        next_state = _build_source_review_state(
+            graph,
+            canonical=canonical,
+            page_bundle=page_bundle,
+            source_path=source_path,
+            block_id=block_id,
+            revision=revision,
+            allow_diagnostic_call=False,
+        )
     next_state["custom_interpretation_used"] = True
     next_state["recommended_target_id"] = ""
     next_state["diagnosis"] = str(
@@ -3578,7 +4286,11 @@ def _source_review_graph_or_raise(
     next_state["decision_question"] = str(
         interpretation.get("question")
         or (
-            "Choose one verified PDF evidence block directly."
+            (
+                "Choose the verified canonical-source patch directly."
+                if next_state.get("review_kind") == "canonical_topic_patch"
+                else "Choose one verified PDF evidence block directly."
+            )
             if next_state.get("candidates")
             else "Replace or correct the source file before resuming."
         )
@@ -3587,6 +4299,102 @@ def _source_review_graph_or_raise(
     raise semantic_recovery.HumanDecisionRequired(
         _source_review_pending(
             graph, next_state, canonical=canonical))
+
+
+def _numbered_main_topic_mismatches(
+    graph: dict[str, Any],
+    *,
+    canonical: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Return structured numbered-topic drift without parsing error prose."""
+
+    bindings = _numbered_main_binding_rows(canonical)
+    if len(bindings) < 2:
+        return []
+    topics = [
+        row for row in graph.get("topics") or [] if isinstance(row, dict)
+    ]
+    topics_by_section: dict[str, list[dict[str, Any]]] = {}
+    for topic in topics:
+        section_id = str(topic.get("section_id") or "")
+        if section_id:
+            topics_by_section.setdefault(section_id, []).append(topic)
+    binding_counts: dict[str, int] = {}
+    for binding in bindings:
+        section_id = str(binding.get("resolved_section_id") or "")
+        if section_id:
+            binding_counts[section_id] = binding_counts.get(section_id, 0) + 1
+    graph_blocks_by_id = {
+        str(row.get("block_id") or ""): row
+        for row in graph.get("blocks") or []
+        if isinstance(row, dict) and str(row.get("block_id") or "")
+    }
+    mismatches: list[dict[str, Any]] = []
+    for binding in bindings:
+        section_id = str(binding.get("resolved_section_id") or "")
+        expected_title = str(binding.get("expected_title") or "").strip()
+        expected_number = str(binding.get("number") or "")
+        section_topics = topics_by_section.get(section_id, [])
+        topic = section_topics[0] if len(section_topics) == 1 else None
+        reasons: list[str] = []
+        if not section_id or binding_counts.get(section_id, 0) != 1:
+            reasons.append("non_unique_canonical_section_binding")
+        if len(section_topics) != 1:
+            reasons.append("missing_or_duplicate_topic_for_section")
+        if isinstance(topic, dict) and (
+            _semantic_title_key(topic.get("title"))
+            != _semantic_title_key(expected_title)
+        ):
+            reasons.append("changed_title")
+        if isinstance(topic, dict) and (
+            str(topic.get("structural_number") or "") != expected_number
+        ):
+            reasons.append("changed_structural_number")
+        heading_block = graph_blocks_by_id.get(
+            str(binding.get("block_id") or "")
+        )
+        if not isinstance(heading_block, dict) or (
+            str(heading_block.get("section_id") or "") != section_id
+        ):
+            reasons.append("heading_block_section_mismatch")
+        if isinstance(topic, dict) and (
+            not isinstance(heading_block, dict)
+            or str(heading_block.get("topic_id") or "")
+            != str(topic.get("topic_id") or "")
+        ):
+            reasons.append("heading_block_topic_mismatch")
+        if (
+            isinstance(topic, dict)
+            and not reasons
+            and _semantic_title_key(topic.get("title"))
+            == _semantic_title_key(expected_title)
+            and str(topic.get("structural_number") or "")
+            == expected_number
+        ):
+            continue
+        actual = topic or next(
+            (
+                row for row in topics
+                if (
+                    _semantic_title_key(row.get("title"))
+                    == _semantic_title_key(expected_title)
+                    or str(row.get("structural_number") or "")
+                    == expected_number
+                )
+            ),
+            {},
+        )
+        mismatches.append({
+            **copy.deepcopy(binding),
+            "actual_topic_id": str(actual.get("topic_id") or ""),
+            "actual_section_id": str(actual.get("section_id") or ""),
+            "actual_title": str(actual.get("title") or ""),
+            "actual_structural_number": str(
+                actual.get("structural_number") or ""
+            ),
+            "reasons": reasons or ["missing_numbered_topic"],
+        })
+    return mismatches
 
 
 def validate_graph(
@@ -3626,44 +4434,27 @@ def validate_graph(
         str(row.get("qid") or "") for row in canonical.get("tasks") or []
         if isinstance(row, dict)
     }
-    numbered_mains, _numbered_subtopics = (
-        structure.numbered_heading_inventory(canonical)
-    )
     # Two or more numbered main headings are unambiguous chapter-topology
-    # evidence. Every one must retain its own graph topic. This also rejects a
-    # previously cached graph that still matches the source hash but silently
-    # absorbed Section 2 into Section 1. A single numbered heading is not
-    # enforced here because some publishers use the chapter number itself as
-    # the only numbered level-one heading.
-    if len(numbered_mains) >= 2:
-        topic_by_section = {
-            str(row.get("section_id") or ""): row
-            for row in graph.get("topics") or []
-            if isinstance(row, dict) and str(row.get("section_id") or "")
-        }
-        missing_or_changed: list[str] = []
-        for number, block in numbered_mains.items():
-            section_id = str(block.get("section_id") or "")
-            expected_title = str(
-                (block.get("heading") or {}).get("title") or ""
-            ).strip()
-            topic = topic_by_section.get(section_id)
-            if (
-                not isinstance(topic, dict)
-                or _normal(topic.get("title")) != _normal(expected_title)
-            ):
-                missing_or_changed.append(
-                    f"{number} {expected_title}".strip()
+    # evidence. Every one must retain its own graph topic. A stale block-to-
+    # section association is rebound from exact canonical evidence above; this
+    # guard therefore reports the expected and actual identities separately.
+    numbered_mismatches = _numbered_main_topic_mismatches(
+        graph, canonical=canonical)
+    if numbered_mismatches:
+        errors.append({
+            "severity": "error",
+            "code": "numbered_main_topic_coverage",
+            "mismatches": numbered_mismatches,
+            "message": (
+                "Semantic graph omitted or changed numbered main topic(s): "
+                + "; ".join(
+                    f"{row.get('number')} {row.get('expected_title')}"
+                    f" [expected section {row.get('resolved_section_id')}; "
+                    f"actual section {row.get('actual_section_id') or 'missing'}]"
+                    for row in numbered_mismatches
                 )
-        if missing_or_changed:
-            errors.append({
-                "severity": "error",
-                "code": "numbered_main_topic_coverage",
-                "message": (
-                    "Semantic graph omitted or changed numbered main topic(s): "
-                    + "; ".join(missing_or_changed)
-                ),
-            })
+            ),
+        })
     for row in graph.get("blocks") or []:
         if row.get("block_id") not in allowed_blocks:
             errors.append({"severity": "error", "code": "unknown_block_id", "message": str(row.get("block_id"))})
@@ -5131,7 +5922,10 @@ def _compatible_source_review_graph(
         semantic_source=semantic_source,
         allow_unresolved_source_anomalies=True,
     )
-    allowed_codes = {"semantic_source_rich_text"}
+    allowed_codes = {
+        "semantic_source_rich_text",
+        "numbered_main_topic_coverage",
+    }
     if any(
         str(row.get("code") or "") not in allowed_codes
         for row in errors
@@ -5139,7 +5933,10 @@ def _compatible_source_review_graph(
     ):
         return None
     if not _human_reviewable_source_graph(
-        graph, canonical=canonical):
+        graph,
+        canonical=canonical,
+        page_bundle=page_bundle,
+    ):
         return None
     review = graph.get(_SOURCE_REVIEW_KEY)
     if review is not None:
@@ -5157,6 +5954,47 @@ def _compatible_source_review_graph(
         ):
             return None
         review_candidates = review.get("candidates") or []
+        if review.get("review_kind") == "canonical_topic_patch":
+            try:
+                current_preview = _numbered_topic_patch_preview(
+                    graph,
+                    canonical=canonical,
+                    page_bundle=page_bundle,
+                )
+            except (TypeError, ValueError):
+                return None
+            saved_patch = review.get("source_patch")
+            if current_preview is None or not isinstance(saved_patch, dict):
+                return None
+            _repaired, current_patch = current_preview
+            sealed_preview_fields = (
+                "version", "kind", "target", "verified",
+                "raw_source_mutated", "source_contract_hash",
+                "semantic_context_hash", "before_sha256", "after_sha256",
+                "patch_hash", "target_id", "before", "after", "operations",
+            )
+            if any(
+                saved_patch.get(field) != current_patch.get(field)
+                for field in sealed_preview_fields
+            ):
+                return None
+            review_item = review.get("item")
+            if not isinstance(review_item, dict) or (
+                str(review_item.get("raw_text") or "")
+                != str(current_patch.get("before") or "")
+                or str(review_item.get("raw_sha256") or "")
+                != _sha256_text(current_patch.get("before") or "")
+            ):
+                return None
+            if len(review_candidates) != 1 or (
+                str(review_candidates[0].get("target_id") or "")
+                != str(current_patch.get("target_id") or "")
+                or str(review_candidates[0].get("resolved_text") or "")
+                != str(current_patch.get("after") or "")
+                or str(review.get("recommended_target_id") or "")
+                != str(current_patch.get("target_id") or "")
+            ):
+                return None
         for candidate in review_candidates:
             if not isinstance(candidate, dict):
                 return None
@@ -5462,7 +6300,11 @@ def prepare_generation_graph(
         session = active_session()
         if isinstance(session, dict):
             session["graph"] = graph
-        if _human_reviewable_source_graph(graph, canonical=canonical):
+        if _human_reviewable_source_graph(
+            graph,
+            canonical=canonical,
+            page_bundle=page_bundle,
+        ):
             try:
                 graph = _source_review_graph_or_raise(
                     graph,

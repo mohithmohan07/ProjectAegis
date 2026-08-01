@@ -136,9 +136,28 @@ export interface SemanticDecisionCandidate {
 }
 
 export interface SemanticDecisionEvidence {
+  evidence_id?: string;
   label: string;
   text: string;
   page: string;
+  [key: string]: unknown;
+}
+
+export interface SemanticSourcePatchPreview {
+  version: string;
+  kind: "canonical_topic_binding";
+  target: "working_derived_source";
+  verified: boolean;
+  raw_source_mutated: false;
+  source_contract_hash: string;
+  semantic_context_hash: string;
+  before_sha256: string;
+  after_sha256: string;
+  patch_hash: string;
+  target_id: string;
+  before: string;
+  after: string;
+  operations: string[];
   [key: string]: unknown;
 }
 
@@ -203,6 +222,7 @@ export interface PendingSemanticDecision {
   evidence: SemanticDecisionEvidence[];
   deferred_assignment_unit_ids?: string[];
   options: SemanticDecisionOption[];
+  source_patch?: SemanticSourcePatchPreview | null;
   agent_review?: AgentSemanticReview;
   cumulative_usage?: OpenAIUsage;
   // Compatibility with early decision payloads generated before the stable

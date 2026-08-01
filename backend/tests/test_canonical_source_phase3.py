@@ -259,6 +259,346 @@ def test_rne_cached_graph_cannot_absorb_numbered_section_two_into_section_one():
     assert "numbered_main_topic_coverage" in codes
 
 
+def test_numbered_topic_validation_rejects_number_and_section_aliasing():
+    _source, canonical, graph, _report, _semantic = _compile_fixture(
+        "RNE.mmd",
+        subject="History",
+        chapter_title="The Rise of Nationalism in Europe",
+    )
+    wrong_number = copy.deepcopy(graph)
+    wrong_number["topics"][1]["structural_number"] = "999"
+    wrong_number_source = phase3.render_semantic_source(
+        wrong_number, canonical)
+    wrong_number["semantic_source_sha256"] = phase3._sha256_text(
+        wrong_number_source)
+    number_errors = phase3.validate_graph(
+        wrong_number,
+        canonical=canonical,
+        semantic_source=wrong_number_source,
+    )
+
+    duplicate_section = copy.deepcopy(graph)
+    duplicate_section["topics"][1]["section_id"] = (
+        duplicate_section["topics"][0]["section_id"]
+    )
+    duplicate_source = phase3.render_semantic_source(
+        duplicate_section, canonical)
+    duplicate_section["semantic_source_sha256"] = phase3._sha256_text(
+        duplicate_source)
+    duplicate_errors = phase3.validate_graph(
+        duplicate_section,
+        canonical=canonical,
+        semantic_source=duplicate_source,
+    )
+
+    stale_heading = copy.deepcopy(graph)
+    second_binding = stale_heading["numbered_main_bindings"][1]
+    first_topic = stale_heading["topics"][0]
+    heading_block = next(
+        row for row in stale_heading["blocks"]
+        if row["block_id"] == second_binding["block_id"]
+    )
+    heading_block["section_id"] = first_topic["section_id"]
+    heading_block["topic_id"] = first_topic["topic_id"]
+    stale_source = phase3.render_semantic_source(stale_heading, canonical)
+    stale_heading["semantic_source_sha256"] = phase3._sha256_text(
+        stale_source)
+    stale_errors = phase3.validate_graph(
+        stale_heading,
+        canonical=canonical,
+        semantic_source=stale_source,
+    )
+
+    assert any(
+        row["code"] == "numbered_main_topic_coverage"
+        and "changed_structural_number" in str(row.get("mismatches"))
+        for row in number_errors
+    )
+    assert any(
+        row["code"] == "numbered_main_topic_coverage"
+        and "missing_or_duplicate_topic_for_section"
+        in str(row.get("mismatches"))
+        for row in duplicate_errors
+    )
+    assert "## The Making of Nationalism in Europe" not in stale_source
+    assert any(
+        row["code"] == "numbered_main_topic_coverage"
+        and "heading_block_section_mismatch" in str(row.get("mismatches"))
+        for row in stale_errors
+    )
+
+
+def test_rne_stale_numbered_heading_section_binding_is_repaired_api_free():
+    source = (DATA / "RNE.mmd").read_text(encoding="utf-8")
+    canonical = phase2.compile_phase2_source(
+        source,
+        source_filename="RNE.mmd",
+        consumer_module="build_concepts",
+    ).canonical
+    mains, _subsections = phase3.structure.numbered_heading_inventory(
+        canonical
+    )
+    section_one_id = str(mains[1]["section_id"])
+    section_two = mains[2]
+    section_two_id = str(section_two["section_id"])
+    section_two["section_id"] = section_one_id
+
+    graph, _report = phase3.compile_semantic_graph(
+        canonical,
+        source_text=source,
+        metadata={
+            "subject": "History",
+            "chapter_title": "The Rise of Nationalism in Europe",
+            "board": "CBSE",
+        },
+        hierarchy_provider=lambda payload: {
+            "sections": [
+                {
+                    "section_id": row["section_id"],
+                    "role": "other",
+                    "parent_section_id": "",
+                    "confidence": 0.999,
+                    "evidence": ["adversarial hierarchy fixture"],
+                }
+                for row in payload["sections"]
+            ],
+        },
+        critic_provider=lambda _payload: {
+            "verdict": "verified",
+            "confidence": 0.999,
+            "repairs": [],
+            "issues": [],
+        },
+    )
+    semantic = phase3.render_semantic_source(graph, canonical)
+    restored = next(
+        row for row in graph["topics"]
+        if row["title"] == "The Making of Nationalism in Europe"
+    )
+    restored_heading = next(
+        row for row in graph["blocks"]
+        if row["block_id"] == section_two["block_id"]
+    )
+    binding = next(
+        row for row in graph["numbered_main_bindings"]
+        if row["number"] == "2"
+    )
+
+    assert source == (DATA / "RNE.mmd").read_text(encoding="utf-8")
+    assert section_two["section_id"] == section_one_id
+    assert restored["section_id"] == section_two_id
+    assert restored["topic_id"] == "TOPIC-0002"
+    assert restored_heading["section_id"] == section_two_id
+    assert restored_heading["topic_id"] == restored["topic_id"]
+    assert binding["claimed_section_id"] == section_one_id
+    assert binding["resolved_section_id"] == section_two_id
+    assert binding["resolution_mode"] == "exact_title_position_rebind"
+    assert semantic.count("## The Making of Nationalism in Europe") == 1
+    assert semantic.index("## The Making of Nationalism in Europe") < (
+        semantic.index("### The Aristocracy and the New Middle Class")
+    )
+    assert not phase3.validate_graph(
+        graph,
+        canonical=canonical,
+        semantic_source=semantic,
+    )
+
+
+def test_collapsed_numbered_topic_builds_and_applies_sealed_working_mmd_patch():
+    source, canonical, graph, _report, _semantic = _compile_fixture(
+        "RNE.mmd",
+        subject="History",
+        chapter_title="The Rise of Nationalism in Europe",
+    )
+    collapsed = copy.deepcopy(graph)
+    removed_topic = next(
+        row for row in collapsed["topics"]
+        if row["title"] == "The Making of Nationalism in Europe"
+    )
+    removed_id = removed_topic["topic_id"]
+    replacement_id = collapsed["topics"][0]["topic_id"]
+    collapsed["topics"] = [
+        row for row in collapsed["topics"]
+        if row["topic_id"] != removed_id
+    ]
+    for collection in ("blocks", "tasks", "subtopics", "sections"):
+        for row in collapsed.get(collection) or []:
+            if row.get("topic_id") == removed_id:
+                row["topic_id"] = replacement_id
+    collapsed_semantic = phase3.render_semantic_source(collapsed, canonical)
+    collapsed["semantic_source_sha256"] = phase3._sha256_text(
+        collapsed_semantic
+    )
+    collapsed["issues"] = phase3.validate_graph(
+        collapsed,
+        canonical=canonical,
+        semantic_source=collapsed_semantic,
+    )
+    collapsed["status"] = "failed"
+
+    with pytest.raises(phase3.semantic_recovery.HumanDecisionRequired) as caught:
+        phase3._source_review_graph_or_raise(
+            collapsed,
+            canonical=canonical,
+            page_bundle=None,
+            source_path=None,
+        )
+    pending = caught.value.pending_decision
+    patch = pending["source_patch"]
+
+    assert pending["item"]["type_id"] == "numbered_main_topic_coverage"
+    assert patch["verified"] is True
+    assert patch["target"] == "working_derived_source"
+    assert patch["raw_source_mutated"] is False
+    assert "The Making of Nationalism in Europe" not in patch["before"]
+    assert "The Making of Nationalism in Europe" in patch["after"]
+    assert pending["options"][0]["target_id"] == patch["target_id"]
+
+    resolution = {
+        "decision_id": pending["decision_id"],
+        "context_hash": pending["context_hash"],
+        "choice": "accept_recommended",
+        "target_id": patch["target_id"],
+        "status": "ready",
+    }
+    tampered = copy.deepcopy(collapsed)
+    tampered[phase3._SOURCE_REVIEW_KEY]["source_patch"]["after"] += (
+        "\n## Invented topic"
+    )
+    with phase3.human_source_resolution_context([resolution]):
+        with pytest.raises(
+            ValueError,
+            match="source patch changed after the decision was shown",
+        ):
+            phase3._source_review_graph_or_raise(
+                tampered,
+                canonical=canonical,
+                page_bundle=None,
+                source_path=None,
+            )
+    with phase3.human_source_resolution_context([resolution]):
+        repaired = phase3._source_review_graph_or_raise(
+            collapsed,
+            canonical=canonical,
+            page_bundle=None,
+            source_path=None,
+        )
+    repaired_semantic = phase3.render_semantic_source(repaired, canonical)
+
+    assert source == (DATA / "RNE.mmd").read_text(encoding="utf-8")
+    assert repaired["status"] == "ready"
+    assert repaired["numbered_topic_patch_resolution"][
+        "human_decision_id"
+    ] == pending["decision_id"]
+    assert not phase3.validate_graph(
+        repaired,
+        canonical=canonical,
+        semantic_source=repaired_semantic,
+    )
+
+
+def test_numbered_topic_patch_resume_reuses_verified_hierarchy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    source, canonical, graph, _report, _semantic = _compile_fixture(
+        "RNE.mmd",
+        subject="History",
+        chapter_title="The Rise of Nationalism in Europe",
+    )
+    metadata = {
+        "subject": "History",
+        "chapter_title": "The Rise of Nationalism in Europe",
+        "board": "CBSE",
+    }
+    collapsed = copy.deepcopy(graph)
+    removed_topic = next(
+        row for row in collapsed["topics"]
+        if row["title"] == "The Making of Nationalism in Europe"
+    )
+    removed_id = removed_topic["topic_id"]
+    replacement_id = collapsed["topics"][0]["topic_id"]
+    collapsed["topics"] = [
+        row for row in collapsed["topics"]
+        if row["topic_id"] != removed_id
+    ]
+    for collection in ("blocks", "tasks", "subtopics", "sections"):
+        for row in collapsed.get(collection) or []:
+            if row.get("topic_id") == removed_id:
+                row["topic_id"] = replacement_id
+    collapsed["classification_mode"] = "api_classified_and_verified"
+    collapsed_semantic = phase3.render_semantic_source(
+        collapsed, canonical)
+    collapsed["semantic_source_sha256"] = phase3._sha256_text(
+        collapsed_semantic)
+    collapsed["issues"] = phase3.validate_graph(
+        collapsed,
+        canonical=canonical,
+        semantic_source=collapsed_semantic,
+    )
+    collapsed["status"] = "failed"
+
+    def unexpected_provider(*_args, **_kwargs):
+        raise AssertionError(
+            "a saved verified hierarchy must not be classified or criticized again"
+        )
+
+    monkeypatch.setattr(phase3, "semantic_api_enabled", lambda: True)
+    monkeypatch.setattr(
+        phase3, "_classify_hierarchy_via_openai", unexpected_provider)
+    monkeypatch.setattr(
+        phase3, "_critic_hierarchy_via_openai", unexpected_provider)
+
+    with pytest.raises(phase3.semantic_recovery.HumanDecisionRequired) as caught:
+        phase3.prepare_generation_graph(
+            canonical=canonical,
+            source_text=source,
+            metadata=metadata,
+            source_path=None,
+            artifact_dir=tmp_path,
+            verify_semantics=True,
+            resume_review_graph=collapsed,
+        )
+    pending = caught.value.pending_decision
+    persisted = phase3.load_graph(tmp_path, canonical)
+
+    assert pending["source_patch"]["raw_source_mutated"] is False
+    assert persisted is not None
+    tampered = copy.deepcopy(persisted)
+    tampered[phase3._SOURCE_REVIEW_KEY]["source_patch"]["after"] += (
+        "\n## Invented topic"
+    )
+    assert phase3._compatible_source_review_graph(
+        tampered,
+        canonical=canonical,
+        metadata=metadata,
+        page_bundle=None,
+    ) is None
+    with phase3.human_source_resolution_context([{
+        "decision_id": pending["decision_id"],
+        "context_hash": pending["context_hash"],
+        "choice": "accept_recommended",
+        "target_id": pending["source_patch"]["target_id"],
+    }]):
+        repaired = phase3.prepare_generation_graph(
+            canonical=canonical,
+            source_text=source,
+            metadata=metadata,
+            source_path=None,
+            artifact_dir=tmp_path,
+            verify_semantics=True,
+            resume_review_graph=persisted,
+        )
+
+    assert source == (DATA / "RNE.mmd").read_text(encoding="utf-8")
+    assert repaired["status"] == "ready"
+    assert not phase3.validate_graph(
+        repaired,
+        canonical=canonical,
+        semantic_source=phase3.render_semantic_source(repaired, canonical),
+    )
+
+
 def test_verified_pdf_missing_parent_heading_is_rendered_in_source_order():
     source = (DATA / "RNE.mmd").read_text(encoding="utf-8")
     section_two = "\\section*{2 The Making of Nationalism in Europe}\n\n"

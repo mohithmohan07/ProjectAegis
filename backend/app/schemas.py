@@ -205,6 +205,7 @@ class SemanticDecisionCandidate(BaseModel):
 
 class SemanticDecisionEvidence(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    evidence_id: str = Field(default="", max_length=128)
     page: str = Field(default="", max_length=128)
     label: str = Field(default="", max_length=512)
     text: str = Field(default="", max_length=8_000)
@@ -239,6 +240,31 @@ class AgentSemanticReview(BaseModel):
     target_concept_id: str = Field(default="", max_length=256)
 
 
+class SemanticSourcePatchPreview(BaseModel):
+    """Hash-sealed preview of a patch to the derived working source.
+
+    The uploaded/raw MMD remains an immutable audit artifact.  This payload
+    describes only a deterministic correction to the canonical semantic graph
+    and its rendered working MMD.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    version: str = Field(min_length=1, max_length=128)
+    kind: Literal["canonical_topic_binding"]
+    target: Literal["working_derived_source"]
+    verified: bool = False
+    raw_source_mutated: Literal[False] = False
+    source_contract_hash: str = Field(min_length=64, max_length=64)
+    semantic_context_hash: str = Field(min_length=64, max_length=64)
+    before_sha256: str = Field(min_length=64, max_length=64)
+    after_sha256: str = Field(min_length=64, max_length=64)
+    patch_hash: str = Field(min_length=64, max_length=64)
+    target_id: str = Field(min_length=1, max_length=512)
+    before: str = Field(default="", max_length=16_000)
+    after: str = Field(default="", max_length=16_000)
+    operations: list[str] = Field(default_factory=list, max_length=100)
+
+
 class PendingSemanticDecision(BaseModel):
     model_config = ConfigDict(extra="forbid")
     decision_id: str = Field(min_length=1, max_length=128)
@@ -260,6 +286,7 @@ class PendingSemanticDecision(BaseModel):
         default_factory=list, max_length=16)
     cumulative_usage: dict = Field(default_factory=dict)
     agent_review: AgentSemanticReview | None = None
+    source_patch: SemanticSourcePatchPreview | None = None
 
 
 class ResolvedSemanticDecision(BaseModel):

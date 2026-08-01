@@ -113,7 +113,10 @@ def _normalize_pending_human_decision(
         )
     } for row in rows("candidates", 100)]
     evidence = [
-        {key: str(row.get(key) or "") for key in ("page", "label", "text")}
+        {
+            key: str(row.get(key) or "")
+            for key in ("evidence_id", "page", "label", "text")
+        }
         for row in rows("evidence", 100)
     ]
     options = [{
@@ -150,6 +153,7 @@ def _normalize_pending_human_decision(
             if str(value)
         ],
         "options": options,
+        "source_patch": copy.deepcopy(raw.get("source_patch")),
     }
     computed_hash = hashlib.sha256(json.dumps(
         stable,
@@ -305,6 +309,22 @@ def _applied_human_decision_ids(checkpoint: dict | None) -> set[str]:
     if not isinstance(checkpoint, dict):
         return set()
     ids: set[str] = set()
+    source_review_graph = checkpoint.get("source_review_graph")
+    if isinstance(source_review_graph, dict):
+        for key in (
+            "source_review_resolution",
+            "numbered_topic_patch_resolution",
+        ):
+            applied = source_review_graph.get(key)
+            if not isinstance(applied, dict):
+                continue
+            decision_id = str(
+                applied.get("decision_id")
+                or applied.get("human_decision_id")
+                or ""
+            )
+            if decision_id:
+                ids.add(decision_id)
     source_state = checkpoint.get("source_topic_recovery")
     if isinstance(source_state, dict):
         attempt = source_state.get("last_attempt")
@@ -2095,13 +2115,22 @@ def _autonomously_resolve_pending_decision(
         # claimed its one autonomous attempt. This includes an unknown-outcome
         # crash fallback restored by _persist_pending_human_decision.
         return None
-    if not autonomous_resolution.enabled():
+    deterministic_result = (
+        autonomous_resolution.verified_source_patch_resolution(pending)
+    )
+    if deterministic_result is None and not autonomous_resolution.enabled():
         return None
     checkpoint = copy.deepcopy(job.generation_checkpoint or {})
     issue_key = autonomous_resolution.issue_key(pending)
     history = _agent_review_history(checkpoint)
     attempted = [row for row in history if isinstance(row, dict)]
-    if any(str(row.get("issue_key") or "") == issue_key for row in attempted):
+    if (
+        deterministic_result is None
+        and any(
+            str(row.get("issue_key") or "") == issue_key
+            for row in attempted
+        )
+    ):
         now = _agent_review_timestamp()
         reason = (
             "A prior autonomous action for this same semantic scope did not "
@@ -2124,7 +2153,10 @@ def _autonomously_resolve_pending_decision(
         )
         progress.log(reason, level="warning")
         return None
-    if len(attempted) >= autonomous_resolution.maximum_decisions():
+    if (
+        deterministic_result is None
+        and len(attempted) >= autonomous_resolution.maximum_decisions()
+    ):
         now = _agent_review_timestamp()
         reason = (
             "This run reached its autonomous decision safety cap. The next "
@@ -2161,8 +2193,15 @@ def _autonomously_resolve_pending_decision(
                 "issue_key": issue_key,
                 "started_at": started_at,
                 "reason": (
-                    "The decision and checkpoint were saved before this one "
-                    "bounded autonomous review started."
+                    (
+                        "The decision and checkpoint were saved before local "
+                        "working-source patch validation."
+                    )
+                    if deterministic_result is not None
+                    else (
+                        "The decision and checkpoint were saved before this "
+                        "one bounded autonomous review started."
+                    )
                 ),
             },
             owner_sub=owner_sub,
@@ -2175,20 +2214,43 @@ def _autonomously_resolve_pending_decision(
             level="warning",
         )
         return None
-    progress.set_progress(
-        job.checkpoint_progress,
-        label="Resolution agent — reviewing discrepancy",
-    )
-    progress.log(
-        "Resolution agent is checking the exact MMD, checkpoint, candidates, "
-        "Types and QIDs once.",
-        level="warning",
-    )
-    result = autonomous_resolution.resolve_pending(
-        pending,
-        source_text=job.mmd_text,
-        checkpoint=copy.deepcopy(job.generation_checkpoint or {}),
-    )
+    if deterministic_result is not None:
+        progress.set_progress(
+            job.checkpoint_progress,
+            label=(
+                "Canonical source — applying verified working-source patch"
+                if deterministic_result.resolved
+                else "Canonical source — saved patch needs your review"
+            ),
+        )
+        progress.log(
+            (
+                "Aegis verified one hash-sealed working-source repair "
+                "locally; no GPT request or hierarchy retry was started."
+                if deterministic_result.resolved
+                else (
+                    f"{deterministic_result.reason} No GPT request or "
+                    "hierarchy retry was started."
+                )
+            ),
+            level="warning",
+        )
+        result = deterministic_result
+    else:
+        progress.set_progress(
+            job.checkpoint_progress,
+            label="Resolution agent — reviewing discrepancy",
+        )
+        progress.log(
+            "Resolution agent is checking the exact MMD, checkpoint, "
+            "candidates, Types and QIDs once.",
+            level="warning",
+        )
+        result = autonomous_resolution.resolve_pending(
+            pending,
+            source_text=job.mmd_text,
+            checkpoint=copy.deepcopy(job.generation_checkpoint or {}),
+        )
     completed_at = _agent_review_timestamp()
     final_review = {
         "status": result.status,
@@ -2212,7 +2274,7 @@ def _autonomously_resolve_pending_decision(
             context_hash=pending["context_hash"],
             review=final_review,
             owner_sub=owner_sub,
-            persist_usage=True,
+            persist_usage=deterministic_result is None,
         )
     except HumanDecisionConflictError:
         db.refresh(job)
@@ -2265,8 +2327,16 @@ def _autonomously_resolve_pending_decision(
         return None
     decision_id = str(recorded["resolved_decision"]["decision_id"])
     progress.log(
-        "Resolution agent applied one source-supported action and generation "
-        "is continuing from the saved checkpoint.",
+        (
+            "Applied the verified patch only to the derived working MMD; the "
+            "raw upload is unchanged and generation is continuing from the "
+            "saved checkpoint."
+        )
+        if deterministic_result is not None
+        else (
+            "Resolution agent applied one source-supported action and "
+            "generation is continuing from the saved checkpoint."
+        ),
         level="success",
     )
     return decision_id

@@ -1,6 +1,7 @@
 """Focused safety coverage for the one-shot semantic resolution agent."""
 from __future__ import annotations
 
+import hashlib
 import json
 
 import pytest
@@ -208,6 +209,70 @@ def test_source_replacement_and_custom_instructions_require_the_user(
 
     assert result.status == "escalated"
     assert "requires the user" in result.reason
+
+
+def test_unique_verified_working_source_patch_resolves_without_provider_call():
+    material = {
+        "version": "phase3-canonical-topic-patch-1",
+        "kind": "canonical_topic_binding",
+        "target": "working_derived_source",
+        "raw_source_mutated": False,
+        "source_contract_hash": "1" * 64,
+        "semantic_context_hash": "2" * 64,
+        "before_sha256": "3" * 64,
+        "after_sha256": "4" * 64,
+        "operations": [
+            "Restore numbered main topic 2 The Making of Nationalism in Europe"
+        ],
+    }
+    patch_hash = hashlib.sha256(json.dumps(
+        material,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
+    target_id = f"canonical-topic-patch-{patch_hash[:24]}"
+    pending = _pending(
+        kind="phase3_source_graph_review",
+        candidates=[{
+            "target_id": target_id,
+            "title": "Verified working-source patch",
+        }],
+        options=[{
+            "choice": "accept_recommended",
+            "label": "Apply the verified working-source patch",
+            "recommended": True,
+            "target_id": target_id,
+        }],
+    )
+    pending["phase"] = "phase3_source_graph"
+    pending["item"]["type_id"] = "numbered_main_topic_coverage"
+    pending["source_patch"] = {
+        **material,
+        "verified": True,
+        "patch_hash": patch_hash,
+        "target_id": target_id,
+        "before": "## The French Revolution and the Idea of the Nation",
+        "after": "## 2 The Making of Nationalism in Europe",
+    }
+
+    def unexpected_provider(**_kwargs):
+        raise AssertionError("a sealed deterministic patch must not call GPT")
+
+    result = resolver.resolve_pending(
+        pending,
+        source_text="The immutable raw MMD remains available.",
+        checkpoint={},
+        provider=unexpected_provider,
+    )
+
+    assert result.resolved is True
+    assert result.choice == "accept_recommended"
+    assert result.target_id == target_id
+    assert result.confidence == 1.0
+    assert result.evidence_refs == (
+        f"CANONICAL-PATCH-{patch_hash[:24].upper()}",
+    )
 
 
 def test_mmd_retrieval_finds_issue_evidence_at_the_source_tail():

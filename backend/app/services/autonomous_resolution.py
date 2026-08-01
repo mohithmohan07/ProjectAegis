@@ -781,6 +781,90 @@ def _validate_response(
     )
 
 
+def verified_source_patch_resolution(
+    pending: Mapping[str, Any],
+) -> ResolutionResult | None:
+    """Apply a unique server-sealed working-source patch without a GPT call."""
+
+    item = pending.get("item") if isinstance(pending.get("item"), Mapping) else {}
+    patch = (
+        pending.get("source_patch")
+        if isinstance(pending.get("source_patch"), Mapping)
+        else None
+    )
+    if (
+        _normal(pending.get("kind")) != "phase3_source_graph_review"
+        or _normal(item.get("type_id")) != "numbered_main_topic_coverage"
+        or patch is None
+    ):
+        return None
+    material = {
+        key: patch.get(key)
+        for key in (
+            "version", "kind", "target", "raw_source_mutated",
+            "source_contract_hash", "semantic_context_hash", "before_sha256",
+            "after_sha256", "operations",
+        )
+    }
+    patch_hash = str(patch.get("patch_hash") or "")
+    target_id = str(patch.get("target_id") or "")
+    expected_target = f"canonical-topic-patch-{patch_hash[:24]}"
+    digests = [
+        str(patch.get(key) or "")
+        for key in (
+            "source_contract_hash", "semantic_context_hash", "before_sha256",
+            "after_sha256", "patch_hash",
+        )
+    ]
+    if not (
+        patch.get("verified") is True
+        and patch.get("raw_source_mutated") is False
+        and patch.get("version") == "phase3-canonical-topic-patch-1"
+        and patch.get("kind") == "canonical_topic_binding"
+        and patch.get("target") == "working_derived_source"
+        and all(re.fullmatch(r"[0-9a-f]{64}", value) for value in digests)
+        and patch_hash == hashlib.sha256(json.dumps(
+            material,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")).hexdigest()
+        and target_id == expected_target
+        and bool(patch.get("operations"))
+    ):
+        return ResolutionResult(
+            "escalated",
+            "The working-source patch seal is incomplete or stale; choose how to proceed.",
+        )
+    candidates = [
+        row for row in pending.get("candidates") or []
+        if isinstance(row, Mapping)
+        and str(row.get("target_id") or "") == target_id
+    ]
+    options = [
+        row for row in pending.get("options") or []
+        if isinstance(row, Mapping)
+        and row.get("choice") == "accept_recommended"
+        and str(row.get("target_id") or "") == target_id
+    ]
+    if len(candidates) != 1 or len(options) != 1:
+        return ResolutionResult(
+            "escalated",
+            "The verified source patch is not the unique offered recommendation.",
+        )
+    return ResolutionResult(
+        status="resolved",
+        reason=(
+            "Aegis verified one hash-sealed canonical-topic patch that changes "
+            "only the derived working MMD and preserves the raw source identity."
+        ),
+        confidence=1.0,
+        evidence_refs=(f"CANONICAL-PATCH-{patch_hash[:24].upper()}",),
+        choice="accept_recommended",
+        target_id=target_id,
+    )
+
+
 def resolve_pending(
     pending: Mapping[str, Any],
     *,
@@ -789,6 +873,10 @@ def resolve_pending(
     provider: Callable[..., Mapping[str, Any]] | None = None,
 ) -> ResolutionResult:
     """Make one physical provider request and deterministically vet its action."""
+
+    sealed_patch = verified_source_patch_resolution(pending)
+    if sealed_patch is not None:
+        return sealed_patch
 
     try:
         packet, evidence_refs = build_packet(

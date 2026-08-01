@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 import threading
 
@@ -138,6 +139,75 @@ def _early_blueprint_pending_packet() -> dict:
                 "recommended": False,
             },
         ],
+    }
+
+
+def _working_source_patch_pending_packet() -> dict:
+    material = {
+        "version": "phase3-canonical-topic-patch-1",
+        "kind": "canonical_topic_binding",
+        "target": "working_derived_source",
+        "raw_source_mutated": False,
+        "source_contract_hash": "1" * 64,
+        "semantic_context_hash": "2" * 64,
+        "before_sha256": "3" * 64,
+        "after_sha256": "4" * 64,
+        "operations": [
+            "Restore numbered main topic 2 The Making of Nationalism in Europe"
+        ],
+    }
+    patch_hash = hashlib.sha256(json.dumps(
+        material,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
+    target_id = f"canonical-topic-patch-{patch_hash[:24]}"
+    return {
+        "decision_id": "phase3-source-" + ("d" * 24),
+        "context_hash": "d" * 64,
+        "kind": "phase3_source_graph_review",
+        "phase": "3",
+        "conflict": "A numbered main topic is missing from the working graph.",
+        "diagnosis": "One deterministic canonical-source repair is verified.",
+        "decision_question": "Apply the verified working-source patch?",
+        "item": {
+            "unit_id": "CANONICAL-TOPIC-SPINE",
+            "type_id": "numbered_main_topic_coverage",
+            "type_title": "Working-source topic patch",
+            "qids": [],
+            "questions": ["2 The Making of Nationalism in Europe"],
+            "topic": "Canonical chapter topic spine",
+        },
+        "candidates": [{
+            "target_id": target_id,
+            "concept_id": target_id,
+            "title": "Repair the working MMD topic spine",
+            "topic": "Canonical chapter topic spine",
+            "coverage": "Restores numbered main topic 2.",
+            "gap": "The working topic spine omitted topic 2.",
+        }],
+        "evidence": [{
+            "evidence_id": "CANONICAL-PATCH-" + patch_hash[:24].upper(),
+            "page": "",
+            "label": "Verified patched topic spine",
+            "text": "## 2 The Making of Nationalism in Europe",
+        }],
+        "deferred_assignment_unit_ids": [],
+        "options": [{
+            "choice": "accept_recommended",
+            "label": "Apply the verified working-source patch",
+            "recommended": True,
+            "target_id": target_id,
+        }],
+        "source_patch": {
+            **material,
+            "verified": True,
+            "patch_hash": patch_hash,
+            "target_id": target_id,
+            "before": "## 1 The French Revolution",
+            "after": "## 1 The French Revolution\n## 2 The Making of Nationalism in Europe",
+        },
     }
 
 
@@ -316,6 +386,65 @@ def test_clear_pause_is_agent_resolved_and_continues_same_run(
     db.refresh(job)
     assert job.status == "generated"
     assert job.pending_decision is None
+
+
+def test_verified_working_source_patch_bypasses_model_and_agent_cap(
+    db,
+    first_chapter,
+    monkeypatch,
+):
+    job, chapter = _job_at_81_percent(db, first_chapter)
+    packet = _working_source_patch_pending_packet()
+    operation_calls = 0
+
+    def operation():
+        nonlocal operation_calls
+        operation_calls += 1
+        if operation_calls == 1:
+            raise semantic_recovery.HumanDecisionRequired(packet)
+        return "continued-without-provider"
+
+    def unexpected_provider(*_args, **_kwargs):
+        pytest.fail("a verified deterministic source patch must not call GPT")
+
+    monkeypatch.setattr(
+        build_concepts.autonomous_resolution, "enabled", lambda: False)
+    monkeypatch.setattr(
+        build_concepts.autonomous_resolution, "maximum_decisions", lambda: 0)
+    monkeypatch.setattr(
+        build_concepts.autonomous_resolution,
+        "resolve_pending",
+        unexpected_provider,
+    )
+    monkeypatch.setattr(
+        build_concepts.drive_checkpoints,
+        "schedule_checkpoint_backup",
+        lambda *_args, **_kwargs: None,
+    )
+
+    paused, result = build_concepts._run_with_human_decision_pause(
+        operation,
+        db=db,
+        job=job,
+        fingerprint=job.generation_checkpoint["fingerprint"],
+        target_chapter_id=chapter.id,
+        owner_sub=auth.LOCAL_OWNER_SUB,
+    )
+
+    assert paused is None
+    assert result == "continued-without-provider"
+    assert operation_calls == 2
+    db.refresh(job)
+    ledger = job.generation_checkpoint["human_decisions"]
+    assert ledger["pending"] is None
+    assert len(ledger["resolutions"]) == 1
+    resolution = ledger["resolutions"][0]
+    assert resolution["resolved_by"] == "agent"
+    assert resolution["choice"] == "accept_recommended"
+    assert resolution["target_id"] == packet["source_patch"]["target_id"]
+    assert resolution["pending_decision"]["agent_review"][
+        "evidence_refs"
+    ][0].startswith("CANONICAL-PATCH-")
 
 
 def test_agent_abstention_persists_pause_and_is_not_called_on_replay(
