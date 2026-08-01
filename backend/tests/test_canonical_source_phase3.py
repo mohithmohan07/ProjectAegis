@@ -40,6 +40,154 @@ def _compile_fixture(filename: str, *, subject: str, chapter_title: str = ""):
     return source, canonical, graph, report, semantic_source
 
 
+def _compile_inline_source(source: str):
+    canonical = phase2.compile_phase2_source(
+        source,
+        source_filename="inline-source.mmd",
+        consumer_module="build_concepts",
+    ).canonical
+    graph, report = phase3.compile_semantic_graph(
+        canonical,
+        source_text=source,
+        metadata={
+            "subject": "History",
+            "chapter_title": "Source Metadata Regression",
+            "board": "CBSE",
+        },
+    )
+    semantic = phase3.render_semantic_source(graph, canonical)
+    return canonical, graph, report, semantic
+
+
+def test_nonvisible_machine_metadata_is_removed_from_every_block():
+    source = """<!-- source_origin: gpt-pdf-to-acsd -->
+<!-- compiler_version: gpt-pdf-to-acsd-2 -->
+<!-- schema_version: 1_1_0 -->
+
+# Source Metadata Regression
+
+<!-- used_for_generation: source-critical -->
+
+## First Topic
+
+Visible first paragraph.
+
+<!-- compilation_status: complete -->
+
+Visible second paragraph.
+
+<!-- source_sha256: abc_def -->
+"""
+    canonical, graph, _report, semantic = _compile_inline_source(source)
+    comment_blocks = [
+        block
+        for block in canonical["blocks"]
+        if "<!--" in str(block.get("raw_text") or "")
+    ]
+
+    assert len(comment_blocks) >= 3
+    assert any(block["block_id"] != "BLK-00001" for block in comment_blocks)
+    assert "Visible first paragraph." in semantic
+    assert "Visible second paragraph." in semantic
+    assert "<!--" not in semantic
+    assert "source_origin" not in semantic
+    assert "compiler_version" not in semantic
+    assert graph["status"] == "ready"
+    assert phase3._rich_text_issue_block_ids(
+        graph, canonical=canonical) == []
+    assert not kr.rich_text_issues(semantic)
+    assert not phase3.validate_graph(
+        graph,
+        canonical=canonical,
+        semantic_source=semantic,
+    )
+
+
+def test_mixed_machine_metadata_preserves_visible_source_text():
+    source = """# Source Metadata Regression
+
+## First Topic
+
+Visible before <!-- compiler_version: build_id --> visible after.
+"""
+    canonical, graph, _report, semantic = _compile_inline_source(source)
+    mixed = next(
+        block
+        for block in canonical["blocks"]
+        if "Visible before" in str(block.get("raw_text") or "")
+    )
+
+    assert "<!-- compiler_version" in mixed["raw_text"]
+    assert semantic.count("Visible before") == 1
+    assert semantic.count("visible after.") == 1
+    assert "compiler_version" not in semantic
+    assert graph["status"] == "ready"
+
+
+def test_machine_metadata_does_not_hide_genuine_raw_latex():
+    source = r"""<!-- source_origin: gpt-pdf-to-acsd -->
+<!-- compiler_version: gpt-pdf-to-acsd-2 -->
+
+# Source Metadata Regression
+
+## First Topic
+
+Visible source with \\notarealcommand still malformed.
+"""
+    canonical, graph, _report, semantic = _compile_inline_source(source)
+    malformed = next(
+        block
+        for block in canonical["blocks"]
+        if "notarealcommand" in str(block.get("raw_text") or "")
+    )
+    issue = next(
+        row
+        for row in graph["issues"]
+        if row.get("code") == "semantic_source_rich_text"
+    )
+
+    assert "source_origin" not in semantic
+    assert "notarealcommand" in semantic
+    assert issue["block_ids"] == [malformed["block_id"]]
+    assert phase3._rich_text_issue_block_ids(
+        graph, canonical=canonical) == [malformed["block_id"]]
+    assert "raw_latex" in issue["message"]
+
+
+def test_literal_and_unknown_html_comments_remain_strictly_preserved():
+    literals = [
+        "`<!-- compiler_version: literal_code -->`",
+        "``code ` <!-- compiler_version: literal_code -->``",
+        "```html\n<!-- compiler_version: literal_code -->\n```",
+        "~~~html\n<!-- compiler_version: literal_code -->\n~~~",
+        "    <!-- compiler_version: literal_code -->\n",
+    ]
+    unknown = "<!-- user_note: learner-visible source -->"
+
+    for literal in literals:
+        assert phase3._strip_machine_metadata_comments(literal) == literal
+        assert not kr.rich_text_issues(literal)
+    literal_source = (
+        "# Source Metadata Regression\n\n## Code Examples\n\n"
+        + "\n\n".join(literals)
+    )
+    _canonical, graph, _report, semantic = _compile_inline_source(
+        literal_source)
+    for literal in literals:
+        assert literal.rstrip("\n") in semantic
+    assert graph["status"] == "ready"
+    assert not kr.rich_text_issues(semantic)
+    assert phase3._strip_machine_metadata_comments(
+        "word<!-- compiler_version: build_id -->word"
+    ) == "word word"
+    assert "raw_latex" in kr.rich_text_issues(
+        "Visible paragraph\n    x_1 remains malformed prose."
+    )
+    assert phase3._strip_machine_metadata_comments(unknown) == unknown
+    assert "raw_latex" in kr.rich_text_issues(
+        phase3._clean_public_text(unknown))
+
+
 def test_rne_graph_restores_six_topics_and_qid_ancestry():
     _source, canonical, graph, report, semantic = _compile_fixture(
         "RNE.mmd", subject="History",

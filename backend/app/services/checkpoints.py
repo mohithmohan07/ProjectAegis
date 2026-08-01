@@ -447,12 +447,12 @@ def _validate_checkpoint_entry(entry: Any, path: str) -> None:
             raise ValueError(
                 f"{path}.source_review_context_hash must be a lowercase "
                 "SHA-256")
-    if (
-        "source_review_resolution_applied" in entry
-        and not isinstance(entry["source_review_resolution_applied"], bool)
+    for field in (
+        "source_review_resolution_applied",
+        "source_review_metadata_sanitization_applied",
     ):
-        raise ValueError(
-            f"{path}.source_review_resolution_applied must be a boolean")
+        if field in entry and not isinstance(entry[field], bool):
+            raise ValueError(f"{path}.{field} must be a boolean")
     certification_key = generation._PLACEMENT_CERTIFICATIONS_KEY
     mined_types = entry.get("mined_types")
     if (

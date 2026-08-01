@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from app import models
+from app.db import SessionLocal
 from app.services import (
     auth,
     build_concepts,
@@ -117,6 +118,389 @@ def _diagnostic(payload: dict, *, source_path: Path | None) -> dict:
             "reason": "Bounded verified-PDF candidate.",
         } for row in candidates],
     }
+
+
+def _legacy_metadata_source_review() -> tuple[str, dict, dict, dict, dict]:
+    source = """<!-- source_origin: gpt-pdf-to-acsd -->
+<!-- compiler_version: gpt-pdf-to-acsd-2 -->
+
+# Review Chapter
+
+## Verified Topic
+
+Visible canonical source.
+"""
+    metadata = {
+        "board": "CBSE",
+        "grade": "10",
+        "subject": "History",
+        "chapter_title": "Review Chapter",
+        "learning_kind": "Post",
+    }
+    canonical = phase2.compile_phase2_source(
+        source,
+        source_filename="review.mmd",
+        consumer_module="build_concepts",
+    ).canonical
+
+    def classify(payload: dict) -> dict:
+        return {
+            "sections": [{
+                "section_id": row["section_id"],
+                "role": row["baseline_role"],
+                "parent_section_id": "",
+                "confidence": 0.999,
+                "evidence": ["verified test hierarchy"],
+            } for row in payload["sections"]]
+        }
+
+    graph, _report = phase3.compile_semantic_graph(
+        canonical,
+        source_text=source,
+        metadata=metadata,
+        hierarchy_provider=classify,
+        critic_provider=lambda _payload: {
+            "verdict": "verified",
+            "confidence": 0.999,
+            "repairs": [],
+            "issues": [],
+        },
+    )
+    metadata_block = next(
+        row
+        for row in canonical["blocks"]
+        if "source_origin" in str(row.get("raw_text") or "")
+    )
+    legacy_source = phase3.render_semantic_source(
+        graph,
+        canonical,
+        strip_machine_metadata=False,
+    )
+    graph["semantic_source_sha256"] = phase3._sha256_text(legacy_source)
+    errors = phase3.validate_graph(
+        graph,
+        canonical=canonical,
+        semantic_source=legacy_source,
+    )
+    rich_error = next(
+        row for row in errors
+        if row.get("code") == "semantic_source_rich_text"
+    )
+    rich_error["block_ids"] = [metadata_block["block_id"]]
+    graph["issues"] = [
+        row for row in graph.get("issues") or []
+        if row.get("severity") != "error"
+    ] + errors
+    graph["status"] = "failed"
+    state = phase3._build_source_review_state(
+        graph,
+        canonical=canonical,
+        page_bundle=None,
+        source_path=None,
+        block_id=metadata_block["block_id"],
+        allow_diagnostic_call=False,
+    )
+    graph[phase3._SOURCE_REVIEW_KEY] = state
+    pending = phase3._source_review_pending(
+        graph,
+        state,
+        canonical=canonical,
+    )
+    return source, metadata, canonical, graph, pending
+
+
+def test_legacy_metadata_source_review_migrates_without_model_retry(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    source, metadata, canonical, graph, pending = (
+        _legacy_metadata_source_review()
+    )
+
+    assert phase3.machine_metadata_source_review_is_obsolete(
+        graph,
+        canonical=canonical,
+        decision_id=pending["decision_id"],
+        context_hash=pending["context_hash"],
+    )
+    migrated = phase3._compatible_source_review_graph(
+        graph,
+        canonical=canonical,
+        metadata=metadata,
+        page_bundle=None,
+    )
+
+    assert migrated is not None
+    assert migrated["status"] == "ready"
+    assert phase3._SOURCE_REVIEW_KEY not in migrated
+    assert not any(
+        row.get("severity") == "error"
+        for row in migrated.get("issues") or []
+    )
+    semantic = phase3.render_semantic_source(migrated, canonical)
+    assert "source_origin" not in semantic
+    assert migrated["semantic_source_sha256"] == phase3._sha256_text(
+        semantic)
+    assert phase3.machine_metadata_migration_seal_valid(
+        migrated,
+        canonical=canonical,
+    )
+
+    legacy_source = phase3.render_semantic_source(
+        graph,
+        canonical,
+        strip_machine_metadata=False,
+    )
+    phase3.write_artifacts(
+        tmp_path,
+        graph=graph,
+        report=phase3._updated_graph_report(graph),
+        semantic_source=legacy_source,
+    )
+    monkeypatch.setattr(phase3, "semantic_api_enabled", lambda: True)
+    monkeypatch.setattr(
+        phase3,
+        "_classify_hierarchy_via_openai",
+        lambda *_args, **_kwargs: pytest.fail(
+            "legacy metadata migration must not repeat hierarchy calls"),
+    )
+    monkeypatch.setattr(
+        phase3,
+        "_critic_hierarchy_via_openai",
+        lambda *_args, **_kwargs: pytest.fail(
+            "legacy metadata migration must not repeat critic calls"),
+    )
+    monkeypatch.setattr(
+        phase3,
+        "_diagnose_source_review_via_openai",
+        lambda *_args, **_kwargs: pytest.fail(
+            "legacy metadata migration must not repeat diagnosis calls"),
+    )
+
+    prepared = phase3.prepare_generation_graph(
+        canonical=canonical,
+        source_text=source,
+        metadata=metadata,
+        source_path=None,
+        artifact_dir=tmp_path,
+        verify_semantics=True,
+        resume_review_graph=graph,
+    )
+
+    assert prepared["status"] == "ready"
+    assert phase3.machine_metadata_migration_seal_valid(
+        prepared,
+        canonical=canonical,
+    )
+    saved_graph = json.loads(
+        (tmp_path / phase3.GRAPH_FILENAME).read_text(encoding="utf-8")
+    )
+    saved_semantic = (
+        tmp_path / phase3.SEMANTIC_SOURCE_FILENAME
+    ).read_text(encoding="utf-8")
+    assert saved_graph["semantic_source_sha256"] == phase3._sha256_text(
+        saved_semantic)
+    assert "source_origin" not in saved_semantic
+
+    # The persisted graph must be independently sufficient even when the
+    # concept checkpoint no longer carries a source-review copy.
+    phase3.write_artifacts(
+        tmp_path,
+        graph=graph,
+        report=phase3._updated_graph_report(graph),
+        semantic_source=legacy_source,
+    )
+    artifact_only = phase3.prepare_generation_graph(
+        canonical=canonical,
+        source_text=source,
+        metadata=metadata,
+        source_path=None,
+        artifact_dir=tmp_path,
+        verify_semantics=True,
+        resume_review_graph=None,
+    )
+    assert artifact_only["status"] == "ready"
+    assert phase3.machine_metadata_migration_seal_valid(
+        artifact_only,
+        canonical=canonical,
+    )
+
+
+def test_saved_metadata_only_pause_is_retired_before_generation(
+    db,
+    first_chapter,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    source, metadata, canonical, graph, pending = (
+        _legacy_metadata_source_review()
+    )
+    chapter = db.get(models.Chapter, first_chapter["id"])
+    job = models.UploadJob(
+        owner_sub=auth.LOCAL_OWNER_SUB,
+        module="build_concepts",
+        upload_type="document",
+        learning_kind="post",
+        filename="review.mmd",
+        mmd_text=source,
+        status="converted",
+        question_inventory={"items": [], "stats": {}, "mined_types": []},
+    )
+    db.add(job)
+    db.flush()
+    stage = generation._make_concept_checkpoint(
+        "source_graph_review",
+        records=[],
+        source_review_graph=copy.deepcopy(graph),
+        source_review_context_hash=pending["context_hash"],
+        source_review_decision_id=pending["decision_id"],
+    )
+    job.generation_checkpoint = (
+        build_concepts._merge_generation_checkpoint_history(
+            {},
+            stage,
+            fingerprint=build_concepts._generation_checkpoint_fingerprint(
+                job, chapter),
+            target_identity=build_concepts._generation_target_identity(
+                chapter),
+            target_chapter_id=chapter.id,
+        )
+    )
+    late_stage = generation._make_concept_checkpoint(
+        "pre_type_assignment",
+        records=[{
+            "topic": "Verified Topic",
+            "parent_concept": "Review Chapter",
+            "concept_title": "Visible canonical source",
+            "concept_details": "Description: Verified source concept.",
+            "keywords": "verified, source",
+        }],
+        question_task_inventory={"items": [], "stats": {}},
+        mined_types={"types": []},
+        method_row_snapshot=[],
+    )
+    job.generation_checkpoint = (
+        build_concepts._merge_generation_checkpoint_history(
+            job.generation_checkpoint,
+            late_stage,
+            fingerprint=job.generation_checkpoint["fingerprint"],
+            target_identity=job.generation_checkpoint["target_identity"],
+            target_chapter_id=chapter.id,
+        )
+    )
+    db.commit()
+    monkeypatch.setattr(
+        build_concepts.drive_checkpoints,
+        "schedule_checkpoint_backup",
+        lambda *_args, **_kwargs: None,
+    )
+    build_concepts._persist_pending_human_decision(
+        db,
+        job,
+        pending,
+        fingerprint=job.generation_checkpoint["fingerprint"],
+        target_chapter_id=chapter.id,
+        owner_sub=auth.LOCAL_OWNER_SUB,
+    )
+    checkpoint = copy.deepcopy(job.generation_checkpoint)
+    monkeypatch.setattr(
+        generation,
+        "_openai_json",
+        lambda *_args, **_kwargs: pytest.fail(
+            "metadata migration must not call a model"),
+    )
+
+    result = build_concepts._existing_human_decision_pause(
+        db,
+        job,
+        checkpoint,
+    )
+
+    assert result is None
+    db.refresh(job)
+    ledger = job.generation_checkpoint["human_decisions"]
+    assert ledger["pending"] is None
+    assert ledger["deferred_assignment_unit_ids"] == []
+    assert ledger["resolutions"] == []
+    newest = generation._newest_compatible_concept_checkpoint(
+        job.generation_checkpoint)
+    assert newest["stage"] == "pre_type_assignment"
+    saved_source_stage = generation._newest_compatible_concept_checkpoint(
+        job.generation_checkpoint,
+        allowed_stages={"source_graph_review"},
+    )
+    assert saved_source_stage["source_review_graph"] == graph
+
+    migrated = phase3._compatible_source_review_graph(
+        graph,
+        canonical=canonical,
+        metadata=metadata,
+        page_bundle=None,
+    )
+    assert phase3.machine_metadata_migration_seal_valid(
+        migrated,
+        canonical=canonical,
+    )
+    refreshed_source_stage = generation._make_concept_checkpoint(
+        "source_graph_review",
+        records=[],
+        source_review_graph=migrated,
+        source_review_context_hash=pending["context_hash"],
+        source_review_decision_id=pending["decision_id"],
+        source_review_metadata_sanitization_applied=True,
+    )
+    preserved = build_concepts._merge_generation_checkpoint_history(
+        job.generation_checkpoint,
+        refreshed_source_stage,
+        fingerprint=job.generation_checkpoint["fingerprint"],
+        target_identity=job.generation_checkpoint["target_identity"],
+        target_chapter_id=chapter.id,
+    )
+    assert generation._newest_compatible_concept_checkpoint(
+        preserved)["stage"] == "pre_type_assignment"
+    assert {
+        row["stage"] for row in preserved["checkpoints"]
+    } >= {"source_graph_review", "pre_type_assignment"}
+
+    # A concurrent user answer must win over stale automatic retirement. The
+    # conditional checkpoint update may not erase the newly committed audit.
+    build_concepts._persist_pending_human_decision(
+        db,
+        job,
+        pending,
+        fingerprint=job.generation_checkpoint["fingerprint"],
+        target_chapter_id=chapter.id,
+        owner_sub=auth.LOCAL_OWNER_SUB,
+    )
+    stale_checkpoint = copy.deepcopy(job.generation_checkpoint)
+
+    def resolve_concurrently(*_args, **_kwargs):
+        with SessionLocal() as concurrent_db:
+            build_concepts.record_human_semantic_decision(
+                concurrent_db,
+                job.id,
+                pending["decision_id"],
+                choice="replace_source",
+                owner_sub=auth.LOCAL_OWNER_SUB,
+            )
+        return True
+
+    monkeypatch.setattr(
+        phase3,
+        "machine_metadata_source_review_is_obsolete",
+        resolve_concurrently,
+    )
+    concurrent_result = build_concepts._existing_human_decision_pause(
+        db,
+        job,
+        stale_checkpoint,
+    )
+
+    assert concurrent_result is None
+    db.refresh(job)
+    concurrent_ledger = job.generation_checkpoint["human_decisions"]
+    assert concurrent_ledger["pending"] is None
+    assert len(concurrent_ledger["resolutions"]) == 1
+    assert concurrent_ledger["resolutions"][0]["choice"] == "replace_source"
 
 
 def test_nonregex_rich_text_failure_pauses_with_candidate_and_resolves(

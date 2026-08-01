@@ -344,6 +344,21 @@ def test_checksum_valid_malformed_checkpoint_certification_is_rejected(
                 deposit_scope_ids=["1"]),
             "deposit_scope_ids[0] must be an integer",
         ),
+        (
+            lambda bundle: bundle["payload"]["generation_checkpoint"]
+            ["checkpoints"][-1].update(
+                source_review_resolution_applied="yes"),
+            "source_review_resolution_applied must be a boolean",
+        ),
+        (
+            lambda bundle: bundle["payload"]["generation_checkpoint"]
+            ["checkpoints"][-1].update(
+                source_review_metadata_sanitization_applied="yes"),
+            (
+                "source_review_metadata_sanitization_applied must be a "
+                "boolean"
+            ),
+        ),
     ],
 )
 def test_checksum_valid_malformed_shapes_are_rejected_before_db_write(
