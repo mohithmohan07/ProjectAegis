@@ -312,8 +312,13 @@ def _stable_json(value: Any) -> str:
 
 
 def checkpoint_signature(checkpoint: Mapping[str, Any] | None) -> str:
+    identity = copy.deepcopy(dict(checkpoint or {}))
+    # This orchestration-only dispatch ledger is written immediately before a
+    # paid repair. Excluding it keeps the pre-dispatch and restart signatures
+    # identical, so an unknown outcome cannot masquerade as a new issue.
+    identity.pop("semantic_recovery_dispatches", None)
     return hashlib.sha256(
-        _stable_json(checkpoint or {}).encode("utf-8")
+        _stable_json(identity).encode("utf-8")
     ).hexdigest()
 
 
@@ -338,6 +343,9 @@ def run_with_semantic_recovery(
         [dict[str, Any], RecoveryContext], RepairResult | None
     ],
     persist_repair: Callable[[RepairResult, RecoveryContext], None],
+    before_repair: Callable[
+        [dict[str, Any], RecoveryContext], None
+    ] | None = None,
     policy: RecoveryPolicy | None = None,
     log: Callable[..., None] | None = None,
 ) -> Any:
@@ -393,6 +401,10 @@ def run_with_semantic_recovery(
                     "the affected checkpoint scope and then continuing this run.",
                     level="warning",
                 )
+            if before_repair is not None:
+                # The caller uses this boundary to durably record dispatch
+                # before the first byte of a paid repair request is sent.
+                before_repair(checkpoint, context)
             result = repair_checkpoint(checkpoint, context)
             if result is None or result.changed_count <= 0:
                 raise SemanticRecoveryExhausted(
@@ -1090,6 +1102,7 @@ def repair_concept_checkpoint_via_gpt(
         system,
         json.dumps(user_payload, ensure_ascii=False, indent=2),
         purpose="concept_validation",
+        single_attempt=True,
     )
     if not isinstance(data, Mapping) or data.get("blocked") is True:
         return None
@@ -1511,6 +1524,7 @@ def repair_pre_learning_checkpoint_via_gpt(
             "source_evidence": source_context,
         }, ensure_ascii=False, indent=2),
         purpose="pre_learning",
+        single_attempt=True,
     )
     if not isinstance(data, Mapping) or data.get("blocked") is True:
         return None

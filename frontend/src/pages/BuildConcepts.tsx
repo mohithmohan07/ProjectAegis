@@ -903,6 +903,25 @@ function SemanticDecisionPanel({
                   + "what should happen, save your decision, and then resume explicitly."}
       </p>
 
+      {decision.agent_review && (
+        <div className="semantic-mismatch" role="status">
+          <div className="row">
+            <strong>Aegis autonomous review</strong>
+            <div className="spacer" />
+            <span className="badge yellow">
+              Saved status: {agentReviewStatusLabel(decision.agent_review.status)}
+            </span>
+          </div>
+          <p>{agentReviewStatusExplanation(decision.agent_review.status)}</p>
+          {firstNonEmptyString(decision.agent_review.reason) && (
+            <p>
+              <strong>Saved reason:</strong>{" "}
+              {firstNonEmptyString(decision.agent_review.reason)}
+            </p>
+          )}
+        </div>
+      )}
+
       <dl className="semantic-decision-details">
         {(item.unit_id || decision.item_id) && (
           <div>
@@ -1283,6 +1302,35 @@ function isGroundingReviewDecision(
   return firstNonEmptyString(decision.kind).toLowerCase().includes(
     "phase31_source_grounding",
   );
+}
+
+function agentReviewStatusLabel(status: string): string {
+  if (status === "escalated") return "Human judgment needed";
+  if (status === "unavailable") return "No safe decision returned";
+  if (status === "request_started") return "Attempt recorded";
+  if (status === "resolved") return "Review completed";
+  return "Human judgment needed";
+}
+
+function agentReviewStatusExplanation(status: string): string {
+  if (status === "request_started") {
+    return "Aegis recorded one bounded autonomous review attempt, but no safe "
+      + "completed decision was saved. To avoid a duplicate paid request, it "
+      + "will not repeat the review while this checkpoint is paused.";
+  }
+  if (status === "unavailable") {
+    return "Aegis tried one bounded autonomous review, but the saved attempt "
+      + "did not return a safe, usable decision. It will not run another "
+      + "autonomous review while this checkpoint is paused.";
+  }
+  if (status === "resolved") {
+    return "Aegis completed one bounded autonomous review, but this checkpoint "
+      + "still requires your confirmation. It will not run another autonomous "
+      + "review while this checkpoint is paused.";
+  }
+  return "Aegis tried one bounded autonomous review and saved that this choice "
+    + "still needs your judgment. It will not run another autonomous review "
+    + "while this checkpoint is paused.";
 }
 
 function optionTargetIdentifier(

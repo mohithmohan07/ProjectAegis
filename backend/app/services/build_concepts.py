@@ -22,6 +22,7 @@ import re
 import shutil
 import tempfile
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -32,6 +33,7 @@ from .. import config, models, schemas
 from .. import bulk_import as bi
 from ..bulk_import import workbook_sync, writer
 from . import (
+    autonomous_resolution,
     canonical_source_phase22,
     chapter_durations,
     concept_cleanup,
@@ -64,6 +66,14 @@ _HUMAN_DECISION_ID_RE = re.compile(
 _HUMAN_DECISION_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 _MAX_HUMAN_DECISIONS = 5_000
 _MAX_DEFERRED_HUMAN_DECISIONS = 5_000
+_SEMANTIC_RECOVERY_DISPATCHES_KEY = "semantic_recovery_dispatches"
+_SEMANTIC_RECOVERY_DISPATCHES_VERSION = 1
+_SEMANTIC_RECOVERY_ISSUE_KEY_VERSION = 1
+_MAX_SEMANTIC_RECOVERY_DISPATCHES = 100
+_ACTIVE_AGENT_RESOLUTION_IDS: ContextVar[frozenset[str]] = ContextVar(
+    "aegis_active_agent_resolution_ids",
+    default=frozenset(),
+)
 
 
 def _normalize_pending_human_decision(
@@ -163,6 +173,7 @@ def _normalize_pending_human_decision(
         "context_hash": context_hash,
         **stable,
         "cumulative_usage": copy.deepcopy(usage),
+        "agent_review": copy.deepcopy(raw.get("agent_review")),
     }).model_dump()
     return payload
 
@@ -172,6 +183,26 @@ def _human_decision_ledger(checkpoint: dict | None) -> dict:
         return {}
     value = checkpoint.get(_HUMAN_DECISIONS_KEY)
     return copy.deepcopy(value) if isinstance(value, dict) else {}
+
+
+def _semantic_recovery_dispatch_ledger(
+    checkpoint: dict | None,
+) -> dict:
+    if not isinstance(checkpoint, dict):
+        return {}
+    value = checkpoint.get(_SEMANTIC_RECOVERY_DISPATCHES_KEY)
+    return copy.deepcopy(value) if isinstance(value, dict) else {}
+
+
+def _copy_semantic_recovery_dispatch_ledger(
+    target: dict,
+    source: dict | None,
+) -> dict:
+    result = copy.deepcopy(target)
+    ledger = _semantic_recovery_dispatch_ledger(source)
+    if ledger:
+        result[_SEMANTIC_RECOVERY_DISPATCHES_KEY] = ledger
+    return result
 
 
 def _pending_human_decision(checkpoint: dict | None) -> dict | None:
@@ -201,6 +232,7 @@ def _human_decisions_with_status(
                     entry.get("target_concept_id") or ""),
                 "target_id": str(entry.get("target_id") or ""),
                 "resolved_at": str(entry.get("resolved_at") or ""),
+                "resolved_by": str(entry.get("resolved_by") or "human"),
             })
     deferred = [
         str(value)
@@ -333,9 +365,39 @@ def _consume_applied_human_decisions(
 
 @contextmanager
 def _human_decision_resolution_context(checkpoint: dict | None):
-    resolutions = _ready_human_decisions(checkpoint)
     durable_resolutions = _human_decisions_with_status(
         checkpoint, statuses={"ready", "consumed"})
+    ready_phase33_contexts = {
+        str(row.get("context_hash") or "")
+        for row in durable_resolutions
+        if row.get("status") == "ready"
+        and row.get("kind") == "phase33_type_host_semantic_conflict"
+        and str(row.get("context_hash") or "")
+    }
+    active_agent_ids = _ACTIVE_AGENT_RESOLUTION_IDS.get()
+    resolutions: list[dict] = []
+    effective_durable: list[dict] = []
+    for raw in durable_resolutions:
+        row = copy.deepcopy(raw)
+        reactivate_agent = (
+            row.get("status") == "consumed"
+            and row.get("resolved_by") == "agent"
+            and (
+                str(row.get("decision_id") or "") in active_agent_ids
+                or (
+                    row.get("kind")
+                    == "phase33_type_host_semantic_conflict"
+                    and str(row.get("context_hash") or "")
+                    in ready_phase33_contexts
+                )
+            )
+        )
+        if reactivate_agent:
+            row["status"] = "ready"
+        effective_durable.append(row)
+        if row.get("status") == "ready":
+            resolutions.append(copy.deepcopy(row))
+    durable_resolutions = effective_durable
     if not resolutions and not durable_resolutions:
         yield
         return
@@ -1158,6 +1220,7 @@ def _merge_generation_checkpoint_history(
         "checkpoints": history,
     }
     merged = _copy_human_decision_ledger(merged, stored)
+    merged = _copy_semantic_recovery_dispatch_ledger(merged, stored)
     return _consume_applied_human_decisions(merged, checkpoint)
 
 
@@ -1200,7 +1263,8 @@ def _compatible_generation_checkpoint_envelope(
         "progress": newest.get("progress", 0.0),
         "checkpoints": history,
     }
-    return _copy_human_decision_ledger(normalized, stored)
+    normalized = _copy_human_decision_ledger(normalized, stored)
+    return _copy_semantic_recovery_dispatch_ledger(normalized, stored)
 
 
 def _persist_compatible_generation_checkpoint_mirror(
@@ -1355,6 +1419,99 @@ def _semantic_recovery_validation_errors(
     ]
 
 
+def _semantic_recovery_issue_key(
+    checkpoint: dict,
+    context: semantic_recovery.RecoveryContext,
+) -> tuple[str, str]:
+    selected = semantic_recovery.select_recovery_checkpoint(checkpoint) or {}
+    stage = str(selected.get("stage") or "")
+    material = {
+        # Keep paid-attempt identity independent of future ledger migrations.
+        "issue_key_version": _SEMANTIC_RECOVERY_ISSUE_KEY_VERSION,
+        "failure_signature": context.failure_signature,
+        "failure_type": type(context.failure).__name__,
+        "failure_kind": context.assessment.kind.value,
+        "stage": stage,
+        "fingerprint": str(checkpoint.get("fingerprint") or ""),
+    }
+    digest = hashlib.sha256(json.dumps(
+        material,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
+    return digest, stage
+
+
+def _persist_semantic_recovery_dispatch_started(
+    db: Session,
+    job: models.UploadJob,
+    checkpoint: dict,
+    context: semantic_recovery.RecoveryContext,
+) -> str:
+    """Seal one generic semantic-repair request before provider dispatch."""
+
+    issue_key, stage = _semantic_recovery_issue_key(checkpoint, context)
+    db.refresh(job)
+    original_checkpoint = copy.deepcopy(job.generation_checkpoint or {})
+    durable = copy.deepcopy(original_checkpoint)
+    ledger = _semantic_recovery_dispatch_ledger(durable)
+    attempts = [
+        copy.deepcopy(row)
+        for row in ledger.get("attempts") or []
+        if isinstance(row, dict)
+    ]
+    if any(str(row.get("issue_key") or "") == issue_key for row in attempts):
+        raise semantic_recovery.SemanticRecoveryExhausted(
+            "semantic recovery already dispatched one paid repair for this "
+            "exact failure and checkpoint stage; the unknown or rejected "
+            "outcome will not be billed again"
+        ) from context.failure
+    if len(attempts) >= _MAX_SEMANTIC_RECOVERY_DISPATCHES:
+        raise semantic_recovery.SemanticRecoveryExhausted(
+            "semantic recovery dispatch history reached its safety limit"
+        ) from context.failure
+    attempts.append({
+        "issue_key": issue_key,
+        "failure_signature": context.failure_signature,
+        "status": "request_started",
+        "started_at": _agent_review_timestamp(),
+        "completed_at": "",
+        "failure_type": type(context.failure).__name__,
+        "stage": stage,
+    })
+    durable[_SEMANTIC_RECOVERY_DISPATCHES_KEY] = {
+        "version": _SEMANTIC_RECOVERY_DISPATCHES_VERSION,
+        "attempts": attempts,
+    }
+    claimed = db.execute(
+        update(models.UploadJob)
+        .where(
+            models.UploadJob.id == job.id,
+            models.UploadJob.generation_checkpoint == original_checkpoint,
+        )
+        .values(
+            generation_checkpoint=copy.deepcopy(durable),
+            detail=(
+                "Aegis saved a one-shot semantic repair dispatch before "
+                "contacting the model."
+            ),
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if claimed.rowcount != 1:
+        db.rollback()
+        db.refresh(job)
+        raise semantic_recovery.SemanticRecoveryExhausted(
+            "another worker already claimed this one-shot semantic repair; "
+            "this worker will not start a provider request"
+        ) from context.failure
+    db.commit()
+    db.refresh(job)
+    drive_checkpoints.schedule_checkpoint_backup(job.id)
+    return issue_key
+
+
 def _persist_semantic_recovery_checkpoint(
     db: Session,
     job: models.UploadJob,
@@ -1364,6 +1521,7 @@ def _persist_semantic_recovery_checkpoint(
     target_identity: dict[str, str],
     target_chapter_id: int,
     owner_sub: str | None,
+    dispatch_issue_key: str = "",
 ) -> None:
     """Replace one repaired stage and discard only its dependent later stages."""
     repaired = copy.deepcopy(result.checkpoint)
@@ -1392,8 +1550,34 @@ def _persist_semantic_recovery_checkpoint(
             target_identity=target_identity,
             target_chapter_id=target_chapter_id,
         )
-    job.generation_checkpoint = _copy_human_decision_ledger(
-        durable, job.generation_checkpoint)
+    source_checkpoint = copy.deepcopy(job.generation_checkpoint or {})
+    durable = _copy_human_decision_ledger(durable, source_checkpoint)
+    durable = _copy_semantic_recovery_dispatch_ledger(
+        durable, source_checkpoint
+    )
+    if dispatch_issue_key:
+        ledger = _semantic_recovery_dispatch_ledger(durable)
+        attempts = []
+        matched = False
+        for raw in ledger.get("attempts") or []:
+            row = copy.deepcopy(raw)
+            if (
+                isinstance(row, dict)
+                and str(row.get("issue_key") or "") == dispatch_issue_key
+            ):
+                row["status"] = "succeeded"
+                row["completed_at"] = _agent_review_timestamp()
+                matched = True
+            attempts.append(row)
+        if not matched:
+            raise RuntimeError(
+                "semantic recovery repair result has no durable dispatch seal"
+            )
+        durable[_SEMANTIC_RECOVERY_DISPATCHES_KEY] = {
+            "version": _SEMANTIC_RECOVERY_DISPATCHES_VERSION,
+            "attempts": attempts,
+        }
+    job.generation_checkpoint = durable
     job.detail = (
         f"Semantic recovery repaired {result.changed_count} bounded unit(s) "
         f"at '{result.base_stage}'; dependent later stages will be replayed."
@@ -1717,10 +1901,46 @@ def _existing_human_decision_pause(
     db: Session,
     job: models.UploadJob,
     checkpoint: dict | None,
+    *,
+    agent_resolution_ids: set[str] | None = None,
 ) -> dict | None:
     """Return the durable pause without starting another provider request."""
     pending = _pending_human_decision(checkpoint)
     if pending is None:
+        return None
+    agent_review = pending.get("agent_review")
+    if (
+        agent_resolution_ids is not None
+        and isinstance(agent_review, dict)
+        and agent_review.get("status") == "resolved"
+    ):
+        # The agent response was committed before its directive was recorded.
+        # Recreate that directive without another provider request, seal it as
+        # consumed, and expose it only to this process's immediate continuation.
+        resolution = _record_human_semantic_decision_locked(
+            db,
+            job,
+            str(pending.get("decision_id") or ""),
+            choice=str(agent_review.get("choice") or ""),
+            instruction=str(agent_review.get("instruction") or ""),
+            target_id=str(agent_review.get("target_id") or ""),
+            target_concept_id=str(
+                agent_review.get("target_concept_id") or ""
+            ),
+            resolved_by="agent",
+            resolution_status="consumed",
+        )
+        agent_resolution_ids.add(str(
+            resolution["resolved_decision"]["decision_id"]
+        ))
+        if isinstance(checkpoint, dict):
+            checkpoint.clear()
+            checkpoint.update(copy.deepcopy(job.generation_checkpoint or {}))
+        progress.log(
+            "Reused the saved autonomous semantic resolution; no second "
+            "resolution-agent request was started.",
+            level="success",
+        )
         return None
     if _retire_obsolete_machine_metadata_pause(
         db,
@@ -1742,6 +1962,314 @@ def _existing_human_decision_pause(
         level="warning",
     )
     return _awaiting_human_decision_result(job, pending)
+
+
+def _agent_review_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _agent_review_history(checkpoint: dict | None) -> list[dict]:
+    rows: list[dict] = []
+    ledger = _human_decision_ledger(checkpoint)
+    pending = ledger.get("pending")
+    if isinstance(pending, dict):
+        review = pending.get("agent_review")
+        if isinstance(review, dict):
+            rows.append(copy.deepcopy(review))
+    for resolution in ledger.get("resolutions") or []:
+        if not isinstance(resolution, dict):
+            continue
+        original = resolution.get("pending_decision")
+        review = (
+            original.get("agent_review")
+            if isinstance(original, dict) else None
+        )
+        if isinstance(review, dict):
+            rows.append(copy.deepcopy(review))
+    return rows
+
+
+def _persist_pending_agent_review(
+    db: Session,
+    job: models.UploadJob,
+    *,
+    decision_id: str,
+    context_hash: str,
+    review: dict,
+    owner_sub: str | None,
+    persist_usage: bool = False,
+) -> dict:
+    """Update only the current pending review, preserving its immutable hash."""
+
+    usage: dict | None = None
+    if persist_usage:
+        # Account for the provider response before making its directive
+        # reusable. A crash after this commit leaves request_started (human
+        # fallback) rather than a terminal verdict with missing billed usage.
+        usage = uploads.persist_current_openai_usage(
+            db, job.id, owner_sub=owner_sub
+        )
+    db.refresh(job)
+    original_checkpoint = copy.deepcopy(job.generation_checkpoint or {})
+    checkpoint = copy.deepcopy(original_checkpoint)
+    ledger = _human_decision_ledger(checkpoint)
+    pending = ledger.get("pending")
+    if (
+        not isinstance(pending, dict)
+        or str(pending.get("decision_id") or "") != decision_id
+        or str(pending.get("context_hash") or "") != context_hash
+    ):
+        raise HumanDecisionConflictError(
+            "the autonomous semantic review context is no longer pending"
+        )
+    validated_review = schemas.AgentSemanticReview.model_validate(
+        review
+    ).model_dump()
+    next_status = str(validated_review.get("status") or "")
+    next_issue_key = str(validated_review.get("issue_key") or "")
+    current_review = pending.get("agent_review")
+    if next_status == "request_started" and isinstance(current_review, dict):
+        raise HumanDecisionConflictError(
+            "this semantic review was already claimed"
+        )
+    if next_status in {"resolved", "unavailable"}:
+        if (
+            not isinstance(current_review, dict)
+            or current_review.get("status") != "request_started"
+            or str(current_review.get("issue_key") or "") != next_issue_key
+        ):
+            raise HumanDecisionConflictError(
+                "the semantic review result has no matching dispatch claim"
+            )
+    if next_status == "escalated" and isinstance(current_review, dict):
+        if str(current_review.get("issue_key") or "") != next_issue_key:
+            raise HumanDecisionConflictError(
+                "the semantic escalation does not match the claimed issue"
+            )
+    pending = copy.deepcopy(pending)
+    pending["agent_review"] = validated_review
+    if usage is not None:
+        pending["cumulative_usage"] = copy.deepcopy(usage)
+    ledger["pending"] = pending
+    checkpoint[_HUMAN_DECISIONS_KEY] = ledger
+    detail = (
+        "Aegis is reviewing the saved semantic discrepancy once."
+        if review.get("status") == "request_started"
+        else "Generation paused after Aegis's bounded semantic review."
+    )
+    claimed = db.execute(
+        update(models.UploadJob)
+        .where(
+            models.UploadJob.id == job.id,
+            models.UploadJob.generation_checkpoint == original_checkpoint,
+        )
+        .values(
+            generation_checkpoint=copy.deepcopy(checkpoint),
+            detail=detail,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if claimed.rowcount != 1:
+        db.rollback()
+        db.refresh(job)
+        raise HumanDecisionConflictError(
+            "another worker already claimed or changed this semantic review"
+        )
+    db.commit()
+    db.refresh(job)
+    drive_checkpoints.schedule_checkpoint_backup(job.id)
+    return copy.deepcopy(pending)
+
+
+def _autonomously_resolve_pending_decision(
+    db: Session,
+    job: models.UploadJob,
+    pending: dict,
+    *,
+    owner_sub: str | None,
+) -> str | None:
+    """Resolve one distinct issue or leave its existing human pause intact."""
+
+    if isinstance(pending.get("agent_review"), dict):
+        # Any persisted review state means this exact decision already used or
+        # claimed its one autonomous attempt. This includes an unknown-outcome
+        # crash fallback restored by _persist_pending_human_decision.
+        return None
+    if not autonomous_resolution.enabled():
+        return None
+    checkpoint = copy.deepcopy(job.generation_checkpoint or {})
+    issue_key = autonomous_resolution.issue_key(pending)
+    history = _agent_review_history(checkpoint)
+    attempted = [row for row in history if isinstance(row, dict)]
+    if any(str(row.get("issue_key") or "") == issue_key for row in attempted):
+        now = _agent_review_timestamp()
+        reason = (
+            "A prior autonomous action for this same semantic scope did not "
+            "finish the issue. Aegis stopped instead of spending on a loop."
+        )
+        _persist_pending_agent_review(
+            db,
+            job,
+            decision_id=pending["decision_id"],
+            context_hash=pending["context_hash"],
+            review={
+                "status": "escalated",
+                "resolver_version": autonomous_resolution.RESOLVER_VERSION,
+                "issue_key": issue_key,
+                "started_at": now,
+                "completed_at": now,
+                "reason": reason,
+            },
+            owner_sub=owner_sub,
+        )
+        progress.log(reason, level="warning")
+        return None
+    if len(attempted) >= autonomous_resolution.maximum_decisions():
+        now = _agent_review_timestamp()
+        reason = (
+            "This run reached its autonomous decision safety cap. The next "
+            "semantic choice is saved for you without another model request."
+        )
+        _persist_pending_agent_review(
+            db,
+            job,
+            decision_id=pending["decision_id"],
+            context_hash=pending["context_hash"],
+            review={
+                "status": "escalated",
+                "resolver_version": autonomous_resolution.RESOLVER_VERSION,
+                "issue_key": issue_key,
+                "started_at": now,
+                "completed_at": now,
+                "reason": reason,
+            },
+            owner_sub=owner_sub,
+        )
+        progress.log(reason, level="warning")
+        return None
+
+    started_at = _agent_review_timestamp()
+    try:
+        pending = _persist_pending_agent_review(
+            db,
+            job,
+            decision_id=pending["decision_id"],
+            context_hash=pending["context_hash"],
+            review={
+                "status": "request_started",
+                "resolver_version": autonomous_resolution.RESOLVER_VERSION,
+                "issue_key": issue_key,
+                "started_at": started_at,
+                "reason": (
+                    "The decision and checkpoint were saved before this one "
+                    "bounded autonomous review started."
+                ),
+            },
+            owner_sub=owner_sub,
+        )
+    except HumanDecisionConflictError:
+        db.refresh(job)
+        progress.log(
+            "Another worker already claimed this saved resolution review; "
+            "this worker did not start a model request.",
+            level="warning",
+        )
+        return None
+    progress.set_progress(
+        job.checkpoint_progress,
+        label="Resolution agent — reviewing discrepancy",
+    )
+    progress.log(
+        "Resolution agent is checking the exact MMD, checkpoint, candidates, "
+        "Types and QIDs once.",
+        level="warning",
+    )
+    result = autonomous_resolution.resolve_pending(
+        pending,
+        source_text=job.mmd_text,
+        checkpoint=copy.deepcopy(job.generation_checkpoint or {}),
+    )
+    completed_at = _agent_review_timestamp()
+    final_review = {
+        "status": result.status,
+        "resolver_version": autonomous_resolution.RESOLVER_VERSION,
+        "issue_key": issue_key,
+        "started_at": started_at,
+        "completed_at": completed_at,
+        "reason": result.reason,
+        "confidence": result.confidence,
+        "evidence_refs": list(result.evidence_refs),
+        "choice": result.choice or None,
+        "instruction": result.instruction,
+        "target_id": result.target_id,
+        "target_concept_id": result.target_concept_id,
+    }
+    try:
+        pending = _persist_pending_agent_review(
+            db,
+            job,
+            decision_id=pending["decision_id"],
+            context_hash=pending["context_hash"],
+            review=final_review,
+            owner_sub=owner_sub,
+            persist_usage=True,
+        )
+    except HumanDecisionConflictError:
+        db.refresh(job)
+        progress.log(
+            "The saved semantic decision changed while the bounded review was "
+            "finishing; Aegis kept the newer state and did not overwrite it.",
+            level="warning",
+        )
+        return None
+    if not result.resolved:
+        progress.set_progress(
+            job.checkpoint_progress,
+            label="Paused for your decision",
+        )
+        progress.log(result.reason, level="warning")
+        return None
+    try:
+        recorded = _record_human_semantic_decision_locked(
+            db,
+            job,
+            pending["decision_id"],
+            choice=result.choice,
+            instruction=result.instruction,
+            target_id=result.target_id,
+            target_concept_id=result.target_concept_id,
+            resolved_by="agent",
+            resolution_status="consumed",
+        )
+    except (HumanDecisionConflictError, ValueError) as exc:
+        fallback = {
+            **final_review,
+            "status": "escalated",
+            "reason": (
+                "The proposed action failed Aegis's deterministic decision "
+                f"validation ({type(exc).__name__}); choose the saved action."
+            ),
+            "choice": None,
+            "target_id": "",
+            "target_concept_id": "",
+        }
+        _persist_pending_agent_review(
+            db,
+            job,
+            decision_id=pending["decision_id"],
+            context_hash=pending["context_hash"],
+            review=fallback,
+            owner_sub=owner_sub,
+        )
+        progress.log(fallback["reason"], level="warning")
+        return None
+    decision_id = str(recorded["resolved_decision"]["decision_id"])
+    progress.log(
+        "Resolution agent applied one source-supported action and generation "
+        "is continuing from the saved checkpoint.",
+        level="success",
+    )
+    return decision_id
 
 
 def _source_replacement_required(checkpoint: dict | None) -> bool:
@@ -1801,6 +2329,27 @@ def _persist_pending_human_decision(
         cumulative_usage=openai_usage.visible_summary(),
     )
     ledger = _human_decision_ledger(checkpoint)
+    existing_pending = ledger.get("pending")
+    if isinstance(existing_pending, dict):
+        if (
+            str(existing_pending.get("decision_id") or "")
+            != str(pending.get("decision_id") or "")
+        ):
+            raise RuntimeError(
+                "another human semantic decision is already pending"
+            )
+        if (
+            str(existing_pending.get("context_hash") or "")
+            != str(pending.get("context_hash") or "")
+        ):
+            raise RuntimeError(
+                "the repeated semantic decision identity has different context"
+            )
+        # Idempotent concurrent replay: never replace a durable dispatch claim,
+        # result, usage snapshot, or escalation with the raw exception packet.
+        # The caller will observe the saved review and cannot start a duplicate
+        # provider request.
+        return copy.deepcopy(existing_pending)
     resolutions = [
         copy.deepcopy(entry)
         for entry in ledger.get("resolutions") or []
@@ -1809,19 +2358,55 @@ def _persist_pending_human_decision(
     if len(resolutions) >= _MAX_HUMAN_DECISIONS:
         raise RuntimeError(
             "human semantic decision history reached its safety limit")
+    replayed_agent_review: dict | None = None
+    retained_resolutions: list[dict] = []
     for entry in resolutions:
         if entry.get("decision_id") == pending["decision_id"]:
+            original = entry.get("pending_decision")
+            review = (
+                original.get("agent_review")
+                if isinstance(original, dict) else None
+            )
+            if (
+                entry.get("resolved_by") == "agent"
+                and entry.get("status") == "consumed"
+                and isinstance(review, dict)
+                and review.get("status") == "resolved"
+            ):
+                # The prior worker durably sealed the agent directive before
+                # rerunning, but no later gate checkpoint proves whether a
+                # downstream paid request started. Restore the original gate
+                # identity for an explicit user decision instead of replaying
+                # the agent or leaving resume permanently broken.
+                replayed_agent_review = copy.deepcopy(review)
+                continue
             raise RuntimeError(
                 "a previously resolved human decision was requested again; "
                 "the saved resolution was not consumed")
-
-    existing_pending = ledger.get("pending")
-    if (
-        isinstance(existing_pending, dict)
-        and existing_pending.get("decision_id") != pending["decision_id"]
-    ):
-        raise RuntimeError(
-            "another human semantic decision is already pending")
+        retained_resolutions.append(entry)
+    resolutions = retained_resolutions
+    if replayed_agent_review is not None:
+        now = _agent_review_timestamp()
+        replayed_agent_review.update({
+            "status": "escalated",
+            "completed_at": now,
+            "reason": (
+                "Aegis saved an autonomous action, but the previous worker "
+                "ended before a later checkpoint proved whether its directed "
+                "request started. Choose how to continue; the action will not "
+                "be replayed or billed automatically."
+            ),
+            "confidence": 0.0,
+            "evidence_refs": [],
+            "choice": None,
+            "instruction": "",
+            "target_id": "",
+            "target_concept_id": "",
+        })
+        pending["agent_review"] = replayed_agent_review
+        pending = schemas.PendingSemanticDecision.model_validate(
+            pending
+        ).model_dump()
 
     checkpoint[_HUMAN_DECISIONS_KEY] = {
         "version": _HUMAN_DECISIONS_VERSION,
@@ -1838,8 +2423,8 @@ def _persist_pending_human_decision(
     job.generation_checkpoint = checkpoint
     job.status = "converted"
     job.detail = (
-        "Generation paused for your semantic decision. No API request is "
-        "running while paused."
+        "Generation saved a semantic decision checkpoint before any bounded "
+        "resolution review."
     )
     # This commits both the decision state and all billable usage observed
     # before the pause. The outer run wrapper may safely persist once more.
@@ -1856,8 +2441,8 @@ def _persist_pending_human_decision(
         label="Paused for your decision",
     )
     progress.log(
-        "Generation paused at the saved checkpoint for a semantic decision; "
-        "no automatic semantic retry will run.",
+        "Saved the semantic decision before resolution. Any enabled "
+        "autonomous review starts only after this commit and runs once.",
         level="warning",
     )
     return pending
@@ -1871,20 +2456,39 @@ def _run_with_human_decision_pause(
     fingerprint: str,
     target_chapter_id: int,
     owner_sub: str | None,
+    initial_agent_resolution_ids: set[str] | None = None,
 ) -> tuple[dict | None, object | None]:
-    """Run one post/pre pipeline and convert only the typed pause exception."""
-    try:
-        return None, operation()
-    except semantic_recovery.HumanDecisionRequired as exc:
-        pending = _persist_pending_human_decision(
-            db,
-            job,
-            exc.pending_decision,
-            fingerprint=fingerprint,
-            target_chapter_id=target_chapter_id,
-            owner_sub=owner_sub,
-        )
-        return _awaiting_human_decision_result(job, pending), None
+    """Run a pipeline with bounded agent-first, human-last decision handling."""
+
+    active_ids = set(initial_agent_resolution_ids or set())
+    while True:
+        token = _ACTIVE_AGENT_RESOLUTION_IDS.set(frozenset(active_ids))
+        try:
+            return None, operation()
+        except semantic_recovery.HumanDecisionRequired as exc:
+            pending = _persist_pending_human_decision(
+                db,
+                job,
+                exc.pending_decision,
+                fingerprint=fingerprint,
+                target_chapter_id=target_chapter_id,
+                owner_sub=owner_sub,
+            )
+            resolved_id = _autonomously_resolve_pending_decision(
+                db,
+                job,
+                pending,
+                owner_sub=owner_sub,
+            )
+            if resolved_id:
+                active_ids.add(resolved_id)
+                continue
+            current = _pending_human_decision(job.generation_checkpoint)
+            return _awaiting_human_decision_result(
+                job, current or pending
+            ), None
+        finally:
+            _ACTIVE_AGENT_RESOLUTION_IDS.reset(token)
 
 
 def record_human_semantic_decision(
@@ -1932,6 +2536,8 @@ def _record_human_semantic_decision_locked(
     instruction: str,
     target_id: str,
     target_concept_id: str,
+    resolved_by: str = "human",
+    resolution_status: str = "ready",
 ) -> dict:
     """Mutate a decision ledger while ``exclusive_job_operation`` is held."""
     if job.status == "generated":
@@ -1950,6 +2556,10 @@ def _record_human_semantic_decision_locked(
     instruction = submission.instruction.strip()
     target_id = submission.target_id.strip()
     target_concept_id = submission.target_concept_id.strip()
+    if resolved_by not in {"human", "agent"}:
+        raise ValueError("resolved_by must be human or agent")
+    if resolution_status not in {"ready", "consumed"}:
+        raise ValueError("resolution_status must be ready or consumed")
     if choice == "custom_instruction" and not instruction:
         raise ValueError("instruction is required for custom_instruction")
 
@@ -2032,6 +2642,7 @@ def _record_human_semantic_decision_locked(
                 "target_id must identify one of the pending decision "
                 "candidates")
 
+    resolved_at = datetime.now(timezone.utc).isoformat()
     resolution = {
         "decision_id": decision_id,
         "context_hash": str(pending.get("context_hash") or ""),
@@ -2039,8 +2650,10 @@ def _record_human_semantic_decision_locked(
         "instruction": instruction,
         "target_id": target_id,
         "target_concept_id": target_concept_id,
-        "resolved_at": datetime.now(timezone.utc).isoformat(),
-        "status": "ready",
+        "resolved_at": resolved_at,
+        "status": resolution_status,
+        "consumed_at": resolved_at if resolution_status == "consumed" else "",
+        "resolved_by": resolved_by,
         "pending_decision": _compact_resolved_pending_decision(
             pending,
             choice=choice,
@@ -2156,8 +2769,13 @@ def generate_post_learning(
         )
         progress.log(message, level="error")
         raise ValueError(message)
+    initial_agent_resolution_ids: set[str] = set()
     existing_pause = _existing_human_decision_pause(
-        db, job, resume_checkpoint)
+        db,
+        job,
+        resume_checkpoint,
+        agent_resolution_ids=initial_agent_resolution_ids,
+    )
     if existing_pause is not None:
         return existing_pause
     _raise_if_source_replacement_required(resume_checkpoint)
@@ -2267,6 +2885,7 @@ def generate_post_learning(
         "learning_kind": "Post",
     }
     recovery_policy = semantic_recovery.RecoveryPolicy.from_environment()
+    recovery_dispatch_keys: dict[str, str] = {}
 
     def generation_attempt() -> list[dict]:
         # Every automatic checkpoint is durable. On recovery, obtain the
@@ -2307,6 +2926,16 @@ def generate_post_learning(
             max_source_chars=recovery_policy.max_source_chars,
         )
 
+    def before_repair(
+        checkpoint: dict,
+        context: semantic_recovery.RecoveryContext,
+    ) -> None:
+        recovery_dispatch_keys[context.failure_signature] = (
+            _persist_semantic_recovery_dispatch_started(
+                db, job, checkpoint, context
+            )
+        )
+
     def persist_repair(
         result: semantic_recovery.RepairResult,
         _context: semantic_recovery.RecoveryContext,
@@ -2319,6 +2948,9 @@ def generate_post_learning(
             target_identity=target_identity,
             target_chapter_id=target_chapter_id,
             owner_sub=owner_sub,
+            dispatch_issue_key=recovery_dispatch_keys.get(
+                _context.failure_signature, ""
+            ),
         )
 
     def generation_and_deposit_attempt() -> tuple[
@@ -2370,6 +3002,7 @@ def generate_post_learning(
                     job.generation_checkpoint or {}),
                 repair_checkpoint=repair_checkpoint,
                 persist_repair=persist_repair,
+                before_repair=before_repair,
                 policy=recovery_policy,
                 log=progress.log,
             )
@@ -2383,6 +3016,7 @@ def generate_post_learning(
         fingerprint=fingerprint,
         target_chapter_id=target_chapter_id,
         owner_sub=owner_sub,
+        initial_agent_resolution_ids=initial_agent_resolution_ids,
     )
     if paused is not None:
         return paused
@@ -2484,8 +3118,13 @@ def generate_pre_learning_from_upload(
         )
         progress.log(message, level="error")
         raise ValueError(message)
+    initial_agent_resolution_ids: set[str] = set()
     existing_pause = _existing_human_decision_pause(
-        db, job, resume_checkpoint)
+        db,
+        job,
+        resume_checkpoint,
+        agent_resolution_ids=initial_agent_resolution_ids,
+    )
     if existing_pause is not None:
         return existing_pause
     _raise_if_source_replacement_required(resume_checkpoint)
@@ -2590,6 +3229,7 @@ def generate_pre_learning_from_upload(
         "learning_kind": "Pre",
     }
     recovery_policy = semantic_recovery.RecoveryPolicy.from_environment()
+    recovery_dispatch_keys: dict[str, str] = {}
     recovery_scope = "post_generation"
 
     def generation_attempt() -> list[dict]:
@@ -2663,6 +3303,16 @@ def generate_pre_learning_from_upload(
             failure_scope=recovery_scope,
         )
 
+    def before_repair(
+        checkpoint: dict,
+        context: semantic_recovery.RecoveryContext,
+    ) -> None:
+        recovery_dispatch_keys[context.failure_signature] = (
+            _persist_semantic_recovery_dispatch_started(
+                db, job, checkpoint, context
+            )
+        )
+
     def persist_repair(
         result: semantic_recovery.RepairResult,
         _context: semantic_recovery.RecoveryContext,
@@ -2675,6 +3325,9 @@ def generate_pre_learning_from_upload(
             target_identity=target_identity,
             target_chapter_id=target_chapter_id,
             owner_sub=owner_sub,
+            dispatch_issue_key=recovery_dispatch_keys.get(
+                _context.failure_signature, ""
+            ),
         )
 
     def generation_and_deposit_attempt() -> tuple[
@@ -2707,6 +3360,7 @@ def generate_pre_learning_from_upload(
                     job.generation_checkpoint or {}),
                 repair_checkpoint=repair_checkpoint,
                 persist_repair=persist_repair,
+                before_repair=before_repair,
                 policy=recovery_policy,
                 log=progress.log,
             )
@@ -2719,6 +3373,7 @@ def generate_pre_learning_from_upload(
         fingerprint=fingerprint,
         target_chapter_id=target_chapter_id,
         owner_sub=owner_sub,
+        initial_agent_resolution_ids=initial_agent_resolution_ids,
     )
     if paused is not None:
         return paused

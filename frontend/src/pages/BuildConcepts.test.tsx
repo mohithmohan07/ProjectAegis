@@ -733,6 +733,90 @@ test("pauses for a semantic decision and saving it never resumes implicitly", as
   await waitFor(() => expect(streamMock).toHaveBeenCalledTimes(2));
 });
 
+test("shows the saved reason when one bounded autonomous review escalates", async () => {
+  streamMock.mockResolvedValueOnce({
+    job_id: 42,
+    status: "awaiting_decision",
+    pending_decision: semanticDecisionFixture({
+      agent_review: {
+        status: "escalated",
+        resolver_version: "aegis-autonomous-resolution-v1",
+        issue_key: "a".repeat(64),
+        started_at: "2026-08-01T10:00:00Z",
+        completed_at: "2026-08-01T10:00:04Z",
+        reason: "Two source-grounded concept hosts remain equally defensible.",
+        confidence: 0.71,
+        evidence_refs: ["MMD-WINDOW-0002", "PENDING-EVIDENCE-0001"],
+        choice: null,
+        instruction: "",
+        target_id: "",
+        target_concept_id: "",
+      },
+    }),
+    resume_required: false,
+  });
+
+  renderPage();
+  fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+  fireEvent.click(await screen.findByRole("button", {
+    name: "Select Electricity target",
+  }));
+  fireEvent.click(screen.getByRole("button", {
+    name: "Resume from 91% checkpoint",
+  }));
+
+  expect(await screen.findByText("Aegis autonomous review")).toBeDefined();
+  expect(screen.getByText("Saved status: Human judgment needed")).toBeDefined();
+  expect(screen.getByText(
+    /tried one bounded autonomous review.*will not run another autonomous review/s,
+  )).toBeDefined();
+  expect(screen.getByText("Saved reason:")).toBeDefined();
+  expect(screen.getByText(
+    "Two source-grounded concept hosts remain equally defensible.",
+  )).toBeDefined();
+  expect(screen.getByText("No API request is running while paused.")).toBeDefined();
+  expect(streamMock).toHaveBeenCalledTimes(1);
+});
+
+test("explains that a recorded autonomous attempt will not be repeated", async () => {
+  streamMock.mockResolvedValueOnce({
+    job_id: 42,
+    status: "awaiting_decision",
+    pending_decision: semanticDecisionFixture({
+      agent_review: {
+        status: "request_started",
+        resolver_version: "aegis-autonomous-resolution-v1",
+        issue_key: "b".repeat(64),
+        started_at: "2026-08-01T10:00:00Z",
+        completed_at: "",
+        reason: "The prior request has no safely persisted final directive.",
+        confidence: 0,
+        evidence_refs: [],
+        choice: null,
+        instruction: "",
+        target_id: "",
+        target_concept_id: "",
+      },
+    }),
+    resume_required: false,
+  });
+
+  renderPage();
+  fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+  fireEvent.click(await screen.findByRole("button", {
+    name: "Select Electricity target",
+  }));
+  fireEvent.click(screen.getByRole("button", {
+    name: "Resume from 91% checkpoint",
+  }));
+
+  expect(await screen.findByText("Saved status: Attempt recorded")).toBeDefined();
+  expect(screen.getByText(
+    /avoid a duplicate paid request.*will not repeat the review/s,
+  )).toBeDefined();
+  expect(streamMock).toHaveBeenCalledTimes(1);
+});
+
 test("Type granularity pause offers quality-safe consolidation or keep choices", async () => {
   streamMock.mockResolvedValueOnce({
     job_id: 42,

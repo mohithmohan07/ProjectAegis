@@ -219,6 +219,26 @@ class SemanticDecisionOption(BaseModel):
     target_concept_id: str = Field(default="", max_length=256)
 
 
+class AgentSemanticReview(BaseModel):
+    """Durable audit state for one bounded autonomous decision attempt."""
+
+    model_config = ConfigDict(extra="forbid")
+    status: Literal[
+        "request_started", "resolved", "escalated", "unavailable"
+    ]
+    resolver_version: str = Field(min_length=1, max_length=128)
+    issue_key: str = Field(min_length=64, max_length=64)
+    started_at: str = Field(min_length=1, max_length=64)
+    completed_at: str = Field(default="", max_length=64)
+    reason: str = Field(default="", max_length=8_000)
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    evidence_refs: list[str] = Field(default_factory=list, max_length=100)
+    choice: SemanticDecisionChoice | None = None
+    instruction: str = Field(default="", max_length=4_000)
+    target_id: str = Field(default="", max_length=512)
+    target_concept_id: str = Field(default="", max_length=256)
+
+
 class PendingSemanticDecision(BaseModel):
     model_config = ConfigDict(extra="forbid")
     decision_id: str = Field(min_length=1, max_length=128)
@@ -239,6 +259,7 @@ class PendingSemanticDecision(BaseModel):
     options: list[SemanticDecisionOption] = Field(
         default_factory=list, max_length=16)
     cumulative_usage: dict = Field(default_factory=dict)
+    agent_review: AgentSemanticReview | None = None
 
 
 class ResolvedSemanticDecision(BaseModel):
@@ -252,6 +273,7 @@ class ResolvedSemanticDecision(BaseModel):
     resolved_at: str = Field(min_length=1, max_length=64)
     status: Literal["ready", "consumed"] = "ready"
     consumed_at: str = Field(default="", max_length=64)
+    resolved_by: Literal["human", "agent"] = "human"
     pending_decision: PendingSemanticDecision
 
 
