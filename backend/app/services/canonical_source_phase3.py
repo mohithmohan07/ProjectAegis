@@ -88,6 +88,8 @@ _HUMAN_SOURCE_RESOLUTIONS: ContextVar[Any] = ContextVar(
 _SOURCE_REVIEW_VERSION = "phase3-source-review-1"
 _SOURCE_REVIEW_KEY = "human_source_review"
 _DOWNSTREAM_INVALIDATION_KEY = "downstream_invalidation_required"
+_MACHINE_METADATA_MIGRATION_KEY = "machine_metadata_sanitization"
+_MACHINE_METADATA_MIGRATION_VERSION = 1
 
 _SPACE_RE = re.compile(r"\s+")
 _NUMBER_PREFIX_RE = re.compile(
@@ -143,6 +145,15 @@ _INCLUDEGRAPHICS_ANY_RE = re.compile(
     re.IGNORECASE,
 )
 _BARE_HTTPS_RE = re.compile(r"https://[^\s<>\[\]]+", re.IGNORECASE)
+_HTML_COMMENT_RE = re.compile(r"<!--(?P<body>.*?)-->", re.DOTALL)
+_MACHINE_METADATA_KEYS = {
+    "compilation_status",
+    "compiler_version",
+    "schema_version",
+    "source_origin",
+    "source_sha256",
+    "used_for_generation",
+}
 _EMPTY_MATH_DELIMITER_PATTERNS = (
     re.compile(r"\\\[\s*\\\]", re.DOTALL),
     re.compile(r"\\\(\s*\\\)", re.DOTALL),
@@ -180,14 +191,21 @@ def _semantic_title_key(value: object) -> str:
     return _normal(text)
 
 
-def _plain_title(value: object) -> str:
+def _plain_title(
+    value: object,
+    *,
+    strip_machine_metadata: bool = True,
+) -> str:
     """Render a source heading as plain learner-visible text.
 
     Topic identity remains tied to the source section ID; this helper removes
     only presentation TeX such as ``\boldsymbol{n}`` and structural numbering.
     It never invents or translates heading text.
     """
-    text = html.unescape(str(value or "")).strip()
+    text = str(value or "")
+    if strip_machine_metadata:
+        text = _strip_machine_metadata_comments(text)
+    text = html.unescape(text).strip()
     text = re.sub(
         r"\\(?:mathbf|boldsymbol|mathrm|mathit|text|operatorname)\s*\{([^{}]*)\}",
         r"\1",
@@ -1448,8 +1466,99 @@ def _restore_rich_tokens(value: str, protected: list[str]) -> str:
     return text
 
 
-def _clean_public_text(value: object) -> str:
-    text, protected = _protect_rich_tokens(str(value or ""))
+def _machine_metadata_comment(body: object) -> bool:
+    """Whether one HTML comment is Aegis-authored, non-visible metadata."""
+
+    value = _SPACE_RE.sub(" ", str(body or "")).strip()
+    if value.casefold() == "aegis canonical source shadow":
+        return True
+    key_match = re.match(r"(?P<key>[a-z][a-z0-9_-]*)\s*:", value, re.I)
+    if (
+        key_match
+        and str(key_match.group("key") or "").casefold()
+        in _MACHINE_METADATA_KEYS
+    ):
+        return True
+    if re.match(
+        r"invalid-image-url preserved in canonical json\s*:",
+        value,
+        re.I,
+    ):
+        return True
+    return bool(re.fullmatch(
+        r"BLK-\d+\s*:\s*source whitespace preserved in canonical JSON",
+        value,
+        re.I,
+    ))
+
+
+def _strip_machine_metadata_comments(value: object) -> str:
+    """Remove only known Aegis metadata comments outside literal code.
+
+    HTML comments can be legitimate Computer Science source examples. Fenced
+    and inline Markdown code therefore remain byte-for-byte protected, and an
+    unknown comment remains visible to the strict rich-text validator.
+    """
+
+    def strip_comments(text: str) -> str:
+        return _HTML_COMMENT_RE.sub(
+            lambda match: " " if _machine_metadata_comment(
+                match.group("body")
+            ) else match.group(0),
+            text,
+        )
+
+    return kr.transform_outside_markdown_code(
+        str(value or ""),
+        strip_comments,
+    )
+
+
+def _protect_markdown_code(value: str) -> tuple[str, list[tuple[str, str]]]:
+    """Stash Markdown code through Phase 3 prose normalization."""
+
+    text = str(value or "")
+    ranges = kr._markdown_code_ranges(text)
+    if not ranges:
+        return text, []
+    prefix = "\ue100AEGISPHASE3CODE"
+    while prefix in text:
+        prefix += "\ue100"
+    protected: list[tuple[str, str]] = []
+    pieces: list[str] = []
+    cursor = 0
+    for index, (start, end) in enumerate(ranges):
+        token = f"{prefix}{index:05d}\ue101"
+        pieces.extend((text[cursor:start], token))
+        protected.append((token, text[start:end]))
+        cursor = end
+    pieces.append(text[cursor:])
+    return "".join(pieces), protected
+
+
+def _restore_markdown_code(
+    value: str,
+    protected: list[tuple[str, str]],
+) -> str:
+    text = str(value or "")
+    for token, rendered in protected:
+        text = text.replace(token, rendered)
+    return text
+
+
+def _clean_public_text(
+    value: object,
+    *,
+    strip_machine_metadata: bool = True,
+    preserve_markdown_code: bool = True,
+) -> str:
+    text = str(value or "")
+    if strip_machine_metadata:
+        text = _strip_machine_metadata_comments(text)
+    code_protected: list[tuple[str, str]] = []
+    if preserve_markdown_code:
+        text, code_protected = _protect_markdown_code(text)
+    text, protected = _protect_rich_tokens(text)
     text = _clean_list(_clean_table(text))
     text = _LAYOUT_COMMAND_RE.sub(" ", text)
     text = _ENV_RE.sub("\n", text)
@@ -1466,7 +1575,8 @@ def _clean_public_text(value: object) -> str:
     # Any residual layout/control command is not learner-visible source text.
     text = re.sub(r"\\(?:hline|vspace|hspace|noindent|smallskip|medskip|bigskip)\b", " ", text)
     lines = [re.sub(r"[ \t]+", " ", line).strip() for line in text.splitlines()]
-    return "\n".join(line for line in lines if line).strip()
+    text = "\n".join(line for line in lines if line).strip()
+    return _restore_markdown_code(text, code_protected)
 
 
 def _graph_block_text(
@@ -1482,7 +1592,13 @@ def _graph_block_text(
     return str(source.get("display_text") or source.get("raw_text") or "")
 
 
-def render_semantic_source(graph: dict[str, Any], canonical: dict[str, Any]) -> str:
+def render_semantic_source(
+    graph: dict[str, Any],
+    canonical: dict[str, Any],
+    *,
+    strip_machine_metadata: bool = True,
+    preserve_markdown_code: bool = True,
+) -> str:
     """Render graph-controlled source text without model-authored wrappers.
 
     Consecutive source blocks are normalized as one stream. Mathpix may split a
@@ -1531,7 +1647,11 @@ def render_semantic_source(graph: dict[str, Any], canonical: dict[str, Any]) -> 
     def flush_pending() -> None:
         if not pending_text:
             return
-        cleaned = _clean_public_text("\n".join(pending_text))
+        cleaned = _clean_public_text(
+            "\n".join(pending_text),
+            strip_machine_metadata=strip_machine_metadata,
+            preserve_markdown_code=preserve_markdown_code,
+        )
         pending_text.clear()
         if cleaned:
             pieces.append(cleaned)
@@ -1550,7 +1670,8 @@ def render_semantic_source(graph: dict[str, Any], canonical: dict[str, Any]) -> 
             emitted_sections.add(sid)
             topic = topic_by_id.get(str(section.get("topic_id") or ""), {})
             title = _plain_title(
-                topic.get("title") or section.get("title") or "Topic"
+                topic.get("title") or section.get("title") or "Topic",
+                strip_machine_metadata=strip_machine_metadata,
             )
             pieces.append(f"## {title}")
 
@@ -1570,17 +1691,22 @@ def render_semantic_source(graph: dict[str, Any], canonical: dict[str, Any]) -> 
                 continue
             emitted_sections.add(sid)
             role = str(section.get("role") or "content_heading")
-            title = _plain_title(section.get("title"))
+            title = _plain_title(
+                section.get("title"),
+                strip_machine_metadata=strip_machine_metadata,
+            )
             if role == "main_topic":
                 title = _plain_title(
                     topic_by_id.get(str(section.get("topic_id") or ""), {}).get("title")
-                    or title
+                    or title,
+                    strip_machine_metadata=strip_machine_metadata,
                 )
                 pieces.append(f"## {title}")
             elif role == "subtopic":
                 title = _plain_title(
                     subtopic_by_id.get(str(section.get("subtopic_id") or ""), {}).get("title")
-                    or title
+                    or title,
+                    strip_machine_metadata=strip_machine_metadata,
                 )
                 pieces.append(f"### {title}")
             elif role == "chapter_heading":
@@ -1591,7 +1717,11 @@ def render_semantic_source(graph: dict[str, Any], canonical: dict[str, Any]) -> 
         if kind == "figure":
             flush_pending()
             figure = figure_by_id.get(str(block.get("figure_id") or ""), {})
-            caption = _clean_public_text(figure.get("caption_raw") or "Source visual")
+            caption = _clean_public_text(
+                figure.get("caption_raw") or "Source visual",
+                strip_machine_metadata=strip_machine_metadata,
+                preserve_markdown_code=preserve_markdown_code,
+            )
             tags: list[str] = []
             for image_id in figure.get("image_ids") or block.get("image_ids") or []:
                 image = image_by_id.get(str(image_id), {})
@@ -1612,7 +1742,16 @@ def render_semantic_source(graph: dict[str, Any], canonical: dict[str, Any]) -> 
         ))
     flush_pending()
     emit_virtual_sections_through(10**18)
-    return "\n\n".join(piece.strip() for piece in pieces if piece.strip()).strip() + "\n"
+    rendered_pieces = [
+        (
+            piece.strip("\r\n")
+            if preserve_markdown_code
+            else piece.strip()
+        )
+        for piece in pieces
+        if piece.strip()
+    ]
+    return "\n\n".join(rendered_pieces).strip("\r\n") + "\n"
 
 
 def _source_tokens(value: object) -> set[str]:
@@ -4729,6 +4868,166 @@ def load_graph(directory: Path, canonical: dict[str, Any]) -> dict[str, Any] | N
     return graph
 
 
+def _migrate_machine_metadata_semantic_source(
+    value: Any,
+    *,
+    canonical: dict[str, Any],
+) -> tuple[dict[str, Any], str] | None:
+    """Upgrade a graph sealed by the pre-sanitization renderer.
+
+    The stored hash must match either the legacy renderer byte-for-byte or the
+    already-sanitized renderer. The two renderings must differ, which proves
+    that this path is changing only allowlisted machine comments rather than
+    accepting arbitrary source drift.
+    """
+
+    if not isinstance(value, dict):
+        return None
+    graph = copy.deepcopy(value)
+    legacy_source = render_semantic_source(
+        graph,
+        canonical,
+        strip_machine_metadata=False,
+        preserve_markdown_code=False,
+    )
+    metadata_only_source = render_semantic_source(
+        graph,
+        canonical,
+        strip_machine_metadata=True,
+        preserve_markdown_code=False,
+    )
+    semantic_source = render_semantic_source(graph, canonical)
+    if (
+        legacy_source == semantic_source
+        or metadata_only_source != semantic_source
+    ):
+        return None
+    stored_hash = str(graph.get("semantic_source_sha256") or "")
+    legacy_hash = _sha256_text(legacy_source)
+    semantic_hash = _sha256_text(semantic_source)
+    if stored_hash != legacy_hash:
+        return None
+
+    graph["semantic_source_sha256"] = semantic_hash
+    graph[_MACHINE_METADATA_MIGRATION_KEY] = {
+        "version": _MACHINE_METADATA_MIGRATION_VERSION,
+        "legacy_semantic_source_sha256": legacy_hash,
+        "semantic_source_sha256": semantic_hash,
+    }
+    graph.pop(_SOURCE_REVIEW_KEY, None)
+    recomputed_codes = {
+        "semantic_source_hash_mismatch",
+        "semantic_source_rich_text",
+    }
+    retained = [
+        copy.deepcopy(issue)
+        for issue in graph.get("issues") or []
+        if isinstance(issue, dict)
+        and str(issue.get("code") or "") not in recomputed_codes
+    ]
+    has_retained_error = any(
+        issue.get("severity") == "error" for issue in retained
+    )
+    graph["issues"] = retained
+    graph["status"] = "review_required" if has_retained_error else "ready"
+    errors = validate_graph(
+        graph,
+        canonical=canonical,
+        semantic_source=semantic_source,
+        allow_unresolved_source_anomalies=has_retained_error,
+    )
+    if errors:
+        graph["status"] = "failed"
+        graph["issues"].extend(errors)
+    return graph, semantic_source
+
+
+def machine_metadata_migration_seal_valid(
+    value: Any,
+    *,
+    canonical: dict[str, Any],
+) -> bool:
+    """Verify that a ready graph changed only by metadata sanitization."""
+
+    if not isinstance(value, dict) or value.get("status") != "ready":
+        return False
+    if (
+        value.get(_DOWNSTREAM_INVALIDATION_KEY)
+        or value.get("source_review_resolution")
+        or _has_human_selected_source_overrides(value)
+    ):
+        return False
+    seal = value.get(_MACHINE_METADATA_MIGRATION_KEY)
+    if (
+        not isinstance(seal, dict)
+        or seal.get("version") != _MACHINE_METADATA_MIGRATION_VERSION
+    ):
+        return False
+    legacy_source = render_semantic_source(
+        value,
+        canonical,
+        strip_machine_metadata=False,
+        preserve_markdown_code=False,
+    )
+    metadata_only_source = render_semantic_source(
+        value,
+        canonical,
+        strip_machine_metadata=True,
+        preserve_markdown_code=False,
+    )
+    semantic_source = render_semantic_source(value, canonical)
+    if (
+        legacy_source == semantic_source
+        or metadata_only_source != semantic_source
+    ):
+        return False
+    legacy_hash = _sha256_text(legacy_source)
+    semantic_hash = _sha256_text(semantic_source)
+    return bool(
+        seal.get("legacy_semantic_source_sha256") == legacy_hash
+        and seal.get("semantic_source_sha256") == semantic_hash
+        and value.get("semantic_source_sha256") == semantic_hash
+        and not validate_graph(
+            value,
+            canonical=canonical,
+            semantic_source=semantic_source,
+        )
+    )
+
+
+def machine_metadata_source_review_is_obsolete(
+    value: Any,
+    *,
+    canonical: dict[str, Any],
+    decision_id: str,
+    context_hash: str,
+) -> bool:
+    """Prove that one saved source pause was caused only by metadata."""
+
+    if not isinstance(value, dict) or value.get("status") == "ready":
+        return False
+    review = value.get(_SOURCE_REVIEW_KEY)
+    if not isinstance(review, dict):
+        return False
+    if (
+        str(review.get("decision_id") or "") != str(decision_id or "")
+        or str(review.get("context_hash") or "") != str(context_hash or "")
+    ):
+        return False
+    error_codes = {
+        str(issue.get("code") or "")
+        for issue in value.get("issues") or []
+        if isinstance(issue, dict) and issue.get("severity") == "error"
+    }
+    if error_codes != {"semantic_source_rich_text"}:
+        return False
+    migrated = _migrate_machine_metadata_semantic_source(
+        value,
+        canonical=canonical,
+    )
+    return bool(migrated and migrated[0].get("status") == "ready")
+
+
 def _compatible_source_review_graph(
     value: Any,
     *,
@@ -4765,7 +5064,13 @@ def _compatible_source_review_graph(
         return None
     semantic_source = render_semantic_source(graph, canonical)
     if graph.get("semantic_source_sha256") != _sha256_text(semantic_source):
-        return None
+        migrated = _migrate_machine_metadata_semantic_source(
+            graph,
+            canonical=canonical,
+        )
+        if migrated is None:
+            return None
+        graph, semantic_source = migrated
     if graph.get("status") == "ready":
         if graph.get(_SOURCE_REVIEW_KEY) is not None:
             return None
@@ -4878,6 +5183,8 @@ def load_verified_generation_graph(
     except (OSError, UnicodeDecodeError):
         return None
     if graph.get("semantic_source_sha256") != _sha256_text(semantic_source):
+        return None
+    if semantic_source != render_semantic_source(graph, canonical):
         return None
     if not _current_human_source_overrides_valid(
         graph,

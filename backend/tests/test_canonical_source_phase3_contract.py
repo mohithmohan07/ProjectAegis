@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 from app.services import canonical_source_phase2 as phase2
 from app.services import canonical_source_phase3 as phase3
-from app.services import generation, uploads
+from app.services import build_concepts, generation, uploads
 
 
 DATA = Path(__file__).parents[1] / "data" / "Testing"
@@ -120,6 +120,156 @@ def test_concepts_wrapper_activates_verified_graph_and_semantic_source(
     assert observed["verify_semantics"] is True
     assert observed["metadata"] == _metadata()
     assert session["graph"] is graph
+
+
+def test_metadata_sanitization_preserves_later_paid_checkpoint(
+    tmp_path,
+    monkeypatch,
+):
+    source = """<!-- source_origin: gpt-pdf-to-acsd -->
+<!-- compiler_version: gpt-pdf-to-acsd-2 -->
+
+# Review Chapter
+
+## Verified Topic
+
+Visible canonical source.
+"""
+    canonical = phase2.compile_phase2_source(
+        source,
+        source_filename="review.mmd",
+        consumer_module="build_concepts",
+    ).canonical
+    metadata = {
+        "board": "CBSE",
+        "grade": "10",
+        "subject": "History",
+        "unit": "",
+        "chapter_title": "Review Chapter",
+        "chapter_id": "1759",
+        "chapter_code": "",
+        "learning_kind": "Post",
+    }
+    legacy_graph, _report = phase3.compile_semantic_graph(
+        canonical,
+        source_text=source,
+        metadata=metadata,
+    )
+    legacy_source = phase3.render_semantic_source(
+        legacy_graph,
+        canonical,
+        strip_machine_metadata=False,
+    )
+    legacy_graph["semantic_source_sha256"] = phase3._sha256_text(
+        legacy_source)
+    legacy_graph["status"] = "failed"
+    legacy_graph["issues"] = [{
+        "severity": "error",
+        "code": "semantic_source_rich_text",
+        "block_ids": ["BLK-00001"],
+        "message": "Legacy compiler metadata was read as raw_latex.",
+    }]
+    migrated, _semantic = phase3._migrate_machine_metadata_semantic_source(
+        legacy_graph,
+        canonical=canonical,
+    )
+    assert phase3.machine_metadata_migration_seal_valid(
+        migrated,
+        canonical=canonical,
+    )
+
+    context_hash = "a" * 64
+    source_stage = generation._make_concept_checkpoint(
+        "source_graph_review",
+        records=[],
+        source_review_graph=copy.deepcopy(legacy_graph),
+        source_review_context_hash=context_hash,
+        source_review_decision_id="phase3-source-" + context_hash[:24],
+    )
+    late_stage = generation._make_concept_checkpoint(
+        "pre_type_assignment",
+        records=[{
+            "topic": "Verified Topic",
+            "parent_concept": "Review Chapter",
+            "concept_title": "Visible canonical source",
+            "concept_details": "Description: Verified source concept.",
+            "keywords": "verified, source",
+        }],
+        question_task_inventory={"items": [], "stats": {}},
+        mined_types={"types": []},
+        method_row_snapshot=[],
+    )
+    fingerprint = "f" * 64
+    target_identity = {
+        "board": "CBSE",
+        "grade": "10",
+        "subject": "History",
+        "unit": "",
+        "chapter_code": "",
+        "chapter_title": "Review Chapter",
+    }
+    checkpoint = build_concepts._merge_generation_checkpoint_history(
+        {},
+        source_stage,
+        fingerprint=fingerprint,
+        target_identity=target_identity,
+        target_chapter_id=1759,
+    )
+    checkpoint = build_concepts._merge_generation_checkpoint_history(
+        checkpoint,
+        late_stage,
+        fingerprint=fingerprint,
+        target_identity=target_identity,
+        target_chapter_id=1759,
+    )
+    callbacks: list[dict] = []
+    job = SimpleNamespace(
+        id=193,
+        mmd_text=source,
+        filename="review.mmd",
+        module="build_concepts",
+    )
+    session = {
+        "job_id": job.id,
+        "job": job,
+        "canonical": canonical,
+        "source_path": None,
+        "artifact_dir": tmp_path,
+        "raw_source": source,
+        "graph": None,
+    }
+    monkeypatch.setattr(
+        phase3,
+        "prepare_generation_graph",
+        lambda **_kwargs: copy.deepcopy(migrated),
+    )
+
+    with phase2.activate(canonical), phase3.activate_session(session):
+        records = generation.concepts_from_mmd(
+            source,
+            **metadata,
+            live=False,
+            artifacts={},
+            resume_checkpoint=checkpoint,
+            checkpoint_callback=callbacks.append,
+        )
+
+    assert records
+    assert len(callbacks) == 1
+    assert callbacks[0]["source_review_metadata_sanitization_applied"] is True
+    assert not callbacks[0].get("source_review_resolution_applied")
+    preserved = build_concepts._merge_generation_checkpoint_history(
+        checkpoint,
+        callbacks[0],
+        fingerprint=fingerprint,
+        target_identity=target_identity,
+        target_chapter_id=1759,
+    )
+    assert generation._newest_compatible_concept_checkpoint(
+        preserved)["stage"] == "pre_type_assignment"
+    assert {
+        row["stage"] for row in preserved["checkpoints"]
+    } >= {"source_graph_review", "pre_type_assignment"}
 
 
 def test_phase3_artifact_manifest_and_download_fallthrough(tmp_path, monkeypatch):

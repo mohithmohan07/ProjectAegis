@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import html
 import re
+from collections.abc import Callable
 from urllib.parse import urlsplit
 
 # Canonical Bulk Import field names that accept rich text.
@@ -129,8 +130,6 @@ _RAW_EQUATION_RE = re.compile(
     r"(?:[A-Za-z][A-Za-z0-9]*|\d+(?:\.\d+)?))*)"
     r"(?![\w])"
 )
-_CODE_FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
-_INLINE_CODE_RE = re.compile(r"`[^`\n]+`")
 _BARE_URL_RE = re.compile(r"https?://[^\s<>\[\]]+", re.IGNORECASE)
 _RAW_LATEX_RE = re.compile(
     r"\\(?:[A-Za-z]+|[%_#{}])"
@@ -159,6 +158,161 @@ _TEX_COMMAND_GROUPS = {
     "vec": 1,
     "hat": 1,
 }
+
+
+def _markdown_block_code_ranges(value: str) -> list[tuple[int, int]]:
+    """Return fenced and indented Markdown code ranges."""
+
+    ranges: list[tuple[int, int]] = []
+    offset = 0
+    fence_start: int | None = None
+    fence_char = ""
+    fence_length = 0
+    indented_code = False
+    previous_blank = True
+    for line in value.splitlines(keepends=True):
+        logical = line.rstrip("\r\n")
+        if fence_start is not None:
+            closing = re.fullmatch(
+                rf" {{0,3}}{re.escape(fence_char)}"
+                rf"{{{fence_length},}}[ \t]*",
+                logical,
+            )
+            if closing:
+                ranges.append((fence_start, offset + len(line)))
+                fence_start = None
+                fence_char = ""
+                fence_length = 0
+        else:
+            is_blank = not logical.strip()
+            is_indented = line.startswith("    ") or line.startswith("\t")
+            if indented_code:
+                if is_indented:
+                    ranges.append((offset, offset + len(line)))
+                    offset += len(line)
+                    previous_blank = False
+                    continue
+                if is_blank:
+                    offset += len(line)
+                    previous_blank = True
+                    continue
+                indented_code = False
+            opening = re.match(r"^ {0,3}(?P<fence>`{3,}|~{3,})", logical)
+            if opening:
+                marker = str(opening.group("fence") or "")
+                info = logical[opening.end():]
+                if marker[0] != "`" or "`" not in info:
+                    fence_start = offset
+                    fence_char = marker[0]
+                    fence_length = len(marker)
+            elif is_indented and previous_blank:
+                ranges.append((offset, offset + len(line)))
+                indented_code = True
+            previous_blank = is_blank
+        offset += len(line)
+    if fence_start is not None:
+        ranges.append((fence_start, len(value)))
+    return ranges
+
+
+def _markdown_inline_code_ranges(
+    value: str,
+    *,
+    start: int,
+    end: int,
+) -> list[tuple[int, int]]:
+    """Return balanced variable-length backtick spans in one text gap."""
+
+    ranges: list[tuple[int, int]] = []
+    cursor = start
+    while cursor < end:
+        opening = value.find("`", cursor, end)
+        if opening < 0:
+            break
+        opening_end = opening + 1
+        while opening_end < end and value[opening_end] == "`":
+            opening_end += 1
+        delimiter_length = opening_end - opening
+        search = opening_end
+        closing_end = -1
+        while search < end:
+            closing = value.find("`", search, end)
+            if closing < 0:
+                break
+            run_end = closing + 1
+            while run_end < end and value[run_end] == "`":
+                run_end += 1
+            if run_end - closing == delimiter_length:
+                closing_end = run_end
+                break
+            search = run_end
+        if closing_end < 0:
+            cursor = opening_end
+            continue
+        ranges.append((opening, closing_end))
+        cursor = closing_end
+    return ranges
+
+
+def _markdown_code_ranges(value: str) -> list[tuple[int, int]]:
+    block_ranges = _markdown_block_code_ranges(value)
+    inline_ranges: list[tuple[int, int]] = []
+    cursor = 0
+    for start, end in block_ranges:
+        if cursor < start:
+            inline_ranges.extend(_markdown_inline_code_ranges(
+                value,
+                start=cursor,
+                end=start,
+            ))
+        cursor = max(cursor, end)
+    if cursor < len(value):
+        inline_ranges.extend(_markdown_inline_code_ranges(
+            value,
+            start=cursor,
+            end=len(value),
+        ))
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted([*block_ranges, *inline_ranges]):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def transform_outside_markdown_code(
+    value: str,
+    transform: Callable[[str], str],
+) -> str:
+    """Transform prose while preserving every Markdown code range exactly."""
+
+    text = str(value or "")
+    pieces: list[str] = []
+    cursor = 0
+    for start, end in _markdown_code_ranges(text):
+        pieces.append(transform(text[cursor:start]))
+        pieces.append(text[start:end])
+        cursor = end
+    pieces.append(transform(text[cursor:]))
+    return "".join(pieces)
+
+
+def _replace_markdown_code(
+    value: str,
+    replacement: Callable[[str], str],
+) -> str:
+    text = str(value or "")
+    pieces: list[str] = []
+    cursor = 0
+    for start, end in _markdown_code_ranges(text):
+        pieces.append(text[cursor:start])
+        pieces.append(replacement(text[start:end]))
+        cursor = end
+    pieces.append(text[cursor:])
+    return "".join(pieces)
+
+
 _TEX_NOARG_COMMANDS = frozenset({
     "alpha", "beta", "gamma", "delta", "epsilon", "theta", "lambda",
     "mu", "nu", "pi", "rho", "sigma", "tau", "phi", "chi", "psi",
@@ -550,14 +704,15 @@ def repair_unwrapped_math(text: str) -> str:
     value = str(text or "")
     protected: list[str] = []
 
-    def stash(match: re.Match) -> str:
+    def stash(match: re.Match | str) -> str:
         token = f"\ue000{len(protected)}\ue001"
-        protected.append(match.group(0))
+        protected.append(
+            match.group(0) if isinstance(match, re.Match) else str(match)
+        )
         return token
 
+    value = _replace_markdown_code(value, stash)
     for pattern in (
-        _CODE_FENCE_RE,
-        _INLINE_CODE_RE,
         _KATEX_TAG_RE,
         _MARKDOWN_IMAGE_RE,
         _IMAGE_TAG_RE,
@@ -708,13 +863,10 @@ def rich_text_issues(
     masked = _KATEX_TAG_RE.sub("", value)
     if re.search(r"!\[", masked):
         issues.append("markdown_image")
-    math_masked = _CODE_FENCE_RE.sub(
-        "",
-        _INLINE_CODE_RE.sub(
-            "",
-            _IMAGE_TAG_RE.sub(
-                "", _MARKDOWN_LINK_RE.sub("", masked)),
-        ),
+    math_masked = _replace_markdown_code(
+        _IMAGE_TAG_RE.sub(
+            "", _MARKDOWN_LINK_RE.sub("", masked)),
+        lambda _value: "",
     )
     delimiter_masked = _CURRENCY_TOKEN_RE.sub("", math_masked)
     if (

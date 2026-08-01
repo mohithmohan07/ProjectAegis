@@ -25,6 +25,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from .. import config, models, schemas
@@ -1424,11 +1425,124 @@ def _awaiting_human_decision_result(
     }
 
 
+def _retire_obsolete_machine_metadata_pause(
+    db: Session,
+    job: models.UploadJob,
+    checkpoint: dict | None,
+    pending: dict,
+) -> bool:
+    """Retire only a hash-proven legacy compiler-metadata false positive."""
+
+    if (
+        str(pending.get("kind") or "") != "phase3_source_graph_review"
+        or str((pending.get("item") or {}).get("type_id") or "")
+        != "semantic_source_rich_text"
+    ):
+        return False
+    stored = copy.deepcopy(job.generation_checkpoint or {})
+    if (
+        not isinstance(checkpoint, dict)
+        or str(stored.get("fingerprint") or "")
+        != str(checkpoint.get("fingerprint") or "")
+    ):
+        return False
+    stored_pending = _pending_human_decision(stored)
+    decision_id = str(pending.get("decision_id") or "")
+    context_hash = str(pending.get("context_hash") or "")
+    if not isinstance(stored_pending, dict) or (
+        str(stored_pending.get("decision_id") or "") != decision_id
+        or str(stored_pending.get("context_hash") or "") != context_hash
+    ):
+        return False
+    source_stage = generation._newest_compatible_concept_checkpoint(
+        stored,
+        allowed_stages={"source_graph_review"},
+    )
+    if not isinstance(source_stage, dict):
+        return False
+    if (
+        str(source_stage.get("source_review_decision_id") or "")
+        != decision_id
+        or str(source_stage.get("source_review_context_hash") or "")
+        != context_hash
+    ):
+        return False
+    graph = source_stage.get("source_review_graph")
+    if not isinstance(graph, dict):
+        return False
+
+    from . import canonical_source_phase2 as phase2
+    from . import canonical_source_phase3 as phase3
+
+    canonical = phase2.active_canonical()
+    if not isinstance(canonical, dict):
+        canonical, _report = phase2._load_or_refresh_for_job(job)
+    if not phase3.machine_metadata_source_review_is_obsolete(
+        graph,
+        canonical=canonical,
+        decision_id=decision_id,
+        context_hash=context_hash,
+    ):
+        return False
+
+    ledger = _human_decision_ledger(stored)
+    ledger["pending"] = None
+    ledger["deferred_assignment_unit_ids"] = []
+    stored[_HUMAN_DECISIONS_KEY] = ledger
+    detail = (
+        "Retired an obsolete compiler-metadata source pause; generation will "
+        "reuse the verified semantic graph and continue."
+    )
+    result = db.execute(
+        update(models.UploadJob)
+        .where(
+            models.UploadJob.id == job.id,
+            models.UploadJob.generation_checkpoint
+            == copy.deepcopy(job.generation_checkpoint or {}),
+        )
+        .values(
+            generation_checkpoint=copy.deepcopy(stored),
+            detail=detail,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount != 1:
+        db.rollback()
+        db.refresh(job)
+        if isinstance(checkpoint, dict):
+            checkpoint.clear()
+            checkpoint.update(copy.deepcopy(job.generation_checkpoint or {}))
+        return False
+    db.commit()
+    db.refresh(job)
+    drive_checkpoints.schedule_checkpoint_backup(job.id)
+    if isinstance(checkpoint, dict):
+        checkpoint.clear()
+        checkpoint.update(copy.deepcopy(job.generation_checkpoint or {}))
+    progress.log(
+        "Removed the legacy compiler-metadata false positive from the saved "
+        "source checkpoint; no model request was started.",
+        level="success",
+    )
+    return True
+
+
 def _existing_human_decision_pause(
+    db: Session,
     job: models.UploadJob,
     checkpoint: dict | None,
 ) -> dict | None:
     """Return the durable pause without starting another provider request."""
+    pending = _pending_human_decision(checkpoint)
+    if pending is None:
+        return None
+    if _retire_obsolete_machine_metadata_pause(
+        db,
+        job,
+        checkpoint,
+        pending,
+    ):
+        return None
     pending = _pending_human_decision(checkpoint)
     if pending is None:
         return None
@@ -1840,7 +1954,8 @@ def generate_post_learning(
         )
         progress.log(message, level="error")
         raise ValueError(message)
-    existing_pause = _existing_human_decision_pause(job, resume_checkpoint)
+    existing_pause = _existing_human_decision_pause(
+        db, job, resume_checkpoint)
     if existing_pause is not None:
         return existing_pause
     _raise_if_source_replacement_required(resume_checkpoint)
@@ -2162,7 +2277,8 @@ def generate_pre_learning_from_upload(
         )
         progress.log(message, level="error")
         raise ValueError(message)
-    existing_pause = _existing_human_decision_pause(job, resume_checkpoint)
+    existing_pause = _existing_human_decision_pause(
+        db, job, resume_checkpoint)
     if existing_pause is not None:
         return existing_pause
     _raise_if_source_replacement_required(resume_checkpoint)

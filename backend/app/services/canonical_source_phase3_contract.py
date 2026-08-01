@@ -204,7 +204,42 @@ def install(generation: ModuleType | None = None) -> None:
                     source_review_decision_id=exc.decision_id,
                 ))
             raise
-        if graph.get("status") == "ready" and (
+        metadata_only_migration = (
+            phase3.machine_metadata_migration_seal_valid(
+                graph,
+                canonical=canonical,
+            )
+        )
+        if metadata_only_migration:
+            # Compiler comments were never learner-visible source. Replace
+            # only the saved source-review graph and retain every later paid
+            # concept/Type checkpoint byte-for-byte.
+            callback = kwargs.get("checkpoint_callback")
+            if (
+                callback is not None
+                and isinstance(resume_review, dict)
+                and not resume_review.get(
+                    "source_review_metadata_sanitization_applied")
+            ):
+                callback(generation._make_concept_checkpoint(
+                    "source_graph_review",
+                    records=[],
+                    source_review_graph=copy.deepcopy(graph),
+                    source_review_context_hash=str(
+                        resume_review.get("source_review_context_hash") or ""
+                    ),
+                    source_review_decision_id=str(
+                        resume_review.get("source_review_decision_id") or ""
+                    ),
+                    source_review_metadata_sanitization_applied=True,
+                ))
+            progress.log(
+                "Reused every downstream generation checkpoint after "
+                "deterministically removing non-visible compiler metadata; "
+                "no semantic source content changed.",
+                level="success",
+            )
+        elif graph.get("status") == "ready" and (
             graph.get(phase3._DOWNSTREAM_INVALIDATION_KEY)
             or (
                 isinstance(resume_review_graph, dict)

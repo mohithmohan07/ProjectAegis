@@ -128,13 +128,12 @@ def _canonicalize_concept_rows(
 
 
 def _protected_spans(generation: ModuleType, text: str) -> list[tuple[int, int]]:
-    spans: list[tuple[int, int]] = []
+    spans: list[tuple[int, int]] = list(
+        generation.kr._markdown_code_ranges(text))
     for pattern in (
         generation.kr._KATEX_TAG_RE,
         generation.kr._IMAGE_TAG_RE,
         generation.kr._MARKDOWN_LINK_RE,
-        generation.kr._CODE_FENCE_RE,
-        generation.kr._INLINE_CODE_RE,
     ):
         spans.extend(match.span() for match in pattern.finditer(text))
     return spans
