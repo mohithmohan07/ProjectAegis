@@ -3626,6 +3626,44 @@ def validate_graph(
         str(row.get("qid") or "") for row in canonical.get("tasks") or []
         if isinstance(row, dict)
     }
+    numbered_mains, _numbered_subtopics = (
+        structure.numbered_heading_inventory(canonical)
+    )
+    # Two or more numbered main headings are unambiguous chapter-topology
+    # evidence. Every one must retain its own graph topic. This also rejects a
+    # previously cached graph that still matches the source hash but silently
+    # absorbed Section 2 into Section 1. A single numbered heading is not
+    # enforced here because some publishers use the chapter number itself as
+    # the only numbered level-one heading.
+    if len(numbered_mains) >= 2:
+        topic_by_section = {
+            str(row.get("section_id") or ""): row
+            for row in graph.get("topics") or []
+            if isinstance(row, dict) and str(row.get("section_id") or "")
+        }
+        missing_or_changed: list[str] = []
+        for number, block in numbered_mains.items():
+            section_id = str(block.get("section_id") or "")
+            expected_title = str(
+                (block.get("heading") or {}).get("title") or ""
+            ).strip()
+            topic = topic_by_section.get(section_id)
+            if (
+                not isinstance(topic, dict)
+                or _normal(topic.get("title")) != _normal(expected_title)
+            ):
+                missing_or_changed.append(
+                    f"{number} {expected_title}".strip()
+                )
+        if missing_or_changed:
+            errors.append({
+                "severity": "error",
+                "code": "numbered_main_topic_coverage",
+                "message": (
+                    "Semantic graph omitted or changed numbered main topic(s): "
+                    + "; ".join(missing_or_changed)
+                ),
+            })
     for row in graph.get("blocks") or []:
         if row.get("block_id") not in allowed_blocks:
             errors.append({"severity": "error", "code": "unknown_block_id", "message": str(row.get("block_id"))})

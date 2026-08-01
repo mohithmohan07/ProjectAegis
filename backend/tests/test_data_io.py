@@ -1,9 +1,37 @@
 import io
 
 import openpyxl
+import pytest
 
 from app import bulk_import as bi
 from app import config
+
+
+@pytest.mark.parametrize(("path", "writer_name"), [
+    ("/data/export?scope=all", "write_workbook"),
+    ("/data/export/questions?ids=1", "write_workbook"),
+    ("/data/export/concepts?ids=1", "write_concepts_workbook"),
+    ("/data/workbook/new?subject=History", "write_subject_workbook"),
+])
+def test_export_cell_limit_is_an_actionable_422(
+    client, monkeypatch, path, writer_name,
+):
+    from app.api import data as data_api
+
+    def oversized(*_args, **_kwargs):
+        raise data_api.writer.ExcelCellLimitError(
+            "Excel export blocked to prevent data loss: concept_details is "
+            "32,768 characters."
+        )
+
+    monkeypatch.setattr(data_api.writer, writer_name, oversized)
+
+    response = client.get(path)
+
+    assert response.status_code == 422
+    assert response.json()["detail"].startswith(
+        "Excel export blocked to prevent data loss"
+    )
 
 
 def test_health(client):

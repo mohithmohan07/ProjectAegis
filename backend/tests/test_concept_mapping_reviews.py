@@ -588,6 +588,122 @@ def test_uploaded_nationalism_fixture_exposes_all_six_main_topics():
     ]
 
 
+def test_deposit_topology_guard_rejects_five_of_six_nationalism_topics(
+    db, first_chapter,
+):
+    source = (
+        Path(__file__).parents[1] / "data" / "Testing" / "RNE.mmd"
+    ).read_text(encoding="utf-8")
+    topics = g._topic_headings(g.parse_mmd_sections(source))
+    missing_topic = "The Making of Nationalism in Europe"
+    records = [
+        {
+            "topic": topic,
+            "parent_concept": topic,
+            "concept_title": f"{topic} concept",
+            "concept_details": "Description: Source-grounded concept.",
+            "keywords": "nationalism",
+        }
+        for topic in topics
+        if topic != missing_topic
+    ]
+
+    missing = build_concepts._missing_deposit_source_topics(records, source)
+
+    assert [group["topic"] for group in missing] == [missing_topic]
+    chapter = db.get(models.Chapter, first_chapter["id"])
+    with pytest.raises(
+        build_concepts.DepositValidationError,
+        match="source-topic topology failed before deposit",
+    ):
+        build_concepts._deposit_concepts(
+            db,
+            chapter,
+            records,
+            "Post",
+            "RNE",
+            source_text=source,
+        )
+
+
+def test_deposit_restores_validated_snapshot_when_dedupe_drops_only_topic_row(
+    db, first_chapter, monkeypatch,
+):
+    source = (
+        Path(__file__).parents[1] / "data" / "Testing" / "RNE.mmd"
+    ).read_text(encoding="utf-8")
+    topics = g._topic_headings(g.parse_mmd_sections(source))
+    removed_topic = "The Making of Nationalism in Europe"
+    records = [
+        {
+            "topic": topic,
+            "parent_concept": topic,
+            "concept_title": f"{topic} concept",
+            "concept_details": (
+                "Description: The source explains this historical idea. // "
+                "Misconception/ Error Analysis: Misconceptions: Learners may "
+                "confuse its context.; Error Analysis: Learners may assign it "
+                "to the wrong historical period."
+            ),
+            "keywords": "nationalism, Europe",
+        }
+        for topic in topics
+    ]
+    dedupe_called = False
+
+    def drop_only_row(rows):
+        nonlocal dedupe_called
+        dedupe_called = True
+        return [
+            row for row in rows
+            if g._topic_comparison_key(row.get("topic", ""))
+            != g._topic_comparison_key(removed_topic)
+        ]
+
+    monkeypatch.setattr(
+        build_concepts.concept_cleanup,
+        "dedupe_similar_titles_chapter_wide",
+        drop_only_row,
+    )
+    class InventoryValidationReached(Exception):
+        pass
+
+    def inspect_inventory_validation(rows, *_args, **_kwargs):
+        assert removed_topic in {row.get("topic") for row in rows}
+        raise InventoryValidationReached
+
+    monkeypatch.setattr(
+        build_concepts.generation,
+        "_normalize_activity_hubs_from_inventory",
+        inspect_inventory_validation,
+    )
+    chapter = db.get(models.Chapter, first_chapter["id"])
+    inventory = {
+        "items": [{
+            "qid": "QINV-MISSING-TOPIC",
+            "source_kind": "exercise",
+            "topic_hint": removed_topic,
+            "raw_task": "Explain the making of nationalism in Europe.",
+            "task_kind": "question",
+        }],
+        "stats": {"total_inventory_items": 1},
+    }
+
+    with pytest.raises(InventoryValidationReached):
+        build_concepts._deposit_concepts(
+            db,
+            chapter,
+            records,
+            "Post",
+            "RNE",
+            inventory=inventory,
+            mined_types={"types": []},
+            source_text=source,
+        )
+
+    assert dedupe_called
+
+
 def test_uploaded_nationalism_fixture_inventories_all_chapter_final_tasks():
     source = (
         Path(__file__).parents[1] / "data" / "Testing" / "RNE.mmd"
@@ -614,6 +730,12 @@ def test_uploaded_nationalism_fixture_inventories_all_chapter_final_tasks():
     )
     assert project["source_kind"] == "activity"
     assert "nationalist symbols in countries outside Europe" in project["raw_task"]
+    project_note = g._compact_activity_hub_note(project)
+    assert "Project Project" not in project_note
+    assert "Find out more about nationalist symbols" in project_note
+    assert "collect examples of pictures, posters or music" in project_note
+    assert "How are these different from European examples?" in project_note
+    assert "…" not in project_note
 
 
 def test_repeated_generic_checkpoint_labels_preserve_distinct_tasks():
@@ -4160,7 +4282,28 @@ def test_activity_hub_note_keeps_task_sentences_before_optional_context():
     assert question in note
     assert "recording observations during the puri-frying experiment" in note
     assert not note.endswith("?.")
-    assert len(note) <= g._ACTIVITY_PUBLIC_CHAR_LIMIT + 150
+    assert "…" not in note
+
+
+def test_activity_hub_note_does_not_split_at_fig_or_clip_project_steps():
+    task = (
+        "Look at Fig. 14(a). Compare it with Fig. 14(b). "
+        "Collect nationalist symbols from one country outside Europe. "
+        "Explain their historical setting and present your comparison."
+    )
+    item = {
+        "qid": "QINV-PROJECT-1",
+        "source_kind": "activity",
+        "source_label": "Project",
+        "raw_task": task,
+        "normalized_task": task,
+    }
+
+    note = g._compact_activity_hub_note(item)
+
+    assert task in note
+    assert note.count(task) == 1
+    assert "…" not in note
 
 
 def test_grade8_math_callouts_exercises_and_answer_key_boundary():
@@ -5171,6 +5314,7 @@ def test_missing_source_topic_recovery_adds_visualising_the_nation(monkeypatch):
 
     def fake_api(system, user, **_kwargs):
         assert "Visualising the Nation" in user
+        assert _kwargs["single_attempt"] is True
         return {"rows": [{
             "topic": "Visualising the Nation",
             "parent_concept": "National Allegory",
@@ -5188,6 +5332,8 @@ def test_missing_source_topic_recovery_adds_visualising_the_nation(monkeypatch):
         records,
         meta=g._metadata(subject="Any"),
         source_topic_excerpts=excerpts,
+        max_attempts=1,
+        single_attempt=True,
     )
     assert {record["topic"] for record in out} == {
         "The Making of Germany and Italy",

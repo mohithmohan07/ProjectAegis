@@ -348,15 +348,9 @@ def test_generic_activity_marker_is_not_repeated_in_visible_hub_note():
     note = g._compact_activity_hub_note(item)
 
     assert "Activity — Activity —" not in note
-    match = re.search(
-        r"Activity\s*[—–-]\s*(?P<marker>[^:]+):\s*(?P<gist>.+)",
-        note,
-    )
-    assert match
-    marker = bi.normalize_question_text(match.group("marker"))
-    gist = bi.normalize_question_text(match.group("gist"))
-    assert marker
-    assert not gist.startswith(marker)
+    task = "Look at Fig. 14(a). Do you notice how the symbols change?"
+    assert task in note
+    assert note.count(task) == 1
 
 
 def test_culmination_title_is_topic_based_while_recap_remains_complete():

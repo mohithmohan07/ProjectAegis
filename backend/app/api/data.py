@@ -24,6 +24,14 @@ from .upload_limits import read_limited_upload
 router = APIRouter(prefix="/data", tags=["data"])
 
 
+def _lossless_xlsx_or_422(factory):
+    """Expose Excel's cell limit as an actionable client error."""
+    try:
+        return factory()
+    except writer.ExcelCellLimitError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.post("/import")
 async def import_workbook(file: UploadFile = File(...), db: Session = Depends(get_db)):
     """Load a canonical Bulk Import workbook into the normalized DB (append-only)."""
@@ -59,7 +67,7 @@ def export_workbook(
             filename="bulk_import_output.xlsx",
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
-    data = writer.write_workbook(db)
+    data = _lossless_xlsx_or_422(lambda: writer.write_workbook(db))
     return Response(
         content=data,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -97,7 +105,9 @@ def export_questions(
     question_ids = _parse_ids(ids)
     if not question_ids:
         raise HTTPException(400, "no question ids provided")
-    data = writer.write_workbook(db, question_ids=question_ids)
+    data = _lossless_xlsx_or_422(
+        lambda: writer.write_workbook(db, question_ids=question_ids)
+    )
     return Response(
         content=data, media_type=_XLSX_MEDIA,
         headers={"Content-Disposition": 'attachment; filename="bulk_import_questions.xlsx"'},
@@ -116,7 +126,9 @@ def export_concepts(
     concept_ids = _parse_ids(ids)
     if not concept_ids:
         raise HTTPException(400, "no concept ids provided")
-    data = writer.write_concepts_workbook(db, concept_ids)
+    data = _lossless_xlsx_or_422(
+        lambda: writer.write_concepts_workbook(db, concept_ids)
+    )
     return Response(
         content=data, media_type=_XLSX_MEDIA,
         headers={"Content-Disposition": 'attachment; filename="bulk_import_concepts.xlsx"'},
@@ -138,9 +150,14 @@ def create_subject_workbook(
     """
     if not subject.strip():
         raise HTTPException(400, "subject is required")
-    data = writer.write_subject_workbook(
-        db, subject=subject.strip(), board=board.strip(), grade=grade.strip(),
-        include_content=(mode == "content"),
+    data = _lossless_xlsx_or_422(
+        lambda: writer.write_subject_workbook(
+            db,
+            subject=subject.strip(),
+            board=board.strip(),
+            grade=grade.strip(),
+            include_content=(mode == "content"),
+        )
     )
     parts = [p.replace(" ", "") for p in (subject, board, grade) if p.strip()]
     fname = "bulk_import_" + "_".join(parts) + ".xlsx"

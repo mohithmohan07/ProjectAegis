@@ -29,6 +29,7 @@ from . import concept_refiner as cr
 from . import prompts
 from . import progress
 from . import semantic_confidence_policy as confidence_policy
+from . import source_topic_decision
 from . import type_granularity_decision
 # Imported for its prompt registrations (assessment.* keys used by _identify_system).
 from . import assessment_prompts as _assessment_prompts_registration  # noqa: F401
@@ -3339,8 +3340,6 @@ def _append_activity_hub(details: str, hub_text: str) -> str:
 # Inventory kinds that belong in Activity/Info Hub. Assessable prompts originating
 # in an Activity also appear in Types, while reusing the same inventory identity.
 _HUB_INVENTORY_KINDS = frozenset({"activity", "experiment_task"})
-_ACTIVITY_PUBLIC_WORD_LIMIT = 55
-_ACTIVITY_PUBLIC_CHAR_LIMIT = 420
 _PLACEMENT_CERTIFICATION_VERSION = 1
 _PLACEMENT_CERTIFICATIONS_KEY = "placement_certifications"
 
@@ -3546,7 +3545,7 @@ def _certified_host_cid(
 def _strip_public_source_heading(text: str) -> str:
     """Remove Markdown/OCR block headings from public Hub/Example prose."""
     value = re.sub(
-        r"(?im)^\s*(?:#{1,6}\s*)?(?:activity|discuss|discussion|exercise|"
+        r"(?im)^\s*(?:#{1,6}\s*)?(?:activity|discuss|discussion|project|exercise|"
         r"question|questions)\b(?:\s+\d+(?:\.\d+)*)?\s*[:.)-]?\s*"
         r"(?:\n|$)",
         "",
@@ -3556,8 +3555,9 @@ def _strip_public_source_heading(text: str) -> str:
     # prompt when a former heading and its first sentence now share one line
     # (for example ``## Activity Imagine you are a weaver ...``).
     value = re.sub(
-        r"(?im)^\s*#{1,6}\s*(?:activity|discuss|discussion|exercise|"
-        r"question|questions)\b\s*[:.)-]?\s*",
+        r"(?im)^\s*#{1,6}\s*(?P<container>activity|discuss|discussion|"
+        r"project|exercise|question|questions)\b"
+        r"(?:\s+(?P=container)\b)?\s*[:.)-]?\s*",
         "",
         value,
     )
@@ -3565,7 +3565,7 @@ def _strip_public_source_heading(text: str) -> str:
     # ``Activity: Explain ...``. Require heading punctuation here so a genuine
     # student-facing imperative such as ``Discuss why ...`` remains intact.
     value = re.sub(
-        r"(?im)^\s*(?:activity|discuss|discussion|exercise|"
+        r"(?im)^\s*(?:activity|discuss|discussion|project|exercise|"
         r"question|questions)\b(?:\s+\d+(?:\.\d+)*)?\s*[:.)-]\s*",
         "",
         value,
@@ -3621,63 +3621,37 @@ def _mark_activity_hub_placement(record: dict, item: dict) -> None:
 
 
 def _compact_activity_hub_note(item: dict, suggested: str = "") -> str:
-    """Teacher-facing Activity summary; never copy the full source dump."""
-    marker = _activity_hub_marker(item)
-    task_raw = _strip_public_source_heading(bi.to_plain_text(
-        suggested
-        or item.get("raw_task")
-        or item.get("normalized_task")
-        or _inventory_task_text(item)
-    ))
-    context_raw = _strip_public_source_heading(bi.to_plain_text(
-        item.get("shared_context") or ""
-    ))
-    # ``to_plain_text`` removes the surrounding [Katex] tags but deliberately
-    # preserves their TeX body. Re-wrap only unambiguous math before the Hub
-    # note re-enters the canonical rich-text pipeline.
-    task_raw = kr.repair_unwrapped_math(task_raw)
-    context_raw = kr.repair_unwrapped_math(context_raw)
-    marker_key = bi.normalize_question_text(marker)
-    if (
-        marker_key
-        and bi.normalize_question_text(task_raw).startswith(marker_key)
-    ):
-        task_raw = task_raw[len(marker):].lstrip(" .:-")
-    task_sentences = re.split(r"(?<=[.!?])\s+", task_raw)
-    task_gist = " ".join(task_sentences[:2]).strip()
-    gist = task_gist
-    if context_raw:
-        context_sentence = re.split(
-            r"(?<=[.!?])\s+", context_raw, maxsplit=1)[0].strip()
-        with_context = " ".join(
-            part for part in (context_sentence, task_gist) if part
-        )
-        if (
-            len(with_context.split()) <= _ACTIVITY_PUBLIC_WORD_LIMIT
-            and len(with_context) <= _ACTIVITY_PUBLIC_CHAR_LIMIT
-        ):
-            gist = with_context
-    words = gist.split()
-    if len(words) > _ACTIVITY_PUBLIC_WORD_LIMIT:
-        gist = " ".join(words[:_ACTIVITY_PUBLIC_WORD_LIMIT]).rstrip(" ,;:") + "…"
-    if len(gist) > _ACTIVITY_PUBLIC_CHAR_LIMIT:
-        gist = gist[:_ACTIVITY_PUBLIC_CHAR_LIMIT].rsplit(" ", 1)[0].rstrip(
-            " ,;:") + "…"
+    """Render the complete source-owned task for the Activity/Info Hub.
+
+    Activity wording is learner-facing source evidence, not a summary field.
+    Sentence and character clipping previously cut multi-part Projects and
+    split at abbreviations such as ``Fig.``.  Build the Hub from the same
+    canonical full-task renderer used by Type Examples so wording, required
+    context, and every owned image remain identical at both boundaries.
+    """
+    raw_label = str(
+        item.get("source_label") or item.get("parent_source_label") or ""
+    )
+    generic_label = _source_label_is_generic(raw_label)
+    marker = "" if generic_label else _activity_hub_marker(item)
+    task_item = dict(item)
+    if str(task_item.get("shared_context") or "").strip():
+        # Hub readers do not have the surrounding source page. Retain the full
+        # shared stem even when the assessable Example can stand alone.
+        task_item["requires_context"] = True
+    gist = _inventory_task_text(task_item).strip()
+    if not gist and suggested:
+        # Compatibility for direct callers with no inventory task. A model
+        # suggestion can fill an absent field, but never override source text.
+        gist = kr.canonicalize_rich_text(
+            _strip_public_source_heading(str(suggested))
+        ).strip()
     prefix = "Activity"
     if marker and bi.normalize_question_text(marker) not in {"activity", "classroom task"}:
         prefix += f" — {marker}"
     note = f"{prefix}: {gist}".strip()
     if not gist:
         note = f"{prefix}: Complete the source-grounded classroom task."
-
-    # A non-assessable visual activity may have no Type Example, so retain all
-    # of its referenced canonical image tags in the concise Hub note.
-    task = _inventory_task_text(item)
-    image_tags = list(dict.fromkeys(
-        match.group(0) for match in _BRACKET_IMAGE_RE.finditer(task)))
-    for image_tag in image_tags:
-        if image_tag not in note:
-            note = f"{note.rstrip('.')} {image_tag}"
     note = note.rstrip()
     if not note.endswith((".", "!", "?")):
         note += "."
@@ -17570,7 +17544,7 @@ def _build_culminations_via_api(records: list[dict], *, meta: dict) -> list[dict
 
 
 _PART_SUFFIX_RE = re.compile(r"\s*\(part \d+/\d+\)$", re.IGNORECASE)
-_MIN_MAIN_TOPIC_HEADINGS = 3
+_MIN_MAIN_TOPIC_HEADINGS = 2
 
 
 def _looks_like_math_fragment_heading(heading: str) -> bool:
@@ -17596,7 +17570,7 @@ def _dedupe_topic_candidates(candidates: list[dict]) -> list[str]:
 def _topic_headings(sections: list[dict]) -> list[str]:
     """Ordered, de-duplicated main topic headings from parsed sections."""
     candidates: list[dict] = []
-    for section in sections or []:
+    for order_index, section in enumerate(sections or []):
         heading = _PART_SUFFIX_RE.sub("", (section.get("heading") or "").strip())
         if not heading or heading.lower() == "general":
             continue
@@ -17620,6 +17594,7 @@ def _topic_headings(sections: list[dict]) -> list[str]:
             "numbered": bool(section.get("heading_numbered")),
             "number_prefix": section.get("heading_number_prefix") or "",
             "chapter": bool(section.get("heading_chapter")),
+            "order_index": order_index,
         })
     numbered = [c for c in candidates if c["numbered"] and not c["chapter"]]
     # Main topics are the SHALLOWEST numbering level with enough sections:
@@ -17631,12 +17606,44 @@ def _topic_headings(sections: list[dict]) -> list[str]:
     for c in numbered:
         if c["number_prefix"]:
             by_depth.setdefault(c["number_prefix"].count("."), []).append(c)
+    selected_numbered_group: list[dict] | None = None
     for depth in sorted(by_depth):
-        if len(by_depth[depth]) >= _MIN_MAIN_TOPIC_HEADINGS:
-            numbered = by_depth[depth]
-            break
-    if len(numbered) >= _MIN_MAIN_TOPIC_HEADINGS:
-        return _dedupe_topic_candidates(numbered)
+        group = by_depth[depth]
+        deeper = [
+            candidate for candidate in numbered
+            if str(candidate.get("number_prefix") or "").count(".") > depth
+        ]
+        if deeper:
+            parent_order = {
+                str(candidate.get("number_prefix") or ""): int(
+                    candidate.get("order_index") or 0)
+                for candidate in group
+            }
+            ordered_children = 0
+            for child in deeper:
+                parts = str(child.get("number_prefix") or "").split(".")
+                parent_prefix = ".".join(parts[:depth + 1])
+                if (
+                    parent_prefix in parent_order
+                    and parent_order[parent_prefix]
+                    < int(child.get("order_index") or 0)
+                ):
+                    ordered_children += 1
+            # Exercise items numbered 1, 2 can appear after genuine 2.1, 2.2
+            # teaching sections. They are not parents merely because their
+            # numbering is shallower; a true parent must precede at least one
+            # child at the next/deeper structural depth.
+            if ordered_children == 0:
+                continue
+        elif len(group) < _MIN_MAIN_TOPIC_HEADINGS:
+            # A lone leaf such as ``5.4`` inside a bounded processing chunk is
+            # not enough to suppress valid unnumbered peer headings. A lone
+            # explicit parent *with* owned children is selected above.
+            continue
+        selected_numbered_group = group
+        break
+    if selected_numbered_group is not None:
+        return _dedupe_topic_candidates(selected_numbered_group)
 
     levels = sorted({c["level"] for c in candidates})
     if len(levels) > 1 and sum(1 for c in candidates if c["level"] == levels[0]) == 1:
@@ -17804,9 +17811,54 @@ def _missing_source_topic_excerpts(
     ]
 
 
+def _accept_source_topic_complete_candidate(
+    baseline: list[dict],
+    candidate: list[dict],
+    source_topic_excerpts: list[dict],
+    *,
+    stage: str,
+) -> list[dict]:
+    """Reject a later transformation that drops a proven source topic.
+
+    Once the 35% human gate has established a complete topology, later repair
+    and cleanup passes have no authority to remove it. Keeping the newest
+    complete snapshot is deterministic, costs nothing, and avoids a retry loop
+    or a second semantic recovery request for a non-ambiguous regression.
+    """
+
+    missing = _missing_source_topic_excerpts(
+        candidate, source_topic_excerpts)
+    if not missing:
+        return candidate
+    baseline_missing = _missing_source_topic_excerpts(
+        baseline, source_topic_excerpts)
+    if baseline_missing:
+        raise RuntimeError(
+            "source-topic safety baseline is incomplete at "
+            f"{stage}: "
+            + ", ".join(
+                str(group.get("topic") or "").strip()
+                for group in baseline_missing
+            )
+        )
+    names = [
+        str(group.get("topic") or "").strip()
+        for group in missing
+        if str(group.get("topic") or "").strip()
+    ]
+    progress.log(
+        f"Rejected {stage} output because it dropped structurally proven "
+        "source topic(s): " + ", ".join(names),
+        level="warning",
+    )
+    return copy.deepcopy(baseline)
+
+
 def _recover_missing_topic_concepts_via_api(
     records: list[dict], *, meta: dict, source_topic_excerpts: list[dict],
-    max_attempts: int = 2,
+    max_attempts: int = 2, instruction: str = "",
+    fail_on_missing: bool = True,
+    single_attempt: bool = False,
 ) -> list[dict]:
     """Recover concepts for structurally proven topics omitted by the model."""
     import json as _json
@@ -17834,16 +17886,30 @@ def _recover_missing_topic_concepts_via_api(
             ],
             "existing_concept_titles": existing_titles,
         }
+        if str(instruction or "").strip():
+            payload["human_topology_instruction"] = str(
+                instruction or ""
+            ).strip()
         user = (
             _metadata_block(meta)
             + "\nMissing source-topic coverage to recover:\n"
             + _json.dumps(payload, ensure_ascii=False)
+            + (
+                "\nThe saved human instruction is authoritative only for "
+                "topology direction. Preserve source wording and all ordinary "
+                "concept-quality contracts."
+                if str(instruction or "").strip() else ""
+            )
         )
         progress.log(
             f"Topic coverage recovery attempt {attempt}: "
             f"{len(missing)} source topic(s) have no concept.")
         data = _openai_json(
-            system, user, purpose="concept_validation")
+            system,
+            user,
+            purpose="concept_validation",
+            single_attempt=single_attempt,
+        )
         allowed = {
             _topic_comparison_key(group.get("topic") or ""):
             (group.get("topic") or "").strip()
@@ -17872,13 +17938,169 @@ def _recover_missing_topic_concepts_via_api(
             level="success" if added else "warning",
         )
     missing = _missing_source_topic_excerpts(out, source_topic_excerpts)
-    if missing:
+    if missing and fail_on_missing:
         raise RuntimeError(
             "concept extraction omitted structurally proven source topics: "
             + ", ".join(
                 (group.get("topic") or "").strip() for group in missing)
         )
     return out
+
+
+def _recover_missing_topics_after_human_direction(
+    records: list[dict], *,
+    meta: dict,
+    source_topic_excerpts: list[dict],
+    checkpoint_callback,
+    recovery_state: dict | None = None,
+    skeleton_method_row_snapshot: dict[tuple[str, str], dict] | None = None,
+) -> list[dict]:
+    """Pause before, and bound, semantic recovery of omitted source topics.
+
+    The ``source_topic_review`` checkpoint is emitted before the first pause and
+    immediately after every authorized request, whether it succeeds or fails.
+    A resume therefore starts from the recovered rows (or a fresh follow-up
+    decision) instead of replaying a paid request.  Each saved answer authorizes
+    at most one physical provider request.
+    """
+
+    out = [dict(record) for record in records]
+    missing = _missing_source_topic_excerpts(out, source_topic_excerpts)
+    if not missing:
+        return out
+    state = copy.deepcopy(recovery_state or {})
+    follow_up = state.get("pending_followup")
+    if not isinstance(follow_up, dict):
+        follow_up = {}
+
+    def emit_review_checkpoint() -> None:
+        _emit_concept_checkpoint(
+            checkpoint_callback,
+            "source_topic_review",
+            records=out,
+            source_topic_recovery=copy.deepcopy(state),
+            skeleton_method_row_snapshot=_serialize_method_row_snapshot(
+                skeleton_method_row_snapshot or {}
+            ),
+        )
+
+    # Persist the exact pre-request topology before asking.  Re-emitting the
+    # same stage is intentional: checkpoint history keeps only the newest state
+    # for this stage while retaining the earlier skeleton checkpoint.
+    emit_review_checkpoint()
+    directive = source_topic_decision.resolve_or_pause(
+        records=out,
+        source_topics=source_topic_excerpts,
+        missing_topics=missing,
+        meta=meta,
+        prior_decision_id=str(follow_up.get("prior_decision_id") or ""),
+        failure=str(follow_up.get("failure") or ""),
+    )
+    if str(directive.get("action") or "") == "replace_source":
+        # Orchestration normally intercepts this saved answer before generation,
+        # but keep the local boundary fail-closed for direct service callers.
+        raise ValueError(
+            "Source replacement is required before topic recovery can continue."
+        )
+
+    decision_id = str(directive.get("decision_id") or "")
+    context_hash = str(directive.get("context_hash") or "")
+    # Consume the one-shot authorization in a durable checkpoint before
+    # dispatch. If the worker dies after this write, the outcome is unknown
+    # and resume asks for a fresh decision instead of replaying a possibly
+    # billed request.
+    state["last_attempt"] = {
+        "decision_id": decision_id,
+        "context_hash": context_hash,
+        "status": "request_started",
+    }
+    state["pending_followup"] = {
+        "prior_decision_id": decision_id,
+        "failure": (
+            "The authorized source-topic request was dispatched, but no "
+            "certified result checkpoint was saved. Its outcome is unknown; "
+            "Aegis will not replay it automatically."
+        ),
+    }
+    emit_review_checkpoint()
+    try:
+        out = _recover_missing_topic_concepts_via_api(
+            out,
+            meta=meta,
+            source_topic_excerpts=source_topic_excerpts,
+            max_attempts=1,
+            instruction=str(directive.get("instruction") or ""),
+            fail_on_missing=False,
+            single_attempt=True,
+        )
+    except Exception as exc:  # noqa: BLE001 - convert into a durable re-pause
+        failure = (
+            "The one bounded recovery request could not produce a usable "
+            f"response ({type(exc).__name__}): {exc}"
+        )[:4_000]
+        state["last_attempt"] = {
+            "decision_id": decision_id,
+            "context_hash": context_hash,
+            "status": "failed",
+        }
+        state["pending_followup"] = {
+            "prior_decision_id": decision_id,
+            "failure": failure,
+        }
+        emit_review_checkpoint()
+        source_topic_decision.resolve_or_pause(
+            records=out,
+            source_topics=source_topic_excerpts,
+            missing_topics=missing,
+            meta=meta,
+            prior_decision_id=decision_id,
+            failure=failure,
+        )
+        raise RuntimeError(
+            "source-topic recovery request failed without creating its "
+            "required follow-up decision"
+        ) from exc
+
+    remaining = _missing_source_topic_excerpts(out, source_topic_excerpts)
+    state["last_attempt"] = {
+        "decision_id": decision_id,
+        "context_hash": context_hash,
+        "status": "succeeded" if not remaining else "incomplete",
+    }
+    if not remaining:
+        state.pop("pending_followup", None)
+        # This is the first durable write after the paid response.  Persist the
+        # recovered rows and consumed decision before any later semantic stage
+        # can run, fail, or be interrupted.
+        emit_review_checkpoint()
+        return out
+
+    failure = (
+        "One bounded recovery request completed, but these structurally proven "
+        "source topics still have no normal concept: "
+        + ", ".join(
+            str(group.get("topic") or "").strip() for group in remaining
+        )
+    )[:4_000]
+    state["pending_followup"] = {
+        "prior_decision_id": decision_id,
+        "failure": failure,
+    }
+    emit_review_checkpoint()
+    # The first call always raises a fresh durable decision.  There is no
+    # automatic second semantic request.
+    source_topic_decision.resolve_or_pause(
+        records=out,
+        source_topics=source_topic_excerpts,
+        missing_topics=remaining,
+        meta=meta,
+        prior_decision_id=decision_id,
+        failure=failure,
+    )
+    raise RuntimeError(
+        "source-topic recovery failed without creating its required follow-up "
+        "decision"
+    )
 
 
 def _chapter_opening_excerpt(
@@ -18147,6 +18369,12 @@ _CONCEPT_CHECKPOINT_STAGES = {
         "progress": 0.24,
         "label": "Concept skeleton complete",
     },
+    "source_topic_review": {
+        "order": 25,
+        "version": 1,
+        "progress": 0.35,
+        "label": "Source-topic topology ready for your decision",
+    },
     "canonical_skeleton": {
         "order": 30,
         "version": 1,
@@ -18179,13 +18407,13 @@ _CONCEPT_CHECKPOINT_STAGES = {
     },
     "post_type_assignment": {
         "order": 70,
-        "version": 2,
+        "version": 3,
         "progress": 0.91,
         "label": "Type assignment and activity hubs complete",
     },
     "final_content_ready": {
         "order": 80,
-        "version": 2,
+        "version": 3,
         "progress": 0.98,
         "label": "Final content ready for deterministic validation",
     },
@@ -18211,6 +18439,7 @@ _CONCEPT_CHECKPOINT_STAGES = {
 _POST_CONCEPT_CHECKPOINT_STAGES = {
     "skeleton_chunks",
     "skeleton_complete",
+    "source_topic_review",
     "canonical_skeleton",
     "description_method_snapshot",
     "question_inventory",
@@ -18299,6 +18528,26 @@ def _type_granularity_replay_seal_valid(checkpoint: dict) -> bool:
     review = mined_types.get("_granularity_review")
     if not isinstance(review, dict):
         return True
+    last_attempt = review.get("last_attempt")
+    if last_attempt is not None and not (
+        isinstance(last_attempt, dict)
+        and str(last_attempt.get("status") or "") in {
+            "request_started", "succeeded", "incomplete", "failed",
+        }
+        and bool(str(last_attempt.get("decision_id") or ""))
+        and bool(re.fullmatch(
+            r"[0-9a-f]{64}",
+            str(last_attempt.get("context_hash") or ""),
+        ))
+    ):
+        return False
+    pending_followup = review.get("pending_followup")
+    if pending_followup is not None and not (
+        isinstance(pending_followup, dict)
+        and bool(str(pending_followup.get("prior_decision_id") or ""))
+        and bool(str(pending_followup.get("failure") or ""))
+    ):
+        return False
     applied = review.get("human_resolution")
     if not isinstance(applied, dict) or not applied.get("decision_id"):
         return True
@@ -18363,6 +18612,35 @@ def _compatible_concept_checkpoint_entry(checkpoint: dict | None) -> bool:
             checkpoint, ("records", list), ("base_records", list))
     if not _checkpoint_has_fields(checkpoint, ("records", list)):
         return False
+    if stage == "source_topic_review":
+        recovery = checkpoint.get("source_topic_recovery")
+        if not _checkpoint_has_fields(
+            checkpoint,
+            ("source_topic_recovery", dict),
+            ("skeleton_method_row_snapshot", list),
+        ):
+            return False
+        last_attempt = recovery.get("last_attempt")
+        if last_attempt is not None and not (
+            isinstance(last_attempt, dict)
+            and str(last_attempt.get("status") or "") in {
+                "request_started", "succeeded", "incomplete", "failed",
+            }
+            and bool(str(last_attempt.get("decision_id") or ""))
+            and bool(re.fullmatch(
+                r"[0-9a-f]{64}",
+                str(last_attempt.get("context_hash") or ""),
+            ))
+        ):
+            return False
+        follow_up = recovery.get("pending_followup")
+        if follow_up is not None and not (
+            isinstance(follow_up, dict)
+            and bool(str(follow_up.get("prior_decision_id") or ""))
+            and bool(str(follow_up.get("failure") or ""))
+        ):
+            return False
+        return True
     if stage == "canonical_skeleton":
         return _checkpoint_has_fields(
             checkpoint, ("skeleton_method_row_snapshot", list))
@@ -18866,7 +19144,7 @@ def _run_live_concept_pre_final_stages(
                 raise RuntimeError(
                     "saved concept checkpoint is incomplete; replace the file "
                     "or clear the checkpoint before retrying")
-        if saved_order >= _checkpoint_order("canonical_skeleton"):
+        if saved_order >= _checkpoint_order("source_topic_review"):
             skeleton_method_row_snapshot = _deserialize_method_row_snapshot(
                 saved.get("skeleton_method_row_snapshot"))
         if saved_order >= _checkpoint_order("description_method_snapshot"):
@@ -18879,6 +19157,38 @@ def _run_live_concept_pre_final_stages(
             _TYPE_TAXONOMY_CHECKPOINT_STAGE
         ):
             mined_types = copy.deepcopy(saved.get("mined_types") or {})
+        missing_saved_topics = _missing_source_topic_excerpts(
+            out, source_topic_excerpts)
+        if (
+            saved_order >= _checkpoint_order("canonical_skeleton")
+            and missing_saved_topics
+        ):
+            # A structurally incomplete newer checkpoint must not bypass the
+            # human topology gate or spend money reconciling its stale
+            # inventory/Types.  Apply one approved recovery, then rebuild every
+            # topology-dependent stage from the durable 35% checkpoint.
+            progress.log(
+                "Resumed checkpoint omits structurally proven source topics; "
+                "rewinding to source-topic review before further API work.",
+                level="warning",
+            )
+            out = _recover_missing_topics_after_human_direction(
+                out,
+                meta=meta,
+                source_topic_excerpts=source_topic_excerpts,
+                checkpoint_callback=checkpoint_callback,
+                skeleton_method_row_snapshot=(
+                    skeleton_method_row_snapshot or method_row_snapshot
+                ),
+            )
+            skeleton_method_row_snapshot = (
+                skeleton_method_row_snapshot or method_row_snapshot
+            )
+            question_task_inventory = {}
+            mined_types = {}
+            method_row_snapshot = {}
+            saved_stage = "source_topic_review"
+            saved_order = _checkpoint_order(saved_stage)
         if saved_order >= _checkpoint_order("question_inventory"):
             restored_inventory = copy.deepcopy(question_task_inventory)
             question_task_inventory = _refresh_inventory_from_source_anchors(
@@ -18981,7 +19291,7 @@ def _run_live_concept_pre_final_stages(
             records=out,
         )
 
-    if saved_order < _checkpoint_order("canonical_skeleton"):
+    if saved_order < _checkpoint_order("source_topic_review"):
         out = _canonicalize_method_anchor_tags(
             out, method_anchors, chunk_text=mmd_text, meta=meta)
         skeleton_method_row_snapshot = _snapshot_method_anchor_rows(
@@ -19013,8 +19323,20 @@ def _run_live_concept_pre_final_stages(
         out = _snap_topics_to_headings(
             out, headings, chapter_title=chapter_title,
             allow_chapter_title_topic=allow_chapter_title_topic)
-        out = _recover_missing_topic_concepts_via_api(
-            out, meta=meta, source_topic_excerpts=source_topic_excerpts)
+
+    if saved_order < _checkpoint_order("canonical_skeleton"):
+        recovery_state = (
+            copy.deepcopy(saved.get("source_topic_recovery") or {})
+            if saved_stage == "source_topic_review" and saved else {}
+        )
+        out = _recover_missing_topics_after_human_direction(
+            out,
+            meta=meta,
+            source_topic_excerpts=source_topic_excerpts,
+            checkpoint_callback=checkpoint_callback,
+            recovery_state=recovery_state,
+            skeleton_method_row_snapshot=skeleton_method_row_snapshot,
+        )
         out = _reorder_records_by_source_topics(out, headings)
         out = _restore_method_anchor_rows(
             out, skeleton_method_row_snapshot)
@@ -19219,20 +19541,72 @@ def _run_live_concept_pre_final_stages(
             action = str(directive.get("action") or "continue")
             resolution_audit: dict = {}
             if action == "consolidate":
-                consolidated, failure, resolution_audit = (
-                    _human_directed_type_consolidation_via_api(
-                        mined_types,
-                        inventory=question_task_inventory,
-                        meta=meta,
-                        instruction=str(
-                            directive.get("instruction") or ""),
-                    )
+                decision_id = str(directive.get("decision_id") or "")
+                context_hash = str(directive.get("context_hash") or "")
+                # Commit authorization consumption before the proposal/critic
+                # pair. A crash after dispatch must never leave the old answer
+                # replayable on resume.
+                review["last_attempt"] = {
+                    "decision_id": decision_id,
+                    "context_hash": context_hash,
+                    "status": "request_started",
+                }
+                review["pending_followup"] = {
+                    "prior_decision_id": decision_id,
+                    "failure": (
+                        "The authorized Type proposal/critic pair was "
+                        "dispatched, but no certified result checkpoint was "
+                        "saved. Its outcome is unknown; Aegis will not replay "
+                        "it automatically."
+                    ),
+                }
+                mined_types["_granularity_review"] = copy.deepcopy(review)
+                _emit_concept_checkpoint(
+                    checkpoint_callback,
+                    (
+                        _CONCEPT_CHECKPOINT_STAGE
+                        if saved_order >= _checkpoint_order(
+                            _CONCEPT_CHECKPOINT_STAGE)
+                        else _TYPE_TAXONOMY_CHECKPOINT_STAGE
+                    ),
+                    records=out,
+                    question_task_inventory=question_task_inventory,
+                    mined_types=mined_types,
+                    method_row_snapshot=_serialize_method_row_snapshot(
+                        method_row_snapshot),
                 )
+                try:
+                    consolidated, failure, resolution_audit = (
+                        _human_directed_type_consolidation_via_api(
+                            mined_types,
+                            inventory=question_task_inventory,
+                            meta=meta,
+                            instruction=str(
+                                directive.get("instruction") or ""),
+                        )
+                    )
+                except Exception as exc:  # noqa: BLE001 - consume and re-pause
+                    consolidated = None
+                    failure = (
+                        "The one authorized Type proposal/critic pair could "
+                        "not produce a usable certified result "
+                        f"({type(exc).__name__}): {exc}"
+                    )
+                    resolution_audit = {
+                        "provider_failure": type(exc).__name__,
+                    }
                 if consolidated is None:
+                    failure = str(failure or "")[:4_000]
                     review["pending_followup"] = {
                         "prior_decision_id": str(
                             directive.get("decision_id") or ""),
-                        "failure": str(failure or "")[:4_000],
+                        "failure": failure,
+                    }
+                    review["last_attempt"] = {
+                        "decision_id": decision_id,
+                        "context_hash": context_hash,
+                        "status": "failed",
+                        "audit": copy.deepcopy(resolution_audit),
                     }
                     mined_types["_granularity_review"] = copy.deepcopy(
                         review)
@@ -19258,7 +19632,7 @@ def _run_live_concept_pre_final_stages(
                         meta=meta,
                         prior_decision_id=str(
                             directive.get("decision_id") or ""),
-                        failure=str(failure or ""),
+                        failure=failure,
                     )
                     raise RuntimeError(
                         "human-directed Type consolidation failed without "
@@ -19284,6 +19658,61 @@ def _run_live_concept_pre_final_stages(
                     int(review.get("raw_type_count") or 0)
                     - len(mined_types["types"]),
                 )
+                if type_granularity_decision.is_anomalously_fragmented(
+                    review
+                ):
+                    failure = (
+                        "The bounded consolidation was source-safe, but the "
+                        "taxonomy remains strongly fragmented at "
+                        f"{len(mined_types['types'])} Types for "
+                        f"{inventory_count} QIDs."
+                    )
+                    review["pending_followup"] = {
+                        "prior_decision_id": str(
+                            directive.get("decision_id") or ""),
+                        "failure": failure,
+                    }
+                    review["last_attempt"] = {
+                        "decision_id": decision_id,
+                        "context_hash": context_hash,
+                        "status": "incomplete",
+                        "audit": copy.deepcopy(resolution_audit),
+                    }
+                    mined_types["_granularity_review"] = copy.deepcopy(
+                        review)
+                    _emit_concept_checkpoint(
+                        checkpoint_callback,
+                        (
+                            _CONCEPT_CHECKPOINT_STAGE
+                            if saved_order >= _checkpoint_order(
+                                _CONCEPT_CHECKPOINT_STAGE)
+                            else _TYPE_TAXONOMY_CHECKPOINT_STAGE
+                        ),
+                        records=out,
+                        question_task_inventory=question_task_inventory,
+                        mined_types=mined_types,
+                        method_row_snapshot=_serialize_method_row_snapshot(
+                            method_row_snapshot),
+                    )
+                    type_granularity_decision.resolve_or_pause(
+                        review=review,
+                        inventory=question_task_inventory,
+                        mined_types=mined_types,
+                        meta=meta,
+                        prior_decision_id=str(
+                            directive.get("decision_id") or ""),
+                        failure=failure,
+                    )
+                    raise RuntimeError(
+                        "fragmented human-directed Type result failed without "
+                        "creating its required follow-up decision"
+                    )
+                review["last_attempt"] = {
+                    "decision_id": decision_id,
+                    "context_hash": context_hash,
+                    "status": "succeeded",
+                    "audit": copy.deepcopy(resolution_audit),
+                }
             if action in {"keep", "consolidate"}:
                 review.pop("pending_followup", None)
                 review["human_resolution"] = {
@@ -19442,14 +19871,30 @@ def _prepare_final_concept_content(
     refresh_chapter_wide_assignments: bool = False,
 ) -> list[dict]:
     """Run every semantic/API finalizer before the deterministic final gate."""
-    # A resumed post-Type checkpoint can still predate topic-coverage recovery.
-    # Restore any structurally proven source topic before downstream cleanup
-    # merges or culminations can make that omission difficult to diagnose.
-    out = _recover_missing_topic_concepts_via_api(
-        out, meta=meta, source_topic_excerpts=source_topic_excerpts)
+    # Missing structural topics are resolved only at the durable human gate in
+    # ``_run_live_concept_pre_final_stages``.  Never hide a stale checkpoint by
+    # starting an automatic paid recovery from the finalizer.
+    missing_source_topics = _missing_source_topic_excerpts(
+        out, source_topic_excerpts)
+    if missing_source_topics:
+        raise RuntimeError(
+            "source-topic review must complete before finalization: "
+            + ", ".join(
+                str(group.get("topic") or "").strip()
+                for group in missing_source_topics
+            )
+        )
+    topology_safe_snapshot = copy.deepcopy(out)
     out = _scrub_section_numbers(out)
     out = _merge_concept_records(out)
     out = _dedupe_titles_chapter_wide(out)
+    out = _accept_source_topic_complete_candidate(
+        topology_safe_snapshot,
+        out,
+        source_topic_excerpts,
+        stage="initial final cleanup",
+    )
+    topology_safe_snapshot = copy.deepcopy(out)
     progress.step(
         "Concept extraction — validating and repairing final map",
         value=0.93,
@@ -19473,6 +19918,13 @@ def _prepare_final_concept_content(
     ]
     out = _enforce_culminations(out)
     out = _ensure_misconceptions_via_api(out, meta=meta)
+    out = _accept_source_topic_complete_candidate(
+        topology_safe_snapshot,
+        out,
+        source_topic_excerpts,
+        stage="concept merge and cleanup",
+    )
+    topology_safe_snapshot = copy.deepcopy(out)
     before_final_repair = out
     out = _repair_records_via_api(
         out, meta=meta, stage="final", source_context=mmd_text, strict=False,
@@ -19490,6 +19942,13 @@ def _prepare_final_concept_content(
         out, inventory=question_task_inventory)
     out = _repair_rendered_inventory_coverage(
         out, question_task_inventory, mined_types)
+    out = _accept_source_topic_complete_candidate(
+        topology_safe_snapshot,
+        out,
+        source_topic_excerpts,
+        stage="final semantic repair",
+    )
+    topology_safe_snapshot = copy.deepcopy(out)
     coverage_safe_snapshot = copy.deepcopy(out)
     out = cr.refine_chapter(out)
     out = _dedupe_titles_chapter_wide(out)
@@ -19514,6 +19973,13 @@ def _prepare_final_concept_content(
     out = _enforce_culminations(out)
     out = _reorder_records_by_source_topics(out, headings)
     out = cr.renumber_types_continuously(out)
+    out = _accept_source_topic_complete_candidate(
+        topology_safe_snapshot,
+        out,
+        source_topic_excerpts,
+        stage="chapter refinement",
+    )
+    topology_safe_snapshot = copy.deepcopy(out)
     missing_method_anchors = [
         anchor for anchor in method_anchors
         if (
@@ -19530,15 +19996,6 @@ def _prepare_final_concept_content(
             "final concept map lost mandatory derivation/method anchors: "
             + ", ".join(
                 anchor["anchor_id"] for anchor in missing_method_anchors)
-        )
-    missing_topics = _missing_source_topic_excerpts(
-        out, source_topic_excerpts)
-    if missing_topics:
-        raise RuntimeError(
-            "final concept map lost structurally proven source topics: "
-            + ", ".join(
-                (group.get("topic") or "").strip()
-                for group in missing_topics)
         )
     if refresh_chapter_wide_assignments:
         # Old final checkpoints may have a valid-but-stale topic assignment
@@ -19584,6 +20041,13 @@ def _prepare_final_concept_content(
     out = _disambiguate_certified_split_type_cases(
         out, question_task_inventory, mined_types)
     out = cr.renumber_types_continuously(out)
+    out = _accept_source_topic_complete_candidate(
+        topology_safe_snapshot,
+        out,
+        source_topic_excerpts,
+        stage="pre-boundary normalization",
+    )
+    topology_safe_snapshot = copy.deepcopy(out)
 
     def final_boundary_report(value: list[dict]) -> dict:
         return cv.validate_concept_rows(
@@ -19624,6 +20088,14 @@ def _prepare_final_concept_content(
         out = _ensure_terminal_culmination_contract(out)
         out = _canonicalize_concept_rich_text(out)
         boundary_report = final_boundary_report(out)
+    out = _accept_source_topic_complete_candidate(
+        topology_safe_snapshot,
+        out,
+        source_topic_excerpts,
+        stage="terminal boundary repair",
+    )
+    topology_safe_snapshot = copy.deepcopy(out)
+    boundary_report = final_boundary_report(out)
     if any(
         error.get("code") == "source_artifact"
         and error.get("severity") == "error"
@@ -19638,6 +20110,13 @@ def _prepare_final_concept_content(
     out = _disambiguate_certified_split_type_cases(
         out, question_task_inventory, mined_types)
     out = cr.renumber_types_continuously(out)
+    out = _accept_source_topic_complete_candidate(
+        topology_safe_snapshot,
+        out,
+        source_topic_excerpts,
+        stage="terminal inventory normalization",
+    )
+    topology_safe_snapshot = copy.deepcopy(out)
 
     type_contract_codes = {
         "missing_type_definition",
@@ -19710,6 +20189,13 @@ def _prepare_final_concept_content(
         out = _normalize_activity_hubs_from_inventory(
             out, question_task_inventory, mined_types)
         out = cr.renumber_types_continuously(out)
+        out = _accept_source_topic_complete_candidate(
+            topology_safe_snapshot,
+            out,
+            source_topic_excerpts,
+            stage="terminal Type rebuild",
+        )
+        topology_safe_snapshot = copy.deepcopy(out)
         inventory_topic_violations = _rendered_inventory_topic_violations(
             out, question_task_inventory, mined_types)
         activity_alignment_violations = (
@@ -19763,7 +20249,13 @@ def _prepare_final_concept_content(
     # Semantic repair can preserve a stale but syntactically valid image tag.
     # Reconcile the final public Examples to the source registry before this
     # exact map is checkpointed, so a later resume does not reintroduce it.
-    return _reconcile_explicit_figure_images(out, source_sections)[0]
+    out = _reconcile_explicit_figure_images(out, source_sections)[0]
+    return _accept_source_topic_complete_candidate(
+        topology_safe_snapshot,
+        out,
+        source_topic_excerpts,
+        stage="source-image reconciliation",
+    )
 
 
 def _repair_final_rich_text_via_api(

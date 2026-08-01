@@ -211,7 +211,6 @@ def is_anomalously_fragmented(review: Mapping[str, Any] | None) -> bool:
     try:
         inventory_count = int(review.get("inventory_count") or 0)
         type_count = int(review.get("type_count") or 0)
-        merged_count = int(review.get("consolidation_merged_count") or 0)
         ratio = float(review.get("type_qid_ratio") or 0.0)
     except (TypeError, ValueError):
         return False
@@ -219,7 +218,6 @@ def is_anomalously_fragmented(review: Mapping[str, Any] | None) -> bool:
         inventory_count >= _MIN_INVENTORY_ITEMS
         and type_count >= _MIN_TYPE_COUNT
         and ratio >= _HIGH_TYPE_QID_RATIO
-        and merged_count == 0
     )
 
 
@@ -257,6 +255,7 @@ def _resolution_for(identity: Mapping[str, str]) -> dict[str, Any] | None:
     for candidate in _resolution_candidates(_HUMAN_RESOLUTIONS.get()):
         if _normal(candidate.get("status")) in {
             "pending", "awaiting_decision", "cancelled", "rejected",
+            "consumed",
         }:
             continue
         identifiers = {
@@ -282,6 +281,26 @@ def _resolution_for(identity: Mapping[str, str]) -> dict[str, Any] | None:
             "instruction": str(candidate.get("instruction") or "").strip(),
         }
     return copy.deepcopy(matched)
+
+
+def _was_consumed(identity: Mapping[str, str]) -> bool:
+    """Whether this exact-context Type authorization has already been spent."""
+
+    decision_id = str(identity.get("decision_id") or "")
+    context_hash = str(identity.get("context_hash") or "")
+    for candidate in _resolution_candidates(_HUMAN_RESOLUTIONS.get()):
+        if _normal(candidate.get("status")) != "consumed":
+            continue
+        identifiers = {
+            str(candidate.get("decision_id") or ""),
+            str(candidate.get("context_hash") or ""),
+            str(candidate.get("_lookup_key") or ""),
+        }
+        if decision_id not in identifiers and context_hash not in identifiers:
+            continue
+        if str(candidate.get("context_hash") or context_hash) == context_hash:
+            return True
+    return False
 
 
 def _identity(
@@ -405,9 +424,9 @@ def _pending_decision(
     ][:100]
     follow_up = bool(failure)
     diagnosis = (
-        "The requested consolidation did not produce a candidate that both "
-        "passed the independent semantic critic and preserved every exact "
-        f"source contract. {str(failure)[:1500]}"
+        "The requested consolidation did not yield a final taxonomy that can "
+        "proceed without another explicit choice. "
+        f"{str(failure)[:1500]}"
         if follow_up else (
             f"Aegis found {type_count} Types for {inventory_count} source "
             f"questions/tasks ({ratio:.0%}). The normal consolidation pass "
@@ -504,21 +523,41 @@ def resolve_or_pause(
 
     if not failure and not is_anomalously_fragmented(review):
         return {"action": "continue"}
-    identity = _identity(
-        review=review,
-        inventory=inventory,
-        mined_types=mined_types,
-        meta=meta,
-        prior_decision_id=prior_decision_id,
-        failure=failure,
-    )
+    prior = str(prior_decision_id or "")
+    failure_text = str(failure or "")
+    # An upstream rewind can recreate the exact pre-decision taxonomy after
+    # its one bounded authorization was already used. Walk the consumed chain
+    # so the old answer cannot be replayed and every recurrence pauses with a
+    # fresh durable identity before any provider call.
+    for _index in range(100):
+        identity = _identity(
+            review=review,
+            inventory=inventory,
+            mined_types=mined_types,
+            meta=meta,
+            prior_decision_id=prior,
+            failure=failure_text,
+        )
+        if not _was_consumed(identity):
+            break
+        prior = str(identity.get("decision_id") or "")
+        failure_text = (
+            "The earlier Type-taxonomy authorization was already used, but "
+            "the same fragmented taxonomy has returned. Choose a fresh "
+            "direction; Aegis will not replay the paid request."
+        )
+    else:
+        raise RuntimeError(
+            "Type-granularity decision history exceeded its bounded safety "
+            "limit"
+        )
     resolution = _resolution_for(identity)
     if resolution is None:
         raise HumanDecisionRequired(_pending_decision(
             identity=identity,
             review=review,
             inventory=inventory,
-            failure=failure,
+            failure=failure_text,
         ))
     choice = str(resolution.get("choice") or "")
     if choice == "keep_distinct_types":

@@ -43,6 +43,7 @@ from . import (
     openai_usage,
     progress,
     semantic_recovery,
+    source_topic_decision,
     type_granularity_decision,
     uploads,
 )
@@ -178,17 +179,22 @@ def _pending_human_decision(checkpoint: dict | None) -> dict | None:
     return copy.deepcopy(pending) if isinstance(pending, dict) else None
 
 
-def _ready_human_decisions(checkpoint: dict | None) -> list[dict]:
+def _human_decisions_with_status(
+    checkpoint: dict | None,
+    *,
+    statuses: set[str],
+) -> list[dict]:
     ledger = _human_decision_ledger(checkpoint)
     result = []
     for entry in ledger.get("resolutions") or []:
         if (
             isinstance(entry, dict)
-            and entry.get("status") == "ready"
+            and str(entry.get("status") or "") in statuses
             and isinstance(entry.get("pending_decision"), dict)
         ):
             result.append({
                 **copy.deepcopy(entry["pending_decision"]),
+                "status": str(entry.get("status") or ""),
                 "choice": str(entry.get("choice") or ""),
                 "instruction": str(entry.get("instruction") or ""),
                 "target_concept_id": str(
@@ -204,6 +210,10 @@ def _ready_human_decisions(checkpoint: dict | None) -> list[dict]:
     if result and deferred:
         result[-1]["deferred_assignment_unit_ids"] = deferred
     return result
+
+
+def _ready_human_decisions(checkpoint: dict | None) -> list[dict]:
+    return _human_decisions_with_status(checkpoint, statuses={"ready"})
 
 
 def _compact_resolved_pending_decision(
@@ -258,10 +268,75 @@ def _copy_human_decision_ledger(
     return result
 
 
+def _applied_human_decision_ids(checkpoint: dict | None) -> set[str]:
+    """Decision IDs whose bounded action is durably represented here."""
+    if not isinstance(checkpoint, dict):
+        return set()
+    ids: set[str] = set()
+    source_state = checkpoint.get("source_topic_recovery")
+    if isinstance(source_state, dict):
+        attempt = source_state.get("last_attempt")
+        if isinstance(attempt, dict) and attempt.get("decision_id"):
+            ids.add(str(attempt["decision_id"]))
+        follow_up = source_state.get("pending_followup")
+        if isinstance(follow_up, dict) and follow_up.get("prior_decision_id"):
+            ids.add(str(follow_up["prior_decision_id"]))
+    mined_types = checkpoint.get("mined_types")
+    review = (
+        mined_types.get("_granularity_review")
+        if isinstance(mined_types, dict) else None
+    )
+    if isinstance(review, dict):
+        last_attempt = review.get("last_attempt")
+        if isinstance(last_attempt, dict) and last_attempt.get("decision_id"):
+            ids.add(str(last_attempt["decision_id"]))
+        applied = review.get("human_resolution")
+        if isinstance(applied, dict) and applied.get("decision_id"):
+            ids.add(str(applied["decision_id"]))
+        follow_up = review.get("pending_followup")
+        if isinstance(follow_up, dict) and follow_up.get("prior_decision_id"):
+            ids.add(str(follow_up["prior_decision_id"]))
+    return {decision_id for decision_id in ids if decision_id}
+
+
+def _consume_applied_human_decisions(
+    envelope: dict,
+    applied_checkpoint: dict | None,
+) -> dict:
+    """Mark an authorization consumed in the same durable checkpoint write."""
+    result = copy.deepcopy(envelope)
+    applied_ids = _applied_human_decision_ids(applied_checkpoint)
+    if not applied_ids:
+        return result
+    ledger = _human_decision_ledger(result)
+    changed = False
+    resolutions: list[dict] = []
+    for raw in ledger.get("resolutions") or []:
+        entry = copy.deepcopy(raw)
+        if (
+            isinstance(entry, dict)
+            and str(entry.get("decision_id") or "") in applied_ids
+            and entry.get("status") == "ready"
+        ):
+            entry["status"] = "consumed"
+            entry["consumed_at"] = str(
+                (applied_checkpoint or {}).get("saved_at")
+                or datetime.now(timezone.utc).isoformat()
+            )
+            changed = True
+        resolutions.append(entry)
+    if changed:
+        ledger["resolutions"] = resolutions
+        result[_HUMAN_DECISIONS_KEY] = ledger
+    return result
+
+
 @contextmanager
 def _human_decision_resolution_context(checkpoint: dict | None):
     resolutions = _ready_human_decisions(checkpoint)
-    if not resolutions:
+    durable_resolutions = _human_decisions_with_status(
+        checkpoint, statuses={"ready", "consumed"})
+    if not resolutions and not durable_resolutions:
         yield
         return
     from . import canonical_source_phase3 as phase3
@@ -270,10 +345,13 @@ def _human_decision_resolution_context(checkpoint: dict | None):
         copy.deepcopy(resolutions)
     ):
         with phase33.human_resolution_context(copy.deepcopy(resolutions)):
-            with type_granularity_decision.human_resolution_context(
-                copy.deepcopy(resolutions)
+            with source_topic_decision.human_resolution_context(
+                copy.deepcopy(durable_resolutions)
             ):
-                yield
+                with type_granularity_decision.human_resolution_context(
+                    copy.deepcopy(durable_resolutions)
+                ):
+                    yield
 
 
 def _find_concept_in_chapter(
@@ -352,6 +430,78 @@ def _add_concept(db: Session, topic: models.Topic, rec: dict,
     return concept
 
 
+def _missing_deposit_source_topics(
+    records: list[dict], source_text: str,
+) -> list[dict]:
+    """Return structurally proven source topics absent at the DB boundary.
+
+    This is a deterministic last line of defence for restored/legacy
+    checkpoints. A source with fewer than two usable main headings does not
+    provide enough topology evidence for this guard; ordinary validation still
+    applies in that case.
+    """
+    if not str(source_text or "").strip():
+        return []
+    sections = [
+        section
+        for chunk in generation._section_aware_chunks(source_text)
+        for section in chunk.get("sections") or []
+        if isinstance(section, dict)
+    ]
+    if len(generation._topic_headings(sections)) < 2:
+        return []
+    return generation._missing_source_topic_excerpts(
+        records,
+        generation._group_source_topic_excerpts(sections),
+    )
+
+
+def _require_deposit_source_topic_coverage(
+    records: list[dict], source_text: str,
+) -> None:
+    """Fail closed when a generated map loses a proven source topic."""
+    missing_source_topics = _missing_deposit_source_topics(
+        records, source_text)
+    if not missing_source_topics:
+        return
+    names = [
+        str(group.get("topic") or "").strip()
+        for group in missing_source_topics
+        if str(group.get("topic") or "").strip()
+    ]
+    progress.log(
+        "Deposit blocked because the generated map lost "
+        f"{len(names)} structurally proven source topic(s): "
+        + ", ".join(names),
+        level="error",
+    )
+    raise DepositValidationError(
+        "source-topic topology failed before deposit: missing="
+        + ",".join(names)
+    )
+
+
+def _restore_deposit_source_topic_snapshot(
+    records: list[dict],
+    baseline: list[dict],
+    source_text: str,
+    *,
+    stage: str,
+) -> list[dict]:
+    """Reject a deposit-only mutation that removes a proven source topic."""
+
+    if not _missing_deposit_source_topics(records, source_text):
+        return records
+    _require_deposit_source_topic_coverage(baseline, source_text)
+    progress.log(
+        f"Rejected {stage} because it dropped a structurally proven source "
+        "topic; restoring the validated final-content snapshot without "
+        "another model call.",
+        level="warning",
+    )
+    return copy.deepcopy(baseline)
+
+
 def _deposit_concepts(
     db: Session, chapter: models.Chapter, records: list[dict],
     pre_post: str, source_book: str,
@@ -365,6 +515,9 @@ def _deposit_concepts(
     Returns (created_ids, merged_ids): a same-learning-kind normalized-title
     match is refreshed from the newly validated record and its sources grow.
     """
+    if pre_post == "Post":
+        _require_deposit_source_topic_coverage(records, source_text)
+    source_topic_safe_records = copy.deepcopy(records)
     # Clean each record (name hygiene, Title Case, dangling-ref removal), then
     # run the deterministic chapter pass: continuous "Type NN" numbering across
     # the whole chapter, "Miscellaneous Type NN" for culmination rows, and a
@@ -387,6 +540,12 @@ def _deposit_concepts(
             records, meta={}, use_api=False)
         records = generation._ensure_terminal_culmination_contract(records)
         records = generation._canonicalize_concept_rich_text(records)
+        records = _restore_deposit_source_topic_snapshot(
+            records,
+            source_topic_safe_records,
+            source_text,
+            stage="deposit-only cleanup",
+        )
     if pre_post == "Post" and inventory is not None:
         # A final-content checkpoint is intentionally restored without another
         # model call.  The deposit-only formatting pass above can still remove
@@ -460,6 +619,19 @@ def _deposit_concepts(
             )
         except RuntimeError as exc:
             raise DepositValidationError(str(exc)) from exc
+    # Cleanup, chapter-wide dedupe, refinement, culmination repair and
+    # inventory restoration above can all remove or reshape rows after the
+    # early restored-checkpoint guard. Re-run the deterministic topology
+    # contract at the terminal record boundary, immediately before the final
+    # validator and the first possible DB write.
+    if pre_post == "Post":
+        records = _restore_deposit_source_topic_snapshot(
+            records,
+            source_topic_safe_records,
+            source_text,
+            stage="terminal deposit normalization",
+        )
+        _require_deposit_source_topic_coverage(records, source_text)
     report = concept_validator.validate_concept_rows(
         records,
         allow_types=True,
@@ -938,6 +1110,19 @@ def _merge_generation_checkpoint_history(
                     str(entry.get("stage") or "")
                 ) <= source_order
             ]
+        if stage == "source_topic_review":
+            # A missing numbered source topic invalidates every concept,
+            # inventory, Type, and final artifact derived after topology. Do
+            # not let an older 81%/98% entry outrank the new 35% human gate on
+            # resume; retaining it would replay the exact omission that caused
+            # the pause.
+            topology_order = generation._checkpoint_order(stage)
+            history = [
+                entry for entry in history
+                if generation._checkpoint_order(
+                    str(entry.get("stage") or "")
+                ) <= topology_order
+            ]
         history = [
             entry for entry in history
             if str(entry.get("stage") or "") != stage
@@ -972,7 +1157,8 @@ def _merge_generation_checkpoint_history(
         "progress": checkpoint.get("progress", 0.0),
         "checkpoints": history,
     }
-    return _copy_human_decision_ledger(merged, stored)
+    merged = _copy_human_decision_ledger(merged, stored)
+    return _consume_applied_human_decisions(merged, checkpoint)
 
 
 def _compatible_generation_checkpoint_envelope(
@@ -1567,6 +1753,7 @@ def _source_replacement_required(checkpoint: dict | None) -> bool:
             "phase3_source_graph_review",
             "phase31_source_grounding_semantic_conflict",
             "phase32_concept_blueprint_semantic_conflict",
+            "source_topic_coverage_review",
         }
         for row in _ready_human_decisions(checkpoint)
         if isinstance(row, dict)
@@ -1911,6 +2098,21 @@ def create_post_learning_job(
     return uploads.persist_new_job(db, job, raw_bytes)
 
 
+def _job_source_label(job: models.UploadJob) -> str:
+    """Use an explicit book name, or retain the uploaded filename identity."""
+    explicit = str(job.source_book or "").strip()
+    if explicit:
+        return explicit
+    filename = Path(str(job.filename or "")).name.strip()
+    stem = Path(filename).stem.strip()
+    fallback = stem or filename or "Uploaded source"
+    # ``sources`` is currently a delimiter-separated legacy field. A raw
+    # filename comma/semicolon would be parsed as multiple fake books.
+    fallback = re.sub(r"[,;\r\n]+", " - ", fallback)
+    fallback = re.sub(r"\s+", " ", fallback).strip(" -")
+    return fallback or "Uploaded source"
+
+
 def generate_post_learning(
     db: Session,
     job_id: int,
@@ -2013,11 +2215,6 @@ def generate_post_learning(
                 level="warning",
             )
             return
-        if checkpoint.get("source_review_resolution_applied"):
-            # This snapshot was derived from the pre-correction semantic
-            # source and must disappear in the same durable update that
-            # invalidates downstream concept stages.
-            job.question_inventory = {}
         if (
             "question_task_inventory" in checkpoint
             or "mined_types" in checkpoint
@@ -2027,6 +2224,16 @@ def generate_post_learning(
                     "question_task_inventory") or {},
                 "mined_types": checkpoint.get("mined_types") or {},
             })
+        if (
+            checkpoint.get("source_review_resolution_applied")
+            or str(checkpoint.get("stage") or "").strip()
+            == "source_topic_review"
+        ):
+            # These snapshots were derived from topology/source text that is
+            # now known to be incomplete. Clear it in the same durable update
+            # as the review checkpoint, after any generic payload handling so
+            # a malformed review checkpoint cannot repopulate stale inventory.
+            job.question_inventory = {}
         label = (
             checkpoint.get("stage_label")
             or checkpoint.get("stage")
@@ -2125,7 +2332,7 @@ def generate_post_learning(
                 chapter_id=target_chapter_id,
                 records=records,
                 pre_post="Post",
-                source_book=job.source_book,
+                source_book=_job_source_label(job),
                 inventory=artifacts.get("question_task_inventory"),
                 mined_types=artifacts.get("mined_types"),
                 source_text=job.mmd_text,
@@ -2336,8 +2543,6 @@ def generate_pre_learning_from_upload(
                 level="warning",
             )
             return
-        if checkpoint.get("source_review_resolution_applied"):
-            job.question_inventory = {}
         if (
             "question_task_inventory" in checkpoint
             or "mined_types" in checkpoint
@@ -2347,6 +2552,12 @@ def generate_pre_learning_from_upload(
                     "question_task_inventory") or {},
                 "mined_types": checkpoint.get("mined_types") or {},
             })
+        if (
+            checkpoint.get("source_review_resolution_applied")
+            or str(checkpoint.get("stage") or "").strip()
+            == "source_topic_review"
+        ):
+            job.question_inventory = {}
         label = (
             checkpoint.get("stage_label")
             or checkpoint.get("stage")
@@ -2478,7 +2689,7 @@ def generate_pre_learning_from_upload(
                 chapter_id=target_chapter_id,
                 records=pre_records,
                 pre_post="Pre",
-                source_book=job.source_book,
+                source_book=_job_source_label(job),
             )
         except Exception:
             # Preserve the separately committed generation checkpoint and

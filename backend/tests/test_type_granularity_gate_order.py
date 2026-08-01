@@ -4,6 +4,7 @@ import copy
 
 import pytest
 
+from app.services import build_concepts
 from app.services import generation as g
 from app.services import semantic_recovery
 from app.services import type_granularity_decision as gate
@@ -344,12 +345,237 @@ def test_consolidation_resume_feeds_only_accepted_taxonomy_downstream(
     monkeypatch.setattr(
         g, "_placement_certification_contract_complete", lambda *_args: True)
 
+    resumed_emitted: list[dict] = []
     with gate.human_resolution_context([resolution]):
         _rows, _inventory_result, accepted_types, _snapshot = _run_pre_final(
             checkpoint=first_emitted[-1],
-            emitted=[],
+            emitted=resumed_emitted,
         )
 
     assert downstream_type_counts == [1]
     assert len(accepted_types["types"]) == 1
     assert accepted_types["_granularity_review"]["type_count"] == 1
+    assert accepted_types["_granularity_review"]["last_attempt"][
+        "status"
+    ] == "succeeded"
+    assert resumed_emitted[0]["mined_types"]["_granularity_review"][
+        "last_attempt"
+    ]["status"] == "request_started"
+
+
+def test_failed_authorized_type_pair_checkpoints_then_requires_fresh_decision(
+    monkeypatch,
+):
+    mined = _types()
+    _preserve_inventory(monkeypatch)
+    monkeypatch.setattr(
+        g,
+        "_mine_types_from_inventory_via_api",
+        lambda **_kwargs: copy.deepcopy(mined),
+    )
+    monkeypatch.setattr(
+        g,
+        "_consolidate_semantic_types_via_api",
+        lambda current, **_kwargs: copy.deepcopy(current),
+    )
+    first_emitted: list[dict] = []
+    with pytest.raises(semantic_recovery.HumanDecisionRequired) as caught:
+        _run_pre_final(
+            checkpoint=_question_inventory_checkpoint(),
+            emitted=first_emitted,
+        )
+    pending = caught.value.pending_decision
+    resolution = {
+        **copy.deepcopy(pending),
+        "status": "ready",
+        "choice": "consolidate_types",
+        "instruction": "Consolidate only source-safe reusable methods.",
+    }
+    calls: list[int] = []
+    resumed_emitted: list[dict] = []
+
+    def fail_pair(*_args, **_kwargs):
+        assert resumed_emitted[-1]["mined_types"][
+            "_granularity_review"
+        ]["last_attempt"]["status"] == "request_started"
+        calls.append(1)
+        raise RuntimeError("critic response schema invalid")
+
+    monkeypatch.setattr(
+        g, "_human_directed_type_consolidation_via_api", fail_pair)
+    with gate.human_resolution_context([resolution]):
+        with pytest.raises(semantic_recovery.HumanDecisionRequired) as follow:
+            _run_pre_final(
+                checkpoint=first_emitted[-1],
+                emitted=resumed_emitted,
+            )
+
+    assert calls == [1]
+    assert follow.value.pending_decision["decision_id"] != pending[
+        "decision_id"
+    ]
+    saved_review = resumed_emitted[-1]["mined_types"][
+        "_granularity_review"
+    ]
+    assert saved_review["last_attempt"]["status"] == "failed"
+    assert saved_review["pending_followup"]["prior_decision_id"] == pending[
+        "decision_id"
+    ]
+
+    # Re-entering the saved state with only the old answer must pause before a
+    # second proposal/critic pair.
+    with gate.human_resolution_context([resolution]):
+        with pytest.raises(semantic_recovery.HumanDecisionRequired):
+            _run_pre_final(
+                checkpoint=resumed_emitted[-1],
+                emitted=[],
+            )
+    assert calls == [1]
+
+
+def test_request_started_type_checkpoint_consumes_ready_authorization():
+    review = gate.build_review(
+        raw_type_count=12,
+        consolidated_type_count=12,
+        inventory_count=12,
+        sufficiency_added_concepts=0,
+        sufficiency_audit_complete=False,
+    )
+    mined = _types()
+    with pytest.raises(semantic_recovery.HumanDecisionRequired) as caught:
+        gate.resolve_or_pause(
+            review=review,
+            inventory=_inventory(),
+            mined_types=mined,
+            meta={"subject": "History", "chapter_title": "Chapter"},
+        )
+    pending = caught.value.pending_decision
+    base_mined = copy.deepcopy(mined)
+    base_mined["_granularity_review"] = copy.deepcopy(review)
+    base = g._make_concept_checkpoint(
+        g._TYPE_TAXONOMY_CHECKPOINT_STAGE,
+        records=[{
+            "topic": "Topic",
+            "parent_concept": "Topic",
+            "concept_title": "Existing Concept",
+            "concept_details": "Description: Existing content.",
+            "keywords": "existing",
+        }],
+        question_task_inventory=_inventory(),
+        mined_types=base_mined,
+        method_row_snapshot=[],
+    )
+    common = {
+        "fingerprint": "f" * 64,
+        "target_identity": {"chapter_title": "Chapter"},
+        "target_chapter_id": 1,
+    }
+    stored = build_concepts._merge_generation_checkpoint_history(
+        {}, base, **common)
+    stored[build_concepts._HUMAN_DECISIONS_KEY] = {
+        "version": 1,
+        "context": {
+            "fingerprint": common["fingerprint"],
+            "target_chapter_id": 1,
+        },
+        "pending": None,
+        "deferred_assignment_unit_ids": [],
+        "resolutions": [{
+            "decision_id": pending["decision_id"],
+            "context_hash": pending["context_hash"],
+            "choice": "consolidate_types",
+            "instruction": "Merge only reusable task patterns.",
+            "target_id": "",
+            "target_concept_id": "",
+            "resolved_at": "2026-08-01T00:00:00+00:00",
+            "status": "ready",
+            "pending_decision": copy.deepcopy(pending),
+        }],
+    }
+    started_mined = copy.deepcopy(base_mined)
+    started_mined["_granularity_review"]["last_attempt"] = {
+        "decision_id": pending["decision_id"],
+        "context_hash": pending["context_hash"],
+        "status": "request_started",
+    }
+    started_mined["_granularity_review"]["pending_followup"] = {
+        "prior_decision_id": pending["decision_id"],
+        "failure": "The dispatched pair has no saved certified result.",
+    }
+    started = g._make_concept_checkpoint(
+        g._TYPE_TAXONOMY_CHECKPOINT_STAGE,
+        records=base["records"],
+        question_task_inventory=_inventory(),
+        mined_types=started_mined,
+        method_row_snapshot=[],
+    )
+    assert g._compatible_concept_checkpoint_entry(started)
+
+    stored = build_concepts._merge_generation_checkpoint_history(
+        stored, started, **common)
+
+    resolution = stored[build_concepts._HUMAN_DECISIONS_KEY][
+        "resolutions"
+    ][0]
+    assert resolution["status"] == "consumed"
+    assert resolution["consumed_at"] == started["saved_at"]
+
+
+def test_still_fragmented_human_consolidation_pauses_before_downstream_work(
+    monkeypatch,
+):
+    mined = _types()
+    _preserve_inventory(monkeypatch)
+    monkeypatch.setattr(
+        g,
+        "_mine_types_from_inventory_via_api",
+        lambda **_kwargs: copy.deepcopy(mined),
+    )
+    monkeypatch.setattr(
+        g,
+        "_consolidate_semantic_types_via_api",
+        lambda current, **_kwargs: copy.deepcopy(current),
+    )
+    first_emitted: list[dict] = []
+    with pytest.raises(semantic_recovery.HumanDecisionRequired) as caught:
+        _run_pre_final(
+            checkpoint=_question_inventory_checkpoint(),
+            emitted=first_emitted,
+        )
+    pending = caught.value.pending_decision
+    resolution = {
+        **copy.deepcopy(pending),
+        "status": "ready",
+        "choice": "consolidate_types",
+        "instruction": "Merge any genuinely reusable patterns.",
+    }
+    still_fragmented = _types(10)
+    monkeypatch.setattr(
+        g,
+        "_human_directed_type_consolidation_via_api",
+        lambda *_args, **_kwargs: (
+            copy.deepcopy(still_fragmented),
+            "",
+            {"critic_verdict": "accept", "critic_confidence": 0.95},
+        ),
+    )
+
+    def downstream_forbidden(*_args, **_kwargs):
+        pytest.fail("fragmented accepted result must pause before downstream")
+
+    monkeypatch.setattr(
+        g, "_add_missing_type_method_concepts_via_api", downstream_forbidden)
+    emitted: list[dict] = []
+    with gate.human_resolution_context([resolution]):
+        with pytest.raises(semantic_recovery.HumanDecisionRequired) as follow:
+            _run_pre_final(
+                checkpoint=first_emitted[-1],
+                emitted=emitted,
+            )
+
+    assert follow.value.pending_decision["decision_id"] != pending[
+        "decision_id"
+    ]
+    saved = emitted[-1]["mined_types"]["_granularity_review"]
+    assert saved["type_count"] == 10
+    assert saved["last_attempt"]["status"] == "incomplete"
