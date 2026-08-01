@@ -201,6 +201,18 @@ class SemanticDecisionCandidate(BaseModel):
     topic: str = Field(default="", max_length=8_000)
     coverage: str = Field(default="", max_length=8_000)
     gap: str = Field(default="", max_length=8_000)
+    # Optional, source-bound action metadata lets the autonomous resolver and
+    # the human fallback inspect the same opaque target without inferring a
+    # BLK identity from nearby prose. Older decision families may omit it.
+    action: str = Field(default="", max_length=128)
+    source_block_ids: list[str] = Field(default_factory=list, max_length=100)
+    source_topic_id: str = Field(default="", max_length=256)
+    target_topic_id: str = Field(default="", max_length=256)
+    boundary_relation: str = Field(default="", max_length=128)
+    source_kind: str = Field(default="", max_length=128)
+    source_page: str = Field(default="", max_length=128)
+    text_sha256: str = Field(default="", max_length=64)
+    binding_hash: str = Field(default="", max_length=64)
 
 
 class SemanticDecisionEvidence(BaseModel):
@@ -229,6 +241,14 @@ class AgentSemanticReview(BaseModel):
     ]
     resolver_version: str = Field(min_length=1, max_length=128)
     issue_key: str = Field(min_length=64, max_length=64)
+    # ``capability_key`` identifies the resolver's deterministic evidence and
+    # candidate exposure contract. It permits one safe upgrade of a checkpoint
+    # produced by the earlier truncated resolver without reopening same-build
+    # retry loops.
+    capability_key: str = Field(default="", max_length=64)
+    workspace_hash: str = Field(default="", max_length=64)
+    offered_candidate_count: int = Field(default=0, ge=0, le=10_000)
+    inspected_candidate_count: int = Field(default=0, ge=0, le=10_000)
     started_at: str = Field(min_length=1, max_length=64)
     completed_at: str = Field(default="", max_length=64)
     reason: str = Field(default="", max_length=8_000)
@@ -317,6 +337,8 @@ class HumanDecisionLedger(BaseModel):
     pending: PendingSemanticDecision | None = None
     deferred_assignment_unit_ids: list[str] = Field(
         default_factory=list, max_length=5_000)
+    agent_review_history: list[AgentSemanticReview] = Field(
+        default_factory=list, max_length=100)
     resolutions: list[ResolvedSemanticDecision] = Field(
         default_factory=list, max_length=5_000)
 

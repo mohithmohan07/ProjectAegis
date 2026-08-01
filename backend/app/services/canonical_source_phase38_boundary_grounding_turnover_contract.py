@@ -136,12 +136,23 @@ def _candidate_payload_row(
     if not block_id or not text:
         return None
     source_topic_id = str(block.get("topic_id") or "")
+    provider_text = phase37._bounded_visual_evidence(text, limit=3000)
     return {
         "block_id": block_id,
         "kind": str(block.get("kind") or ""),
         "subtopic_id": str(block.get("subtopic_id") or ""),
         "figure_id": str(block.get("figure_id") or source.get("figure_id") or ""),
-        "text": phase37._bounded_visual_evidence(text, limit=3000),
+        "text": provider_text,
+        "text_sha256": phase3._sha256_text(provider_text),
+        "source_page": str(
+            block.get("page_number")
+            or block.get("pdf_page")
+            or block.get("page")
+            or source.get("page_number")
+            or source.get("pdf_page")
+            or source.get("page")
+            or ""
+        ),
         "source_order": int(block.get("order") or 0),
         "source_start": int(block.get("source_start") or 0),
         "source_topic_id": source_topic_id,
@@ -204,6 +215,7 @@ def _candidate_blocks(
         block_id = str(block.get("block_id") or "")
         if block_id not in native_by_id:
             continue
+        source = canonical_blocks.get(block_id, {})
         native_by_id[block_id].setdefault("source_order", int(block.get("order") or 0))
         native_by_id[block_id].setdefault(
             "source_start", int(block.get("source_start") or 0)
@@ -214,6 +226,22 @@ def _candidate_blocks(
         )
         native_by_id[block_id].setdefault("target_topic_id", topic_id)
         native_by_id[block_id].setdefault("boundary_relation", "native_topic")
+        native_by_id[block_id].setdefault(
+            "source_page",
+            str(
+                block.get("page_number")
+                or block.get("pdf_page")
+                or block.get("page")
+                or source.get("page_number")
+                or source.get("pdf_page")
+                or source.get("page")
+                or ""
+            ),
+        )
+        native_by_id[block_id].setdefault(
+            "text_sha256",
+            phase3._sha256_text(native_by_id[block_id].get("text") or ""),
+        )
 
     for relation, rows in (
         ("previous_topic_boundary", before),

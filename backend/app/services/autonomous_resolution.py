@@ -11,21 +11,47 @@ import hashlib
 import json
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable, Mapping
 
 from .. import config
 from . import canonical_source_phase22 as phase22
+from . import early_semantic_gate
 from . import generation
 from . import semantic_confidence_policy as confidence_policy
 
 
-RESOLVER_VERSION = "semantic-resolution-agent-1"
+RESOLVER_VERSION = "semantic-resolution-agent-2"
 _ISSUE_KEY_VERSION = 1
 _DEFAULT_MAX_DECISIONS = 6
 _DEFAULT_SOURCE_CHARS = 16_000
 _MAX_PACKET_CHARS = 48_000
+_CANDIDATE_WORKSPACE_POLICY = (
+    "complete-candidate-catalog-v2:all-opaque-identities;"
+    "content-bound-sha256;relevance-ranked-detail;"
+    "critic-mentions-are-retrieval-only;all-topology-actions-visible;"
+    "legacy-exact-canonical-source-map-v1"
+)
+_DEFAULT_CANDIDATE_DETAILS = 10
 _SPACE_RE = re.compile(r"\s+")
+_BLOCK_ID_RE = re.compile(r"\bBLK-[A-Za-z0-9_-]+\b")
+_CANDIDATE_CATALOG_FIELDS = (
+    "target_id",
+    "concept_id",
+    "action",
+    "topic",
+    "title",
+    "source_block_ids",
+    "source_topic_id",
+    "target_topic_id",
+    "boundary_relation",
+    "source_kind",
+    "source_page",
+    "text_sha256",
+    "binding_hash",
+    "binding_origin",
+    "server_binding_valid",
+)
 
 
 @dataclass(frozen=True)
@@ -38,6 +64,9 @@ class ResolutionResult:
     instruction: str = ""
     target_id: str = ""
     target_concept_id: str = ""
+    workspace_hash: str = ""
+    offered_candidate_count: int = 0
+    inspected_candidate_count: int = 0
 
     @property
     def resolved(self) -> bool:
@@ -100,6 +129,176 @@ def _normal(value: object) -> str:
     return _SPACE_RE.sub(" ", str(value or "")).strip().casefold()
 
 
+def _stable_json_value(value: object) -> Any:
+    """Return a deterministic JSON-safe representation without truncation."""
+
+    if isinstance(value, Mapping):
+        return {
+            str(key): _stable_json_value(raw)
+            for key, raw in sorted(value.items(), key=lambda pair: str(pair[0]))
+        }
+    if isinstance(value, (list, tuple)):
+        return [_stable_json_value(raw) for raw in value]
+    if isinstance(value, set):
+        return sorted(
+            (_stable_json_value(raw) for raw in value),
+            key=lambda raw: json.dumps(
+                raw, ensure_ascii=False, sort_keys=True, default=str
+            ),
+        )
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
+def _sha256_json(value: object) -> str:
+    return hashlib.sha256(json.dumps(
+        _stable_json_value(value),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
+
+
+def _candidate_action(row: Mapping[str, Any]) -> str:
+    explicit = str(row.get("action") or "").strip()
+    if explicit:
+        return explicit
+    title = _normal(row.get("title"))
+    if title.startswith("use verified evidence"):
+        return "use_verified_evidence"
+    for action, prefixes in (
+        ("refine", ("refine ",)),
+        ("split", ("split ",)),
+        ("retire", ("retire ",)),
+        ("move", ("move ",)),
+        ("keep", ("keep ",)),
+    ):
+        if title.startswith(prefixes):
+            return action
+    return "offered_candidate"
+
+
+def _candidate_block_ids(row: Mapping[str, Any]) -> tuple[list[str], str]:
+    raw_block_ids = row.get("source_block_ids") or []
+    if isinstance(raw_block_ids, str) or not isinstance(
+        raw_block_ids, (list, tuple, set)
+    ):
+        raw_block_ids = [raw_block_ids]
+    explicit = [
+        str(value)
+        for value in raw_block_ids
+        if str(value)
+    ]
+    if explicit:
+        return list(dict.fromkeys(explicit)), "server_field"
+    # Older pending-decision payloads expose the block only in the offered
+    # title.  Recording that identity is useful, but it is not evidence that
+    # the block supports the claim; the bound text and hash below decide that.
+    mentioned = _BLOCK_ID_RE.findall(str(row.get("title") or ""))
+    return list(dict.fromkeys(mentioned)), (
+        "offered_title" if mentioned else "none"
+    )
+
+
+def _candidate_binding(row: Mapping[str, Any]) -> dict[str, Any]:
+    block_ids, block_id_origin = _candidate_block_ids(row)
+    coverage = str(row.get("coverage") or "")
+    gap = str(row.get("gap") or "")
+    action = _candidate_action(row)
+    material = {
+        "offered_candidate": _stable_json_value(dict(row)),
+        "derived_binding": {
+            "action": action,
+            "source_block_ids": block_ids,
+            "block_id_origin": block_id_origin,
+        },
+    }
+    workspace_binding_sha256 = _sha256_json(material)
+    server_binding_hash = str(row.get("binding_hash") or "")
+    server_binding_valid = early_semantic_gate.candidate_binding_is_valid(row)
+    effective_binding_hash = (
+        server_binding_hash
+        if server_binding_hash
+        else workspace_binding_sha256
+    )
+    return {
+        # Opaque identities are never shortened. If a pathological set cannot
+        # fit the fixed packet budget, the resolver safely becomes unavailable.
+        "target_id": str(row.get("target_id") or ""),
+        "concept_id": str(
+            row.get("concept_id") or row.get("target_concept_id") or ""
+        ),
+        "action": action,
+        "topic": _compact_text(row.get("topic"), 240),
+        "title": _compact_text(row.get("title"), 240),
+        "source_block_ids": block_ids,
+        "block_id_origin": block_id_origin,
+        "source_topic_id": str(row.get("source_topic_id") or ""),
+        "target_topic_id": str(row.get("target_topic_id") or ""),
+        "boundary_relation": str(row.get("boundary_relation") or ""),
+        "source_kind": str(row.get("source_kind") or ""),
+        "source_page": str(row.get("source_page") or ""),
+        "text_sha256": str(row.get("text_sha256") or ""),
+        # Preserve the server seal exactly when supplied. Legacy candidates
+        # receive a resolver-local full-row seal so every selectable target
+        # still has an exact evidence reference.
+        "binding_hash": effective_binding_hash,
+        "binding_origin": (
+            "server"
+            if server_binding_hash and server_binding_valid
+            else "invalid_server"
+            if server_binding_hash
+            else "resolver_legacy"
+        ),
+        "server_binding_valid": bool(server_binding_valid),
+        "workspace_binding_sha256": workspace_binding_sha256,
+        "coverage_sha256": hashlib.sha256(
+            coverage.encode("utf-8")
+        ).hexdigest(),
+        "coverage_chars": len(coverage),
+        "gap_sha256": hashlib.sha256(gap.encode("utf-8")).hexdigest(),
+        "gap_chars": len(gap),
+    }
+
+
+def capability_key(pending: Mapping[str, Any]) -> str:
+    """Fingerprint the resolver's complete candidate-workspace capability.
+
+    This deliberately excludes the provider/model identity.  A changed key
+    means the model was materially given a different bounded workspace (for
+    example, v2's complete candidate catalog), not merely that code redeployed.
+    Candidate order is immaterial, while every full candidate binding is
+    represented by its content hash and exact opaque identities.
+    """
+
+    candidates = [
+        _candidate_binding(row)
+        for row in pending.get("candidates") or []
+        if isinstance(row, Mapping)
+    ]
+    candidates.sort(key=lambda row: (
+        row["target_id"], row["concept_id"], row["action"],
+        row["workspace_binding_sha256"],
+    ))
+    options = [
+        _stable_json_value(dict(row))
+        for row in pending.get("options") or []
+        if isinstance(row, Mapping)
+    ]
+    options.sort(key=lambda row: json.dumps(
+        row, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ))
+    material = {
+        "policy": _CANDIDATE_WORKSPACE_POLICY,
+        "packet_max_chars": _MAX_PACKET_CHARS,
+        "source_max_chars": _source_limit(),
+        "candidate_bindings": candidates,
+        "options": options,
+    }
+    return _sha256_json(material)
+
+
 def _source_limit() -> int:
     raw = os.environ.get(
         "AEGIS_AUTONOMOUS_RESOLUTION_SOURCE_CHARS",
@@ -115,6 +314,10 @@ def _source_limit() -> int:
 def _search_needles(pending: Mapping[str, Any]) -> list[str]:
     item = pending.get("item") if isinstance(pending.get("item"), Mapping) else {}
     raw: list[object] = [
+        # Critic prose is used only to retrieve and expose the exact binding.
+        # A BLK mention here never becomes a recommendation by itself.
+        pending.get("conflict"), pending.get("diagnosis"),
+        pending.get("decision_question"), pending.get("question"),
         item.get("unit_id"), item.get("type_id"), item.get("type_title"),
         item.get("topic"), *(item.get("qids") or []),
         *(item.get("questions") or []),
@@ -125,8 +328,21 @@ def _search_needles(pending: Mapping[str, Any]) -> list[str]:
                 continue
             raw.extend(row.get(field) for field in (
                 "label", "text", "target_id", "concept_id", "title",
-                "topic", "coverage", "gap",
+                "topic", "coverage", "gap", "action",
             ))
+            block_ids = row.get("source_block_ids") or []
+            raw.extend(
+                block_ids
+                if isinstance(block_ids, (list, tuple, set))
+                else [block_ids]
+            )
+            if key == "candidates":
+                # Legacy decisions may carry the opaque BLK identity only in
+                # the candidate title. It is safe to use that exact ID for
+                # retrieval, but never as proof that the block supports the
+                # claim; validation below still requires an exact text match.
+                derived_block_ids, _origin = _candidate_block_ids(row)
+                raw.extend(derived_block_ids)
     result: list[str] = []
     seen: set[str] = set()
     for value in raw:
@@ -255,57 +471,113 @@ def _compact_string_list(
     ]
 
 
+def _candidate_relevance_order(
+    pending: Mapping[str, Any],
+    candidates: list[Mapping[str, Any]],
+) -> list[int]:
+    """Rank detail retrieval without turning critic mentions into support."""
+
+    item = pending.get("item") if isinstance(pending.get("item"), Mapping) else {}
+    context = " ".join(str(value or "") for value in (
+        pending.get("conflict"), pending.get("diagnosis"),
+        pending.get("decision_question"), pending.get("question"),
+        item.get("unit_id"), item.get("type_id"), item.get("type_title"),
+        item.get("topic"), *(item.get("qids") or []),
+        *(item.get("questions") or []),
+    ))
+    context_folded = context.casefold()
+    context_tokens = set(re.findall(r"[\w-]{4,}", context_folded))
+    priority_targets = {
+        str(row.get("target_id") or "")
+        for row in pending.get("options") or []
+        if isinstance(row, Mapping) and row.get("target_id")
+    }
+    priority_concepts = {
+        str(row.get("target_concept_id") or "")
+        for row in pending.get("options") or []
+        if isinstance(row, Mapping) and row.get("target_concept_id")
+    }
+    scored: list[tuple[int, int]] = []
+    for index, row in enumerate(candidates):
+        binding = _candidate_binding(row)
+        target_id = binding["target_id"]
+        concept_id = binding["concept_id"]
+        score = 0
+        if target_id and target_id in priority_targets:
+            score += 1_000_000
+        if concept_id and concept_id in priority_concepts:
+            score += 900_000
+        if target_id and target_id.casefold() in context_folded:
+            score += 500_000
+        if concept_id and concept_id.casefold() in context_folded:
+            score += 400_000
+        for block_id in binding["source_block_ids"]:
+            if block_id.casefold() in context_folded:
+                score += 300_000
+        searchable = " ".join(str(row.get(key) or "") for key in (
+            "title", "topic", "coverage", "gap", "action"
+        )).casefold()
+        score += min(10_000, 20 * len(
+            context_tokens.intersection(re.findall(r"[\w-]{4,}", searchable))
+        ))
+        scored.append((score, index))
+    return [index for _score, index in sorted(
+        scored, key=lambda pair: (-pair[0], pair[1])
+    )]
+
+
 def _model_pending_decision(pending: Mapping[str, Any]) -> dict[str, Any]:
-    """Keep decision semantics while excluding unbounded UI/audit payloads."""
+    """Expose every offered identity plus bounded relevance-ranked detail."""
 
     item = pending.get("item") if isinstance(pending.get("item"), Mapping) else {}
     options: list[dict[str, Any]] = []
-    priority_target_ids: set[str] = set()
-    priority_concept_ids: set[str] = set()
     for raw in pending.get("options") or []:
         if not isinstance(raw, Mapping):
             continue
-        target_id = _compact_text(raw.get("target_id"), 512)
-        target_concept_id = _compact_text(
-            raw.get("target_concept_id"), 256
-        )
-        if target_id:
-            priority_target_ids.add(target_id)
-        if target_concept_id:
-            priority_concept_ids.add(target_concept_id)
         options.append({
             "choice": _compact_text(raw.get("choice"), 64),
             "label": _compact_text(raw.get("label"), 320),
             "recommended": bool(raw.get("recommended")),
-            "target_id": target_id,
-            "target_concept_id": target_concept_id,
+            "target_id": str(raw.get("target_id") or ""),
+            "target_concept_id": str(
+                raw.get("target_concept_id") or ""
+            ),
         })
-        if len(options) >= 16:
-            break
 
     raw_candidates = [
         row for row in pending.get("candidates") or []
         if isinstance(row, Mapping)
     ]
-    ordered_candidates = sorted(
-        enumerate(raw_candidates),
-        key=lambda pair: (
-            0 if (
-                str(pair[1].get("target_id") or "") in priority_target_ids
-                or str(pair[1].get("concept_id") or "")
-                in priority_concept_ids
-            ) else 1,
-            pair[0],
-        ),
-    )
-    candidates = [{
-        "target_id": _compact_text(row.get("target_id"), 512),
-        "concept_id": _compact_text(row.get("concept_id"), 256),
-        "title": _compact_text(row.get("title"), 420),
-        "topic": _compact_text(row.get("topic"), 420),
-        "coverage": _compact_text(row.get("coverage"), 650),
-        "gap": _compact_text(row.get("gap"), 650),
-    } for _index, row in ordered_candidates[:8]]
+    bindings = [_candidate_binding(row) for row in raw_candidates]
+    # The catalog is materially complete. Coverage/gap prose is kept out of
+    # every row so 100+ evidence blocks fit, while the full-content binding
+    # hash makes the relevance-ranked detail cryptographically unambiguous.
+    candidate_rows = [
+        [row[field] for field in _CANDIDATE_CATALOG_FIELDS]
+        for row in bindings
+    ]
+    detail_order = _candidate_relevance_order(pending, raw_candidates)
+    candidate_details = []
+    for rank, index in enumerate(
+        detail_order[:_DEFAULT_CANDIDATE_DETAILS], start=1
+    ):
+        raw = raw_candidates[index]
+        binding = bindings[index]
+        candidate_details.append({
+            "relevance_rank": rank,
+            "target_id": binding["target_id"],
+            "binding_hash": binding["binding_hash"],
+            "coverage_sha256": binding["coverage_sha256"],
+            "coverage_chars": binding["coverage_chars"],
+            "coverage": _compact_text(raw.get("coverage"), 1_400),
+            "gap_sha256": binding["gap_sha256"],
+            "gap_chars": binding["gap_chars"],
+            "gap": _compact_text(raw.get("gap"), 600),
+            "retrieval_note": (
+                "Ranked for inspection only; an ID mentioned by a critic is "
+                "not evidence of support. Verify this bound text and hash."
+            ),
+        })
 
     return {
         "decision_id": _compact_text(pending.get("decision_id"), 128),
@@ -330,13 +602,108 @@ def _model_pending_decision(pending: Mapping[str, Any]) -> dict[str, Any]:
             ),
             "topic": _compact_text(item.get("topic"), 800),
         },
-        "candidates": candidates,
+        "candidates": {
+            "fields": list(_CANDIDATE_CATALOG_FIELDS),
+            "rows": candidate_rows,
+            "count": len(candidate_rows),
+            "bindings_sha256": _sha256_json(sorted(
+                (
+                    row["target_id"], row["concept_id"],
+                    row["workspace_binding_sha256"],
+                )
+                for row in bindings
+            )),
+            "complete": True,
+            "detail_order_is_retrieval_not_recommendation": True,
+        },
+        "candidate_details": candidate_details,
         "deferred_assignment_unit_ids": _compact_string_list(
             pending.get("deferred_assignment_unit_ids"),
             maximum=30,
             chars=128,
         ),
         "options": options,
+    }
+
+
+def _model_candidate_rows(pending: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Decode either the compact v2 catalog or legacy object rows."""
+
+    candidates = pending.get("candidates")
+    if isinstance(candidates, Mapping):
+        fields = [str(value) for value in candidates.get("fields") or []]
+        out: list[dict[str, Any]] = []
+        for raw in candidates.get("rows") or []:
+            if not isinstance(raw, list) or len(raw) != len(fields):
+                continue
+            out.append(dict(zip(fields, raw)))
+        return out
+    return [
+        dict(row)
+        for row in candidates or []
+        if isinstance(row, Mapping)
+    ]
+
+
+def _legacy_exact_source_matches(
+    pending: Mapping[str, Any],
+    mmd_windows: object,
+) -> dict[str, Any]:
+    """Bind every legacy evidence candidate to exact transmitted MMD text.
+
+    The compact catalog remains complete even when only a relevance-ranked
+    subset has expanded prose.  These zero-based catalog indexes let the model
+    and validator identify any legacy candidate whose full saved coverage is
+    literally present in a canonical window that survives packet compaction.
+    """
+
+    windows = mmd_windows if isinstance(mmd_windows, list) else []
+    canonical_rows = [
+        row
+        for row in windows
+        if isinstance(row, Mapping)
+        and row.get("issue_match") is True
+        and row.get("evidence_id")
+    ]
+    matches: list[list[Any]] = []
+    for index, raw in enumerate(pending.get("candidates") or []):
+        if not isinstance(raw, Mapping):
+            continue
+        binding = _candidate_binding(raw)
+        if not (
+            binding["binding_origin"] == "resolver_legacy"
+            and binding["action"] == "use_verified_evidence"
+        ):
+            continue
+        coverage = _normal(raw.get("coverage"))
+        refs = list(dict.fromkeys(
+            str(row.get("evidence_id") or "")
+            for row in canonical_rows
+            if coverage and coverage in _normal(row.get("text"))
+        ))
+        if refs:
+            matches.append([index, refs])
+    return {
+        "fields": ["catalog_index_zero_based", "canonical_evidence_refs"],
+        "rows": matches,
+        "meaning": (
+            "Each row proves that the legacy candidate's complete saved "
+            "coverage occurs verbatim after whitespace normalization in the "
+            "listed canonical MMD window transmitted in this packet."
+        ),
+    }
+
+
+def _rows_scan_summary(
+    rows: object,
+    relevant: list[dict[str, Any]],
+) -> dict[str, Any]:
+    all_rows = [row for row in rows or [] if isinstance(row, Mapping)]
+    return {
+        "scanned_count": len(all_rows),
+        "matched_count": len(relevant),
+        "full_sha256": _sha256_json(all_rows),
+        "matched_sha256": _sha256_json(relevant),
     }
 
 
@@ -405,6 +772,15 @@ def _relevant_checkpoint_context(
     return {
         "stage": str(stage.get("stage") or ""),
         "saved_at": str(stage.get("saved_at") or ""),
+        "scan_summary": {
+            "records": _rows_scan_summary(
+                stage.get("records"), relevant_records
+            ),
+            "question_inventory": _rows_scan_summary(
+                inventory_items, relevant_inventory
+            ),
+            "mined_types": _rows_scan_summary(types, relevant_types),
+        },
         "records": _bounded_rows(relevant_records, maximum=4, chars=1_100),
         "question_inventory": _bounded_rows(
             relevant_inventory, maximum=5, chars=900
@@ -440,11 +816,13 @@ def build_packet(
     )
     packet = {
         "resolver_version": RESOLVER_VERSION,
+        "capability_key": capability_key(pending),
         "issue_key": issue_key(pending),
         "source_identity": {
             "mmd_sha256": hashlib.sha256(
                 str(source_text or "").encode("utf-8")
             ).hexdigest(),
+            "mmd_chars": len(str(source_text or "")),
             "checkpoint_fingerprint": str(
                 (checkpoint or {}).get("fingerprint") or ""
             ),
@@ -469,31 +847,101 @@ def build_packet(
             "preserve_source_wording_qids_figures_topics_and_types": True,
             "never_replace_source_automatically": True,
             "never_invent_custom_instruction": True,
+            "critic_id_mentions_are_retrieval_priority_not_support": True,
+            "verify_candidate_bound_text_and_hash_before_selection": True,
+            "selected_candidate_must_cite_its_binding_hash": True,
+            "legacy_candidate_must_have_exact_canonical_source_match": True,
             "abstain_on_uncertainty": True,
         },
     }
-    encoded = json.dumps(packet, ensure_ascii=False, default=str)
-    if len(encoded) > _MAX_PACKET_CHARS:
+
+    def refresh_legacy_exact_source_matches() -> None:
+        exact_matches = _legacy_exact_source_matches(
+            pending,
+            packet["mmd_windows"],
+        )
+        packet["pending_decision"][
+            "legacy_exact_source_matches"
+        ] = exact_matches
+        refs_by_index = {
+            int(row[0]): [str(ref) for ref in row[1] if str(ref)]
+            for row in exact_matches["rows"]
+            if isinstance(row, list)
+            and len(row) == 2
+            and isinstance(row[0], int)
+            and isinstance(row[1], list)
+        }
+        candidate_index_by_target = {
+            str(row.get("target_id") or ""): index
+            for index, row in enumerate(pending.get("candidates") or [])
+            if isinstance(row, Mapping) and row.get("target_id")
+        }
+        legacy_candidate_indexes = {
+            index
+            for index, row in enumerate(pending.get("candidates") or [])
+            if isinstance(row, Mapping)
+            and _candidate_binding(row)["binding_origin"]
+            == "resolver_legacy"
+            and _candidate_binding(row)["action"]
+            == "use_verified_evidence"
+        }
+        for detail in packet["pending_decision"].get(
+            "candidate_details"
+        ) or []:
+            if not isinstance(detail, dict):
+                continue
+            index = candidate_index_by_target.get(
+                str(detail.get("target_id") or "")
+            )
+            if index not in legacy_candidate_indexes:
+                detail.pop("legacy_exact_source_refs", None)
+                detail.pop("legacy_exact_source_match", None)
+                continue
+            refs = refs_by_index.get(index, []) if index is not None else []
+            detail["legacy_exact_source_refs"] = refs
+            detail["legacy_exact_source_match"] = bool(refs)
+
+    refresh_legacy_exact_source_matches()
+
+    def packet_chars() -> int:
+        return len(json.dumps(packet, ensure_ascii=False, default=str))
+
+    def bound_windows(total: int, per_window: int) -> None:
+        remaining = total
+        bounded = []
+        for row in packet["mmd_windows"]:
+            text = _compact_text(row.get("text"), min(per_window, remaining))
+            if not text:
+                break
+            bounded.append({**row, "text": text})
+            remaining -= len(text)
+            if remaining <= 0:
+                break
+        packet["mmd_windows"] = bounded
+        # Recompute against only the text that will actually reach the model;
+        # pre-compaction matches must never survive a truncated source window.
+        refresh_legacy_exact_source_matches()
+
+    if packet_chars() > _MAX_PACKET_CHARS:
         packet["checkpoint_context"]["records"] = []
         packet["checkpoint_context"]["question_inventory"] = []
         packet["checkpoint_context"]["mined_types"] = []
-    if len(json.dumps(packet, ensure_ascii=False, default=str)) > _MAX_PACKET_CHARS:
+    if packet_chars() > _MAX_PACKET_CHARS:
+        packet["pending_decision"]["candidate_details"] = [
+            {
+                **row,
+                "coverage": _compact_text(row.get("coverage"), 700),
+                "gap": _compact_text(row.get("gap"), 300),
+                "retrieval_note": "Retrieval rank is not a recommendation.",
+            }
+            for row in packet["pending_decision"]["candidate_details"][:8]
+        ]
         packet["source_evidence"] = [
             {**row, "text": _compact_text(row.get("text"), 500)}
             for row in packet["source_evidence"][:3]
         ]
-        remaining = 7_000
-        bounded_windows = []
-        for row in packet["mmd_windows"]:
-            text = _compact_text(row.get("text"), min(2_500, remaining))
-            if not text:
-                break
-            bounded_windows.append({**row, "text": text})
-            remaining -= len(text)
-            if remaining <= 0:
-                break
-        packet["mmd_windows"] = bounded_windows
-    if len(json.dumps(packet, ensure_ascii=False, default=str)) > _MAX_PACKET_CHARS:
+        bound_windows(7_000, 2_500)
+    if packet_chars() > _MAX_PACKET_CHARS:
         compact_pending = packet["pending_decision"]
         compact_pending["conflict"] = _compact_text(
             compact_pending.get("conflict"), 500
@@ -508,36 +956,79 @@ def build_packet(
             compact_pending["item"]["questions"][:3]
         )
         compact_pending["deferred_assignment_unit_ids"] = []
-        compact_pending["candidates"] = [
+        compact_pending["candidate_details"] = [
             {
                 **row,
-                "title": _compact_text(row.get("title"), 200),
-                "topic": _compact_text(row.get("topic"), 200),
-                "coverage": _compact_text(row.get("coverage"), 240),
-                "gap": _compact_text(row.get("gap"), 240),
+                "coverage": _compact_text(row.get("coverage"), 500),
+                "gap": _compact_text(row.get("gap"), 200),
+                "retrieval_note": "Retrieval rank is not support.",
             }
-            for row in compact_pending["candidates"][:6]
+            for row in compact_pending["candidate_details"][:5]
         ]
-    if len(json.dumps(packet, ensure_ascii=False, default=str)) > _MAX_PACKET_CHARS:
-        # The fixed schema fields and all offered actions stay intact. Optional
-        # prose is reduced before any matched source window is discarded.
-        packet["source_evidence"] = packet["source_evidence"][:1]
-        packet["pending_decision"]["candidates"] = [
+        bound_windows(4_000, 2_000)
+    if packet_chars() > _MAX_PACKET_CHARS:
+        packet["source_evidence"] = [
+            {**row, "text": _compact_text(row.get("text"), 300)}
+            for row in packet["source_evidence"][:1]
+        ]
+        packet["pending_decision"]["candidate_details"] = [
             {
-                "target_id": row.get("target_id", ""),
-                "concept_id": row.get("concept_id", ""),
-                "title": _compact_text(row.get("title"), 160),
-                "topic": _compact_text(row.get("topic"), 160),
-                "coverage": "",
-                "gap": "",
+                **row,
+                "coverage": _compact_text(row.get("coverage"), 300),
+                "gap": _compact_text(row.get("gap"), 120),
+                "retrieval_note": "Retrieval only.",
             }
-            for row in packet["pending_decision"]["candidates"][:4]
+            for row in packet["pending_decision"]["candidate_details"][:3]
         ]
-        packet["mmd_windows"] = [
-            {**row, "text": _compact_text(row.get("text"), 2_000)}
-            for row in packet["mmd_windows"][:1]
+        bound_windows(2_000, 2_000)
+    if packet_chars() > _MAX_PACKET_CHARS:
+        compact_pending = packet["pending_decision"]
+        compact_pending["conflict"] = _compact_text(
+            compact_pending.get("conflict"), 220
+        )
+        compact_pending["diagnosis"] = _compact_text(
+            compact_pending.get("diagnosis"), 220
+        )
+        compact_pending["decision_question"] = _compact_text(
+            compact_pending.get("decision_question"), 220
+        )
+        compact_pending["item"]["questions"] = [
+            _compact_text(value, 240)
+            for value in compact_pending["item"]["questions"][:1]
         ]
-    if len(json.dumps(packet, ensure_ascii=False, default=str)) > _MAX_PACKET_CHARS:
+        compact_pending["candidate_details"] = [
+            {
+                **row,
+                "coverage": _compact_text(row.get("coverage"), 240),
+                "gap": "",
+                "retrieval_note": "Retrieval only.",
+            }
+            for row in compact_pending["candidate_details"][:2]
+        ]
+        bound_windows(1_200, 1_200)
+    if packet_chars() > _MAX_PACKET_CHARS:
+        # Catalog identities/bindings, action options, and one matched source
+        # window are non-negotiable. Remove only optional prose/details.
+        packet["pending_decision"]["candidate_details"] = [
+            {
+                "relevance_rank": row.get("relevance_rank", 1),
+                "target_id": row.get("target_id", ""),
+                "binding_hash": row.get("binding_hash", ""),
+                "coverage_sha256": row.get("coverage_sha256", ""),
+                "coverage_chars": row.get("coverage_chars", 0),
+                "coverage": _compact_text(row.get("coverage"), 240),
+                "gap_chars": row.get("gap_chars", 0),
+                "gap": _compact_text(row.get("gap"), 80),
+                "retrieval_note": "Retrieval only; verify catalog binding.",
+            }
+            for row in packet["pending_decision"]["candidate_details"][:1]
+        ]
+        packet["source_evidence"] = []
+        packet["checkpoint_context"]["records"] = []
+        packet["checkpoint_context"]["question_inventory"] = []
+        packet["checkpoint_context"]["mined_types"] = []
+        bound_windows(600, 600)
+    if packet_chars() > _MAX_PACKET_CHARS:
         raise ValueError("autonomous semantic resolution packet exceeds safety cap")
 
     evidence_refs = {
@@ -550,6 +1041,15 @@ def build_packet(
         for row in packet["mmd_windows"]
         if row.get("evidence_id") and row.get("issue_match") is True
     )
+    # Each exact server (or legacy resolver) binding hash is itself a sealed
+    # evidence reference. A
+    # candidate-based action must cite this hash as well as canonical MMD for
+    # source-critical phases.
+    evidence_refs.update(
+        str(row.get("binding_hash") or "")
+        for row in _model_candidate_rows(packet["pending_decision"])
+        if row.get("binding_hash") and row.get("server_binding_valid") is not False
+    )
     return packet, evidence_refs
 
 
@@ -557,6 +1057,7 @@ def _response_schema(
     pending: Mapping[str, Any],
     evidence_refs: set[str],
 ) -> dict[str, Any]:
+    candidate_rows = _model_candidate_rows(pending)
     choices = list(dict.fromkeys(
         str(row.get("choice") or "")
         for row in pending.get("options") or []
@@ -564,12 +1065,12 @@ def _response_schema(
     ))
     target_ids = list(dict.fromkeys(
         str(row.get("target_id") or "")
-        for row in [*(pending.get("candidates") or []), *(pending.get("options") or [])]
+        for row in [*candidate_rows, *(pending.get("options") or [])]
         if isinstance(row, Mapping) and row.get("target_id")
     ))
     concept_ids = list(dict.fromkeys(
         str(row.get("concept_id") or row.get("target_concept_id") or "")
-        for row in [*(pending.get("candidates") or []), *(pending.get("options") or [])]
+        for row in [*candidate_rows, *(pending.get("options") or [])]
         if isinstance(row, Mapping)
         and (row.get("concept_id") or row.get("target_concept_id"))
     ))
@@ -623,6 +1124,15 @@ def _provider_call(
             "You are Aegis's bounded semantic resolution agent. Use only the "
             "evidence and opaque IDs supplied. Do not repair content, invent a "
             "target, weaken an integrity rule, or choose source replacement. "
+            "A block ID mentioned by a critic is only a retrieval hint, never "
+            "proof or a recommendation. Before selecting any candidate, verify "
+            "its catalog row, bound candidate text, text_sha256 and binding_hash, "
+            "then cite that exact binding_hash in evidence_refs; source-critical "
+            "choices must also cite matched canonical MMD evidence. A legacy "
+            "candidate is selectable only when its zero-based catalog index "
+            "appears in legacy_exact_source_matches, and the response cites one "
+            "of that row's canonical evidence refs. The candidate catalog is "
+            "complete even when detailed prose is relevance-bounded. "
             "Select apply only when exactly one offered action is clearly "
             "supported; otherwise ask_human and state the unresolved ambiguity."
         ),
@@ -654,6 +1164,7 @@ def _validate_response(
     *,
     pending: Mapping[str, Any],
     evidence_refs: set[str],
+    packet: Mapping[str, Any] | None = None,
 ) -> ResolutionResult:
     reason = _compact_text(response.get("reason"), 8_000).strip()
     try:
@@ -746,6 +1257,34 @@ def _validate_response(
         for row in pending.get("candidates") or []
         if isinstance(row, Mapping) and row.get("concept_id")
     }
+    candidate_binding_by_target = {
+        str(row.get("target_id") or ""): _candidate_binding(row)[
+            "binding_hash"
+        ]
+        for row in pending.get("candidates") or []
+        if isinstance(row, Mapping) and row.get("target_id")
+    }
+    candidate_binding_by_concept = {
+        str(row.get("concept_id") or row.get("target_concept_id") or ""):
+        _candidate_binding(row)["binding_hash"]
+        for row in pending.get("candidates") or []
+        if isinstance(row, Mapping)
+        and (row.get("concept_id") or row.get("target_concept_id"))
+    }
+    candidate_valid_by_target = {
+        str(row.get("target_id") or ""): _candidate_binding(row)[
+            "server_binding_valid"
+        ]
+        for row in pending.get("candidates") or []
+        if isinstance(row, Mapping) and row.get("target_id")
+    }
+    candidate_valid_by_concept = {
+        str(row.get("concept_id") or row.get("target_concept_id") or ""):
+        _candidate_binding(row)["server_binding_valid"]
+        for row in pending.get("candidates") or []
+        if isinstance(row, Mapping)
+        and (row.get("concept_id") or row.get("target_concept_id"))
+    }
     if choice == "accept_recommended":
         expected = str(option.get("target_id") or "")
         if target_id and target_id != expected:
@@ -765,6 +1304,96 @@ def _validate_response(
                 "escalated",
                 "The selected concept is not a supplied candidate.",
             )
+    selected_binding = (
+        candidate_binding_by_target.get(target_id)
+        if choice in {"accept_recommended", "select_candidate"}
+        else candidate_binding_by_concept.get(target_concept_id)
+        if choice in {"expand_existing", "select_existing"}
+        else None
+    )
+    selected_binding_valid = (
+        candidate_valid_by_target.get(target_id)
+        if choice in {"accept_recommended", "select_candidate"}
+        else candidate_valid_by_concept.get(target_concept_id)
+        if choice in {"expand_existing", "select_existing"}
+        else True
+    )
+    selected_candidate_index = next(
+        (
+            index
+            for index, row in enumerate(pending.get("candidates") or [])
+            if isinstance(row, Mapping)
+            and (
+                str(row.get("target_id") or "") == target_id
+                if choice in {"accept_recommended", "select_candidate"}
+                else str(
+                    row.get("concept_id")
+                    or row.get("target_concept_id")
+                    or ""
+                ) == target_concept_id
+            )
+        ),
+        None,
+    )
+    selected_candidate = (
+        (pending.get("candidates") or [])[selected_candidate_index]
+        if isinstance(selected_candidate_index, int)
+        else None
+    )
+    if selected_binding_valid is False:
+        return ResolutionResult(
+            "escalated",
+            "The selected candidate's exact server binding is invalid or stale.",
+            confidence,
+            refs,
+        )
+    if selected_binding and selected_binding not in refs:
+        return ResolutionResult(
+            "escalated",
+            "The selected candidate was not tied to its exact bound text hash.",
+            confidence,
+            refs,
+        )
+    if isinstance(selected_candidate, Mapping):
+        selected_candidate_binding = _candidate_binding(selected_candidate)
+        if (
+            selected_candidate_binding["binding_origin"]
+            == "resolver_legacy"
+            and selected_candidate_binding["action"]
+            == "use_verified_evidence"
+        ):
+            model_pending = (
+                packet.get("pending_decision")
+                if isinstance(packet, Mapping)
+                and isinstance(packet.get("pending_decision"), Mapping)
+                else {}
+            )
+            exact_match_catalog = (
+                model_pending.get("legacy_exact_source_matches")
+                if isinstance(
+                    model_pending.get("legacy_exact_source_matches"),
+                    Mapping,
+                )
+                else {}
+            )
+            exact_refs = {
+                str(ref)
+                for row in exact_match_catalog.get("rows") or []
+                if isinstance(row, list)
+                and len(row) == 2
+                and row[0] == selected_candidate_index
+                and isinstance(row[1], list)
+                for ref in row[1]
+                if str(ref)
+            }
+            if not exact_refs.intersection(refs):
+                return ResolutionResult(
+                    "escalated",
+                    "The legacy BLK candidate's exact saved text was not "
+                    "matched to and cited from canonical MMD evidence.",
+                    confidence,
+                    refs,
+                )
     if not reason:
         return ResolutionResult(
             "escalated",
@@ -878,6 +1507,11 @@ def resolve_pending(
     if sealed_patch is not None:
         return sealed_patch
 
+    offered_candidate_count = len([
+        row for row in pending.get("candidates") or []
+        if isinstance(row, Mapping)
+    ])
+    packet: dict[str, Any] | None = None
     try:
         packet, evidence_refs = build_packet(
             pending,
@@ -896,17 +1530,40 @@ def resolve_pending(
                 "The one bounded autonomous review could not complete "
                 f"({type(exc).__name__}). Your saved decision is still available."
             ),
+            workspace_hash=(
+                _sha256_json(packet) if isinstance(packet, Mapping)
+                else capability_key(pending)
+            ),
+            offered_candidate_count=offered_candidate_count,
+            inspected_candidate_count=(
+                len(packet["pending_decision"].get("candidate_details") or [])
+                if isinstance(packet, Mapping) else 0
+            ),
         )
     if not isinstance(raw, Mapping):
         return ResolutionResult(
             status="unavailable",
             reason="The autonomous review returned no structured decision.",
+            workspace_hash=_sha256_json(packet),
+            offered_candidate_count=offered_candidate_count,
+            inspected_candidate_count=len(
+                packet["pending_decision"].get("candidate_details") or []
+            ),
         )
     try:
-        return _validate_response(
+        result = _validate_response(
             raw,
             pending=pending,
             evidence_refs=evidence_refs,
+            packet=packet,
+        )
+        return replace(
+            result,
+            workspace_hash=_sha256_json(packet),
+            offered_candidate_count=offered_candidate_count,
+            inspected_candidate_count=len(
+                packet["pending_decision"].get("candidate_details") or []
+            ),
         )
     except Exception as exc:
         return ResolutionResult(
@@ -914,5 +1571,10 @@ def resolve_pending(
             reason=(
                 "The bounded autonomous review could not be validated "
                 f"({type(exc).__name__}). Your saved decision is still available."
+            ),
+            workspace_hash=_sha256_json(packet),
+            offered_candidate_count=offered_candidate_count,
+            inspected_candidate_count=len(
+                packet["pending_decision"].get("candidate_details") or []
             ),
         )

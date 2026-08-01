@@ -132,6 +132,15 @@ export interface SemanticDecisionCandidate {
   topic?: string;
   coverage?: string;
   gap?: string;
+  action?: string;
+  source_block_ids?: string[];
+  source_topic_id?: string;
+  target_topic_id?: string;
+  boundary_relation?: string;
+  source_kind?: string;
+  source_page?: string | number;
+  text_sha256?: string;
+  binding_hash?: string;
   [key: string]: unknown;
 }
 
@@ -193,6 +202,10 @@ export interface AgentSemanticReview {
   status: AgentSemanticReviewStatus;
   resolver_version: string;
   issue_key: string;
+  capability_key?: string;
+  workspace_hash?: string;
+  offered_candidate_count?: number;
+  inspected_candidate_count?: number;
   started_at: string;
   completed_at: string;
   reason: string;

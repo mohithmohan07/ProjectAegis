@@ -504,6 +504,104 @@ def test_agent_abstention_persists_pause_and_is_not_called_on_replay(
     assert generation_calls == 1
 
 
+def test_saved_v1_pause_gets_one_complete_workspace_upgrade_on_resume(
+    db,
+    first_chapter,
+    monkeypatch,
+):
+    job, chapter = _job_at_81_percent(db, first_chapter)
+    pending = _attach_pending(db, job, chapter)
+    issue_key = autonomous_resolution.issue_key(pending)
+    started_at = build_concepts._agent_review_timestamp()
+    legacy_base = {
+        "resolver_version": "semantic-resolution-agent-1",
+        "issue_key": issue_key,
+        "started_at": started_at,
+    }
+    build_concepts._persist_pending_agent_review(
+        db,
+        job,
+        decision_id=pending["decision_id"],
+        context_hash=pending["context_hash"],
+        review={
+            **legacy_base,
+            "status": "request_started",
+            "reason": "The legacy resolver inspected a truncated target set.",
+        },
+        owner_sub=auth.LOCAL_OWNER_SUB,
+    )
+    build_concepts._persist_pending_agent_review(
+        db,
+        job,
+        decision_id=pending["decision_id"],
+        context_hash=pending["context_hash"],
+        review={
+            **legacy_base,
+            "status": "escalated",
+            "completed_at": build_concepts._agent_review_timestamp(),
+            "reason": "The required target was not offered to the agent.",
+        },
+        owner_sub=auth.LOCAL_OWNER_SUB,
+    )
+    resolver_calls = 0
+
+    def abstain(*_args, **_kwargs):
+        nonlocal resolver_calls
+        resolver_calls += 1
+        return autonomous_resolution.ResolutionResult(
+            status="escalated",
+            reason="Two fully bound candidates remain equally defensible.",
+            confidence=0.93,
+            evidence_refs=("PENDING-EVIDENCE-001",),
+        )
+
+    monkeypatch.setattr(
+        build_concepts.autonomous_resolution, "enabled", lambda: True
+    )
+    monkeypatch.setattr(
+        build_concepts.autonomous_resolution, "resolve_pending", abstain
+    )
+    monkeypatch.setattr(
+        build_concepts.drive_checkpoints,
+        "schedule_checkpoint_backup",
+        lambda *_args, **_kwargs: None,
+    )
+
+    first = build_concepts._existing_human_decision_pause(
+        db,
+        job,
+        copy.deepcopy(job.generation_checkpoint),
+        agent_resolution_ids=set(),
+        owner_sub=auth.LOCAL_OWNER_SUB,
+    )
+
+    assert first["status"] == "awaiting_decision"
+    assert resolver_calls == 1
+    db.refresh(job)
+    ledger = job.generation_checkpoint["human_decisions"]
+    assert ledger["agent_review_history"][0]["resolver_version"] == (
+        "semantic-resolution-agent-1"
+    )
+    current = ledger["pending"]["agent_review"]
+    assert current["resolver_version"] == autonomous_resolution.RESOLVER_VERSION
+    assert current["capability_key"] == autonomous_resolution.capability_key(
+        ledger["pending"]
+    )
+    assert current["offered_candidate_count"] == len(
+        ledger["pending"]["candidates"]
+    )
+
+    repeated = build_concepts._existing_human_decision_pause(
+        db,
+        job,
+        copy.deepcopy(job.generation_checkpoint),
+        agent_resolution_ids=set(),
+        owner_sub=auth.LOCAL_OWNER_SUB,
+    )
+    assert repeated["status"] == "awaiting_decision"
+    assert resolver_calls == 1
+
+
 def test_request_started_agent_state_blocks_unknown_outcome_replay(
     db,
     first_chapter,

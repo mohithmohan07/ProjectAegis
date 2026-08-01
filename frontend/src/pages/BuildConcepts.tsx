@@ -748,6 +748,10 @@ function SemanticDecisionPanel({
     candidateIdentifier(candidate) === recommendedId);
   const selectableCandidates = candidates.filter((candidate) =>
     Boolean(candidateIdentifier(candidate)));
+  const selectableCandidateGroups = groupSemanticCandidates(
+    selectableCandidates,
+  );
+  const displayedCandidateGroups = groupSemanticCandidates(candidates);
   const [choice, setChoice] =
     useState<SemanticDecisionUiChoice | "">("");
   const [targetId, setTargetId] = useState("");
@@ -924,6 +928,11 @@ function SemanticDecisionPanel({
             </span>
           </div>
           <p>{agentReviewStatusExplanation(decision.agent_review.status)}</p>
+          <p className="semantic-agent-boundary">
+            <strong>Bounded search:</strong>{" "}
+            {agentReviewBoundary(decision)} Rendering this decision screen does
+            not run the resolver or make another API request.
+          </p>
           {firstNonEmptyString(decision.agent_review.reason) && (
             <p>
               <strong>Saved reason:</strong>{" "}
@@ -1087,46 +1096,73 @@ function SemanticDecisionPanel({
               : sourceTopicReview
                 ? "Source-topic recovery plan"
                 : groundingReview
-                  ? "Verified evidence and topology repairs"
+                  ? "Bound source candidates and topology repairs"
                   : sourceReview
-                    ? "Verified source candidates"
+                    ? "Bound source candidates"
                     : "Candidate concepts"}
           </h3>
-          <div className="semantic-candidate-list">
-            {candidates.map((candidate, index) => (
-              <div
-                className="semantic-candidate"
-                key={candidateIdentifier(candidate) || index}
+          {groundingReview && (
+            <p className="muted semantic-candidate-verification-note">
+              Binding proves each BLK&apos;s identity and exact text. Semantic
+              support is still checked by the mapper and independent critic
+              after a candidate is selected.
+            </p>
+          )}
+          <div className="semantic-candidate-groups">
+            {displayedCandidateGroups.map((group) => (
+              <details
+                className="semantic-candidate-group"
+                key={group.kind}
+                role="region"
+                aria-label={candidateGroupLabel(group.kind)}
               >
-                <div className="row">
-                  <strong>{candidateTitle(candidate)}</strong>
-                  {candidateIdentifier(candidate) === recommendedId && (
-                    <span className="badge green">Recommended</span>
-                  )}
-                  {candidateIdentifier(candidate) && (
-                    <span className="badge mono">
-                      {candidateIdentifier(candidate)}
-                    </span>
-                  )}
+                <summary>
+                  <strong>{candidateGroupLabel(group.kind)}</strong>
+                  <span className="badge">{group.candidates.length}</span>
+                  <span className="muted">Show exact candidates</span>
+                </summary>
+                <div className="semantic-candidate-list">
+                  {group.candidates.map((candidate, index) => (
+                    <div
+                      className="semantic-candidate"
+                      key={candidateIdentifier(candidate) || index}
+                    >
+                      <div className="row semantic-candidate-heading">
+                        <strong>{candidateDisplayTitle(candidate)}</strong>
+                        {candidateIdentifier(candidate) === recommendedId && (
+                          <span className="badge green">Recommended</span>
+                        )}
+                        {candidateActionLabel(candidate) && (
+                          <span className="badge">
+                            {candidateActionLabel(candidate)}
+                          </span>
+                        )}
+                        {candidateIdentifier(candidate) && (
+                          <span className="badge mono">
+                            {candidateIdentifier(candidate)}
+                          </span>
+                        )}
+                      </div>
+                      {candidateSummary(
+                        candidate,
+                        sourceReview
+                          && !sourceTopicReview
+                          && !topologyReview,
+                      ) && (
+                        <p className="muted">
+                          {candidateSummary(
+                            candidate,
+                            sourceReview
+                              && !sourceTopicReview
+                              && !topologyReview,
+                          )}
+                        </p>
+                      )}
+                      <CandidateSourceBinding candidate={candidate} />
+                    </div>
+                  ))}
                 </div>
-                {candidateSummary(
-                  candidate,
-                  sourceReview
-                    && !sourceTopicReview
-                    && !topologyReview
-                    && !groundingReview,
-                ) && (
-                  <p className="muted">
-                    {candidateSummary(
-                      candidate,
-                      sourceReview
-                        && !sourceTopicReview
-                        && !topologyReview
-                        && !groundingReview,
-                    )}
-                  </p>
-                )}
-              </div>
+              </details>
             ))}
           </div>
         </div>
@@ -1203,13 +1239,20 @@ function SemanticDecisionPanel({
                           }}
                         >
                           <option value="">Choose an option…</option>
-                          {selectableCandidates.map((candidate) => (
-                            <option
-                              key={candidateIdentifier(candidate)}
-                              value={candidateIdentifier(candidate)}
+                          {selectableCandidateGroups.map((group) => (
+                            <optgroup
+                              key={group.kind}
+                              label={candidateGroupLabel(group.kind)}
                             >
-                              {candidateTitle(candidate)}
-                            </option>
+                              {group.candidates.map((candidate) => (
+                                <option
+                                  key={candidateIdentifier(candidate)}
+                                  value={candidateIdentifier(candidate)}
+                                >
+                                  {candidateSelectLabel(candidate)}
+                                </option>
+                              ))}
+                            </optgroup>
                           ))}
                         </select>
                       )}
@@ -1407,23 +1450,55 @@ function agentReviewStatusLabel(status: string): string {
 
 function agentReviewStatusExplanation(status: string): string {
   if (status === "request_started") {
-    return "Aegis recorded one bounded autonomous review attempt, but no safe "
-      + "completed decision was saved. To avoid a duplicate paid request, it "
-      + "will not repeat the review while this checkpoint is paused.";
+    return "Aegis saved the start of one bounded autonomous search, but no "
+      + "safe completed decision was persisted. To avoid a duplicate paid "
+      + "request, it will not repeat the review or search while this checkpoint "
+      + "is paused.";
   }
   if (status === "unavailable") {
-    return "Aegis tried one bounded autonomous review, but the saved attempt "
-      + "did not return a safe, usable decision. It will not run another "
-      + "autonomous review while this checkpoint is paused.";
+    return "Aegis searched the saved source and candidate packet once, within "
+      + "a bounded autonomous review, but no safe usable decision was returned. "
+      + "It will not run another review while this checkpoint is paused.";
   }
   if (status === "resolved") {
-    return "Aegis completed one bounded autonomous review, but this checkpoint "
-      + "still requires your confirmation. It will not run another autonomous "
-      + "review while this checkpoint is paused.";
+    return "Aegis searched the saved source and candidate packet once and "
+      + "completed its bounded autonomous review. This checkpoint still "
+      + "requires confirmation; displaying it cannot start another review.";
   }
-  return "Aegis tried one bounded autonomous review and saved that this choice "
-    + "still needs your judgment. It will not run another autonomous review "
-    + "while this checkpoint is paused.";
+  return "Aegis tried one bounded autonomous review and searched the saved "
+    + "source and candidate packet once. Deterministic checks could not certify "
+    + "one safe action, so it will not run another autonomous review while paused.";
+}
+
+function agentReviewBoundary(decision: PendingSemanticDecision): string {
+  const review = decision.agent_review;
+  if (!review) return "The resolver was limited to one saved attempt.";
+  const offeredCandidateCount = firstFiniteNumber(
+    review.offered_candidate_count,
+  ) ?? decision.candidates.length;
+  const inspectedCandidateCount = firstFiniteNumber(
+    review.inspected_candidate_count,
+    review.searched_candidate_count,
+    review.considered_candidate_count,
+    review.candidate_count,
+  );
+  const evidenceCount = Array.isArray(review.evidence_refs)
+    ? review.evidence_refs.filter((value) => Boolean(String(value).trim())).length
+    : 0;
+  const inspectionBoundary = review.status === "request_started"
+    ? "; detail inspection outcome unknown"
+    : inspectedCandidateCount === null
+      ? ""
+      : `; ${inspectedCandidateCount} expanded with source detail`;
+  const scope = [
+    `${offeredCandidateCount} sealed candidate${offeredCandidateCount === 1 ? "" : "s"} catalogued`
+      + inspectionBoundary,
+    evidenceCount > 0
+      ? `${evidenceCount} evidence reference${evidenceCount === 1 ? "" : "s"}`
+      : "the saved source evidence",
+    "the checkpoint, Types and QIDs",
+  ].join(", ");
+  return `The resolver was limited to one saved search over ${scope}.`;
 }
 
 function optionTargetIdentifier(
@@ -1584,6 +1659,249 @@ function candidateTitle(candidate: SemanticDecisionCandidate): string {
   ) || "Existing concept";
 }
 
+type SemanticCandidateGroupKind = "evidence" | "topology" | "candidate";
+
+type SemanticCandidateGroup = {
+  kind: SemanticCandidateGroupKind;
+  candidates: SemanticDecisionCandidate[];
+};
+
+function candidateAction(candidate: SemanticDecisionCandidate): string {
+  const explicit = firstNonEmptyString(
+    candidate.action,
+    candidate.action_kind,
+    candidate.repair_action,
+  ).toLowerCase().split("-").join("_").split(" ").join("_");
+  if (explicit) return explicit;
+  const title = candidateTitle(candidate).toLowerCase();
+  if (title.includes("verified evidence") || title.startsWith("pdf page")) {
+    return "use_verified_evidence";
+  }
+  for (const action of ["refine", "split", "move", "retire", "keep"]) {
+    if (title.startsWith(action) || title.includes(` ${action} `)) return action;
+  }
+  return "";
+}
+
+function candidateGroupKind(
+  candidate: SemanticDecisionCandidate,
+): SemanticCandidateGroupKind {
+  const action = candidateAction(candidate);
+  const blocks = candidateBlockIds(candidate);
+  if (
+    blocks.length > 0
+    || action.includes("evidence")
+    || firstNonEmptyString(candidate.source_kind)
+  ) {
+    return "evidence";
+  }
+  if (
+    ["refine", "split", "move", "retire", "keep"].includes(action)
+    || firstNonEmptyString(
+      candidate.target_topic_id,
+      candidate.boundary_relation,
+    )
+  ) {
+    return "topology";
+  }
+  return "candidate";
+}
+
+function candidateGroupLabel(kind: SemanticCandidateGroupKind): string {
+  if (kind === "evidence") return "Bound source candidates";
+  if (kind === "topology") return "Topology repairs";
+  return "Other candidates";
+}
+
+function groupSemanticCandidates(
+  candidates: SemanticDecisionCandidate[],
+): SemanticCandidateGroup[] {
+  const grouped: Record<SemanticCandidateGroupKind, SemanticDecisionCandidate[]> = {
+    evidence: [],
+    topology: [],
+    candidate: [],
+  };
+  for (const candidate of candidates) {
+    grouped[candidateGroupKind(candidate)].push(candidate);
+  }
+  return (["evidence", "topology", "candidate"] as const)
+    .filter((kind) => grouped[kind].length > 0)
+    .map((kind) => ({ kind, candidates: grouped[kind] }));
+}
+
+function candidateActionLabel(candidate: SemanticDecisionCandidate): string {
+  const action = candidateAction(candidate);
+  const labels: Record<string, string> = {
+    evidence: "Evidence",
+    use_verified_evidence: "Evidence",
+    refine: "Refine",
+    split: "Split",
+    move: "Move",
+    retire: "Retire",
+    keep: "Keep",
+  };
+  return labels[action] ?? (action
+    ? action.split("_").filter(Boolean).map((part) =>
+      `${part.charAt(0).toUpperCase()}${part.slice(1)}`).join(" ")
+    : "");
+}
+
+function candidateMoveTarget(candidate: SemanticDecisionCandidate): string {
+  if (candidateAction(candidate) !== "move") return "";
+  return firstNonEmptyString(
+    candidate.target_topic_title,
+    candidate.target_topic,
+    candidate.topic,
+    candidate.target_topic_id,
+  );
+}
+
+function candidateDisplayTitle(candidate: SemanticDecisionCandidate): string {
+  const title = candidateTitle(candidate);
+  const moveTarget = candidateMoveTarget(candidate);
+  return moveTarget && !title.toLowerCase().includes(moveTarget.toLowerCase())
+    ? `${title} → ${moveTarget}`
+    : title;
+}
+
+function candidateSelectLabel(candidate: SemanticDecisionCandidate): string {
+  const title = candidateDisplayTitle(candidate);
+  if (candidateGroupKind(candidate) !== "evidence") return title;
+  const blocks = candidateBlockIds(candidate).filter((block) =>
+    !title.toLowerCase().includes(block.toLowerCase()));
+  const page = candidateSourcePage(candidate);
+  const topic = candidateSourceTopic(candidate);
+  const details = [
+    blocks.join(", "),
+    page ? `page ${page}` : "",
+    topic && !title.toLowerCase().includes(topic.toLowerCase()) ? topic : "",
+  ].filter(Boolean);
+  return details.length ? `${title} — ${details.join(" · ")}` : title;
+}
+
+function candidateBlockIds(candidate: SemanticDecisionCandidate): string[] {
+  const values = Array.isArray(candidate.source_block_ids)
+    ? candidate.source_block_ids
+    : [];
+  const fallback = firstNonEmptyString(
+    candidate.source_block_id,
+    candidate.block_id,
+  );
+  const all = [...values, ...(fallback ? [fallback] : [])]
+    .map((value) => String(value).trim())
+    .filter(Boolean);
+  return [...new Set(all)];
+}
+
+function candidateSourcePage(candidate: SemanticDecisionCandidate): string {
+  return firstScalarText(
+    candidate.source_page,
+    candidate.page,
+    candidate.page_number,
+    candidate.pdf_page,
+  );
+}
+
+function candidateSourceTopic(candidate: SemanticDecisionCandidate): string {
+  const action = candidateAction(candidate);
+  return firstNonEmptyString(
+    candidate.source_topic_title,
+    candidate.source_topic,
+    action === "move" ? "" : candidate.topic,
+    candidate.source_topic_id,
+  );
+}
+
+function candidateHasExplicitBinding(
+  candidate: SemanticDecisionCandidate,
+): boolean {
+  return candidateBlockIds(candidate).length > 0
+    || Boolean(candidateSourcePage(candidate))
+    || Boolean(firstNonEmptyString(
+      candidate.source_topic_id,
+      candidate.text_sha256,
+      candidate.binding_hash,
+    ));
+}
+
+function CandidateSourceBinding({
+  candidate,
+}: {
+  candidate: SemanticDecisionCandidate;
+}) {
+  const action = candidateAction(candidate);
+  const blocks = candidateBlockIds(candidate);
+  const page = candidateSourcePage(candidate);
+  const sourceTopic = candidateSourceTopic(candidate);
+  const sourceTopicId = firstNonEmptyString(candidate.source_topic_id);
+  const targetTopic = candidateMoveTarget(candidate);
+  const targetTopicId = firstNonEmptyString(candidate.target_topic_id);
+  const sourceKind = firstNonEmptyString(candidate.source_kind);
+  const boundary = firstNonEmptyString(candidate.boundary_relation);
+  const textHash = firstNonEmptyString(candidate.text_sha256);
+  const bindingHash = firstNonEmptyString(candidate.binding_hash);
+  const snippet = candidateGroupKind(candidate) === "evidence"
+    && candidateHasExplicitBinding(candidate)
+    ? firstNonEmptyString(candidate.coverage)
+    : "";
+  if (!(
+    blocks.length || page || sourceTopic || targetTopic || targetTopicId
+    || sourceKind || boundary || textHash || bindingHash || snippet
+  )) return null;
+  return (
+    <div className="semantic-candidate-binding">
+      <dl>
+        {blocks.length > 0 && (
+          <div><dt>Source block</dt><dd className="mono">{blocks.join(", ")}</dd></div>
+        )}
+        {page && <div><dt>PDF page</dt><dd>{page}</dd></div>}
+        {(sourceTopic || sourceTopicId) && (
+          <div>
+            <dt>Source topic</dt>
+            <dd>
+              {[sourceTopic, sourceTopicId]
+                .filter((value, index, values) => value
+                  && values.indexOf(value) === index).join(" · ")}
+            </dd>
+          </div>
+        )}
+        {action === "move" && (targetTopic || targetTopicId) && (
+          <div>
+            <dt>Move target</dt>
+            <dd>
+              {[targetTopic, targetTopicId]
+                .filter((value, index, values) => value
+                  && values.indexOf(value) === index).join(" · ")}
+            </dd>
+          </div>
+        )}
+        {sourceKind && <div><dt>Source kind</dt><dd>{sourceKind}</dd></div>}
+        {boundary && <div><dt>Boundary</dt><dd>{boundary}</dd></div>}
+      </dl>
+      {snippet && (
+        <blockquote className="semantic-candidate-snippet">
+          <strong>Exact bound source text</strong>
+          <span>{snippet}</span>
+        </blockquote>
+      )}
+      {(textHash || bindingHash) && (
+        <details className="semantic-candidate-seal">
+          <summary>
+            Exact source binding
+            {bindingHash ? ` · ${bindingHash.slice(0, 16)}…` : ""}
+          </summary>
+          {textHash && (
+            <p><strong>Text SHA-256</strong><code>{textHash}</code></p>
+          )}
+          {bindingHash && (
+            <p><strong>Binding seal</strong><code>{bindingHash}</code></p>
+          )}
+        </details>
+      )}
+    </div>
+  );
+}
+
 function candidateSummary(
   candidate: SemanticDecisionCandidate,
   sourceReview = false,
@@ -1593,7 +1911,10 @@ function candidateSummary(
     candidate.description,
     candidate.match_reason,
   );
-  const coverage = firstNonEmptyString(candidate.coverage);
+  const coverage = candidateGroupKind(candidate) === "evidence"
+      && candidateHasExplicitBinding(candidate)
+    ? ""
+    : firstNonEmptyString(candidate.coverage);
   const gap = firstNonEmptyString(candidate.gap);
   return [
     explanation,
@@ -1610,6 +1931,26 @@ function candidateSummary(
       )
       : "",
   ].filter(Boolean).join(" ");
+}
+
+function firstScalarText(...values: unknown[]): string {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  }
+  return "";
+}
+
+function firstFiniteNumber(...values: unknown[]): number | null {
+  for (const value of values) {
+    const parsed = typeof value === "number"
+      ? value
+      : typeof value === "string" && value.trim()
+        ? Number(value)
+        : Number.NaN;
+    if (Number.isFinite(parsed) && parsed >= 0) return Math.floor(parsed);
+  }
+  return null;
 }
 
 function labeledSemanticText(label: string, value: string): string {
