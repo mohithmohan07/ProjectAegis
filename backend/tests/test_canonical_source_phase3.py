@@ -59,6 +59,87 @@ def _compile_inline_source(source: str):
     return canonical, graph, report, semantic
 
 
+def _phase22_adjudicated_parent_fixture():
+    source = """# Adjudicated Heading Regression
+
+## 1 First Topic
+
+First topic body.
+
+Introductory text under the recovered second topic.
+
+### 2.1 Child of the Recovered Topic
+
+Second topic body.
+
+## 3 Third Topic
+
+Third topic body.
+"""
+    canonical = phase2.compile_phase2_source(
+        source,
+        source_filename="adjudicated-heading.mmd",
+        consumer_module="build_concepts",
+    ).canonical
+    anchor = next(
+        row
+        for row in canonical["blocks"]
+        if "Introductory text under" in str(row.get("raw_text") or "")
+    )
+    recovered = "2 Second Topic"
+    provenance = {
+        "repair_id": "REPAIR-ADJUDICATED-HEADING",
+        "page_number": 6,
+        "raw_mmd_changed": False,
+        "recovered_text": recovered,
+    }
+    phase3.phase22.apply_missing_heading(
+        canonical,
+        {"section_number": 2},
+        {
+            "recovered_text": recovered,
+            "insert_before_block_id": anchor["block_id"],
+        },
+        provenance,
+    )
+    canonical["source_adjudication"] = {
+        "version": phase3.phase22.ADJUDICATION_VERSION,
+        "status": "verified",
+        "raw_mmd_changed": False,
+        "decisions": [{
+            "issue_type": "missing_parent_section",
+            "status": "verified",
+            "provenance": copy.deepcopy(provenance),
+        }],
+        "verified_repairs": 1,
+        "remaining_issues": 0,
+    }
+    semantic_source = phase3.phase22.semantic_source(canonical, source)
+    canonical["source_adjudication"]["semantic_source_sha256"] = (
+        phase3._sha256_text(semantic_source)
+    )
+    metadata = {
+        "subject": "History",
+        "chapter_title": "Adjudicated Heading Regression",
+        "board": "CBSE",
+    }
+    graph, report = phase3.compile_semantic_graph(
+        canonical,
+        source_text=semantic_source,
+        metadata=metadata,
+    )
+    rendered_source = phase3.render_semantic_source(graph, canonical)
+    return (
+        source,
+        semantic_source,
+        rendered_source,
+        canonical,
+        metadata,
+        graph,
+        report,
+    )
+
+
 def test_nonvisible_machine_metadata_is_removed_from_every_block():
     source = """<!-- source_origin: gpt-pdf-to-acsd -->
 <!-- compiler_version: gpt-pdf-to-acsd-2 -->
@@ -401,6 +482,194 @@ def test_rne_stale_numbered_heading_section_binding_is_repaired_api_free():
         graph,
         canonical=canonical,
         semantic_source=semantic,
+    )
+
+
+def test_phase22_adjudicated_parent_is_valid_without_a_physical_heading_block():
+    (
+        _source,
+        _working_source,
+        rendered,
+        canonical,
+        _metadata,
+        graph,
+        report,
+    ) = _phase22_adjudicated_parent_fixture()
+    restored = next(
+        row for row in graph["topics"]
+        if row["title"] == "Second Topic"
+    )
+    binding = next(
+        row for row in graph["numbered_main_bindings"]
+        if row["number"] == "2"
+    )
+
+    assert restored["section_id"] == "SEC-ADJ-0002"
+    assert restored["structural_number"] == "2"
+    assert binding["block_id"] == "ADJUDICATED-SEC-ADJ-0002"
+    assert binding["heading_origin"] == "adjudicated_pdf"
+    assert binding["heading_materialized_in_blocks"] is False
+    assert not any(
+        row.get("block_id") == binding["block_id"]
+        for row in canonical["blocks"]
+    )
+    assert not any(
+        row.get("block_id") == binding["block_id"]
+        for row in graph["blocks"]
+    )
+    assert phase3._verified_adjudicated_heading_binding(
+        binding,
+        canonical=canonical,
+    )
+    at_source_start = copy.deepcopy(canonical)
+    start_section = next(
+        row for row in at_source_start["sections"]
+        if row["section_id"] == binding["resolved_section_id"]
+    )
+    start_overlay = next(
+        row for row in at_source_start["source_overlays"]
+        if row["repair_id"]
+        == start_section["adjudicated_heading"]["repair_id"]
+    )
+    start_section["source_start"] = 0
+    start_overlay["offset"] = 0
+    assert phase3._verified_adjudicated_heading_binding(
+        binding,
+        canonical=at_source_start,
+    )
+    assert graph["status"] == "ready"
+    assert report["status"] == "ready"
+    assert not phase3.validate_graph(
+        graph,
+        canonical=canonical,
+        semantic_source=rendered,
+    )
+
+
+def test_phase22_adjudicated_parent_requires_its_sealed_repair_provenance():
+    (
+        _source,
+        _working_source,
+        rendered,
+        canonical,
+        _metadata,
+        graph,
+        _report,
+    ) = _phase22_adjudicated_parent_fixture()
+    tampered = copy.deepcopy(canonical)
+    tampered["source_adjudication"]["decisions"][0]["provenance"][
+        "page_number"
+    ] = 99
+
+    errors = phase3.validate_graph(
+        graph,
+        canonical=tampered,
+        semantic_source=rendered,
+    )
+    mismatch = next(
+        row for row in errors
+        if row.get("code") == "numbered_main_topic_coverage"
+    )["mismatches"][0]
+
+    assert "invalid_adjudicated_heading_provenance" in mismatch["reasons"]
+    assert "heading_block_section_mismatch" not in mismatch["reasons"]
+
+
+def test_failed_pseudo_block_validation_migrates_without_hierarchy_calls(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    (
+        _source,
+        working_source,
+        rendered,
+        canonical,
+        metadata,
+        graph,
+        report,
+    ) = _phase22_adjudicated_parent_fixture()
+    stale = copy.deepcopy(graph)
+    stale["classification_mode"] = "api_classified_and_verified"
+    for binding in stale["numbered_main_bindings"]:
+        binding.pop("heading_origin", None)
+        binding.pop("heading_materialized_in_blocks", None)
+    second_topic = next(
+        row for row in stale["topics"] if row["title"] == "Second Topic"
+    )
+    second_binding = next(
+        row for row in graph["numbered_main_bindings"]
+        if row["number"] == "2"
+    )
+    stale_mismatch = {
+        **{
+            key: copy.deepcopy(second_binding.get(key))
+            for key in (
+                "number", "block_id", "claimed_section_id",
+                "resolved_section_id", "expected_title", "source_start",
+                "resolution_mode",
+            )
+        },
+        "actual_topic_id": second_topic["topic_id"],
+        "actual_section_id": second_topic["section_id"],
+        "actual_title": second_topic["title"],
+        "actual_structural_number": second_topic["structural_number"],
+        "reasons": [
+            "heading_block_section_mismatch",
+            "heading_block_topic_mismatch",
+        ],
+    }
+    stale["status"] = "failed"
+    stale["issues"] = [{
+        "severity": "error",
+        "code": "numbered_main_topic_coverage",
+        "mismatches": [stale_mismatch],
+        "message": "legacy pseudo-block false positive",
+    }]
+    stale["semantic_source_sha256"] = phase3._sha256_text(rendered)
+    malformed = copy.deepcopy(stale)
+    malformed["issues"][0]["mismatches"].append("not-a-mismatch-object")
+    assert phase3._migrate_adjudicated_heading_validation_false_positive(
+        malformed,
+        canonical=canonical,
+        semantic_source=rendered,
+    ) is None
+    phase3.write_artifacts(
+        tmp_path,
+        graph=stale,
+        report=phase3._updated_graph_report(stale, report),
+        semantic_source=rendered,
+    )
+
+    monkeypatch.setattr(phase3, "semantic_api_enabled", lambda: True)
+
+    def unexpected_api(_payload: dict) -> dict:
+        raise AssertionError("saved hierarchy batches must not be called again")
+
+    monkeypatch.setattr(
+        phase3, "_classify_hierarchy_via_openai", unexpected_api)
+    monkeypatch.setattr(
+        phase3, "_critic_hierarchy_via_openai", unexpected_api)
+
+    migrated = phase3.prepare_generation_graph(
+        canonical=canonical,
+        source_text=working_source,
+        metadata=metadata,
+        source_path=None,
+        artifact_dir=tmp_path,
+        verify_semantics=True,
+    )
+
+    assert migrated["status"] == "ready"
+    assert migrated["classification_mode"] == "api_classified_and_verified"
+    assert migrated[phase3._ADJUDICATED_HEADING_MIGRATION_KEY]["version"] == 1
+    assert any(
+        row.get("code") == "adjudicated_heading_validation_migrated"
+        for row in migrated["issues"]
+    )
+    assert not phase3.validate_graph(
+        migrated,
+        canonical=canonical,
+        semantic_source=rendered,
     )
 
 
