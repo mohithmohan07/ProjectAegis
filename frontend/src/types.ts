@@ -136,9 +136,28 @@ export interface SemanticDecisionCandidate {
 }
 
 export interface SemanticDecisionEvidence {
+  evidence_id?: string;
   label: string;
   text: string;
   page: string;
+  [key: string]: unknown;
+}
+
+export interface SemanticSourcePatchPreview {
+  version: string;
+  kind: "canonical_topic_binding";
+  target: "working_derived_source";
+  verified: boolean;
+  raw_source_mutated: false;
+  source_contract_hash: string;
+  semantic_context_hash: string;
+  before_sha256: string;
+  after_sha256: string;
+  patch_hash: string;
+  target_id: string;
+  before: string;
+  after: string;
+  operations: string[];
   [key: string]: unknown;
 }
 
@@ -159,6 +178,33 @@ export interface SemanticDecisionOption {
   target_id?: string;
 }
 
+export type AgentSemanticReviewStatus =
+  | "request_started"
+  | "resolved"
+  | "escalated"
+  | "unavailable";
+
+/**
+ * Durable record of the single bounded autonomous review that ran before a
+ * semantic decision was handed to the user. Its presence is informational:
+ * displaying it must never trigger or imply another model request.
+ */
+export interface AgentSemanticReview {
+  status: AgentSemanticReviewStatus;
+  resolver_version: string;
+  issue_key: string;
+  started_at: string;
+  completed_at: string;
+  reason: string;
+  confidence: number;
+  evidence_refs: string[];
+  choice?: SemanticDecisionChoice | null;
+  instruction: string;
+  target_id: string;
+  target_concept_id: string;
+  [key: string]: unknown;
+}
+
 /**
  * A persisted semantic choice that needs a human before generation may
  * continue. While this object is present, the backend is checkpointed and no
@@ -176,6 +222,8 @@ export interface PendingSemanticDecision {
   evidence: SemanticDecisionEvidence[];
   deferred_assignment_unit_ids?: string[];
   options: SemanticDecisionOption[];
+  source_patch?: SemanticSourcePatchPreview | null;
+  agent_review?: AgentSemanticReview;
   cumulative_usage?: OpenAIUsage;
   // Compatibility with early decision payloads generated before the stable
   // nested `item` contract was introduced.

@@ -1,4 +1,11 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { RunConsoleProvider } from "../RunConsole";
 import type {
@@ -283,6 +290,100 @@ function sourceReviewDecisionFixture(
     checkpoint_progress: 0.65,
     ...overrides,
   };
+}
+
+function workingSourcePatchDecisionFixture(): PendingSemanticDecision {
+  const patchHash = "f".repeat(64);
+  const patchTarget = `canonical-topic-patch-${patchHash.slice(0, 24)}`;
+  const before = [
+    "## 1 The French Revolution and the Idea of the Nation",
+    "## 3 The Age of Revolutions: 1830-1848",
+  ].join("\n");
+  const after = [
+    "## 1 The French Revolution and the Idea of the Nation",
+    "## 2 The Making of Nationalism in Europe",
+    "## 3 The Age of Revolutions: 1830-1848",
+  ].join("\n");
+
+  return sourceReviewDecisionFixture({
+    decision_id: "phase3-source-topic-patch-abc456",
+    conflict:
+      "Semantic graph omitted or changed numbered main topic 2 The Making "
+      + "of Nationalism in Europe.",
+    diagnosis:
+      "Aegis verified the canonical topic in the source contract and prepared "
+      + "a bounded repair for the derived working MMD. The uploaded raw MMD "
+      + "remains byte-for-byte unchanged.",
+    decision_question:
+      "Apply this verified working-source patch, provide different guidance, "
+      + "or upload a different source?",
+    checkpoint_progress: 0.81,
+    item: {
+      unit_id: "CANONICAL-TOPIC-0002",
+      type_id: "numbered_main_topic_coverage",
+      type_title: "Working-source topic patch",
+      qids: [],
+      questions: ["2 The Making of Nationalism in Europe"],
+      topic: "Canonical chapter topic spine",
+    },
+    candidates: [{
+      target_id: patchTarget,
+      concept_id: patchTarget,
+      title: "Repair the working MMD topic spine",
+      topic: "Canonical chapter topic spine",
+    }],
+    evidence: [
+      {
+        evidence_id: "CURRENT-WORKING-MMD-TOPIC-SPINE",
+        page: "",
+        label: "Current working MMD topic spine",
+        text: before,
+      },
+      {
+        evidence_id: "VERIFIED-PATCHED-TOPIC-SPINE",
+        page: "",
+        label: "Verified patched topic spine",
+        text: after,
+      },
+    ],
+    options: [
+      {
+        choice: "accept_recommended",
+        label: "Apply the verified working-source patch",
+        recommended: true,
+        target_id: patchTarget,
+      },
+      {
+        choice: "custom_instruction",
+        label: "Tell Aegis how to correct the working source",
+        recommended: false,
+      },
+      {
+        choice: "replace_source",
+        label: "Upload a different source instead",
+        recommended: false,
+      },
+    ],
+    source_patch: {
+      version: "phase3-canonical-topic-patch-1",
+      kind: "canonical_topic_binding",
+      target: "working_derived_source",
+      verified: true,
+      raw_source_mutated: false,
+      source_contract_hash: "a".repeat(64),
+      semantic_context_hash: "b".repeat(64),
+      before_sha256: "c".repeat(64),
+      after_sha256: "d".repeat(64),
+      patch_hash: patchHash,
+      target_id: patchTarget,
+      before,
+      after,
+      operations: [
+        "Restore numbered main topic 2 The Making of Nationalism in Europe "
+        + "at canonical section SEC-0009.",
+      ],
+    },
+  });
 }
 
 function typeGranularityDecisionFixture(): PendingSemanticDecision {
@@ -733,6 +834,90 @@ test("pauses for a semantic decision and saving it never resumes implicitly", as
   await waitFor(() => expect(streamMock).toHaveBeenCalledTimes(2));
 });
 
+test("shows the saved reason when one bounded autonomous review escalates", async () => {
+  streamMock.mockResolvedValueOnce({
+    job_id: 42,
+    status: "awaiting_decision",
+    pending_decision: semanticDecisionFixture({
+      agent_review: {
+        status: "escalated",
+        resolver_version: "aegis-autonomous-resolution-v1",
+        issue_key: "a".repeat(64),
+        started_at: "2026-08-01T10:00:00Z",
+        completed_at: "2026-08-01T10:00:04Z",
+        reason: "Two source-grounded concept hosts remain equally defensible.",
+        confidence: 0.71,
+        evidence_refs: ["MMD-WINDOW-0002", "PENDING-EVIDENCE-0001"],
+        choice: null,
+        instruction: "",
+        target_id: "",
+        target_concept_id: "",
+      },
+    }),
+    resume_required: false,
+  });
+
+  renderPage();
+  fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+  fireEvent.click(await screen.findByRole("button", {
+    name: "Select Electricity target",
+  }));
+  fireEvent.click(screen.getByRole("button", {
+    name: "Resume from 91% checkpoint",
+  }));
+
+  expect(await screen.findByText("Aegis autonomous review")).toBeDefined();
+  expect(screen.getByText("Saved status: Human judgment needed")).toBeDefined();
+  expect(screen.getByText(
+    /tried one bounded autonomous review.*will not run another autonomous review/s,
+  )).toBeDefined();
+  expect(screen.getByText("Saved reason:")).toBeDefined();
+  expect(screen.getByText(
+    "Two source-grounded concept hosts remain equally defensible.",
+  )).toBeDefined();
+  expect(screen.getByText("No API request is running while paused.")).toBeDefined();
+  expect(streamMock).toHaveBeenCalledTimes(1);
+});
+
+test("explains that a recorded autonomous attempt will not be repeated", async () => {
+  streamMock.mockResolvedValueOnce({
+    job_id: 42,
+    status: "awaiting_decision",
+    pending_decision: semanticDecisionFixture({
+      agent_review: {
+        status: "request_started",
+        resolver_version: "aegis-autonomous-resolution-v1",
+        issue_key: "b".repeat(64),
+        started_at: "2026-08-01T10:00:00Z",
+        completed_at: "",
+        reason: "The prior request has no safely persisted final directive.",
+        confidence: 0,
+        evidence_refs: [],
+        choice: null,
+        instruction: "",
+        target_id: "",
+        target_concept_id: "",
+      },
+    }),
+    resume_required: false,
+  });
+
+  renderPage();
+  fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+  fireEvent.click(await screen.findByRole("button", {
+    name: "Select Electricity target",
+  }));
+  fireEvent.click(screen.getByRole("button", {
+    name: "Resume from 91% checkpoint",
+  }));
+
+  expect(await screen.findByText("Saved status: Attempt recorded")).toBeDefined();
+  expect(screen.getByText(
+    /avoid a duplicate paid request.*will not repeat the review/s,
+  )).toBeDefined();
+  expect(streamMock).toHaveBeenCalledTimes(1);
+});
+
 test("Type granularity pause offers quality-safe consolidation or keep choices", async () => {
   streamMock.mockResolvedValueOnce({
     job_id: 42,
@@ -969,6 +1154,101 @@ test("Phase 3 source review shows GPT context and requires an explicit safe acti
   });
   expect(streamMock).toHaveBeenCalledTimes(1);
   expect(await screen.findByText("Decision saved.")).toBeDefined();
+
+  fireEvent.click(screen.getByRole("button", { name: "Resume generation" }));
+  await waitFor(() => expect(streamMock).toHaveBeenCalledTimes(2));
+});
+
+test("numbered-topic failures offer a verified working-MMD patch without mutating the raw source", async () => {
+  const pendingDecision = workingSourcePatchDecisionFixture();
+  const patchTarget = pendingDecision.source_patch!.target_id;
+  streamMock
+    .mockResolvedValueOnce({
+      job_id: 42,
+      status: "awaiting_decision",
+      pending_decision: pendingDecision,
+      resume_required: false,
+    })
+    .mockResolvedValueOnce({
+      job_id: 42,
+      concept_ids: [],
+      inventory_items: 0,
+    });
+
+  renderPage();
+  fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+  fireEvent.click(await screen.findByRole("button", {
+    name: "Select Electricity target",
+  }));
+  fireEvent.click(screen.getByRole("button", {
+    name: "Resume from 91% checkpoint",
+  }));
+
+  expect(await screen.findByText(
+    "Working-source integrity diagnosis",
+  )).toBeDefined();
+  expect(screen.getByRole("heading", {
+    name: "Affected numbered main topic",
+  })).toBeDefined();
+
+  const patchReview = screen.getByRole("region", {
+    name: "Verified working-source patch",
+  });
+  expect(within(patchReview).getByText(
+    "Verified derived-source patch",
+  )).toBeDefined();
+  expect(within(patchReview).getByText("Raw MMD unchanged")).toBeDefined();
+  expect(within(patchReview).getByText(
+    /uploaded raw MMD remains byte-for-byte unchanged/i,
+  )).toBeDefined();
+  expect(within(patchReview).getByText(
+    "Before · current derived working MMD",
+  )).toBeDefined();
+  expect(within(patchReview).getByText(
+    "After · verified derived working MMD",
+  )).toBeDefined();
+  expect(patchReview.textContent).toContain(
+    "## 2 The Making of Nationalism in Europe",
+  );
+  expect(within(patchReview).getByText(
+    /Restore numbered main topic 2 The Making of Nationalism in Europe/,
+  )).toBeDefined();
+  expect(screen.queryByText("Verified source candidates")).toBeNull();
+  expect(screen.getAllByRole("radio").every((radio) =>
+    !(radio as HTMLInputElement).checked)).toBe(true);
+
+  expect(screen.getByRole("radio", {
+    name: /Apply the verified working-source patch/,
+  })).toBeDefined();
+  expect(screen.getByRole("radio", {
+    name: /Tell Aegis how to correct the working source/,
+  })).toBeDefined();
+  expect(screen.getByRole("radio", {
+    name: /Upload a different source instead/,
+  })).toBeDefined();
+  expect(screen.getByText(
+    /exact verified topic-spine repair shown above/,
+  )).toBeDefined();
+
+  fireEvent.click(screen.getByRole("radio", {
+    name: /Apply the verified working-source patch/,
+  }));
+  fireEvent.click(screen.getByRole("button", { name: "Save decision" }));
+
+  await waitFor(() => {
+    expect(apiMock.submitConceptDecision).toHaveBeenCalledWith(
+      42,
+      "phase3-source-topic-patch-abc456",
+      {
+        choice: "accept_recommended",
+        target_id: patchTarget,
+      },
+    );
+  });
+  expect(streamMock).toHaveBeenCalledTimes(1);
+  expect(await screen.findByText(
+    /applied only to the derived working MMD when you explicitly resume/i,
+  )).toBeDefined();
 
   fireEvent.click(screen.getByRole("button", { name: "Resume generation" }));
   await waitFor(() => expect(streamMock).toHaveBeenCalledTimes(2));

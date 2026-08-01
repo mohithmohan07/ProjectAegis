@@ -3997,10 +3997,14 @@ def _place_activity_inventory_into_hubs(
 
 def _populate_activity_hubs_via_api(
     records: list[dict], inventory: dict | None, *, meta: dict,
-    mined_types: dict | None = None, max_attempts: int = 3,
+    mined_types: dict | None = None, max_attempts: int = 2,
 ) -> list[dict]:
     """Certify every Activity Hub host; never guess an ambiguous destination."""
     import json as _json
+
+    # One primary verdict plus one unresolved-QID correction is the complete
+    # paid budget. Configuration/callers cannot restore a broad retry loop.
+    max_attempts = max(1, min(2, int(max_attempts or 1)))
 
     items_by_qid: dict[str, dict] = {}
     for item in _hub_inventory_items(inventory):
@@ -11524,10 +11528,14 @@ def _review_case_unit_hosts_via_api(
     concept_payload: list[dict],
     allowed_cids_by_tid: dict[str, set[str]],
     meta: dict,
-    max_attempts: int = 3,
+    max_attempts: int = 2,
 ) -> dict[str, list[dict]]:
     """Second-pass semantic host review, constrained to proven concept IDs."""
     import json as _json
+
+    # Preserve one issue-scoped correction for malformed/missing opaque IDs,
+    # but never pay for a third broad review of the same host evidence.
+    max_attempts = max(1, min(2, int(max_attempts or 1)))
 
     current_by_tid: dict[str, str] = {}
     for cid, units in per_concept.items():
@@ -11881,7 +11889,7 @@ def _consolidate_reusable_type_hosts(
 
 
 def _assign_mined_types_via_api(
-    records: list[dict], *, meta: dict, mined_types: dict, max_attempts: int = 4,
+    records: list[dict], *, meta: dict, mined_types: dict, max_attempts: int = 2,
 ) -> list[dict]:
     """Embed every mined Case within its source topic using exact API IDs.
 
@@ -11895,6 +11903,10 @@ def _assign_mined_types_via_api(
     only — no regex, token, or word matching.
     """
     import json as _json
+
+    # One complete assignment plus one correction containing only unresolved
+    # IDs retains quality feedback without the former four-call retry loop.
+    max_attempts = max(1, min(2, int(max_attempts or 1)))
 
     types = (mined_types or {}).get("types") or []
     if not types:

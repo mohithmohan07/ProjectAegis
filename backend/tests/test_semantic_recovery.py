@@ -6,6 +6,7 @@ import pytest
 
 from app import models
 from app.bulk_import import writer
+from app.db import SessionLocal
 from app.services import build_concepts
 from app.services import semantic_recovery as recovery
 
@@ -318,6 +319,76 @@ def test_runner_repairs_checkpoint_and_continues_same_operation():
     assert len(persisted) == 1
     assert current["checkpoints"][0]["records"][0]["concept_title"] == (
         "Verified Concept")
+
+
+def test_runner_persists_dispatch_boundary_before_paid_repair():
+    current = _checkpoint([_row("Incorrectly Grounded Concept")])
+    events: list[str] = []
+    calls = 0
+
+    def operation():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise ValueError(
+                "concept grounding failed independent verification at "
+                "row_index=0"
+            )
+        return "completed"
+
+    def before(_checkpoint, _context):
+        events.append("dispatch_saved")
+
+    def repair(checkpoint, _context):
+        events.append("provider_called")
+        selected = recovery.select_recovery_checkpoint(checkpoint)
+        assert selected is not None
+        return recovery.RepairResult(
+            checkpoint=selected,
+            base_stage="pre_type_assignment",
+            changed_row_indexes=(0,),
+            repair_signature="sealed-repair",
+            scope="checkpoint_rows",
+        )
+
+    result = recovery.run_with_semantic_recovery(
+        operation,
+        checkpoint_snapshot=lambda: copy.deepcopy(current),
+        repair_checkpoint=repair,
+        before_repair=before,
+        persist_repair=lambda *_args: events.append("repair_saved"),
+        policy=recovery.RecoveryPolicy(max_attempts=1),
+    )
+
+    assert result == "completed"
+    assert events == ["dispatch_saved", "provider_called", "repair_saved"]
+
+
+def test_runner_never_calls_repair_when_dispatch_seal_refuses_replay():
+    checkpoint = _checkpoint([_row("Unsupported Concept")])
+
+    with pytest.raises(
+        recovery.SemanticRecoveryExhausted,
+        match="already dispatched",
+    ):
+        recovery.run_with_semantic_recovery(
+            lambda: (_ for _ in ()).throw(ValueError(
+                "unsupported concept failed semantic validation at row_index=0"
+            )),
+            checkpoint_snapshot=lambda: checkpoint,
+            before_repair=lambda *_args: (_ for _ in ()).throw(
+                recovery.SemanticRecoveryExhausted(
+                    "semantic recovery already dispatched this issue"
+                )
+            ),
+            repair_checkpoint=lambda *_args: pytest.fail(
+                "repair provider must not run after a saved dispatch"
+            ),
+            persist_repair=lambda *_args: pytest.fail(
+                "no replayed repair may be persisted"
+            ),
+            policy=recovery.RecoveryPolicy(max_attempts=1),
+        )
 
 
 def test_runner_does_not_retry_when_repair_is_noop():
@@ -650,6 +721,40 @@ def test_gpt_repair_changes_only_implicated_row_and_preserves_source_owned_text(
     assert "_source_grounding_contract" not in changed
     assert protected_types in changed["concept_details"]
     assert repaired.checkpoint["records"][1:] == records[1:]
+
+
+def test_post_row_repair_dispatches_one_provider_attempt():
+    checkpoint = _checkpoint([_row("Unsupported Concept")])
+    context = recovery.RecoveryContext(
+        attempt=1,
+        failure=ValueError(
+            "concept grounding failed independent verification at row_index=0"
+        ),
+        assessment=recovery.FailureAssessment(
+            recovery.FailureKind.RECOVERABLE_SEMANTIC,
+            "bounded repair",
+        ),
+        failure_signature="single-attempt-post-row-repair",
+    )
+    calls: list[dict] = []
+
+    def api_call(_system: str, _user: str, **kwargs):
+        calls.append(kwargs)
+        return {"blocked": True, "reason": "Test stops after dispatch."}
+
+    repaired = recovery.repair_concept_checkpoint_via_gpt(
+        checkpoint,
+        context,
+        api_call=api_call,
+        metadata={"learning_kind": "Post"},
+        source_text="Verified source evidence.",
+    )
+
+    assert repaired is None
+    assert calls == [{
+        "purpose": "concept_validation",
+        "single_attempt": True,
+    }]
 
 
 def test_gpt_repair_rejects_figure_or_qid_mutation():
@@ -1058,10 +1163,10 @@ def test_explicit_pre_generation_scope_overrides_generic_failure_wording():
         ),
         failure_signature="generic-pre-generation-failure",
     )
-    purposes: list[str] = []
+    dispatches: list[tuple[str, bool]] = []
 
-    def api_call(_system, _user, *, purpose):
-        purposes.append(purpose)
+    def api_call(_system, _user, *, purpose, single_attempt):
+        dispatches.append((purpose, single_attempt))
         return {
             "blocked": False,
             "pre_map": candidate,
@@ -1079,7 +1184,40 @@ def test_explicit_pre_generation_scope_overrides_generic_failure_wording():
     assert repaired is not None
     assert repaired.scope == "pre_learning_map"
     assert repaired.base_stage == "pre_derivation_draft"
-    assert purposes == ["pre_learning"]
+    assert dispatches == [("pre_learning", True)]
+
+
+def test_pre_map_repair_dispatches_one_provider_attempt():
+    envelope = _checkpoint([_row("Target Chapter Concept")])
+    context = recovery.RecoveryContext(
+        attempt=1,
+        failure=RuntimeError("pre-learning prerequisite map failed validation"),
+        assessment=recovery.FailureAssessment(
+            recovery.FailureKind.RECOVERABLE_SEMANTIC,
+            "bounded repair",
+        ),
+        failure_signature="single-attempt-pre-map-repair",
+    )
+    calls: list[dict] = []
+
+    def api_call(_system: str, _user: str, **kwargs):
+        calls.append(kwargs)
+        return {"blocked": True, "reason": "Test stops after dispatch."}
+
+    repaired = recovery.repair_pre_learning_checkpoint_via_gpt(
+        envelope,
+        context,
+        api_call=api_call,
+        metadata={"learning_kind": "Pre"},
+        source_text="Verified target-chapter source.",
+        failure_scope="pre_generation",
+    )
+
+    assert repaired is None
+    assert calls == [{
+        "purpose": "pre_learning",
+        "single_attempt": True,
+    }]
 
 
 def test_under_generated_saved_pre_map_can_expand_to_contract_shape():
@@ -1377,6 +1515,9 @@ def test_post_learning_recovers_semantic_rejection_in_same_run(
                 resume_checkpoint)
         )
         assert saved is not None
+        dispatches = resume_checkpoint["semantic_recovery_dispatches"]
+        assert dispatches["attempts"][0]["status"] == "succeeded"
+        assert len(dispatches["attempts"]) == 1
         assert saved["stage"] == "pre_type_assignment"
         assert saved["records"][0]["concept_title"] == (
             "Verified Central Relationship")
@@ -1550,6 +1691,194 @@ def test_post_learning_recovers_deposit_semantics_without_manual_resume(
     assert result["job_id"] == job.id
     assert generation_calls == 2
     assert deposit_calls == 2
+
+
+def test_durable_semantic_repair_dispatch_blocks_worker_restart_replay(
+    db,
+    first_chapter,
+    monkeypatch,
+):
+    chapter = db.get(models.Chapter, first_chapter["id"])
+    job = models.UploadJob(
+        module="build_concepts",
+        upload_type="document",
+        learning_kind="post",
+        filename="durable-repair-dispatch.mmd",
+        mmd_text="## Source Topic\nVerified source wording.",
+        status="converted",
+    )
+    db.add(job)
+    db.flush()
+    stage = build_concepts.generation._make_concept_checkpoint(
+        "pre_type_assignment",
+        records=[_row("Unsupported Concept", topic="Source Topic")],
+        question_task_inventory={"items": [], "stats": {}},
+        mined_types={"types": []},
+        method_row_snapshot=[],
+    )
+    job.generation_checkpoint = build_concepts._merge_generation_checkpoint_history(
+        {},
+        stage,
+        fingerprint=build_concepts._generation_checkpoint_fingerprint(
+            job, chapter
+        ),
+        target_identity=build_concepts._generation_target_identity(chapter),
+        target_chapter_id=chapter.id,
+    )
+    db.commit()
+    db.refresh(job)
+    failure = ValueError(
+        "unsupported concept failed semantic validation at row_index=0"
+    )
+    assessment = recovery.classify_failure(failure)
+    context = recovery.RecoveryContext(
+        attempt=1,
+        failure=failure,
+        assessment=assessment,
+        failure_signature=recovery.failure_signature(
+            failure, job.generation_checkpoint
+        ),
+    )
+    monkeypatch.setattr(
+        build_concepts.drive_checkpoints,
+        "schedule_checkpoint_backup",
+        lambda *_args, **_kwargs: None,
+    )
+
+    issue_key = build_concepts._persist_semantic_recovery_dispatch_started(
+        db, job, copy.deepcopy(job.generation_checkpoint), context
+    )
+    db.refresh(job)
+    attempts = job.generation_checkpoint[
+        "semantic_recovery_dispatches"
+    ]["attempts"]
+    assert len(attempts) == 1
+    assert attempts[0]["issue_key"] == issue_key
+    assert attempts[0]["status"] == "request_started"
+    assert attempts[0]["completed_at"] == ""
+    assert recovery.failure_signature(
+        failure, job.generation_checkpoint
+    ) == context.failure_signature
+
+    with pytest.raises(
+        recovery.SemanticRecoveryExhausted,
+        match="will not be billed again",
+    ):
+        build_concepts._persist_semantic_recovery_dispatch_started(
+            db, job, copy.deepcopy(job.generation_checkpoint), context
+        )
+    db.refresh(job)
+    assert len(job.generation_checkpoint[
+        "semantic_recovery_dispatches"
+    ]["attempts"]) == 1
+
+
+def test_semantic_repair_dispatch_claim_is_atomic_across_workers(
+    db,
+    first_chapter,
+    monkeypatch,
+):
+    chapter = db.get(models.Chapter, first_chapter["id"])
+    job = models.UploadJob(
+        module="build_concepts",
+        upload_type="document",
+        learning_kind="post",
+        filename="atomic-repair-dispatch.mmd",
+        mmd_text="## Source Topic\nVerified source wording.",
+        status="converted",
+    )
+    db.add(job)
+    db.flush()
+    stage = build_concepts.generation._make_concept_checkpoint(
+        "pre_type_assignment",
+        records=[_row("Unsupported Concept", topic="Source Topic")],
+        question_task_inventory={"items": [], "stats": {}},
+        mined_types={"types": []},
+        method_row_snapshot=[],
+    )
+    job.generation_checkpoint = build_concepts._merge_generation_checkpoint_history(
+        {},
+        stage,
+        fingerprint=build_concepts._generation_checkpoint_fingerprint(
+            job, chapter
+        ),
+        target_identity=build_concepts._generation_target_identity(chapter),
+        target_chapter_id=chapter.id,
+    )
+    db.commit()
+    job_id = job.id
+    failure = ValueError(
+        "unsupported concept failed semantic validation at row_index=0"
+    )
+    monkeypatch.setattr(
+        build_concepts.drive_checkpoints,
+        "schedule_checkpoint_backup",
+        lambda *_args, **_kwargs: None,
+    )
+
+    worker_one = SessionLocal()
+    worker_two = SessionLocal()
+    try:
+        first_job = worker_one.get(models.UploadJob, job_id)
+        second_job = worker_two.get(models.UploadJob, job_id)
+        assert first_job is not None
+        assert second_job is not None
+        first_checkpoint = copy.deepcopy(first_job.generation_checkpoint)
+        second_checkpoint = copy.deepcopy(second_job.generation_checkpoint)
+        assert first_checkpoint == second_checkpoint
+        context = recovery.RecoveryContext(
+            attempt=1,
+            failure=failure,
+            assessment=recovery.classify_failure(failure),
+            failure_signature=recovery.failure_signature(
+                failure, first_checkpoint
+            ),
+        )
+
+        issue_key = build_concepts._persist_semantic_recovery_dispatch_started(
+            worker_one,
+            first_job,
+            first_checkpoint,
+            context,
+        )
+
+        # Worker two read the same pre-claim checkpoint. Reproduce the race
+        # window after that read so its optimistic UPDATE, rather than an
+        # in-memory duplicate check, must reject the stale claim.
+        real_refresh = worker_two.refresh
+        refresh_calls = 0
+
+        def refresh_after_racing_update(instance, *args, **kwargs):
+            nonlocal refresh_calls
+            refresh_calls += 1
+            if refresh_calls == 1:
+                return None
+            return real_refresh(instance, *args, **kwargs)
+
+        monkeypatch.setattr(worker_two, "refresh", refresh_after_racing_update)
+        with pytest.raises(
+            recovery.SemanticRecoveryExhausted,
+            match="another worker already claimed",
+        ):
+            build_concepts._persist_semantic_recovery_dispatch_started(
+                worker_two,
+                second_job,
+                second_checkpoint,
+                context,
+            )
+    finally:
+        worker_one.close()
+        worker_two.close()
+
+    db.expire_all()
+    persisted = db.get(models.UploadJob, job_id)
+    assert persisted is not None
+    attempts = persisted.generation_checkpoint[
+        "semantic_recovery_dispatches"
+    ]["attempts"]
+    assert len(attempts) == 1
+    assert attempts[0]["issue_key"] == issue_key
+    assert attempts[0]["status"] == "request_started"
 
 
 def test_upload_pre_learning_creates_repaired_draft_and_continues_same_run(

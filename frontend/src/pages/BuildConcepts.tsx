@@ -699,6 +699,7 @@ function SemanticDecisionPanel({
 }) {
   const item = semanticDecisionItem(decision);
   const sourceReview = isSourceReviewDecision(decision);
+  const workingSourcePatch = isWorkingSourcePatchDecision(decision);
   const sourceTopicReview = isSourceTopicReviewDecision(decision);
   const typeGranularity = isTypeGranularityDecision(decision);
   const topologyReview = isTopologyReviewDecision(decision);
@@ -768,7 +769,9 @@ function SemanticDecisionPanel({
     decision.reason,
     decision.mismatch,
   ) || (
-    sourceReview
+    workingSourcePatch
+      ? "The numbered topic spine in the derived working MMD needs a verified repair before generation can continue."
+      : sourceReview
       ? "The Phase 3 source graph needs human review before it can be used safely."
       : "Aegis found more than one defensible concept placement."
   );
@@ -778,7 +781,9 @@ function SemanticDecisionPanel({
     decision.review_question,
     sourceReview ? item.type_title : "",
   ) || (
-    sourceReview
+    workingSourcePatch
+      ? "Should Aegis apply the verified patch to the derived working MMD while preserving the uploaded raw MMD?"
+      : sourceReview
       ? "Which verified source evidence should Aegis use to resolve this discrepancy?"
       : "How should Aegis handle this semantic mismatch?"
   );
@@ -878,6 +883,12 @@ function SemanticDecisionPanel({
             + "the expensive host and topology stages. Review the counts, "
             + "choose whether to keep or consolidate the taxonomy, save that "
             + "decision, and then resume explicitly."
+          : workingSourcePatch
+            ? "Aegis found that the Phase 3 semantic graph omitted or changed a "
+              + "numbered main topic. Review the exact before-and-after repair to "
+              + "the derived working MMD, choose whether to apply it or provide "
+              + "guidance, save that decision, and then resume explicitly. Your "
+              + "uploaded raw MMD is never modified."
           : sourceTopicReview
             ? "Aegis found a numbered main topic in the source that has no "
               + "normal concept in the generated map. Review the exact source "
@@ -902,6 +913,25 @@ function SemanticDecisionPanel({
                   + "safely from the source alone. Review the exact mismatch, choose "
                   + "what should happen, save your decision, and then resume explicitly."}
       </p>
+
+      {decision.agent_review && (
+        <div className="semantic-mismatch" role="status">
+          <div className="row">
+            <strong>Aegis autonomous review</strong>
+            <div className="spacer" />
+            <span className="badge yellow">
+              Saved status: {agentReviewStatusLabel(decision.agent_review.status)}
+            </span>
+          </div>
+          <p>{agentReviewStatusExplanation(decision.agent_review.status)}</p>
+          {firstNonEmptyString(decision.agent_review.reason) && (
+            <p>
+              <strong>Saved reason:</strong>{" "}
+              {firstNonEmptyString(decision.agent_review.reason)}
+            </p>
+          )}
+        </div>
+      )}
 
       <dl className="semantic-decision-details">
         {(item.unit_id || decision.item_id) && (
@@ -946,7 +976,11 @@ function SemanticDecisionPanel({
       {questions.length > 0 && (
         <div className="semantic-decision-section">
           <h3>
-            {sourceTopicReview
+            {workingSourcePatch
+              ? questions.length === 1
+                ? "Affected numbered main topic"
+                : "Affected numbered main topics"
+              : sourceTopicReview
               ? questions.length === 1
                 ? "Missing source topic"
                 : "Missing source topics"
@@ -966,6 +1000,8 @@ function SemanticDecisionPanel({
         <strong>
           {typeGranularity
             ? "Aegis quality check"
+            : workingSourcePatch
+              ? "Working-source integrity diagnosis"
             : sourceTopicReview
               ? "Source-topic integrity diagnosis"
               : topologyReview
@@ -984,7 +1020,66 @@ function SemanticDecisionPanel({
         <p>{decisionQuestion}</p>
       </div>
 
-      {candidates.length > 0 && (
+      {workingSourcePatch && decision.source_patch && (
+        <section
+          className="semantic-source-patch"
+          aria-label="Verified working-source patch"
+        >
+          <div className="semantic-source-patch-head">
+            <div>
+              <span className={decision.source_patch.verified
+                ? "badge green"
+                : "badge yellow"}
+              >
+                {decision.source_patch.verified
+                  ? "Verified derived-source patch"
+                  : "Derived-source patch preview"}
+              </span>
+              <h3>Working MMD topic-spine repair</h3>
+            </div>
+            <span className="badge mono">Raw MMD unchanged</span>
+          </div>
+
+          <p className="semantic-source-patch-assurance" role="status">
+            Your uploaded raw MMD remains byte-for-byte unchanged. Only the
+            derived working MMD used by this generation run will be repaired
+            after you save this decision and explicitly resume.
+          </p>
+
+          <div className="semantic-source-patch-diff">
+            <div className="semantic-source-patch-pane">
+              <strong>Before · current derived working MMD</strong>
+              <pre>{decision.source_patch.before
+                || "No current topic-spine text was supplied."}</pre>
+            </div>
+            <div className="semantic-source-patch-pane">
+              <strong>After · verified derived working MMD</strong>
+              <pre>{decision.source_patch.after
+                || "No patched topic-spine text was supplied."}</pre>
+            </div>
+          </div>
+
+          {decision.source_patch.operations.length > 0 && (
+            <div className="semantic-source-patch-operations">
+              <strong>Verified patch operations</strong>
+              <ul>
+                {decision.source_patch.operations.map((operation, index) => (
+                  <li key={`${index}-${operation}`}>{operation}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          <p className="muted mono semantic-source-patch-id">
+            Patch target: {decision.source_patch.target_id}
+            {decision.source_patch.patch_hash
+              ? ` · ${decision.source_patch.patch_hash.slice(0, 12)}…`
+              : ""}
+          </p>
+        </section>
+      )}
+
+      {candidates.length > 0 && !workingSourcePatch && (
         <div className="semantic-decision-section">
           <h3>
             {topologyReview
@@ -1139,6 +1234,8 @@ function SemanticDecisionPanel({
                             ? "For example: target 12-16 reusable Types, keeping genuinely different methods separate."
                             : topologyReview || groundingReview
                               ? "Describe the exact source-supported refine, move, split, keep, retire, or evidence action to review."
+                              : workingSourcePatch
+                                ? "Describe how the derived working MMD topic spine should be corrected. The uploaded raw MMD will remain unchanged."
                               : sourceReview
                                 ? "Describe exactly how Aegis should resolve this source discrepancy."
                                 : "For example: expand the Renan concept to cover both attributes and the importance of nations."}
@@ -1185,6 +1282,12 @@ function SemanticDecisionPanel({
                 using the upload controls above, convert it again, and then
                 start or resume from the new verified source. Aegis will not
                 alter the file automatically.
+              </p>
+            ) : workingSourcePatch ? (
+              <p>
+                The verified patch is recorded at this checkpoint. It will be
+                applied only to the derived working MMD when you explicitly
+                resume. Your uploaded raw MMD remains unchanged.
               </p>
             ) : (
               <p>
@@ -1255,6 +1358,15 @@ function isSourceReviewDecision(decision: PendingSemanticDecision): boolean {
     || false;
 }
 
+function isWorkingSourcePatchDecision(
+  decision: PendingSemanticDecision,
+): boolean {
+  return firstNonEmptyString(decision.item?.type_id).toLowerCase()
+      === "numbered_main_topic_coverage"
+    && decision.source_patch?.kind === "canonical_topic_binding"
+    && decision.source_patch.target === "working_derived_source";
+}
+
 function isSourceTopicReviewDecision(
   decision: PendingSemanticDecision,
 ): boolean {
@@ -1285,6 +1397,35 @@ function isGroundingReviewDecision(
   );
 }
 
+function agentReviewStatusLabel(status: string): string {
+  if (status === "escalated") return "Human judgment needed";
+  if (status === "unavailable") return "No safe decision returned";
+  if (status === "request_started") return "Attempt recorded";
+  if (status === "resolved") return "Review completed";
+  return "Human judgment needed";
+}
+
+function agentReviewStatusExplanation(status: string): string {
+  if (status === "request_started") {
+    return "Aegis recorded one bounded autonomous review attempt, but no safe "
+      + "completed decision was saved. To avoid a duplicate paid request, it "
+      + "will not repeat the review while this checkpoint is paused.";
+  }
+  if (status === "unavailable") {
+    return "Aegis tried one bounded autonomous review, but the saved attempt "
+      + "did not return a safe, usable decision. It will not run another "
+      + "autonomous review while this checkpoint is paused.";
+  }
+  if (status === "resolved") {
+    return "Aegis completed one bounded autonomous review, but this checkpoint "
+      + "still requires your confirmation. It will not run another autonomous "
+      + "review while this checkpoint is paused.";
+  }
+  return "Aegis tried one bounded autonomous review and saved that this choice "
+    + "still needs your judgment. It will not run another autonomous review "
+    + "while this checkpoint is paused.";
+}
+
 function optionTargetIdentifier(
   option?: SemanticDecisionOption,
 ): string {
@@ -1308,6 +1449,9 @@ function decisionTargetLabel(
   choice: SemanticDecisionUiChoice,
   decision: PendingSemanticDecision,
 ): string {
+  if (isWorkingSourcePatchDecision(decision)) {
+    return "Verified working-source patch";
+  }
   if (isSourceTopicReviewDecision(decision)) {
     return "Source-topic recovery plan";
   }
@@ -1330,8 +1474,12 @@ function decisionOptionDescription(
   const topologyReview = isTopologyReviewDecision(decision);
   const groundingReview = isGroundingReviewDecision(decision);
   const sourceTopicReview = isSourceTopicReviewDecision(decision);
+  const workingSourcePatch = isWorkingSourcePatchDecision(decision);
   const sourceReview = isSourceReviewDecision(decision);
   if (option.choice === "accept_recommended") {
+    if (workingSourcePatch) {
+      return "Apply the exact verified topic-spine repair shown above; the uploaded raw MMD stays unchanged.";
+    }
     if (sourceTopicReview) {
       return "Preserve every numbered main topic and authorize one bounded recovery request.";
     }
@@ -1354,6 +1502,9 @@ function decisionOptionDescription(
     return "Choose a different verified page or source block; Aegis will not pick one for you.";
   }
   if (option.choice === "replace_source") {
+    if (workingSourcePatch) {
+      return "Reject this derived-source patch and upload a different source file; the current raw MMD is not modified.";
+    }
     return "Stop at this checkpoint so you can correct or replace the source file; Aegis will not change it automatically.";
   }
   if (option.choice === "consolidate_types") {
@@ -1374,6 +1525,9 @@ function decisionOptionDescription(
     return "Choose a different verified concept host from the candidates.";
   }
   if (option.choice === "custom_instruction") {
+    if (workingSourcePatch) {
+      return "Tell Aegis how to revise the derived working MMD topic spine; the raw upload remains unchanged.";
+    }
     if (topologyReview || groundingReview) {
       return "Tell Aegis the exact source-supported evidence or concept action to review once on Resume.";
     }
@@ -1495,9 +1649,10 @@ function formatEvidence(
     evidence.label,
     evidence.source,
   );
-  const page = evidence.page === undefined || evidence.page === null
+  const pageValue = evidence.page === undefined || evidence.page === null
     ? ""
-    : `page ${String(evidence.page)}`;
+    : String(evidence.page).trim();
+  const page = pageValue ? `page ${pageValue}` : "";
   const text = firstNonEmptyString(
     evidence.excerpt,
     evidence.text,

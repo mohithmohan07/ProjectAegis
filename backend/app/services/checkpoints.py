@@ -538,6 +538,38 @@ def _validate_human_decisions(
             pending.cumulative_usage,
             f"{pending_path}.cumulative_usage",
         )
+        review = pending.agent_review
+        if review is not None:
+            if not _SHA256_RE.fullmatch(review.issue_key):
+                raise ValueError(
+                    f"{pending_path}.agent_review.issue_key must be a "
+                    "lowercase SHA-256"
+                )
+            _timestamp(
+                review.started_at,
+                f"{pending_path}.agent_review.started_at",
+            )
+            if review.status == "request_started":
+                if review.completed_at:
+                    raise ValueError(
+                        f"{pending_path}.agent_review.completed_at must be "
+                        "empty while request_started"
+                    )
+            else:
+                if not review.completed_at:
+                    raise ValueError(
+                        f"{pending_path}.agent_review.completed_at must not "
+                        "be empty after review"
+                    )
+                _timestamp(
+                    review.completed_at,
+                    f"{pending_path}.agent_review.completed_at",
+                )
+            if review.status == "resolved" and review.choice is None:
+                raise ValueError(
+                    f"{pending_path}.agent_review.choice must not be empty "
+                    "for a resolved review"
+                )
         candidate_ids = {
             row.concept_id for row in pending.candidates if row.concept_id
         }
@@ -605,6 +637,29 @@ def _validate_human_decisions(
         ):
             raise ValueError(
                 f"{resolution_path} does not match its pending decision")
+        if resolution.resolved_by == "agent":
+            review = original.agent_review
+            if review is None or review.status != "resolved":
+                raise ValueError(
+                    f"{resolution_path} is agent-resolved without a "
+                    "validated agent review"
+                )
+            if resolution.status != "consumed":
+                raise ValueError(
+                    f"{resolution_path} agent resolution must be durably "
+                    "sealed as consumed"
+                )
+            if (
+                review.choice != resolution.choice
+                or review.instruction != resolution.instruction
+                or review.target_id != resolution.target_id
+                or review.target_concept_id
+                != resolution.target_concept_id
+            ):
+                raise ValueError(
+                    f"{resolution_path} does not match its validated agent "
+                    "review directive"
+                )
         candidate_ids = {
             row.concept_id for row in original.candidates if row.concept_id
         }
@@ -639,6 +694,61 @@ def _validate_human_decisions(
     ):
         raise ValueError(
             f"{path}.pending has already been resolved")
+
+
+def _validate_semantic_recovery_dispatches(value: Any, path: str) -> None:
+    if not isinstance(value, dict):
+        raise ValueError(f"{path} must be an object")
+    _exact_keys(value, {"version", "attempts"}, path)
+    version = _integer(value["version"], f"{path}.version", 100, minimum=1)
+    if version != 1:
+        raise ValueError(f"{path}.version is not supported")
+    attempts = _object_list(value["attempts"], f"{path}.attempts", 100)
+    issue_keys: set[str] = set()
+    fields = {
+        "issue_key", "failure_signature", "status", "started_at",
+        "completed_at", "failure_type", "stage",
+    }
+    for index, row in enumerate(attempts):
+        row_path = f"{path}.attempts[{index}]"
+        _exact_keys(row, fields, row_path)
+        issue_key = _string(
+            row["issue_key"], f"{row_path}.issue_key", 64, nonempty=True
+        )
+        signature = _string(
+            row["failure_signature"],
+            f"{row_path}.failure_signature",
+            64,
+            nonempty=True,
+        )
+        if not _SHA256_RE.fullmatch(issue_key):
+            raise ValueError(f"{row_path}.issue_key must be a lowercase SHA-256")
+        if not _SHA256_RE.fullmatch(signature):
+            raise ValueError(
+                f"{row_path}.failure_signature must be a lowercase SHA-256"
+            )
+        if issue_key in issue_keys:
+            raise ValueError(f"{path}.attempts contains a duplicate issue_key")
+        issue_keys.add(issue_key)
+        status = _string(
+            row["status"], f"{row_path}.status", 32, nonempty=True
+        )
+        if status not in {"request_started", "succeeded"}:
+            raise ValueError(f"{row_path}.status is not supported")
+        _timestamp(row["started_at"], f"{row_path}.started_at")
+        if status == "succeeded":
+            _timestamp(row["completed_at"], f"{row_path}.completed_at")
+        elif row["completed_at"]:
+            raise ValueError(
+                f"{row_path}.completed_at requires succeeded status"
+            )
+        _string(
+            row["failure_type"],
+            f"{row_path}.failure_type",
+            256,
+            nonempty=True,
+        )
+        _string(row["stage"], f"{row_path}.stage", 128)
 
 
 def _validate_checkpoint(
@@ -703,6 +813,11 @@ def _validate_checkpoint(
             value["human_decisions"],
             checkpoint=value,
             path=f"{path}.human_decisions",
+        )
+    if "semantic_recovery_dispatches" in value:
+        _validate_semantic_recovery_dispatches(
+            value["semantic_recovery_dispatches"],
+            f"{path}.semantic_recovery_dispatches",
         )
     if not generation._valid_concept_checkpoint(value):
         raise ValueError(

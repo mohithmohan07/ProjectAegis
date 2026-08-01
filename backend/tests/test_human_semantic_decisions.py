@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 import threading
 
@@ -7,6 +8,7 @@ import pytest
 from app import models
 from app.db import SessionLocal
 from app.services import (
+    autonomous_resolution,
     auth,
     build_concepts,
     canonical_source_phase33_preflight_contract as phase33,
@@ -140,6 +142,75 @@ def _early_blueprint_pending_packet() -> dict:
     }
 
 
+def _working_source_patch_pending_packet() -> dict:
+    material = {
+        "version": "phase3-canonical-topic-patch-1",
+        "kind": "canonical_topic_binding",
+        "target": "working_derived_source",
+        "raw_source_mutated": False,
+        "source_contract_hash": "1" * 64,
+        "semantic_context_hash": "2" * 64,
+        "before_sha256": "3" * 64,
+        "after_sha256": "4" * 64,
+        "operations": [
+            "Restore numbered main topic 2 The Making of Nationalism in Europe"
+        ],
+    }
+    patch_hash = hashlib.sha256(json.dumps(
+        material,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
+    target_id = f"canonical-topic-patch-{patch_hash[:24]}"
+    return {
+        "decision_id": "phase3-source-" + ("d" * 24),
+        "context_hash": "d" * 64,
+        "kind": "phase3_source_graph_review",
+        "phase": "3",
+        "conflict": "A numbered main topic is missing from the working graph.",
+        "diagnosis": "One deterministic canonical-source repair is verified.",
+        "decision_question": "Apply the verified working-source patch?",
+        "item": {
+            "unit_id": "CANONICAL-TOPIC-SPINE",
+            "type_id": "numbered_main_topic_coverage",
+            "type_title": "Working-source topic patch",
+            "qids": [],
+            "questions": ["2 The Making of Nationalism in Europe"],
+            "topic": "Canonical chapter topic spine",
+        },
+        "candidates": [{
+            "target_id": target_id,
+            "concept_id": target_id,
+            "title": "Repair the working MMD topic spine",
+            "topic": "Canonical chapter topic spine",
+            "coverage": "Restores numbered main topic 2.",
+            "gap": "The working topic spine omitted topic 2.",
+        }],
+        "evidence": [{
+            "evidence_id": "CANONICAL-PATCH-" + patch_hash[:24].upper(),
+            "page": "",
+            "label": "Verified patched topic spine",
+            "text": "## 2 The Making of Nationalism in Europe",
+        }],
+        "deferred_assignment_unit_ids": [],
+        "options": [{
+            "choice": "accept_recommended",
+            "label": "Apply the verified working-source patch",
+            "recommended": True,
+            "target_id": target_id,
+        }],
+        "source_patch": {
+            **material,
+            "verified": True,
+            "patch_hash": patch_hash,
+            "target_id": target_id,
+            "before": "## 1 The French Revolution",
+            "after": "## 1 The French Revolution\n## 2 The Making of Nationalism in Europe",
+        },
+    }
+
+
 def _job_at_81_percent(db, first_chapter, *, learning_kind="post"):
     chapter = db.get(models.Chapter, first_chapter["id"])
     job = models.UploadJob(
@@ -235,6 +306,908 @@ def test_generation_pause_preserves_81_percent_checkpoint_and_skips_reentry(
         db, job.id, chapter.id, owner_sub=auth.LOCAL_OWNER_SUB)
     assert repeated["status"] == "awaiting_decision"
     assert calls == 1
+
+
+def test_clear_pause_is_agent_resolved_and_continues_same_run(
+    db,
+    first_chapter,
+    monkeypatch,
+):
+    job, chapter = _job_at_81_percent(db, first_chapter)
+    identity = {
+        "decision_id": _pending_packet()["decision_id"],
+        "context_hash": _pending_packet()["context_hash"],
+    }
+    generation_calls = 0
+    resolver_calls = 0
+
+    def generate(*_args, **_kwargs):
+        nonlocal generation_calls
+        generation_calls += 1
+        resolution = phase33._human_resolution_for(identity)
+        if resolution is None:
+            raise semantic_recovery.HumanDecisionRequired(_pending_packet())
+        assert resolution["choice"] == "expand_existing"
+        assert resolution["target_concept_id"] == "HOST-CONCEPT-0001"
+        return [{
+            "topic": "The French Revolution",
+            "parent_concept": "Nationalism",
+            "concept_title": "Ernest Renan's Idea of a Nation",
+            "concept_details": "Description: Nations safeguard liberty.",
+            "keywords": "Renan, nation, liberty",
+        }]
+
+    def resolve(*_args, **_kwargs):
+        nonlocal resolver_calls
+        resolver_calls += 1
+        # The request-started marker must be durable before the paid call.
+        db.expire_all()
+        saved = db.get(models.UploadJob, job.id)
+        review = saved.pending_decision["agent_review"]
+        assert review["status"] == "request_started"
+        return autonomous_resolution.ResolutionResult(
+            status="resolved",
+            reason="The supplied liberty evidence uniquely expands Renan.",
+            confidence=0.97,
+            evidence_refs=("PENDING-EVIDENCE-001",),
+            choice="expand_existing",
+            target_concept_id="HOST-CONCEPT-0001",
+        )
+
+    monkeypatch.setattr(build_concepts.config, "use_live_generation", lambda: True)
+    monkeypatch.setattr(
+        build_concepts.autonomous_resolution, "enabled", lambda: True
+    )
+    monkeypatch.setattr(
+        build_concepts.autonomous_resolution, "resolve_pending", resolve
+    )
+    monkeypatch.setattr(build_concepts.generation, "concepts_from_mmd", generate)
+    monkeypatch.setattr(
+        build_concepts,
+        "_deposit_and_publish_concepts",
+        lambda *_args, **_kwargs: (
+            [902], [],
+            {"written": 1, "sources_updated": 0, "parent_column": True},
+        ),
+    )
+    monkeypatch.setattr(
+        build_concepts.drive_checkpoints,
+        "schedule_checkpoint_backup",
+        lambda *_args, **_kwargs: None,
+    )
+
+    result = build_concepts.generate_post_learning(
+        db, job.id, chapter.id, owner_sub=auth.LOCAL_OWNER_SUB
+    )
+
+    assert result["concept_ids"] == [902]
+    assert generation_calls == 2
+    assert resolver_calls == 1
+    db.refresh(job)
+    assert job.status == "generated"
+    assert job.pending_decision is None
+
+
+def test_verified_working_source_patch_bypasses_model_and_agent_cap(
+    db,
+    first_chapter,
+    monkeypatch,
+):
+    job, chapter = _job_at_81_percent(db, first_chapter)
+    packet = _working_source_patch_pending_packet()
+    operation_calls = 0
+
+    def operation():
+        nonlocal operation_calls
+        operation_calls += 1
+        if operation_calls == 1:
+            raise semantic_recovery.HumanDecisionRequired(packet)
+        return "continued-without-provider"
+
+    def unexpected_provider(*_args, **_kwargs):
+        pytest.fail("a verified deterministic source patch must not call GPT")
+
+    monkeypatch.setattr(
+        build_concepts.autonomous_resolution, "enabled", lambda: False)
+    monkeypatch.setattr(
+        build_concepts.autonomous_resolution, "maximum_decisions", lambda: 0)
+    monkeypatch.setattr(
+        build_concepts.autonomous_resolution,
+        "resolve_pending",
+        unexpected_provider,
+    )
+    monkeypatch.setattr(
+        build_concepts.drive_checkpoints,
+        "schedule_checkpoint_backup",
+        lambda *_args, **_kwargs: None,
+    )
+
+    paused, result = build_concepts._run_with_human_decision_pause(
+        operation,
+        db=db,
+        job=job,
+        fingerprint=job.generation_checkpoint["fingerprint"],
+        target_chapter_id=chapter.id,
+        owner_sub=auth.LOCAL_OWNER_SUB,
+    )
+
+    assert paused is None
+    assert result == "continued-without-provider"
+    assert operation_calls == 2
+    db.refresh(job)
+    ledger = job.generation_checkpoint["human_decisions"]
+    assert ledger["pending"] is None
+    assert len(ledger["resolutions"]) == 1
+    resolution = ledger["resolutions"][0]
+    assert resolution["resolved_by"] == "agent"
+    assert resolution["choice"] == "accept_recommended"
+    assert resolution["target_id"] == packet["source_patch"]["target_id"]
+    assert resolution["pending_decision"]["agent_review"][
+        "evidence_refs"
+    ][0].startswith("CANONICAL-PATCH-")
+
+
+def test_agent_abstention_persists_pause_and_is_not_called_on_replay(
+    db,
+    first_chapter,
+    monkeypatch,
+):
+    job, chapter = _job_at_81_percent(db, first_chapter)
+    resolver_calls = 0
+    generation_calls = 0
+
+    def require_decision(*_args, **_kwargs):
+        nonlocal generation_calls
+        generation_calls += 1
+        raise semantic_recovery.HumanDecisionRequired(_pending_packet())
+
+    def abstain(*_args, **_kwargs):
+        nonlocal resolver_calls
+        resolver_calls += 1
+        return autonomous_resolution.ResolutionResult(
+            status="escalated",
+            reason="Two source-supported hosts remain equally defensible.",
+            confidence=0.91,
+            evidence_refs=("PENDING-EVIDENCE-001",),
+        )
+
+    monkeypatch.setattr(build_concepts.config, "use_live_generation", lambda: True)
+    monkeypatch.setattr(
+        build_concepts.autonomous_resolution, "enabled", lambda: True
+    )
+    monkeypatch.setattr(
+        build_concepts.autonomous_resolution, "resolve_pending", abstain
+    )
+    monkeypatch.setattr(
+        build_concepts.generation, "concepts_from_mmd", require_decision
+    )
+    monkeypatch.setattr(
+        build_concepts.drive_checkpoints,
+        "schedule_checkpoint_backup",
+        lambda *_args, **_kwargs: None,
+    )
+
+    first = build_concepts.generate_post_learning(
+        db, job.id, chapter.id, owner_sub=auth.LOCAL_OWNER_SUB
+    )
+    assert first["status"] == "awaiting_decision"
+    assert first["pending_decision"]["agent_review"]["status"] == "escalated"
+    assert "equally defensible" in (
+        first["pending_decision"]["agent_review"]["reason"]
+    )
+
+    repeated = build_concepts.generate_post_learning(
+        db, job.id, chapter.id, owner_sub=auth.LOCAL_OWNER_SUB
+    )
+    assert repeated["status"] == "awaiting_decision"
+    assert resolver_calls == 1
+    assert generation_calls == 1
+
+
+def test_request_started_agent_state_blocks_unknown_outcome_replay(
+    db,
+    first_chapter,
+    monkeypatch,
+):
+    job, chapter = _job_at_81_percent(db, first_chapter)
+    pending = _attach_pending(db, job, chapter)
+    started_at = build_concepts._agent_review_timestamp()
+    build_concepts._persist_pending_agent_review(
+        db,
+        job,
+        decision_id=pending["decision_id"],
+        context_hash=pending["context_hash"],
+        review={
+            "status": "request_started",
+            "resolver_version": autonomous_resolution.RESOLVER_VERSION,
+            "issue_key": autonomous_resolution.issue_key(pending),
+            "started_at": started_at,
+            "reason": "Saved before dispatch.",
+        },
+        owner_sub=auth.LOCAL_OWNER_SUB,
+    )
+    monkeypatch.setattr(build_concepts.config, "use_live_generation", lambda: True)
+    monkeypatch.setattr(
+        build_concepts.autonomous_resolution,
+        "resolve_pending",
+        lambda *_args, **_kwargs: pytest.fail(
+            "an unknown prior outcome must never be dispatched again"
+        ),
+    )
+    monkeypatch.setattr(
+        build_concepts.generation,
+        "concepts_from_mmd",
+        lambda *_args, **_kwargs: pytest.fail(
+            "a request-started decision must remain paused"
+        ),
+    )
+
+    result = build_concepts.generate_post_learning(
+        db, job.id, chapter.id, owner_sub=auth.LOCAL_OWNER_SUB
+    )
+    assert result["status"] == "awaiting_decision"
+    assert result["pending_decision"]["agent_review"]["status"] == (
+        "request_started"
+    )
+    db.refresh(job)
+    assert job.status == "converted"
+    assert job.generation_checkpoint["stage"] == "pre_type_assignment"
+    assert job.checkpoint_progress == pytest.approx(0.81)
+    assert job.awaiting_decision is True
+
+    repeated = build_concepts.generate_post_learning(
+        db, job.id, chapter.id, owner_sub=auth.LOCAL_OWNER_SUB)
+    assert repeated["status"] == "awaiting_decision"
+
+
+def test_saved_agent_directive_replays_without_second_agent_call(
+    db,
+    first_chapter,
+    monkeypatch,
+):
+    job, chapter = _job_at_81_percent(db, first_chapter)
+    pending = _attach_pending(db, job, chapter)
+    now = build_concepts._agent_review_timestamp()
+    build_concepts._persist_pending_agent_review(
+        db,
+        job,
+        decision_id=pending["decision_id"],
+        context_hash=pending["context_hash"],
+        review={
+            "status": "request_started",
+            "resolver_version": autonomous_resolution.RESOLVER_VERSION,
+            "issue_key": autonomous_resolution.issue_key(pending),
+            "started_at": now,
+            "reason": "Saved before the bounded autonomous request.",
+        },
+        owner_sub=auth.LOCAL_OWNER_SUB,
+    )
+    build_concepts._persist_pending_agent_review(
+        db,
+        job,
+        decision_id=pending["decision_id"],
+        context_hash=pending["context_hash"],
+        review={
+            "status": "resolved",
+            "resolver_version": autonomous_resolution.RESOLVER_VERSION,
+            "issue_key": autonomous_resolution.issue_key(pending),
+            "started_at": now,
+            "completed_at": now,
+            "reason": "The exact liberty evidence supports one host.",
+            "confidence": 0.97,
+            "evidence_refs": ["PENDING-EVIDENCE-001"],
+            "choice": "expand_existing",
+            "target_concept_id": "HOST-CONCEPT-0001",
+        },
+        owner_sub=auth.LOCAL_OWNER_SUB,
+    )
+    identity = {
+        "decision_id": pending["decision_id"],
+        "context_hash": pending["context_hash"],
+    }
+    generation_calls = 0
+
+    def generate(*_args, **_kwargs):
+        nonlocal generation_calls
+        generation_calls += 1
+        resolution = phase33._human_resolution_for(identity)
+        assert resolution is not None
+        assert resolution["choice"] == "expand_existing"
+        return [{
+            "topic": "The French Revolution",
+            "parent_concept": "Nationalism",
+            "concept_title": "Ernest Renan's Idea of a Nation",
+            "concept_details": "Description: Nations safeguard liberty.",
+            "keywords": "Renan, liberty",
+        }]
+
+    monkeypatch.setattr(build_concepts.config, "use_live_generation", lambda: True)
+    monkeypatch.setattr(build_concepts.generation, "concepts_from_mmd", generate)
+    monkeypatch.setattr(
+        build_concepts.autonomous_resolution,
+        "resolve_pending",
+        lambda *_args, **_kwargs: pytest.fail(
+            "a saved directive must not call the resolution agent again"
+        ),
+    )
+    monkeypatch.setattr(
+        build_concepts,
+        "_deposit_and_publish_concepts",
+        lambda *_args, **_kwargs: (
+            [903], [],
+            {"written": 1, "sources_updated": 0, "parent_column": True},
+        ),
+    )
+    monkeypatch.setattr(
+        build_concepts.drive_checkpoints,
+        "schedule_checkpoint_backup",
+        lambda *_args, **_kwargs: None,
+    )
+
+    result = build_concepts.generate_post_learning(
+        db, job.id, chapter.id, owner_sub=auth.LOCAL_OWNER_SUB
+    )
+    assert result["concept_ids"] == [903]
+    assert generation_calls == 1
+
+
+def test_agent_action_followup_same_scope_escalates_without_loop(
+    db,
+    first_chapter,
+    monkeypatch,
+):
+    job, chapter = _job_at_81_percent(db, first_chapter)
+    first_packet = _pending_packet()
+    first_packet["candidates"].append({
+        "concept_id": "HOST-CONCEPT-0002",
+        "title": "A second Renan host candidate",
+        "topic": "The French Revolution and the Idea of the Nation",
+        "coverage": "Nations preserve collective inheritance.",
+        "gap": "Nations as guarantees of liberty.",
+    })
+    followup = copy.deepcopy(first_packet)
+    followup["context_hash"] = "f" * 64
+    followup["decision_id"] = "phase33-host-followup-" + "f" * 16
+    # Candidate opaque IDs can be regenerated and reordered by a later critic
+    # pass. They must not turn the same semantic unit into a billable new issue.
+    followup["candidates"] = [
+        {
+            **copy.deepcopy(first_packet["candidates"][1]),
+            "concept_id": "HOST-REGENERATED-9002",
+        },
+        {
+            **copy.deepcopy(first_packet["candidates"][0]),
+            "concept_id": "HOST-REGENERATED-9001",
+        },
+    ]
+    followup["conflict"] = (
+        "The directed expansion was reviewed but the same Renan host scope "
+        "still lacks a durable explanation."
+    )
+    identity = {
+        "decision_id": first_packet["decision_id"],
+        "context_hash": first_packet["context_hash"],
+    }
+    generation_calls = 0
+    resolver_calls = 0
+
+    def generate(*_args, **_kwargs):
+        nonlocal generation_calls
+        generation_calls += 1
+        if phase33._human_resolution_for(identity) is None:
+            raise semantic_recovery.HumanDecisionRequired(first_packet)
+        raise semantic_recovery.HumanDecisionRequired(followup)
+
+    def resolve(*_args, **_kwargs):
+        nonlocal resolver_calls
+        resolver_calls += 1
+        return autonomous_resolution.ResolutionResult(
+            status="resolved",
+            reason="The exact evidence initially supports expanding Renan.",
+            confidence=0.97,
+            evidence_refs=("PENDING-EVIDENCE-001",),
+            choice="expand_existing",
+            target_concept_id="HOST-CONCEPT-0001",
+        )
+
+    monkeypatch.setattr(build_concepts.config, "use_live_generation", lambda: True)
+    monkeypatch.setattr(
+        build_concepts.autonomous_resolution, "enabled", lambda: True
+    )
+    monkeypatch.setattr(
+        build_concepts.autonomous_resolution, "resolve_pending", resolve
+    )
+    monkeypatch.setattr(build_concepts.generation, "concepts_from_mmd", generate)
+    monkeypatch.setattr(
+        build_concepts.drive_checkpoints,
+        "schedule_checkpoint_backup",
+        lambda *_args, **_kwargs: None,
+    )
+
+    result = build_concepts.generate_post_learning(
+        db, job.id, chapter.id, owner_sub=auth.LOCAL_OWNER_SUB
+    )
+    assert result["status"] == "awaiting_decision"
+    assert result["pending_decision"]["decision_id"] == followup["decision_id"]
+    review = result["pending_decision"]["agent_review"]
+    assert review["status"] == "escalated"
+    assert "same semantic scope" in review["reason"]
+    assert generation_calls == 2
+    assert resolver_calls == 1
+
+
+def test_second_sequential_agent_dispatch_claim_is_rejected_atomically(
+    db,
+    first_chapter,
+    monkeypatch,
+):
+    job, chapter = _job_at_81_percent(db, first_chapter)
+    monkeypatch.setattr(
+        build_concepts.drive_checkpoints,
+        "schedule_checkpoint_backup",
+        lambda *_args, **_kwargs: None,
+    )
+    pending = _attach_pending(db, job, chapter)
+    issue_key = autonomous_resolution.issue_key(pending)
+    first_review = {
+        "status": "request_started",
+        "resolver_version": autonomous_resolution.RESOLVER_VERSION,
+        "issue_key": issue_key,
+        "started_at": "2026-08-01T10:00:00+00:00",
+        "reason": "The first worker durably claimed this decision.",
+    }
+    build_concepts._persist_pending_agent_review(
+        db,
+        job,
+        decision_id=pending["decision_id"],
+        context_hash=pending["context_hash"],
+        review=first_review,
+        owner_sub=auth.LOCAL_OWNER_SUB,
+    )
+    db.refresh(job)
+    checkpoint_after_first_claim = copy.deepcopy(job.generation_checkpoint)
+
+    # A competing worker can rediscover the same gate after the first worker
+    # committed its dispatch claim. Re-persisting the identical raw pause must
+    # preserve that claim rather than reverting it to an unclaimed decision.
+    replayed = build_concepts._persist_pending_human_decision(
+        db,
+        job,
+        _pending_packet(),
+        fingerprint=job.generation_checkpoint["fingerprint"],
+        target_chapter_id=chapter.id,
+        owner_sub=auth.LOCAL_OWNER_SUB,
+    )
+    assert replayed["agent_review"]["status"] == "request_started"
+    assert replayed["agent_review"]["started_at"] == first_review[
+        "started_at"
+    ]
+    db.refresh(job)
+    checkpoint_after_replayed_pause = copy.deepcopy(job.generation_checkpoint)
+
+    with pytest.raises(
+        build_concepts.HumanDecisionConflictError,
+        match="already claimed",
+    ):
+        build_concepts._persist_pending_agent_review(
+            db,
+            job,
+            decision_id=pending["decision_id"],
+            context_hash=pending["context_hash"],
+            review={
+                **first_review,
+                "started_at": "2026-08-01T10:00:01+00:00",
+                "reason": "A second worker must not overwrite the claim.",
+            },
+            owner_sub=auth.LOCAL_OWNER_SUB,
+        )
+
+    db.expire_all()
+    saved = db.get(models.UploadJob, job.id)
+    assert checkpoint_after_replayed_pause == checkpoint_after_first_claim
+    assert saved.generation_checkpoint == checkpoint_after_replayed_pause
+    review = saved.pending_decision["agent_review"]
+    assert review["started_at"] == first_review["started_at"]
+    assert review["reason"] == first_review["reason"]
+
+
+def test_consumed_agent_resolution_reappearing_after_crash_escalates_to_user(
+    db,
+    first_chapter,
+    monkeypatch,
+):
+    job, chapter = _job_at_81_percent(db, first_chapter)
+    monkeypatch.setattr(
+        build_concepts.drive_checkpoints,
+        "schedule_checkpoint_backup",
+        lambda *_args, **_kwargs: None,
+    )
+    pending = _attach_pending(db, job, chapter)
+    issue_key = autonomous_resolution.issue_key(pending)
+    started_at = "2026-08-01T10:01:00+00:00"
+    build_concepts._persist_pending_agent_review(
+        db,
+        job,
+        decision_id=pending["decision_id"],
+        context_hash=pending["context_hash"],
+        review={
+            "status": "request_started",
+            "resolver_version": autonomous_resolution.RESOLVER_VERSION,
+            "issue_key": issue_key,
+            "started_at": started_at,
+            "reason": "Saved before the autonomous request.",
+        },
+        owner_sub=auth.LOCAL_OWNER_SUB,
+    )
+    build_concepts._persist_pending_agent_review(
+        db,
+        job,
+        decision_id=pending["decision_id"],
+        context_hash=pending["context_hash"],
+        review={
+            "status": "resolved",
+            "resolver_version": autonomous_resolution.RESOLVER_VERSION,
+            "issue_key": issue_key,
+            "started_at": started_at,
+            "completed_at": "2026-08-01T10:01:01+00:00",
+            "reason": "The source uniquely supports the existing host.",
+            "confidence": 0.97,
+            "evidence_refs": ["PENDING-EVIDENCE-001"],
+            "choice": "expand_existing",
+            "target_concept_id": "HOST-CONCEPT-0001",
+        },
+        owner_sub=auth.LOCAL_OWNER_SUB,
+    )
+    build_concepts._record_human_semantic_decision_locked(
+        db,
+        job,
+        pending["decision_id"],
+        choice="expand_existing",
+        instruction="",
+        target_id="",
+        target_concept_id="HOST-CONCEPT-0001",
+        resolved_by="agent",
+        resolution_status="consumed",
+    )
+    db.refresh(job)
+    assert job.generation_checkpoint["human_decisions"]["resolutions"][0][
+        "status"
+    ] == "consumed"
+    checkpoints._validate_checkpoint(
+        copy.deepcopy(job.generation_checkpoint),
+        learning_kind="post",
+        mmd_text=job.mmd_text,
+        path="checkpoint",
+    )
+
+    unsealed = copy.deepcopy(job.generation_checkpoint)
+    unsealed_resolution = unsealed["human_decisions"]["resolutions"][0]
+    unsealed_resolution["status"] = "ready"
+    unsealed_resolution["consumed_at"] = ""
+    with pytest.raises(ValueError, match="must be durably sealed as consumed"):
+        checkpoints._validate_checkpoint(
+            unsealed,
+            learning_kind="post",
+            mmd_text=job.mmd_text,
+            path="checkpoint",
+        )
+
+    mismatched = copy.deepcopy(job.generation_checkpoint)
+    mismatched["human_decisions"]["resolutions"][0][
+        "pending_decision"
+    ]["agent_review"]["target_concept_id"] = "HOST-CONCEPT-CHANGED"
+    with pytest.raises(ValueError, match="validated agent review directive"):
+        checkpoints._validate_checkpoint(
+            mismatched,
+            learning_kind="post",
+            mmd_text=job.mmd_text,
+            path="checkpoint",
+        )
+
+    resolver_calls = 0
+    operation_calls = 0
+
+    def must_not_resolve(*_args, **_kwargs):
+        nonlocal resolver_calls
+        resolver_calls += 1
+        pytest.fail("a crash-ambiguous action must not call the agent again")
+
+    def repeat_pending():
+        nonlocal operation_calls
+        operation_calls += 1
+        raise semantic_recovery.HumanDecisionRequired(_pending_packet())
+
+    monkeypatch.setattr(
+        build_concepts.autonomous_resolution, "enabled", lambda: True
+    )
+    monkeypatch.setattr(
+        build_concepts.autonomous_resolution,
+        "resolve_pending",
+        must_not_resolve,
+    )
+
+    paused, operation_result = build_concepts._run_with_human_decision_pause(
+        repeat_pending,
+        db=db,
+        job=job,
+        fingerprint=job.generation_checkpoint["fingerprint"],
+        target_chapter_id=chapter.id,
+        owner_sub=auth.LOCAL_OWNER_SUB,
+    )
+
+    assert operation_result is None
+    assert paused["status"] == "awaiting_decision"
+    assert paused["pending_decision"]["decision_id"] == pending["decision_id"]
+    review = paused["pending_decision"]["agent_review"]
+    assert review["status"] == "escalated"
+    assert "previous worker ended" in review["reason"]
+    assert review["choice"] is None
+    assert resolver_calls == 0
+    assert operation_calls == 1
+    db.refresh(job)
+    ledger = job.generation_checkpoint["human_decisions"]
+    assert ledger["pending"]["agent_review"]["status"] == "escalated"
+    assert ledger["resolutions"] == []
+
+
+def test_distinct_agent_decisions_remain_active_across_same_run_restarts(
+    db,
+    first_chapter,
+    monkeypatch,
+):
+    job, chapter = _job_at_81_percent(db, first_chapter)
+    monkeypatch.setattr(
+        build_concepts.drive_checkpoints,
+        "schedule_checkpoint_backup",
+        lambda *_args, **_kwargs: None,
+    )
+    packet_a = _pending_packet()
+    packet_b = copy.deepcopy(packet_a)
+    packet_b["context_hash"] = "c" * 64
+    packet_b["decision_id"] = "phase33-host-b-" + ("c" * 20)
+    packet_b["conflict"] = "A second, independent Type host needs direction."
+    packet_b["item"].update({
+        "unit_id": "TYPE-0100",
+        "type_id": "TYPE-0100",
+        "type_title": "Explain a second source idea",
+        "qids": ["QINV-0100"],
+        "questions": ["Why is the second source idea important?"],
+    })
+    packet_b["candidates"][0].update({
+        "concept_id": "HOST-CONCEPT-0100",
+        "title": "Second source-grounded concept",
+        "coverage": "The second idea's verified attributes.",
+        "gap": "Its source-supported importance.",
+    })
+    packet_b["options"][0]["target_concept_id"] = "HOST-CONCEPT-0100"
+    identity_a = {
+        "decision_id": packet_a["decision_id"],
+        "context_hash": packet_a["context_hash"],
+    }
+    identity_b = {
+        "decision_id": packet_b["decision_id"],
+        "context_hash": packet_b["context_hash"],
+    }
+    operation_calls = 0
+    resolver_decision_ids: list[str] = []
+
+    def operation():
+        nonlocal operation_calls
+        operation_calls += 1
+        with build_concepts._human_decision_resolution_context(
+            copy.deepcopy(job.generation_checkpoint or {})
+        ):
+            resolution_a = phase33._human_resolution_for(identity_a)
+            if resolution_a is None:
+                raise semantic_recovery.HumanDecisionRequired(packet_a)
+            assert resolution_a["target_concept_id"] == "HOST-CONCEPT-0001"
+            resolution_b = phase33._human_resolution_for(identity_b)
+            if resolution_b is None:
+                raise semantic_recovery.HumanDecisionRequired(packet_b)
+            assert resolution_b["target_concept_id"] == "HOST-CONCEPT-0100"
+            return "operation-complete"
+
+    def resolve(pending, **_kwargs):
+        decision_id = pending["decision_id"]
+        resolver_decision_ids.append(decision_id)
+        target = (
+            "HOST-CONCEPT-0001"
+            if decision_id == packet_a["decision_id"]
+            else "HOST-CONCEPT-0100"
+        )
+        return autonomous_resolution.ResolutionResult(
+            status="resolved",
+            reason="One existing host is uniquely supported by the source.",
+            confidence=0.97,
+            evidence_refs=("PENDING-EVIDENCE-001",),
+            choice="expand_existing",
+            target_concept_id=target,
+        )
+
+    monkeypatch.setattr(
+        build_concepts.autonomous_resolution, "enabled", lambda: True
+    )
+    monkeypatch.setattr(
+        build_concepts.autonomous_resolution, "resolve_pending", resolve
+    )
+
+    paused, operation_result = build_concepts._run_with_human_decision_pause(
+        operation,
+        db=db,
+        job=job,
+        fingerprint=job.generation_checkpoint["fingerprint"],
+        target_chapter_id=chapter.id,
+        owner_sub=auth.LOCAL_OWNER_SUB,
+    )
+
+    assert paused is None
+    assert operation_result == "operation-complete"
+    assert operation_calls == 3
+    assert resolver_decision_ids == [
+        packet_a["decision_id"],
+        packet_b["decision_id"],
+    ]
+    db.refresh(job)
+    resolutions = job.generation_checkpoint["human_decisions"]["resolutions"]
+    assert [row["decision_id"] for row in resolutions] == [
+        packet_a["decision_id"],
+        packet_b["decision_id"],
+    ]
+    assert {row["status"] for row in resolutions} == {"consumed"}
+    assert {row["resolved_by"] for row in resolutions} == {"agent"}
+
+
+def test_fresh_resume_keeps_prior_agent_direction_with_later_human_answer(
+    db,
+    first_chapter,
+    monkeypatch,
+):
+    job, chapter = _job_at_81_percent(db, first_chapter)
+    monkeypatch.setattr(
+        build_concepts.drive_checkpoints,
+        "schedule_checkpoint_backup",
+        lambda *_args, **_kwargs: None,
+    )
+    packet_a = _pending_packet()
+    pending_a = _attach_pending(db, job, chapter)
+    issue_key_a = autonomous_resolution.issue_key(pending_a)
+    started_at = "2026-08-01T10:02:00+00:00"
+    build_concepts._persist_pending_agent_review(
+        db,
+        job,
+        decision_id=pending_a["decision_id"],
+        context_hash=pending_a["context_hash"],
+        review={
+            "status": "request_started",
+            "resolver_version": autonomous_resolution.RESOLVER_VERSION,
+            "issue_key": issue_key_a,
+            "started_at": started_at,
+            "reason": "Saved before resolving the first Phase 3.3 issue.",
+        },
+        owner_sub=auth.LOCAL_OWNER_SUB,
+    )
+    build_concepts._persist_pending_agent_review(
+        db,
+        job,
+        decision_id=pending_a["decision_id"],
+        context_hash=pending_a["context_hash"],
+        review={
+            "status": "resolved",
+            "resolver_version": autonomous_resolution.RESOLVER_VERSION,
+            "issue_key": issue_key_a,
+            "started_at": started_at,
+            "completed_at": "2026-08-01T10:02:01+00:00",
+            "reason": "The first host is uniquely source-supported.",
+            "confidence": 0.97,
+            "evidence_refs": ["PENDING-EVIDENCE-001"],
+            "choice": "expand_existing",
+            "target_concept_id": "HOST-CONCEPT-0001",
+        },
+        owner_sub=auth.LOCAL_OWNER_SUB,
+    )
+    build_concepts._record_human_semantic_decision_locked(
+        db,
+        job,
+        pending_a["decision_id"],
+        choice="expand_existing",
+        instruction="",
+        target_id="",
+        target_concept_id="HOST-CONCEPT-0001",
+        resolved_by="agent",
+        resolution_status="consumed",
+    )
+
+    packet_b = copy.deepcopy(packet_a)
+    # Phase 3.3 derives one context hash from the complete host-planning
+    # context, then emits distinct decision IDs for sequential unit reviews.
+    packet_b["context_hash"] = packet_a["context_hash"]
+    packet_b["decision_id"] = "phase33-host-human-b-" + ("d" * 16)
+    packet_b["conflict"] = "A later independent Type host needs direction."
+    packet_b["item"].update({
+        "unit_id": "TYPE-0200",
+        "type_id": "TYPE-0200",
+        "type_title": "Explain the later source idea",
+        "qids": ["QINV-0200"],
+        "questions": ["Why is the later source idea important?"],
+    })
+    packet_b["candidates"][0].update({
+        "concept_id": "HOST-CONCEPT-0200",
+        "title": "Later source-grounded concept",
+        "coverage": "The later idea's verified attributes.",
+        "gap": "Its source-supported importance.",
+    })
+    packet_b["options"][0]["target_concept_id"] = "HOST-CONCEPT-0200"
+    pending_b = build_concepts._persist_pending_human_decision(
+        db,
+        job,
+        packet_b,
+        fingerprint=job.generation_checkpoint["fingerprint"],
+        target_chapter_id=chapter.id,
+        owner_sub=auth.LOCAL_OWNER_SUB,
+    )
+    build_concepts._record_human_semantic_decision_locked(
+        db,
+        job,
+        pending_b["decision_id"],
+        choice="expand_existing",
+        instruction="",
+        target_id="",
+        target_concept_id="HOST-CONCEPT-0200",
+    )
+    db.refresh(job)
+    durable_rows = job.generation_checkpoint["human_decisions"]["resolutions"]
+    assert [
+        (row["resolved_by"], row["status"]) for row in durable_rows
+    ] == [("agent", "consumed"), ("human", "ready")]
+    identity_a = {
+        "decision_id": packet_a["decision_id"],
+        "context_hash": packet_a["context_hash"],
+    }
+    operation_calls = 0
+
+    def operation():
+        nonlocal operation_calls
+        operation_calls += 1
+        with build_concepts._human_decision_resolution_context(
+            copy.deepcopy(job.generation_checkpoint or {})
+        ):
+            resolutions = phase33._human_resolutions_for(identity_a)
+            by_unit = {
+                row["assignment_unit_id"]: row for row in resolutions
+            }
+            if "TYPE-0002" not in by_unit:
+                raise semantic_recovery.HumanDecisionRequired(packet_a)
+            if "TYPE-0200" not in by_unit:
+                raise semantic_recovery.HumanDecisionRequired(packet_b)
+            assert by_unit["TYPE-0002"]["target_concept_id"] == (
+                "HOST-CONCEPT-0001"
+            )
+            assert by_unit["TYPE-0200"]["target_concept_id"] == (
+                "HOST-CONCEPT-0200"
+            )
+            return "fresh-resume-complete"
+
+    monkeypatch.setattr(
+        build_concepts.autonomous_resolution,
+        "resolve_pending",
+        lambda *_args, **_kwargs: pytest.fail(
+            "fresh resume must reuse both durable answers"
+        ),
+    )
+
+    paused, operation_result = build_concepts._run_with_human_decision_pause(
+        operation,
+        db=db,
+        job=job,
+        fingerprint=job.generation_checkpoint["fingerprint"],
+        target_chapter_id=chapter.id,
+        owner_sub=auth.LOCAL_OWNER_SUB,
+        initial_agent_resolution_ids=set(),
+    )
+
+    assert paused is None
+    assert operation_result == "fresh-resume-complete"
+    assert operation_calls == 1
 
 
 def test_decision_submission_is_owner_scoped_one_time_and_api_free(
