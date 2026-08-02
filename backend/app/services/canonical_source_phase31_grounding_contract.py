@@ -41,7 +41,8 @@ _CONCEPT_GROUNDING_CACHE_VERSION = "phase3.1-per-concept-grounding-4"
 _GROUNDING_CACHE_FILENAME = "source.phase31-concept-grounding-cache.json"
 _TOPOLOGY_CACHE_FILENAME = "source.phase31-final-topology-cache.json"
 _PUBLIC_GROUNDING_CANDIDATE_LIMIT = 100
-_PRIORITY_EVIDENCE_CANDIDATE_COUNT = 4
+_MAX_COMPOUND_EVIDENCE_BLOCKS = 8
+_PUBLIC_EVIDENCE_TEXT_LIMIT = 8_000
 _MASTERY_TAIL_RE = re.compile(
     r"(?:\r?\n|\\n)\s*Achieving\s+Mastery\s*:\s*.*\Z",
     re.IGNORECASE | re.DOTALL,
@@ -50,6 +51,15 @@ _MASTERY_TAIL_RE = re.compile(
 
 GroundingProvider = Callable[[dict[str, Any]], dict[str, Any]]
 GroundingCritic = Callable[[dict[str, Any]], dict[str, Any]]
+
+
+_GROUNDING_STOPWORDS = {
+    "about", "after", "also", "among", "been", "before", "being",
+    "between", "could", "from", "have", "into", "more", "most", "other",
+    "over", "such", "than", "that", "their", "them", "then", "there",
+    "these", "they", "this", "through", "under", "very", "were", "what",
+    "when", "where", "which", "while", "with", "would",
+}
 
 
 def _max_grounding_attempts() -> int:
@@ -64,6 +74,37 @@ def _max_grounding_attempts() -> int:
 
 def _normal(value: object) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip().casefold()
+
+
+def _semantic_tokens(value: object) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[a-z0-9]{3,}", _normal(value))
+        if token not in _GROUNDING_STOPWORDS
+    }
+
+
+def _first_source_offset(*values: object, default: int = 0) -> int:
+    for value in values:
+        if value is None or value == "":
+            continue
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            continue
+    return max(0, int(default))
+
+
+def _source_bounds(row: dict[str, Any]) -> tuple[int, int]:
+    text = str(row.get("text") or "")
+    source_start = _first_source_offset(row.get("source_start"))
+    source_end = _first_source_offset(
+        row.get("source_end"),
+        default=source_start + len(text),
+    )
+    if source_end < source_start:
+        source_end = source_start + len(text)
+    return source_start, source_end
 
 
 def _json_safe(value: object) -> object:
@@ -184,8 +225,23 @@ def _candidate_blocks(
             or block.get("relation")
             or "within_fixed_source_topic"
         )
-        provider_text = text[:1800]
+        # Preserve the complete provider-visible block.  Phase 3 blocks are
+        # already source-bounded; truncating them here can remove the second
+        # clause of a compound claim before either the mapper or the resolver
+        # sees it.
+        provider_text = text
         text_sha256 = phase3._sha256_text(provider_text)
+        source_start = _first_source_offset(
+            block.get("source_start"),
+            source.get("source_start"),
+        )
+        source_end = _first_source_offset(
+            block.get("source_end"),
+            source.get("source_end"),
+            default=source_start + len(provider_text),
+        )
+        if source_end < source_start:
+            source_end = source_start + len(provider_text)
         payload.append(
             {
                 "block_id": str(block.get("block_id") or ""),
@@ -195,11 +251,72 @@ def _candidate_blocks(
                 "source_topic_title": topic_title,
                 "boundary_relation": boundary_relation,
                 "source_page": source_page,
+                "source_start": source_start,
+                "source_end": source_end,
+                "source_offsets": f"{source_start}:{source_end}",
                 "text_sha256": text_sha256,
                 "text": provider_text,
             }
         )
     return usable, payload
+
+
+def _complete_source_block_payload(
+    graph: dict[str, Any],
+    canonical: dict[str, Any],
+    source_blocks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Rehydrate exact canonical text after later visual/boundary wrappers.
+
+    Phase 3.7/3.8 broaden ``_candidate_blocks`` with neighbouring evidence and
+    historically bounded its text for model calls. Phase 3.1 decisions need
+    the unabridged canonical block and offsets, so normalize every returned row
+    at the grounding boundary regardless of which wrapper is installed.
+    """
+
+    graph_by_id = {
+        str(row.get("block_id") or ""): row
+        for row in graph.get("blocks") or []
+        if isinstance(row, dict) and str(row.get("block_id") or "")
+    }
+    canonical_by_id = {
+        str(row.get("block_id") or ""): row
+        for row in canonical.get("blocks") or []
+        if isinstance(row, dict) and str(row.get("block_id") or "")
+    }
+    out: list[dict[str, Any]] = []
+    for raw in source_blocks:
+        row = copy.deepcopy(raw)
+        block_id = str(row.get("block_id") or "")
+        graph_block = graph_by_id.get(block_id, {})
+        canonical_block = canonical_by_id.get(block_id, {})
+        exact_text = phase3._clean_public_text(
+            phase3._graph_block_text(graph_block, canonical_block)
+        )
+        if exact_text:
+            row["text"] = exact_text
+        text = str(row.get("text") or "")
+        source_start = _first_source_offset(
+            graph_block.get("source_start"),
+            canonical_block.get("source_start"),
+            row.get("source_start"),
+        )
+        source_end = _first_source_offset(
+            graph_block.get("source_end"),
+            canonical_block.get("source_end"),
+            row.get("source_end"),
+            default=source_start + len(text),
+        )
+        if source_end < source_start:
+            source_end = source_start + len(text)
+        row.update({
+            "source_start": source_start,
+            "source_end": source_end,
+            "source_offsets": f"{source_start}:{source_end}",
+            "text_sha256": phase3._sha256_text(text),
+        })
+        out.append(row)
+    return out
 
 
 def _concept_payload(
@@ -593,6 +710,8 @@ def _source_block_directory(
             "source_topic_id": str(row.get("source_topic_id") or ""),
             "boundary_relation": str(row.get("boundary_relation") or ""),
             "source_page": str(row.get("source_page") or ""),
+            "source_start": str(_source_bounds(row)[0]),
+            "source_end": str(_source_bounds(row)[1]),
             "text_sha256": str(
                 row.get("text_sha256")
                 or phase3._sha256_text(row.get("text") or "")
@@ -799,15 +918,211 @@ def _write_cached_concept_proposals(
     _write_json(path, cache)
 
 
+def _candidate_coverage_for_blocks(
+    blocks: list[dict[str, Any]],
+) -> str:
+    """Return a readable, bounded envelope sealed to every source block.
+
+    A single short block retains the legacy plain-text display.  A compound
+    evidence action additionally carries every ordered block ID, complete text
+    digest and exact source offsets in its coverage.  Because ``bind_candidate``
+    seals the digest of this envelope together with the ordered ID list, a
+    resolver cannot substitute or reorder one member of the evidence set.
+    """
+
+    if len(blocks) == 1:
+        text = str(blocks[0].get("text") or "")
+        if len(text) <= _PUBLIC_EVIDENCE_TEXT_LIMIT:
+            return text
+
+    headers = []
+    for block in blocks:
+        source_start, source_end = _source_bounds(block)
+        headers.append(
+            f"[{str(block.get('block_id') or '')} | "
+            f"text_sha256={str(block.get('text_sha256') or '')} | "
+            f"source_offsets={source_start}:{source_end} | "
+            f"page={str(block.get('source_page') or '')}]"
+        )
+    coverage = "\n".join(headers)
+    if len(coverage) >= _PUBLIC_EVIDENCE_TEXT_LIMIT:
+        return coverage[:_PUBLIC_EVIDENCE_TEXT_LIMIT]
+
+    remaining = _PUBLIC_EVIDENCE_TEXT_LIMIT - len(coverage)
+    per_block = max(160, remaining // max(1, len(blocks)))
+    bodies: list[str] = []
+    for block in blocks:
+        block_id = str(block.get("block_id") or "")
+        text = str(block.get("text") or "")
+        body = f"\n\n{block_id}\n{text[:max(0, per_block - len(block_id) - 3)]}"
+        bodies.append(body)
+    return (coverage + "".join(bodies))[:_PUBLIC_EVIDENCE_TEXT_LIMIT]
+
+
+def _evidence_candidate(
+    *,
+    graph: dict[str, Any],
+    concept: dict[str, Any],
+    source_blocks: list[dict[str, Any]],
+    block_ids: list[str],
+) -> dict[str, Any] | None:
+    by_id = {
+        str(row.get("block_id") or ""): row
+        for row in source_blocks
+        if str(row.get("block_id") or "")
+    }
+    ordered_ids = list(dict.fromkeys(
+        str(value) for value in block_ids if str(value)
+    ))
+    if not ordered_ids or any(block_id not in by_id for block_id in ordered_ids):
+        return None
+    blocks = [by_id[block_id] for block_id in ordered_ids]
+    current_topic_id = str(concept.get("current_topic_id") or "")
+    coverage = _candidate_coverage_for_blocks(blocks)
+    pages = list(dict.fromkeys(
+        str(block.get("source_page") or "")
+        for block in blocks
+        if str(block.get("source_page") or "")
+    ))
+    candidate_seed = early_gate.bind_candidate({
+        "action": "use_verified_evidence",
+        "source_block_ids": ordered_ids,
+        "source_topic_id": str(
+            blocks[0].get("source_topic_id") or current_topic_id
+        ),
+        "target_topic_id": current_topic_id,
+        "boundary_relation": (
+            str(blocks[0].get("boundary_relation") or "within_fixed_source_topic")
+            if len(blocks) == 1
+            else "within_fixed_source_topic_evidence_set"
+        ),
+        "source_kind": (
+            str(blocks[0].get("kind") or "")
+            if len(blocks) == 1
+            else "verified_evidence_set"
+        ),
+        "source_page": ", ".join(pages)[:128],
+        # This aggregate digest seals the readable envelope. For multi-block
+        # actions the envelope itself includes every full source-text digest.
+        "text_sha256": phase3._sha256_text(coverage),
+    })
+    joined_ids = " + ".join(ordered_ids)
+    return {
+        "target_id": early_gate.candidate_target_id(
+            phase="3.1",
+            action="use_verified_evidence",
+            graph=graph,
+            unit=concept,
+            candidate=candidate_seed,
+        ),
+        "concept_id": "",
+        "title": (
+            f"Use verified evidence {joined_ids}"
+            if len(ordered_ids) == 1
+            else f"Use verified evidence set {joined_ids}"
+        ),
+        "topic": str(
+            blocks[0].get("source_topic_title")
+            or concept.get("current_topic_title")
+            or ""
+        ),
+        "coverage": coverage,
+        "gap": (
+            "Binding inclusion only; the mapper must still produce a minimal "
+            "sufficient evidence set and the independent critic must verify it."
+        ),
+        **candidate_seed,
+    }
+
+
+def _compound_evidence_sets(
+    *,
+    source_claim: str,
+    ranked_blocks: list[dict[str, Any]],
+) -> list[list[str]]:
+    """Build a few reproducible compound-claim evidence routes.
+
+    These are selectable directions, never semantic approvals.  They let the
+    mapper and critic inspect a set of canonical blocks without forcing the UI
+    or autonomous resolver to choose only one BLK for a multi-clause claim.
+    """
+
+    claim_tokens = _semantic_tokens(source_claim)
+    if not claim_tokens:
+        return []
+    indexed = [
+        (
+            index,
+            str(block.get("block_id") or ""),
+            _semantic_tokens(block.get("text") or "") & claim_tokens,
+        )
+        for index, block in enumerate(ranked_blocks)
+        if str(block.get("block_id") or "")
+    ]
+    relevant = [row for row in indexed if row[2]]
+    if len(relevant) < 2:
+        return []
+
+    proposed_sets: list[list[str]] = []
+
+    # Greedily cover distinct claim vocabulary, which is robust when Mathpix
+    # has split one textbook paragraph across non-adjacent canonical BLKs.
+    uncovered = set(claim_tokens)
+    greedy: list[str] = []
+    remaining = list(relevant)
+    while remaining and len(greedy) < _MAX_COMPOUND_EVIDENCE_BLOCKS:
+        best = max(
+            remaining,
+            key=lambda row: (len(row[2] & uncovered), len(row[2]), -row[0]),
+        )
+        new_tokens = best[2] & uncovered
+        if not new_tokens:
+            break
+        greedy.append(best[1])
+        uncovered -= new_tokens
+        remaining.remove(best)
+    if len(greedy) >= 2:
+        proposed_sets.append(greedy)
+
+    # A compact top-two route avoids unnecessarily binding an incidental third
+    # paragraph when two strong blocks completely support a simple compound.
+    top_pair = [relevant[0][1], relevant[1][1]]
+    proposed_sets.append(top_pair)
+
+    # Preserve source order inside each binding and remove duplicate sets.
+    source_order = {
+        str(block.get("block_id") or ""): (
+            int(block.get("source_start") or 0),
+            index,
+        )
+        for index, block in enumerate(ranked_blocks)
+    }
+    out: list[list[str]] = []
+    seen: set[tuple[str, ...]] = set()
+    for values in proposed_sets:
+        ordered = tuple(sorted(
+            dict.fromkeys(values),
+            key=lambda block_id: source_order.get(block_id, (10**9, 10**9)),
+        ))
+        if len(ordered) < 2 or ordered in seen:
+            continue
+        seen.add(ordered)
+        out.append(list(ordered))
+    return out
+
+
 def _grounding_candidates(
     *,
     graph: dict[str, Any],
     concept: dict[str, Any],
     source_blocks: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    # Direct/unit callers may receive a Phase 3.7/3.8 wrapped payload. Restore
+    # graph-authored offsets here as well as at the main grounding boundary.
+    source_blocks = _complete_source_block_payload(graph, {}, source_blocks)
     current_topic_id = str(concept.get("current_topic_id") or "")
     source_claim = str(concept.get("source_claim") or "")
-    claim_tokens = set(re.findall(r"[a-z0-9]{3,}", _normal(source_claim)))
+    claim_tokens = _semantic_tokens(source_claim)
 
     # Relevance affects only packet order/capping; it never accepts evidence.
     # The mapper and independent critic remain the semantic authority.  Stable
@@ -817,64 +1132,39 @@ def _grounding_candidates(
         key=lambda pair: (
             -len(
                 claim_tokens
-                & set(
-                    re.findall(
-                        r"[a-z0-9]{3,}",
-                        _normal(pair[1].get("text") or ""),
-                    )
-                )
+                & _semantic_tokens(pair[1].get("text") or "")
             ),
             pair[0],
         ),
     )
+    ranked_source_blocks = [block for _order, block in ranked_blocks]
     evidence_candidates: list[dict[str, Any]] = []
-    for _source_order, block in ranked_blocks:
+    for block in ranked_source_blocks:
         block_id = str(block.get("block_id") or "")
         if not block_id:
             continue
-        candidate_seed = early_gate.bind_candidate({
-            "action": "use_verified_evidence",
-            "source_block_ids": [block_id],
-            "source_topic_id": str(
-                block.get("source_topic_id") or current_topic_id
-            ),
-            "target_topic_id": current_topic_id,
-            "boundary_relation": str(
-                block.get("boundary_relation")
-                or "within_fixed_source_topic"
-            ),
-            "source_kind": str(block.get("kind") or ""),
-            "source_page": str(block.get("source_page") or ""),
-            "text_sha256": str(
-                block.get("text_sha256")
-                or phase3._sha256_text(block.get("text") or "")
-            ),
-        })
-        evidence_candidates.append(
-            {
-                "target_id": early_gate.candidate_target_id(
-                    phase="3.1",
-                    action="use_verified_evidence",
-                    graph=graph,
-                    unit=concept,
-                    candidate=candidate_seed,
-                ),
-                "concept_id": "",
-                "title": f"Use verified evidence {block_id}",
-                "topic": str(
-                    block.get("source_topic_title")
-                    or concept.get("current_topic_title")
-                    or ""
-                ),
-                "coverage": str(block.get("text") or "")[:8000],
-                "gap": (
-                    "Binding inclusion only; the mapper must still produce a "
-                    "minimal sufficient evidence set and the independent "
-                    "critic must verify it."
-                ),
-                **candidate_seed,
-            }
+        candidate = _evidence_candidate(
+            graph=graph,
+            concept=concept,
+            source_blocks=source_blocks,
+            block_ids=[block_id],
         )
+        if candidate is not None:
+            evidence_candidates.append(candidate)
+
+    compound_candidates: list[dict[str, Any]] = []
+    for block_ids in _compound_evidence_sets(
+        source_claim=source_claim,
+        ranked_blocks=ranked_source_blocks,
+    ):
+        candidate = _evidence_candidate(
+            graph=graph,
+            concept=concept,
+            source_blocks=source_blocks,
+            block_ids=block_ids,
+        )
+        if candidate is not None:
+            compound_candidates.append(candidate)
     topology_seeds: list[dict[str, Any]] = [
         {
             "action": "refine",
@@ -887,7 +1177,7 @@ def _grounding_candidates(
             "text_sha256": "",
             "title": "Refine the unsupported source claim",
             "topic": str(concept.get("current_topic_title") or ""),
-            "coverage": source_claim,
+            "coverage": "Topology repair: refine within the current source topic.",
             "gap": (
                 "Return this concept to topology and narrow the unsupported "
                 "clause."
@@ -904,7 +1194,7 @@ def _grounding_candidates(
             "text_sha256": "",
             "title": "Split distinct source-supported claims",
             "topic": "Across verified source topics",
-            "coverage": source_claim,
+            "coverage": "Topology repair: split into separately supported claims.",
             "gap": (
                 "Return this concept to topology and separate durable claims."
             ),
@@ -920,7 +1210,7 @@ def _grounding_candidates(
             "text_sha256": "",
             "title": "Retire an unsupported or fully duplicated claim",
             "topic": str(concept.get("current_topic_title") or ""),
-            "coverage": source_claim,
+            "coverage": "Topology repair: retire only if unsupported or duplicate.",
             "gap": (
                 "Destructive retirement still requires the stricter "
                 "independent gate."
@@ -945,7 +1235,7 @@ def _grounding_candidates(
                 "text_sha256": "",
                 "title": "Move the complete claim to a different source topic",
                 "topic": str(topic.get("title") or topic_id),
-                "coverage": source_claim,
+                "coverage": "Topology repair: move the unchanged claim.",
                 "gap": (
                     "Move without changing the claim; independent review "
                     "remains mandatory."
@@ -978,30 +1268,24 @@ def _grounding_candidates(
             }
         )
 
-    # PendingSemanticDecision has a deliberate 100-row ceiling.  Reserve every
-    # topology repair action first, then use the remaining capacity for the
-    # highest-overlap evidence blocks.  Core repair actions are interleaved
-    # after four evidence rows so even a legacy compact packet cannot contain
-    # evidence-only choices.  This is candidate routing, not semantic approval.
-    if len(topology_candidates) >= _PUBLIC_GROUNDING_CANDIDATE_LIMIT:
-        topology_candidates = topology_candidates[
-            : _PUBLIC_GROUNDING_CANDIDATE_LIMIT - 1
-        ]
+    # Evidence remains first in both the UI and autonomous packet. Reserve the
+    # complete bounded topology catalog (refine/split/retire plus every source
+    # topic move) before filling the remaining rows with evidence. Otherwise a
+    # large topic could expose 97 BLKs yet omit the one valid destination move.
+    selected_topology = topology_candidates[:max(
+        0, _PUBLIC_GROUNDING_CANDIDATE_LIMIT - 1
+    )]
+    # Keep legacy single-BLK ordering stable; compound choices extend the same
+    # UI after those rows instead of silently changing an older saved choice.
+    evidence_routes = [*evidence_candidates, *compound_candidates]
     evidence_capacity = max(
         1,
-        _PUBLIC_GROUNDING_CANDIDATE_LIMIT - len(topology_candidates),
+        _PUBLIC_GROUNDING_CANDIDATE_LIMIT - len(selected_topology),
     )
-    evidence_candidates = evidence_candidates[:evidence_capacity]
-    priority_count = min(
-        _PRIORITY_EVIDENCE_CANDIDATE_COUNT,
-        len(evidence_candidates),
-    )
-    core_repairs = topology_candidates[:3]
+    selected_evidence = evidence_routes[:evidence_capacity]
     return [
-        *evidence_candidates[:priority_count],
-        *core_repairs,
-        *evidence_candidates[priority_count:],
-        *topology_candidates[3:],
+        *selected_evidence,
+        *selected_topology,
     ]
 
 
@@ -1030,6 +1314,8 @@ def _grounding_identity(
                         row.get("boundary_relation") or ""
                     ),
                     "source_page": str(row.get("source_page") or ""),
+                    "source_start": str(_source_bounds(row)[0]),
+                    "source_end": str(_source_bounds(row)[1]),
                     "text_sha256": str(
                         row.get("text_sha256")
                         or phase3._sha256_text(row.get("text") or "")
@@ -1040,6 +1326,153 @@ def _grounding_identity(
         },
         candidates=candidates,
     )
+
+
+def _proposal_source_block_ids(
+    proposal: Any,
+    *,
+    concept_id: str,
+) -> list[str]:
+    rows: list[Any] = []
+    if isinstance(proposal, dict):
+        direct = proposal.get(concept_id)
+        if isinstance(direct, dict):
+            rows.append(direct)
+        concepts = proposal.get("concepts")
+        if isinstance(concepts, list):
+            rows.extend(concepts)
+        if proposal.get("concept_id") == concept_id:
+            rows.append(proposal)
+    return list(dict.fromkeys(
+        str(value)
+        for row in rows
+        if isinstance(row, dict)
+        and str(row.get("concept_id") or concept_id) == concept_id
+        for value in row.get("source_block_ids") or []
+        if str(value)
+    ))
+
+
+def _pending_source_evidence(
+    *,
+    concept: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    source_blocks: list[dict[str, Any]],
+    issues: list[str],
+    resolution: dict[str, Any] | None,
+    proposal: Any,
+) -> list[dict[str, Any]]:
+    """Expose exact issue-local source before the rest of the topic.
+
+    The autonomous resolver only expands the first few evidence rows.  Stable
+    source order therefore cannot be the primary pending-decision order: an
+    independently rejected BLK near the end of a chapter would disappear.
+    Proposal-, critic-, and selected-candidate IDs are placed first, adjacent
+    canonical blocks follow as local context, then every remaining topic block
+    is retained up to the existing 100-row public decision limit.
+    """
+
+    concept_id = str(concept.get("concept_id") or "")
+    explicit_ids = _proposal_source_block_ids(
+        proposal,
+        concept_id=concept_id,
+    )
+    if isinstance(resolution, dict):
+        selected = resolution.get("selected_candidate")
+        if isinstance(selected, dict):
+            explicit_ids.extend(
+                str(value)
+                for value in selected.get("source_block_ids") or []
+                if str(value)
+            )
+    explicit_ids.extend(sorted(early_gate.block_ids_from_issues(issues)))
+    explicit_ids = list(dict.fromkeys(explicit_ids))
+
+    # A generated compound route is also useful issue-local context even when
+    # a critic did not spell the BLK IDs out in prose.
+    if len(explicit_ids) < 2:
+        compound = next(
+            (
+                row
+                for row in candidates
+                if row.get("action") == "use_verified_evidence"
+                and len(row.get("source_block_ids") or []) > 1
+            ),
+            None,
+        )
+        if isinstance(compound, dict):
+            explicit_ids.extend(
+                str(value)
+                for value in compound.get("source_block_ids") or []
+                if str(value)
+            )
+            explicit_ids = list(dict.fromkeys(explicit_ids))
+
+    source_index = {
+        str(row.get("block_id") or ""): index
+        for index, row in enumerate(source_blocks)
+        if str(row.get("block_id") or "")
+    }
+    adjacent_ids: list[str] = []
+    for block_id in explicit_ids:
+        index = source_index.get(block_id)
+        if index is None:
+            continue
+        for adjacent_index in (index - 1, index + 1):
+            if 0 <= adjacent_index < len(source_blocks):
+                adjacent_id = str(
+                    source_blocks[adjacent_index].get("block_id") or ""
+                )
+                if adjacent_id:
+                    adjacent_ids.append(adjacent_id)
+    adjacent_ids = list(dict.fromkeys(adjacent_ids))
+
+    context_tokens = _semantic_tokens(
+        " ".join([
+            str(concept.get("source_claim") or ""),
+            *[str(value) for value in issues],
+        ])
+    )
+    explicit_order = {value: index for index, value in enumerate(explicit_ids)}
+    adjacent_order = {value: index for index, value in enumerate(adjacent_ids)}
+    ranked = sorted(
+        enumerate(source_blocks),
+        key=lambda pair: (
+            0 if str(pair[1].get("block_id") or "") in explicit_order else 1,
+            explicit_order.get(str(pair[1].get("block_id") or ""), 10**9),
+            0 if str(pair[1].get("block_id") or "") in adjacent_order else 1,
+            adjacent_order.get(str(pair[1].get("block_id") or ""), 10**9),
+            -len(context_tokens & _semantic_tokens(pair[1].get("text") or "")),
+            pair[0],
+        ),
+    )
+
+    evidence: list[dict[str, Any]] = []
+    for _source_order, row in ranked[:_PUBLIC_GROUNDING_CANDIDATE_LIMIT]:
+        block_id = str(row.get("block_id") or "")
+        source_start, source_end = _source_bounds(row)
+        text = str(row.get("text") or "")
+        text_sha256 = str(
+            row.get("text_sha256") or phase3._sha256_text(text)
+        )
+        evidence.append(
+            {
+                # SemanticDecisionEvidence intentionally has a stable four-
+                # field public schema. Encode exact offsets and the complete
+                # text digest in evidence_id instead of adding fields that old
+                # API clients cannot validate.
+                "evidence_id": (
+                    f"{block_id}@{source_start}:{source_end}#{text_sha256}"
+                )[:128],
+                "page": (
+                    f"{str(row.get('source_page') or '')} · "
+                    f"source_offsets={source_start}:{source_end}"
+                )[:128],
+                "label": block_id,
+                "text": text[:_PUBLIC_EVIDENCE_TEXT_LIMIT],
+            }
+        )
+    return evidence
 
 
 def _grounding_pending_decision(
@@ -1183,19 +1616,14 @@ def _grounding_pending_decision(
                 "topic": str(topic.get("title") or ""),
             },
             "candidates": public_candidates,
-            "evidence": [
-                {
-                    "page": str(
-                        row.get("page_number")
-                        or row.get("pdf_page")
-                        or row.get("page")
-                        or ""
-                    ),
-                    "label": str(row.get("block_id") or ""),
-                    "text": str(row.get("text") or "")[:8000],
-                }
-                for row in source_blocks[:24]
-            ],
+            "evidence": _pending_source_evidence(
+                concept=concept,
+                candidates=candidates,
+                source_blocks=source_blocks,
+                issues=clean_issues,
+                resolution=resolution,
+                proposal=proposal,
+            ),
             "deferred_assignment_unit_ids": [
                 value
                 for value in rejected_ids
@@ -1416,6 +1844,11 @@ def ground_concepts(
         ]
         candidates, source_blocks = _candidate_blocks(
             graph, canonical, topic_id
+        )
+        source_blocks = _complete_source_block_payload(
+            graph,
+            canonical,
+            source_blocks,
         )
         if not source_blocks:
             continue

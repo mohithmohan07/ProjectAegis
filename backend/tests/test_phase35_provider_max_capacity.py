@@ -1,4 +1,4 @@
-"""Regression coverage for Phase 3.5 provider-capacity ceilings."""
+"""Regression coverage for Phase 3.5 provider-capacity allowances."""
 from __future__ import annotations
 
 from app import config
@@ -47,7 +47,7 @@ def test_gpt56_provider_capacity_defaults(monkeypatch):
     ) == 128_000
 
 
-def test_live_json_calls_preserve_smaller_budget_and_clamp_oversize(monkeypatch):
+def test_live_json_calls_receive_provider_max_allowance(monkeypatch):
     _activate(monkeypatch)
     captured: list[dict] = []
 
@@ -83,7 +83,7 @@ def test_live_json_calls_preserve_smaller_budget_and_clamp_oversize(monkeypatch)
     )
 
     assert first == second == defaulted == {"ok": True}
-    assert [row["max_tokens"] for row in captured] == [321, 128_000, 128_000]
+    assert [row["max_tokens"] for row in captured] == [128_000] * 3
     assert all(row["purpose"] == "concept_validation" for row in captured)
 
 
@@ -109,11 +109,13 @@ def test_live_strict_schema_budget_and_retry_cap_use_provider_ceiling(monkeypatc
         response_schema={"name": "test", "strict": True, "schema": {}},
         purpose="concept_mapping",
         max_tokens=4_000,
+        model="gpt-5.6-terra",
     )
 
     assert result == {"ok": True}
-    assert captured["max_tokens"] == 4_000
-    assert phase34._completion_cap(4_000) == 16_000
+    assert captured["max_tokens"] == 128_000
+    assert captured["model"] == "gpt-5.6-terra"
+    assert phase34._completion_cap(4_000) == 128_000
     assert phase34._completion_cap(200_000) == 128_000
 
 

@@ -78,12 +78,32 @@ def test_luna_pricing_matches_standard_text_token_rates():
         )
         summary = openai_usage.current_summary()
 
-    # 400*$1/M + 400*$0.10/M + 200*$1.25/M + 200*$6/M
-    # = $0.00189. Cache-write tokens are a subset of input tokens.
+    # 400*$0.20/M + 400*$0.02/M + 200*$0.25/M + 200*$1.20/M
+    # = $0.000378. Cache-write tokens are a subset of input tokens.
     assert summary["model"] == "gpt-5.6-luna"
     assert summary["cache_write_tokens"] == 200
     assert summary["reasoning_tokens"] == 80
-    assert summary["estimated_cost_usd"] == pytest.approx(0.00189)
+    assert summary["estimated_cost_usd"] == pytest.approx(0.000378)
+
+
+def test_terra_resolution_pricing_is_accounted_separately():
+    with openai_usage.track():
+        openai_usage.record_response(
+            _response(
+                model="gpt-5.6-terra",
+                input_tokens=1_000,
+                cached_tokens=400,
+                cache_write_tokens=200,
+                output_tokens=200,
+                reasoning_tokens=80,
+            )
+        )
+        summary = openai_usage.current_summary()
+
+    # 400*$2/M + 400*$0.20/M + 200*$2.50/M + 200*$12/M.
+    assert summary["model"] == "gpt-5.6-terra"
+    assert summary["pricing_complete"] is True
+    assert summary["estimated_cost_usd"] == pytest.approx(0.00378)
 
 
 def test_luna_long_context_multiplier_is_applied_per_request():
@@ -100,7 +120,7 @@ def test_luna_long_context_multiplier_is_applied_per_request():
         summary = openai_usage.current_summary()
 
     # Inputs above 272K are 2x; output is 1.5x for the full request.
-    assert summary["estimated_cost_usd"] == pytest.approx(0.555)
+    assert summary["estimated_cost_usd"] == pytest.approx(0.111)
 
 
 def test_multiple_responses_aggregate_and_unknown_pricing_is_not_zero():

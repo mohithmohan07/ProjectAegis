@@ -5,6 +5,7 @@ import copy
 
 import pytest
 
+from app import schemas
 from app.services import canonical_source_phase3 as phase3
 from app.services import canonical_source_phase31_grounding_contract as phase31
 from app.services import canonical_source_phase33_preflight_contract as phase33
@@ -29,12 +30,16 @@ def _source_graph() -> tuple[dict, dict]:
                 "topic_id": "TOPIC-0001",
                 "subtopic_id": "TOPIC-0001-SUB-001",
                 "kind": "paragraph",
+                "source_start": 100,
+                "source_end": 192,
             },
             {
                 "block_id": "BLK-0002",
                 "topic_id": "TOPIC-0001",
                 "subtopic_id": "TOPIC-0001-SUB-002",
                 "kind": "paragraph",
+                "source_start": 240,
+                "source_end": 330,
             },
         ],
     }
@@ -47,6 +52,8 @@ def _source_graph() -> tuple[dict, dict]:
                     "A landed aristocracy dominated social and political life "
                     "while most people belonged to the peasantry."
                 ),
+                "source_start": 100,
+                "source_end": 192,
             },
             {
                 "block_id": "BLK-0002",
@@ -55,6 +62,8 @@ def _source_graph() -> tuple[dict, dict]:
                     "The Zollverein abolished tariff barriers and supported "
                     "economic integration among the German states."
                 ),
+                "source_start": 240,
+                "source_end": 330,
             },
         ],
     }
@@ -458,7 +467,7 @@ def test_many_evidence_candidates_keep_repairs_and_exact_block_bindings():
             "title": "Visualising the Nation",
         },
     ])
-    for number in range(3, 18):
+    for number in range(3, 105):
         block_id = f"BLK-{number:04d}"
         graph["blocks"].append({
             "block_id": block_id,
@@ -488,11 +497,15 @@ def test_many_evidence_candidates_keep_repairs_and_exact_block_bindings():
     assert sum(
         row["action"] == "use_verified_evidence" for row in candidates
     ) > 8
-    assert {row["action"] for row in candidates[:8]} >= {
-        "refine",
-        "split",
-        "retire",
-    }
+    first_topology = next(
+        index
+        for index, row in enumerate(candidates)
+        if row["action"] != "use_verified_evidence"
+    )
+    assert all(
+        row["action"] == "use_verified_evidence"
+        for row in candidates[:first_topology]
+    )
     assert {row["action"] for row in candidates} >= {
         "use_verified_evidence",
         "refine",
@@ -500,7 +513,17 @@ def test_many_evidence_candidates_keep_repairs_and_exact_block_bindings():
         "move",
         "retire",
     }
+    assert {
+        row["target_topic_id"]
+        for row in candidates
+        if row["action"] == "move"
+    } == {"TOPIC-0002", "TOPIC-0003"}
     assert len(candidates) <= phase31._PUBLIC_GROUNDING_CANDIDATE_LIMIT
+    assert all(
+        concept["source_claim"] not in row["coverage"]
+        for row in candidates
+        if row["action"] != "use_verified_evidence"
+    )
 
     evidence = next(
         row for row in candidates
@@ -539,6 +562,214 @@ def test_many_evidence_candidates_keep_repairs_and_exact_block_bindings():
     assert public_evidence["boundary_relation"] == evidence[
         "boundary_relation"
     ]
+
+
+def test_rejected_compound_claim_exposes_late_blocks_and_exact_offsets():
+    graph, canonical = _source_graph()
+    for number in range(3, 33):
+        block_id = f"BLK-{number:04d}"
+        source_start = number * 1_000
+        text = (
+            "The Zollverein removed tariff barriers and joined the German "
+            "states through economic integration."
+            if number == 30
+            else f"Verified contextual source paragraph {number}."
+        )
+        graph["blocks"].append({
+            "block_id": block_id,
+            "topic_id": "TOPIC-0001",
+            "subtopic_id": f"TOPIC-0001-SUB-{number:03d}",
+            "kind": "paragraph",
+            "page_number": number,
+            "source_start": source_start,
+            "source_end": source_start + len(text),
+        })
+        canonical["blocks"].append({
+            "block_id": block_id,
+            "kind": "paragraph",
+            "display_text": text,
+            "page_number": number,
+            "source_start": source_start,
+            "source_end": source_start + len(text),
+        })
+
+    records = [_record(details=(
+        "Description: A landed aristocracy dominated political life while the "
+        "Zollverein removed tariffs and promoted German economic integration."
+    ))]
+    _usable, source_blocks = phase31._candidate_blocks(
+        graph, canonical, "TOPIC-0001"
+    )
+    concepts, _ = phase31._concept_payload(records, [0])
+    concept = concepts[0]
+    candidates = phase31._grounding_candidates(
+        graph=graph,
+        concept=concept,
+        source_blocks=source_blocks,
+    )
+    identity = phase31._grounding_identity(
+        graph=graph,
+        topic=graph["topics"][0],
+        concept=concept,
+        candidates=candidates,
+        source_blocks=source_blocks,
+    )
+    proposal = {
+        concept["concept_id"]: {
+            "concept_id": concept["concept_id"],
+            "source_block_ids": ["BLK-0001", "BLK-0030"],
+            "confidence": 0.999,
+            "reason": "Both canonical passages are needed.",
+        }
+    }
+    pending = phase31._grounding_pending_decision(
+        identity=identity,
+        graph=graph,
+        topic=graph["topics"][0],
+        concept=concept,
+        candidates=candidates,
+        source_blocks=source_blocks,
+        issues=[
+            "BLK-0001 supports the social clause and BLK-0030 supports the "
+            "economic clause; review the complete set."
+        ],
+        rejected_ids=[concept["concept_id"]],
+        proposal=proposal,
+    )
+
+    # The old source_blocks[:24] packet dropped BLK-0030 entirely. The exact
+    # issue set now leads the evidence packet and all 32 bounded blocks remain.
+    assert [row["label"] for row in pending["evidence"][:2]] == [
+        "BLK-0001",
+        "BLK-0030",
+    ]
+    assert len(pending["evidence"]) == 32
+    late = next(
+        row for row in pending["evidence"] if row["label"] == "BLK-0030"
+    )
+    exact_text = next(
+        row["text"] for row in source_blocks if row["block_id"] == "BLK-0030"
+    )
+    assert late["text"] == exact_text
+    assert late["page"].endswith(
+        f"source_offsets=30000:{30_000 + len(exact_text)}"
+    )
+    assert late["evidence_id"] == (
+        f"BLK-0030@30000:{30_000 + len(exact_text)}#"
+        f"{phase3._sha256_text(exact_text)}"
+    )
+    # The public decision remains compatible with existing API/UI clients.
+    schemas.PendingSemanticDecision.model_validate(pending)
+
+
+def test_verified_multi_block_candidate_can_direct_one_safe_resume():
+    graph, canonical = _source_graph()
+    records = [_record(details=(
+        "Description: A landed aristocracy dominated social and political "
+        "life, while the Zollverein removed tariff barriers and supported "
+        "economic integration among the German states."
+    ))]
+    _usable, source_blocks = phase31._candidate_blocks(
+        graph, canonical, "TOPIC-0001"
+    )
+    concepts, _ = phase31._concept_payload(records, [0])
+    candidates = phase31._grounding_candidates(
+        graph=graph,
+        concept=concepts[0],
+        source_blocks=source_blocks,
+    )
+    evidence_set = next(
+        row
+        for row in candidates
+        if row["source_block_ids"] == ["BLK-0001", "BLK-0002"]
+    )
+    assert evidence_set["action"] == "use_verified_evidence"
+    assert evidence_set["source_kind"] == "verified_evidence_set"
+    assert "text_sha256=" in evidence_set["coverage"]
+    assert "source_offsets=100:192" in evidence_set["coverage"]
+    assert "source_offsets=240:330" in evidence_set["coverage"]
+    assert evidence_set["text_sha256"] == phase3._sha256_text(
+        evidence_set["coverage"]
+    )
+    assert phase31.early_gate.candidate_binding_is_valid(evidence_set)
+
+    reordered = copy.deepcopy(evidence_set)
+    reordered["source_block_ids"] = ["BLK-0002", "BLK-0001"]
+    assert not phase31.early_gate.candidate_binding_is_valid(reordered)
+
+    provider_calls = 0
+    critic_calls = 0
+
+    def provider(payload: dict) -> dict:
+        nonlocal provider_calls
+        provider_calls += 1
+        concept_id = payload["concepts"][0]["concept_id"]
+        selected_ids = ["BLK-0001"]
+        if provider_calls == 2:
+            selected = payload["human_resolutions"][0]["selected_candidate"]
+            assert selected["source_block_ids"] == ["BLK-0001", "BLK-0002"]
+            assert phase31.early_gate.candidate_binding_is_valid(selected)
+            selected_ids = list(selected["source_block_ids"])
+        return {"concepts": [{
+            "concept_id": concept_id,
+            "source_block_ids": selected_ids,
+            "confidence": 0.999,
+            "reason": "Use the complete independently checked source set.",
+        }]}
+
+    def critic(payload: dict) -> dict:
+        nonlocal critic_calls
+        critic_calls += 1
+        concept_id = payload["concepts"][0]["concept_id"]
+        if critic_calls == 1:
+            return {
+                "verdict": "rejected",
+                "confidence": 0.999,
+                "accepted_concept_ids": [],
+                "rejected_concept_ids": [concept_id],
+                "issues": [
+                    "BLK-0001 supports only the first clause; BLK-0002 is "
+                    "also required for the Zollverein clause."
+                ],
+            }
+        assert payload["proposed_grounding"][0]["source_block_ids"] == [
+            "BLK-0001",
+            "BLK-0002",
+        ]
+        return _verified_review(payload)
+
+    with pytest.raises(semantic_recovery.HumanDecisionRequired) as paused:
+        phase31.ground_concepts(
+            records,
+            graph=graph,
+            canonical=canonical,
+            provider=provider,
+            critic=critic,
+        )
+    pending = paused.value.pending_decision
+    selected_set = next(
+        row
+        for row in pending["candidates"]
+        if row["source_block_ids"] == ["BLK-0001", "BLK-0002"]
+    )
+    resolution = {
+        **copy.deepcopy(pending),
+        "choice": "select_candidate",
+        "target_id": selected_set["target_id"],
+        "instruction": "",
+    }
+    with phase33.human_resolution_context([resolution]):
+        grounded = phase31.ground_concepts(
+            records,
+            graph=graph,
+            canonical=canonical,
+            provider=provider,
+            critic=critic,
+        )
+
+    assert provider_calls == 2
+    assert critic_calls == 2
+    assert grounded[0]["_source_block_ids"] == ["BLK-0001", "BLK-0002"]
 
 
 def test_wrong_block_prose_cannot_rebind_a_sealed_evidence_candidate():
@@ -648,7 +879,11 @@ def test_stale_grounding_resolution_requires_exact_context():
 
 @pytest.mark.parametrize(
     "resolver_version",
-    ["semantic-resolution-agent-2", "semantic-resolution-agent-3"],
+    [
+        "semantic-resolution-agent-2",
+        "semantic-resolution-agent-3",
+        "semantic-resolution-agent-4",
+    ],
 )
 def test_complete_workspace_agent_maps_legacy_blk_to_current_binding(
     resolver_version,

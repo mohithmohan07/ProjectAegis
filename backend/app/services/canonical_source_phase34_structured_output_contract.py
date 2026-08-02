@@ -8,10 +8,12 @@ the truncation.
 
 This contract makes structured output resumable rather than brittle:
 
-* completion-limit responses are retried with a larger budget and progressively
-  more compact reasoning while preserving the same strict JSON schema;
-* a fully parsed strict-schema object is accepted even when the provider reports
-  ``finish_reason=length`` after the final closing brace;
+* completion-limit responses are retried with a larger budget (or the same
+  provider-max allowance once already at capacity) and progressively more
+  compact reasoning while preserving the same strict JSON schema;
+* a fully parsed *and schema-complete* object is accepted even when the provider
+  reports ``finish_reason=length`` after the final closing brace; a merely
+  syntactically valid partial object is never accepted;
 * Phase 3 hierarchy classification and criticism are split into contiguous,
   independently cached batches.  Every batch sees a compact, complete section
   directory, while body evidence is limited to its targets and the adjacent or
@@ -37,12 +39,14 @@ import time
 from pathlib import Path
 from typing import Any
 
+from aegis_pipeline.openai_policy import provider_token_capacity
+
 from .. import config
 from . import canonical_source_phase22 as phase22
 from . import canonical_source_phase3 as phase3
 from . import progress
 
-_CONTRACT_VERSION = 2
+_CONTRACT_VERSION = 3
 _TURNOVER_VERSION = "phase3.4-structured-output-turnover-2"
 _HIERARCHY_CACHE_FILENAME = "source.phase34-hierarchy-batch-cache.json"
 _ALLOWED_HIERARCHY_ROLES = (
@@ -58,6 +62,7 @@ _ALLOWED_HIERARCHY_ROLES = (
     "other",
 )
 _REASONING_DOWNGRADE = {
+    "max": "xhigh",
     "xhigh": "high",
     "high": "medium",
     "medium": "low",
@@ -77,14 +82,25 @@ def _schema_name(response_schema: dict[str, Any]) -> str:
     return str(response_schema.get("name") or "unnamed_json_schema")
 
 
-def _completion_cap(initial: int) -> int:
+def _completion_cap(initial: int, *, model: str | None = None) -> int:
+    provider_maximum = max(
+        1,
+        min(
+            int(config.OPENAI_MAX_OUTPUT_TOKENS),
+            int(provider_token_capacity(model).max_output_tokens),
+        ),
+    )
     configured = max(
         4000,
         int(os.environ.get(
-            "AEGIS_STRUCTURED_JSON_MAX_COMPLETION_TOKENS", "65536"
+            "AEGIS_STRUCTURED_JSON_MAX_COMPLETION_TOKENS",
+            str(provider_maximum),
         )),
     )
-    return max(int(initial), min(131072, configured))
+    return min(
+        provider_maximum,
+        max(max(1, int(initial)), min(provider_maximum, configured)),
+    )
 
 
 def _max_truncation_retries() -> int:
@@ -150,6 +166,55 @@ def _downgraded_reasoning(value: object, steps: int) -> str:
     return effort
 
 
+def _matches_schema_shape(value: object, schema: object) -> bool:
+    """Conservatively prove the required structural portion of a JSON schema.
+
+    The provider enforces the full strict schema, but a compatibility layer can
+    still expose a syntactically valid prefix when a response reaches its length
+    boundary.  Required keys and array cardinality are enough to distinguish
+    that partial object before the existing semantic validators run.
+    """
+    if not isinstance(schema, dict):
+        return True
+    schema_type = schema.get("type")
+    if schema_type == "object":
+        if not isinstance(value, dict):
+            return False
+        required = [str(item) for item in schema.get("required") or []]
+        if any(key not in value for key in required):
+            return False
+        properties = schema.get("properties") or {}
+        if isinstance(properties, dict):
+            return all(
+                key not in value or _matches_schema_shape(value[key], child)
+                for key, child in properties.items()
+            )
+        return True
+    if schema_type == "array":
+        if not isinstance(value, list):
+            return False
+        minimum = schema.get("minItems")
+        maximum = schema.get("maxItems")
+        if minimum is not None and len(value) < int(minimum):
+            return False
+        if maximum is not None and len(value) > int(maximum):
+            return False
+        return all(
+            _matches_schema_shape(item, schema.get("items")) for item in value
+        )
+    if schema_type == "string":
+        return isinstance(value, str)
+    if schema_type == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if schema_type == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if schema_type == "boolean":
+        return isinstance(value, bool)
+    if schema_type == "null":
+        return value is None
+    return True
+
+
 def _resilient_openai_multimodal_json(
     *,
     system: str,
@@ -159,6 +224,7 @@ def _resilient_openai_multimodal_json(
     purpose: str = "source_adjudication",
     max_tokens: int = phase22._MAX_OUTPUT_TOKENS,
     single_attempt: bool = False,
+    model: str | None = None,
 ) -> dict[str, Any]:
     """Strict-schema call with adaptive completion-limit turnover.
 
@@ -197,17 +263,19 @@ def _resilient_openai_multimodal_json(
         APITimeoutError,
         InternalServerError,
     )
-    base_policy = chat_request_policy(purpose, model=config.OPENAI_MODEL)
+    selected_model = str(model or config.OPENAI_MODEL)
+    base_policy = chat_request_policy(purpose, model=selected_model)
     client = OpenAI(timeout=config.OPENAI_REQUEST_TIMEOUT_SECONDS, max_retries=0)
     gate = generation._get_openai_gate()
     current_budget = max(1000, int(max_tokens or 0))
-    completion_cap = _completion_cap(current_budget)
+    completion_cap = _completion_cap(current_budget, model=selected_model)
     max_turnovers = 0 if single_attempt else _max_truncation_retries()
     truncations = 0
     transient = 0
     hard = 0
     last_error: Exception | None = None
     schema = _schema_name(response_schema)
+    strict_schema = response_schema.get("schema") or {}
     label = _purpose_label(purpose)
 
     while True:
@@ -267,10 +335,18 @@ def _resilient_openai_multimodal_json(
             except Exception as exc:  # JSONDecodeError plus compatible clients
                 parse_error = exc
 
+            if refusal:
+                raise ValueError(
+                    f"OpenAI {label} refused schema {schema}: {refusal[:500]}"
+                )
+
             # Some providers mark the response as length-limited after emitting a
-            # complete closing brace.  A parsed strict-schema object is usable; all
-            # semantic/identity validators still run at the caller boundary.
-            if isinstance(parsed, dict):
+            # complete closing brace. Accept it only after proving every required
+            # field/row is present; semantic/identity validators still run at the
+            # caller boundary.
+            if isinstance(parsed, dict) and _matches_schema_shape(
+                parsed, strict_schema
+            ):
                 if finish_reason == "length":
                     progress.log(
                         "Accepted a complete strict-schema response despite a "
@@ -279,20 +355,18 @@ def _resilient_openai_multimodal_json(
                     )
                 return parsed
 
-            if refusal:
-                raise ValueError(
-                    f"OpenAI {label} refused schema {schema}: {refusal[:500]}"
-                )
-
-            if finish_reason == "length":
-                if (
-                    truncations >= max_turnovers
-                    or current_budget >= completion_cap
-                ):
+            incomplete_object = isinstance(parsed, dict)
+            if finish_reason == "length" or incomplete_object:
+                if truncations >= max_turnovers:
+                    condition = (
+                        "an incomplete strict object"
+                        if incomplete_object
+                        else "a completion-limit response"
+                    )
                     raise _TerminalStructuredOutputError(
-                        f"OpenAI {label} schema {schema} remained truncated after "
-                        f"{truncations + 1} completion-limit response(s) at "
-                        f"{current_budget} tokens"
+                        f"OpenAI {label} schema {schema} remained {condition} "
+                        f"after {truncations + 1} bounded response(s) at "
+                        f"the {current_budget}-token allowance"
                     )
                 previous_budget = current_budget
                 current_budget = min(
@@ -300,10 +374,20 @@ def _resilient_openai_multimodal_json(
                     max(previous_budget * 2, previous_budget + 4000),
                 )
                 truncations += 1
+                issue = (
+                    "returned an incomplete strict object"
+                    if incomplete_object
+                    else "reached the completion limit"
+                )
+                allowance = (
+                    f"with {current_budget} tokens"
+                    if current_budget > previous_budget
+                    else f"at the {current_budget}-token provider maximum"
+                )
                 progress.log(
-                    f"OpenAI {label} schema {schema} reached the completion limit "
-                    f"at {previous_budget} tokens; retrying with "
-                    f"{current_budget} tokens and compact structured reasoning "
+                    f"OpenAI {label} schema {schema} {issue} at "
+                    f"{previous_budget} tokens; retrying {allowance} and compact "
+                    "structured reasoning "
                     f"({truncations}/{max_turnovers}).",
                     level="warning",
                 )

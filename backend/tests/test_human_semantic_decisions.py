@@ -399,9 +399,10 @@ def test_clear_pause_is_agent_resolved_and_continues_same_run(
             "keywords": "Renan, nation, liberty",
         }]
 
-    def resolve(*_args, **_kwargs):
+    def resolve(*_args, **kwargs):
         nonlocal resolver_calls
         resolver_calls += 1
+        assert kwargs["source_text"] == "# Verified semantic source\nRenan"
         # The request-started marker must be durable before the paid call.
         db.expire_all()
         saved = db.get(models.UploadJob, job.id)
@@ -422,6 +423,11 @@ def test_clear_pause_is_agent_resolved_and_continues_same_run(
     )
     monkeypatch.setattr(
         build_concepts.autonomous_resolution, "resolve_pending", resolve
+    )
+    monkeypatch.setattr(
+        build_concepts,
+        "_semantic_recovery_source_text",
+        lambda _raw: "# Verified semantic source\nRenan",
     )
     monkeypatch.setattr(build_concepts.generation, "concepts_from_mmd", generate)
     monkeypatch.setattr(
@@ -1219,7 +1225,7 @@ def test_saved_agent_directive_replays_without_second_agent_call(
     assert generation_calls == 1
 
 
-def test_agent_action_followup_same_scope_escalates_without_loop(
+def test_changed_same_scope_followup_is_replanned_and_completes(
     db,
     first_chapter,
     monkeypatch,
@@ -1236,8 +1242,9 @@ def test_agent_action_followup_same_scope_escalates_without_loop(
     followup = copy.deepcopy(first_packet)
     followup["context_hash"] = "f" * 64
     followup["decision_id"] = "phase33-host-followup-" + "f" * 16
-    # Candidate opaque IDs can be regenerated and reordered by a later critic
-    # pass. They must not turn the same semantic unit into a billable new issue.
+    # The later critic exposes a materially changed candidate workspace for the
+    # same unit. Terra must see the prior ineffective pathway and choose again
+    # instead of forcing a manual pause.
     followup["candidates"] = [
         {
             **copy.deepcopy(first_packet["candidates"][1]),
@@ -1256,6 +1263,10 @@ def test_agent_action_followup_same_scope_escalates_without_loop(
         "decision_id": first_packet["decision_id"],
         "context_hash": first_packet["context_hash"],
     }
+    followup_identity = {
+        "decision_id": followup["decision_id"],
+        "context_hash": followup["context_hash"],
+    }
     generation_calls = 0
     resolver_calls = 0
 
@@ -1264,18 +1275,28 @@ def test_agent_action_followup_same_scope_escalates_without_loop(
         generation_calls += 1
         if phase33._human_resolution_for(identity) is None:
             raise semantic_recovery.HumanDecisionRequired(first_packet)
-        raise semantic_recovery.HumanDecisionRequired(followup)
+        if phase33._human_resolution_for(followup_identity) is None:
+            raise semantic_recovery.HumanDecisionRequired(followup)
+        return [{"concept_title": "Renan's nation and liberty"}]
 
     def resolve(*_args, **_kwargs):
         nonlocal resolver_calls
         resolver_calls += 1
+        target = (
+            "HOST-CONCEPT-0001"
+            if resolver_calls == 1
+            else "HOST-REGENERATED-9002"
+        )
         return autonomous_resolution.ResolutionResult(
             status="resolved",
-            reason="The exact evidence initially supports expanding Renan.",
+            reason=(
+                "The changed critic workspace supports a different bounded "
+                "host pathway."
+            ),
             confidence=0.97,
             evidence_refs=("PENDING-EVIDENCE-001",),
             choice="expand_existing",
-            target_concept_id="HOST-CONCEPT-0001",
+            target_concept_id=target,
         )
 
     monkeypatch.setattr(build_concepts.config, "use_live_generation", lambda: True)
@@ -1287,6 +1308,14 @@ def test_agent_action_followup_same_scope_escalates_without_loop(
     )
     monkeypatch.setattr(build_concepts.generation, "concepts_from_mmd", generate)
     monkeypatch.setattr(
+        build_concepts,
+        "_deposit_and_publish_concepts",
+        lambda *_args, **_kwargs: (
+            [904], [],
+            {"written": 1, "sources_updated": 0, "parent_column": True},
+        ),
+    )
+    monkeypatch.setattr(
         build_concepts.drive_checkpoints,
         "schedule_checkpoint_backup",
         lambda *_args, **_kwargs: None,
@@ -1295,13 +1324,9 @@ def test_agent_action_followup_same_scope_escalates_without_loop(
     result = build_concepts.generate_post_learning(
         db, job.id, chapter.id, owner_sub=auth.LOCAL_OWNER_SUB
     )
-    assert result["status"] == "awaiting_decision"
-    assert result["pending_decision"]["decision_id"] == followup["decision_id"]
-    review = result["pending_decision"]["agent_review"]
-    assert review["status"] == "escalated"
-    assert "same semantic scope" in review["reason"]
-    assert generation_calls == 2
-    assert resolver_calls == 1
+    assert result["concept_ids"] == [904]
+    assert generation_calls == 3
+    assert resolver_calls == 2
 
 
 def test_second_sequential_agent_dispatch_claim_is_rejected_atomically(

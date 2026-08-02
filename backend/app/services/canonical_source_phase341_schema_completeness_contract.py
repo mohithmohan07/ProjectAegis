@@ -7,9 +7,10 @@ already escalates malformed/truncated text, but a syntactically valid partial
 object must also be rejected before a caller mistakes it for a complete schema.
 
 This final wrapper checks required keys, required nested object fields, and array
-min/max cardinality from the supplied strict schema.  An incomplete object is
-retried with a larger completion budget and a compact-output instruction.  It
-never manufactures missing fields or relaxes caller validation.
+min/max cardinality from the supplied strict schema. An incomplete object is
+retried with a larger completion budget, or with the same provider-max allowance
+and a compact-output instruction when already at capacity. It never manufactures
+missing fields or relaxes caller validation.
 """
 from __future__ import annotations
 
@@ -17,10 +18,13 @@ import copy
 import os
 from typing import Any
 
+from aegis_pipeline.openai_policy import provider_token_capacity
+
+from .. import config
 from . import canonical_source_phase22 as phase22
 from . import progress
 
-_CONTRACT_VERSION = 1
+_CONTRACT_VERSION = 2
 
 
 class _IncompleteStrictSchemaError(RuntimeError):
@@ -69,14 +73,25 @@ def _matches_schema_shape(value: object, schema: object) -> bool:
     return True
 
 
-def _completion_cap(initial: int) -> int:
+def _completion_cap(initial: int, *, model: str | None = None) -> int:
+    provider_maximum = max(
+        1,
+        min(
+            int(config.OPENAI_MAX_OUTPUT_TOKENS),
+            int(provider_token_capacity(model).max_output_tokens),
+        ),
+    )
     configured = max(
         4000,
         int(os.environ.get(
-            "AEGIS_STRUCTURED_JSON_MAX_COMPLETION_TOKENS", "65536"
+            "AEGIS_STRUCTURED_JSON_MAX_COMPLETION_TOKENS",
+            str(provider_maximum),
         )),
     )
-    return max(int(initial), min(131072, configured))
+    return min(
+        provider_maximum,
+        max(max(1, int(initial)), min(provider_maximum, configured)),
+    )
 
 
 def _max_retries() -> int:
@@ -109,7 +124,10 @@ def install() -> None:
             "_", " "
         )
         current_budget = max(1000, int(kwargs.get("max_tokens") or 0))
-        cap = _completion_cap(current_budget)
+        cap = _completion_cap(
+            current_budget,
+            model=str(kwargs.get("model") or config.OPENAI_MODEL),
+        )
         attempts = (
             0 if kwargs.get("single_attempt") else _max_retries()
         )
@@ -130,17 +148,22 @@ def install() -> None:
             result = original(**call_kwargs)
             if _matches_schema_shape(result, strict_schema):
                 return result
-            if attempt > attempts or current_budget >= cap:
+            if attempt > attempts:
                 raise _IncompleteStrictSchemaError(
                     f"OpenAI {purpose} schema {schema_name} remained incomplete "
                     f"after {attempt} bounded response(s) at {current_budget} tokens"
                 )
             previous = current_budget
             current_budget = min(cap, max(previous * 2, previous + 4000))
+            allowance = (
+                f"with {current_budget} tokens"
+                if current_budget > previous
+                else f"at the {current_budget}-token provider maximum"
+            )
             progress.log(
                 f"OpenAI {purpose} schema {schema_name} returned an incomplete "
-                f"strict object at {previous} tokens; retrying with "
-                f"{current_budget} tokens ({attempt}/{attempts}).",
+                f"strict object at {previous} tokens; retrying {allowance} "
+                f"({attempt}/{attempts}).",
                 level="warning",
             )
         raise _IncompleteStrictSchemaError(

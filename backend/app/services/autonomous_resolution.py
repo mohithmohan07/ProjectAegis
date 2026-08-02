@@ -1,12 +1,14 @@
-"""One-shot, evidence-bounded semantic decision agent.
+"""Two-step, evidence-bounded semantic decision agent.
 
-The agent is deliberately narrower than generation.  It may select only a
-server-offered action and target, it receives bounded source/checkpoint
-evidence, and it must abstain when that evidence is incomplete or ambiguous.
-The orchestration layer owns durable exactly-once dispatch state.
+The agent may select only a server-offered action and target.  Its first call
+either resolves the issue or asks the server for exact offered candidate/block
+identities.  The server then expands that evidence deterministically and makes
+one final call.  It never repeats an unchanged packet, and the orchestration
+layer owns durable exactly-once dispatch state.
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -21,14 +23,19 @@ from . import generation
 from . import semantic_confidence_policy as confidence_policy
 
 
-RESOLVER_VERSION = "semantic-resolution-agent-3"
+RESOLVER_VERSION = "semantic-resolution-agent-4"
 _ISSUE_KEY_VERSION = 1
-_DEFAULT_MAX_DECISIONS = 6
-_DEFAULT_SOURCE_CHARS = 16_000
-_MAX_PACKET_CHARS = 48_000
+_DEFAULT_MAX_DECISIONS = 100
+_DEFAULT_MAX_PATHWAY_TURNS = 24
+_DEFAULT_SOURCE_CHARS = 96_000
+_MAX_PACKET_CHARS = 320_000
+_DEFAULT_RESOLUTION_MODEL = "gpt-5.6-terra"
+_RESOLUTION_MODEL_ENV = "AEGIS_AUTONOMOUS_RESOLUTION_MODEL"
 _CANDIDATE_WORKSPACE_POLICY = (
-    "complete-candidate-catalog-v3:all-opaque-identities;"
+    "complete-candidate-catalog-v4:all-opaque-identities;"
     "content-bound-sha256;relevance-ranked-detail;"
+    "separate-evidence-and-topology-detail-quotas;"
+    "deterministic-one-time-evidence-expansion;compound-evidence-refs;"
     "critic-mentions-are-retrieval-only;all-topology-actions-visible;"
     "legacy-exact-canonical-source-map-v1;"
     "automatable-actions-only;instruction-must-be-empty-v1"
@@ -43,7 +50,12 @@ AUTOMATABLE_CHOICES = frozenset({
     "consolidate_types",
     "keep_distinct_types",
 })
-_DEFAULT_CANDIDATE_DETAILS = 10
+_DEFAULT_EVIDENCE_CANDIDATE_DETAILS = 18
+_DEFAULT_TOPOLOGY_CANDIDATE_DETAILS = 12
+_DEFAULT_PENDING_EVIDENCE_ROWS = 24
+_MAX_EXPANSION_CANDIDATES = 24
+_MAX_EXPANSION_BLOCKS = 32
+_MAX_EXPANSION_REFS = 32
 _SPACE_RE = re.compile(r"\s+")
 _BLOCK_ID_RE = re.compile(r"\bBLK-[A-Za-z0-9_-]+\b")
 _CANDIDATE_CATALOG_FIELDS = (
@@ -78,6 +90,7 @@ class ResolutionResult:
     workspace_hash: str = ""
     offered_candidate_count: int = 0
     inspected_candidate_count: int = 0
+    supporting_target_ids: tuple[str, ...] = ()
 
     @property
     def resolved(self) -> bool:
@@ -99,7 +112,30 @@ def maximum_decisions() -> int:
         value = int(raw)
     except (TypeError, ValueError):
         value = _DEFAULT_MAX_DECISIONS
-    return max(0, min(25, value))
+    return max(0, min(500, value))
+
+
+def maximum_pathway_turns() -> int:
+    """Return the bounded number of distinct repairs one issue may explore."""
+
+    raw = os.environ.get(
+        "AEGIS_AUTONOMOUS_RESOLUTION_MAX_PATHWAY_TURNS",
+        str(_DEFAULT_MAX_PATHWAY_TURNS),
+    )
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = _DEFAULT_MAX_PATHWAY_TURNS
+    return max(1, min(100, value))
+
+
+def resolution_model() -> str:
+    """Return the high-intelligence planner/solver model for discrepancies."""
+
+    return (
+        os.environ.get(_RESOLUTION_MODEL_ENV, _DEFAULT_RESOLUTION_MODEL).strip()
+        or _DEFAULT_RESOLUTION_MODEL
+    )
 
 
 def issue_key(pending: Mapping[str, Any]) -> str:
@@ -289,7 +325,88 @@ def _candidate_binding(row: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def capability_key(pending: Mapping[str, Any]) -> str:
+def _prior_pathway_history(
+    checkpoint: Mapping[str, Any] | None,
+    pending: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Return bounded agent actions that did not finish this semantic scope.
+
+    Only completed actions are included. Dispatch claims and abstentions are
+    transport/audit state, not a pathway for the next solver to avoid. The
+    resulting rows are deliberately compact but retain the exact offered
+    action and target chosen by the prior solver.
+    """
+
+    ledger = (
+        checkpoint.get("human_decisions")
+        if isinstance(checkpoint, Mapping)
+        and isinstance(checkpoint.get("human_decisions"), Mapping)
+        else {}
+    )
+    wanted_issue = issue_key(pending)
+    rows: list[dict[str, Any]] = []
+
+    def add(review: object, resolution: object = None) -> None:
+        if not isinstance(review, Mapping):
+            return
+        if (
+            str(review.get("issue_key") or "") != wanted_issue
+            or str(review.get("status") or "") != "resolved"
+        ):
+            return
+        resolved = resolution if isinstance(resolution, Mapping) else {}
+        rows.append({
+            "resolver_version": str(review.get("resolver_version") or ""),
+            "capability_key": str(review.get("capability_key") or ""),
+            "choice": str(
+                resolved.get("choice") or review.get("choice") or ""
+            ),
+            "target_id": str(
+                resolved.get("target_id") or review.get("target_id") or ""
+            ),
+            "target_concept_id": str(
+                resolved.get("target_concept_id")
+                or review.get("target_concept_id")
+                or ""
+            ),
+            "confidence": review.get("confidence", 0.0),
+            "reason": _compact_text(review.get("reason"), 800),
+            "completed_at": str(review.get("completed_at") or ""),
+        })
+
+    for review in ledger.get("agent_review_history") or []:
+        add(review)
+    for resolution in ledger.get("resolutions") or []:
+        if not isinstance(resolution, Mapping):
+            continue
+        original = resolution.get("pending_decision")
+        review = (
+            original.get("agent_review")
+            if isinstance(original, Mapping)
+            else None
+        )
+        add(review, resolution)
+
+    rows.sort(key=lambda row: (
+        row["completed_at"], row["capability_key"], row["choice"],
+        row["target_id"], row["target_concept_id"],
+    ))
+    deduplicated: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        identity = _sha256_json(row)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        deduplicated.append(row)
+    return deduplicated[-maximum_pathway_turns():]
+
+
+def capability_key(
+    pending: Mapping[str, Any],
+    *,
+    checkpoint: Mapping[str, Any] | None = None,
+) -> str:
     """Fingerprint the resolver's complete candidate-workspace capability.
 
     This deliberately excludes the provider/model identity.  A changed key
@@ -315,6 +432,19 @@ def capability_key(pending: Mapping[str, Any]) -> str:
     options.sort(key=lambda row: json.dumps(
         row, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ))
+    evidence = [
+        _stable_json_value(dict(row))
+        for row in pending.get("evidence") or []
+        if isinstance(row, Mapping)
+    ]
+    evidence.sort(key=lambda row: json.dumps(
+        row, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ))
+    item = (
+        _stable_json_value(dict(pending.get("item") or {}))
+        if isinstance(pending.get("item"), Mapping)
+        else {}
+    )
     material = {
         "policy": _CANDIDATE_WORKSPACE_POLICY,
         "output_policy": {
@@ -326,6 +456,27 @@ def capability_key(pending: Mapping[str, Any]) -> str:
         "source_max_chars": _source_limit(),
         "candidate_bindings": candidates,
         "options": options,
+        # Changed critic conclusions, evidence, item scope, or canonical
+        # context are a materially new workspace and may be replanned. Pure
+        # list reordering remains immaterial.
+        "semantic_workspace": {
+            "context_hash": str(pending.get("context_hash") or ""),
+            "kind": str(pending.get("kind") or ""),
+            "phase": str(pending.get("phase") or ""),
+            "conflict": str(pending.get("conflict") or ""),
+            "diagnosis": str(pending.get("diagnosis") or ""),
+            "decision_question": str(
+                pending.get("decision_question")
+                or pending.get("question")
+                or ""
+            ),
+            "item": item,
+            "evidence": evidence,
+        },
+        # A repeated issue after one applied action is a pathway turnover, not
+        # the same request. Sealing the prior actions lets the next Terra pass
+        # choose a different repair without reopening identical-packet loops.
+        "prior_pathways": _prior_pathway_history(checkpoint, pending),
     }
     return _sha256_json(material)
 
@@ -339,7 +490,7 @@ def _source_limit() -> int:
         value = int(raw)
     except (TypeError, ValueError):
         value = _DEFAULT_SOURCE_CHARS
-    return max(4_000, min(40_000, value))
+    return max(8_000, min(240_000, value))
 
 
 def _search_needles(pending: Mapping[str, Any]) -> list[str]:
@@ -586,15 +737,25 @@ def _model_pending_decision(pending: Mapping[str, Any]) -> dict[str, Any]:
         for row in bindings
     ]
     detail_order = _candidate_relevance_order(pending, raw_candidates)
-    candidate_details = []
-    for rank, index in enumerate(
-        detail_order[:_DEFAULT_CANDIDATE_DETAILS], start=1
-    ):
+    evidence_indexes = [
+        index for index in detail_order
+        if bindings[index]["action"] == "use_verified_evidence"
+        or bool(bindings[index]["source_block_ids"])
+    ][:_DEFAULT_EVIDENCE_CANDIDATE_DETAILS]
+    topology_indexes = [
+        index for index in detail_order
+        if bindings[index]["action"] != "use_verified_evidence"
+        and not bindings[index]["source_block_ids"]
+    ][:_DEFAULT_TOPOLOGY_CANDIDATE_DETAILS]
+
+    def detail(index: int, *, rank: int, detail_kind: str) -> dict[str, Any]:
         raw = raw_candidates[index]
         binding = bindings[index]
-        candidate_details.append({
+        return {
             "relevance_rank": rank,
+            "detail_kind": detail_kind,
             "target_id": binding["target_id"],
+            "concept_id": binding["concept_id"],
             "binding_hash": binding["binding_hash"],
             "coverage_sha256": binding["coverage_sha256"],
             "coverage_chars": binding["coverage_chars"],
@@ -606,7 +767,20 @@ def _model_pending_decision(pending: Mapping[str, Any]) -> dict[str, Any]:
                 "Ranked for inspection only; an ID mentioned by a critic is "
                 "not evidence of support. Verify this bound text and hash."
             ),
-        })
+        }
+
+    evidence_candidate_details = [
+        detail(index, rank=rank, detail_kind="evidence")
+        for rank, index in enumerate(evidence_indexes, start=1)
+    ]
+    topology_candidate_details = [
+        detail(index, rank=rank, detail_kind="topology")
+        for rank, index in enumerate(topology_indexes, start=1)
+    ]
+    candidate_details = [
+        *evidence_candidate_details,
+        *topology_candidate_details,
+    ]
 
     return {
         "decision_id": _compact_text(pending.get("decision_id"), 128),
@@ -646,6 +820,16 @@ def _model_pending_decision(pending: Mapping[str, Any]) -> dict[str, Any]:
             "detail_order_is_retrieval_not_recommendation": True,
         },
         "candidate_details": candidate_details,
+        "evidence_candidate_detail_target_ids": [
+            row["target_id"] for row in evidence_candidate_details
+        ],
+        "topology_candidate_detail_target_ids": [
+            row["target_id"] for row in topology_candidate_details
+        ],
+        "candidate_detail_quotas": {
+            "evidence": _DEFAULT_EVIDENCE_CANDIDATE_DETAILS,
+            "topology": _DEFAULT_TOPOLOGY_CANDIDATE_DETAILS,
+        },
         "deferred_assignment_unit_ids": _compact_string_list(
             pending.get("deferred_assignment_unit_ids"),
             maximum=30,
@@ -817,6 +1001,9 @@ def _relevant_checkpoint_context(
         "mined_types": _bounded_rows(
             relevant_types, maximum=4, chars=1_100
         ),
+        "prior_agent_pathways": _prior_pathway_history(
+            checkpoint, pending
+        ),
     }
 
 
@@ -827,6 +1014,52 @@ def build_packet(
     checkpoint: Mapping[str, Any] | None,
 ) -> tuple[dict[str, Any], set[str]]:
     model_pending = _model_pending_decision(pending)
+    prior_pathways = _prior_pathway_history(checkpoint, pending)
+    tried_targetless_choices = {
+        str(row.get("choice") or "")
+        for row in prior_pathways
+        if str(row.get("choice") or "")
+        and not str(row.get("target_id") or "")
+        and not str(row.get("target_concept_id") or "")
+    }
+    tried_target_ids = {
+        str(row.get("target_id") or "")
+        for row in prior_pathways
+        if str(row.get("target_id") or "")
+    }
+    tried_concept_ids = {
+        str(row.get("target_concept_id") or "")
+        for row in prior_pathways
+        if str(row.get("target_concept_id") or "")
+    }
+
+    def option_was_tried(row: Mapping[str, Any]) -> bool:
+        choice = str(row.get("choice") or "")
+        target_id = str(row.get("target_id") or "")
+        concept_id = str(row.get("target_concept_id") or "")
+        if target_id or concept_id:
+            return target_id in tried_target_ids or concept_id in tried_concept_ids
+        return choice in tried_targetless_choices
+
+    untried_options = [
+        row for row in model_pending.get("options") or []
+        if not option_was_tried(row)
+    ]
+    if prior_pathways:
+        model_pending["options"] = untried_options
+        model_pending["excluded_prior_targetless_choices"] = sorted(
+            tried_targetless_choices
+        )
+        model_pending["excluded_prior_pathways"] = [
+            {
+                "choice": str(row.get("choice") or ""),
+                "target_id": str(row.get("target_id") or ""),
+                "target_concept_id": str(
+                    row.get("target_concept_id") or ""
+                ),
+            }
+            for row in prior_pathways
+        ]
     evidence: list[dict[str, str]] = []
     for index, row in enumerate(pending.get("evidence") or [], start=1):
         if not isinstance(row, Mapping):
@@ -837,7 +1070,7 @@ def build_packet(
             "page": _compact_text(row.get("page"), 128),
             "text": _compact_text(row.get("text"), 1_200),
         })
-        if len(evidence) >= 6:
+        if len(evidence) >= _DEFAULT_PENDING_EVIDENCE_ROWS:
             break
     windows = _mmd_windows(source_text, pending)
     true_mmd_match = any(
@@ -845,7 +1078,9 @@ def build_packet(
     )
     packet = {
         "resolver_version": RESOLVER_VERSION,
-        "capability_key": capability_key(pending),
+        "capability_key": capability_key(
+            pending, checkpoint=checkpoint
+        ),
         "issue_key": issue_key(pending),
         "source_identity": {
             "mmd_sha256": hashlib.sha256(
@@ -857,13 +1092,13 @@ def build_packet(
             ),
         },
         "task": (
-            "Resolve only when one offered action is clearly supported by the "
-            "supplied evidence. Otherwise ask the user."
+            "Choose the best safe, source-preserving offered continuation. If "
+            "the current packet lacks exact evidence, request the precise "
+            "offered candidate, BLK, or evidence identities needed for one "
+            "deterministic expansion instead of asking the user."
         ),
         "pending_decision": model_pending,
-        "checkpoint_context": _relevant_checkpoint_context(
-            checkpoint, pending
-        ),
+        "checkpoint_context": _relevant_checkpoint_context(checkpoint, pending),
         "source_evidence": evidence,
         "mmd_windows": windows,
         "evidence_status": {
@@ -880,7 +1115,12 @@ def build_packet(
             "verify_candidate_bound_text_and_hash_before_selection": True,
             "selected_candidate_must_cite_its_binding_hash": True,
             "legacy_candidate_must_have_exact_canonical_source_match": True,
-            "abstain_on_uncertainty": True,
+            "prefer_safe_non_destructive_continuation": True,
+            "request_evidence_before_human_escalation": True,
+            "compound_claims_may_cite_multiple_bound_candidates": True,
+            "first_pass_may_request_exact_evidence": True,
+            "final_pass_must_choose_best_safe_offered_pathway": True,
+            "do_not_repeat_a_prior_ineffective_pathway": True,
         },
     }
 
@@ -1060,31 +1300,299 @@ def build_packet(
     if packet_chars() > _MAX_PACKET_CHARS:
         raise ValueError("autonomous semantic resolution packet exceeds safety cap")
 
+    evidence_refs = _packet_evidence_refs(packet)
+    return packet, evidence_refs
+
+
+def _packet_evidence_refs(packet: Mapping[str, Any]) -> set[str]:
+    """Return only exact evidence identities physically present in a packet."""
+
     evidence_refs = {
         str(row.get("evidence_id") or "")
-        for row in packet["source_evidence"]
+        for row in packet.get("source_evidence") or []
+        if isinstance(row, Mapping)
         if row.get("evidence_id")
     }
     evidence_refs.update(
         str(row.get("evidence_id") or "")
-        for row in packet["mmd_windows"]
+        for row in packet.get("mmd_windows") or []
+        if isinstance(row, Mapping)
         if row.get("evidence_id") and row.get("issue_match") is True
     )
-    # Each exact server (or legacy resolver) binding hash is itself a sealed
-    # evidence reference. A
-    # candidate-based action must cite this hash as well as canonical MMD for
-    # source-critical phases.
+    # A binding hash is selectable evidence only when the packet also exposes
+    # that candidate's semantic text. The compact catalog may list 100 opaque
+    # identities, but a hash alone cannot prove what an undetailed target says.
+    model_pending = packet.get("pending_decision") or {}
+    detailed_rows = [
+        row
+        for row in model_pending.get("candidate_details") or []
+        if isinstance(row, Mapping)
+    ]
+    expansion = packet.get("evidence_expansion")
+    if isinstance(expansion, Mapping):
+        detailed_rows.extend(
+            row
+            for row in expansion.get("candidate_details") or []
+            if isinstance(row, Mapping)
+        )
     evidence_refs.update(
         str(row.get("binding_hash") or "")
-        for row in _model_candidate_rows(packet["pending_decision"])
-        if row.get("binding_hash") and row.get("server_binding_valid") is not False
+        for row in detailed_rows
+        if row.get("binding_hash")
+        and row.get("server_binding_valid") is not False
     )
-    return packet, evidence_refs
+    return evidence_refs
+
+
+def _requested_expansion(
+    response: Mapping[str, Any],
+    *,
+    pending: Mapping[str, Any],
+    evidence_refs: set[str],
+) -> dict[str, list[str]] | None:
+    """Validate a planner's exact, server-expandable evidence request."""
+
+    candidate_ids = {
+        str(row.get("target_id") or "")
+        for row in pending.get("candidates") or []
+        if isinstance(row, Mapping) and row.get("target_id")
+    }
+    block_ids = {
+        block_id
+        for row in pending.get("candidates") or []
+        if isinstance(row, Mapping)
+        for block_id in _candidate_block_ids(row)[0]
+        if block_id
+    }
+
+    def requested(name: str, allowed: set[str], maximum: int) -> list[str] | None:
+        values = list(dict.fromkeys(
+            str(value) for value in response.get(name) or [] if str(value)
+        ))
+        if len(values) > maximum or any(value not in allowed for value in values):
+            return None
+        return values
+
+    requested_candidates = requested(
+        "requested_candidate_ids", candidate_ids, _MAX_EXPANSION_CANDIDATES
+    )
+    requested_blocks = requested(
+        "requested_block_ids", block_ids, _MAX_EXPANSION_BLOCKS
+    )
+    requested_refs = requested(
+        "requested_evidence_refs", evidence_refs, _MAX_EXPANSION_REFS
+    )
+    if any(value is None for value in (
+        requested_candidates, requested_blocks, requested_refs
+    )):
+        return None
+    if not any((requested_candidates, requested_blocks, requested_refs)):
+        return None
+    return {
+        "candidate_ids": requested_candidates or [],
+        "block_ids": requested_blocks or [],
+        "evidence_refs": requested_refs or [],
+    }
+
+
+def _exact_source_expansion_windows(
+    source_text: str,
+    *,
+    needles: list[str],
+    maximum_chars: int = 72_000,
+) -> list[dict[str, Any]]:
+    """Retrieve every requested exact source neighborhood without fuzzy edits."""
+
+    source = str(source_text or "")
+    if not source:
+        return []
+    folded = source.casefold()
+    spans: list[tuple[int, int]] = []
+    for needle in list(dict.fromkeys(value for value in needles if value)):
+        normalized = _SPACE_RE.sub(" ", needle).strip()
+        if not normalized:
+            continue
+        variants = [normalized]
+        words = normalized.split()
+        if len(words) > 12:
+            variants.extend((" ".join(words[:12]), " ".join(words[-12:])))
+        matched_this_needle = False
+        for variant in variants:
+            start_at = 0
+            while len(spans) < 40:
+                position = folded.find(variant.casefold(), start_at)
+                if position < 0:
+                    break
+                spans.append((
+                    max(0, position - 1_200),
+                    min(len(source), position + len(variant) + 3_600),
+                ))
+                matched_this_needle = True
+                start_at = position + max(1, len(variant))
+            if matched_this_needle:
+                break
+        if len(spans) >= 40:
+            break
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(spans):
+        if merged and start <= merged[-1][1] + 400:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    out: list[dict[str, Any]] = []
+    used = 0
+    for index, (start, end) in enumerate(merged, start=1):
+        text = source[start:end]
+        if used + len(text) > maximum_chars:
+            text = text[:max(0, maximum_chars - used)]
+        if not text:
+            break
+        out.append({
+            "evidence_id": f"MMD-WINDOW-EXPANDED-{index:03d}",
+            "source_offsets": f"{start}:{start + len(text)}",
+            "text": text,
+            "issue_match": True,
+            "requested_exact_expansion": True,
+        })
+        used += len(text)
+        if used >= maximum_chars:
+            break
+    return out
+
+
+def _expand_packet_once(
+    packet: Mapping[str, Any],
+    *,
+    pending: Mapping[str, Any],
+    source_text: str,
+    request: Mapping[str, list[str]],
+) -> tuple[dict[str, Any], set[str]]:
+    """Build a different, deterministic final workspace from exact IDs."""
+
+    expanded = copy.deepcopy(dict(packet))
+    requested_candidates = set(request.get("candidate_ids") or [])
+    requested_blocks = set(request.get("block_ids") or [])
+    selected_rows: list[Mapping[str, Any]] = []
+    for row in pending.get("candidates") or []:
+        if not isinstance(row, Mapping):
+            continue
+        binding = _candidate_binding(row)
+        if (
+            binding["target_id"] in requested_candidates
+            or requested_blocks.intersection(binding["source_block_ids"])
+        ):
+            selected_rows.append(row)
+    selected_rows = selected_rows[:_MAX_EXPANSION_CANDIDATES]
+
+    expanded_details: list[dict[str, Any]] = []
+    source_needles = list(requested_blocks)
+    for rank, row in enumerate(selected_rows, start=1):
+        binding = _candidate_binding(row)
+        coverage = str(row.get("coverage") or "")
+        gap = str(row.get("gap") or "")
+        source_needles.extend(binding["source_block_ids"])
+        source_needles.extend((coverage, gap))
+        expanded_details.append({
+            "expansion_rank": rank,
+            "target_id": binding["target_id"],
+            "concept_id": binding["concept_id"],
+            "action": binding["action"],
+            "source_block_ids": binding["source_block_ids"],
+            "binding_hash": binding["binding_hash"],
+            "server_binding_valid": binding["server_binding_valid"],
+            "text_sha256": binding["text_sha256"],
+            "coverage_sha256": binding["coverage_sha256"],
+            "coverage": _compact_text(coverage, 4_000),
+            "gap_sha256": binding["gap_sha256"],
+            "gap": _compact_text(gap, 1_500),
+        })
+
+    requested_refs = set(request.get("evidence_refs") or [])
+    expanded_source_evidence = []
+    for row in expanded.get("source_evidence") or []:
+        if not isinstance(row, Mapping):
+            continue
+        evidence_id = str(row.get("evidence_id") or "")
+        if evidence_id in requested_refs or any(
+            block_id in str(row.get("text") or "")
+            for block_id in requested_blocks
+        ):
+            expanded_source_evidence.append(dict(row))
+
+    expansion_windows = _exact_source_expansion_windows(
+        source_text,
+        needles=source_needles,
+    )
+    existing_offsets = {
+        str(row.get("source_offsets") or "")
+        for row in expanded.get("mmd_windows") or []
+        if isinstance(row, Mapping)
+    }
+    expansion_windows = [
+        row for row in expansion_windows
+        if row["source_offsets"] not in existing_offsets
+    ]
+    expanded["mmd_windows"] = [
+        *(expanded.get("mmd_windows") or []),
+        *expansion_windows,
+    ]
+    expanded["source_evidence"] = [
+        *(expanded.get("source_evidence") or []),
+        *(
+            [] if not expanded_source_evidence
+            else [{**row, "requested_expansion": True}
+                  for row in expanded_source_evidence]
+        ),
+    ]
+    expanded["evidence_expansion"] = {
+        "attempt": 1,
+        "request": _stable_json_value(dict(request)),
+        "candidate_details": expanded_details,
+        "source_windows_added": len(expansion_windows),
+        "same_packet_retry": False,
+        "final_call": True,
+    }
+    expanded["task"] = (
+        "Make the final best safe source-preserving decision. Use multiple "
+        "candidate binding hashes when a compound claim requires several "
+        "verified blocks. Apply one offered target/action. The server has "
+        "already filtered source-changing and user-only actions from this "
+        "final workspace, so do not defer the choice."
+    )
+    expanded["constraints"][
+        "first_pass_may_request_exact_evidence"
+    ] = False
+    expanded["constraints"][
+        "final_pass_must_choose_best_safe_offered_pathway"
+    ] = True
+    model_pending = expanded.get("pending_decision") or {}
+    model_pending["legacy_exact_source_matches"] = (
+        _legacy_exact_source_matches(pending, expanded["mmd_windows"])
+    )
+    expanded["pending_decision"] = model_pending
+    if len(json.dumps(expanded, ensure_ascii=False, default=str)) > _MAX_PACKET_CHARS:
+        expanded["mmd_windows"] = [
+            *(packet.get("mmd_windows") or []),
+            *_exact_source_expansion_windows(
+                source_text,
+                needles=source_needles,
+                maximum_chars=32_000,
+            ),
+        ]
+    if len(json.dumps(expanded, ensure_ascii=False, default=str)) > _MAX_PACKET_CHARS:
+        expanded["evidence_expansion"]["candidate_details"] = (
+            expanded_details[:12]
+        )
+    if len(json.dumps(expanded, ensure_ascii=False, default=str)) > _MAX_PACKET_CHARS:
+        raise ValueError("expanded autonomous resolution packet exceeds safety cap")
+    return expanded, _packet_evidence_refs(expanded)
 
 
 def _response_schema(
     pending: Mapping[str, Any],
     evidence_refs: set[str],
+    *,
+    final: bool = False,
 ) -> dict[str, Any]:
     candidate_rows = _model_candidate_rows(pending)
     choices = list(dict.fromkeys(
@@ -1093,18 +1601,46 @@ def _response_schema(
         if isinstance(row, Mapping)
         and is_automatable_choice(row.get("choice"))
     ))
-    target_ids = list(dict.fromkeys(
+    excluded_pathways = [
+        row for row in pending.get("excluded_prior_pathways") or []
+        if isinstance(row, Mapping)
+    ]
+    excluded_target_ids = {
+        str(row.get("target_id") or "")
+        for row in excluded_pathways
+        if str(row.get("target_id") or "")
+    }
+    excluded_concept_ids = {
+        str(row.get("target_concept_id") or "")
+        for row in excluded_pathways
+        if str(row.get("target_concept_id") or "")
+    }
+    all_target_ids = list(dict.fromkeys(
         str(row.get("target_id") or "")
         for row in [*candidate_rows, *(pending.get("options") or [])]
-        if isinstance(row, Mapping) and row.get("target_id")
+        if isinstance(row, Mapping)
+        and row.get("target_id")
     ))
+    target_ids = [
+        value for value in all_target_ids
+        if value not in excluded_target_ids
+    ]
     concept_ids = list(dict.fromkeys(
         str(row.get("concept_id") or row.get("target_concept_id") or "")
         for row in [*candidate_rows, *(pending.get("options") or [])]
         if isinstance(row, Mapping)
         and (row.get("concept_id") or row.get("target_concept_id"))
+        and str(
+            row.get("concept_id") or row.get("target_concept_id") or ""
+        ) not in excluded_concept_ids
     ))
     refs = sorted(evidence_refs) or ["NONE"]
+    block_ids = list(dict.fromkeys(
+        str(block_id)
+        for row in candidate_rows
+        for block_id in row.get("source_block_ids") or []
+        if str(block_id)
+    ))
     return {
         "name": "aegis_autonomous_semantic_resolution",
         "strict": True,
@@ -1112,7 +1648,12 @@ def _response_schema(
             "type": "object",
             "properties": {
                 "disposition": {
-                    "type": "string", "enum": ["apply", "ask_human"]
+                    "type": "string",
+                    "enum": (
+                        ["apply"]
+                        if final
+                        else ["apply", "request_evidence", "ask_human"]
+                    ),
                 },
                 "choice": {"type": "string", "enum": ["", *choices]},
                 "target_id": {
@@ -1121,12 +1662,30 @@ def _response_schema(
                 "target_concept_id": {
                     "type": "string", "enum": ["", *concept_ids]
                 },
+                "supporting_target_ids": {
+                    "type": "array",
+                    "maxItems": min(24, len(all_target_ids)),
+                    "items": {
+                        "type": "string",
+                        # A previously attempted evidence target cannot be the
+                        # applied action again, but its exact bound source text
+                        # may still support a new compound repair.
+                        "enum": all_target_ids or ["NONE"],
+                    },
+                },
                 # Explanatory prose belongs in ``reason``.  Keeping this
                 # compatibility field fixed to the empty string makes a
                 # malformed provider response fail its strict contract before
                 # it can be mistaken for a custom human direction.
                 "instruction": {"type": "string", "enum": [""]},
-                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                "confidence": {
+                    "type": "number",
+                    "minimum": (
+                        confidence_policy.minimum(_gate_for(pending))
+                        if final else 0
+                    ),
+                    "maximum": 1,
+                },
                 "reason": {
                     "type": "string", "minLength": 1, "maxLength": 8000
                 },
@@ -1136,14 +1695,40 @@ def _response_schema(
                     "items": {"type": "string", "enum": refs},
                 },
                 "uncertainties": {
-                    "type": "array", "maxItems": 20,
+                    "type": "array", "maxItems": 0 if final else 20,
                     "items": {"type": "string", "maxLength": 1000},
+                },
+                "requested_candidate_ids": {
+                    "type": "array",
+                    "maxItems": 0 if final else min(
+                        _MAX_EXPANSION_CANDIDATES, len(target_ids)
+                    ),
+                    "items": {
+                        "type": "string", "enum": target_ids or ["NONE"]
+                    },
+                },
+                "requested_block_ids": {
+                    "type": "array",
+                    "maxItems": 0 if final else min(
+                        _MAX_EXPANSION_BLOCKS, len(block_ids)
+                    ),
+                    "items": {
+                        "type": "string", "enum": block_ids or ["NONE"]
+                    },
+                },
+                "requested_evidence_refs": {
+                    "type": "array",
+                    "maxItems": 0 if final else min(
+                        _MAX_EXPANSION_REFS, len(refs)
+                    ),
+                    "items": {"type": "string", "enum": refs},
                 },
             },
             "required": [
                 "disposition", "choice", "target_id", "target_concept_id",
-                "instruction", "confidence", "reason", "evidence_refs",
-                "uncertainties",
+                "supporting_target_ids", "instruction", "confidence", "reason",
+                "evidence_refs", "uncertainties", "requested_candidate_ids",
+                "requested_block_ids", "requested_evidence_refs",
             ],
             "additionalProperties": False,
         },
@@ -1155,10 +1740,13 @@ def _provider_call(
     packet: dict[str, Any],
     response_schema: dict[str, Any],
 ) -> dict[str, Any]:
-    return phase22._openai_multimodal_json(
+    final_call = bool(packet.get("evidence_expansion"))
+    kwargs = dict(
         system=(
-            "You are Aegis's bounded semantic resolution agent. Use only the "
-            "evidence and opaque IDs supplied. Do not repair content, invent a "
+            "You are Aegis's autonomous semantic planner and solver. Apply your "
+            "domain knowledge to reason about the best pathway, while grounding "
+            "every factual output in the supplied evidence and opaque IDs. Do not "
+            "repair content, invent a "
             "target, weaken an integrity rule, or choose source replacement. "
             "A block ID mentioned by a critic is only a retrieval hint, never "
             "proof or a recommendation. Before selecting any candidate, verify "
@@ -1169,18 +1757,72 @@ def _provider_call(
             "appears in legacy_exact_source_matches, and the response cites one "
             "of that row's canonical evidence refs. The candidate catalog is "
             "complete even when detailed prose is relevance-bounded. "
-            "Select apply only when exactly one offered action is clearly "
-            "supported; otherwise ask_human and state the unresolved ambiguity. "
+            "A compound claim may cite multiple exact candidate binding hashes, "
+            "but the applied action/target must still be one server-offered safe "
+            "continuation. If checkpoint_context.prior_agent_pathways is non-empty, "
+            "the same semantic scope reappeared after those actions; diagnose why "
+            "they were insufficient and choose a different offered pathway or "
+            "target unless newly supplied evidence proves the earlier pathway is "
+            "now complete. On the first call, if exact proof is absent, use "
+            "request_evidence with precise offered candidate, block, or evidence "
+            "IDs; do not ask the user merely because the packet is incomplete. "
+            + (
+                "This is the final expanded call: choose the best non-destructive "
+                "offered pathway. The server has already verified that the "
+                "canonical source exists and exposed only bounded, permitted "
+                "actions, so return apply and do not defer the choice. "
+                if final_call
+                else "The server permits exactly one deterministic expansion. "
+            )
+            +
             "The instruction field must be exactly empty; put every explanation "
             "in reason."
         ),
         prompt=json.dumps(packet, ensure_ascii=False),
         pages=[],
         response_schema=response_schema,
-        purpose="concept_validation",
-        max_tokens=3_000,
-        single_attempt=True,
+        purpose="semantic_resolution",
+        max_tokens=config.OPENAI_MAX_OUTPUT_TOKENS,
+        # Provider transport/protocol retries are allowed at the wrapper
+        # layer. They do not change the semantic packet or create an agentic
+        # pathway loop, and keep a transient API failure from becoming a
+        # manual decision.
+        single_attempt=False,
     )
+    requested_model = resolution_model()
+    try:
+        return phase22._openai_multimodal_json(
+            **kwargs,
+            model=requested_model,
+        )
+    except Exception as exc:
+        message = str(exc).casefold()
+        primary_model = str(config.OPENAI_MODEL or "").strip()
+        unavailable_model = any(marker in message for marker in (
+            "model_not_found",
+            "model not found",
+            "does not exist or you do not have access",
+            "not have access to model",
+        ))
+        if (
+            not unavailable_model
+            or not primary_model
+            or primary_model == requested_model
+        ):
+            raise
+        # A provider rejection before inference is not a semantic retry. Use
+        # the configured primary model once; quota/auth/timeout failures never
+        # enter this fallback and remain visible to orchestration.
+        packet["provider_model_fallback"] = {
+            "requested": requested_model,
+            "used": primary_model,
+            "reason": "requested resolution model unavailable",
+        }
+        kwargs["prompt"] = json.dumps(packet, ensure_ascii=False)
+        return phase22._openai_multimodal_json(
+            **kwargs,
+            model=primary_model,
+        )
 
 
 def _gate_for(pending: Mapping[str, Any], *, choice: str = ""):
@@ -1211,6 +1853,11 @@ def _validate_response(
         confidence = 0.0
     refs = tuple(dict.fromkeys(
         str(value) for value in response.get("evidence_refs") or [] if value
+    ))
+    supporting_target_ids = tuple(dict.fromkeys(
+        str(value)
+        for value in response.get("supporting_target_ids") or []
+        if str(value)
     ))
     uncertainties = [
         str(value).strip()
@@ -1330,6 +1977,29 @@ def _validate_response(
         if isinstance(row, Mapping)
         and (row.get("concept_id") or row.get("target_concept_id"))
     }
+    if any(target not in candidate_target_ids for target in supporting_target_ids):
+        return ResolutionResult(
+            "escalated",
+            "The agent cited a compound-support target that was not offered.",
+            confidence,
+            refs,
+        )
+    for supporting_target in supporting_target_ids:
+        supporting_binding = candidate_binding_by_target.get(supporting_target)
+        if candidate_valid_by_target.get(supporting_target) is False:
+            return ResolutionResult(
+                "escalated",
+                "A compound-support candidate has an invalid or stale binding.",
+                confidence,
+                refs,
+            )
+        if supporting_binding and supporting_binding not in refs:
+            return ResolutionResult(
+                "escalated",
+                "Compound evidence was not tied to every exact candidate binding.",
+                confidence,
+                refs,
+            )
     if choice == "accept_recommended":
         expected = str(option.get("target_id") or "")
         if target_id and target_id != expected:
@@ -1439,6 +2109,44 @@ def _validate_response(
                     confidence,
                     refs,
                 )
+    if supporting_target_ids:
+        model_pending = (
+            packet.get("pending_decision")
+            if isinstance(packet, Mapping)
+            and isinstance(packet.get("pending_decision"), Mapping)
+            else {}
+        )
+        exact_match_catalog = (
+            model_pending.get("legacy_exact_source_matches")
+            if isinstance(model_pending.get("legacy_exact_source_matches"), Mapping)
+            else {}
+        )
+        refs_by_index = {
+            int(row[0]): {str(ref) for ref in row[1] if str(ref)}
+            for row in exact_match_catalog.get("rows") or []
+            if isinstance(row, list)
+            and len(row) == 2
+            and isinstance(row[0], int)
+            and isinstance(row[1], list)
+        }
+        for index, candidate in enumerate(pending.get("candidates") or []):
+            if not isinstance(candidate, Mapping):
+                continue
+            if str(candidate.get("target_id") or "") not in supporting_target_ids:
+                continue
+            binding = _candidate_binding(candidate)
+            if (
+                binding["binding_origin"] == "resolver_legacy"
+                and binding["action"] == "use_verified_evidence"
+                and not refs_by_index.get(index, set()).intersection(refs)
+            ):
+                return ResolutionResult(
+                    "escalated",
+                    "Compound legacy evidence was not matched to and cited "
+                    "from exact canonical source text.",
+                    confidence,
+                    refs,
+                )
     if not reason:
         return ResolutionResult(
             "escalated",
@@ -1452,6 +2160,7 @@ def _validate_response(
         choice=choice,
         target_id=target_id,
         target_concept_id=target_concept_id,
+        supporting_target_ids=supporting_target_ids,
     )
 
 
@@ -1546,11 +2255,23 @@ def resolve_pending(
     checkpoint: Mapping[str, Any] | None,
     provider: Callable[..., Mapping[str, Any]] | None = None,
 ) -> ResolutionResult:
-    """Make one physical provider request and deterministically vet its action."""
+    """Resolve with at most two semantic calls and no same-packet retry."""
 
     sealed_patch = verified_source_patch_resolution(pending)
     if sealed_patch is not None:
         return sealed_patch
+
+    if not str(source_text or "").strip():
+        return ResolutionResult(
+            status="unavailable",
+            reason=(
+                "The canonical working source is empty, so no source-grounded "
+                "autonomous pathway can be applied safely."
+            ),
+            workspace_hash=capability_key(
+                pending, checkpoint=checkpoint
+            ),
+        )
 
     offered_candidate_count = len([
         row for row in pending.get("candidates") or []
@@ -1563,63 +2284,210 @@ def resolve_pending(
                 "This decision has no action approved for autonomous "
                 "execution and requires the user."
             ),
-            workspace_hash=capability_key(pending),
+            workspace_hash=capability_key(
+                pending, checkpoint=checkpoint
+            ),
             offered_candidate_count=offered_candidate_count,
             inspected_candidate_count=0,
         )
     packet: dict[str, Any] | None = None
+    final_packet: dict[str, Any] | None = None
+
+    def inspected_count(value: Mapping[str, Any] | None) -> int:
+        if not isinstance(value, Mapping):
+            return 0
+        pending_packet = value.get("pending_decision")
+        pending_packet = pending_packet if isinstance(pending_packet, Mapping) else {}
+        ids = {
+            str(row.get("target_id") or "")
+            for row in pending_packet.get("candidate_details") or []
+            if isinstance(row, Mapping) and row.get("target_id")
+        }
+        expansion = value.get("evidence_expansion")
+        expansion = expansion if isinstance(expansion, Mapping) else {}
+        ids.update(
+            str(row.get("target_id") or "")
+            for row in expansion.get("candidate_details") or []
+            if isinstance(row, Mapping) and row.get("target_id")
+        )
+        return len(ids)
+
+    def default_expansion_request(
+        value: Mapping[str, Any], refs: set[str]
+    ) -> dict[str, list[str]] | None:
+        model_pending = value.get("pending_decision")
+        model_pending = model_pending if isinstance(model_pending, Mapping) else {}
+        target_ids = list(dict.fromkeys(
+            str(row.get("target_id") or "")
+            for row in model_pending.get("candidate_details") or []
+            if isinstance(row, Mapping) and row.get("target_id")
+        ))[:_MAX_EXPANSION_CANDIDATES]
+        if not target_ids:
+            target_ids = [
+                str(row.get("target_id") or "")
+                for row in pending.get("candidates") or []
+                if isinstance(row, Mapping) and row.get("target_id")
+            ][:_MAX_EXPANSION_CANDIDATES]
+        selected = set(target_ids)
+        block_ids = list(dict.fromkeys(
+            block_id
+            for row in pending.get("candidates") or []
+            if isinstance(row, Mapping)
+            and str(row.get("target_id") or "") in selected
+            for block_id in _candidate_block_ids(row)[0]
+        ))[:_MAX_EXPANSION_BLOCKS]
+        evidence = [
+            ref for ref in sorted(refs)
+            if ref.startswith(("PENDING-EVIDENCE-", "MMD-WINDOW-"))
+        ][:_MAX_EXPANSION_REFS]
+        if not any((target_ids, block_ids, evidence)):
+            return None
+        return {
+            "candidate_ids": target_ids,
+            "block_ids": block_ids,
+            "evidence_refs": evidence,
+        }
+
     try:
         packet, evidence_refs = build_packet(
             pending,
             source_text=source_text,
             checkpoint=checkpoint,
         )
+        if not packet["pending_decision"].get("options"):
+            return ResolutionResult(
+                status="escalated",
+                reason=(
+                    "Every currently offered autonomous pathway for this "
+                    "semantic scope was already applied without finishing "
+                    "the issue; Aegis did not repeat one."
+                ),
+                workspace_hash=_sha256_json(packet),
+                offered_candidate_count=offered_candidate_count,
+                inspected_candidate_count=inspected_count(packet),
+            )
         schema = _response_schema(packet["pending_decision"], evidence_refs)
         raw = (provider or _provider_call)(
             packet=packet,
             response_schema=schema,
         )
+        if not isinstance(raw, Mapping):
+            raise TypeError("resolution planner returned no structured decision")
+
+        disposition = str(raw.get("disposition") or "")
+        first_result = (
+            _validate_response(
+                raw,
+                pending=pending,
+                evidence_refs=evidence_refs,
+                packet=packet,
+            )
+            if disposition == "apply"
+            else None
+        )
+        if first_result is not None and first_result.resolved:
+            final_packet = packet
+            final_refs = evidence_refs
+            final_raw = raw
+        else:
+            request = (
+                _requested_expansion(
+                    raw,
+                    pending=pending,
+                    evidence_refs=evidence_refs,
+                )
+                if disposition == "request_evidence"
+                else None
+            )
+            if request is None and disposition == "apply":
+                proposed_target = str(raw.get("target_id") or "")
+                proposed_concept = str(
+                    raw.get("target_concept_id") or ""
+                )
+                proposed_candidate_ids = [
+                    str(row.get("target_id") or "")
+                    for row in pending.get("candidates") or []
+                    if isinstance(row, Mapping)
+                    and str(row.get("target_id") or "")
+                    and (
+                        str(row.get("target_id") or "") == proposed_target
+                        or (
+                            proposed_concept
+                            and str(
+                                row.get("concept_id")
+                                or row.get("target_concept_id")
+                                or ""
+                            ) == proposed_concept
+                        )
+                    )
+                ]
+                if proposed_candidate_ids:
+                    request = {
+                        "candidate_ids": list(dict.fromkeys(
+                            proposed_candidate_ids
+                        ))[:_MAX_EXPANSION_CANDIDATES],
+                        "block_ids": [],
+                        "evidence_refs": [],
+                    }
+            # A premature abstention *or an invalid/low-confidence first
+            # proposal* is not sent to the user. Give Terra a deterministic
+            # expansion of the most relevant exact offered identities, then
+            # require the final best-safe action.
+            request = request or default_expansion_request(packet, evidence_refs)
+            if request is None:
+                final_packet = packet
+                final_refs = evidence_refs
+                final_raw = raw
+            else:
+                final_packet, final_refs = _expand_packet_once(
+                    packet,
+                    pending=pending,
+                    source_text=source_text,
+                    request=request,
+                )
+                if _sha256_json(final_packet) == _sha256_json(packet):
+                    raise RuntimeError("evidence expansion did not change workspace")
+                final_schema = _response_schema(
+                    final_packet["pending_decision"],
+                    final_refs,
+                    final=True,
+                )
+                final_raw = (provider or _provider_call)(
+                    packet=final_packet,
+                    response_schema=final_schema,
+                )
+                if not isinstance(final_raw, Mapping):
+                    raise TypeError("resolution solver returned no structured decision")
+                if str(final_raw.get("disposition") or "") == "request_evidence":
+                    raise ValueError("final resolution call requested a third pass")
     except Exception as exc:
+        used_packet = final_packet or packet
         return ResolutionResult(
             status="unavailable",
             reason=(
-                "The one bounded autonomous review could not complete "
-                f"({type(exc).__name__}). Your saved decision is still available."
+                "The bounded autonomous planner/solver could not complete "
+                f"({type(exc).__name__}); the checkpoint and source identity "
+                "were preserved for an infrastructure-safe resume."
             ),
             workspace_hash=(
-                _sha256_json(packet) if isinstance(packet, Mapping)
-                else capability_key(pending)
+                _sha256_json(used_packet) if isinstance(used_packet, Mapping)
+                else capability_key(pending, checkpoint=checkpoint)
             ),
             offered_candidate_count=offered_candidate_count,
-            inspected_candidate_count=(
-                len(packet["pending_decision"].get("candidate_details") or [])
-                if isinstance(packet, Mapping) else 0
-            ),
-        )
-    if not isinstance(raw, Mapping):
-        return ResolutionResult(
-            status="unavailable",
-            reason="The autonomous review returned no structured decision.",
-            workspace_hash=_sha256_json(packet),
-            offered_candidate_count=offered_candidate_count,
-            inspected_candidate_count=len(
-                packet["pending_decision"].get("candidate_details") or []
-            ),
+            inspected_candidate_count=inspected_count(used_packet),
         )
     try:
         result = _validate_response(
-            raw,
+            final_raw,
             pending=pending,
-            evidence_refs=evidence_refs,
-            packet=packet,
+            evidence_refs=final_refs,
+            packet=final_packet,
         )
         return replace(
             result,
-            workspace_hash=_sha256_json(packet),
+            workspace_hash=_sha256_json(final_packet),
             offered_candidate_count=offered_candidate_count,
-            inspected_candidate_count=len(
-                packet["pending_decision"].get("candidate_details") or []
-            ),
+            inspected_candidate_count=inspected_count(final_packet),
         )
     except Exception as exc:
         return ResolutionResult(
@@ -1628,9 +2496,7 @@ def resolve_pending(
                 "The bounded autonomous review could not be validated "
                 f"({type(exc).__name__}). Your saved decision is still available."
             ),
-            workspace_hash=_sha256_json(packet),
+            workspace_hash=_sha256_json(final_packet),
             offered_candidate_count=offered_candidate_count,
-            inspected_candidate_count=len(
-                packet["pending_decision"].get("candidate_details") or []
-            ),
+            inspected_candidate_count=inspected_count(final_packet),
         )

@@ -80,7 +80,9 @@ def test_valid_but_incomplete_object_gets_larger_budget_retry(monkeypatch):
 
     assert result == {"rows": [{"id": "A"}, {"id": "B"}]}
     assert [call["max_completion_tokens"] for call in calls] == [1200, 5200]
-    assert "STRICT-SCHEMA COMPLETENESS RECOVERY" in (
+    # Phase 3.4 now rejects the partial object before the outer completeness
+    # guard needs to see it; either layer's bounded recovery is acceptable.
+    assert "STRUCTURED OUTPUT RECOVERY" in (
         calls[1]["messages"][0]["content"]
     )
     generation._openai_gate = None

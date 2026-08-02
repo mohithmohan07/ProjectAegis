@@ -169,8 +169,9 @@ def require_workbooks_live() -> None:
 
 # OpenAI model for concept extraction / pre-learning derivation. The same model
 # family the Create Workbooks pipeline is validated with. Provider-capacity mode
-# is enabled by default: live calls retain their purpose-specific budgets, capped
-# by the model's documented limits, and oversized source is losslessly batched.
+# is enabled by default: live calls receive the model's configured maximum output
+# allowance, while oversized source is losslessly batched within its separate
+# input limit.
 OPENAI_MODEL = configured_openai_model()
 OPENAI_PROVIDER_MAX_TOKENS = provider_max_tokens_enabled()
 OPENAI_CONTEXT_WINDOW_TOKENS = configured_context_window_tokens(OPENAI_MODEL)

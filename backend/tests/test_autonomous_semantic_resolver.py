@@ -1,4 +1,4 @@
-"""Focused safety coverage for the one-shot semantic resolution agent."""
+"""Focused safety coverage for the two-step semantic resolution agent."""
 from __future__ import annotations
 
 import hashlib
@@ -64,11 +64,15 @@ def _response(**overrides) -> dict:
         "choice": "consolidate_types",
         "target_id": "",
         "target_concept_id": "",
+        "supporting_target_ids": [],
         "instruction": "",
         "confidence": 0.94,
         "reason": "The verified source statement supports one shared Type.",
         "evidence_refs": ["PENDING-EVIDENCE-001"],
         "uncertainties": [],
+        "requested_candidate_ids": [],
+        "requested_block_ids": [],
+        "requested_evidence_refs": [],
     }
     response.update(overrides)
     return response
@@ -103,10 +107,11 @@ def test_resolves_one_high_confidence_offered_action_with_one_provider_call(
     assert len(calls) == 1
 
     call = calls[0]
-    assert call["single_attempt"] is True
-    assert call["purpose"] == "concept_validation"
+    assert call["single_attempt"] is False
+    assert call["purpose"] == "semantic_resolution"
     assert call["pages"] == []
-    assert call["max_tokens"] == 3_000
+    assert call["max_tokens"] == resolver.config.OPENAI_MAX_OUTPUT_TOKENS
+    assert call["model"] == "gpt-5.6-terra"
     assert call["response_schema"]["strict"] is True
     schema = call["response_schema"]["schema"]
     assert schema["additionalProperties"] is False
@@ -127,7 +132,230 @@ def test_resolves_one_high_confidence_offered_action_with_one_provider_call(
         "keep_distinct_types",
     }
     assert packet["constraints"]["choose_only_offered_action"] is True
-    assert packet["constraints"]["abstain_on_uncertainty"] is True
+    assert packet["constraints"][
+        "final_pass_must_choose_best_safe_offered_pathway"
+    ] is True
+
+
+def test_resolution_model_is_configurable_and_keeps_provider_max_output(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    calls: list[dict] = []
+    monkeypatch.setenv(
+        "AEGIS_AUTONOMOUS_RESOLUTION_MODEL", "gpt-5.6-terra-snapshot"
+    )
+    monkeypatch.setattr(
+        resolver.phase22,
+        "_openai_multimodal_json",
+        lambda **kwargs: calls.append(kwargs) or _response(),
+    )
+
+    result = resolver.resolve_pending(
+        _pending(),
+        source_text="TYPE-0001 is supported by the canonical source.",
+        checkpoint={},
+    )
+
+    assert result.resolved is True
+    assert len(calls) == 1
+    assert calls[0]["model"] == "gpt-5.6-terra-snapshot"
+    assert calls[0]["max_tokens"] == resolver.config.OPENAI_MAX_OUTPUT_TOKENS
+    assert calls[0]["purpose"] == "semantic_resolution"
+
+
+def test_planner_expands_exact_compound_evidence_once_then_applies():
+    def candidate(
+        *, target_id: str, action: str, block_ids: list[str], coverage: str
+    ) -> dict:
+        return resolver.early_semantic_gate.bind_candidate({
+            "target_id": target_id,
+            "concept_id": "CONCEPT-VIENNA",
+            "action": action,
+            "title": f"{action} Vienna settlement",
+            "topic": "The Making of Nationalism in Europe",
+            "coverage": coverage,
+            "gap": "Preserve every supported clause.",
+            "source_block_ids": block_ids,
+            "source_topic_id": "TOPIC-VIENNA",
+            "target_topic_id": "TOPIC-VIENNA",
+            "boundary_relation": "within_fixed_source_topic",
+            "source_kind": "paragraph" if block_ids else "topology_repair",
+            "source_page": "6",
+            "text_sha256": hashlib.sha256(
+                coverage.encode("utf-8")
+            ).hexdigest(),
+        })
+
+    metternich = candidate(
+        target_id="TARGET-METTERNICH",
+        action="use_verified_evidence",
+        block_ids=["BLK-00099"],
+        coverage="Duke Metternich hosted the Congress of Vienna in 1815.",
+    )
+    settlement = candidate(
+        target_id="TARGET-SETTLEMENT",
+        action="use_verified_evidence",
+        block_ids=["BLK-00107", "BLK-00109"],
+        coverage=(
+            "The Treaty restored dynasties and conservative governments used "
+            "censorship to suppress criticism."
+        ),
+    )
+    refine = candidate(
+        target_id="TARGET-REFINE",
+        action="refine",
+        block_ids=[],
+        coverage=(
+            "Metternich hosted the settlement, which restored dynasties and "
+            "was defended through censorship."
+        ),
+    )
+    pending = _pending(
+        kind="phase31_source_grounding_semantic_conflict",
+        options=[{
+            "choice": "select_candidate",
+            "label": "Select evidence or a topology repair",
+            "recommended": True,
+        }],
+        candidates=[metternich, settlement, refine],
+    )
+    pending["phase"] = "3.1"
+    pending["item"]["unit_id"] = "CONCEPT-VIENNA"
+    pending["item"]["questions"] = [refine["coverage"]]
+    source = (
+        "BLK-00099 Duke Metternich hosted the Congress of Vienna in 1815. "
+        "BLK-00107 The Treaty restored dynasties. "
+        "BLK-00109 Conservative governments used censorship to suppress "
+        "criticism."
+    )
+    calls: list[dict] = []
+
+    def provider(*, packet, response_schema):
+        calls.append({
+            "packet": json.loads(json.dumps(packet)),
+            "schema": response_schema,
+        })
+        if len(calls) == 1:
+            return _response(
+                disposition="request_evidence",
+                choice="",
+                confidence=0.98,
+                reason="Inspect the exact compound source blocks together.",
+                evidence_refs=[],
+                requested_candidate_ids=[
+                    metternich["target_id"], settlement["target_id"],
+                    refine["target_id"],
+                ],
+                requested_block_ids=["BLK-00099", "BLK-00107", "BLK-00109"],
+            )
+        refs = resolver._packet_evidence_refs(packet)
+        mmd_ref = next(ref for ref in refs if ref.startswith("MMD-WINDOW-"))
+        return _response(
+            choice="select_candidate",
+            target_id=refine["target_id"],
+            supporting_target_ids=[
+                metternich["target_id"], settlement["target_id"],
+            ],
+            confidence=0.99,
+            reason=(
+                "The three exact blocks jointly support one conservative "
+                "settlement claim, so the offered source-preserving refinement "
+                "is the best safe continuation."
+            ),
+            evidence_refs=[
+                refine["binding_hash"], metternich["binding_hash"],
+                settlement["binding_hash"], mmd_ref,
+            ],
+        )
+
+    result = resolver.resolve_pending(
+        pending,
+        source_text=source,
+        checkpoint={},
+        provider=provider,
+    )
+
+    assert result.resolved is True
+    assert result.target_id == "TARGET-REFINE"
+    assert result.supporting_target_ids == (
+        "TARGET-METTERNICH", "TARGET-SETTLEMENT",
+    )
+    assert len(calls) == 2
+    assert resolver._sha256_json(calls[0]["packet"]) != resolver._sha256_json(
+        calls[1]["packet"]
+    )
+    assert calls[1]["packet"]["evidence_expansion"]["final_call"] is True
+    assert calls[1]["packet"]["source_identity"] == calls[0]["packet"][
+        "source_identity"
+    ]
+    assert calls[1]["schema"]["schema"]["properties"][
+        "disposition"
+    ]["enum"] == ["apply"]
+
+
+def test_first_pass_abstention_is_expanded_not_sent_to_the_user():
+    candidate = resolver.early_semantic_gate.bind_candidate({
+        "target_id": "TARGET-REFINE",
+        "concept_id": "CONCEPT-0001",
+        "action": "refine",
+        "title": "Refine the unsupported source claim",
+        "topic": "The Making of Nationalism in Europe",
+        "coverage": "The verified source supports the narrower claim.",
+        "gap": "Drop unsupported wording.",
+        "source_block_ids": [],
+        "source_topic_id": "TOPIC-0001",
+        "target_topic_id": "TOPIC-0001",
+        "boundary_relation": "refine_source_claim",
+        "source_kind": "topology_repair",
+        "source_page": "",
+        "text_sha256": "",
+    })
+    pending = _pending(
+        kind="phase31_source_grounding_semantic_conflict",
+        options=[{
+            "choice": "select_candidate",
+            "label": "Select a topology repair",
+            "recommended": True,
+        }],
+        candidates=[candidate],
+    )
+    pending["phase"] = "3.1"
+    calls = 0
+
+    def provider(*, packet, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return _response(
+                disposition="ask_human",
+                choice="",
+                confidence=0.8,
+                reason="The first bounded packet is incomplete.",
+                evidence_refs=[],
+            )
+        mmd_ref = next(
+            ref for ref in resolver._packet_evidence_refs(packet)
+            if ref.startswith("MMD-WINDOW-")
+        )
+        return _response(
+            choice="select_candidate",
+            target_id=candidate["target_id"],
+            confidence=0.99,
+            reason="The expanded source proves the offered safe refinement.",
+            evidence_refs=[candidate["binding_hash"], mmd_ref],
+        )
+
+    result = resolver.resolve_pending(
+        pending,
+        source_text=(
+            "CONCEPT-0001 The verified source supports the narrower claim."
+        ),
+        checkpoint={},
+        provider=provider,
+    )
+
+    assert calls == 2
+    assert result.resolved is True
 
 
 def test_nonblank_provider_instruction_is_rejected_even_for_valid_choice():
@@ -144,7 +372,9 @@ def test_nonblank_provider_instruction_is_rejected_even_for_valid_choice():
     assert "instruction outside" in result.reason
 
 
-def test_low_confidence_action_abstains(monkeypatch: pytest.MonkeyPatch):
+def test_low_confidence_first_action_gets_one_evidence_expansion(
+    monkeypatch: pytest.MonkeyPatch,
+):
     monkeypatch.delenv(
         confidence_policy.SEMANTIC_ACCEPTANCE_ENV, raising=False
     )
@@ -162,7 +392,7 @@ def test_low_confidence_action_abstains(monkeypatch: pytest.MonkeyPatch):
         provider=provider,
     )
 
-    assert calls == 1
+    assert calls == 2
     assert result.status == "escalated"
     assert result.resolved is False
     assert result.confidence == 0.91
@@ -595,16 +825,16 @@ def test_huge_packet_stays_within_hard_json_budget_without_losing_ids():
     assert len(encoded) <= resolver._MAX_PACKET_CHARS
 
 
-def test_candidate_beyond_expanded_detail_is_selectable_from_complete_catalog():
+def test_undetailed_candidate_requires_exact_expansion_before_selection():
     candidates = [{
         "target_id": f"TARGET-{index:04d}",
         "title": f"Use verified evidence BLK-{index:04d}",
         "coverage": (
             "Unrelated source block."
-            if index != 12
+            if index != 22
             else "Cavour engineered a diplomatic alliance with France."
         ),
-    } for index in range(1, 15)]
+    } for index in range(1, 26)]
     pending = _pending(
         kind="phase31_source_grounding_semantic_conflict",
         options=[{
@@ -617,15 +847,31 @@ def test_candidate_beyond_expanded_detail_is_selectable_from_complete_catalog():
     pending["phase"] = "3.1"
     pending["conflict"] = "One disputed claim needs exact canonical support."
 
+    calls = 0
+
     def provider(*, packet, **_kwargs):
+        nonlocal calls
+        calls += 1
         catalog = resolver._model_candidate_rows(packet["pending_decision"])
-        assert len(catalog) == 14
-        selected = catalog[11]
-        assert selected["target_id"] not in {
-            row["target_id"]
-            for row in packet["pending_decision"]["candidate_details"]
-        }
-        assert [11, ["MMD-WINDOW-001"]] in packet[
+        assert len(catalog) == 25
+        selected = catalog[21]
+        if calls == 1:
+            assert selected["target_id"] not in {
+                row["target_id"]
+                for row in packet["pending_decision"]["candidate_details"]
+            }
+            assert selected["binding_hash"] not in (
+                resolver._packet_evidence_refs(packet)
+            )
+        else:
+            assert selected["target_id"] in {
+                row["target_id"]
+                for row in packet["evidence_expansion"]["candidate_details"]
+            }
+            assert selected["binding_hash"] in (
+                resolver._packet_evidence_refs(packet)
+            )
+        assert [21, ["MMD-WINDOW-001"]] in packet[
             "pending_decision"
         ]["legacy_exact_source_matches"]["rows"]
         mmd_ref = next(
@@ -643,14 +889,16 @@ def test_candidate_beyond_expanded_detail_is_selectable_from_complete_catalog():
     result = resolver.resolve_pending(
         pending,
         source_text=(
-            "BLK-0012 Cavour engineered a diplomatic alliance with France."
+            "The Making of Nationalism in Europe. BLK-0022 Cavour engineered "
+            "a diplomatic alliance with France."
         ),
         checkpoint={},
         provider=provider,
     )
 
     assert result.resolved is True
-    assert result.target_id == "TARGET-0012"
+    assert result.target_id == "TARGET-0022"
+    assert calls == 2
 
 
 def test_legacy_exact_match_map_uses_only_final_transmitted_mmd_text():
@@ -793,6 +1041,53 @@ def test_all_topology_actions_remain_visible_after_many_evidence_candidates():
     assert packet["pending_decision"]["candidates"]["count"] == 94
     assert packet["pending_decision"]["candidates"]["complete"] is True
     assert len(json.dumps(packet, ensure_ascii=False)) <= resolver._MAX_PACKET_CHARS
+
+
+def test_evidence_and_topology_details_have_independent_quotas():
+    evidence = [{
+        "target_id": f"EVIDENCE-{index:03d}",
+        "action": "use_verified_evidence",
+        "title": f"Use verified evidence BLK-{index:05d}",
+        "source_block_ids": [f"BLK-{index:05d}"],
+        "coverage": f"Exact evidence paragraph {index}.",
+    } for index in range(60)]
+    topology = [{
+        "target_id": f"TOPOLOGY-{action}",
+        "action": action,
+        "title": f"{action.title()} the claim",
+        "coverage": "Complete source claim.",
+    } for action in ("refine", "split", "move", "retire", "keep")]
+    pending = _pending(candidates=[*evidence, *topology])
+
+    packet, _refs = resolver.build_packet(
+        pending,
+        source_text="BLK-00059 Exact evidence paragraph 59.",
+        checkpoint={},
+    )
+    details = packet["pending_decision"]["candidate_details"]
+    evidence_details = [row for row in details if row["detail_kind"] == "evidence"]
+    topology_details = [row for row in details if row["detail_kind"] == "topology"]
+
+    assert len(evidence_details) == resolver._DEFAULT_EVIDENCE_CANDIDATE_DETAILS
+    assert {row["target_id"] for row in topology_details} == {
+        row["target_id"] for row in topology
+    }
+    assert packet["pending_decision"]["candidate_detail_quotas"] == {
+        "evidence": resolver._DEFAULT_EVIDENCE_CANDIDATE_DETAILS,
+        "topology": resolver._DEFAULT_TOPOLOGY_CANDIDATE_DETAILS,
+    }
+
+
+def test_default_distinct_issue_budget_avoids_chapter_level_manual_pauses(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.delenv(
+        "AEGIS_AUTONOMOUS_RESOLUTION_MAX_DECISIONS", raising=False
+    )
+    assert resolver.maximum_decisions() == 100
+
+    monkeypatch.setenv("AEGIS_AUTONOMOUS_RESOLUTION_MAX_DECISIONS", "9999")
+    assert resolver.maximum_decisions() == 500
 
 
 def test_full_100_row_bound_catalog_keeps_top_relevant_text_under_cap():
@@ -1024,9 +1319,106 @@ def test_capability_key_tracks_full_binding_but_not_candidate_order():
         ],
     }
 
-    assert resolver.RESOLVER_VERSION == "semantic-resolution-agent-3"
+    assert resolver.RESOLVER_VERSION == "semantic-resolution-agent-4"
     assert resolver.capability_key(first) == resolver.capability_key(reordered)
     assert resolver.capability_key(first) != resolver.capability_key(changed)
+
+
+def test_capability_key_turns_over_for_changed_critic_and_prior_pathway():
+    pending = _pending()
+    changed_critic = {
+        **pending,
+        "context_hash": "b" * 64,
+        "conflict": "The later critic found a different unsupported clause.",
+    }
+    prior_review = {
+        "status": "resolved",
+        "resolver_version": resolver.RESOLVER_VERSION,
+        "issue_key": resolver.issue_key(pending),
+        "capability_key": "c" * 64,
+        "choice": "keep_distinct_types",
+        "target_id": "",
+        "target_concept_id": "",
+        "confidence": 0.98,
+        "reason": "The first pathway did not finish the semantic scope.",
+        "completed_at": "2026-08-02T01:00:00+00:00",
+    }
+    checkpoint = {
+        "human_decisions": {
+            "agent_review_history": [prior_review],
+            "resolutions": [],
+        }
+    }
+
+    initial = resolver.capability_key(pending)
+    assert initial != resolver.capability_key(changed_critic)
+    assert initial != resolver.capability_key(
+        pending, checkpoint=checkpoint
+    )
+
+    packet, _refs = resolver.build_packet(
+        pending,
+        source_text="TYPE-0001 canonical source context.",
+        checkpoint=checkpoint,
+    )
+    pathways = packet["checkpoint_context"]["prior_agent_pathways"]
+    assert pathways[0]["choice"] == "keep_distinct_types"
+    assert [
+        row["choice"] for row in packet["pending_decision"]["options"]
+    ] == ["consolidate_types"]
+
+
+def test_prior_target_is_not_selectable_again_on_pathway_turnover():
+    candidates = [
+        resolver.early_semantic_gate.bind_candidate({
+            "target_id": target_id,
+            "action": "refine",
+            "title": f"Refine with {target_id}",
+            "coverage": f"Verified semantic text for {target_id}.",
+        })
+        for target_id in ("TARGET-TRIED", "TARGET-UNTRIED")
+    ]
+    pending = _pending(
+        kind="phase31_source_grounding_semantic_conflict",
+        options=[{
+            "choice": "select_candidate",
+            "label": "Select a bounded repair",
+            "recommended": True,
+        }],
+        candidates=candidates,
+    )
+    prior = {
+        "status": "resolved",
+        "resolver_version": resolver.RESOLVER_VERSION,
+        "issue_key": resolver.issue_key(pending),
+        "capability_key": "d" * 64,
+        "choice": "select_candidate",
+        "target_id": "TARGET-TRIED",
+        "confidence": 0.99,
+        "reason": "This target did not finish the issue.",
+        "completed_at": "2026-08-02T02:00:00+00:00",
+    }
+    checkpoint = {
+        "human_decisions": {
+            "agent_review_history": [prior],
+            "resolutions": [],
+        }
+    }
+
+    packet, refs = resolver.build_packet(
+        pending,
+        source_text="Verified source for both bounded repair candidates.",
+        checkpoint=checkpoint,
+    )
+    schema = resolver._response_schema(packet["pending_decision"], refs)
+    allowed = schema["schema"]["properties"]["target_id"]["enum"]
+
+    assert "TARGET-TRIED" not in allowed
+    assert "TARGET-UNTRIED" in allowed
+    assert "TARGET-TRIED" in {
+        row["target_id"]
+        for row in packet["pending_decision"]["candidate_details"]
+    }
 
 
 def test_source_critical_action_requires_issue_matched_mmd_evidence():
