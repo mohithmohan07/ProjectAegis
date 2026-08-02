@@ -1934,7 +1934,7 @@ def test_unassigned_mined_types_fail_instead_of_guessing(monkeypatch):
             max_attempts=1)
 
 
-def test_mined_activity_role_is_split_by_authoritative_inventory_qids():
+def test_mined_activity_role_is_case_scoped_by_authoritative_inventory_qids():
     inventory = {"items": [
         {
             "qid": "QINV-0001",
@@ -1981,9 +1981,16 @@ def test_mined_activity_role_is_split_by_authoritative_inventory_qids():
 
     normalized = g._normalize_mined_type_candidate(raw_types, inventory)
 
+    assert len(normalized) == 1
+    assert normalized[0]["source_question_ids"] == [
+        "QINV-0001", "QINV-0002",
+    ]
     assert [
-        (item["is_activity"], item["source_question_ids"])
-        for item in normalized
+        (
+            case["is_activity"],
+            g._assignment_case_qids(case),
+        )
+        for case in normalized[0]["case_prompts"]
     ] == [
         (False, ["QINV-0001"]),
         (True, ["QINV-0002"]),
@@ -3452,7 +3459,8 @@ def test_prompts_require_opening_granularity_and_canonical_media_policy():
     assert "Preserve any existing Activity/Info Hub" in refine
     inventory = g.prompts.get_text("concepts.question_task_inventory.system")
     assert "numbered parent question" in inventory
-    assert "all of its lettered/roman subparts" in inventory
+    assert "independently answerable" in inventory
+    assert "dependent subparts" in inventory
     assert "Missing even one" in inventory and "checkpoint is a defect" in inventory
     assert "Activity/Info Hub" in inventory
     assert "feed culmination" not in inventory.lower()

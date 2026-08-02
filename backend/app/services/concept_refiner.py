@@ -6,8 +6,9 @@ team requires regardless of which extractor produced them:
 
 1. **Stable reusable Type numbering.** Extractors restart ``Type 01`` inside
    every concept. We allocate numbers in textbook/topic order, but semantically
-   consolidated Types rendered on more than one concept retain the SAME
-   ``Type NN``. Their ``Case NN`` sequence continues across those concepts.
+   consolidated Types rendered on more than one concept or topic retain the
+   SAME ``Type NN`` when their hidden mined-Type identity is supplied. Their
+   ``Case NN`` sequence continues across those hosts.
 2. **Culmination concepts use a separate "Miscellaneous Type NN" sequence**
    that is ALSO continuous across the whole chapter, and never advances (or is
    advanced by) the regular Type counter.
@@ -32,6 +33,7 @@ omitted when not applicable.
 """
 from __future__ import annotations
 
+import hashlib
 import re
 
 _SECTION_SEP = " // "
@@ -46,6 +48,26 @@ _ACTIVITY_HUB_LABEL = "Activity/Info Hub"
 _MISCONCEPTIONS_LABEL = "Misconceptions"
 _ERROR_ANALYSIS_LABEL = "Error Analysis"
 _ANALYSIS_LABEL = "Misconception/ Error Analysis"
+_TYPE_ORIGIN_SEALS_KEY = "_type_origin_seals"
+
+
+def _number_from_token(value: str) -> int | None:
+    """Return the rendered numeric identity from a Type/Case token."""
+    match = re.search(r"\d+", str(value or ""))
+    return int(match.group(0)) if match else None
+
+
+def _seal_origin_identity(value: object) -> str:
+    """Return a durable opaque seal without retaining the mined Type ID."""
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if re.fullmatch(r"origin-seal::[0-9a-f]{64}", raw):
+        return raw
+    digest = hashlib.sha256(
+        ("aegis-rendered-type-origin-v1\0" + raw).encode("utf-8")
+    ).hexdigest()
+    return f"origin-seal::{digest}"
 
 
 def is_culmination(title: str) -> bool:
@@ -147,14 +169,307 @@ def _type_signature(segment: str) -> str:
     return re.sub(r"\s+", " ", header.lower()).strip()
 
 
+def _type_example_signature(segment: str) -> tuple[str, ...]:
+    """Return exact public Example identities owned by one Type block."""
+    matches = list(_EXAMPLE_TOKEN_RE.finditer(segment or ""))
+    examples: list[str] = []
+    for index, match in enumerate(matches):
+        end = (
+            matches[index + 1].start()
+            if index + 1 < len(matches)
+            else len(segment)
+        )
+        value = segment[match.end():end]
+        boundary = re.search(
+            r"\b(?:Case|(?:Miscellaneous\s+)?Type)\s*0*\d+\s*:",
+            value,
+            re.IGNORECASE,
+        )
+        if boundary:
+            value = value[:boundary.start()]
+        normalized = re.sub(r"\s+", " ", value).strip().casefold()
+        if normalized:
+            examples.append(normalized)
+    return tuple(sorted(examples))
+
+
+def _origin_type_ids_for_block(
+    value: object,
+    *,
+    text: str,
+    matches: list[re.Match],
+) -> list[str]:
+    """Resolve hidden mined-Type identities for rendered Type occurrences.
+
+    ``_origin_type_id`` is deliberately record metadata, never public Type
+    text.  A record that renders one Type may carry the historical scalar
+    value.  Records that render several Types carry an ordered list/tuple so
+    each occurrence keeps its own mined identity.  A small mapping form is
+    also accepted for compatibility with callers that retain the original
+    local ``Type NN`` token as their key.
+
+    A scalar on a multi-Type record is ambiguous, so it is ignored rather than
+    incorrectly collapsing every Type on that record into one public Type.
+    """
+    count = len(matches)
+    if not count:
+        return []
+    if isinstance(value, str):
+        origin = value.strip()
+        return [origin] if origin and count == 1 else [""] * count
+    if isinstance(value, (list, tuple)):
+        return [
+            str(value[index] or "").strip() if index < len(value) else ""
+            for index in range(count)
+        ]
+    if not isinstance(value, dict):
+        return [""] * count
+
+    origins: list[str] = []
+    for index, match in enumerate(matches):
+        end = (
+            matches[index + 1].start()
+            if index + 1 < count
+            else len(text)
+        )
+        segment = text[match.start():end]
+        token = re.sub(r"\s*:\s*$", "", match.group(0)).strip()
+        signature = _type_signature(segment)
+        raw_origin = ""
+        # Ordered lists are preferred.  Mapping support is intentionally
+        # explicit: zero-based occurrence index, original local Type token,
+        # or the normalized rendered header.
+        for candidate in (
+            index,
+            str(index),
+            token,
+            token.casefold(),
+            signature,
+        ):
+            if candidate in value:
+                raw_origin = value[candidate]
+                break
+        origins.append(str(raw_origin or "").strip())
+    return origins
+
+
+def _type_occurrences(record: dict) -> tuple[str, list[re.Match]]:
+    """Return the rendered Types body and its ordered Type tokens."""
+    sections = split_sections(record.get("concept_details") or "")
+    index = _find_types(sections)
+    if index < 0:
+        return "", []
+    content = sections[index][1]
+    return content, list(_TYPE_TOKEN_RE.finditer(content or ""))
+
+
+def _record_origin_seals(record: dict) -> tuple[str, list[re.Match], list[str]]:
+    """Resolve the ordered hidden seals currently attached to one record."""
+    content, matches = _type_occurrences(record)
+    if not matches:
+        return content, matches, []
+    persisted = _origin_type_ids_for_block(
+        record.get(_TYPE_ORIGIN_SEALS_KEY),
+        text=content,
+        matches=matches,
+    )
+    handoff = _origin_type_ids_for_block(
+        record.get("_origin_type_id"),
+        text=content,
+        matches=matches,
+    )
+    seals = [
+        _seal_origin_identity(handoff[index] or persisted[index])
+        for index in range(len(matches))
+    ]
+    return content, matches, seals
+
+
+def carry_type_origin_metadata(before: dict, after: dict) -> dict:
+    """Carry opaque Type identity across a row-local Types rebuild.
+
+    Cleanup helpers rebuild Case numbering within one record.  Without this
+    handoff, a chapter-global Type rendered on several topics can temporarily
+    restart at ``Case 01`` and become indistinguishable from unrelated local
+    Types before the next chapter-wide renumbering pass.  Match stable Type
+    headers and exact public Examples first. Rendered numbers are used only
+    when the block has no Example identity, preventing a broad API rewrite
+    from accidentally joining unrelated Types.
+    """
+    before_content, before_matches, before_seals = _record_origin_seals(before)
+    after_content, after_matches = _type_occurrences(after)
+    if not after_matches:
+        after.pop(_TYPE_ORIGIN_SEALS_KEY, None)
+        after.pop("_origin_type_id", None)
+        return after
+    if not before_matches or not any(before_seals):
+        after.pop("_origin_type_id", None)
+        return after
+
+    before_entries: list[tuple[int, str, tuple[str, ...], str]] = []
+    for index, match in enumerate(before_matches):
+        end = (
+            before_matches[index + 1].start()
+            if index + 1 < len(before_matches)
+            else len(before_content)
+        )
+        before_entries.append((
+            _number_from_token(match.group(0)) or -1,
+            _type_signature(before_content[match.start():end]),
+            _type_example_signature(before_content[match.start():end]),
+            before_seals[index],
+        ))
+
+    used: set[int] = set()
+    carried: list[str] = []
+    same_count = len(before_matches) == len(after_matches)
+    for index, match in enumerate(after_matches):
+        end = (
+            after_matches[index + 1].start()
+            if index + 1 < len(after_matches)
+            else len(after_content)
+        )
+        number = _number_from_token(match.group(0)) or -1
+        segment = after_content[match.start():end]
+        signature = _type_signature(segment)
+        examples = _type_example_signature(segment)
+        candidates = [
+            entry_index
+            for entry_index, (old_number, old_signature, _old_examples, seal)
+            in enumerate(before_entries)
+            if entry_index not in used
+            and seal
+            and old_number == number
+            and old_signature == signature
+        ]
+        if not candidates:
+            candidates = [
+                entry_index
+                for entry_index, (_old_number, old_signature, _old_examples, seal)
+                in enumerate(before_entries)
+                if entry_index not in used and seal and old_signature == signature
+            ]
+        if not candidates:
+            candidates = [
+                entry_index
+                for entry_index, (_old_number, _old_signature, old_examples, seal)
+                in enumerate(before_entries)
+                if entry_index not in used
+                and seal
+                and examples
+                and old_examples == examples
+            ]
+        if not candidates:
+            candidates = [
+                entry_index
+                for entry_index, (old_number, _old_signature, old_examples, seal)
+                in enumerate(before_entries)
+                if entry_index not in used
+                and seal
+                and old_number == number
+                and (not examples or not old_examples)
+            ]
+        if (
+            not candidates
+            and same_count
+            and index not in used
+            and before_entries[index][2] == examples
+        ):
+            candidates = [index]
+        chosen = candidates[0] if len(candidates) == 1 else -1
+        if chosen >= 0:
+            used.add(chosen)
+            carried.append(before_entries[chosen][3])
+        else:
+            carried.append("")
+
+    if any(carried):
+        after[_TYPE_ORIGIN_SEALS_KEY] = carried
+    else:
+        after.pop(_TYPE_ORIGIN_SEALS_KEY, None)
+    # Raw mined Type IDs are a one-shot rendering handoff and never survive in
+    # checkpoint/public records; only the opaque seals above are durable.
+    after.pop("_origin_type_id", None)
+    return after
+
+
+def _durable_rendered_type_origins(records: list[dict]) -> dict[tuple, str]:
+    """Recover a previously rendered cross-topic Type identity.
+
+    Hidden mined-Type IDs are intentionally consumed on the first rendering so
+    they cannot leak into stored rows.  Later cleanup passes may renumber the
+    same public rows again.  A genuinely shared Type is then still observable:
+    the same rendered Type number and definition occur in multiple topics and
+    its Case numbers form one non-overlapping continuous sequence.  Legacy
+    topic-local Types restart at Case 01, so they do not satisfy this seal.
+    """
+    occurrences: dict[tuple, list[tuple[str, tuple[int, ...]]]] = {}
+    for record in records:
+        details = record.get("concept_details") or ""
+        sections = split_sections(details)
+        index = _find_types(sections)
+        if index < 0:
+            continue
+        _, content = sections[index]
+        matches = list(_TYPE_TOKEN_RE.finditer(content or ""))
+        topic_key = re.sub(
+            r"\W+", " ", str(record.get("topic") or "").lower()
+        ).strip()
+        sequence = (
+            "miscellaneous"
+            if is_culmination(record.get("concept_title", ""))
+            else "regular"
+        )
+        for type_index, match in enumerate(matches):
+            end = (
+                matches[type_index + 1].start()
+                if type_index + 1 < len(matches)
+                else len(content)
+            )
+            segment = content[match.start():end]
+            type_number = _number_from_token(match.group(0))
+            signature = _type_signature(segment)
+            case_numbers = tuple(
+                number
+                for token in _CASE_TOKEN_RE.findall(segment)
+                if (number := _number_from_token(token)) is not None
+            )
+            if type_number is None or not signature or not case_numbers:
+                continue
+            key = (sequence, type_number, signature)
+            occurrences.setdefault(key, []).append((topic_key, case_numbers))
+
+    durable: dict[tuple, str] = {}
+    for key, entries in occurrences.items():
+        if len({topic for topic, _numbers in entries if topic}) < 2:
+            continue
+        case_numbers = [
+            number
+            for _topic, numbers in entries
+            for number in numbers
+        ]
+        if (
+            len(case_numbers) < 2
+            or len(set(case_numbers)) != len(case_numbers)
+            or sorted(case_numbers) != list(range(1, max(case_numbers) + 1))
+        ):
+            continue
+        sequence, type_number, signature = key
+        durable[key] = (
+            f"rendered-global::{sequence}::{type_number}::{signature}"
+        )
+    return durable
+
+
 def _renumber_reusable_block(
     text: str,
     *,
     topic_key: str,
     type_label: str,
-    number_by_signature: dict[tuple[str, str], int],
-    case_count_by_signature: dict[tuple[str, str], int],
+    number_by_signature: dict[tuple[str, ...], int],
+    case_count_by_signature: dict[tuple[str, ...], int],
     next_number: int,
+    origin_type_ids: list[str] | None = None,
 ) -> tuple[str, int]:
     """Allocate stable Type numbers and continuous Cases by semantic header."""
     matches = list(_TYPE_TOKEN_RE.finditer(text or ""))
@@ -168,7 +483,20 @@ def _renumber_reusable_block(
         # A malformed/empty title must not accidentally share identity.
         if not signature:
             signature = f"__anonymous_{next_number + 1}_{index}"
-        key = (topic_key, signature)
+        origin_type_id = (
+            origin_type_ids[index]
+            if origin_type_ids and index < len(origin_type_ids)
+            else ""
+        )
+        # A mined Type ID is an opaque chapter-global identity.  It remains
+        # authoritative when its Cases are intentionally hosted on different
+        # concepts or source topics.  Legacy rows without that hidden handoff
+        # preserve the historical topic-plus-header matching behaviour.
+        key = (
+            ("origin_type_id", origin_type_id)
+            if origin_type_id
+            else ("topic_signature", topic_key, signature)
+        )
         number = number_by_signature.get(key)
         if number is None:
             next_number += 1
@@ -235,26 +563,73 @@ def renumber_types_continuously(records: list[dict]) -> list[dict]:
     Two independent, chapter-wide continuous sequences:
       * regular concepts  -> "Type 01", "Type 02", ...
       * culmination rows  -> "Miscellaneous Type 01", "Miscellaneous Type 02", ...
-    Neither advances the other. Within one source topic, repeated canonical
-    Type definitions retain one number across concept rows and their Cases
-    continue increasing instead of restarting.
+    Neither advances the other. A supplied hidden ``_origin_type_id`` keeps a
+    mined Type chapter-global even when its Cases have different concept/topic
+    hosts. The raw ID is immediately replaced by an opaque origin seal, which
+    survives row-local cleanup and checkpoint resume without entering public
+    Type text. Legacy rows without that handoff retain the prior behaviour:
+    within one source topic, repeated canonical Type definitions share one
+    number and their Cases continue increasing instead of restarting.
     """
     counter = 0
     misc_counter = 0
-    regular_numbers: dict[tuple[str, str], int] = {}
-    regular_cases: dict[tuple[str, str], int] = {}
-    misc_numbers: dict[tuple[str, str], int] = {}
-    misc_cases: dict[tuple[str, str], int] = {}
+    regular_numbers: dict[tuple[str, ...], int] = {}
+    regular_cases: dict[tuple[str, ...], int] = {}
+    misc_numbers: dict[tuple[str, ...], int] = {}
+    misc_cases: dict[tuple[str, ...], int] = {}
+    durable_origins = _durable_rendered_type_origins(records)
     for rec in records:
+        # This handoff exists only long enough to give rendered fragments their
+        # stable mined-Type identity. Consume the raw ID here; an opaque hash
+        # seal remains as non-public record metadata for later cleanup/resume.
+        raw_origin_type_id = rec.pop("_origin_type_id", None)
         details = rec.get("concept_details") or ""
         sections = split_sections(details)
         idx = _find_types(sections)
         if idx < 0:
+            rec.pop(_TYPE_ORIGIN_SEALS_KEY, None)
             continue
         label, content = sections[idx]
+        type_matches = list(_TYPE_TOKEN_RE.finditer(content or ""))
+        persisted_origin_seals = _origin_type_ids_for_block(
+            rec.get(_TYPE_ORIGIN_SEALS_KEY),
+            text=content,
+            matches=type_matches,
+        )
+        raw_origin_type_ids = _origin_type_ids_for_block(
+            raw_origin_type_id,
+            text=content,
+            matches=type_matches,
+        )
+        origin_type_ids = [
+            _seal_origin_identity(
+                raw_origin_type_ids[index] or persisted_origin_seals[index]
+            )
+            for index in range(len(type_matches))
+        ]
         topic_key = re.sub(
             r"\W+", " ", str(rec.get("topic") or "").lower()).strip()
-        if is_culmination(rec.get("concept_title", "")):
+        culmination = is_culmination(rec.get("concept_title", ""))
+        sequence = "miscellaneous" if culmination else "regular"
+        for type_index, match in enumerate(type_matches):
+            if origin_type_ids[type_index]:
+                continue
+            end = (
+                type_matches[type_index + 1].start()
+                if type_index + 1 < len(type_matches)
+                else len(content)
+            )
+            segment = content[match.start():end]
+            type_number = _number_from_token(match.group(0))
+            if type_number is None:
+                continue
+            origin_type_ids[type_index] = _seal_origin_identity(
+                durable_origins.get(
+                    (sequence, type_number, _type_signature(segment)),
+                    "",
+                )
+            )
+        if culmination:
             new_content, misc_counter = _renumber_reusable_block(
                 content,
                 topic_key=topic_key,
@@ -262,6 +637,7 @@ def renumber_types_continuously(records: list[dict]) -> list[dict]:
                 number_by_signature=misc_numbers,
                 case_count_by_signature=misc_cases,
                 next_number=misc_counter,
+                origin_type_ids=origin_type_ids,
             )
         else:
             new_content, counter = _renumber_reusable_block(
@@ -271,9 +647,14 @@ def renumber_types_continuously(records: list[dict]) -> list[dict]:
                 number_by_signature=regular_numbers,
                 case_count_by_signature=regular_cases,
                 next_number=counter,
+                origin_type_ids=origin_type_ids,
             )
         sections[idx] = (label, new_content)
         rec["concept_details"] = join_sections(sections)
+        if any(origin_type_ids):
+            rec[_TYPE_ORIGIN_SEALS_KEY] = origin_type_ids
+        else:
+            rec.pop(_TYPE_ORIGIN_SEALS_KEY, None)
     return records
 
 

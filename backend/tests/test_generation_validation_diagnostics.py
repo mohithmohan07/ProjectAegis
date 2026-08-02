@@ -1900,7 +1900,7 @@ def test_invalid_inventory_checkpoint_rewinds_before_question_inventory():
     assert restored["stage"] == "description_method_snapshot"
 
 
-def test_legacy_81_percent_checkpoint_is_reused_and_v3_requires_ledger():
+def test_legacy_81_percent_checkpoint_is_rejected_and_v4_requires_ledger():
     question = (
         "Apply the supplied procedure and report the requested numerical "
         "value."
@@ -1945,9 +1945,13 @@ def test_legacy_81_percent_checkpoint_is_reused_and_v3_requires_ledger():
         mined_types={"types": types},
         method_row_snapshot=[],
     )
-    # Pin the current-main 81% contract explicitly. A future broad version
-    # bump must not silently replay paid canonical/inventory/Type work from 24%.
+    # Pin the legacy one-host Type contract explicitly. Case-owned routing and
+    # leaf-QID inventory cannot safely replay it as the current 81% artifact.
     pre_type["stage_schema_version"] = 1
+    schema_v2_pre_type = dict(pre_type)
+    schema_v2_pre_type["schema_version"] = g._LEGACY_CONCEPT_CHECKPOINT_SCHEMA
+    schema_v2_pre_type.pop("stage_schema_version", None)
+    assert not g._compatible_concept_checkpoint_entry(schema_v2_pre_type)
     legacy_post = g._make_concept_checkpoint(
         "post_type_assignment",
         records=records,
@@ -1972,8 +1976,7 @@ def test_legacy_81_percent_checkpoint_is_reused_and_v3_requires_ledger():
 
     restored = g._newest_compatible_concept_checkpoint(history)
 
-    assert restored["stage"] == g._CONCEPT_CHECKPOINT_STAGE
-    assert restored["progress"] == pytest.approx(0.81)
+    assert restored is None
 
     incomplete_v3 = g._make_concept_checkpoint(
         "post_type_assignment",
@@ -1992,17 +1995,17 @@ def test_legacy_81_percent_checkpoint_is_reused_and_v3_requires_ledger():
         records[0],
         basis="type_host_review",
     )
-    current_v3 = g._make_concept_checkpoint(
+    current_v4 = g._make_concept_checkpoint(
         "post_type_assignment",
         records=records,
         question_task_inventory=inventory,
         mined_types=certified_mined,
         method_row_snapshot=[],
     )
-    history["checkpoints"].append(current_v3)
+    history["checkpoints"].append(current_v4)
 
-    assert current_v3["stage_schema_version"] == 3
-    assert g._compatible_concept_checkpoint_entry(current_v3)
+    assert current_v4["stage_schema_version"] == 4
+    assert g._compatible_concept_checkpoint_entry(current_v4)
     assert g._newest_compatible_concept_checkpoint(
         history)["stage"] == "post_type_assignment"
 

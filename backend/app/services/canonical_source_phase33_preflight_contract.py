@@ -55,7 +55,7 @@ from .semantic_recovery import (
 _CONTRACT_VERSION = 1
 _DECISION_CACHE_VERSION = "phase3.3-topology-decision-cache-1"
 _DECISION_CACHE_FILENAME = "source.phase33-topology-decision-cache.json"
-_HOST_VERSION = "phase3.3-type-host-preflight-3"
+_HOST_VERSION = "phase3.3-type-host-preflight-4-case-routes"
 _HOST_PLAN_CACHE_FILENAME = "source.phase33-type-host-plan-cache.json"
 _HOST_RESULT_CACHE_FILENAME = "source.phase33-type-host-result-cache.json"
 

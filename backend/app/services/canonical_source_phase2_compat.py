@@ -244,9 +244,17 @@ def install(generation: ModuleType | None = None) -> None:
                 if isinstance(item, dict)
             ]
             qid_set = {str(item.get("qid") or "") for item in items}
-            expected = {
-                f"QINV-{index:04d}" for index in range(1, len(items) + 1)
-            }
+            active = phase2.active_canonical()
+            expected_order = [
+                str(item.get("qid") or "")
+                for item in (
+                    phase2.inventory_from_canonical(active).get("items")
+                    if isinstance(active, dict)
+                    else items
+                ) or []
+                if isinstance(item, dict)
+            ]
+            expected = set(expected_order)
             if qid_set != expected:
                 raise RuntimeError(
                     "Phase 2 chapter-wide topic placement changed the canonical "
@@ -259,9 +267,7 @@ def install(generation: ModuleType | None = None) -> None:
                 )
             )
             qids = [str(item.get("qid") or "") for item in items]
-            if qids != [
-                f"QINV-{index:04d}" for index in range(1, len(items) + 1)
-            ]:
+            if qids != expected_order:
                 raise RuntimeError(
                     "Phase 2 Question / Task Inventory order changed after "
                     "source compilation"

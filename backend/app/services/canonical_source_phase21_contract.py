@@ -96,7 +96,10 @@ def install(generation: ModuleType) -> None:
         if not _phase21_active(canonical):
             return original_expand(types)
         return render.intact_type_assignment_units(
-            generation, list(types or []), canonical
+            generation,
+            list(types or []),
+            canonical,
+            expand_units=original_expand,
         )
 
     @wraps(original_normalize_hubs)

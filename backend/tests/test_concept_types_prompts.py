@@ -127,17 +127,16 @@ def test_universal_question_task_inventory_and_type_mining_prompts():
     assert "TYPE WORDING" in mining
     assert "precise, self-explanatory pattern name" in mining
     assert "type_description must DEFINE the pattern" in mining
-    # concept_match_hint is Type-level: Cases for distinct concept rows cannot
-    # be hidden inside one broad formula-sharing Type.
-    assert "same single granular concept" in mining_contract
-    assert "concept_match_hint is Type-level" in mining_contract
+    # Reusable Type identity is chapter-wide; each Case owns one exact route.
+    assert "Type owns only the reusable answering method" in mining_contract
+    assert "Every Case owns its own concept/topic route" in mining_contract
     assert "direct formula calculations" in mining_contract
     assert "contextual/real-life modeling or applications" in mining_contract
     assert "incremental delta" in delta
     assert "never return an already classified question" in delta
     assert "complete source task" in delta
-    assert "same granular concept as every existing Case" in delta_contract
-    assert "concept_match_hint applies to the whole Type" in delta_contract
+    assert "existing Type from another topic" in delta_contract
+    assert "Emit a new Case with its own exact" in delta_contract
     embedding = g.prompts.get_text("concepts.type_embedding.system")
     embedding_contract = " ".join(embedding.split())
     assert "concept_id" in embedding and "type_ids" in embedding

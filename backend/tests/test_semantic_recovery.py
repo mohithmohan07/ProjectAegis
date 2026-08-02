@@ -623,6 +623,49 @@ def test_exact_qid_uses_certified_host_identity():
     assert indexes == (18,)
 
 
+def test_leaf_qid_uses_its_exact_certified_host_identity():
+    checkpoint = recovery.select_recovery_checkpoint(_checkpoint([
+        _row(f"Concept {index}", topic="Shared Topic")
+        for index in range(20)
+    ]))
+    assert checkpoint is not None
+    checkpoint["question_task_inventory"] = {
+        "items": [{
+            "qid": "QINV-0016.2",
+            "parent_qid": "QINV-0016",
+            "topic_hint": "Shared Topic",
+        }],
+        "stats": {},
+    }
+    checkpoint["mined_types"] = {
+        "types": [],
+        "placement_certifications": {
+            "version": 1,
+            "hosts": {
+                "QINV-0016.2": {
+                    "topic": "Shared Topic",
+                    "topic_key": "shared topic",
+                    "concept": "Concept 18",
+                    "concept_key": "concept 18",
+                    "is_culmination": False,
+                    "basis": "reviewed",
+                },
+            },
+        },
+    }
+
+    indexes = recovery.implicated_row_indexes(
+        checkpoint,
+        ValueError(
+            "question/task inventory coverage failed before deposit: "
+            "missing=QINV-0016.2"
+        ),
+        max_rows=12,
+    )
+
+    assert indexes == (18,)
+
+
 def test_gpt_repair_changes_only_implicated_row_and_preserves_source_owned_text():
     protected_types = (
         "Types: Type 01: Source task Case 01: Interpret the supplied Figure "

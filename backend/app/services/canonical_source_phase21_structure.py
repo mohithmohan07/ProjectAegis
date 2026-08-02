@@ -56,6 +56,27 @@ _TABLE_COLUMN_SPEC_RE = re.compile(
     r"\{\s*\|?(?:[lcrpmbX]\|?){2,}\s*\}",
     re.IGNORECASE,
 )
+_TASK_CUE_HEADING_RE = re.compile(
+    r"(?i)^\s*(?:activity|project|write\s+in\s+brief|discuss|"
+    r"think\s+about\s+it|let['’]s\s+discuss)\s*$"
+)
+_INDEPENDENT_ENUMERATION_STEM_RE = re.compile(
+    # Only a stem that explicitly asks for a separate note certifies that its
+    # lettered objects are independently answerable Cases.  Generic stems
+    # such as ``answer the following`` can introduce dependent evidence or
+    # calculation subparts and must remain one atomic task.
+    r"(?i)\bwrite\s+(?:a\s+)?(?:short\s+)?notes?\s+on\b"
+    r"[^:\n]*:\s*$"
+)
+_LETTERED_SUBPART_RE = re.compile(
+    r"(?<![\w(])(?P<label>[a-z])\)\s+",
+    re.IGNORECASE,
+)
+_FIGURE_REFERENCE_RE = re.compile(
+    r"\bfig(?:ure)?s?\.?\s*(?P<number>\d+(?:\.\d+)*"
+    r"(?:\s*\([a-z]\))?)",
+    re.IGNORECASE,
+)
 
 
 def normal_text(value: object) -> str:
@@ -111,6 +132,364 @@ def canonical_task_display(value: object) -> str:
         ):
             rendered = repaired
     return kr.canonicalize_rich_text(rendered).strip()
+
+
+def _heading_title(block: dict[str, Any]) -> str:
+    heading = block.get("heading")
+    if isinstance(heading, dict) and heading.get("title"):
+        return str(heading.get("title") or "").strip()
+    raw = str(block.get("raw_text") or "")
+    match = re.search(r"\\(?:sub)*section\*?\{(?P<title>[^}]+)\}", raw)
+    return str(match.group("title") if match else raw).strip("# \t\r\n")
+
+
+def _figure_reference_ids(value: object) -> list[str]:
+    found: list[str] = []
+    for match in _FIGURE_REFERENCE_RE.finditer(str(value or "")):
+        reference = re.sub(r"\s+", "", match.group("number").casefold())
+        if reference and reference not in found:
+            found.append(reference)
+    return found
+
+
+def recover_followup_task_prompts(canonical: dict[str, Any]) -> int:
+    """Attach separately printed prompts to their single source-task parent.
+
+    Mathpix sometimes emits two independently answerable paragraphs below one
+    ``Activity`` heading, while the legacy anchor parser retains only the first.
+    This pass does not create another canonical parent QID.  It records every
+    unowned sibling paragraph beneath the one source parent so the public
+    inventory can expose stable leaf Case identities later.
+
+    Recovery is intentionally bounded to a cue-heading region containing
+    exactly one canonical task.  Numbered exercise groups already represented
+    by several parent QIDs are therefore never collapsed into one parent.
+    """
+    blocks = [
+        block for block in canonical.get("blocks") or []
+        if isinstance(block, dict)
+    ]
+    blocks.sort(key=lambda block: int(block.get("source_start") or 0))
+    tasks = [
+        task for task in canonical.get("tasks") or []
+        if isinstance(task, dict)
+    ]
+    recovered = 0
+
+    for heading_index, heading in enumerate(blocks):
+        if (
+            heading.get("kind") != "heading"
+            or not _TASK_CUE_HEADING_RE.fullmatch(_heading_title(heading))
+        ):
+            continue
+        region_end = next(
+            (
+                int(block.get("source_start") or 0)
+                for block in blocks[heading_index + 1:]
+                if block.get("kind") == "heading"
+            ),
+            max(
+                [int(block.get("source_end") or 0) for block in blocks]
+                or [int(heading.get("source_end") or 0)]
+            ),
+        )
+        region_start = int(heading.get("source_end") or 0)
+        owners = [
+            task for task in tasks
+            if region_start <= int(task.get("source_start") or 0) < region_end
+        ]
+        if len(owners) != 1:
+            continue
+        owner = owners[0]
+        owner_start = int(owner.get("source_start") or 0)
+        seen_task_content = False
+
+        for block in blocks[heading_index + 1:]:
+            block_start = int(block.get("source_start") or 0)
+            if block_start >= region_end:
+                break
+            if block.get("kind") not in {"paragraph", "list"}:
+                continue
+            prompt = prompt_from_block(block.get("raw_text") or "")
+            if not is_task_like(prompt):
+                if seen_task_content:
+                    break
+                continue
+            seen_task_content = True
+            if block_start < owner_start or task_matches_prompt(owner, prompt):
+                continue
+            if any(task_matches_prompt(task, prompt) for task in tasks):
+                continue
+            followups = owner.setdefault("source_followup_prompts", [])
+            if any(
+                normal_text(row.get("raw_prompt")) == normal_text(prompt)
+                for row in followups if isinstance(row, dict)
+            ):
+                continue
+            followups.append({
+                "raw_prompt": prompt,
+                "display_prompt": canonical_task_display(prompt),
+                "source_start": block_start,
+                "source_end": int(block.get("source_end") or block_start + len(prompt)),
+                "source_section_index": int(owner.get("source_section_index") or 0),
+                "source_position": max(
+                    0,
+                    block_start - int(
+                        next(
+                            (
+                                section.get("source_start") or 0
+                                for section in canonical.get("sections") or []
+                                if isinstance(section, dict)
+                                and section.get("section_id") == block.get("section_id")
+                            ),
+                            0,
+                        )
+                    ),
+                ),
+                "section_id": str(block.get("section_id") or owner.get("section_id") or ""),
+                "block_id": str(block.get("block_id") or ""),
+                "explicit_figure_reference_ids": _figure_reference_ids(prompt),
+                "recovery": "phase21_same_cue_followup_prompt",
+            })
+            recovered += 1
+    return recovered
+
+
+def _independent_enumerated_parts(
+    prompt: str,
+) -> tuple[str, list[tuple[str, str, int, int]]]:
+    """Return independently answerable lettered parts, or no decomposition.
+
+    A colon-terminated independent instruction is required.  Consequently
+    dependent constructions such as ``How would you (a) ... and (b) ...?``
+    remain one atomic task.
+    """
+    text = str(prompt or "").strip()
+    matches = list(_LETTERED_SUBPART_RE.finditer(text))
+    if len(matches) < 2:
+        return "", []
+    stem = text[:matches[0].start()].strip()
+    if not _INDEPENDENT_ENUMERATION_STEM_RE.search(stem):
+        return "", []
+    expected = [chr(ord("a") + index) for index in range(len(matches))]
+    labels = [match.group("label").casefold() for match in matches]
+    if labels != expected:
+        return "", []
+    parts: list[tuple[str, str, int, int]] = []
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        raw = text[match.start():end].strip()
+        body = text[match.end():end].strip()
+        if not raw or not body:
+            return "", []
+        parts.append((match.group("label").casefold(), raw, match.start(), end))
+    return stem, parts
+
+
+def _resolved_leaf_figures(
+    canonical: dict[str, Any],
+    *,
+    prompt: str,
+    inherited: dict[str, Any] | None = None,
+) -> tuple[list[str], list[str], list[str], list[str]]:
+    references = _figure_reference_ids(prompt)
+    if inherited is not None:
+        inherited_raw = _figure_reference_ids(
+            inherited.get("raw_prompt") or inherited.get("display_prompt") or ""
+        )
+        if references == inherited_raw:
+            return (
+                list(inherited.get("figure_refs") or []),
+                list(inherited.get("image_urls") or []),
+                list(inherited.get("unresolved_figure_reference_ids") or []),
+                list(inherited.get("ambiguous_figure_reference_ids") or []),
+            )
+
+    by_reference: dict[str, list[dict[str, Any]]] = {}
+    for figure in canonical.get("figures") or []:
+        if not isinstance(figure, dict):
+            continue
+        for reference in figure.get("reference_ids") or []:
+            key = re.sub(r"\s+", "", str(reference or "").casefold())
+            if key:
+                by_reference.setdefault(key, []).append(figure)
+    figure_refs: list[str] = []
+    image_urls: list[str] = []
+    unresolved: list[str] = []
+    ambiguous: list[str] = []
+    for reference in references:
+        candidates = by_reference.get(reference, [])
+        if len(candidates) == 1:
+            figure = candidates[0]
+            figure_id = str(figure.get("figure_id") or "")
+            if figure_id and figure_id not in figure_refs:
+                figure_refs.append(figure_id)
+            for url in figure.get("image_urls") or []:
+                url = str(url or "").strip()
+                if url and url not in image_urls:
+                    image_urls.append(url)
+        elif not candidates:
+            unresolved.append(reference)
+        else:
+            ambiguous.append(reference)
+    return figure_refs, image_urls, unresolved, ambiguous
+
+
+def materialize_task_leaf_cases(canonical: dict[str, Any]) -> int:
+    """Create stable inventory leaves without replacing canonical parents."""
+    total_leaves = 0
+    decomposed_parents = 0
+    for task in canonical.get("tasks") or []:
+        if not isinstance(task, dict):
+            continue
+        task.pop("leaf_cases", None)
+        parent_qid = str(task.get("qid") or "").strip()
+        parent_identity = str(task.get("identity_key") or "")
+        sources: list[dict[str, Any]] = [{
+            "raw_prompt": str(task.get("raw_prompt") or ""),
+            "display_prompt": str(task.get("display_prompt") or ""),
+            "source_start": int(task.get("source_start") or 0),
+            "source_end": int(task.get("source_end") or 0),
+            "source_section_index": int(task.get("source_section_index") or 0),
+            "source_position": int(task.get("source_position") or 0),
+            "section_id": str(task.get("section_id") or ""),
+            "block_id": "",
+            "base_task": True,
+        }]
+        sources.extend(
+            row for row in task.get("source_followup_prompts") or []
+            if isinstance(row, dict)
+        )
+
+        provisional: list[dict[str, Any]] = []
+        for source in sources:
+            raw_prompt = str(source.get("raw_prompt") or "").strip()
+            stem, enumerated = _independent_enumerated_parts(raw_prompt)
+            if enumerated:
+                inherited_context = str(task.get("shared_context") or "").strip()
+                leaf_context = "\n\n".join(
+                    part for part in (inherited_context, stem)
+                    if part
+                )
+                for label, raw_part, relative_start, relative_end in enumerated:
+                    provisional.append({
+                        **source,
+                        "raw_prompt": raw_part,
+                        "display_prompt": canonical_task_display(
+                            " ".join(part for part in (stem, raw_part) if part)
+                        ),
+                        "shared_context": leaf_context,
+                        "requires_context": True,
+                        "subpart_label": f"{label})",
+                        "source_start": int(source.get("source_start") or 0) + relative_start,
+                        "source_end": int(source.get("source_start") or 0) + relative_end,
+                    })
+            else:
+                provisional.append({
+                    **source,
+                    "raw_prompt": raw_prompt,
+                    "display_prompt": str(
+                        source.get("display_prompt")
+                        or canonical_task_display(raw_prompt)
+                    ),
+                    "shared_context": str(task.get("shared_context") or ""),
+                    "requires_context": bool(task.get("requires_context")),
+                    "subpart_label": str(task.get("subpart_label") or ""),
+                })
+
+        if len(provisional) <= 1:
+            continue
+        leaves: list[dict[str, Any]] = []
+        for leaf_index, leaf in enumerate(provisional, start=1):
+            leaf_qid = f"{parent_qid}.{leaf_index}"
+            is_base = bool(leaf.get("base_task")) and not leaf.get("subpart_label")
+            figures, urls, unresolved, ambiguous = _resolved_leaf_figures(
+                canonical,
+                # The visual reference is commonly carried by the shared
+                # instruction rather than repeated in every enumerated item.
+                prompt="\n\n".join(
+                    part for part in (
+                        str(leaf.get("shared_context") or "").strip(),
+                        str(leaf.get("display_prompt") or "").strip(),
+                        str(leaf.get("raw_prompt") or "").strip(),
+                    )
+                    if part
+                ),
+                inherited=task if is_base else None,
+            )
+            identity_material = "\u241f".join([
+                parent_identity,
+                str(leaf.get("subpart_label") or leaf_index),
+                str(leaf.get("raw_prompt") or ""),
+                str(leaf.get("source_start") or 0),
+            ])
+            leaves.append({
+                **{
+                    key: task.get(key)
+                    for key in (
+                        "source_kind", "source_label", "parent_source_label",
+                        "topic_hint", "page_hint", "chapter_wide",
+                        "activity_origin", "_topic_scope", "content_objects",
+                        "raw_solution_or_answer",
+                    )
+                    if task.get(key) not in (None, "", [], {})
+                },
+                "qid": leaf_qid,
+                "case_id": f"CASE-{leaf_qid}",
+                "parent_qid": parent_qid,
+                "parent_task_id": str(task.get("task_id") or ""),
+                "parent_identity_key": parent_identity,
+                "identity_key": sha256_text(identity_material),
+                "leaf_order": leaf_index,
+                "raw_prompt": str(leaf.get("raw_prompt") or ""),
+                "display_prompt": str(leaf.get("display_prompt") or ""),
+                "shared_context": str(leaf.get("shared_context") or ""),
+                "requires_context": bool(leaf.get("requires_context")),
+                "subpart_label": str(leaf.get("subpart_label") or ""),
+                "source_start": int(leaf.get("source_start") or 0),
+                "source_end": int(leaf.get("source_end") or 0),
+                "source_section_index": int(leaf.get("source_section_index") or 0),
+                "source_position": int(leaf.get("source_position") or 0),
+                "section_id": str(leaf.get("section_id") or task.get("section_id") or ""),
+                "source_block_id": str(leaf.get("block_id") or ""),
+                "requires_visual": bool(figures or urls or unresolved or ambiguous),
+                "figure_refs": figures,
+                "image_urls": urls,
+                "_image_captions": {},
+                "explicit_figure_reference_ids": _figure_reference_ids(
+                    "\n\n".join(
+                        part for part in (
+                            str(leaf.get("shared_context") or "").strip(),
+                            str(leaf.get("display_prompt") or "").strip(),
+                            str(leaf.get("raw_prompt") or "").strip(),
+                        )
+                        if part
+                    )
+                ),
+                "unresolved_figure_reference_ids": unresolved,
+                "ambiguous_figure_reference_ids": ambiguous,
+                "canonical_source_mode": task.get("canonical_source_mode"),
+            })
+        task["leaf_cases"] = leaves
+        task["inventory_leaf_count"] = len(leaves)
+        decomposed_parents += 1
+        total_leaves += len(leaves)
+
+    parent_count = len([
+        task for task in canonical.get("tasks") or [] if isinstance(task, dict)
+    ])
+    inventory_count = parent_count + total_leaves - decomposed_parents
+    statistics = canonical.setdefault("statistics", {})
+    if isinstance(statistics, dict):
+        statistics["parent_tasks"] = parent_count
+        statistics["decomposed_parent_tasks"] = decomposed_parents
+        statistics["inventory_leaf_tasks"] = inventory_count
+    source_contract = canonical.setdefault("source_contract", {})
+    if isinstance(source_contract, dict):
+        source_contract["parent_task_count"] = parent_count
+        source_contract["inventory_item_count"] = inventory_count
+        source_contract["decomposed_parent_task_count"] = decomposed_parents
+    return inventory_count
 
 
 def prompt_from_block(value: object) -> str:
@@ -405,6 +784,7 @@ def renumber_tasks(canonical: dict[str, Any]) -> None:
     tasks = [
         task for task in canonical.get("tasks") or [] if isinstance(task, dict)
     ]
+    had_leaf_cases = any(task.get("leaf_cases") for task in tasks)
     tasks.sort(key=lambda task: (
         int(task.get("source_start") or 0),
         int(task.get("source_position") or 0),
@@ -450,10 +830,17 @@ def renumber_tasks(canonical: dict[str, Any]) -> None:
     canonical["tasks"] = tasks
     if isinstance(canonical.get("statistics"), dict):
         canonical["statistics"]["tasks"] = len(tasks)
+    if had_leaf_cases:
+        # Phase 2.2 may insert a PDF-verified parent task before an existing
+        # decomposed parent. Rebuild derived leaf qids from the newly canonical
+        # parent sequence so no stale QINV prefix can survive adjudication.
+        materialize_task_leaf_cases(canonical)
 
 
 def task_boundary_issues(canonical: dict[str, Any]) -> list[dict[str, Any]]:
     issues: list[dict[str, Any]] = []
+    leaf_qids: set[str] = set()
+    leaf_identities: set[str] = set()
     for task in canonical.get("tasks") or []:
         if not isinstance(task, dict):
             continue
@@ -466,6 +853,45 @@ def task_boundary_issues(canonical: dict[str, Any]) -> list[dict[str, Any]]:
                 ),
                 "qid": task.get("qid") or "",
             })
+        leaves = [
+            leaf for leaf in task.get("leaf_cases") or []
+            if isinstance(leaf, dict)
+        ]
+        if not leaves:
+            continue
+        parent_qid = str(task.get("qid") or "").strip()
+        if len(leaves) < 2:
+            issues.append({
+                "severity": "error",
+                "code": "phase21_leaf_case_decomposition_not_plural",
+                "message": "A decomposed canonical parent must expose at least two leaves.",
+                "qid": parent_qid,
+            })
+        for index, leaf in enumerate(leaves, start=1):
+            leaf_qid = str(leaf.get("qid") or "").strip()
+            identity = str(leaf.get("identity_key") or "").strip()
+            expected_qid = f"{parent_qid}.{index}"
+            invalid = bool(
+                leaf_qid != expected_qid
+                or str(leaf.get("parent_qid") or "").strip() != parent_qid
+                or not identity
+                or leaf_qid in leaf_qids
+                or identity in leaf_identities
+                or not str(leaf.get("raw_prompt") or "").strip()
+            )
+            if invalid:
+                issues.append({
+                    "severity": "error",
+                    "code": "phase21_leaf_case_identity_mismatch",
+                    "message": (
+                        "A canonical inventory leaf lost stable parent, order, "
+                        "identity, or source-prompt provenance."
+                    ),
+                    "qid": leaf_qid or expected_qid,
+                    "parent_qid": parent_qid,
+                })
+            leaf_qids.add(leaf_qid)
+            leaf_identities.add(identity)
     for block in canonical.get("blocks") or []:
         if (
             not isinstance(block, dict)

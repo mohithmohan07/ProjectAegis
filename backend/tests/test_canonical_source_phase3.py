@@ -1292,7 +1292,7 @@ def test_full_type_allocator_uses_qid_topic_ancestry_not_stale_subtopic_hint(
     assert "Types:" not in assigned[2]["concept_details"]
 
 
-def test_chapter_wide_inventory_topic_resolution_updates_qid_type_scope():
+def test_chapter_wide_inventory_topic_resolution_does_not_mutate_parent_task():
     _source, _canonical, graph, _report, _semantic = _compile_fixture(
         "RNE.mmd", subject="History",
     )
@@ -1302,6 +1302,7 @@ def test_chapter_wide_inventory_topic_resolution_updates_qid_type_scope():
         "_topic_scope": "chapter",
         "_chapter_wide_task": True,
     }]}
+    graph_before = copy.deepcopy(graph)
 
     annotated_inventory = phase3.annotate_inventory(inventory, graph)
     item = annotated_inventory["items"][0]
@@ -1309,15 +1310,26 @@ def test_chapter_wide_inventory_topic_resolution_updates_qid_type_scope():
 
     assert item["_semantic_topic_id"] == "TOPIC-0001"
     assert item["topic_hint"] == "The French Revolution and the Idea of the Nation"
-    assert task["topic_id"] == "TOPIC-0001"
+    assert task["topic_id"] == "TOPIC-0006"
+    assert graph == graph_before
 
     mined = {"types": [{
         "type_id": "TYPE-CHAPTER-WIDE",
         "type_title": "Collective identity measures",
         "type_description": "Explain measures used to construct collective identity.",
-        "topic_match_hint": "Nationalism and Imperialism",
+        "topic_match_hint": "The French Revolution and the Idea of the Nation",
         "source_question_ids": ["QINV-0017"],
-        "case_prompts": [],
+        "case_prompts": [{
+            "case_id": "CASE-COLLECTIVE-IDENTITY",
+            "topic_match_hint": (
+                "The French Revolution and the Idea of the Nation"
+            ),
+            "placement_scope": "normal",
+            "examples": [{
+                "source_question_id": "QINV-0017",
+                "example_prompt": "Explain measures used to create identity.",
+            }],
+        }],
         "is_activity": False,
     }]}
     annotated_type = phase3.annotate_mined_types(mined, graph)["types"][0]
@@ -1360,7 +1372,8 @@ def test_cross_topic_type_keeps_case_level_topic_identities():
 
     annotated = phase3.annotate_mined_types(mined, graph)
     mtype = annotated["types"][0]
-    assert mtype["_semantic_scope"] == "cross_topic_synthesis"
+    assert mtype["_semantic_scope"] == "multi_topic_reuse"
+    assert mtype["placement_scope"] == "normal"
     assert mtype["_semantic_topic_ids"] == ["TOPIC-0001", "TOPIC-0002"]
     assert [case["_semantic_topic_id"] for case in mtype["case_prompts"]] == [
         "TOPIC-0001", "TOPIC-0002",

@@ -4740,6 +4740,33 @@ def canonical_topic_for_text(graph: dict[str, Any], value: object) -> dict[str, 
     return aliases.get(_normal(stripped))
 
 
+_LEAF_QID_RE = re.compile(r"^(?P<parent>.+)\.(?P<leaf>\d+)$")
+
+
+def _graph_task_for_qid(
+    task_by_qid: dict[str, dict[str, Any]],
+    qid: object,
+    *,
+    parent_qid: object = "",
+) -> dict[str, Any] | None:
+    """Resolve an inventory leaf to its immutable canonical parent task.
+
+    Phase 2.1 deliberately keeps the original 26 task objects and materializes
+    independently answerable children only in the production inventory.  The
+    semantic graph therefore owns the parent task ID while the leaf owns its
+    own route and Example identity.
+    """
+    value = str(qid or "").strip()
+    direct = task_by_qid.get(value)
+    if direct is not None:
+        return direct
+    parent = str(parent_qid or "").strip()
+    if parent and parent in task_by_qid:
+        return task_by_qid[parent]
+    matched = _LEAF_QID_RE.match(value)
+    return task_by_qid.get(matched.group("parent")) if matched else None
+
+
 def annotate_inventory(inventory: dict[str, Any], graph: dict[str, Any] | None = None) -> dict[str, Any]:
     graph = graph or active_graph()
     if not isinstance(graph, dict):
@@ -4761,7 +4788,11 @@ def annotate_inventory(inventory: dict[str, Any], graph: dict[str, Any] | None =
         if not isinstance(item, dict):
             continue
         qid = str(item.get("qid") or "")
-        task = task_by_qid.get(qid)
+        task = _graph_task_for_qid(
+            task_by_qid,
+            qid,
+            parent_qid=item.get("parent_qid") or item.get("_acsd_parent_qid"),
+        )
         if not task:
             continue
         assigned_topic = None
@@ -4771,13 +4802,18 @@ def annotate_inventory(inventory: dict[str, Any], graph: dict[str, Any] | None =
             or task.get("chapter_wide")
         ):
             assigned_topic = canonical_topic_for_text(graph, item.get("topic_hint"))
+        semantic_topic_id = str(task.get("topic_id") or "")
+        semantic_subtopic_id = str(task.get("subtopic_id") or "")
         if assigned_topic is not None:
-            task["topic_id"] = str(assigned_topic.get("topic_id") or "")
-            task["subtopic_id"] = ""
-        topic = topic_by_id.get(str(task.get("topic_id") or ""), {})
-        subtopic = subtopic_by_id.get(str(task.get("subtopic_id") or ""), {})
-        item["_semantic_topic_id"] = str(task.get("topic_id") or "")
-        item["_semantic_subtopic_id"] = str(task.get("subtopic_id") or "")
+            # The reviewed leaf route is an annotation, not a graph mutation.
+            # Several chapter-wide leaves can share one parent task while
+            # legitimately belonging to different source topics.
+            semantic_topic_id = str(assigned_topic.get("topic_id") or "")
+            semantic_subtopic_id = ""
+        topic = topic_by_id.get(semantic_topic_id, {})
+        subtopic = subtopic_by_id.get(semantic_subtopic_id, {})
+        item["_semantic_topic_id"] = semantic_topic_id
+        item["_semantic_subtopic_id"] = semantic_subtopic_id
         item["_semantic_graph_contract"] = graph.get("source_contract_hash")
         item["_semantic_source_task_id"] = str(task.get("task_id") or "")
         # The visible hint remains for legacy prompts, but structural identity is
@@ -4786,10 +4822,17 @@ def annotate_inventory(inventory: dict[str, Any], graph: dict[str, Any] | None =
             item["topic_hint"] = str(topic["title"])
         if subtopic.get("title"):
             item["_semantic_subtopic_title"] = str(subtopic["title"])
+        else:
+            item.pop("_semantic_subtopic_title", None)
     return out
 
 
-def _qid_scope(graph: dict[str, Any], qids: Iterable[object]) -> tuple[list[str], list[str]]:
+def _qid_scope(
+    graph: dict[str, Any],
+    qids: Iterable[object],
+    *,
+    topic_hint: object = "",
+) -> tuple[list[str], list[str]]:
     task_by_qid = {
         str(row.get("qid") or ""): row for row in graph.get("tasks") or []
         if isinstance(row, dict) and str(row.get("qid") or "")
@@ -4797,7 +4840,7 @@ def _qid_scope(graph: dict[str, Any], qids: Iterable[object]) -> tuple[list[str]
     topic_ids: list[str] = []
     subtopic_ids: list[str] = []
     for raw_qid in qids:
-        task = task_by_qid.get(str(raw_qid or "").strip())
+        task = _graph_task_for_qid(task_by_qid, raw_qid)
         if not task:
             continue
         topic_id = str(task.get("topic_id") or "")
@@ -4806,6 +4849,16 @@ def _qid_scope(graph: dict[str, Any], qids: Iterable[object]) -> tuple[list[str]
             topic_ids.append(topic_id)
         if subtopic_id and subtopic_id not in subtopic_ids:
             subtopic_ids.append(subtopic_id)
+    routed_topic = canonical_topic_for_text(graph, topic_hint)
+    if routed_topic is not None:
+        routed_topic_id = str(routed_topic.get("topic_id") or "")
+        if routed_topic_id:
+            # A Case route is authoritative for a chapter-wide inventory leaf.
+            # A subtopic inherited from the physical parent is not valid after
+            # moving that leaf to a different semantic main topic.
+            if topic_ids != [routed_topic_id]:
+                subtopic_ids = []
+            topic_ids = [routed_topic_id]
     return topic_ids, subtopic_ids
 
 
@@ -4825,8 +4878,66 @@ def annotate_mined_types(
     for mtype in out.get("types") or []:
         if not isinstance(mtype, dict):
             continue
-        qids = generation._type_source_qids(mtype)
-        topic_ids, subtopic_ids = _qid_scope(graph, qids)
+        case_topic_ids: list[str] = []
+        case_subtopic_ids: list[str] = []
+        case_owned_qids: set[str] = set()
+        cases = [
+            case for case in mtype.get("case_prompts") or []
+            if isinstance(case, dict)
+        ]
+        for case in cases:
+            case_qids = generation._assignment_case_qids(case)
+            case_owned_qids.update(case_qids)
+            raw_topics, _raw_subtopics = _qid_scope(graph, case_qids)
+            explicit_cross_topic = (
+                str(case.get("placement_scope") or "").strip().lower()
+                == "cross_topic_synthesis"
+                and len(raw_topics) > 1
+            )
+            case_topics, case_subtopics = _qid_scope(
+                graph,
+                case_qids,
+                topic_hint=(
+                    "" if explicit_cross_topic
+                    else case.get("topic_match_hint") or ""
+                ),
+            )
+            case["_semantic_topic_ids"] = case_topics
+            case["_semantic_subtopic_ids"] = case_subtopics
+            for topic_id in case_topics:
+                if topic_id not in case_topic_ids:
+                    case_topic_ids.append(topic_id)
+            for subtopic_id in case_subtopics:
+                if subtopic_id not in case_subtopic_ids:
+                    case_subtopic_ids.append(subtopic_id)
+            if len(case_topics) == 1:
+                case["_semantic_topic_id"] = case_topics[0]
+                case.pop("_semantic_scope", None)
+            elif len(case_topics) > 1:
+                # Cross-topic synthesis belongs to one integrated Case. Merely
+                # reusing an operator Type across separately routed Cases does
+                # not turn those Cases into synthesis.
+                case.pop("_semantic_topic_id", None)
+                case["placement_scope"] = "cross_topic_synthesis"
+                case["_semantic_scope"] = "cross_topic_synthesis"
+
+        unclaimed_qids = [
+            qid for qid in generation._type_source_qids(mtype)
+            if qid not in case_owned_qids
+        ]
+        fallback_topics, fallback_subtopics = _qid_scope(
+            graph,
+            unclaimed_qids,
+            topic_hint=(mtype.get("topic_match_hint") or "") if not cases else "",
+        )
+        for topic_id in fallback_topics:
+            if topic_id not in case_topic_ids:
+                case_topic_ids.append(topic_id)
+        for subtopic_id in fallback_subtopics:
+            if subtopic_id not in case_subtopic_ids:
+                case_subtopic_ids.append(subtopic_id)
+        topic_ids = case_topic_ids
+        subtopic_ids = case_subtopic_ids
         mtype["_semantic_topic_ids"] = topic_ids
         mtype["_semantic_subtopic_ids"] = subtopic_ids
         mtype["_semantic_graph_contract"] = graph.get("source_contract_hash")
@@ -4836,22 +4947,15 @@ def annotate_mined_types(
                 mtype["topic_match_hint"] = str(topic["title"])
             mtype["_semantic_scope"] = "topic"
         elif len(topic_ids) > 1:
-            mtype["placement_scope"] = "cross_topic_synthesis"
-            mtype["_semantic_scope"] = "cross_topic_synthesis"
-            first = topic_by_id.get(topic_ids[0], {})
-            if first.get("title"):
-                mtype["topic_match_hint"] = str(first["title"])
-        for case in mtype.get("case_prompts") or []:
-            if not isinstance(case, dict):
-                continue
-            case_qids = generation._assignment_case_qids(case)
-            case_topics, case_subtopics = _qid_scope(graph, case_qids)
-            case["_semantic_topic_ids"] = case_topics
-            case["_semantic_subtopic_ids"] = case_subtopics
-            if len(case_topics) == 1:
-                case["_semantic_topic_id"] = case_topics[0]
-            elif len(case_topics) > 1:
-                case["_semantic_scope"] = "cross_topic_synthesis"
+            mtype["_semantic_scope"] = "multi_topic_reuse"
+            integrated_cross_topic_case = bool(
+                len(cases) == 1
+                and len(cases[0].get("_semantic_topic_ids") or []) > 1
+            )
+            mtype["placement_scope"] = (
+                "cross_topic_synthesis"
+                if integrated_cross_topic_case else "normal"
+            )
     return out
 
 
@@ -4868,7 +4972,20 @@ def annotate_assignment_units(
     out = copy.deepcopy(units)
     for unit in out:
         qids = list(unit.get("source_question_ids") or [])
-        topic_ids, subtopic_ids = _qid_scope(graph, qids)
+        raw_topic_ids, _raw_subtopic_ids = _qid_scope(graph, qids)
+        explicit_cross_topic = (
+            str(unit.get("placement_scope") or "").strip().lower()
+            == "cross_topic_synthesis"
+            and len(raw_topic_ids) > 1
+        )
+        topic_ids, subtopic_ids = _qid_scope(
+            graph,
+            qids,
+            topic_hint=(
+                "" if explicit_cross_topic
+                else unit.get("topic_match_hint") or ""
+            ),
+        )
         unit["_semantic_topic_ids"] = topic_ids
         unit["_semantic_subtopic_ids"] = subtopic_ids
         if len(topic_ids) == 1:
@@ -4879,6 +4996,7 @@ def annotate_assignment_units(
             if unit.get("placement_scope") == "cross_topic_synthesis":
                 unit["placement_scope"] = "mixed_synthesis"
         elif len(topic_ids) > 1:
+            unit.pop("_semantic_topic_id", None)
             unit["placement_scope"] = "cross_topic_synthesis"
             first = topic_by_id.get(topic_ids[0], {})
             if first.get("title"):

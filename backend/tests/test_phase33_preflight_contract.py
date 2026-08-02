@@ -52,6 +52,49 @@ def _verified_review(ids: list[str]) -> dict:
     }
 
 
+def test_phase33_leaf_case_uses_its_route_instead_of_parent_task_topic():
+    graph = {
+        "source_contract_hash": "SOURCE-LEAF-1",
+        "topics": [
+            {"topic_id": "TOPIC-0002", "title": "The Revolutionaries"},
+            {"topic_id": "TOPIC-0006", "title": "Nationalism and Imperialism"},
+        ],
+        "subtopics": [],
+        "tasks": [{
+            "task_id": "TASK-00016",
+            "qid": "QINV-0016",
+            "topic_id": "TOPIC-0006",
+            "subtopic_id": "",
+            "chapter_wide": True,
+        }],
+    }
+    mined = {
+        "types": [{
+            "type_id": "TYPE-SHORT-NOTE",
+            "type_title": "Writing a concise historical note",
+            "source_question_ids": ["QINV-0016.1"],
+            "case_prompts": [{
+                "case_id": "CASE-MAZZINI",
+                "topic_match_hint": "The Revolutionaries",
+                "placement_scope": "normal",
+                "examples": [{
+                    "source_question_id": "QINV-0016.1",
+                    "example_prompt": "Write a note on Giuseppe Mazzini.",
+                }],
+            }],
+        }],
+    }
+
+    units = phase33._stable_assignment_units(g, mined, graph)
+
+    assert len(units) == 1
+    assert units[0]["source_question_ids"] == ["QINV-0016.1"]
+    assert units[0]["_origin_type_id"] == "TYPE-SHORT-NOTE"
+    assert units[0]["_semantic_topic_ids"] == ["TOPIC-0002"]
+    assert units[0]["_semantic_topic_id"] == "TOPIC-0002"
+    assert g._assignment_placement_scope(units[0], {}) == "normal"
+
+
 def test_production_keep_and_move_projection_preserves_source_claim():
     concepts = [
         {

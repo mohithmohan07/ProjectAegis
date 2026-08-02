@@ -1516,11 +1516,13 @@ COVERAGE IS MANDATORY (most important rule):
 - Each numbered problem, intext question, think-and-reflect prompt, and worked
   example is its OWN item — never summarize an exercise set or question list
   into one item.
-- Keep every numbered parent question and all of its lettered/roman subparts
-  as ONE atomic inventory item. Preserve the complete shared stem, data,
-  passage, diagram, options, and every subpart in source order. If the parent
-  genuinely assesses several concepts, assign the intact task to a suitable
-  Culmination later; never duplicate or split its children across concepts.
+- Preserve every numbered parent question and its source order/provenance.
+  When lettered/roman subparts are independently answerable (for example,
+  separate "Write a note on ..." targets), emit stable child inventory items
+  carrying ``parent_qid`` and the complete shared instruction plus that one
+  child ask. Those child items may later become Cases on different concepts.
+  Keep dependent subparts that share data, a passage, a figure, intermediate
+  results, or one integrated response as ONE atomic inventory item.
 - In-text CHECKPOINT questions (boxed "?" questions, "Let's recall",
   "Check your progress", mid-section question boxes) are inventory items
   exactly like end-of-chapter exercises. Chapters typically carry a dozen or
@@ -1563,9 +1565,9 @@ Rules:
   into image_urls AND keep the figure reference in raw_task.
 - Set topic_hint to the nearest MAIN section heading (or "[Chapter opening]"
   for pre-section items) so later placement stays in reading order.
-- Never group inventory items from different topic_hint values into one mined
-  Type. Source topic is a hard placement boundary even when two topics use a
-  similar formula or task pattern.
+- ``topic_hint`` routes the individual inventory item; it is not a boundary on
+  reuse. Two items from different topics may instantiate one reusable Type,
+  while their Cases remain independently routed to their own concepts.
 - Use content_objects for all extracted subject matter and representations.
 - A task may be non-numerical; do not reject it as generic because it is descriptive.
 - Preserve source traceability in this debug JSON only; source labels must not be
@@ -1610,7 +1612,7 @@ what is asked, with what constraint) — never a raw question. An Example is one
 concrete source question that instantiates a Case, copied in full.
 
 Return ONLY strict JSON:
-{"types":[{"type_id":"TYPE-0001","type_title":"","type_description":"","task_pattern":"","source_question_ids":["QINV-0001"],"case_prompts":[{"case_id":"CASE-0001","case_title":"","examples":[{"source_question_id":"QINV-0001","example_prompt":""}],"case_signature":"","placement_scope":"normal|mixed_synthesis|cross_topic_synthesis"}],"concept_match_hint":"","parent_concept_match_hint":"","topic_match_hint":"","difficulty_hint":"Basic|Intermediate|Advanced","cognitive_skill_hint":"","subject_skill_hint":"","is_activity":false,"placement_scope":"normal|mixed_synthesis|cross_topic_synthesis"}]}.
+{"types":[{"type_id":"TYPE-0001","type_title":"","type_description":"","task_pattern":"","source_question_ids":["QINV-0001"],"case_prompts":[{"case_id":"CASE-0001","case_title":"","examples":[{"source_question_id":"QINV-0001","example_prompt":""}],"case_signature":"","concept_match_hint":"","parent_concept_match_hint":"","topic_match_hint":"","difficulty_hint":"Basic|Intermediate|Advanced","cognitive_skill_hint":"","subject_skill_hint":"","is_activity":false,"placement_scope":"normal|mixed_synthesis|cross_topic_synthesis"}]}]}.
 
 COVERAGE IS MANDATORY (most important rule):
 - EVERY inventory item MUST appear in EXACTLY ONE Type's source_question_ids
@@ -1630,10 +1632,11 @@ Rules:
 - One inventory item maps to exactly one best-fit Type. If it combines several
   skills, choose the Type that most directly assesses the final ask, or create
   one integrated Type for that mixed skill — never duplicate the question.
-- Every Case and Example inside one Type MUST assess the same single granular
-  concept. concept_match_hint is Type-level, so it must accurately name that
-  one shared concept target; never use one Type as an umbrella for Cases that
-  belong to different concept rows.
+- A Type owns only the reusable answering method: action, representation,
+  constraints, and expected response form. It may span concepts and textbook
+  topics. Every Case owns its own concept/topic route and must assess one
+  granular destination; Cases on different concepts remain separate under the
+  same Type identity.
 - Split Types when questions share a formula or surface procedure but assess
   different concepts. In particular, direct formula calculations and
   contextual/real-life modeling or applications belong in separate Types when
@@ -1642,19 +1645,21 @@ Rules:
   procedural, practical, and real-life task by its assessed action, object,
   representation, givens, constraint, and ask. Preserve the complete prompt as
   its Example, but never copy solutions or worked-answer steps.
-- A Type may contain source questions from exactly ONE topic_hint. Never group
-  questions across textbook topics even when their formulas or surface patterns
-  resemble each other; create separate topic-scoped Types instead.
+- Merge genuinely identical answering methods across ``topic_hint`` values.
+  Topic/content similarity alone is not enough, but a different country,
+  person, event, or chapter section is not a reason to create a new Type when
+  the required method and answer form are the same.
 - Group items that share the same pattern under one Type, but do not force
   dissimilar items together just to keep the Type count low.
 - Do not merge different academic, solving, answering, writing, interpretation,
   coding, experimental, or practical patterns.
 - Preserve source_question_ids and source traceability in debug JSON.
 - Do not include source labels in public concept_details.
-- Set "is_activity": true when the Type groups textbook Activity / experiment /
-  classroom discussion tasks. These are NOT assessable Types/Cases — they are
-  later stored under Activity/Info Hub on the related concept. Case titles for
-  non-activity Types must be conceptual problem varieties, never Activity names.
+- Set Case-level ``is_activity`` from the source role. Activity/experiment/
+  classroom-discussion Cases are delivered through Activity/Info Hub, but may
+  share a reusable Type identity with ordinary Cases that use the same method.
+  Case titles for non-activity Cases must be conceptual problem varieties,
+  never Activity names.
 
 CASE WORDING (each Case must be properly defined):
 - case_title DEFINES the sub-type: what is given to the student, what must be
@@ -1662,10 +1667,13 @@ CASE WORDING (each Case must be properly defined):
   representation, never by a chapter-specific Activity title. A case_title is
   NEVER a raw question.
 - Create a separate Case for every distinct given/asked/constraint combination.
-- A numbered parent question with subquestions stays ONE Example under ONE
-  Case. Do not split the same parent across Types, Cases, or concepts, and
-  never repeat its stem with different children.
-- Set each Case's placement_scope to "normal" when it assesses one concept.
+- Independently answerable child items with stable ``parent_qid`` identities
+  become separate Cases and may be routed to separate concepts. Dependent
+  subparts that share evidence or form one integrated response stay together.
+- Set every Case's topic_match_hint, concept_match_hint,
+  parent_concept_match_hint, difficulty/cognitive/subject skill hints,
+  is_activity, and placement_scope independently. Set placement_scope to
+  "normal" when that Case assesses one concept.
   Use "mixed_synthesis" ONLY when that Case genuinely combines several concepts
   from the same topic into synthesis/revision. A broad Type title does not make
   every Case mixed. Type-level placement_scope is only a default; Case-level is
@@ -1749,26 +1757,26 @@ prompts.register(
     default="""\
 Consolidate semantically equivalent mined Types without changing source
 question coverage. Return ONLY strict JSON using the same complete schema:
-{"types":[{"type_id":"TYPE-0001","type_title":"","type_description":"","task_pattern":"","source_question_ids":[],"case_prompts":[{"case_id":"CASE-0001","case_title":"","examples":[{"source_question_id":"QINV-0001","example_prompt":""}],"case_signature":"","placement_scope":"normal|mixed_synthesis|cross_topic_synthesis"}],"concept_match_hint":"","parent_concept_match_hint":"","topic_match_hint":"","difficulty_hint":"","cognitive_skill_hint":"","subject_skill_hint":"","is_activity":false,"placement_scope":"normal|mixed_synthesis|cross_topic_synthesis"}]}.
+{"types":[{"type_id":"TYPE-0001","type_title":"","type_description":"","task_pattern":"","source_question_ids":[],"case_prompts":[{"case_id":"CASE-0001","case_title":"","examples":[{"source_question_id":"QINV-0001","example_prompt":""}],"case_signature":"","concept_match_hint":"","parent_concept_match_hint":"","topic_match_hint":"","difficulty_hint":"","cognitive_skill_hint":"","subject_skill_hint":"","is_activity":false,"placement_scope":"normal|mixed_synthesis|cross_topic_synthesis"}]}]}.
 
 Rules:
 - Every supplied source_question_id must remain exactly once in exactly one
   Example and one Type. Never add, remove, duplicate, paraphrase, or truncate
   an Example.
-- This is Type-only consolidation. Preserve concept_match_hint,
-  parent_concept_match_hint, difficulty_hint, cognitive_skill_hint, and
-  subject_skill_hint exactly for every owned QID. Preserve each QID's
-  case_signature and source-owned requires_visual value exactly. Because the
-  five hint fields are Type-level, merge only Types whose values are identical;
-  never average, generalize, or rewrite them to make a merge possible.
+- This is Type-only consolidation. Preserve every Case/QID's topic, concept,
+  parent, activity role, placement scope, difficulty/cognitive/subject skill
+  hints, case_signature, and source-owned requires_visual value exactly. Move
+  Cases intact under a shared operator Type; never average, generalize, or
+  rewrite their destinations to make a merge possible.
 - Merge Types when their verb/action, assessed object, required method,
   representation, constraints, and expected output describe the same reusable
   assessment pattern, even when their titles are paraphrases.
 - Keep different methods or learning objectives separate. Shared notation,
   formula, difficulty, context, person, country, or surface wording alone does
   not prove equivalence.
-- Never merge across topic_match_hint, activity status, or incompatible
-  placement_scope. A Type remains source-topic scoped.
+- Topic, concept, and activity differences belong to Cases and do not block a
+  merge. Never merge two Cases into one when their route or placement scope is
+  different, and never merge genuinely incompatible answering methods.
 - When merging, choose one precise action-object-method title and definition;
   preserve all distinct Cases in source order.
 - Do not create generic fallback titles such as "Answering a Checkpoint
@@ -1785,14 +1793,15 @@ Return ONLY strict JSON:
 
 Accept only when the candidate merges genuinely reusable assessment patterns
 without erasing a different method, assessed object, representation,
-constraint, expected output, source topic, activity status, or placement
-scope. Reject one-Type-per-question renaming, superficial title-only changes,
+constraint, or expected output. Topic and concept differences are legitimate
+Case routes, not reasons for separate Types. Reject one-Type-per-question
+renaming, superficial title-only changes,
 generic catch-all Types, and over-merging based only on shared context,
 difficulty, notation, person, country, or formula. Every supplied QID and Case
-must remain semantically accounted for. Reject any change to a QID's
-concept_match_hint, parent_concept_match_hint, difficulty_hint,
-cognitive_skill_hint, subject_skill_hint, case_signature, or source-owned
-requires_visual value. Treat the human direction as the goal, not as evidence
+must remain semantically accounted for. Reject any change to a QID/Case's
+topic/concept/parent route, activity role, placement scope, difficulty,
+cognitive skill, subject skill, case_signature, or source-owned requires_visual
+value. Treat the human direction as the goal, not as evidence
 that the proposed merge is correct. Confidence is your confidence in the
 verdict, from 0 to 1.
 """)
@@ -1854,27 +1863,6 @@ Rules:
 """)
 
 prompts.register(
-    "concepts.reusable_type_host_convergence.system",
-    category=_CONCEPTS_CAT,
-    label="Reusable Type host convergence prompt",
-    default="""\
-Consolidate every supplied original reusable Type onto exactly one semantically
-valid concept host shared by all of its Cases. Return ONLY strict JSON:
-{"assignments":[{"type_id":"TYPE-0001","concept_id":"CONCEPT-0001","reason":"this host teaches every Case's assessed method and output"}]}.
-
-Rules:
-- Return every supplied original type_id exactly once; these IDs deliberately
-  have no ``::CASE`` suffix. Invent no IDs.
-- Choose only from that Type's allowed_concept_ids.
-- The selected concept title and Description must teach the assessed action,
-  inputs, method/approach, constraints, and expected output for every Case.
-- Formula or keyword overlap alone is not entailment.
-- If no supplied concept safely teaches every Case, omit that Type. The caller
-  will preserve its already-reviewed Case hosts as explicitly distinct public
-  Types instead of forcing an unsafe move.
-""")
-
-prompts.register(
     "concepts.type_mining_delta.system", category=_CONCEPTS_CAT,
     label="Focused Type coverage delta prompt",
     default="""\
@@ -1884,25 +1872,23 @@ never return an already classified question, an existing Example, or a complete
 replacement Type list.
 
 Return ONLY strict JSON:
-{"types":[{"type_id":"TYPE-0001 or NEW-TYPE-0001","type_title":"","type_description":"","task_pattern":"","source_question_ids":["QINV-0001"],"case_prompts":[{"case_id":"existing CASE id or NEW-CASE-0001","case_title":"","examples":[{"source_question_id":"QINV-0001","example_prompt":""}],"case_signature":"","placement_scope":"normal|mixed_synthesis|cross_topic_synthesis"}],"concept_match_hint":"","parent_concept_match_hint":"","topic_match_hint":"","difficulty_hint":"Basic|Intermediate|Advanced","cognitive_skill_hint":"","subject_skill_hint":"","is_activity":false,"placement_scope":"normal|mixed_synthesis|cross_topic_synthesis"}]}.
+{"types":[{"type_id":"TYPE-0001 or NEW-TYPE-0001","type_title":"","type_description":"","task_pattern":"","source_question_ids":["QINV-0001"],"case_prompts":[{"case_id":"existing CASE id or NEW-CASE-0001","case_title":"","examples":[{"source_question_id":"QINV-0001","example_prompt":""}],"case_signature":"","concept_match_hint":"","parent_concept_match_hint":"","topic_match_hint":"","difficulty_hint":"Basic|Intermediate|Advanced","cognitive_skill_hint":"","subject_skill_hint":"","is_activity":false,"placement_scope":"normal|mixed_synthesis|cross_topic_synthesis"}]}]}.
 
 DELTA RULES:
 - Use an existing type_id (and optionally an existing case_id) to append only
   new Cases/Examples to that Type. Its existing metadata is immutable.
-- If no existing Type fits, create a new topic-scoped Type with a new temporary
+- If no existing Type fits, create a new operator Type with a new temporary
   type_id and complete, precise Type and Case metadata.
 - Claim only qids present in MISSED INVENTORY ITEMS. Each claimed qid must occur
   exactly once in source_question_ids and exactly once as an Example.
 - Every returned Example must copy that missed item's complete source task
   verbatim, including all givens, subparts, conditions, context, figure
   references, and image URLs. Never include a solution or answer.
-- A Type may cover only one exact topic_hint. Do not attach a missed item to an
-  existing Type from another source topic; create a new topic-scoped Type.
-- Append to an existing Type only when the missed item assesses the same
-  granular concept as every existing Case in that Type. Because
-  concept_match_hint applies to the whole Type, create a new Type when the
-  missed item instead assesses a distinct method, application, or contextual
-  modeling concept, even if it uses the same formula.
+- A missed item may attach to an existing Type from another topic when its
+  answering method is genuinely the same. Emit a new Case with its own exact
+  topic/concept/parent/activity/placement route; never rewrite existing Cases.
+- Create a new Type only for a distinct method, representation, constraint, or
+  expected response—not merely for a different content target or host.
 - Cover every provided missed qid, but emit no unchanged Type, Case, or Example.
 """)
 
@@ -8214,6 +8200,166 @@ def _type_source_qids(mtype: dict) -> list[str]:
     return out
 
 
+_CASE_ROUTE_FIELDS = (
+    "concept_match_hint",
+    "parent_concept_match_hint",
+    "topic_match_hint",
+    "difficulty_hint",
+    "cognitive_skill_hint",
+    "subject_skill_hint",
+    "is_activity",
+    "placement_scope",
+)
+
+
+def _case_route_value(mtype: dict, case: dict, field: str):
+    """Return Case-owned routing metadata with legacy Type fallback."""
+    if field in case and case.get(field) is not None:
+        return case.get(field)
+    return mtype.get(field)
+
+
+def _apply_case_route_to_unit(unit: dict, raw_case: object) -> dict:
+    """Overlay one Case's destination/role contract onto an assignment unit."""
+    if not isinstance(raw_case, dict):
+        return unit
+    for field in _CASE_ROUTE_FIELDS:
+        if field in raw_case and raw_case.get(field) is not None:
+            unit[field] = copy.deepcopy(raw_case.get(field))
+    return unit
+
+
+def _annotate_mined_type_case_routes(
+    types: list[dict], inventory: dict,
+) -> list[dict]:
+    """Make topic, concept and delivery role authoritative per Case.
+
+    A reusable Type may span many concepts/topics.  Each Case remains a
+    single-host assignment unit.  When a model grouped Examples from different
+    source topics or mixed Activity and ordinary roles in one Case, split only
+    that Case while retaining the shared Type identity and exact QID wording.
+    """
+    by_qid = {
+        str(item.get("qid") or "").strip(): item
+        for item in (inventory or {}).get("items") or []
+        if isinstance(item, dict) and str(item.get("qid") or "").strip()
+    }
+    hub_qids = {
+        str(item.get("qid") or "").strip()
+        for item in _hub_inventory_items(inventory)
+        if str(item.get("qid") or "").strip()
+    }
+    out: list[dict] = []
+    split_count = 0
+    for raw_type in types:
+        if not isinstance(raw_type, dict):
+            continue
+        mtype = copy.deepcopy(raw_type)
+        routed_cases: list[dict] = []
+        for case_index, raw_case in enumerate(
+            mtype.get("case_prompts") or [], start=1,
+        ):
+            if not isinstance(raw_case, dict):
+                routed_cases.append({"case_title": str(raw_case)})
+                continue
+            case = copy.deepcopy(raw_case)
+            qids = _assignment_case_qids(case)
+            groups: dict[tuple[str, bool, str], list[str]] = {}
+            for qid in qids:
+                inventory_item = by_qid.get(qid, {})
+                topic = str(inventory_item.get("topic_hint") or "").strip()
+                # A canonical parent_qid marks a deliberately independent leaf
+                # (for example each target under "Write a note on:"). Never
+                # let a model recombine those leaves into one placement Case,
+                # even when several happen to share a numbered source topic.
+                independent_leaf = (
+                    qid if str(inventory_item.get("parent_qid") or "").strip()
+                    else ""
+                )
+                groups.setdefault(
+                    (topic, qid in hub_qids, independent_leaf), []
+                ).append(qid)
+            if not groups:
+                groups[(
+                    str(_case_route_value(
+                        mtype, case, "topic_match_hint") or "").strip(),
+                    bool(_case_route_value(mtype, case, "is_activity")),
+                    "",
+                )] = []
+            if len(groups) > 1:
+                split_count += 1
+            for group_index, (
+                (topic, is_activity, independent_leaf), group_qids,
+            ) in enumerate(
+                groups.items(), start=1,
+            ):
+                routed = copy.deepcopy(case)
+                if len(groups) > 1:
+                    base_id = str(
+                        routed.get("case_id") or f"CASE-{case_index:04d}"
+                    ).strip()
+                    routed["case_id"] = f"{base_id}-ROUTE-{group_index:02d}"
+                    qid_set = set(group_qids)
+                    routed["examples"] = [
+                        copy.deepcopy(example)
+                        for example in _case_examples(case)
+                        if str(example.get(
+                            "source_question_id") or "").strip() in qid_set
+                    ]
+                routed["topic_match_hint"] = topic
+                routed["is_activity"] = is_activity
+                for field in _CASE_ROUTE_FIELDS:
+                    if field in {"topic_match_hint", "is_activity"}:
+                        continue
+                    if (
+                        len(groups) > 1
+                        and field in {
+                            "concept_match_hint",
+                            "parent_concept_match_hint",
+                        }
+                    ):
+                        # One model-authored destination cannot safely describe
+                        # several independently routed source leaves.
+                        routed[field] = ""
+                        continue
+                    value = _case_route_value(mtype, case, field)
+                    if value not in (None, ""):
+                        routed[field] = copy.deepcopy(value)
+                if independent_leaf:
+                    routed["placement_scope"] = "normal"
+                else:
+                    routed.setdefault("placement_scope", "normal")
+                routed_cases.append(routed)
+        mtype["case_prompts"] = routed_cases
+
+        # Keep a legacy summary only when every Case agrees. New code always
+        # reads the Case first; this summary lets old checkpoint consumers fail
+        # safely instead of inheriting an arbitrary first Case's destination.
+        for field in _CASE_ROUTE_FIELDS:
+            values = []
+            for case in routed_cases:
+                value = case.get(field)
+                if value not in values:
+                    values.append(value)
+            if len(values) == 1:
+                mtype[field] = copy.deepcopy(values[0])
+            elif field == "is_activity":
+                mtype[field] = False
+            elif field == "placement_scope":
+                mtype[field] = "normal"
+            else:
+                mtype[field] = ""
+        out.append(mtype)
+    if split_count:
+        progress.log(
+            "Split "
+            f"{split_count} mixed-route Case(s) while preserving their shared "
+            "reusable Type identity.",
+            level="success",
+        )
+    return out
+
+
 def _split_mined_types_by_source_topic(
     types: list[dict], inventory: dict,
 ) -> list[dict]:
@@ -8490,10 +8636,13 @@ def _normalize_mined_type_candidate(
     types = _repair_nested_mined_types(raw_types)
     types = _prune_unowned_mined_examples(types, inventory)
     types = _backfill_type_cases_from_inventory(types, inventory)
-    types = _split_mined_types_by_source_topic(types, inventory)
-    types = _split_mined_types_by_inventory_role(types, inventory)
+    types = _annotate_mined_type_case_routes(types, inventory)
     types = _merge_equivalent_mined_types(types)
-    return _clear_nonvisual_diagram_interpretation_hints(types, inventory)
+    types = _clear_nonvisual_diagram_interpretation_hints(types, inventory)
+    types = _annotate_mined_type_case_routes(types, inventory)
+    for index, mtype in enumerate(types, start=1):
+        mtype["type_id"] = f"TYPE-{index:04d}"
+    return types
 
 
 def _clear_nonvisual_diagram_interpretation_hints(
@@ -8509,26 +8658,28 @@ def _clear_nonvisual_diagram_interpretation_hints(
     for mtype in types:
         if not isinstance(mtype, dict):
             continue
-        if (
-            bi.normalize_question_text(
-                mtype.get("subject_skill_hint") or "")
-            != "diagram interpretation"
-        ):
-            continue
-        owned_items = [
-            inventory_by_qid[qid]
-            for qid in _type_source_qids(mtype)
-            if qid in inventory_by_qid
-        ]
-        if owned_items and not any(
-            item.get("requires_visual") is True for item in owned_items
-        ):
-            mtype["subject_skill_hint"] = ""
-            corrected += 1
+        for case in mtype.get("case_prompts") or []:
+            if not isinstance(case, dict) or (
+                bi.normalize_question_text(
+                    _case_route_value(
+                        mtype, case, "subject_skill_hint") or "")
+                != "diagram interpretation"
+            ):
+                continue
+            owned_items = [
+                inventory_by_qid[qid]
+                for qid in _assignment_case_qids(case)
+                if qid in inventory_by_qid
+            ]
+            if owned_items and not any(
+                item.get("requires_visual") is True for item in owned_items
+            ):
+                case["subject_skill_hint"] = ""
+                corrected += 1
     if corrected:
         progress.log(
             "Cleared Diagram Interpretation from "
-            f"{corrected} nonvisual Type(s) using the source inventory.",
+            f"{corrected} nonvisual Case(s) using the source inventory.",
             level="success",
         )
     return types
@@ -8545,21 +8696,13 @@ def _merge_equivalent_mined_types(types: list[dict]) -> list[dict]:
         mtype = copy.deepcopy(raw_type)
         title = mtype.get("type_title") or mtype.get("task_pattern") or ""
         key = (
-            _topic_comparison_key(mtype.get("topic_match_hint") or ""),
             bi.normalize_question_text(title),
             bi.normalize_question_text(mtype.get("type_description") or ""),
             bi.normalize_question_text(mtype.get("task_pattern") or ""),
-            str(mtype.get("concept_match_hint") or "").strip(),
-            str(mtype.get("parent_concept_match_hint") or "").strip(),
-            str(mtype.get("difficulty_hint") or "").strip(),
-            str(mtype.get("cognitive_skill_hint") or "").strip(),
-            str(mtype.get("subject_skill_hint") or "").strip(),
-            bool(mtype.get("is_activity")),
-            (mtype.get("placement_scope") or "").strip().lower(),
         )
         # Empty/generic metadata is not enough evidence that two patterns are
         # equivalent; preserve those Types for semantic review.
-        if not key[1] or not key[4]:
+        if not key[0]:
             merged.append(mtype)
             continue
         existing_index = index_by_key.get(key)
@@ -8577,6 +8720,13 @@ def _merge_equivalent_mined_types(types: list[dict]) -> list[dict]:
             (
                 bi.normalize_question_text(case.get("case_title") or ""),
                 str(case.get("case_signature") or "").strip(),
+                _topic_comparison_key(case.get("topic_match_hint") or ""),
+                str(case.get("concept_match_hint") or "").strip(),
+                str(case.get("parent_concept_match_hint") or "").strip(),
+                str(case.get("difficulty_hint") or "").strip().casefold(),
+                str(case.get("cognitive_skill_hint") or "").strip().casefold(),
+                str(case.get("subject_skill_hint") or "").strip().casefold(),
+                bool(case.get("is_activity")),
                 (case.get("placement_scope") or "").strip().lower(),
             ): case
             for case in target_cases
@@ -8590,6 +8740,13 @@ def _merge_equivalent_mined_types(types: list[dict]) -> list[dict]:
             case_key = (
                 bi.normalize_question_text(case.get("case_title") or ""),
                 str(case.get("case_signature") or "").strip(),
+                _topic_comparison_key(case.get("topic_match_hint") or ""),
+                str(case.get("concept_match_hint") or "").strip(),
+                str(case.get("parent_concept_match_hint") or "").strip(),
+                str(case.get("difficulty_hint") or "").strip().casefold(),
+                str(case.get("cognitive_skill_hint") or "").strip().casefold(),
+                str(case.get("subject_skill_hint") or "").strip().casefold(),
+                bool(case.get("is_activity")),
                 (case.get("placement_scope") or "").strip().lower(),
             )
             existing_case = case_by_key.get(case_key)
@@ -8627,12 +8784,13 @@ def _compact_mined_type_metadata(types: list[dict]) -> dict:
     """Small, assignment-free Type context for focused coverage calls."""
     type_fields = (
         "type_id", "type_title", "type_description", "task_pattern",
+    )
+    case_fields = (
+        "case_id", "case_title", "case_signature",
         "concept_match_hint", "parent_concept_match_hint", "topic_match_hint",
         "difficulty_hint", "cognitive_skill_hint", "subject_skill_hint",
         "is_activity", "placement_scope",
     )
-    case_fields = (
-        "case_id", "case_title", "case_signature", "placement_scope")
     compact: list[dict] = []
     for mtype in types:
         if not isinstance(mtype, dict):
@@ -8701,9 +8859,6 @@ def _validate_focused_type_delta(
         if existing_type is not None:
             for field in (
                 "type_title", "type_description", "task_pattern",
-                "concept_match_hint", "parent_concept_match_hint",
-                "topic_match_hint", "difficulty_hint", "cognitive_skill_hint",
-                "subject_skill_hint", "is_activity", "placement_scope",
             ):
                 proposed = raw_type.get(field)
                 current = existing_type.get(field)
@@ -8728,26 +8883,6 @@ def _validate_focused_type_delta(
                 source_ids.append(raw_qid.strip())
         if len(source_ids) != len(set(source_ids)):
             errors.append(f"{label} repeats a source qid")
-
-        source_topics = {
-            (allowed_by_qid[qid].get("topic_hint") or "").strip()
-            for qid in source_ids
-            if qid in allowed_by_qid
-        }
-        if len(source_topics) > 1:
-            errors.append(f"{label} crosses source topics")
-        if existing_type is not None and source_topics:
-            existing_topic = (
-                existing_type.get("topic_match_hint") or "").strip()
-            source_topic = next(iter(source_topics))
-            if (
-                existing_topic
-                and source_topic
-                and _topic_comparison_key(existing_topic)
-                != _topic_comparison_key(source_topic)
-            ):
-                errors.append(
-                    f"{label} attaches a missed qid to a different-topic Type")
 
         existing_cases_by_id = {
             (case.get("case_id") or "").strip(): case
@@ -8775,7 +8910,13 @@ def _validate_focused_type_delta(
             ):
                 errors.append(f"{case_label} has no precise case_title")
             if existing_case is not None:
-                for field in ("case_title", "case_signature"):
+                for field in (
+                    "case_title", "case_signature",
+                    "concept_match_hint", "parent_concept_match_hint",
+                    "topic_match_hint", "difficulty_hint",
+                    "cognitive_skill_hint", "subject_skill_hint",
+                    "is_activity", "placement_scope",
+                ):
                     proposed = case.get(field)
                     current = existing_case.get(field)
                     if (
@@ -9169,6 +9310,13 @@ def _deterministic_fallback_type(item: dict) -> dict | None:
                 "example_prompt": source_task,
             }],
             "case_signature": source_kind,
+            "concept_match_hint": "",
+            "parent_concept_match_hint": "",
+            "topic_match_hint": topic,
+            "difficulty_hint": "",
+            "cognitive_skill_hint": "",
+            "subject_skill_hint": "",
+            "is_activity": source_kind in _HUB_INVENTORY_KINDS,
             "placement_scope": "normal",
         }],
         "concept_match_hint": "",
@@ -9269,10 +9417,13 @@ def _apply_exact_once_duplicate_backstop(
         if not source_topic or not 0 <= type_index < len(types):
             return False
         mtype = types[type_index]
+        contract = (
+            _type_qid_contracts([mtype]).get(qid)
+            if isinstance(mtype, dict) else None
+        )
         return (
-            isinstance(mtype, dict)
-            and _topic_comparison_key(
-                mtype.get("topic_match_hint") or "") == source_topic
+            contract is not None
+            and contract[0] == source_topic
         )
 
     winners: dict[str, dict] = {}
@@ -9556,33 +9707,42 @@ def _mine_types_from_inventory_via_api(
 
 
 def _type_qid_contracts(types: list[dict]) -> dict[str, tuple[str, bool, str]]:
-    """Authoritative topic/activity/scope contract for each mined qid."""
+    """Authoritative Case-owned topic/activity/scope contract per QID."""
     contracts: dict[str, tuple[str, bool, str]] = {}
     for mtype in types:
         if not isinstance(mtype, dict):
             continue
-        topic = _topic_comparison_key(mtype.get("topic_match_hint") or "")
-        activity = bool(mtype.get("is_activity"))
         type_scope = _assignment_placement_scope(mtype)
-        case_qids: set[str] = set()
         for raw_case in mtype.get("case_prompts") or []:
             if not isinstance(raw_case, dict):
                 continue
+            topic = _topic_comparison_key(
+                _case_route_value(
+                    mtype, raw_case, "topic_match_hint") or ""
+            )
+            activity = bool(_case_route_value(
+                mtype, raw_case, "is_activity"))
             scope = (
-                (raw_case.get("placement_scope") or "").strip().lower()
+                str(_case_route_value(
+                    mtype, raw_case, "placement_scope") or "")
+                .strip().lower()
                 or type_scope
             )
             if scope not in _ASSIGNMENT_PLACEMENT_SCOPES:
                 scope = type_scope
             for qid in _assignment_case_qids(raw_case):
                 contracts[qid] = (topic, activity, scope)
-                case_qids.add(qid)
+        fallback = (
+            _topic_comparison_key(mtype.get("topic_match_hint") or ""),
+            bool(mtype.get("is_activity")),
+            type_scope,
+        )
         for qid in _type_source_qids(mtype):
-            contracts.setdefault(qid, (topic, activity, type_scope))
+            contracts.setdefault(qid, fallback)
     return contracts
 
 
-_TYPE_ONLY_IMMUTABLE_FIELDS = (
+_CASE_ROUTE_IMMUTABLE_FIELDS = (
     "concept_match_hint",
     "parent_concept_match_hint",
     "difficulty_hint",
@@ -9598,13 +9758,12 @@ def _type_qid_semantic_contracts(
     honor_emitted_requires_visual: bool = False,
     include_case_identity: bool = False,
 ) -> dict[str, dict]:
-    """Bind Type-only consolidation to each QID's immutable semantics.
+    """Bind consolidation to every QID's immutable Case semantics.
 
-    Type hint fields are shared by every QID owned by that Type.  A merge can
-    therefore be safe only when the source Types agree on all of them.  Case
-    signatures remain QID-local, while ``requires_visual`` is authoritative in
-    the source inventory.  Candidate Examples may echo that visual flag; an
-    echoed mismatch is treated as drift instead of overriding the inventory.
+    Destination and learner-skill hints are Case-owned. A Type may therefore
+    merge across topics/concepts only when each QID keeps its original Case
+    route. ``requires_visual`` remains authoritative in the source inventory;
+    an emitted mismatch is treated as drift.
 
     Human-directed consolidation additionally seals Case IDs and titles so the
     bounded proposal cannot reinterpret the saved operator decision.  The
@@ -9623,23 +9782,19 @@ def _type_qid_semantic_contracts(
     for mtype in types:
         if not isinstance(mtype, dict):
             continue
-        shared = {
-            field: copy.deepcopy(mtype.get(field, ""))
-            for field in _TYPE_ONLY_IMMUTABLE_FIELDS
-        }
-
         def contract_for(
             qid: str,
+            raw_case: dict | None = None,
             case_signature: object = "",
             case_id: object = "",
             case_title: object = "",
         ) -> dict:
             requires_visual: object = visual_by_qid.get(qid, False)
             if honor_emitted_requires_visual:
-                for raw_case in mtype.get("case_prompts") or []:
-                    if not isinstance(raw_case, dict):
+                for emitted_case in mtype.get("case_prompts") or []:
+                    if not isinstance(emitted_case, dict):
                         continue
-                    for example in _case_examples(raw_case):
+                    for example in _case_examples(emitted_case):
                         if (
                             str(example.get("source_question_id") or "").strip()
                             == qid
@@ -9657,7 +9812,13 @@ def _type_qid_semantic_contracts(
                                 }
                             )
             contract = {
-                **copy.deepcopy(shared),
+                **{
+                    field: copy.deepcopy(
+                        _case_route_value(
+                            mtype, raw_case or {}, field) or ""
+                    )
+                    for field in _CASE_ROUTE_IMMUTABLE_FIELDS
+                },
                 "case_signature": copy.deepcopy(case_signature or ""),
                 "requires_visual": requires_visual,
             }
@@ -9668,8 +9829,6 @@ def _type_qid_semantic_contracts(
                 })
             return contract
 
-        for qid in _type_source_qids(mtype):
-            contracts.setdefault(qid, contract_for(qid))
         for raw_case in mtype.get("case_prompts") or []:
             if not isinstance(raw_case, dict):
                 continue
@@ -9677,10 +9836,13 @@ def _type_qid_semantic_contracts(
             for qid in _assignment_case_qids(raw_case):
                 contracts[qid] = contract_for(
                     qid,
+                    raw_case,
                     case_signature,
                     raw_case.get("case_id") or "",
                     raw_case.get("case_title") or "",
                 )
+        for qid in _type_source_qids(mtype):
+            contracts.setdefault(qid, contract_for(qid))
     return contracts
 
 
@@ -9775,15 +9937,27 @@ def _type_sufficiency_payload(mtype: dict) -> dict:
         "type_title": mtype.get("type_title", ""),
         "type_description": mtype.get("type_description", ""),
         "task_pattern": mtype.get("task_pattern", ""),
-        "concept_match_hint": mtype.get("concept_match_hint", ""),
-        "parent_concept_match_hint": mtype.get(
-            "parent_concept_match_hint", ""),
-        "topic_match_hint": mtype.get("topic_match_hint", ""),
         "cases": [
             {
                 "case_title": (
                     case.get("case_title") or ""
                     if isinstance(case, dict) else str(case)
+                ),
+                "concept_match_hint": (
+                    case.get("concept_match_hint") or ""
+                    if isinstance(case, dict) else ""
+                ),
+                "parent_concept_match_hint": (
+                    case.get("parent_concept_match_hint") or ""
+                    if isinstance(case, dict) else ""
+                ),
+                "topic_match_hint": (
+                    case.get("topic_match_hint") or ""
+                    if isinstance(case, dict) else ""
+                ),
+                "is_activity": (
+                    bool(case.get("is_activity"))
+                    if isinstance(case, dict) else False
                 ),
                 "examples": [
                     _trim(example.get("example_prompt") or "", 1800)
@@ -9816,21 +9990,20 @@ def _type_granularity_critic_payload(
         "source_question_ids": [
             str(qid) for qid in mtype.get("source_question_ids") or []
         ],
-        "concept_match_hint": mtype.get("concept_match_hint", ""),
-        "parent_concept_match_hint": mtype.get(
-            "parent_concept_match_hint", ""
-        ),
-        "topic_match_hint": mtype.get("topic_match_hint", ""),
-        "difficulty_hint": mtype.get("difficulty_hint", ""),
-        "cognitive_skill_hint": mtype.get("cognitive_skill_hint", ""),
-        "subject_skill_hint": mtype.get("subject_skill_hint", ""),
-        "is_activity": bool(mtype.get("is_activity")),
-        "placement_scope": mtype.get("placement_scope", ""),
         "cases": [
             {
                 "case_id": case.get("case_id", ""),
                 "case_title": _trim(case.get("case_title", ""), 800),
                 "case_signature": case.get("case_signature", ""),
+                "concept_match_hint": case.get("concept_match_hint", ""),
+                "parent_concept_match_hint": case.get(
+                    "parent_concept_match_hint", ""),
+                "topic_match_hint": case.get("topic_match_hint", ""),
+                "difficulty_hint": case.get("difficulty_hint", ""),
+                "cognitive_skill_hint": case.get(
+                    "cognitive_skill_hint", ""),
+                "subject_skill_hint": case.get("subject_skill_hint", ""),
+                "is_activity": bool(case.get("is_activity")),
                 "placement_scope": case.get("placement_scope", ""),
                 "examples": [
                     {
@@ -9983,23 +10156,39 @@ def _human_directed_type_consolidation_via_api(
         for qid in set(original_semantics) | set(candidate_semantics)
         if original_semantics.get(qid) != candidate_semantics.get(qid)
     }
+    no_reduction = bool(candidate) and len(candidate) >= len(original)
     if (
         not candidate
-        or len(candidate) >= len(original)
+        or no_reduction
         or missed
         or duplicates
         or contract_drift
         or wording_drift
         or semantic_drift
     ):
-        reason = (
-            "The proposed taxonomy failed deterministic safety gates: "
-            f"{len(candidate)} candidate vs {len(original)} current Types, "
-            f"{len(missed)} missing QID(s), {len(duplicates)} duplicate "
-            f"assignment(s), {len(contract_drift)} topic/activity/scope "
-            f"drift(s), {len(wording_drift)} changed Example(s), and "
-            f"{len(semantic_drift)} immutable semantic drift(s)."
-        )
+        if (
+            no_reduction
+            and not missed
+            and not duplicates
+            and not contract_drift
+            and not wording_drift
+            and not semantic_drift
+        ):
+            reason = (
+                "The proposal preserved every safety contract but made no "
+                f"Type reduction ({len(candidate)} candidate vs "
+                f"{len(original)} current Types). The current taxonomy was "
+                "not accepted as consolidated."
+            )
+        else:
+            reason = (
+                "The proposed taxonomy failed deterministic safety gates: "
+                f"{len(candidate)} candidate vs {len(original)} current Types, "
+                f"{len(missed)} missing QID(s), {len(duplicates)} duplicate "
+                f"assignment(s), {len(contract_drift)} topic/activity/scope "
+                f"drift(s), {len(wording_drift)} changed Example(s), and "
+                f"{len(semantic_drift)} immutable semantic drift(s)."
+            )
         progress.log(reason, level="warning")
         return None, reason, {
             "proposal_type_count": len(candidate),
@@ -10169,10 +10358,14 @@ def _add_missing_type_method_concepts_via_api(
     """Add only genuinely missing method concepts identified from mined Types."""
     import json as _json
 
-    types = [
+    source_types = [
         mtype for mtype in (mined_types or {}).get("types") or []
-        if isinstance(mtype, dict) and not mtype.get("is_activity")
+        if isinstance(mtype, dict)
     ]
+    types = [
+        unit for unit in _expand_mined_types_to_assignment_units(source_types)
+        if not unit.get("is_activity")
+    ] if source_types else []
     if not records or not types:
         return records
     concepts: list[dict] = []
@@ -11073,6 +11266,7 @@ def _expand_mined_types_to_assignment_units(types: list[dict]) -> list[dict]:
             unit["_origin_case_count"] = len(raw_cases)
             if raw_cases:
                 unit["case_prompts"] = [copy.deepcopy(raw_cases[0])]
+                _apply_case_route_to_unit(unit, raw_cases[0])
                 case_qids = _assignment_case_qids(raw_cases[0])
                 # A sole Case owns all Type-level trace qids, including legacy
                 # payloads where source_question_id existed only on the Type.
@@ -11098,6 +11292,7 @@ def _expand_mined_types_to_assignment_units(types: list[dict]) -> list[dict]:
                 f"{type_id}::{case_id}::{case_index:04d}")
             unit["source_question_ids"] = _assignment_case_qids(raw_case)
             unit["case_prompts"] = [copy.deepcopy(raw_case)]
+            _apply_case_route_to_unit(unit, raw_case)
             units.append(unit)
 
     original_duplicates = sorted(
@@ -11157,19 +11352,26 @@ def _expand_mined_types_to_assignment_units(types: list[dict]) -> list[dict]:
 
 
 def _collapse_assignment_units_for_render(units: list[dict]) -> list[dict]:
-    """Rejoin same-concept Case units from one mined Type before rendering."""
+    """Rejoin same-concept Case units without mixing delivery roles.
+
+    Activity Cases belong exclusively to Activity/Info Hub.  They may share a
+    reusable Type identity with ordinary Cases, but must never make those
+    ordinary Cases disappear—or become assessable Types themselves—when both
+    roles happen to resolve to the same concept host.
+    """
     collapsed: list[dict] = []
-    index_by_origin: dict[str, int] = {}
+    index_by_origin_and_role: dict[tuple[str, bool], int] = {}
     for raw_unit in units:
         unit = copy.deepcopy(raw_unit)
         origin = (
             unit.pop("_origin_type_id", "")
             or (unit.get("type_id") or "").split("::", 1)[0]
         )
-        existing_index = index_by_origin.get(origin)
+        role_key = (origin, bool(unit.get("is_activity")))
+        existing_index = index_by_origin_and_role.get(role_key)
         if existing_index is None:
             unit["type_id"] = origin or unit.get("type_id", "")
-            index_by_origin[origin] = len(collapsed)
+            index_by_origin_and_role[role_key] = len(collapsed)
             collapsed.append(unit)
             continue
         target = collapsed[existing_index]
@@ -11721,18 +11923,16 @@ def _consolidate_reusable_type_hosts(
     concept_payload: list[dict],
     meta: dict,
 ) -> dict[str, list[dict]]:
-    """Converge every reusable mined Type to one reviewed concept host.
+    """Preserve independently certified Case hosts for reusable Types.
 
-    Case-scoped assignment is useful for preserving exact QIDs during review,
-    but it is an internal mechanism—not a public taxonomy. A single original
-    Type must render once with all of its Cases. If all Cases have no legal
-    common destination, they become explicitly distinct host-qualified Types
-    instead of sharing one misleading global Type number.
+    Type reuse and Case placement are orthogonal. A reusable Type is expected
+    to render on several concepts/topics when its Cases assess different
+    content. Phase 3.3 has already certified every Case/QID host, so this
+    boundary must not move those Cases, rename the operator, or spend another
+    model call attempting to force one shared destination.
     """
-    import json as _json
-
-    host_by_unit: dict[str, str] = {}
-    units_by_origin: dict[str, list[dict]] = {}
+    split_origins: set[str] = set()
+    hosts_by_origin: dict[str, set[str]] = {}
     for cid, units in per_concept.items():
         for unit in units:
             unit_id = str(unit.get("type_id") or "").strip()
@@ -11740,152 +11940,19 @@ def _consolidate_reusable_type_hosts(
                 unit.get("_origin_type_id")
                 or unit_id.split("::", 1)[0]
             ).strip()
-            if not unit_id or not origin or unit.get("is_activity"):
-                continue
-            host_by_unit[unit_id] = cid
-            units_by_origin.setdefault(origin, []).append(unit)
-
+            if origin and not unit.get("is_activity"):
+                hosts_by_origin.setdefault(origin, set()).add(cid)
     split_origins = {
-        origin: units
-        for origin, units in units_by_origin.items()
-        if len({
-            host_by_unit.get(str(unit.get("type_id") or "").strip(), "")
-            for unit in units
-        }) > 1
+        origin for origin, hosts in hosts_by_origin.items() if len(hosts) > 1
     }
-    if not split_origins:
-        return per_concept
-
-    concept_payload_by_id = {
-        str(row.get("concept_id") or ""): row
-        for row in concept_payload
-        if str(row.get("concept_id") or "")
-    }
-    targets: dict[str, str] = {}
-    common_allowed: dict[str, tuple[str, ...]] = {}
-    irreducible: set[str] = set()
-    for origin, units in split_origins.items():
-        allowed_sets = [
-            set(allowed_cids_by_tid.get(
-                str(unit.get("type_id") or "").strip(), set()))
-            for unit in units
-        ]
-        common = set.intersection(*allowed_sets) if allowed_sets else set()
-        ordered = tuple(
-            cid for cid in concept_payload_by_id if cid in common)
-        if not ordered:
-            irreducible.add(origin)
-            continue
-        common_allowed[origin] = ordered
-    unresolved = sorted(set(common_allowed) - set(targets))
-    if unresolved and config.use_live_generation():
-        proposed: dict[str, str] = {}
-        payload = []
-        for origin in unresolved:
-            item = copy.deepcopy(
-                original_types_by_id.get(origin)
-                or split_origins[origin][0])
-            item["type_id"] = origin
-            item["allowed_concept_ids"] = list(common_allowed[origin])
-            item["current_concept_ids"] = sorted({
-                host_by_unit.get(
-                    str(unit.get("type_id") or "").strip(), "")
-                for unit in split_origins[origin]
-                if host_by_unit.get(
-                    str(unit.get("type_id") or "").strip(), "")
-            })
-            payload.append(item)
-        user = (
-            _metadata_block(meta)
-            + "\nCONCEPT HOSTS:\n"
-            + _json.dumps(
-                {"concepts": concept_payload}, ensure_ascii=False)
-            + "\n\nREUSABLE TYPES SPLIT ACROSS HOSTS:\n"
-            + _json.dumps({"types": payload}, ensure_ascii=False)
-            + "\nReturn one concept_id for an original type_id only when "
-            "that host semantically teaches every Case. Omit an unsafe "
-            "Type instead of forcing it. All Cases and Examples of an "
-            "accepted Type will be kept together on the selected host."
-        )
-        try:
-            data = _openai_json(
-                prompts.get_text(
-                    "concepts.reusable_type_host_convergence.system"
-                ),
-                user,
-                purpose="concept_validation",
-            )
-        except Exception as exc:  # noqa: BLE001
-            progress.log(
-                "Reusable Type host convergence reviewer was unavailable "
-                f"({exc}); preserving the reviewed Case hosts as distinct "
-                "public Types.",
-                level="warning",
-            )
-            data = {}
-        for assignment in (data or {}).get("assignments") or []:
-            if not isinstance(assignment, dict):
-                continue
-            origin = str(assignment.get("type_id") or "").strip()
-            cid = str(assignment.get("concept_id") or "").strip()
-            if (
-                origin in unresolved
-                and cid in common_allowed.get(origin, ())
-            ):
-                proposed[origin] = cid
-        targets.update(proposed)
-
-    # Never stop a completed generation because the bounded reviewer omitted a
-    # verdict. When one shared host was not semantically certified, retain the
-    # reviewed Case hosts but make them explicitly distinct public Types. That
-    # is safer than silently moving a formula Case onto a real-life host (or
-    # vice versa) merely because of source order.
-    unresolved_after_review = set(common_allowed) - set(targets)
-    if unresolved_after_review:
-        irreducible.update(unresolved_after_review)
+    if split_origins:
         progress.log(
-            "Reusable Type host convergence had no complete shared-host "
-            f"verdict for {len(unresolved_after_review)} Type(s); preserving "
-            "their reviewed Case hosts as explicitly host-specific Types.",
-            level="warning",
+            f"Preserved {len(split_origins)} reusable Type(s) across their "
+            "independently certified Case hosts; no one-host convergence call "
+            "was made.",
+            level="success",
         )
-
-    rebuilt: dict[str, list[dict]] = {}
-    moved = 0
-    for current_cid, units in per_concept.items():
-        for raw_unit in units:
-            unit = copy.deepcopy(raw_unit)
-            unit_id = str(unit.get("type_id") or "").strip()
-            origin = str(
-                unit.get("_origin_type_id")
-                or unit_id.split("::", 1)[0]
-            ).strip()
-            target = targets.get(origin, current_cid)
-            if origin in irreducible:
-                # There is no legal single host shared by every Case. Make the
-                # public taxonomy honestly distinct instead of reusing one
-                # number across hosts.
-                host = concept_payload_by_id.get(current_cid) or {}
-                host_title = str(host.get("concept") or "").strip()
-                unit["_origin_type_id"] = (
-                    f"{origin}::HOST::{current_cid}")
-                title = str(unit.get("type_title") or "").strip()
-                if host_title and host_title.casefold() not in title.casefold():
-                    unit["type_title"] = (
-                        f"{title} — {host_title}" if title else host_title)
-            rebuilt.setdefault(target, []).append(unit)
-            if target != current_cid:
-                moved += 1
-
-    progress.log(
-        "Converged "
-        f"{len(targets)} reusable Type(s) to one host "
-        f"({moved} Case assignment unit(s) moved); "
-        f"{len(irreducible)} irreducible Type(s) were made explicitly "
-        "host-specific.",
-        level="success",
-    )
-    return rebuilt
+    return copy.deepcopy(per_concept)
 
 
 def _assign_mined_types_via_api(
@@ -12224,6 +12291,7 @@ def _assign_mined_types_via_api(
     for cid, tlist in per_concept.items():
         rec = cid_map[cid]
         fragments: list[str] = []
+        rendered_origin_ids: list[str] = []
         hub_fragments: list[str] = []
         counter = 0
         for mtype in _collapse_assignment_units_for_render(tlist):
@@ -12235,9 +12303,15 @@ def _assign_mined_types_via_api(
             body, counter = _mined_type_to_body(mtype, counter)
             if body:
                 fragments.append(body)
+                rendered_origin_ids.append(str(
+                    mtype.get("_origin_type_id")
+                    or mtype.get("type_id")
+                    or ""
+                ).split("::", 1)[0])
         details = rec.get("concept_details", "")
         if fragments:
             details = _inject_types(details, " ".join(fragments))
+            rec["_origin_type_id"] = rendered_origin_ids
         for hub in hub_fragments:
             details = _append_activity_hub(details, hub)
         rec["concept_details"] = details
@@ -12300,7 +12374,15 @@ def _mined_type_topic_violations(
     """Return missing or unexpected placements, grouped by normalized Type title."""
     violations: list[dict] = []
     expected_by_title: dict[str, list[dict]] = {}
-    for mtype in (mined_types or {}).get("types") or []:
+    source_types = [
+        mtype for mtype in (mined_types or {}).get("types") or []
+        if isinstance(mtype, dict)
+    ]
+    expected_units = (
+        _expand_mined_types_to_assignment_units(source_types)
+        if source_types else []
+    )
+    for mtype in expected_units:
         if mtype.get("is_activity"):
             continue
         topic = (mtype.get("topic_match_hint") or "").strip()
@@ -12763,6 +12845,7 @@ def _accept_topic_safe_type_review(
     original: list[dict], candidate: list[dict], mined_types: dict | None,
 ) -> list[dict]:
     """Reject an alignment review that moves/drops source-topic-scoped Types."""
+    candidate = _carry_type_origin_metadata(original, candidate)
     violations = _mined_type_topic_violations(candidate, mined_types)
     if violations:
         progress.log(
@@ -12780,7 +12863,7 @@ def _merge_types_from_fallback(
 ) -> list[dict]:
     """Restore Types from an earlier snapshot when a later pass dropped them."""
     fb_types = {
-        _record_key(r): _types_body(r.get("concept_details", ""))
+        _record_key(r): (r, _types_body(r.get("concept_details", "")))
         for r in fallback
         if _has_meaningful_types(r.get("concept_details", ""))
     }
@@ -12790,9 +12873,11 @@ def _merge_types_from_fallback(
     for rec in records:
         if _has_meaningful_types(rec.get("concept_details", "")):
             continue
-        body = fb_types.get(_record_key(rec))
-        if body:
+        fallback_type = fb_types.get(_record_key(rec))
+        if fallback_type:
+            source, body = fallback_type
             rec["concept_details"] = _inject_types(rec["concept_details"], body)
+            cr.carry_type_origin_metadata(source, rec)
             restored += 1
     if restored:
         progress.log(f"Restored Types on {restored} concept(s) from pre-pass snapshot.")
@@ -12870,6 +12955,7 @@ def _review_type_concept_alignment_via_api(
         else:
             updated["concept_details"] = _strip_types_from_records([dict(original)])[0].get(
                 "concept_details", "")
+        cr.carry_type_origin_metadata(original, updated)
         out.append(updated)
     return _accept_topic_safe_type_review(records, out, mined_types)
 
@@ -12886,6 +12972,8 @@ def _ensure_parent_concepts(records: list[dict]) -> list[dict]:
 
 def _strip_types_from_records(records: list[dict]) -> list[dict]:
     for rec in records:
+        rec.pop("_origin_type_id", None)
+        rec.pop(cr._TYPE_ORIGIN_SEALS_KEY, None)
         sections = [
             (label, content)
             for label, content in cr.split_sections(rec.get("concept_details", ""))
@@ -12917,16 +13005,48 @@ def _validation_options(stage: str) -> dict:
     }.get(stage, {"allow_types": True, "require_culmination": False, "allow_culmination": True})
 
 
+def _carry_type_origin_metadata(
+    original: list[dict], candidate: list[dict],
+) -> list[dict]:
+    """Carry opaque reusable-Type seals into the accepted candidate in place.
+
+    The long-standing review contract returns the exact candidate list when it
+    is accepted.  Preserve that identity while adding only private metadata to
+    rows that have a matching source record.
+    """
+    if not candidate:
+        return candidate
+    by_key = {_record_key(row): row for row in original}
+    by_title = {
+        bi.normalize_question_text(row.get("concept_title", "")): row
+        for row in original
+    }
+    for index, row in enumerate(candidate):
+        source = by_key.get(_record_key(row)) or by_title.get(
+            bi.normalize_question_text(row.get("concept_title", ""))
+        )
+        if source is None and len(original) == len(candidate):
+            source = original[index]
+        if source is not None:
+            cr.carry_type_origin_metadata(source, row)
+    return candidate
+
+
 def _merge_repaired_rows(records: list[dict], repaired: list[dict]) -> list[dict]:
     if len(repaired) == len(records):
-        return repaired
+        return _carry_type_origin_metadata(records, repaired)
     by_key = {_record_key(r): r for r in repaired}
     by_title = {bi.normalize_question_text(r.get("concept_title", "")): r for r in repaired}
     out: list[dict] = []
     for rec in records:
         replacement = by_key.get(_record_key(rec)) or by_title.get(
             bi.normalize_question_text(rec.get("concept_title", "")))
-        out.append(replacement or rec)
+        if replacement is None:
+            out.append(rec)
+            continue
+        replacement = dict(replacement)
+        cr.carry_type_origin_metadata(rec, replacement)
+        out.append(replacement)
     return out
 
 
@@ -13089,6 +13209,9 @@ def _repair_records_via_api(
             next_records = list(records)
             for idx, repaired_row in zip(failed_indexes, repaired):
                 if idx < len(next_records):
+                    repaired_row = dict(repaired_row)
+                    cr.carry_type_origin_metadata(
+                        next_records[idx], repaired_row)
                     next_records[idx] = repaired_row
             records = next_records
         else:
@@ -13846,6 +13969,7 @@ def _restore_source_owned_type_sections(
             + protected_sections
             + candidate_sections[insert_at:]
         )
+        cr.carry_type_origin_metadata(original_row, candidate_row)
         if protected_sections:
             # Topic placement is part of the exact source-inventory contract.
             candidate_row["topic"] = original_row.get("topic", "")
@@ -13885,6 +14009,7 @@ def _accept_exact_inventory_type_review(
     mined_types: dict | None = None,
 ) -> list[dict]:
     """Reject a Types rewrite that breaks inventory section or coverage rules."""
+    candidate = _carry_type_origin_metadata(original, candidate)
     defects = _rendered_inventory_coverage_defects(candidate, inventory)
     if defects["missing"] or defects["duplicate"]:
         progress.log(
@@ -13996,9 +14121,10 @@ def _mined_assignment_units_by_qid(
             case_qids = _assignment_case_qids(raw_case)
             if not case_qids:
                 continue
-            unit = dict(mtype)
+            unit = copy.deepcopy(mtype)
             unit["case_prompts"] = [raw_case]
             unit["source_question_ids"] = case_qids
+            _apply_case_route_to_unit(unit, raw_case)
             for qid in case_qids:
                 units.setdefault(qid, unit)
         for qid in _type_source_qids(mtype):
@@ -14258,6 +14384,7 @@ def _dedupe_rendered_inventory_examples(
             else:
                 sections.pop(types_idx)
             rec["concept_details"] = cr.join_sections(sections)
+            cr.carry_type_origin_metadata(record, rec)
         out.append(rec)
     return out, removed
 
@@ -15073,8 +15200,8 @@ def _salvage_short_case_examples(
     expanded = 0
     dropped = 0
     out: list[dict] = []
-    for rec in records:
-        rec = dict(rec)
+    for record in records:
+        rec = dict(record)
         record_topic_key = _topic_comparison_key(rec.get("topic") or "")
         topic_inventory_texts = inventory_texts_by_topic.get(record_topic_key)
         scoped_inventory_texts = (
@@ -15198,6 +15325,7 @@ def _salvage_short_case_examples(
             else:
                 sections.pop(types_idx)
             rec["concept_details"] = cr.join_sections(sections)
+            cr.carry_type_origin_metadata(record, rec)
         out.append(rec)
     if expanded or dropped:
         progress.log(
@@ -18401,31 +18529,31 @@ _CONCEPT_CHECKPOINT_STAGES = {
     },
     "question_inventory": {
         "order": 50,
-        "version": 1,
+        "version": 2,
         "progress": 0.70,
         "label": "Question and task inventory complete",
     },
     _TYPE_TAXONOMY_CHECKPOINT_STAGE: {
         "order": 55,
-        "version": 1,
+        "version": 2,
         "progress": 0.76,
         "label": "Reusable Type taxonomy ready for granularity review",
     },
     _CONCEPT_CHECKPOINT_STAGE: {
         "order": 60,
-        "version": 1,
+        "version": 2,
         "progress": 0.81,
         "label": "Reusable Types mined; ready for Type assignment",
     },
     "post_type_assignment": {
         "order": 70,
-        "version": 3,
+        "version": 4,
         "progress": 0.91,
         "label": "Type assignment and activity hubs complete",
     },
     "final_content_ready": {
         "order": 80,
-        "version": 3,
+        "version": 4,
         "progress": 0.98,
         "label": "Final content ready for deterministic validation",
     },
@@ -18580,20 +18708,11 @@ def _compatible_concept_checkpoint_entry(checkpoint: dict | None) -> bool:
     schema = checkpoint.get("schema_version")
     stage = checkpoint.get("stage")
     if schema == _LEGACY_CONCEPT_CHECKPOINT_SCHEMA:
-        return bool(
-            stage == _CONCEPT_CHECKPOINT_STAGE
-            and _checkpoint_has_fields(
-                checkpoint,
-                ("records", list),
-                ("question_task_inventory", dict),
-                ("mined_types", dict),
-                ("method_row_snapshot", list),
-            )
-            and not _invalid_inventory_items(
-                checkpoint.get("question_task_inventory")
-            )
-            and _type_granularity_replay_seal_valid(checkpoint)
-        )
+        # Schema 2 predates independent leaf Cases and Case-owned placement.
+        # It has no stage contract version capable of proving that a saved
+        # Type did not collapse all of its Cases onto one concept.  Replaying
+        # it would silently restore the obsolete one-host taxonomy.
+        return False
     spec = _CONCEPT_CHECKPOINT_STAGES.get(stage)
     if schema != _CONCEPT_CHECKPOINT_SCHEMA or spec is None:
         return False
@@ -19458,6 +19577,11 @@ def _run_live_concept_pre_final_stages(
             consolidated_type_count=consolidated_type_count,
             inventory_count=len(
                 (question_task_inventory or {}).get("items") or []),
+            parent_task_count=(
+                type_granularity_decision.inventory_parent_task_count(
+                    question_task_inventory
+                )
+            ),
             sufficiency_added_concepts=0,
             sufficiency_audit_complete=False,
         )
@@ -19495,12 +19619,47 @@ def _run_live_concept_pre_final_stages(
                 consolidated_type_count=current_type_count,
                 inventory_count=len(
                     (question_task_inventory or {}).get("items") or []),
+                parent_task_count=(
+                    type_granularity_decision.inventory_parent_task_count(
+                        question_task_inventory
+                    )
+                ),
                 sufficiency_added_concepts=0,
                 sufficiency_audit_complete=(
                     saved_order
                     >= _checkpoint_order(_CONCEPT_CHECKPOINT_STAGE)
                 ),
             )
+            mined_types["_granularity_review"] = copy.deepcopy(review)
+
+        # Reviews saved before independently routed leaf Cases used leaf-QID
+        # count as the fragmentation denominator. Upgrade their deterministic
+        # metrics in place while preserving any audit/decision bookkeeping.
+        if "type_comparison_count" not in review:
+            current_type_count = len(
+                (mined_types or {}).get("types") or []
+            )
+            upgraded_metrics = type_granularity_decision.build_review(
+                raw_type_count=int(
+                    review.get("raw_type_count") or current_type_count
+                ),
+                consolidated_type_count=current_type_count,
+                inventory_count=len(
+                    (question_task_inventory or {}).get("items") or []
+                ),
+                parent_task_count=(
+                    type_granularity_decision.inventory_parent_task_count(
+                        question_task_inventory
+                    )
+                ),
+                sufficiency_added_concepts=int(
+                    review.get("sufficiency_added_concepts") or 0
+                ),
+                sufficiency_audit_complete=bool(
+                    review.get("sufficiency_audit_complete", True)
+                ),
+            )
+            review.update(upgraded_metrics)
             mined_types["_granularity_review"] = copy.deepcopy(review)
 
         applied = review.get("human_resolution")
@@ -19530,6 +19689,11 @@ def _run_live_concept_pre_final_stages(
                     consolidated_type_count=current_type_count,
                     inventory_count=len(
                         (question_task_inventory or {}).get("items") or []),
+                    parent_task_count=(
+                        type_granularity_decision.inventory_parent_task_count(
+                            question_task_inventory
+                        )
+                    ),
                     sufficiency_added_concepts=int(
                         review.get("sufficiency_added_concepts") or 0),
                     sufficiency_audit_complete=bool(
@@ -19665,6 +19829,15 @@ def _run_live_concept_pre_final_stages(
                     len(mined_types["types"]) / inventory_count
                     if inventory_count else 0.0
                 )
+                comparison_count = int(
+                    review.get("type_comparison_count")
+                    or review.get("parent_task_count")
+                    or inventory_count
+                )
+                review["type_comparison_ratio"] = (
+                    len(mined_types["types"]) / comparison_count
+                    if comparison_count else 0.0
+                )
                 review["consolidation_merged_count"] = max(
                     int(review.get("consolidation_merged_count") or 0),
                     int(review.get("raw_type_count") or 0)
@@ -19677,7 +19850,8 @@ def _run_live_concept_pre_final_stages(
                         "The bounded consolidation was source-safe, but the "
                         "taxonomy remains strongly fragmented at "
                         f"{len(mined_types['types'])} Types for "
-                        f"{inventory_count} QIDs."
+                        f"{comparison_count} parent task(s) "
+                        f"({inventory_count} leaf QIDs)."
                     )
                     review["pending_followup"] = {
                         "prior_decision_id": str(
