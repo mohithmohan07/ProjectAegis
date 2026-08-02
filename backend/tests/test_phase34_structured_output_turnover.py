@@ -31,6 +31,315 @@ def test_max_reasoning_compacts_on_structured_output_turnover():
     assert phase34._downgraded_reasoning("max", 2) == "high"
 
 
+def test_unsupported_reasoning_effort_downgrades_immediately(monkeypatch):
+    import openai
+    from aegis_pipeline import openai_policy
+
+    calls: list[dict] = []
+
+    class UnsupportedEffortError(RuntimeError):
+        body = {
+            "error": {
+                "message": (
+                    "Unsupported value: reasoning_effort does not support max"
+                ),
+                "param": "reasoning_effort",
+                "code": "unsupported_value",
+            }
+        }
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=self.create)
+            )
+
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                raise UnsupportedEffortError("unsupported max effort")
+            return SimpleNamespace(
+                choices=[SimpleNamespace(
+                    message=SimpleNamespace(
+                        content=json.dumps({"ok": True}), refusal=None
+                    ),
+                    finish_reason="stop",
+                )]
+            )
+
+    monkeypatch.setattr(openai, "OpenAI", Client)
+    monkeypatch.setattr(
+        openai_policy,
+        "chat_request_policy",
+        lambda purpose, model=None: {
+            "model": model or "gpt-5.6-terra",
+            "reasoning_effort": "max",
+        },
+    )
+    monkeypatch.setattr(phase34.time, "sleep", lambda _seconds: None)
+    generation._openai_gate = None
+
+    result = phase34._resilient_openai_multimodal_json(
+        system="Return strict JSON.",
+        prompt="payload",
+        pages=[],
+        response_schema=_simple_schema(),
+        purpose="semantic_resolution",
+        max_tokens=128_000,
+        model="gpt-5.6-terra",
+    )
+
+    assert result == {"ok": True}
+    assert [call["reasoning_effort"] for call in calls] == ["max", "xhigh"]
+    assert len(calls) == 2
+    generation._openai_gate = None
+
+
+def test_each_unsupported_reasoning_effort_is_tried_once(monkeypatch):
+    import openai
+    from aegis_pipeline import openai_policy
+
+    calls: list[dict] = []
+
+    class UnsupportedEffortError(RuntimeError):
+        status_code = 400
+        body = {
+            "error": {
+                "message": "Unsupported reasoning_effort for this model",
+                "param": "reasoning_effort",
+                "code": "unsupported_value",
+            }
+        }
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=self.create)
+            )
+
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            if kwargs["reasoning_effort"] in {"max", "xhigh"}:
+                raise UnsupportedEffortError("unsupported effort")
+            return SimpleNamespace(
+                choices=[SimpleNamespace(
+                    message=SimpleNamespace(
+                        content=json.dumps({"ok": True}), refusal=None
+                    ),
+                    finish_reason="stop",
+                )]
+            )
+
+    monkeypatch.setattr(openai, "OpenAI", Client)
+    monkeypatch.setattr(
+        openai_policy,
+        "chat_request_policy",
+        lambda purpose, model=None: {
+            "model": model or "gpt-5.6-terra",
+            "reasoning_effort": "max",
+        },
+    )
+    monkeypatch.setattr(phase34.time, "sleep", lambda _seconds: None)
+    generation._openai_gate = None
+
+    result = phase34._resilient_openai_multimodal_json(
+        system="Return strict JSON.",
+        prompt="payload",
+        pages=[],
+        response_schema=_simple_schema(),
+        purpose="semantic_resolution",
+        max_tokens=128_000,
+        model="gpt-5.6-terra",
+    )
+
+    assert result == {"ok": True}
+    assert [call["reasoning_effort"] for call in calls] == [
+        "max",
+        "xhigh",
+        "high",
+    ]
+    generation._openai_gate = None
+
+
+def test_capability_downgrade_then_truncation_uses_lower_effort(monkeypatch):
+    import openai
+    from aegis_pipeline import openai_policy
+
+    calls: list[dict] = []
+
+    class UnsupportedEffortError(RuntimeError):
+        status_code = 400
+        body = {
+            "error": {
+                "message": "Unsupported reasoning_effort for this model",
+                "param": "reasoning_effort",
+                "code": "unsupported_value",
+            }
+        }
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=self.create)
+            )
+
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                raise UnsupportedEffortError("unsupported xhigh effort")
+            if len(calls) == 2:
+                return SimpleNamespace(
+                    choices=[SimpleNamespace(
+                        message=SimpleNamespace(content="{}", refusal=None),
+                        finish_reason="length",
+                    )]
+                )
+            return SimpleNamespace(
+                choices=[SimpleNamespace(
+                    message=SimpleNamespace(
+                        content=json.dumps({"ok": True}), refusal=None
+                    ),
+                    finish_reason="stop",
+                )]
+            )
+
+    monkeypatch.setattr(openai, "OpenAI", Client)
+    monkeypatch.setattr(
+        openai_policy,
+        "chat_request_policy",
+        lambda purpose, model=None: {
+            "model": model or "gpt-5.6-terra",
+            "reasoning_effort": "xhigh",
+        },
+    )
+    generation._openai_gate = None
+
+    result = phase34._resilient_openai_multimodal_json(
+        system="Return strict JSON.",
+        prompt="payload",
+        pages=[],
+        response_schema=_simple_schema(),
+        purpose="semantic_resolution",
+        max_tokens=128_000,
+        model="gpt-5.6-terra",
+    )
+
+    assert result == {"ok": True}
+    assert [call["reasoning_effort"] for call in calls] == [
+        "xhigh",
+        "high",
+        "medium",
+    ]
+    generation._openai_gate = None
+
+
+def test_unrelated_definitive_400_is_not_replayed(monkeypatch):
+    import openai
+
+    calls = 0
+
+    class InvalidRequestError(RuntimeError):
+        status_code = 400
+        body = {
+            "error": {
+                "message": "Invalid schema declaration",
+                "param": "response_format",
+                "code": "invalid_request_error",
+            }
+        }
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=self.create)
+            )
+
+        def create(self, **_kwargs):
+            nonlocal calls
+            calls += 1
+            raise InvalidRequestError("invalid response schema")
+
+    monkeypatch.setattr(openai, "OpenAI", Client)
+    monkeypatch.setattr(phase34.time, "sleep", lambda _seconds: None)
+    generation._openai_gate = None
+
+    with pytest.raises(RuntimeError, match="definitively rejected"):
+        phase34._resilient_openai_multimodal_json(
+            system="Return strict JSON.",
+            prompt="payload",
+            pages=[],
+            response_schema=_simple_schema(),
+            purpose="semantic_resolution",
+            max_tokens=128_000,
+            model="gpt-5.6-terra",
+        )
+
+    assert calls == 1
+    generation._openai_gate = None
+
+
+def test_structured_non_reasoning_param_wins_over_message_text():
+    class ResponseFormatError(RuntimeError):
+        body = {
+            "error": {
+                "message": (
+                    "Unsupported response_format while reasoning_effort is set"
+                ),
+                "param": "response_format",
+                "code": "unsupported_value",
+            }
+        }
+
+    assert not phase34._unsupported_reasoning_effort(
+        ResponseFormatError("unsupported response format")
+    )
+
+
+def test_single_attempt_does_not_negotiate_reasoning_effort(monkeypatch):
+    import openai
+
+    calls = 0
+
+    class UnsupportedEffortError(RuntimeError):
+        status_code = 400
+        body = {
+            "error": {
+                "message": "Unsupported reasoning_effort for this model",
+                "param": "reasoning_effort",
+                "code": "unsupported_value",
+            }
+        }
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=self.create)
+            )
+
+        def create(self, **_kwargs):
+            nonlocal calls
+            calls += 1
+            raise UnsupportedEffortError("unsupported effort")
+
+    monkeypatch.setattr(openai, "OpenAI", Client)
+    generation._openai_gate = None
+
+    with pytest.raises(RuntimeError, match="single attempt failed"):
+        phase34._resilient_openai_multimodal_json(
+            system="Return strict JSON.",
+            prompt="payload",
+            pages=[],
+            response_schema=_simple_schema(),
+            purpose="semantic_resolution",
+            max_tokens=128_000,
+            model="gpt-5.6-terra",
+            single_attempt=True,
+        )
+
+    assert calls == 1
+    generation._openai_gate = None
+
+
 def test_completion_limit_escalates_budget_and_finishes(monkeypatch):
     import openai
 

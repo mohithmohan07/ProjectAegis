@@ -68,6 +68,22 @@ _REASONING_DOWNGRADE = {
     "medium": "low",
     "low": "low",
 }
+_CAPABILITY_REASONING_DOWNGRADE = {
+    "max": "xhigh",
+    "xhigh": "high",
+    "high": "medium",
+    "medium": "low",
+    "low": "none",
+    "none": "",
+}
+_REASONING_ORDER = {
+    "none": 0,
+    "low": 1,
+    "medium": 2,
+    "high": 3,
+    "xhigh": 4,
+    "max": 5,
+}
 
 
 class _TerminalStructuredOutputError(RuntimeError):
@@ -164,6 +180,54 @@ def _downgraded_reasoning(value: object, steps: int) -> str:
     for _ in range(max(0, int(steps))):
         effort = _REASONING_DOWNGRADE.get(effort, effort)
     return effort
+
+
+def _reasoning_with_cap(value: object, cap: str | None) -> str:
+    """Return the preferred effort without exceeding a discovered API cap."""
+    effort = str(value or "")
+    if not cap:
+        return effort
+    if effort not in _REASONING_ORDER or cap not in _REASONING_ORDER:
+        return cap
+    return (
+        effort
+        if _REASONING_ORDER[effort] <= _REASONING_ORDER[cap]
+        else cap
+    )
+
+
+def _unsupported_reasoning_effort(exc: Exception) -> bool:
+    """Recognize the provider's structured 400 for an unsupported effort.
+
+    OpenAI SDK versions expose the error fields either as attributes or inside
+    ``body['error']``.  The string fallback keeps compatible gateways from
+    turning this deterministic capability mismatch into three identical
+    protocol retries.
+    """
+    body = getattr(exc, "body", None)
+    error = body.get("error", body) if isinstance(body, dict) else {}
+    param = str(
+        getattr(exc, "param", None) or error.get("param") or ""
+    ).casefold()
+    code = str(
+        getattr(exc, "code", None) or error.get("code") or ""
+    ).casefold()
+    message = str(
+        error.get("message") or getattr(exc, "message", None) or exc
+    ).casefold()
+    unsupported = code == "unsupported_value" or "unsupported" in message
+    if param:
+        return param == "reasoning_effort" and unsupported
+    return "reasoning_effort" in message and unsupported
+
+
+def _definitive_client_error(exc: Exception) -> bool:
+    """Whether retrying the identical provider request cannot repair it."""
+    try:
+        status_code = int(getattr(exc, "status_code", 0) or 0)
+    except (TypeError, ValueError):
+        status_code = 0
+    return 400 <= status_code < 500 and status_code != 429
 
 
 def _matches_schema_shape(value: object, schema: object) -> bool:
@@ -273,6 +337,8 @@ def _resilient_openai_multimodal_json(
     truncations = 0
     transient = 0
     hard = 0
+    reasoning_cap: str | None = None
+    omit_reasoning_effort = False
     last_error: Exception | None = None
     schema = _schema_name(response_schema)
     strict_schema = response_schema.get("schema") or {}
@@ -280,10 +346,16 @@ def _resilient_openai_multimodal_json(
 
     while True:
         request_policy = dict(base_policy)
-        if truncations and request_policy.get("reasoning_effort"):
-            request_policy["reasoning_effort"] = _downgraded_reasoning(
-                request_policy["reasoning_effort"], truncations
+        if omit_reasoning_effort:
+            request_policy.pop("reasoning_effort", None)
+        elif request_policy.get("reasoning_effort"):
+            request_policy["reasoning_effort"] = _reasoning_with_cap(
+                request_policy["reasoning_effort"], reasoning_cap
             )
+            if truncations:
+                request_policy["reasoning_effort"] = _downgraded_reasoning(
+                    request_policy["reasoning_effort"], truncations
+                )
         recovery_instruction = ""
         if truncations:
             recovery_instruction = (
@@ -440,6 +512,37 @@ def _resilient_openai_multimodal_json(
                 raise RuntimeError(
                     f"OpenAI {label} schema {schema} single attempt failed: "
                     f"{exc!r}"
+                ) from exc
+            current_effort = str(
+                request_policy.get("reasoning_effort") or ""
+            )
+            lower_effort = _CAPABILITY_REASONING_DOWNGRADE.get(current_effort)
+            if (
+                current_effort in _CAPABILITY_REASONING_DOWNGRADE
+                and _unsupported_reasoning_effort(exc)
+                and lower_effort != current_effort
+            ):
+                if lower_effort:
+                    reasoning_cap = lower_effort
+                else:
+                    omit_reasoning_effort = True
+                next_label = repr(lower_effort) if lower_effort else "omitted"
+                progress.log(
+                    f"OpenAI {label} does not support reasoning effort "
+                    f"{current_effort!r} for model {selected_model}; retrying "
+                    f"immediately with reasoning_effort {next_label} without "
+                    "consuming a "
+                    "protocol retry.",
+                    level="warning",
+                )
+                continue
+            if _definitive_client_error(exc):
+                # Authentication, permissions, model availability, and other
+                # invalid-request failures cannot be fixed by replaying an
+                # identical payload.  Surface them immediately so the caller's
+                # explicit model fallback or infrastructure handling can act.
+                raise RuntimeError(
+                    f"OpenAI {label} request was definitively rejected: {exc}"
                 ) from exc
             hard += 1
             last_error = exc
