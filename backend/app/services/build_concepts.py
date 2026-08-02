@@ -2650,6 +2650,33 @@ def _autonomously_resolve_pending_decision(
         row for row in attempted
         if str(row.get("issue_key") or "") == issue_key
     ]
+    # Unattended completion: when a guard below would otherwise pause for a
+    # human, the safest server-offered bounded action (the one the review UI
+    # highlights, or an explicit keep candidate) is applied deterministically
+    # instead — no model request, full audit retained. Decisions whose only
+    # meaningful action is user-only (source replacement, custom instruction)
+    # yield no safe option and still pause.
+    safe_option = (
+        autonomous_resolution.safe_continuation_option(pending)
+        if autonomous_resolution.unattended_completion_enabled()
+        else None
+    )
+
+    def _forced_safe_result(guard_reason: str) -> "autonomous_resolution.ResolutionResult":
+        assert safe_option is not None
+        return autonomous_resolution.ResolutionResult(
+            status="resolved",
+            reason=(
+                f"Safe continuation: {guard_reason} Aegis applied the "
+                "safest server-offered bounded action "
+                f"({safe_option['choice']}) instead of pausing for review."
+            )[:8000],
+            choice=safe_option["choice"],
+            target_id=safe_option["target_id"],
+            target_concept_id=safe_option["target_concept_id"],
+        )
+
+    forced_safe: "autonomous_resolution.ResolutionResult | None" = None
     if deterministic_result is None and any(
         str(row.get("capability_key") or "") == capability_key
         for row in same_scope_attempts
@@ -2657,74 +2684,95 @@ def _autonomously_resolve_pending_decision(
         # Identical evidence + critic state + prior-pathway history is a true
         # loop. A changed critic conclusion, evidence set, or prior action has
         # a different capability key and is sent back to Terra below.
-        progress.log(
-            "This exact semantic workspace was already inspected; Aegis "
-            "did not repeat an identical model request.",
-            level="warning",
-        )
-        return None
+        if safe_option is not None:
+            forced_safe = _forced_safe_result(
+                "this exact semantic workspace was already inspected and "
+                "escalated once; repeating the identical model request "
+                "cannot produce a different verdict."
+            )
+        else:
+            progress.log(
+                "This exact semantic workspace was already inspected; Aegis "
+                "did not repeat an identical model request.",
+                level="warning",
+            )
+            return None
     if (
-        deterministic_result is None
+        forced_safe is None
+        and deterministic_result is None
         and len(same_scope_attempts)
         >= autonomous_resolution.maximum_pathway_turns()
     ):
-        now = _agent_review_timestamp()
         reason = (
             "This semantic scope exhausted its distinct autonomous repair "
-            "pathways. The checkpoint is preserved because continuing would "
-            "repeat an ineffective action rather than improve the output."
+            "pathways."
         )
-        if not upgrading_current_review:
-            _persist_pending_agent_review(
-                db,
-                job,
-                decision_id=pending["decision_id"],
-                context_hash=pending["context_hash"],
-                review={
-                    "status": "escalated",
-                    "resolver_version": (
-                        autonomous_resolution.RESOLVER_VERSION
-                    ),
-                    "issue_key": issue_key,
-                    **workspace_audit,
-                    "started_at": now,
-                    "completed_at": now,
-                    "reason": reason,
-                },
-                owner_sub=owner_sub,
+        if safe_option is not None:
+            forced_safe = _forced_safe_result(reason)
+        else:
+            now = _agent_review_timestamp()
+            reason = (
+                reason
+                + " The checkpoint is preserved because continuing would "
+                "repeat an ineffective action rather than improve the output."
             )
-        progress.log(reason, level="warning")
-        return None
+            if not upgrading_current_review:
+                _persist_pending_agent_review(
+                    db,
+                    job,
+                    decision_id=pending["decision_id"],
+                    context_hash=pending["context_hash"],
+                    review={
+                        "status": "escalated",
+                        "resolver_version": (
+                            autonomous_resolution.RESOLVER_VERSION
+                        ),
+                        "issue_key": issue_key,
+                        **workspace_audit,
+                        "started_at": now,
+                        "completed_at": now,
+                        "reason": reason,
+                    },
+                    owner_sub=owner_sub,
+                )
+            progress.log(reason, level="warning")
+            return None
     if (
-        deterministic_result is None
+        forced_safe is None
+        and deterministic_result is None
         and len(attempted) >= autonomous_resolution.maximum_decisions()
     ):
-        now = _agent_review_timestamp()
-        reason = (
-            "This run reached its autonomous decision safety cap. The next "
-            "semantic choice is saved for you without another model request."
-        )
-        if not upgrading_current_review:
-            _persist_pending_agent_review(
-                db,
-                job,
-                decision_id=pending["decision_id"],
-                context_hash=pending["context_hash"],
-                review={
-                    "status": "escalated",
-                    "resolver_version": (
-                        autonomous_resolution.RESOLVER_VERSION
-                    ),
-                    "issue_key": issue_key,
-                    **workspace_audit,
-                    "started_at": now,
-                    "completed_at": now,
-                    "reason": reason,
-                },
-                owner_sub=owner_sub,
+        reason = "This run reached its autonomous decision safety cap."
+        if safe_option is not None:
+            forced_safe = _forced_safe_result(reason)
+        else:
+            now = _agent_review_timestamp()
+            reason = (
+                reason
+                + " The next semantic choice is saved for you without "
+                "another model request."
             )
-        progress.log(reason, level="warning")
-        return None
+            if not upgrading_current_review:
+                _persist_pending_agent_review(
+                    db,
+                    job,
+                    decision_id=pending["decision_id"],
+                    context_hash=pending["context_hash"],
+                    review={
+                        "status": "escalated",
+                        "resolver_version": (
+                            autonomous_resolution.RESOLVER_VERSION
+                        ),
+                        "issue_key": issue_key,
+                        **workspace_audit,
+                        "started_at": now,
+                        "completed_at": now,
+                        "reason": reason,
+                    },
+                    owner_sub=owner_sub,
+                )
+            progress.log(reason, level="warning")
+            return None
 
     started_at = _agent_review_timestamp()
     try:
@@ -2746,6 +2794,11 @@ def _autonomously_resolve_pending_decision(
                     )
                     if deterministic_result is not None
                     else (
+                        "The decision and checkpoint were saved before a "
+                        "deterministic safe continuation was applied."
+                    )
+                    if forced_safe is not None
+                    else (
                         "The decision and checkpoint were saved before this "
                         "one bounded autonomous review started."
                     )
@@ -2761,7 +2814,13 @@ def _autonomously_resolve_pending_decision(
             level="warning",
         )
         return None
-    if deterministic_result is not None:
+    if forced_safe is not None:
+        progress.log(
+            forced_safe.reason + " No model request was started.",
+            level="warning",
+        )
+        result = forced_safe
+    elif deterministic_result is not None:
         progress.set_progress(
             job.checkpoint_progress,
             label=(
@@ -2802,6 +2861,35 @@ def _autonomously_resolve_pending_decision(
             # hide the very blocks that support the generated claim.
             source_text=_semantic_recovery_source_text(job.mmd_text),
             checkpoint=copy.deepcopy(job.generation_checkpoint or {}),
+        )
+    if (
+        not result.resolved
+        and forced_safe is None
+        and deterministic_result is None
+        and safe_option is not None
+    ):
+        # The bounded review escalated, but a safe server-offered action
+        # exists. Unattended completion applies it — with the original
+        # escalation verdict preserved verbatim in the audited reason —
+        # instead of pausing the run for a manual review click.
+        continuation_reason = (
+            f"Safe continuation after escalation: {result.reason} "
+            "Aegis applied the safest server-offered bounded action "
+            f"({safe_option['choice']}) so generation completes without "
+            "manual review."
+        )[:8000]
+        progress.log(continuation_reason, level="warning")
+        result = autonomous_resolution.ResolutionResult(
+            status="resolved",
+            reason=continuation_reason,
+            confidence=result.confidence,
+            evidence_refs=result.evidence_refs,
+            choice=safe_option["choice"],
+            target_id=safe_option["target_id"],
+            target_concept_id=safe_option["target_concept_id"],
+            workspace_hash=result.workspace_hash,
+            offered_candidate_count=result.offered_candidate_count,
+            inspected_candidate_count=result.inspected_candidate_count,
         )
     completed_at = _agent_review_timestamp()
     final_workspace_audit = {

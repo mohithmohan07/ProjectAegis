@@ -173,6 +173,90 @@ def is_automatable_choice(choice: object) -> bool:
     return value in AUTOMATABLE_CHOICES
 
 
+def unattended_completion_enabled() -> bool:
+    """Whether escalations degrade to the safest offered action, not a pause.
+
+    Unattended completion applies the exact bounded action the review UI
+    would highlight as recommended (or an explicit keep/no-change candidate)
+    when the resolver cannot certify a stronger action. Source replacement
+    and custom instructions always remain user-only.
+    """
+
+    raw = os.environ.get("AEGIS_UNATTENDED_COMPLETION", "1")
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def safe_continuation_option(
+    pending: Mapping[str, Any],
+) -> dict[str, str] | None:
+    """Deterministically choose the safest offered action for one decision.
+
+    Returns the server-recommended automatable option when its target is
+    fully specified, otherwise the single explicit keep/no-change candidate
+    route. Returns None when no safe bounded action is offered — the caller
+    must then keep the human pause (for example when the only remaining
+    action is a source replacement).
+    """
+
+    candidates = [
+        row for row in pending.get("candidates") or []
+        if isinstance(row, Mapping)
+    ]
+    candidate_target_ids = {
+        str(row.get("target_id") or "") for row in candidates
+    } - {""}
+    candidate_concept_ids = {
+        str(row.get("concept_id") or "") for row in candidates
+    } - {""}
+    options = [
+        row for row in pending.get("options") or []
+        if isinstance(row, Mapping)
+    ]
+
+    def selection(row: Mapping[str, Any]) -> dict[str, str] | None:
+        choice = str(row.get("choice") or "").strip()
+        if not is_automatable_choice(choice):
+            return None
+        target_id = str(row.get("target_id") or "").strip()
+        target_concept_id = str(row.get("target_concept_id") or "").strip()
+        if choice in {"accept_recommended", "select_candidate"}:
+            if not target_id or target_id not in candidate_target_ids:
+                return None
+        if choice in {"expand_existing", "select_existing"}:
+            if not target_concept_id or (
+                candidate_concept_ids
+                and target_concept_id not in candidate_concept_ids
+            ):
+                return None
+        return {
+            "choice": choice,
+            "target_id": target_id,
+            "target_concept_id": target_concept_id,
+        }
+
+    for row in options:
+        if row.get("recommended"):
+            selected = selection(row)
+            if selected is not None:
+                return selected
+    keep_candidates = [
+        row for row in candidates
+        if _normal(row.get("action")) == "keep"
+        and str(row.get("target_id") or "")
+    ]
+    if len(keep_candidates) == 1 and any(
+        str(row.get("choice") or "") == "select_candidate"
+        for row in options
+    ):
+        row = keep_candidates[0]
+        return {
+            "choice": "select_candidate",
+            "target_id": str(row.get("target_id") or ""),
+            "target_concept_id": str(row.get("concept_id") or ""),
+        }
+    return None
+
+
 def _automatable_options(pending: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     return [
         row
