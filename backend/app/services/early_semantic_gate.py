@@ -230,6 +230,7 @@ def _agent_upgrade_candidate(
             "semantic-resolution-agent-2",
             "semantic-resolution-agent-3",
             "semantic-resolution-agent-4",
+            "semantic-resolution-agent-5",
         }
         and re.fullmatch(
             r"[0-9a-f]{64}", str(review.get("capability_key") or "")

@@ -163,6 +163,39 @@ def test_resolution_model_is_configurable_and_keeps_provider_max_output(
     assert calls[0]["purpose"] == "semantic_resolution"
 
 
+def test_unavailable_terra_model_falls_back_once_to_primary(monkeypatch):
+    calls: list[dict] = []
+
+    def provider(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise RuntimeError(
+                "model_not_found: requested resolution model does not exist"
+            )
+        return _response()
+
+    monkeypatch.setattr(resolver.config, "OPENAI_MODEL", "gpt-5.6-luna")
+    monkeypatch.setattr(resolver.phase22, "_openai_multimodal_json", provider)
+
+    result = resolver.resolve_pending(
+        _pending(),
+        source_text="TYPE-0001 is supported by the canonical source.",
+        checkpoint={},
+    )
+
+    assert result.resolved is True
+    assert [call["model"] for call in calls] == [
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+    ]
+    fallback_packet = json.loads(calls[1]["prompt"])
+    assert fallback_packet["provider_model_fallback"] == {
+        "requested": "gpt-5.6-terra",
+        "used": "gpt-5.6-luna",
+        "reason": "requested resolution model unavailable",
+    }
+
+
 def test_planner_expands_exact_compound_evidence_once_then_applies():
     def candidate(
         *, target_id: str, action: str, block_ids: list[str], coverage: str
@@ -1319,7 +1352,7 @@ def test_capability_key_tracks_full_binding_but_not_candidate_order():
         ],
     }
 
-    assert resolver.RESOLVER_VERSION == "semantic-resolution-agent-4"
+    assert resolver.RESOLVER_VERSION == "semantic-resolution-agent-5"
     assert resolver.capability_key(first) == resolver.capability_key(reordered)
     assert resolver.capability_key(first) != resolver.capability_key(changed)
 

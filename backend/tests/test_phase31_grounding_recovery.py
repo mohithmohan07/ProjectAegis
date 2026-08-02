@@ -883,6 +883,7 @@ def test_stale_grounding_resolution_requires_exact_context():
         "semantic-resolution-agent-2",
         "semantic-resolution-agent-3",
         "semantic-resolution-agent-4",
+        "semantic-resolution-agent-5",
     ],
 )
 def test_complete_workspace_agent_maps_legacy_blk_to_current_binding(

@@ -18,7 +18,7 @@ EXPECTED_REASONING_POLICY = {
     "concept_mapping": "high",
     "concept_detailing": "medium",
     "concept_validation": "xhigh",
-    "semantic_resolution": "max",
+    "semantic_resolution": "xhigh",
     "pre_learning": "high",
     "workbook_planning": "high",
     "workbook_authoring": "high",
@@ -59,7 +59,7 @@ def test_default_model_and_complete_reasoning_policy(monkeypatch):
     assert openai_policy.configured_openai_model() == "gpt-5.6-luna"
     assert openai_policy.REASONING_EFFORT_BY_PURPOSE == EXPECTED_REASONING_POLICY
     assert openai_policy.REASONING_EFFORT_BY_PURPOSE["semantic_resolution"] == (
-        "max"
+        "xhigh"
     )
 
 

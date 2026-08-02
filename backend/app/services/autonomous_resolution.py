@@ -23,7 +23,7 @@ from . import generation
 from . import semantic_confidence_policy as confidence_policy
 
 
-RESOLVER_VERSION = "semantic-resolution-agent-4"
+RESOLVER_VERSION = "semantic-resolution-agent-5"
 _ISSUE_KEY_VERSION = 1
 _DEFAULT_MAX_DECISIONS = 100
 _DEFAULT_MAX_PATHWAY_TURNS = 24
@@ -32,13 +32,14 @@ _MAX_PACKET_CHARS = 320_000
 _DEFAULT_RESOLUTION_MODEL = "gpt-5.6-terra"
 _RESOLUTION_MODEL_ENV = "AEGIS_AUTONOMOUS_RESOLUTION_MODEL"
 _CANDIDATE_WORKSPACE_POLICY = (
-    "complete-candidate-catalog-v4:all-opaque-identities;"
+    "complete-candidate-catalog-v5:all-opaque-identities;"
     "content-bound-sha256;relevance-ranked-detail;"
     "separate-evidence-and-topology-detail-quotas;"
     "deterministic-one-time-evidence-expansion;compound-evidence-refs;"
     "critic-mentions-are-retrieval-only;all-topology-actions-visible;"
     "legacy-exact-canonical-source-map-v1;"
-    "automatable-actions-only;instruction-must-be-empty-v1"
+    "automatable-actions-only;instruction-must-be-empty-v1;"
+    "reasoning-capability-negotiation-v1"
 )
 USER_ONLY_CHOICES = frozenset({"replace_source", "custom_instruction"})
 AUTOMATABLE_CHOICES = frozenset({

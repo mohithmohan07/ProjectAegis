@@ -65,9 +65,11 @@ ReasoningEffort = Literal["low", "medium", "high", "xhigh", "max"]
 # Medium: grounded extraction and bounded content drafting.
 # High: cross-row reconciliation and long-form planning/authoring.
 # Xhigh: bounded validation/repair passes where missed defects are costly.
-# Max: the final agentic pathway decision after ordinary semantic validation
-# has already disagreed; this is precisely where additional deliberation can
-# replace repeated human review without weakening source-integrity checks.
+# Xhigh: the final agentic pathway decision after ordinary semantic validation
+# has already disagreed.  The live Chat Completions endpoint currently exposes
+# xhigh as its highest accepted effort for the configured GPT-5.6 models; asking
+# for an unsupported ``max`` value only creates a provider-side 400 before any
+# semantic work starts.
 REASONING_EFFORT_BY_PURPOSE: Final[dict[OpenAIPurpose, ReasoningEffort]] = {
     "assessment_generation": "medium",
     "source_extraction": "medium",
@@ -75,7 +77,7 @@ REASONING_EFFORT_BY_PURPOSE: Final[dict[OpenAIPurpose, ReasoningEffort]] = {
     "concept_mapping": "high",
     "concept_detailing": "medium",
     "concept_validation": "xhigh",
-    "semantic_resolution": "max",
+    "semantic_resolution": "xhigh",
     "pre_learning": "high",
     "workbook_planning": "high",
     "workbook_authoring": "high",

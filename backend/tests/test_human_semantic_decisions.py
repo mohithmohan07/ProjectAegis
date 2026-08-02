@@ -677,17 +677,26 @@ def test_agent_abstention_persists_pause_and_is_not_called_on_replay(
     assert generation_calls == 1
 
 
-def test_saved_v2_pause_gets_one_output_contract_upgrade_on_resume(
+@pytest.mark.parametrize(
+    ("legacy_status", "legacy_version"),
+    [
+        ("escalated", "semantic-resolution-agent-2"),
+        ("unavailable", "semantic-resolution-agent-4"),
+    ],
+)
+def test_saved_pause_gets_one_output_contract_upgrade_on_resume(
     db,
     first_chapter,
     monkeypatch,
+    legacy_status,
+    legacy_version,
 ):
     job, chapter = _job_at_81_percent(db, first_chapter)
     pending = _attach_pending(db, job, chapter)
     issue_key = autonomous_resolution.issue_key(pending)
     started_at = build_concepts._agent_review_timestamp()
     legacy_base = {
-        "resolver_version": "semantic-resolution-agent-2",
+        "resolver_version": legacy_version,
         "issue_key": issue_key,
         "capability_key": "8" * 64,
         "started_at": started_at,
@@ -711,9 +720,16 @@ def test_saved_v2_pause_gets_one_output_contract_upgrade_on_resume(
         context_hash=pending["context_hash"],
         review={
             **legacy_base,
-            "status": "escalated",
+            "status": legacy_status,
             "completed_at": build_concepts._agent_review_timestamp(),
-            "reason": "The required target was not offered to the agent.",
+            "reason": (
+                "The required target was not offered to the agent."
+                if legacy_status == "escalated"
+                else (
+                    "The provider rejected the old reasoning capability; "
+                    "the checkpoint is safe to resume after an upgrade."
+                )
+            ),
         },
         owner_sub=auth.LOCAL_OWNER_SUB,
     )
@@ -754,7 +770,7 @@ def test_saved_v2_pause_gets_one_output_contract_upgrade_on_resume(
     db.refresh(job)
     ledger = job.generation_checkpoint["human_decisions"]
     assert ledger["agent_review_history"][0]["resolver_version"] == (
-        "semantic-resolution-agent-2"
+        legacy_version
     )
     current = ledger["pending"]["agent_review"]
     assert current["resolver_version"] == autonomous_resolution.RESOLVER_VERSION
