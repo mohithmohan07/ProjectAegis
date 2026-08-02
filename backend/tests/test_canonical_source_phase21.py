@@ -1,8 +1,11 @@
 """Regression coverage for the Phase 2.1 source-hardening contract."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from types import SimpleNamespace
 
+from app.services import canonical_source
 from app.services import canonical_source_phase2 as phase2
 from app.services import canonical_source_phase21 as phase21
 from app.services import canonical_source_phase21_render as phase21_render
@@ -37,7 +40,10 @@ def test_complete_rne_is_phase21_ready_with_six_sections_and_26_tasks():
     compiled = _compile(_rne_source())
     canonical = compiled.canonical
 
-    assert canonical["phase21_hardening"]["version"] == "2.1.2"
+    assert canonical["phase21_hardening"]["version"] == "2.1.3"
+    assert canonical["phase21_hardening"]["compiler"] == (
+        "phase-2.1-source-leaf-inventory-2"
+    )
     assert canonical["phase21_issues"] == []
     assert compiled.report["phase2_issues"] == []
     assert canonical["phase2_inventory_ready"] is True
@@ -104,6 +110,210 @@ def test_only_certified_note_lists_split_and_each_leaf_inherits_context_and_visu
     }
     assert phase21_structure.materialize_task_leaf_cases(dependent) == 1
     assert not dependent["tasks"][0].get("leaf_cases")
+
+
+def test_folded_distinct_visual_prompts_are_two_cases_with_all_questions():
+    source = _rne_source()
+    first = (
+        "Look at Fig. 14(a). Do you think that the people living in any of "
+        "these regions thought of themselves as Italians?"
+    )
+    second = (
+        "Examine Fig. 14(b). Which was the first region to become a part of "
+        "unified Italy? Which was the last region to join? In which year did "
+        "the largest number of states join?"
+    )
+    assert f"{first}\n\n{second}" in source
+
+    for separator in ("\n", " "):
+        compiled = _compile(
+            source.replace(f"{first}\n\n{second}", f"{first}{separator}{second}", 1)
+        )
+        inventory = phase2.inventory_from_canonical(compiled.canonical)
+        parent = next(
+            task for task in compiled.canonical["tasks"]
+            if task["qid"] == "QINV-0011"
+        )
+
+        assert compiled.canonical["phase2_inventory_ready"] is True
+        assert len(inventory["items"]) == 31
+        assert [leaf["qid"] for leaf in parent["leaf_cases"]] == [
+            "QINV-0011.1", "QINV-0011.2",
+        ]
+        assert parent["leaf_cases"][0]["raw_prompt"] == first
+        assert parent["leaf_cases"][1]["raw_prompt"] == second
+        assert parent["leaf_cases"][0]["figure_refs"] == ["FIG-00015"]
+        assert parent["leaf_cases"][1]["figure_refs"] == ["FIG-00016"]
+        assert parent["leaf_cases"][1]["raw_prompt"].count("?") == 3
+        assert all(
+            leaf["decomposition"] == "phase21_distinct_visual_task_clusters"
+            for leaf in parent["leaf_cases"]
+        )
+
+
+def test_visual_cluster_guard_does_not_split_same_figure_or_comparative_tasks():
+    standard_figures = [
+        {
+            "figure_id": "FIG-A",
+            "reference_ids": ["14(a)"],
+            "image_urls": ["https://example.test/14-a.png"],
+        },
+        {
+            "figure_id": "FIG-B",
+            "reference_ids": ["14(b)", "14(a)"],
+            "image_urls": ["https://example.test/14-b.png"],
+        },
+    ]
+
+    def materialized(prompt: str, figures: list[dict] | None = None) -> dict:
+        canonical = {
+            "tasks": [{
+                "task_id": "TASK-00001",
+                "qid": "QINV-0001",
+                "identity_key": "visual-parent",
+                "raw_prompt": prompt,
+                "display_prompt": prompt,
+                "source_start": 0,
+                "source_end": len(prompt),
+            }],
+            "figures": figures or standard_figures,
+        }
+        phase21_structure.materialize_task_leaf_cases(canonical)
+        return canonical["tasks"][0]
+
+    same_figure = materialized(
+        "Look at Fig. 14(a). Identify the region. "
+        "Examine Fig. 14(a). Explain that same region."
+    )
+    comparative = materialized(
+        "Look at Fig. 14(a). Identify the regions. "
+        "Examine Fig. 14(b). Compare it with Fig. 14(a)."
+    )
+    generic = materialized(
+        "Look at Fig. 14(a) and Fig. 14(b). Compare both maps."
+    )
+    narrative = materialized(
+        "The source first asks us to examine Fig. 14(a). It then describes "
+        "why historians examine Fig. 14(b) for chronology."
+    )
+    same_figure_aliases = materialized(
+        "Look at Fig. 14(a). Identify the region. "
+        "Examine Fig. 15(a). Explain the year.",
+        figures=[{
+            "figure_id": "FIG-ALIASED",
+            "reference_ids": ["14(a)", "15(a)"],
+            "image_urls": ["https://example.test/aliased.png"],
+        }],
+    )
+    ambiguous = materialized(
+        "Look at Fig. 14(a). Identify the region. "
+        "Examine Fig. 14(b). Explain the year.",
+        figures=[
+            *standard_figures,
+            {
+                "figure_id": "FIG-B-DUPLICATE",
+                "reference_ids": ["14(b)"],
+                "image_urls": ["https://example.test/14-b-duplicate.png"],
+            },
+        ],
+    )
+
+    assert not same_figure.get("leaf_cases")
+    assert not comparative.get("leaf_cases")
+    assert not generic.get("leaf_cases")
+    assert not narrative.get("leaf_cases")
+    assert not same_figure_aliases.get("leaf_cases")
+    assert not ambiguous.get("leaf_cases")
+
+
+def test_phase21_loader_rebuilds_a_self_consistent_but_incomplete_leaf_artifact(
+    tmp_path: Path,
+    monkeypatch,
+):
+    source = _rne_source()
+    first = (
+        "Look at Fig. 14(a). Do you think that the people living in any of "
+        "these regions thought of themselves as Italians?"
+    )
+    second = (
+        "Examine Fig. 14(b). Which was the first region to become a part of "
+        "unified Italy? Which was the last region to join? In which year did "
+        "the largest number of states join?"
+    )
+    folded = source.replace(f"{first}\n\n{second}", f"{first} {second}", 1)
+    artifact_dir = tmp_path / "artifacts"
+    phase2.write_phase2_artifacts(
+        artifact_dir,
+        mmd_text=folded,
+        source_filename="RNE.mmd",
+        consumer_module="build_concepts",
+    )
+    canonical_path = (
+        artifact_dir / canonical_source.ARTIFACT_SPECS["canonical_json"]["filename"]
+    )
+    report_path = artifact_dir / canonical_source.ARTIFACT_SPECS["report"]["filename"]
+    canonical = json.loads(canonical_path.read_text(encoding="utf-8"))
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    parent = next(
+        task for task in canonical["tasks"] if task["qid"] == "QINV-0011"
+    )
+    parent["leaf_cases"] = parent["leaf_cases"][:1]
+    parent["inventory_leaf_count"] = 1
+    for container in (
+        canonical["phase21_hardening"], canonical["source_contract"],
+    ):
+        container["parent_task_count"] = 26
+        container["decomposed_parent_task_count"] = 2
+        container["inventory_item_count"] = 30
+    canonical["statistics"]["parent_tasks"] = 26
+    canonical["statistics"]["decomposed_parent_tasks"] = 2
+    canonical["statistics"]["inventory_leaf_tasks"] = 30
+    report["phase21_hardening"] = dict(canonical["phase21_hardening"])
+    report["summary"]["inventory_items"] = 30
+    canonical_path.write_text(json.dumps(canonical), encoding="utf-8")
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    from app.services import uploads
+
+    monkeypatch.setattr(
+        uploads, "source_artifact_directory", lambda _job_id: artifact_dir
+    )
+    loaded, loaded_report = phase2._load_or_refresh_for_job(SimpleNamespace(
+        id=312,
+        filename="RNE.mmd",
+        mmd_text=folded,
+    ))
+
+    assert phase21.hardening_artifact_valid(loaded, loaded_report)
+    assert len(phase2.inventory_from_canonical(loaded)["items"]) == 31
+    loaded_parent = next(
+        task for task in loaded["tasks"] if task["qid"] == "QINV-0011"
+    )
+    assert [leaf["qid"] for leaf in loaded_parent["leaf_cases"]] == [
+        "QINV-0011.1", "QINV-0011.2",
+    ]
+
+
+def test_all_inventory_bearing_checkpoint_stages_reject_previous_versions():
+    expected_versions = {
+        "question_inventory": 3,
+        generation._TYPE_TAXONOMY_CHECKPOINT_STAGE: 3,
+        generation._CONCEPT_CHECKPOINT_STAGE: 3,
+        "post_type_assignment": 5,
+        "final_content_ready": 5,
+    }
+
+    assert {
+        stage: generation._CONCEPT_CHECKPOINT_STAGES[stage]["version"]
+        for stage in expected_versions
+    } == expected_versions
+    for stage, current_version in expected_versions.items():
+        stale = {
+            "schema_version": generation._CONCEPT_CHECKPOINT_SCHEMA,
+            "stage_schema_version": current_version - 1,
+            "stage": stage,
+        }
+        assert not generation._compatible_concept_checkpoint_entry(stale)
 
 
 def test_plain_text_discuss_cue_recovers_renan_without_reordering():

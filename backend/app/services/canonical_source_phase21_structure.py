@@ -77,6 +77,14 @@ _FIGURE_REFERENCE_RE = re.compile(
     r"(?:\s*\([a-z]\))?)",
     re.IGNORECASE,
 )
+_VISUAL_TASK_CLUSTER_CUE_RE = re.compile(
+    r"(?im)(?:^|(?<=[.!?])[\t \r\n]+)"
+    r"(?P<cue>look\s+at|examine|inspect|study|observe)\s+"
+    r"fig(?:ure)?\.?\s*\d+(?:\.\d+)*(?:\s*\([a-z]\))?\b"
+)
+_COMPARATIVE_VISUAL_TASK_RE = re.compile(
+    r"(?i)\b(?:compare|contrast|similarit(?:y|ies)|differences?|both)\b"
+)
 
 
 def normal_text(value: object) -> str:
@@ -319,8 +327,27 @@ def _resolved_leaf_figures(
     ambiguous: list[str] = []
     for reference in references:
         candidates = by_reference.get(reference, [])
+        selected: dict[str, Any] | None = None
         if len(candidates) == 1:
-            figure = candidates[0]
+            selected = candidates[0]
+        elif len(candidates) > 1:
+            # A caption may mention another panel in explanatory prose (for
+            # example Fig. 14(b) says "seen in Fig. 14(a)").  That does not
+            # make ownership of 14(a) ambiguous when exactly one Figure has
+            # 14(a) as its primary, first canonical reference.
+            primary = []
+            for figure in candidates:
+                ordered = [
+                    re.sub(r"\s+", "", str(value or "").casefold())
+                    for value in figure.get("reference_ids") or []
+                    if str(value or "").strip()
+                ]
+                if ordered and ordered[0] == reference:
+                    primary.append(figure)
+            if len(primary) == 1:
+                selected = primary[0]
+        if selected is not None:
+            figure = selected
             figure_id = str(figure.get("figure_id") or "")
             if figure_id and figure_id not in figure_refs:
                 figure_refs.append(figure_id)
@@ -333,6 +360,66 @@ def _resolved_leaf_figures(
         else:
             ambiguous.append(reference)
     return figure_refs, image_urls, unresolved, ambiguous
+
+
+def _independent_visual_task_clusters(
+    canonical: dict[str, Any],
+    prompt: str,
+) -> list[tuple[str, int, int]]:
+    """Return independently answerable visual prompts folded into one block.
+
+    Mathpix can remove the paragraph break between two visual activities.  A
+    punctuation boundary by itself is not enough to infer a new Case: the
+    second sentence may merely compare two panels or continue working with the
+    same Figure.  Decomposition is therefore allowed only when every cluster:
+
+    * starts with an explicit visual-task imperative;
+    * names exactly one Figure reference;
+    * resolves unambiguously to a different canonical Figure; and
+    * is not comparative with another cluster.
+
+    The range ends at the next certified visual imperative, so all dependent
+    questions following that imperative remain inside the same Case.
+    """
+    text = str(prompt or "")
+    matches = list(_VISUAL_TASK_CLUSTER_CUE_RE.finditer(text))
+    if len(matches) < 2:
+        return []
+    first_start = matches[0].start("cue")
+    if text[:first_start].strip():
+        return []
+
+    clusters: list[tuple[str, int, int]] = []
+    resolved_figure_ids: set[str] = set()
+    reference_ids: set[str] = set()
+    for index, match in enumerate(matches):
+        start = match.start("cue")
+        end = (
+            matches[index + 1].start("cue")
+            if index + 1 < len(matches)
+            else len(text)
+        )
+        raw_cluster = text[start:end].strip()
+        if not raw_cluster or _COMPARATIVE_VISUAL_TASK_RE.search(raw_cluster):
+            return []
+        references = _figure_reference_ids(raw_cluster)
+        if len(references) != 1 or references[0] in reference_ids:
+            return []
+        figures, _urls, unresolved, ambiguous = _resolved_leaf_figures(
+            canonical,
+            prompt=raw_cluster,
+        )
+        if (
+            len(figures) != 1
+            or unresolved
+            or ambiguous
+            or figures[0] in resolved_figure_ids
+        ):
+            return []
+        reference_ids.add(references[0])
+        resolved_figure_ids.add(figures[0])
+        clusters.append((raw_cluster, start, start + len(raw_cluster)))
+    return clusters
 
 
 def materialize_task_leaf_cases(canonical: dict[str, Any]) -> int:
@@ -383,6 +470,25 @@ def materialize_task_leaf_cases(canonical: dict[str, Any]) -> int:
                         "subpart_label": f"{label})",
                         "source_start": int(source.get("source_start") or 0) + relative_start,
                         "source_end": int(source.get("source_start") or 0) + relative_end,
+                    })
+            elif visual_clusters := _independent_visual_task_clusters(
+                canonical, raw_prompt
+            ):
+                for raw_cluster, relative_start, relative_end in visual_clusters:
+                    provisional.append({
+                        **source,
+                        # A cluster derived from the base paragraph must
+                        # resolve only its own explicit Figure, never inherit
+                        # the parent's combined Figure ownership.
+                        "base_task": False,
+                        "raw_prompt": raw_cluster,
+                        "display_prompt": canonical_task_display(raw_cluster),
+                        "shared_context": str(task.get("shared_context") or ""),
+                        "requires_context": bool(task.get("requires_context")),
+                        "subpart_label": "",
+                        "source_start": int(source.get("source_start") or 0) + relative_start,
+                        "source_end": int(source.get("source_start") or 0) + relative_end,
+                        "decomposition": "phase21_distinct_visual_task_clusters",
                     })
             else:
                 provisional.append({
@@ -469,6 +575,7 @@ def materialize_task_leaf_cases(canonical: dict[str, Any]) -> int:
                 "unresolved_figure_reference_ids": unresolved,
                 "ambiguous_figure_reference_ids": ambiguous,
                 "canonical_source_mode": task.get("canonical_source_mode"),
+                "decomposition": str(leaf.get("decomposition") or ""),
             })
         task["leaf_cases"] = leaves
         task["inventory_leaf_count"] = len(leaves)
@@ -489,7 +596,136 @@ def materialize_task_leaf_cases(canonical: dict[str, Any]) -> int:
         source_contract["parent_task_count"] = parent_count
         source_contract["inventory_item_count"] = inventory_count
         source_contract["decomposed_parent_task_count"] = decomposed_parents
+    hardening = canonical.get("phase21_hardening")
+    if isinstance(hardening, dict):
+        hardening["parent_task_count"] = parent_count
+        hardening["inventory_item_count"] = inventory_count
+        hardening["decomposed_parent_task_count"] = decomposed_parents
     return inventory_count
+
+
+def inventory_shape(canonical: dict[str, Any]) -> tuple[int, int, int]:
+    """Return parent, decomposed-parent, and effective inventory counts."""
+    tasks = [
+        task for task in canonical.get("tasks") or [] if isinstance(task, dict)
+    ]
+    decomposed = 0
+    total_leaves = 0
+    for task in tasks:
+        leaves = [
+            leaf for leaf in task.get("leaf_cases") or []
+            if isinstance(leaf, dict)
+        ]
+        if leaves:
+            decomposed += 1
+            total_leaves += len(leaves)
+    return len(tasks), decomposed, len(tasks) + total_leaves - decomposed
+
+
+def followup_prompt_count(canonical: dict[str, Any]) -> int:
+    return sum(
+        len([
+            row for row in task.get("source_followup_prompts") or []
+            if isinstance(row, dict)
+        ])
+        for task in canonical.get("tasks") or []
+        if isinstance(task, dict)
+    )
+
+
+def inventory_contract_issues(canonical: dict[str, Any]) -> list[dict[str, Any]]:
+    """Fail closed when derived leaf Cases or their count seals are stale."""
+    issues: list[dict[str, Any]] = []
+    parent_count, decomposed_count, inventory_count = inventory_shape(canonical)
+
+    for task in canonical.get("tasks") or []:
+        if not isinstance(task, dict):
+            continue
+        clusters = _independent_visual_task_clusters(
+            canonical, str(task.get("raw_prompt") or "")
+        )
+        if not clusters:
+            continue
+        actual_prompts = {
+            normal_text(leaf.get("raw_prompt") or "")
+            for leaf in task.get("leaf_cases") or []
+            if isinstance(leaf, dict)
+        }
+        missing = [
+            prompt for prompt, _start, _end in clusters
+            if normal_text(prompt) not in actual_prompts
+        ]
+        if missing:
+            issues.append({
+                "severity": "error",
+                "code": "phase21_visual_task_cluster_coverage_mismatch",
+                "message": (
+                    "Distinct, source-resolvable visual task clusters were not "
+                    "materialized as independent inventory Cases."
+                ),
+                "qid": str(task.get("qid") or ""),
+                "missing_cluster_count": len(missing),
+            })
+
+    expected = {
+        "parent_task_count": parent_count,
+        "decomposed_parent_task_count": decomposed_count,
+        "inventory_item_count": inventory_count,
+    }
+    containers = (
+        ("source_contract", canonical.get("source_contract")),
+        ("phase21_hardening", canonical.get("phase21_hardening")),
+    )
+    for container_name, container in containers:
+        if not isinstance(container, dict):
+            continue
+        for field, actual in expected.items():
+            if field not in container:
+                continue
+            try:
+                sealed = int(container.get(field))
+            except (TypeError, ValueError):
+                sealed = -1
+            if sealed != actual:
+                issues.append({
+                    "severity": "error",
+                    "code": "phase21_inventory_count_seal_mismatch",
+                    "message": (
+                        "A derived inventory count seal does not match the "
+                        "canonical parent/leaf Case topology."
+                    ),
+                    "container": container_name,
+                    "field": field,
+                    "expected": actual,
+                    "actual": container.get(field),
+                })
+    statistics = canonical.get("statistics")
+    if isinstance(statistics, dict):
+        for field, actual in {
+            "parent_tasks": parent_count,
+            "decomposed_parent_tasks": decomposed_count,
+            "inventory_leaf_tasks": inventory_count,
+        }.items():
+            if field not in statistics:
+                continue
+            try:
+                sealed = int(statistics.get(field))
+            except (TypeError, ValueError):
+                sealed = -1
+            if sealed != actual:
+                issues.append({
+                    "severity": "error",
+                    "code": "phase21_inventory_count_seal_mismatch",
+                    "message": (
+                        "A derived inventory statistics seal does not match "
+                        "the canonical parent/leaf Case topology."
+                    ),
+                    "container": "statistics",
+                    "field": field,
+                    "expected": actual,
+                    "actual": statistics.get(field),
+                })
+    return issues
 
 
 def prompt_from_block(value: object) -> str:

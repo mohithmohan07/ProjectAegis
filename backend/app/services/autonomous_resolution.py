@@ -21,17 +21,28 @@ from . import generation
 from . import semantic_confidence_policy as confidence_policy
 
 
-RESOLVER_VERSION = "semantic-resolution-agent-2"
+RESOLVER_VERSION = "semantic-resolution-agent-3"
 _ISSUE_KEY_VERSION = 1
 _DEFAULT_MAX_DECISIONS = 6
 _DEFAULT_SOURCE_CHARS = 16_000
 _MAX_PACKET_CHARS = 48_000
 _CANDIDATE_WORKSPACE_POLICY = (
-    "complete-candidate-catalog-v2:all-opaque-identities;"
+    "complete-candidate-catalog-v3:all-opaque-identities;"
     "content-bound-sha256;relevance-ranked-detail;"
     "critic-mentions-are-retrieval-only;all-topology-actions-visible;"
-    "legacy-exact-canonical-source-map-v1"
+    "legacy-exact-canonical-source-map-v1;"
+    "automatable-actions-only;instruction-must-be-empty-v1"
 )
+USER_ONLY_CHOICES = frozenset({"replace_source", "custom_instruction"})
+AUTOMATABLE_CHOICES = frozenset({
+    "expand_existing",
+    "create_new",
+    "select_existing",
+    "accept_recommended",
+    "select_candidate",
+    "consolidate_types",
+    "keep_distinct_types",
+})
 _DEFAULT_CANDIDATE_DETAILS = 10
 _SPACE_RE = re.compile(r"\s+")
 _BLOCK_ID_RE = re.compile(r"\bBLK-[A-Za-z0-9_-]+\b")
@@ -116,6 +127,22 @@ def issue_key(pending: Mapping[str, Any]) -> str:
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")).hexdigest()
+
+
+def is_automatable_choice(choice: object) -> bool:
+    """Whether a server-offered choice may be applied without user input."""
+
+    value = str(choice or "").strip()
+    return value in AUTOMATABLE_CHOICES
+
+
+def _automatable_options(pending: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    return [
+        row
+        for row in pending.get("options") or []
+        if isinstance(row, Mapping)
+        and is_automatable_choice(row.get("choice"))
+    ]
 
 
 def _compact_text(value: object, limit: int) -> str:
@@ -283,14 +310,18 @@ def capability_key(pending: Mapping[str, Any]) -> str:
     ))
     options = [
         _stable_json_value(dict(row))
-        for row in pending.get("options") or []
-        if isinstance(row, Mapping)
+        for row in _automatable_options(pending)
     ]
     options.sort(key=lambda row: json.dumps(
         row, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ))
     material = {
         "policy": _CANDIDATE_WORKSPACE_POLICY,
+        "output_policy": {
+            "options": "automatable_only",
+            "instruction": "exactly_empty",
+            "explanation_field": "reason",
+        },
         "packet_max_chars": _MAX_PACKET_CHARS,
         "source_max_chars": _source_limit(),
         "candidate_bindings": candidates,
@@ -531,9 +562,7 @@ def _model_pending_decision(pending: Mapping[str, Any]) -> dict[str, Any]:
 
     item = pending.get("item") if isinstance(pending.get("item"), Mapping) else {}
     options: list[dict[str, Any]] = []
-    for raw in pending.get("options") or []:
-        if not isinstance(raw, Mapping):
-            continue
+    for raw in _automatable_options(pending):
         options.append({
             "choice": _compact_text(raw.get("choice"), 64),
             "label": _compact_text(raw.get("label"), 320),
@@ -1061,7 +1090,8 @@ def _response_schema(
     choices = list(dict.fromkeys(
         str(row.get("choice") or "")
         for row in pending.get("options") or []
-        if isinstance(row, Mapping) and row.get("choice")
+        if isinstance(row, Mapping)
+        and is_automatable_choice(row.get("choice"))
     ))
     target_ids = list(dict.fromkeys(
         str(row.get("target_id") or "")
@@ -1091,9 +1121,15 @@ def _response_schema(
                 "target_concept_id": {
                     "type": "string", "enum": ["", *concept_ids]
                 },
-                "instruction": {"type": "string", "maxLength": 4000},
+                # Explanatory prose belongs in ``reason``.  Keeping this
+                # compatibility field fixed to the empty string makes a
+                # malformed provider response fail its strict contract before
+                # it can be mistaken for a custom human direction.
+                "instruction": {"type": "string", "enum": [""]},
                 "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-                "reason": {"type": "string", "maxLength": 8000},
+                "reason": {
+                    "type": "string", "minLength": 1, "maxLength": 8000
+                },
                 "evidence_refs": {
                     "type": "array",
                     "maxItems": min(100, len(refs)),
@@ -1134,7 +1170,9 @@ def _provider_call(
             "of that row's canonical evidence refs. The candidate catalog is "
             "complete even when detailed prose is relevance-bounded. "
             "Select apply only when exactly one offered action is clearly "
-            "supported; otherwise ask_human and state the unresolved ambiguity."
+            "supported; otherwise ask_human and state the unresolved ambiguity. "
+            "The instruction field must be exactly empty; put every explanation "
+            "in reason."
         ),
         prompt=json.dumps(packet, ensure_ascii=False),
         pages=[],
@@ -1198,10 +1236,17 @@ def _validate_response(
     }
     if choice not in offered:
         return ResolutionResult("escalated", "The agent selected an action that was not offered.")
-    if choice in {"replace_source", "custom_instruction"}:
+    if choice in USER_ONLY_CHOICES:
         return ResolutionResult(
             "escalated",
             "This action changes the source or introduces new instructions and requires the user.",
+            confidence,
+            refs,
+        )
+    if not is_automatable_choice(choice):
+        return ResolutionResult(
+            "escalated",
+            "The selected action is not approved for autonomous execution.",
             confidence,
             refs,
         )
@@ -1511,6 +1556,17 @@ def resolve_pending(
         row for row in pending.get("candidates") or []
         if isinstance(row, Mapping)
     ])
+    if not _automatable_options(pending):
+        return ResolutionResult(
+            status="escalated",
+            reason=(
+                "This decision has no action approved for autonomous "
+                "execution and requires the user."
+            ),
+            workspace_hash=capability_key(pending),
+            offered_candidate_count=offered_candidate_count,
+            inspected_candidate_count=0,
+        )
     packet: dict[str, Any] | None = None
     try:
         packet, evidence_refs = build_packet(

@@ -38,7 +38,7 @@ def test_nested_mathpix_itemize_is_rendered_without_raw_latex():
     task = _task(compiled.canonical, "Write a note on")
     display = task["display_prompt"]
 
-    assert compiled.canonical["phase21_hardening"]["patch_version"] == "2.1.2"
+    assert compiled.canonical["phase21_hardening"]["patch_version"] == "2.1.3"
     assert task["raw_prompt"].startswith("Write a note on:")
     assert "a) Guiseppe Mazzini" in display
     assert "e) The role of women in nationalist struggles" in display

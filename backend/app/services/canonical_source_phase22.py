@@ -1330,22 +1330,47 @@ def _recalculate_after_adjudication(
     structure.renumber_tasks(canonical)
     _refresh_sections(canonical)
     _refresh_task_topics(canonical)
+    # Adjudication can insert a parent task or refresh block ownership after
+    # the original hardening pass.  Leaf Cases are a derived source contract,
+    # so never trust their pre-adjudication shape: recover folded follow-ups
+    # and materialize every leaf again from the now-final parent sequence.
+    structure.recover_followup_task_prompts(canonical)
+    inventory_items = structure.materialize_task_leaf_cases(canonical)
+    parent_count, decomposed_count, inventory_items = structure.inventory_shape(
+        canonical
+    )
+    marker = canonical.setdefault("phase21_hardening", {})
+    marker.update({
+        "version": phase21.HARDENING_VERSION,
+        "compiler": phase21.COMPILER_LABEL,
+        "followup_task_prompts_recovered": structure.followup_prompt_count(
+            canonical
+        ),
+        "parent_task_count": parent_count,
+        "decomposed_parent_task_count": decomposed_count,
+        "inventory_item_count": inventory_items,
+        "blocking_issues": 0,
+    })
+    source_contract = canonical.setdefault("source_contract", {})
+    source_contract["hardening_version"] = phase21.HARDENING_VERSION
+    source_contract["hardening_compiler"] = phase21.COMPILER_LABEL
     source_issues = phase21.source_boundary_issues(canonical)
     canonical["phase21_issues"] = source_issues
-    if isinstance(canonical.get("phase21_hardening"), dict):
-        canonical["phase21_hardening"]["blocking_issues"] = len(source_issues)
+    marker["blocking_issues"] = len(source_issues)
+    report["phase21_hardening"] = copy.deepcopy(marker)
     report["phase21_issues"] = copy.deepcopy(source_issues)
     issues = phase2.phase2_inventory_issues(canonical, report)
     ready = not issues
     canonical["phase2_inventory_ready"] = ready
     canonical["phase"] = ADJUDICATION_PHASE if ready else canonical.get("phase")
-    canonical.setdefault("source_contract", {})["task_count"] = len(
+    source_contract["task_count"] = len(
         canonical.get("tasks") or []
     )
-    canonical["source_contract"]["section_sequence"] = list(
+    source_contract["section_sequence"] = list(
         canonical.get("section_sequence") or []
     )
     canonical.setdefault("shadow_validation", {})["phase2_inventory_ready"] = ready
+    canonical["shadow_validation"]["phase21_blocking_issues"] = len(source_issues)
     canonical["shadow_validation"]["phase2_blocking_issues"] = len(issues)
     if isinstance(canonical.get("statistics"), dict):
         canonical["statistics"]["tasks"] = len(canonical.get("tasks") or [])
@@ -1355,6 +1380,8 @@ def _recalculate_after_adjudication(
     report["phase2_issues"] = copy.deepcopy(issues)
     report.setdefault("summary", {})["tasks"] = len(canonical.get("tasks") or [])
     report["summary"]["sections"] = len(canonical.get("sections") or [])
+    report["summary"]["inventory_items"] = inventory_items
+    report["summary"]["phase21_blocking_issues"] = len(source_issues)
     report["summary"]["phase2_blocking_issues"] = len(issues)
     report["status"] = "passed_with_warnings" if ready and report.get("issues") else (
         "passed" if ready else "failed"

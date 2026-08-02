@@ -235,6 +235,40 @@ def _copy_semantic_recovery_dispatch_ledger(
     return result
 
 
+def _prune_semantic_recovery_dispatches_after_checkpoint_fallback(
+    envelope: dict,
+    *,
+    retained_stage: str,
+) -> dict:
+    """Drop paid-repair seals belonging only to discarded later stages."""
+
+    result = copy.deepcopy(envelope)
+    ledger = _semantic_recovery_dispatch_ledger(result)
+    if not ledger:
+        return result
+    retained_order = generation._checkpoint_order(retained_stage)
+    attempts = []
+    changed = False
+    for raw in ledger.get("attempts") or []:
+        if not isinstance(raw, dict):
+            continue
+        attempt_order = generation._checkpoint_order(
+            str(raw.get("stage") or "")
+        )
+        if (
+            retained_order >= 0
+            and attempt_order >= 0
+            and attempt_order > retained_order
+        ):
+            changed = True
+            continue
+        attempts.append(copy.deepcopy(raw))
+    if changed:
+        ledger["attempts"] = attempts
+        result[_SEMANTIC_RECOVERY_DISPATCHES_KEY] = ledger
+    return result
+
+
 def _pending_human_decision(checkpoint: dict | None) -> dict | None:
     pending = _human_decision_ledger(checkpoint).get("pending")
     return copy.deepcopy(pending) if isinstance(pending, dict) else None
@@ -326,6 +360,106 @@ def _copy_human_decision_ledger(
     result = copy.deepcopy(target)
     ledger = _human_decision_ledger(source)
     if ledger:
+        result[_HUMAN_DECISIONS_KEY] = ledger
+    return result
+
+
+def _prune_human_decisions_after_checkpoint_fallback(
+    envelope: dict,
+    *,
+    retained_stage: str,
+) -> dict:
+    """Retire decisions derived from checkpoint stages this build discarded.
+
+    A pending semantic action is meaningful only with the inventory/topology
+    stage that produced its candidates.  When a stage-contract bump rewinds an
+    envelope, dispatching that old pause before compatibility normalization
+    would spend once on stale evidence.  Earlier source decisions remain
+    reusable; only decisions whose own saved progress is later than the
+    retained stage are removed.
+    """
+
+    result = copy.deepcopy(envelope)
+    ledger = _human_decision_ledger(result)
+    if not ledger:
+        return result
+
+    retained_order = generation._checkpoint_order(retained_stage)
+
+    def derived_after_fallback(raw_pending: object) -> bool:
+        if not isinstance(raw_pending, dict):
+            return False
+        try:
+            progress_value = float(raw_pending.get("checkpoint_progress") or 0.0)
+        except (TypeError, ValueError):
+            progress_value = 0.0
+        if progress_value <= 0.0 or retained_order < 0:
+            return False
+        exact_orders = [
+            int(spec.get("order", -1))
+            for spec in generation._CONCEPT_CHECKPOINT_STAGES.values()
+            if abs(
+                float(spec.get("progress") or 0.0) - progress_value
+            ) <= 1e-9
+        ]
+        earlier_orders = [
+            int(spec.get("order", -1))
+            for spec in generation._CONCEPT_CHECKPOINT_STAGES.values()
+            if float(spec.get("progress") or 0.0) < progress_value
+        ]
+        derived_order = (
+            min(exact_orders)
+            if exact_orders else max(earlier_orders, default=-1)
+        )
+        return derived_order > retained_order
+
+    invalidated = False
+    invalidated_issue_keys: set[str] = set()
+
+    def remember_review_issue(raw_pending: object) -> None:
+        if not isinstance(raw_pending, dict):
+            return
+        review = raw_pending.get("agent_review")
+        issue_key = (
+            str(review.get("issue_key") or "")
+            if isinstance(review, dict) else ""
+        )
+        if issue_key:
+            invalidated_issue_keys.add(issue_key)
+
+    pending = ledger.get("pending")
+    if derived_after_fallback(pending):
+        remember_review_issue(pending)
+        ledger["pending"] = None
+        invalidated = True
+
+    retained_resolutions = []
+    for raw in ledger.get("resolutions") or []:
+        if (
+            isinstance(raw, dict)
+            and derived_after_fallback(raw.get("pending_decision"))
+            and str(raw.get("choice") or "") != "replace_source"
+        ):
+            remember_review_issue(raw.get("pending_decision"))
+            invalidated = True
+            continue
+        retained_resolutions.append(copy.deepcopy(raw))
+    ledger["resolutions"] = retained_resolutions
+
+    if invalidated:
+        # These queues and review attempts are identities of the discarded
+        # candidate workspace.  Keeping them could either replay a stale
+        # direction or suppress the regenerated 31-Case issue as a duplicate.
+        ledger["deferred_assignment_unit_ids"] = []
+        ledger["agent_review_history"] = [
+            copy.deepcopy(row)
+            for row in ledger.get("agent_review_history") or []
+            if (
+                isinstance(row, dict)
+                and str(row.get("issue_key") or "")
+                not in invalidated_issue_keys
+            )
+        ]
         result[_HUMAN_DECISIONS_KEY] = ledger
     return result
 
@@ -1121,11 +1255,33 @@ def _checkpoint_matches_generation(
 ) -> bool:
     if not generation._valid_concept_checkpoint(checkpoint):
         return False
+    return _checkpoint_identity_matches_generation(
+        checkpoint,
+        job=job,
+        chapter=chapter,
+    )
+
+
+def _checkpoint_identity_matches_generation(
+    checkpoint: dict,
+    *,
+    job: models.UploadJob,
+    chapter: models.Chapter,
+) -> bool:
+    """Match source/target identity independently of stage compatibility.
+
+    A deployment can intentionally invalidate every saved stage contract.  A
+    same-source envelope must then normalize to an empty restart instead of
+    being misreported as a different upload or chapter.
+    """
+
     stable_fingerprint = _generation_checkpoint_fingerprint(job, chapter)
     target_identity = _generation_target_identity(chapter)
     if checkpoint.get("checkpoint_format") == generation._CONCEPT_CHECKPOINT_FORMAT:
         return bool(
-            checkpoint.get("fingerprint") == stable_fingerprint
+            checkpoint.get("schema_version")
+            == generation._CONCEPT_CHECKPOINT_SCHEMA
+            and checkpoint.get("fingerprint") == stable_fingerprint
             and checkpoint.get("target_identity") == target_identity
         )
     if checkpoint.get("schema_version") == generation._LEGACY_CONCEPT_CHECKPOINT_SCHEMA:
@@ -1138,7 +1294,9 @@ def _checkpoint_matches_generation(
     # envelope.  Accept their stable fingerprint, retaining the old target-id
     # check only when no stable identity was saved.
     return bool(
-        checkpoint.get("fingerprint") == stable_fingerprint
+        checkpoint.get("schema_version")
+        == generation._CONCEPT_CHECKPOINT_SCHEMA
+        and checkpoint.get("fingerprint") == stable_fingerprint
         and (
             checkpoint.get("target_identity") == target_identity
             or (
@@ -1310,7 +1468,15 @@ def _compatible_generation_checkpoint_envelope(
         "checkpoints": history,
     }
     normalized = _copy_human_decision_ledger(normalized, stored)
-    return _copy_semantic_recovery_dispatch_ledger(normalized, stored)
+    normalized = _prune_human_decisions_after_checkpoint_fallback(
+        normalized,
+        retained_stage=stage,
+    )
+    normalized = _copy_semantic_recovery_dispatch_ledger(normalized, stored)
+    return _prune_semantic_recovery_dispatches_after_checkpoint_fallback(
+        normalized,
+        retained_stage=stage,
+    )
 
 
 def _persist_compatible_generation_checkpoint_mirror(
@@ -1329,6 +1495,11 @@ def _persist_compatible_generation_checkpoint_mirror(
         target_identity=target_identity,
         target_chapter_id=target_chapter_id,
     )
+    if not normalized and _source_replacement_required(stored):
+        # A user's explicit source-authority decision remains terminal even if
+        # a deployment invalidated the only serialized generation stage.  Do
+        # not erase that stop merely to represent an empty compatible history.
+        return stored, {}
     resumed = generation._newest_compatible_concept_checkpoint(
         normalized) or {}
     if normalized != stored:
@@ -2116,6 +2287,18 @@ def _persist_pending_agent_review(
         review
     ).model_dump()
     next_status = str(validated_review.get("status") or "")
+    if next_status == "resolved":
+        if not autonomous_resolution.is_automatable_choice(
+            validated_review.get("choice")
+        ):
+            raise ValueError(
+                "an autonomous review cannot resolve a user-only choice"
+            )
+        if str(validated_review.get("instruction") or "").strip():
+            raise ValueError(
+                "an autonomous review instruction must be empty; "
+                "explanatory prose belongs in reason"
+            )
     next_issue_key = str(validated_review.get("issue_key") or "")
     next_capability_key = str(
         validated_review.get("capability_key") or ""
@@ -2306,6 +2489,7 @@ def _autonomously_resolve_pending_decision(
         return None
     if (
         deterministic_result is None
+        and not upgrading_current_review
         and len(attempted) >= autonomous_resolution.maximum_decisions()
     ):
         now = _agent_review_timestamp()
@@ -2811,6 +2995,17 @@ def _record_human_semantic_decision_locked(
         raise ValueError("resolution_status must be ready or consumed")
     if choice == "custom_instruction" and not instruction:
         raise ValueError("instruction is required for custom_instruction")
+    if resolved_by == "agent":
+        if not autonomous_resolution.is_automatable_choice(choice):
+            raise ValueError(
+                "an agent cannot record a source replacement or custom "
+                "instruction"
+            )
+        if instruction:
+            raise ValueError(
+                "an agent instruction must be empty; explanatory prose "
+                "belongs in the validated review reason"
+            )
 
     checkpoint = copy.deepcopy(job.generation_checkpoint or {})
     ledger = _human_decision_ledger(checkpoint)
@@ -3009,7 +3204,7 @@ def generate_post_learning(
     stored_checkpoint = job.generation_checkpoint or {}
     resume_checkpoint = (
         stored_checkpoint
-        if _checkpoint_matches_generation(
+        if _checkpoint_identity_matches_generation(
             stored_checkpoint, job=job, chapter=chapter)
         else None
     )
@@ -3021,6 +3216,17 @@ def generate_post_learning(
         )
         progress.log(message, level="error")
         raise ValueError(message)
+    resumed: dict = {}
+    if resume_checkpoint:
+        resume_checkpoint, resumed = (
+            _persist_compatible_generation_checkpoint_mirror(
+                db,
+                job,
+                fingerprint=fingerprint,
+                target_identity=target_identity,
+                target_chapter_id=target_chapter_id,
+            )
+        )
     initial_agent_resolution_ids: set[str] = set()
     existing_pause = _existing_human_decision_pause(
         db,
@@ -3033,15 +3239,6 @@ def generate_post_learning(
         return existing_pause
     _raise_if_source_replacement_required(resume_checkpoint)
     if resume_checkpoint:
-        resume_checkpoint, resumed = (
-            _persist_compatible_generation_checkpoint_mirror(
-                db,
-                job,
-                fingerprint=fingerprint,
-                target_identity=target_identity,
-                target_chapter_id=target_chapter_id,
-            )
-        )
         stage_label = (
             resumed.get("stage_label")
             or resumed.get("stage")
@@ -3359,7 +3556,7 @@ def generate_pre_learning_from_upload(
     stored_checkpoint = job.generation_checkpoint or {}
     resume_checkpoint = (
         stored_checkpoint
-        if _checkpoint_matches_generation(
+        if _checkpoint_identity_matches_generation(
             stored_checkpoint, job=job, chapter=chapter)
         else None
     )
@@ -3371,6 +3568,17 @@ def generate_pre_learning_from_upload(
         )
         progress.log(message, level="error")
         raise ValueError(message)
+    resumed: dict = {}
+    if resume_checkpoint:
+        resume_checkpoint, resumed = (
+            _persist_compatible_generation_checkpoint_mirror(
+                db,
+                job,
+                fingerprint=fingerprint,
+                target_identity=target_identity,
+                target_chapter_id=target_chapter_id,
+            )
+        )
     initial_agent_resolution_ids: set[str] = set()
     existing_pause = _existing_human_decision_pause(
         db,
@@ -3383,15 +3591,6 @@ def generate_pre_learning_from_upload(
         return existing_pause
     _raise_if_source_replacement_required(resume_checkpoint)
     if resume_checkpoint:
-        resume_checkpoint, resumed = (
-            _persist_compatible_generation_checkpoint_mirror(
-                db,
-                job,
-                fingerprint=fingerprint,
-                target_identity=target_identity,
-                target_chapter_id=target_chapter_id,
-            )
-        )
         stage_label = (
             resumed.get("stage_label")
             or resumed.get("stage")

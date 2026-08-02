@@ -50,6 +50,15 @@ _TARGET_FIELDS = (
 )
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _DECISION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+_AGENT_AUTOMATABLE_CHOICES = {
+    "expand_existing",
+    "create_new",
+    "select_existing",
+    "accept_recommended",
+    "select_candidate",
+    "consolidate_types",
+    "keep_distinct_types",
+}
 _BUNDLE_KEYS = {
     "format", "bundle_schema_version", "exported_at",
     "payload_sha256", "payload",
@@ -579,6 +588,17 @@ def _validate_human_decisions(
                     f"{pending_path}.agent_review.choice must not be empty "
                     "for a resolved review"
                 )
+            if review.status == "resolved":
+                if review.choice not in _AGENT_AUTOMATABLE_CHOICES:
+                    raise ValueError(
+                        f"{pending_path}.agent_review.choice is not approved "
+                        "for autonomous execution"
+                    )
+                if review.instruction.strip():
+                    raise ValueError(
+                        f"{pending_path}.agent_review.instruction must be "
+                        "empty for an autonomous review"
+                    )
         candidate_ids = {
             row.concept_id for row in pending.candidates if row.concept_id
         }
@@ -643,6 +663,22 @@ def _validate_human_decisions(
             )
         else:
             _timestamp(review.completed_at, f"{review_path}.completed_at")
+        if review.status == "resolved":
+            if review.choice is None:
+                raise ValueError(
+                    f"{review_path}.choice must not be empty for a "
+                    "resolved review"
+                )
+            if review.choice not in _AGENT_AUTOMATABLE_CHOICES:
+                raise ValueError(
+                    f"{review_path}.choice is not approved for autonomous "
+                    "execution"
+                )
+            if review.instruction.strip():
+                raise ValueError(
+                    f"{review_path}.instruction must be empty for an "
+                    "autonomous review"
+                )
 
     for index, resolution in enumerate(ledger.resolutions):
         resolution_path = f"{path}.resolutions[{index}]"
@@ -686,6 +722,16 @@ def _validate_human_decisions(
                 raise ValueError(
                     f"{resolution_path} agent resolution must be durably "
                     "sealed as consumed"
+                )
+            if resolution.choice not in _AGENT_AUTOMATABLE_CHOICES:
+                raise ValueError(
+                    f"{resolution_path}.choice is not approved for "
+                    "autonomous execution"
+                )
+            if resolution.instruction.strip():
+                raise ValueError(
+                    f"{resolution_path}.instruction must be empty for an "
+                    "agent resolution"
                 )
             if (
                 review.choice != resolution.choice

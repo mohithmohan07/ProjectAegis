@@ -646,7 +646,13 @@ def test_stale_grounding_resolution_requires_exact_context():
     assert source_blocks
 
 
-def test_v2_agent_upgrade_maps_one_legacy_blk_to_exact_current_binding():
+@pytest.mark.parametrize(
+    "resolver_version",
+    ["semantic-resolution-agent-2", "semantic-resolution-agent-3"],
+)
+def test_complete_workspace_agent_maps_legacy_blk_to_current_binding(
+    resolver_version,
+):
     graph, canonical = _source_graph()
     records = [_record()]
     _source_blocks, payload_blocks = phase31._candidate_blocks(
@@ -690,7 +696,7 @@ def test_v2_agent_upgrade_maps_one_legacy_blk_to_exact_current_binding():
         "resolved_by": "agent",
         "agent_review": {
             "status": "resolved",
-            "resolver_version": "semantic-resolution-agent-2",
+            "resolver_version": resolver_version,
             "capability_key": "c" * 64,
         },
     }

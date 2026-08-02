@@ -215,19 +215,21 @@ def _legacy_candidate_matches_current(
     )
 
 
-def _v2_agent_upgrade_candidate(
+def _agent_upgrade_candidate(
     resolution: Mapping[str, Any],
     candidates: list[Mapping[str, Any]],
 ) -> dict[str, Any] | None:
-    """Map a v1 saved target only after the v2 resolver sealed its answer."""
+    """Map a saved target only after a complete-workspace resolver sealed it."""
 
     review = resolution.get("agent_review")
     if not (
         str(resolution.get("resolved_by") or "") == "agent"
         and isinstance(review, Mapping)
         and str(review.get("status") or "") == "resolved"
-        and str(review.get("resolver_version") or "")
-        == "semantic-resolution-agent-2"
+        and str(review.get("resolver_version") or "") in {
+            "semantic-resolution-agent-2",
+            "semantic-resolution-agent-3",
+        }
         and re.fullmatch(
             r"[0-9a-f]{64}", str(review.get("capability_key") or "")
         )
@@ -411,7 +413,7 @@ def resolution_for(
             not exact_context
             and choice in {"accept_recommended", "select_candidate"}
         ):
-            upgraded_candidate = _v2_agent_upgrade_candidate(
+            upgraded_candidate = _agent_upgrade_candidate(
                 raw,
                 candidates,
             )
