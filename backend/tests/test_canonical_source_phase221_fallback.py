@@ -249,7 +249,11 @@ def test_verified_page_batches_are_cached(tmp_path: Path, monkeypatch):
 
     assert first["pages"] == second["pages"]
     assert calls == 1
-    assert len(list(cache_dir.glob("*.json"))) == 1
+    # One verified batch entry plus the sealed complete bundle for the source
+    # hash, which lets an unchanged source skip lane re-entry entirely.
+    assert len(list(cache_dir.glob("*.json"))) == 2
+    sealed_key = fallback._bundle_cache_key(fallback._pdf_sha256(pdf))
+    assert fallback._batch_cache_path(sealed_key).exists()
 
 
 def test_build_concepts_conversion_uses_fallback_after_mathpix_hard_failure(
