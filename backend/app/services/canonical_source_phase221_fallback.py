@@ -37,6 +37,11 @@ from . import progress
 FALLBACK_VERSION = "2.2.2"
 FALLBACK_COMPILER = "gpt-pdf-to-acsd-2"
 FALLBACK_ORIGIN = "gpt_pdf_acsd_fallback"
+# Version stamped on the extracted page bundle. Phase 3's page-evidence cache
+# validates against this exact constant, so producer and consumer can never
+# drift apart again (a hardcoded mismatch previously made that cache dead and
+# re-entered this lane on every Phase 3 rebuild).
+PAGE_ACSD_SCHEMA_VERSION = "1.1.0"
 GPT_PAGE_ACSD_FILENAME = "source.gpt-page-acsd.json"
 MATHPIX_RAW_FILENAME = "source.mathpix.raw.mmd"
 ASSET_DIRNAME = "assets"
@@ -601,6 +606,18 @@ def _batch_cache_key_from_sha(pdf_sha256: str, pages: list[PdfPage]) -> str:
     return _sha256_text(material)
 
 
+def _bundle_cache_key(pdf_sha256: str) -> str:
+    """Key for the sealed complete verified bundle of one source hash."""
+    material = "\u241f".join([
+        FALLBACK_VERSION,
+        FALLBACK_COMPILER,
+        config.OPENAI_MODEL,
+        str(pdf_sha256 or ""),
+        "full-verified-bundle",
+    ])
+    return _sha256_text(material)
+
+
 def _batch_cache_key(path: Path, pages: list[PdfPage]) -> str:
     """Backward-compatible helper retained for focused unit tests."""
     return _batch_cache_key_from_sha(_pdf_sha256(path), pages)
@@ -932,6 +949,24 @@ def extract_pdf_to_page_acsd(
     size = _batch_size()
     batch_count = (page_count + size - 1) // size
     pdf_sha = _pdf_sha256(path)
+    # Nearest-stage resume: the fallback materializes at most once per source
+    # hash. A sealed complete verified bundle is returned without re-entering
+    # batch orchestration, so a semantic-only repair or Phase 3 rebuild causes
+    # zero lane replay while the source is unchanged.
+    sealed = _read_verified_batch_cache(_bundle_cache_key(pdf_sha))
+    if sealed is not None and isinstance(sealed.get("result"), dict):
+        bundle = copy.deepcopy(sealed["result"])
+        if (
+            bundle.get("pdf_sha256") == pdf_sha
+            and len(bundle.get("pages") or []) == page_count
+        ):
+            progress.log(
+                "Reusing the sealed verified GPT PDF-to-ACSD bundle for this "
+                f"unchanged source ({page_count} page(s)); no model batches "
+                "were replayed.",
+                level="info",
+            )
+            return bundle
     progress.step("Canonical source — GPT PDF-to-ACSD fallback", value=0.01)
     progress.log(
         f"GPT PDF-to-ACSD fallback will inspect {page_count} original page(s) "
@@ -991,9 +1026,9 @@ def extract_pdf_to_page_acsd(
         raise ValueError(
             "verified GPT page ACSD does not cover every original PDF page exactly once"
         )
-    return {
+    bundle = {
         "schema_name": "Aegis GPT Page ACSD",
-        "schema_version": "1.0.0",
+        "schema_version": PAGE_ACSD_SCHEMA_VERSION,
         "compiler_version": FALLBACK_COMPILER,
         "source_origin": FALLBACK_ORIGIN,
         "model": config.OPENAI_MODEL,
@@ -1001,6 +1036,15 @@ def extract_pdf_to_page_acsd(
         "pages": accepted,
         "batches": decisions,
     }
+    _write_verified_batch_cache(_bundle_cache_key(pdf_sha), {
+        "version": FALLBACK_VERSION,
+        "status": "verified",
+        "created_at": time.time(),
+        "model": config.OPENAI_MODEL,
+        "pdf_sha256": pdf_sha,
+        "result": copy.deepcopy(bundle),
+    })
+    return bundle
 
 
 def _clip_bbox(page: Any, bbox: list[float]) -> Any:

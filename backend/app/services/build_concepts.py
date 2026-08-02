@@ -464,6 +464,93 @@ def _prune_human_decisions_after_checkpoint_fallback(
     return result
 
 
+def _retire_repaired_row_decisions(
+    envelope: dict,
+    *,
+    changed_row_indexes: tuple[int, ...],
+    repair_signature: str,
+) -> dict:
+    """Supersede saved semantic directions bound to rows a repair rewrote.
+
+    A saved grounding/topology direction is an identity of the exact candidate
+    payload it was recorded against; the positional CONCEPT-GROUND-style unit
+    IDs keep pointing at the row after its content changes.  Replaying such a
+    stale direction against the repaired row would re-assert the old evidence
+    mapping, so the same durable write that persists the repair retires the
+    ledger entries for every changed unit.
+    """
+
+    if not changed_row_indexes:
+        return envelope
+    result = copy.deepcopy(envelope)
+    ledger = _human_decision_ledger(result)
+    if not ledger:
+        return result
+    changed = {int(value) for value in changed_row_indexes}
+
+    def bound_to_changed_row(raw_pending: object) -> bool:
+        if not isinstance(raw_pending, dict):
+            return False
+        item = raw_pending.get("item")
+        unit_id = (
+            str(item.get("unit_id") or "").strip()
+            if isinstance(item, dict)
+            else ""
+        )
+        match = semantic_recovery._CONCEPT_ID_RE.fullmatch(unit_id)
+        if match is None:
+            return False
+        return (int(match.group("number")) - 1) in changed
+
+    retired_issue_keys: set[str] = set()
+
+    def remember_review_issue(raw_pending: object) -> None:
+        if not isinstance(raw_pending, dict):
+            return
+        review = raw_pending.get("agent_review")
+        issue_key = (
+            str(review.get("issue_key") or "")
+            if isinstance(review, dict) else ""
+        )
+        if issue_key:
+            retired_issue_keys.add(issue_key)
+
+    mutated = False
+    pending = ledger.get("pending")
+    if bound_to_changed_row(pending):
+        remember_review_issue(pending)
+        ledger["pending"] = None
+        mutated = True
+    resolutions: list[dict] = []
+    for raw in ledger.get("resolutions") or []:
+        entry = copy.deepcopy(raw)
+        if (
+            isinstance(entry, dict)
+            and str(entry.get("status") or "") in {"ready", "consumed"}
+            and bound_to_changed_row(entry.get("pending_decision"))
+        ):
+            remember_review_issue(entry.get("pending_decision"))
+            entry["status"] = "superseded"
+            entry["superseded_by_repair_signature"] = repair_signature
+            mutated = True
+        resolutions.append(entry)
+    if mutated:
+        ledger["resolutions"] = resolutions
+        # Review attempts for the retired units are identities of the
+        # pre-repair candidate. Keeping them would suppress the regenerated
+        # issue as an already-reviewed duplicate.
+        ledger["agent_review_history"] = [
+            copy.deepcopy(row)
+            for row in ledger.get("agent_review_history") or []
+            if not (
+                isinstance(row, dict)
+                and str(row.get("issue_key") or "") in retired_issue_keys
+            )
+        ]
+        result[_HUMAN_DECISIONS_KEY] = ledger
+    return result
+
+
 def _applied_human_decision_ids(checkpoint: dict | None) -> set[str]:
     """Decision IDs whose bounded action is durably represented here."""
     if not isinstance(checkpoint, dict):
@@ -1769,6 +1856,20 @@ def _persist_semantic_recovery_checkpoint(
         )
     source_checkpoint = copy.deepcopy(job.generation_checkpoint or {})
     durable = _copy_human_decision_ledger(durable, source_checkpoint)
+    # Transactional reduction: the same durable write that installs the
+    # repaired stage retires every dependent decision-ledger entry — both
+    # entries derived from the discarded later stages and entries bound to the
+    # exact rows this repair rewrote. Copying the old ledger unpruned is what
+    # allowed a stale rejection to survive a reported repair.
+    durable = _prune_human_decisions_after_checkpoint_fallback(
+        durable,
+        retained_stage=result.base_stage,
+    )
+    durable = _retire_repaired_row_decisions(
+        durable,
+        changed_row_indexes=result.changed_row_indexes,
+        repair_signature=result.repair_signature,
+    )
     durable = _copy_semantic_recovery_dispatch_ledger(
         durable, source_checkpoint
     )
@@ -1782,8 +1883,12 @@ def _persist_semantic_recovery_checkpoint(
                 isinstance(row, dict)
                 and str(row.get("issue_key") or "") == dispatch_issue_key
             ):
-                row["status"] = "succeeded"
+                # Postcondition-first: the repair is only "applied" here. It
+                # becomes "succeeded" when the rerun passes final grounding
+                # without this issue recurring.
+                row["status"] = "applied"
                 row["completed_at"] = _agent_review_timestamp()
+                row["candidate_payload_hash"] = result.repair_signature
                 matched = True
             attempts.append(row)
         if not matched:
@@ -1796,13 +1901,56 @@ def _persist_semantic_recovery_checkpoint(
         }
     job.generation_checkpoint = durable
     job.detail = (
-        f"Semantic recovery repaired {result.changed_count} bounded unit(s) "
-        f"at '{result.base_stage}'; dependent later stages will be replayed."
+        f"Semantic recovery applied a bounded repair to "
+        f"{result.changed_count} unit(s) at '{result.base_stage}'; dependent "
+        "later stages will be replayed and the repair re-verified."
     )
     # Checkpoint and current provider usage are committed together. A database
     # or filesystem failure propagates and is never converted into GPT repair.
     uploads.persist_current_openai_usage(
         db, job.id, owner_sub=owner_sub)
+    drive_checkpoints.schedule_checkpoint_backup(job.id)
+
+
+def _persist_semantic_recovery_dispatch_verified(
+    db: Session,
+    job: models.UploadJob,
+    issue_keys: list[str],
+) -> None:
+    """Certify applied repairs after the rerun passed without recurrence.
+
+    This is the only place an attempt becomes ``succeeded``: the postcondition
+    (the run completed and the old rejection signature did not return) has
+    held, so the durable ledger can record the verified terminal outcome.
+    """
+
+    issue_key_set = {key for key in issue_keys if key}
+    if not issue_key_set:
+        return
+    db.refresh(job)
+    durable = copy.deepcopy(job.generation_checkpoint or {})
+    ledger = _semantic_recovery_dispatch_ledger(durable)
+    attempts = []
+    changed = False
+    for raw in ledger.get("attempts") or []:
+        row = copy.deepcopy(raw)
+        if (
+            isinstance(row, dict)
+            and str(row.get("issue_key") or "") in issue_key_set
+            and str(row.get("status") or "") == "applied"
+        ):
+            row["status"] = "succeeded"
+            row["verified_at"] = _agent_review_timestamp()
+            changed = True
+        attempts.append(row)
+    if not changed:
+        return
+    durable[_SEMANTIC_RECOVERY_DISPATCHES_KEY] = {
+        "version": _SEMANTIC_RECOVERY_DISPATCHES_VERSION,
+        "attempts": attempts,
+    }
+    job.generation_checkpoint = durable
+    db.commit()
     drive_checkpoints.schedule_checkpoint_backup(job.id)
 
 
@@ -1845,24 +1993,58 @@ def _commit_and_publish_concept_workbook(
     target: Path,
     concept_ids: list[int],
 ) -> dict[str, int]:
-    """Stage, commit, and publish while holding the shared workbook lock."""
+    """Stage, commit, and publish while holding the shared workbook lock.
+
+    Ordering is transactional-outbox shaped: any interrupted earlier
+    publication is completed first, the intent to publish this staged sibling
+    is durably recorded before the database commits, and only then is the
+    staged workbook published and the intent cleared. A failure before the
+    commit rolls everything back; a failure after the commit leaves the
+    staged workbook queued in the outbox, so the export converges with the
+    committed database state instead of silently diverging.
+    """
     staged_workbook: Path | None = None
+    committed = False
     with workbook_sync.output_workbook_lock():
+        if workbook_sync.recover_pending_publication(target):
+            progress.log(
+                "Completed a previously interrupted workbook publication "
+                "before staging new concept rows.",
+                level="warning",
+            )
         try:
             staged_workbook, written = _stage_concept_workbook(
                 db,
                 target,
                 concept_ids,
             )
+            workbook_sync.record_publication_intent(staged_workbook, target)
             db.commit()
+            committed = True
             _publish_staged_workbook(staged_workbook, target)
+            workbook_sync.clear_publication_intent(target)
             staged_workbook = None
             return written
-        except Exception:
-            db.rollback()
-            if staged_workbook is not None:
-                staged_workbook.unlink(missing_ok=True)
-            raise
+        except Exception as exc:
+            if not committed:
+                db.rollback()
+                workbook_sync.clear_publication_intent(target)
+                if staged_workbook is not None:
+                    staged_workbook.unlink(missing_ok=True)
+                raise
+            # The database commit is durable and cannot be undone here. The
+            # staged workbook and its outbox record survive, so the next
+            # workbook operation completes this exact publication.
+            progress.log(
+                "Concept rows are committed but workbook publication was "
+                f"interrupted ({exc}); the staged workbook remains queued "
+                "and will be published on the next workbook operation.",
+                level="error",
+            )
+            raise workbook_sync.WorkbookPublicationPending(
+                "concept deposit is committed; workbook publication is "
+                f"queued for automatic completion: {exc}"
+            ) from exc
 
 
 def _deposit_and_publish_concepts(
@@ -3474,6 +3656,18 @@ def generate_post_learning(
             raise
         return records, created_ids, merged_ids, written
 
+    def on_recovery_verified(
+        contexts: tuple[semantic_recovery.RecoveryContext, ...],
+    ) -> None:
+        _persist_semantic_recovery_dispatch_verified(
+            db,
+            job,
+            [
+                recovery_dispatch_keys.get(context.failure_signature, "")
+                for context in contexts
+            ],
+        )
+
     def run_pipeline():
         if config.use_live_generation():
             return semantic_recovery.run_with_semantic_recovery(
@@ -3483,6 +3677,7 @@ def generate_post_learning(
                 repair_checkpoint=repair_checkpoint,
                 persist_repair=persist_repair,
                 before_repair=before_repair,
+                on_recovery_verified=on_recovery_verified,
                 policy=recovery_policy,
                 log=progress.log,
             )
@@ -3835,6 +4030,18 @@ def generate_pre_learning_from_upload(
             raise
         return pre_records, created_ids, merged_ids, written
 
+    def on_recovery_verified(
+        contexts: tuple[semantic_recovery.RecoveryContext, ...],
+    ) -> None:
+        _persist_semantic_recovery_dispatch_verified(
+            db,
+            job,
+            [
+                recovery_dispatch_keys.get(context.failure_signature, "")
+                for context in contexts
+            ],
+        )
+
     def run_pipeline():
         if config.use_live_generation():
             return semantic_recovery.run_with_semantic_recovery(
@@ -3844,6 +4051,7 @@ def generate_pre_learning_from_upload(
                 repair_checkpoint=repair_checkpoint,
                 persist_repair=persist_repair,
                 before_repair=before_repair,
+                on_recovery_verified=on_recovery_verified,
                 policy=recovery_policy,
                 log=progress.log,
             )

@@ -1559,7 +1559,11 @@ def test_post_learning_recovers_semantic_rejection_in_same_run(
         )
         assert saved is not None
         dispatches = resume_checkpoint["semantic_recovery_dispatches"]
-        assert dispatches["attempts"][0]["status"] == "succeeded"
+        # Postcondition-first success: while the repaired candidate is being
+        # re-verified the dispatch is only "applied"; it may not claim success
+        # before this rerun completes without the rejection recurring.
+        assert dispatches["attempts"][0]["status"] == "applied"
+        assert dispatches["attempts"][0]["candidate_payload_hash"]
         assert len(dispatches["attempts"]) == 1
         assert saved["stage"] == "pre_type_assignment"
         assert saved["records"][0]["concept_title"] == (

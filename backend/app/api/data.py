@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session
 
 from .. import config, models, schemas
-from ..bulk_import import reader, writer
+from ..bulk_import import reader, workbook_sync, writer
 from ..db import get_db
 from ..services import data_reset as reset_svc
 from . import admin as admin_api
@@ -60,6 +60,10 @@ def export_workbook(
     scope=output -> the append-only output workbook accumulated by generations
     """
     if scope == "output":
+        with workbook_sync.output_workbook_lock():
+            # A crash between DB commit and workbook publication leaves the
+            # staged export queued; serve the converged file, never the stale one.
+            workbook_sync.recover_pending_publication(config.BULK_IMPORT_OUTPUT)
         if not config.BULK_IMPORT_OUTPUT.exists():
             raise HTTPException(404, "no output workbook yet — run a generation first")
         return FileResponse(

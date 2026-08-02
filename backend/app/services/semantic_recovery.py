@@ -70,24 +70,47 @@ class RepairResult:
         return len(self.changed_row_indexes) + len(self.changed_units)
 
 
+_DEFAULT_MAX_TOTAL_ATTEMPTS = 3
+_MAX_TOTAL_ATTEMPTS_CEILING = 8
+
+
 @dataclass
 class RecoveryPolicy:
-    """Limits for one logical generation run."""
+    """Limits for one logical generation run.
+
+    Attempts are keyed by (issue signature, candidate/checkpoint hash), not by
+    one global run counter.  An identical issue against an identical candidate
+    is refused outright; the same issue against a materially changed candidate
+    receives exactly one fresh verification turn, bounded overall by
+    ``max_total_attempts`` so distinct-but-wrong candidates cannot loop
+    indefinitely.
+    """
 
     max_attempts: int = 1
+    max_total_attempts: int = _DEFAULT_MAX_TOTAL_ATTEMPTS
     max_rows_per_attempt: int = 12
     max_source_chars: int = 28_000
     seen_failure_signatures: set[str] = field(default_factory=set)
     seen_repair_signatures: set[str] = field(default_factory=set)
+    attempted_issue_candidates: set[tuple[str, str]] = field(
+        default_factory=set)
 
     def __post_init__(self) -> None:
-        """Keep every construction path within the single-repair budget."""
+        """Keep every construction path within the per-candidate budget."""
 
         try:
             attempts = int(self.max_attempts)
         except (TypeError, ValueError):
             attempts = 1
         self.max_attempts = max(0, min(1, attempts))
+        try:
+            total = int(self.max_total_attempts)
+        except (TypeError, ValueError):
+            total = _DEFAULT_MAX_TOTAL_ATTEMPTS
+        self.max_total_attempts = max(
+            self.max_attempts,
+            min(_MAX_TOTAL_ATTEMPTS_CEILING, total),
+        )
 
     @classmethod
     def from_environment(cls) -> "RecoveryPolicy":
@@ -96,9 +119,17 @@ class RecoveryPolicy:
             attempts = int(raw)
         except (TypeError, ValueError):
             attempts = 1
+        raw_total = os.getenv(
+            "AEGIS_SEMANTIC_RECOVERY_MAX_TOTAL_ATTEMPTS",
+            str(_DEFAULT_MAX_TOTAL_ATTEMPTS),
+        )
+        try:
+            total = int(raw_total)
+        except (TypeError, ValueError):
+            total = _DEFAULT_MAX_TOTAL_ATTEMPTS
         # __post_init__ also clamps explicit callers so deployment
         # configuration cannot opt back into a repeated semantic-repair loop.
-        return cls(max_attempts=attempts)
+        return cls(max_attempts=attempts, max_total_attempts=total)
 
 
 class SemanticRecoveryExhausted(RuntimeError):
@@ -335,6 +366,22 @@ def failure_signature(
     return hashlib.sha256(_stable_json(payload).encode("utf-8")).hexdigest()
 
 
+def issue_signature(exc: Exception) -> str:
+    """Candidate-independent identity of one semantic issue.
+
+    Unlike :func:`failure_signature`, this excludes the checkpoint hash so the
+    same rejection (for example ``CONCEPT-GROUND-0023``) keeps one identity
+    across materially different repair candidates.
+    """
+
+    normalized = re.sub(r"\s+", " ", str(exc or "")).strip().casefold()
+    payload = {
+        "type": type(exc).__name__,
+        "message": normalized,
+    }
+    return hashlib.sha256(_stable_json(payload).encode("utf-8")).hexdigest()
+
+
 def run_with_semantic_recovery(
     operation: Callable[[], Any],
     *,
@@ -346,15 +393,36 @@ def run_with_semantic_recovery(
     before_repair: Callable[
         [dict[str, Any], RecoveryContext], None
     ] | None = None,
+    on_recovery_verified: Callable[
+        [tuple[RecoveryContext, ...]], None
+    ] | None = None,
     policy: RecoveryPolicy | None = None,
     log: Callable[..., None] | None = None,
 ) -> Any:
-    """Run ``operation`` and recover rejected semantic checkpoint rows in-place."""
+    """Run ``operation`` and recover rejected semantic checkpoint rows in-place.
+
+    Success is postcondition-first: an applied repair is only reported as
+    pending re-verification.  The repaired candidate is certified — and
+    ``on_recovery_verified`` invoked — only when ``operation`` subsequently
+    completes without the issue recurring.  Exactly one terminal outcome is
+    raised per run; the terminal log is emitted here exactly once.
+    """
     policy = policy or RecoveryPolicy.from_environment()
     attempt = 0
+    applied_contexts: list[RecoveryContext] = []
+    terminal_logged = False
+
+    def _terminal(message: str, cause: Exception) -> SemanticRecoveryExhausted:
+        nonlocal terminal_logged
+        error = SemanticRecoveryExhausted(message)
+        if log is not None and not terminal_logged:
+            terminal_logged = True
+            log(message, level="error")
+        return error
+
     while True:
         try:
-            return operation()
+            outcome = operation()
         except HumanDecisionRequired:
             # A pause is durable workflow state, not a semantic failure. Let the
             # caller persist/return it without invoking any recovery model.
@@ -363,6 +431,8 @@ def run_with_semantic_recovery(
             assessment = classify_failure(exc)
             checkpoint = checkpoint_snapshot() or {}
             signature = failure_signature(exc, checkpoint)
+            issue = issue_signature(exc)
+            candidate = checkpoint_signature(checkpoint)
             if not assessment.recoverable:
                 if log is not None:
                     log(
@@ -371,22 +441,37 @@ def run_with_semantic_recovery(
                         level="error",
                     )
                 raise
-            if signature in policy.seen_failure_signatures:
-                raise SemanticRecoveryExhausted(
+            if (
+                signature in policy.seen_failure_signatures
+                or (issue, candidate) in policy.attempted_issue_candidates
+            ):
+                # Identical issue against an identical candidate: the previous
+                # repair did not clear this rejection signature, so a retry
+                # would replay the same paid loop.
+                raise _terminal(
                     "semantic recovery refused an identical failure/checkpoint "
-                    f"retry signature after {attempt} repair attempt(s): {exc}"
+                    f"retry signature after {attempt} repair attempt(s): {exc}",
+                    exc,
+                ) from exc
+            if attempt >= policy.max_total_attempts or policy.max_attempts < 1:
+                budget = (
+                    policy.max_total_attempts
+                    if policy.max_attempts >= 1
+                    else policy.max_attempts
+                )
+                raise _terminal(
+                    "semantic recovery exhausted its bounded "
+                    f"{budget} repair attempt(s); the unsupported "
+                    f"or rejected content remains unresolved: {exc}",
+                    exc,
                 ) from exc
             policy.seen_failure_signatures.add(signature)
-            if attempt >= policy.max_attempts:
-                raise SemanticRecoveryExhausted(
-                    "semantic recovery exhausted its bounded "
-                    f"{policy.max_attempts} repair attempt(s); the unsupported "
-                    f"or rejected content remains unresolved: {exc}"
-                ) from exc
+            policy.attempted_issue_candidates.add((issue, candidate))
             if not checkpoint:
-                raise SemanticRecoveryExhausted(
+                raise _terminal(
                     "semantic recovery has no durable successful checkpoint to "
-                    "repair safely; source and completed work were left intact"
+                    "repair safely; source and completed work were left intact",
+                    exc,
                 ) from exc
 
             context = RecoveryContext(
@@ -407,17 +492,20 @@ def run_with_semantic_recovery(
                 before_repair(checkpoint, context)
             result = repair_checkpoint(checkpoint, context)
             if result is None or result.changed_count <= 0:
-                raise SemanticRecoveryExhausted(
+                raise _terminal(
                     "semantic recovery produced no safe checkpoint change; "
-                    "an identical retry was not attempted"
+                    "an identical retry was not attempted",
+                    exc,
                 ) from exc
             if result.repair_signature in policy.seen_repair_signatures:
-                raise SemanticRecoveryExhausted(
+                raise _terminal(
                     "semantic recovery produced an already-seen repair "
-                    "signature; retry loop stopped"
+                    "signature; retry loop stopped",
+                    exc,
                 ) from exc
             policy.seen_repair_signatures.add(result.repair_signature)
             persist_repair(result, context)
+            applied_contexts.append(context)
             attempt += 1
             if log is not None:
                 if result.changed_row_indexes:
@@ -435,11 +523,27 @@ def run_with_semantic_recovery(
                     )
                 log(
                     f"Semantic recovery attempt {attempt}/"
-                    f"{policy.max_attempts} repaired checkpoint stage "
-                    f"'{result.base_stage}' {changed}; dependent later "
-                    "stages were invalidated and generation is continuing.",
-                    level="success",
+                    f"{policy.max_total_attempts} applied a bounded repair to "
+                    f"checkpoint stage '{result.base_stage}' {changed}; "
+                    "dependent later stages were invalidated and the repaired "
+                    "candidate is being re-verified before it is certified.",
+                    level="warning",
                 )
+        else:
+            if applied_contexts:
+                # Postcondition holds: the run completed without the repaired
+                # issue recurring. Only now is the repair certified as
+                # succeeded and reported as such.
+                if on_recovery_verified is not None:
+                    on_recovery_verified(tuple(applied_contexts))
+                if log is not None:
+                    log(
+                        "Semantic recovery postcondition verified: "
+                        f"{len(applied_contexts)} bounded repair(s) passed "
+                        "re-verification and generation completed.",
+                        level="success",
+                    )
+            return outcome
 
 
 _ROW_INDEX_RE = re.compile(r"\brow(?:_index|\s+index)?\s*[=:]\s*(\d+)\b", re.I)

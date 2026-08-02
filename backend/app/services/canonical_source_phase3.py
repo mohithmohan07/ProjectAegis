@@ -5847,11 +5847,16 @@ def load_page_evidence(
     if artifact_path.exists():
         try:
             cached = json.loads(artifact_path.read_text(encoding="utf-8"))
+            # The schema gate uses the producer's constant: a hardcoded
+            # version here previously never matched what the extractor
+            # stamped, so this cache was dead and every Phase 3 rebuild
+            # re-entered the full PDF-to-ACSD lane.
             if (
                 isinstance(cached, dict)
                 and cached.get("pdf_sha256") == pdf_sha
                 and cached.get("compiler_version") == page_acsd.FALLBACK_COMPILER
-                and cached.get("schema_version") == "1.1.0"
+                and cached.get("schema_version")
+                == page_acsd.PAGE_ACSD_SCHEMA_VERSION
             ):
                 bundle = cached
         except (OSError, UnicodeDecodeError, json.JSONDecodeError):

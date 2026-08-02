@@ -230,6 +230,37 @@ def _definitive_client_error(exc: Exception) -> bool:
     return 400 <= status_code < 500 and status_code != 429
 
 
+_LOGGED_EFFORT_NEGOTIATIONS: set[tuple[str, str, str, str]] = set()
+
+
+def _log_effort_negotiation_once(
+    *,
+    label: str,
+    model: str,
+    requested: str,
+    used: str,
+) -> None:
+    """Emit requested-vs-used reasoning effort when negotiation changed it.
+
+    Capability negotiation is otherwise invisible in the live log, which made
+    the reasoning_effort=max 400 incident impossible to observe after the
+    retry succeeded. One line per (purpose, model, requested, used) is enough.
+    """
+
+    if requested == used:
+        return
+    key = (label, model, requested, used)
+    if key in _LOGGED_EFFORT_NEGOTIATIONS:
+        return
+    _LOGGED_EFFORT_NEGOTIATIONS.add(key)
+    progress.log(
+        f"OpenAI {label} reasoning effort negotiated for model {model}: "
+        f"requested {requested or 'default'!r}, used {used or 'omitted'!r} "
+        "(capability or truncation fallback).",
+        level="info",
+    )
+
+
 def _matches_schema_shape(value: object, schema: object) -> bool:
     """Conservatively prove the required structural portion of a JSON schema.
 
@@ -425,6 +456,16 @@ def _resilient_openai_multimodal_json(
                         f"provider length marker ({label}, schema {schema}).",
                         level="warning",
                     )
+                _log_effort_negotiation_once(
+                    label=label,
+                    model=selected_model,
+                    requested=str(base_policy.get("reasoning_effort") or ""),
+                    used=(
+                        ""
+                        if omit_reasoning_effort
+                        else str(request_policy.get("reasoning_effort") or "")
+                    ),
+                )
                 return parsed
 
             incomplete_object = isinstance(parsed, dict)
