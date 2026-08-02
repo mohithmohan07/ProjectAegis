@@ -1900,7 +1900,7 @@ def test_invalid_inventory_checkpoint_rewinds_before_question_inventory():
     assert restored["stage"] == "description_method_snapshot"
 
 
-def test_legacy_81_percent_checkpoint_is_rejected_and_v4_requires_ledger():
+def test_legacy_81_percent_checkpoint_is_rejected_and_v5_requires_ledger():
     question = (
         "Apply the supplied procedure and report the requested numerical "
         "value."
@@ -1995,17 +1995,17 @@ def test_legacy_81_percent_checkpoint_is_rejected_and_v4_requires_ledger():
         records[0],
         basis="type_host_review",
     )
-    current_v4 = g._make_concept_checkpoint(
+    current_v5 = g._make_concept_checkpoint(
         "post_type_assignment",
         records=records,
         question_task_inventory=inventory,
         mined_types=certified_mined,
         method_row_snapshot=[],
     )
-    history["checkpoints"].append(current_v4)
+    history["checkpoints"].append(current_v5)
 
-    assert current_v4["stage_schema_version"] == 4
-    assert g._compatible_concept_checkpoint_entry(current_v4)
+    assert current_v5["stage_schema_version"] == 5
+    assert g._compatible_concept_checkpoint_entry(current_v5)
     assert g._newest_compatible_concept_checkpoint(
         history)["stage"] == "post_type_assignment"
 

@@ -161,6 +161,13 @@ def test_verified_pdf_decisions_restore_six_sections_and_26_tasks(
     assert [task["qid"] for task in canonical["tasks"]] == [
         f"QINV-{index:04d}" for index in range(1, 27)
     ]
+    inventory = phase2.inventory_from_canonical(canonical)
+    assert len(inventory["items"]) == 31
+    assert any(item["qid"] == "QINV-0011.2" for item in inventory["items"])
+    assert canonical["phase21_hardening"]["parent_task_count"] == 26
+    assert canonical["phase21_hardening"]["inventory_item_count"] == 31
+    assert canonical["source_contract"]["inventory_item_count"] == 31
+    assert report["summary"]["inventory_items"] == 31
     mains, _subsections = structure.numbered_heading_inventory(canonical)
     assert sorted(mains) == [1, 2, 3, 4, 5, 6]
 
@@ -182,6 +189,69 @@ def test_verified_pdf_decisions_restore_six_sections_and_26_tasks(
     assert job.generation_checkpoint == {}
     assert job.question_inventory == {}
     assert db.commits == 1
+
+
+def test_phase22_rebuilds_stale_missing_leaf_derivations_unconditionally(
+    tmp_path: Path,
+    monkeypatch,
+):
+    source = _corrupted_rne()
+    compiled = _compile(source)
+    # Simulate a persisted pre-fix artifact whose parent tasks are valid but
+    # whose derived follow-up/leaf rows were lost before adjudication.
+    for task in compiled.canonical["tasks"]:
+        task.pop("source_followup_prompts", None)
+        task.pop("leaf_cases", None)
+        task.pop("inventory_leaf_count", None)
+    compiled.canonical["statistics"]["parent_tasks"] = 25
+    compiled.canonical["statistics"]["decomposed_parent_tasks"] = 0
+    compiled.canonical["statistics"]["inventory_leaf_tasks"] = 25
+    compiled.canonical["source_contract"]["parent_task_count"] = 25
+    compiled.canonical["source_contract"]["decomposed_parent_task_count"] = 0
+    compiled.canonical["source_contract"]["inventory_item_count"] = 25
+    compiled.canonical["phase21_hardening"]["parent_task_count"] = 25
+    compiled.canonical["phase21_hardening"]["decomposed_parent_task_count"] = 0
+    compiled.canonical["phase21_hardening"]["inventory_item_count"] = 25
+
+    pdf = tmp_path / "RNE.pdf"
+    _make_pdf(pdf)
+    artifact_dir = tmp_path / "artifacts"
+    from app.services import uploads
+
+    monkeypatch.setattr(uploads, "upload_file_path", lambda _job: pdf)
+    monkeypatch.setattr(uploads, "source_artifact_directory", lambda _job_id: artifact_dir)
+    monkeypatch.setattr(phase22, "_CACHE_DIR", tmp_path / "cache")
+    job = SimpleNamespace(
+        id=172,
+        filename="RNE.pdf",
+        mmd_text=source,
+        generation_checkpoint={"stage": "question_inventory"},
+        question_inventory={"items": [{"qid": "legacy"}]},
+        detail="",
+    )
+    db = SimpleNamespace(commits=0)
+    db.commit = lambda: setattr(db, "commits", db.commits + 1)
+
+    canonical, report, ready = phase22.adjudicate_job_source(
+        db,
+        job,
+        compiled.canonical,
+        compiled.report,
+        decision_provider=lambda packet, _pages: _decision(packet),
+    )
+
+    inventory = phase2.inventory_from_canonical(canonical)
+    by_qid = {item["qid"]: item for item in inventory["items"]}
+    assert ready is True
+    assert len(canonical["tasks"]) == 26
+    assert len(inventory["items"]) == 31
+    assert "QINV-0011.2" in by_qid
+    assert "Examine Fig. 14(b)." in by_qid["QINV-0011.2"]["raw_task"]
+    assert canonical["phase21_hardening"]["inventory_item_count"] == 31
+    assert canonical["statistics"]["inventory_leaf_tasks"] == 31
+    assert canonical["source_contract"]["inventory_item_count"] == 31
+    assert report["phase21_hardening"]["inventory_item_count"] == 31
+    assert report["summary"]["inventory_items"] == 31
 
 
 def test_unverified_decision_never_mutates_source_topology(tmp_path: Path, monkeypatch):

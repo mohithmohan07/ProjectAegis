@@ -13,6 +13,7 @@ from app.services import (
     build_concepts,
     canonical_source_phase33_preflight_contract as phase33,
     checkpoints,
+    early_semantic_gate,
     generation,
     semantic_recovery,
     uploads,
@@ -127,6 +128,67 @@ def _early_blueprint_pending_packet() -> dict:
                 "choice": "select_candidate",
                 "label": "Choose another bounded action",
                 "recommended": False,
+            },
+            {
+                "choice": "replace_source",
+                "label": "Correct or replace the source",
+                "recommended": False,
+            },
+            {
+                "choice": "custom_instruction",
+                "label": "Give a custom instruction",
+                "recommended": False,
+            },
+        ],
+    }
+
+
+def _phase31_topology_pending_packet() -> dict:
+    context_hash = "e" * 64
+    candidate = early_semantic_gate.bind_candidate({
+        "target_id": "3.1:topology:refine:" + ("e" * 32),
+        "concept_id": "TOPOLOGY-CONCEPT-0002",
+        "action": "refine",
+        "title": "Refine the unsupported source claim",
+        "topic": "The Making of Nationalism in Europe",
+        "coverage": "Cavour secured a diplomatic alliance with France.",
+        "gap": "Remove the broader unsupported wording.",
+        "source_topic_id": "TOPIC-0002",
+        "target_topic_id": "TOPIC-0002",
+        "boundary_relation": "same_topic",
+        "source_kind": "topology_repair",
+    })
+    return {
+        "decision_id": f"phase31-ground-{context_hash[:24]}",
+        "context_hash": context_hash,
+        "kind": "phase31_source_grounding_semantic_conflict",
+        "phase": "3.1",
+        "conflict": "The original claim is broader than its verified source.",
+        "diagnosis": "One bounded topology refinement is source-supported.",
+        "decision_question": "How should the claim return to topology?",
+        "item": {
+            "unit_id": "TOPOLOGY-CONCEPT-0002",
+            "type_id": "",
+            "type_title": "Cavour's diplomatic mechanism",
+            "qids": [],
+            "questions": [
+                "Cavour secured a diplomatic alliance with France."
+            ],
+            "topic": "The Making of Nationalism in Europe",
+        },
+        "candidates": [candidate],
+        "evidence": [{
+            "evidence_id": "MMD-WINDOW-001",
+            "page": "10",
+            "label": "Verified source window",
+            "text": "Cavour secured a diplomatic alliance with France.",
+        }],
+        "deferred_assignment_unit_ids": [],
+        "options": [
+            {
+                "choice": "select_candidate",
+                "label": "Select evidence or a topology repair",
+                "recommended": True,
             },
             {
                 "choice": "replace_source",
@@ -388,6 +450,111 @@ def test_clear_pause_is_agent_resolved_and_continues_same_run(
     assert job.pending_decision is None
 
 
+def test_agent_selected_phase31_topology_action_is_consumed_and_continues(
+    db,
+    first_chapter,
+    monkeypatch,
+):
+    job, chapter = _job_at_81_percent(db, first_chapter)
+    packet = _phase31_topology_pending_packet()
+    candidate = packet["candidates"][0]
+    identity = {
+        "decision_id": packet["decision_id"],
+        "context_hash": packet["context_hash"],
+    }
+    generation_calls = 0
+    resolver_calls = 0
+    consumed_directives: list[dict] = []
+
+    def generate(*_args, **_kwargs):
+        nonlocal generation_calls
+        generation_calls += 1
+        resolution = early_semantic_gate.resolution_for(
+            identity=identity,
+            kind=packet["kind"],
+            phase=packet["phase"],
+            unit_id=packet["item"]["unit_id"],
+            candidates=packet["candidates"],
+        )
+        if resolution is None:
+            raise semantic_recovery.HumanDecisionRequired(packet)
+        assert resolution["choice"] == "select_candidate"
+        assert resolution["instruction"] == ""
+        assert resolution["selected_candidate"]["action"] == "refine"
+        db.expire_all()
+        saved = db.get(models.UploadJob, job.id)
+        durable = saved.generation_checkpoint["human_decisions"][
+            "resolutions"
+        ][0]
+        assert durable["status"] == "consumed"
+        assert durable["resolved_by"] == "agent"
+        consumed_directives.append(copy.deepcopy(durable))
+        return [{
+            "topic": "The Making of Nationalism in Europe",
+            "parent_concept": "Unification of Italy",
+            "concept_title": "Cavour's Diplomacy",
+            "concept_details": (
+                "Description: Cavour secured a diplomatic alliance with "
+                "France."
+            ),
+            "keywords": "Cavour, diplomacy, France",
+        }]
+
+    def resolve(*_args, **_kwargs):
+        nonlocal resolver_calls
+        resolver_calls += 1
+        return autonomous_resolution.ResolutionResult(
+            status="resolved",
+            reason=(
+                "The exact source uniquely supports the bounded refinement."
+            ),
+            confidence=0.97,
+            evidence_refs=(
+                "MMD-WINDOW-001",
+                candidate["binding_hash"],
+            ),
+            choice="select_candidate",
+            target_id=candidate["target_id"],
+        )
+
+    monkeypatch.setattr(build_concepts.config, "use_live_generation", lambda: True)
+    monkeypatch.setattr(
+        build_concepts.autonomous_resolution, "enabled", lambda: True
+    )
+    monkeypatch.setattr(
+        build_concepts.autonomous_resolution, "resolve_pending", resolve
+    )
+    monkeypatch.setattr(build_concepts.generation, "concepts_from_mmd", generate)
+    monkeypatch.setattr(
+        build_concepts,
+        "_deposit_and_publish_concepts",
+        lambda *_args, **_kwargs: (
+            [904], [],
+            {"written": 1, "sources_updated": 0, "parent_column": True},
+        ),
+    )
+    monkeypatch.setattr(
+        build_concepts.drive_checkpoints,
+        "schedule_checkpoint_backup",
+        lambda *_args, **_kwargs: None,
+    )
+
+    result = build_concepts.generate_post_learning(
+        db, job.id, chapter.id, owner_sub=auth.LOCAL_OWNER_SUB
+    )
+
+    assert result["concept_ids"] == [904]
+    assert generation_calls == 2
+    assert resolver_calls == 1
+    db.refresh(job)
+    resolution = consumed_directives[0]
+    assert resolution["choice"] == "select_candidate"
+    assert resolution["status"] == "consumed"
+    assert resolution["resolved_by"] == "agent"
+    assert resolution["instruction"] == ""
+    assert job.pending_decision is None
+
+
 def test_verified_working_source_patch_bypasses_model_and_agent_cap(
     db,
     first_chapter,
@@ -504,7 +671,7 @@ def test_agent_abstention_persists_pause_and_is_not_called_on_replay(
     assert generation_calls == 1
 
 
-def test_saved_v1_pause_gets_one_complete_workspace_upgrade_on_resume(
+def test_saved_v2_pause_gets_one_output_contract_upgrade_on_resume(
     db,
     first_chapter,
     monkeypatch,
@@ -514,8 +681,9 @@ def test_saved_v1_pause_gets_one_complete_workspace_upgrade_on_resume(
     issue_key = autonomous_resolution.issue_key(pending)
     started_at = build_concepts._agent_review_timestamp()
     legacy_base = {
-        "resolver_version": "semantic-resolution-agent-1",
+        "resolver_version": "semantic-resolution-agent-2",
         "issue_key": issue_key,
+        "capability_key": "8" * 64,
         "started_at": started_at,
     }
     build_concepts._persist_pending_agent_review(
@@ -580,7 +748,7 @@ def test_saved_v1_pause_gets_one_complete_workspace_upgrade_on_resume(
     db.refresh(job)
     ledger = job.generation_checkpoint["human_decisions"]
     assert ledger["agent_review_history"][0]["resolver_version"] == (
-        "semantic-resolution-agent-1"
+        "semantic-resolution-agent-2"
     )
     current = ledger["pending"]["agent_review"]
     assert current["resolver_version"] == autonomous_resolution.RESOLVER_VERSION
@@ -602,6 +770,307 @@ def test_saved_v1_pause_gets_one_complete_workspace_upgrade_on_resume(
     assert resolver_calls == 1
 
 
+def test_incompatible_81_percent_pause_is_pruned_before_agent_dispatch(
+    db,
+    first_chapter,
+    monkeypatch,
+):
+    job, chapter = _job_at_81_percent(db, first_chapter)
+    description_stage = generation._make_concept_checkpoint(
+        "description_method_snapshot",
+        records=[{
+            "topic": "The Making of Nationalism in Europe",
+            "parent_concept": "Nationalism",
+            "concept_title": "Cavour's Diplomacy",
+            "concept_details": "Description: Verified source description.",
+            "keywords": "Cavour, diplomacy",
+        }],
+        method_row_snapshot=[],
+    )
+    job.generation_checkpoint = build_concepts._merge_generation_checkpoint_history(
+        job.generation_checkpoint,
+        description_stage,
+        fingerprint=job.generation_checkpoint["fingerprint"],
+        target_identity=job.generation_checkpoint["target_identity"],
+        target_chapter_id=chapter.id,
+    )
+    db.commit()
+    pending = _attach_pending(db, job, chapter)
+    legacy_capability = "b" * 64
+    started_at = build_concepts._agent_review_timestamp()
+    build_concepts._persist_pending_agent_review(
+        db,
+        job,
+        decision_id=pending["decision_id"],
+        context_hash=pending["context_hash"],
+        review={
+            "status": "request_started",
+            "resolver_version": "semantic-resolution-agent-2",
+            "issue_key": autonomous_resolution.issue_key(pending),
+            "capability_key": legacy_capability,
+            "started_at": started_at,
+            "reason": "Saved before the old bounded request.",
+        },
+        owner_sub=auth.LOCAL_OWNER_SUB,
+    )
+    build_concepts._persist_pending_agent_review(
+        db,
+        job,
+        decision_id=pending["decision_id"],
+        context_hash=pending["context_hash"],
+        review={
+            "status": "escalated",
+            "resolver_version": "semantic-resolution-agent-2",
+            "issue_key": autonomous_resolution.issue_key(pending),
+            "capability_key": legacy_capability,
+            "started_at": started_at,
+            "completed_at": build_concepts._agent_review_timestamp(),
+            "reason": "The old action contract could not apply the choice.",
+        },
+        owner_sub=auth.LOCAL_OWNER_SUB,
+    )
+    db.refresh(job)
+    checkpoint = copy.deepcopy(job.generation_checkpoint)
+    checkpoint["semantic_recovery_dispatches"] = {
+        "version": 1,
+        "attempts": [
+            {
+                "issue_key": "1" * 64,
+                "failure_signature": "2" * 64,
+                "status": "succeeded",
+                "started_at": "2026-08-01T10:00:00+00:00",
+                "completed_at": "2026-08-01T10:00:01+00:00",
+                "failure_type": "ValueError",
+                "stage": "description_method_snapshot",
+            },
+            {
+                "issue_key": "3" * 64,
+                "failure_signature": "4" * 64,
+                "status": "succeeded",
+                "started_at": "2026-08-01T10:00:02+00:00",
+                "completed_at": "2026-08-01T10:00:03+00:00",
+                "failure_type": "ValueError",
+                "stage": "pre_type_assignment",
+            },
+        ],
+    }
+    job.generation_checkpoint = checkpoint
+    db.commit()
+
+    old_spec = generation._CONCEPT_CHECKPOINT_STAGES[
+        "pre_type_assignment"
+    ]
+    monkeypatch.setitem(
+        generation._CONCEPT_CHECKPOINT_STAGES,
+        "pre_type_assignment",
+        {**old_spec, "version": old_spec["version"] + 1},
+    )
+    resolver_calls = 0
+    generation_calls = 0
+
+    def must_not_resolve(*_args, **_kwargs):
+        nonlocal resolver_calls
+        resolver_calls += 1
+        pytest.fail("a discarded 30-Case pause must not call the agent")
+
+    def generate(*_args, **kwargs):
+        nonlocal generation_calls
+        generation_calls += 1
+        resume = kwargs["resume_checkpoint"]
+        assert resume["stage"] == "description_method_snapshot"
+        assert resume["human_decisions"]["pending"] is None
+        assert [
+            row["stage"]
+            for row in resume["semantic_recovery_dispatches"]["attempts"]
+        ] == ["description_method_snapshot"]
+        return [{
+            "topic": "The Making of Nationalism in Europe",
+            "parent_concept": "Nationalism",
+            "concept_title": "Cavour's Diplomacy",
+            "concept_details": "Description: Verified source description.",
+            "keywords": "Cavour, diplomacy",
+        }]
+
+    monkeypatch.setattr(build_concepts.config, "use_live_generation", lambda: True)
+    monkeypatch.setattr(
+        build_concepts.autonomous_resolution,
+        "resolve_pending",
+        must_not_resolve,
+    )
+    monkeypatch.setattr(build_concepts.generation, "concepts_from_mmd", generate)
+    monkeypatch.setattr(
+        build_concepts,
+        "_deposit_and_publish_concepts",
+        lambda *_args, **_kwargs: (
+            [905], [],
+            {"written": 1, "sources_updated": 0, "parent_column": True},
+        ),
+    )
+    monkeypatch.setattr(
+        build_concepts.drive_checkpoints,
+        "schedule_checkpoint_backup",
+        lambda *_args, **_kwargs: None,
+    )
+
+    result = build_concepts.generate_post_learning(
+        db, job.id, chapter.id, owner_sub=auth.LOCAL_OWNER_SUB
+    )
+
+    assert result["concept_ids"] == [905]
+    assert resolver_calls == 0
+    assert generation_calls == 1
+    db.refresh(job)
+    assert job.status == "generated"
+
+
+def test_checkpoint_fallback_preserves_earlier_and_replace_source_authority():
+    early_issue = "1" * 64
+    stale_issue = "2" * 64
+    envelope = {
+        "human_decisions": {
+            "version": 1,
+            "context": {"fingerprint": "f" * 64, "target_chapter_id": 1},
+            "pending": {
+                "checkpoint_progress": 0.81,
+                "agent_review": {"issue_key": stale_issue},
+            },
+            "deferred_assignment_unit_ids": ["STALE-CONCEPT"],
+            "agent_review_history": [
+                {"issue_key": early_issue, "status": "escalated"},
+                {"issue_key": stale_issue, "status": "escalated"},
+            ],
+            "resolutions": [
+                {
+                    "choice": "select_candidate",
+                    "pending_decision": {"checkpoint_progress": 0.35},
+                },
+                {
+                    "choice": "custom_instruction",
+                    "pending_decision": {
+                        "checkpoint_progress": 0.81,
+                        "agent_review": {"issue_key": stale_issue},
+                    },
+                },
+                {
+                    "choice": "replace_source",
+                    "pending_decision": {"checkpoint_progress": 0.81},
+                },
+            ],
+        },
+    }
+
+    pruned = build_concepts._prune_human_decisions_after_checkpoint_fallback(
+        envelope,
+        retained_stage="description_method_snapshot",
+    )
+    ledger = pruned["human_decisions"]
+
+    assert ledger["pending"] is None
+    assert ledger["deferred_assignment_unit_ids"] == []
+    assert [row["choice"] for row in ledger["resolutions"]] == [
+        "select_candidate",
+        "replace_source",
+    ]
+    assert [row["issue_key"] for row in ledger["agent_review_history"]] == [
+        early_issue
+    ]
+
+
+def test_sole_incompatible_same_source_stage_restarts_without_mismatch_error(
+    db,
+    first_chapter,
+    monkeypatch,
+):
+    job, chapter = _job_at_81_percent(db, first_chapter)
+    old_spec = generation._CONCEPT_CHECKPOINT_STAGES[
+        "pre_type_assignment"
+    ]
+    monkeypatch.setitem(
+        generation._CONCEPT_CHECKPOINT_STAGES,
+        "pre_type_assignment",
+        {**old_spec, "version": old_spec["version"] + 1},
+    )
+    generation_calls = 0
+
+    def generate(*_args, **kwargs):
+        nonlocal generation_calls
+        generation_calls += 1
+        assert kwargs["resume_checkpoint"] is None
+        return [{
+            "topic": "The Making of Nationalism in Europe",
+            "parent_concept": "Nationalism",
+            "concept_title": "Cavour's Diplomacy",
+            "concept_details": "Description: Rebuilt from the same source.",
+            "keywords": "Cavour, diplomacy",
+        }]
+
+    monkeypatch.setattr(build_concepts.config, "use_live_generation", lambda: True)
+    monkeypatch.setattr(build_concepts.generation, "concepts_from_mmd", generate)
+    monkeypatch.setattr(
+        build_concepts,
+        "_deposit_and_publish_concepts",
+        lambda *_args, **_kwargs: (
+            [906], [],
+            {"written": 1, "sources_updated": 0, "parent_column": True},
+        ),
+    )
+    monkeypatch.setattr(
+        build_concepts.drive_checkpoints,
+        "schedule_checkpoint_backup",
+        lambda *_args, **_kwargs: None,
+    )
+
+    result = build_concepts.generate_post_learning(
+        db, job.id, chapter.id, owner_sub=auth.LOCAL_OWNER_SUB
+    )
+
+    assert result["concept_ids"] == [906]
+    assert generation_calls == 1
+
+
+def test_sole_incompatible_stage_preserves_replace_source_stop(
+    db,
+    first_chapter,
+    monkeypatch,
+):
+    job, chapter = _job_at_81_percent(db, first_chapter)
+    pending = build_concepts._persist_pending_human_decision(
+        db,
+        job,
+        _early_blueprint_pending_packet(),
+        fingerprint=job.generation_checkpoint["fingerprint"],
+        target_chapter_id=chapter.id,
+        owner_sub=auth.LOCAL_OWNER_SUB,
+    )
+    build_concepts._record_human_semantic_decision_locked(
+        db,
+        job,
+        pending["decision_id"],
+        choice="replace_source",
+        instruction="",
+        target_id="",
+        target_concept_id="",
+    )
+    old_spec = generation._CONCEPT_CHECKPOINT_STAGES[
+        "pre_type_assignment"
+    ]
+    monkeypatch.setitem(
+        generation._CONCEPT_CHECKPOINT_STAGES,
+        "pre_type_assignment",
+        {**old_spec, "version": old_spec["version"] + 1},
+    )
+
+    with pytest.raises(ValueError, match="Source replacement is required"):
+        build_concepts.generate_post_learning(
+            db, job.id, chapter.id, owner_sub=auth.LOCAL_OWNER_SUB
+        )
+
+    db.refresh(job)
+    assert build_concepts._source_replacement_required(
+        job.generation_checkpoint
+    )
+
+
 def test_request_started_agent_state_blocks_unknown_outcome_replay(
     db,
     first_chapter,
@@ -617,10 +1086,11 @@ def test_request_started_agent_state_blocks_unknown_outcome_replay(
         context_hash=pending["context_hash"],
         review={
             "status": "request_started",
-            "resolver_version": autonomous_resolution.RESOLVER_VERSION,
+            "resolver_version": "semantic-resolution-agent-2",
             "issue_key": autonomous_resolution.issue_key(pending),
+            "capability_key": "9" * 64,
             "started_at": started_at,
-            "reason": "Saved before dispatch.",
+            "reason": "Saved before the v2 dispatch with an unknown outcome.",
         },
         owner_sub=auth.LOCAL_OWNER_SUB,
     )
@@ -1002,6 +1472,37 @@ def test_consumed_agent_resolution_reappearing_after_crash_escalates_to_user(
             path="checkpoint",
         )
 
+    instructed = copy.deepcopy(job.generation_checkpoint)
+    instructed_resolution = instructed["human_decisions"]["resolutions"][0]
+    instructed_resolution["instruction"] = "Apply this extra direction."
+    instructed_resolution["pending_decision"]["agent_review"][
+        "instruction"
+    ] = "Apply this extra direction."
+    with pytest.raises(
+        ValueError,
+        match="instruction must be empty for an autonomous review",
+    ):
+        checkpoints._validate_checkpoint(
+            instructed,
+            learning_kind="post",
+            mmd_text=job.mmd_text,
+            path="checkpoint",
+        )
+
+    user_only = copy.deepcopy(job.generation_checkpoint)
+    user_only_resolution = user_only["human_decisions"]["resolutions"][0]
+    user_only_resolution["choice"] = "replace_source"
+    user_only_resolution["pending_decision"]["agent_review"][
+        "choice"
+    ] = "replace_source"
+    with pytest.raises(ValueError, match="not approved for autonomous"):
+        checkpoints._validate_checkpoint(
+            user_only,
+            learning_kind="post",
+            mmd_text=job.mmd_text,
+            path="checkpoint",
+        )
+
     resolver_calls = 0
     operation_calls = 0
 
@@ -1359,6 +1860,65 @@ def test_decision_submission_is_owner_scoped_one_time_and_api_free(
             choice="expand_existing",
             owner_sub="google:another-user",
         )
+
+
+def test_agent_recorder_rejects_user_only_actions_and_instructions(
+    db,
+    first_chapter,
+    monkeypatch,
+):
+    job, chapter = _job_at_81_percent(db, first_chapter)
+    pending = build_concepts._persist_pending_human_decision(
+        db,
+        job,
+        _phase31_topology_pending_packet(),
+        fingerprint=job.generation_checkpoint["fingerprint"],
+        target_chapter_id=chapter.id,
+        owner_sub=auth.LOCAL_OWNER_SUB,
+    )
+    monkeypatch.setattr(
+        build_concepts.drive_checkpoints,
+        "schedule_checkpoint_backup",
+        lambda *_args, **_kwargs: None,
+    )
+
+    with pytest.raises(ValueError, match="cannot record"):
+        build_concepts._record_human_semantic_decision_locked(
+            db,
+            job,
+            pending["decision_id"],
+            choice="replace_source",
+            instruction="",
+            target_id="",
+            target_concept_id="",
+            resolved_by="agent",
+            resolution_status="consumed",
+        )
+    with pytest.raises(ValueError, match="instruction must be empty"):
+        build_concepts._record_human_semantic_decision_locked(
+            db,
+            job,
+            pending["decision_id"],
+            choice="select_candidate",
+            instruction="Refine it using this prose.",
+            target_id=pending["candidates"][0]["target_id"],
+            target_concept_id="",
+            resolved_by="agent",
+            resolution_status="consumed",
+        )
+
+    recorded = build_concepts._record_human_semantic_decision_locked(
+        db,
+        job,
+        pending["decision_id"],
+        choice="custom_instruction",
+        instruction="Refine the claim to Cavour's verified diplomacy.",
+        target_id="",
+        target_concept_id="",
+        resolved_by="human",
+    )
+    assert recorded["resolved_decision"]["choice"] == "custom_instruction"
+    assert recorded["resolved_decision"]["instruction"].startswith("Refine")
 
 
 def test_early_blueprint_pending_replay_and_save_are_api_free(

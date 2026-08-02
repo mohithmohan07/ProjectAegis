@@ -21,7 +21,7 @@ from . import canonical_source_phase21_structure as structure
 from . import canonical_source_phase21_visuals as visuals
 
 _CONTRACT_VERSION = 1
-PATCH_VERSION = "2.1.2"
+PATCH_VERSION = "2.1.3"
 
 _LIST_ENV_RE = re.compile(
     r"\\(?:begin|end)\{(?:itemize|enumerate|description)\}",

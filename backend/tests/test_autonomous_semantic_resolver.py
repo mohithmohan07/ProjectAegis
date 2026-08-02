@@ -115,11 +115,33 @@ def test_resolves_one_high_confidence_offered_action_with_one_provider_call(
         "",
         "consolidate_types",
         "keep_distinct_types",
-        "custom_instruction",
     ]
+    assert schema["properties"]["instruction"] == {
+        "type": "string",
+        "enum": [""],
+    }
+    assert schema["properties"]["reason"]["minLength"] == 1
     packet = json.loads(call["prompt"])
+    assert {row["choice"] for row in packet["pending_decision"]["options"]} == {
+        "consolidate_types",
+        "keep_distinct_types",
+    }
     assert packet["constraints"]["choose_only_offered_action"] is True
     assert packet["constraints"]["abstain_on_uncertainty"] is True
+
+
+def test_nonblank_provider_instruction_is_rejected_even_for_valid_choice():
+    result = resolver.resolve_pending(
+        _pending(),
+        source_text="TYPE-0001 appears in the verified source.",
+        checkpoint={},
+        provider=lambda **_kwargs: _response(
+            instruction="Use this explanation as another direction.",
+        ),
+    )
+
+    assert result.status == "escalated"
+    assert "instruction outside" in result.reason
 
 
 def test_low_confidence_action_abstains(monkeypatch: pytest.MonkeyPatch):
@@ -201,14 +223,132 @@ def test_source_replacement_and_custom_instructions_require_the_user(
         pending,
         source_text="TYPE-0001 appears in the verified source.",
         checkpoint={},
-        provider=lambda **_kwargs: _response(
-            choice=choice,
-            instruction=instruction,
+        provider=lambda **_kwargs: pytest.fail(
+            "a user-only decision must not call the provider"
         ),
     )
 
     assert result.status == "escalated"
     assert "requires the user" in result.reason
+
+
+def test_user_only_choices_are_not_exposed_to_the_resolution_provider():
+    seen: dict = {}
+
+    def provider(**kwargs):
+        seen.update(kwargs)
+        return _response(choice="keep_distinct_types")
+
+    pending = _pending(options=[
+        {
+            "choice": "keep_distinct_types",
+            "label": "Keep the current Types",
+            "recommended": True,
+        },
+        {
+            "choice": "replace_source",
+            "label": "Correct or replace the source",
+            "recommended": False,
+        },
+        {
+            "choice": "custom_instruction",
+            "label": "Give another instruction",
+            "recommended": False,
+        },
+    ])
+
+    result = resolver.resolve_pending(
+        pending,
+        source_text="TYPE-0001 appears in the verified source.",
+        checkpoint={},
+        provider=provider,
+    )
+
+    assert result.resolved is True
+    packet = seen["packet"]
+    assert [
+        row["choice"] for row in packet["pending_decision"]["options"]
+    ] == ["keep_distinct_types"]
+    assert seen["response_schema"]["schema"]["properties"]["choice"][
+        "enum"
+    ] == ["", "keep_distinct_types"]
+
+
+def test_unknown_future_choice_is_not_automatable_by_default():
+    pending = _pending(options=[{
+        "choice": "future_unreviewed_action",
+        "label": "A future action",
+        "recommended": True,
+    }])
+
+    result = resolver.resolve_pending(
+        pending,
+        source_text="TYPE-0001 appears in the verified source.",
+        checkpoint={},
+        provider=lambda **_kwargs: pytest.fail(
+            "an unknown-only decision must not call the provider"
+        ),
+    )
+
+    assert result.status == "escalated"
+    assert "no action approved for autonomous execution" in result.reason
+
+
+def test_sealed_phase31_topology_candidate_is_an_automatable_action():
+    candidate = resolver.early_semantic_gate.bind_candidate({
+        "target_id": "3.1:topology:refine:" + ("a" * 32),
+        "concept_id": "CONCEPT-0001",
+        "action": "refine",
+        "title": "Refine the unsupported source claim",
+        "topic": "The Making of Nationalism in Europe",
+        "coverage": "Cavour secured a diplomatic alliance with France.",
+        "gap": "Remove the broader unsupported wording.",
+        "source_topic_id": "TOPIC-0002",
+        "target_topic_id": "TOPIC-0002",
+        "boundary_relation": "same_topic",
+        "source_kind": "topology_repair",
+    })
+    pending = _pending(
+        kind="phase31_source_grounding_semantic_conflict",
+        options=[{
+            "choice": "select_candidate",
+            "label": "Select evidence or a topology repair",
+            "recommended": True,
+        }],
+        candidates=[candidate],
+    )
+    pending["phase"] = "3.1"
+    pending["item"]["unit_id"] = "CONCEPT-0001"
+    pending["item"]["questions"] = [
+        "Cavour secured a diplomatic alliance with France."
+    ]
+
+    result = resolver.resolve_pending(
+        pending,
+        source_text=(
+            "Cavour secured a diplomatic alliance with France. "
+            "Sardinia-Piedmont then defeated Austria."
+        ),
+        checkpoint={},
+        provider=lambda **_kwargs: _response(
+            choice="select_candidate",
+            target_id=candidate["target_id"],
+            confidence=0.97,
+            reason=(
+                "The bounded source supports refinement to Cavour's exact "
+                "diplomatic mechanism."
+            ),
+            evidence_refs=[
+                "MMD-WINDOW-001",
+                candidate["binding_hash"],
+            ],
+        ),
+    )
+
+    assert result.resolved is True
+    assert result.choice == "select_candidate"
+    assert result.target_id == candidate["target_id"]
+    assert result.instruction == ""
 
 
 def test_unique_verified_working_source_patch_resolves_without_provider_call():
@@ -884,7 +1024,7 @@ def test_capability_key_tracks_full_binding_but_not_candidate_order():
         ],
     }
 
-    assert resolver.RESOLVER_VERSION == "semantic-resolution-agent-2"
+    assert resolver.RESOLVER_VERSION == "semantic-resolution-agent-3"
     assert resolver.capability_key(first) == resolver.capability_key(reordered)
     assert resolver.capability_key(first) != resolver.capability_key(changed)
 

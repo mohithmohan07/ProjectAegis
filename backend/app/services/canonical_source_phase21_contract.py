@@ -21,6 +21,7 @@ def _phase21_active(canonical: dict[str, Any] | None) -> bool:
     return bool(
         isinstance(marker, dict)
         and marker.get("version") == phase21.HARDENING_VERSION
+        and marker.get("compiler") == phase21.COMPILER_LABEL
     )
 
 
@@ -70,7 +71,7 @@ def install(generation: ModuleType) -> None:
     @wraps(original_load)
     def load_or_refresh_for_job(job):
         canonical, report = original_load(job)
-        if _phase21_active(canonical):
+        if phase21.hardening_artifact_valid(canonical, report):
             return canonical, report
         from . import uploads
 
@@ -88,7 +89,14 @@ def install(generation: ModuleType) -> None:
         report_path = (
             directory / canonical_source.ARTIFACT_SPECS["report"]["filename"]
         )
-        return phase2._read_json(canonical_path), phase2._read_json(report_path)
+        canonical = phase2._read_json(canonical_path)
+        report = phase2._read_json(report_path)
+        if not phase21.hardening_artifact_valid(canonical, report):
+            raise RuntimeError(
+                "Phase 2.1 source hardening did not produce a complete leaf "
+                "inventory artifact."
+            )
+        return canonical, report
 
     @wraps(original_expand)
     def expand_mined_types_to_assignment_units(types):
