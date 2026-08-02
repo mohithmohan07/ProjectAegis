@@ -625,6 +625,9 @@ def test_agent_abstention_persists_pause_and_is_not_called_on_replay(
     first_chapter,
     monkeypatch,
 ):
+    # This test pins the attended pause contract; unattended completion
+    # (the default) would instead apply the safest offered action.
+    monkeypatch.setenv("AEGIS_UNATTENDED_COMPLETION", "0")
     job, chapter = _job_at_81_percent(db, first_chapter)
     resolver_calls = 0
     generation_calls = 0
@@ -691,6 +694,9 @@ def test_saved_pause_gets_one_output_contract_upgrade_on_resume(
     legacy_status,
     legacy_version,
 ):
+    # This test pins the attended pause-upgrade contract; unattended
+    # completion (the default) would instead apply the safest offered action.
+    monkeypatch.setenv("AEGIS_UNATTENDED_COMPLETION", "0")
     job, chapter = _job_at_81_percent(db, first_chapter)
     pending = _attach_pending(db, job, chapter)
     issue_key = autonomous_resolution.issue_key(pending)
