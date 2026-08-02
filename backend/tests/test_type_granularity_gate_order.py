@@ -44,6 +44,9 @@ def _types(count: int = 12) -> dict:
                 "case_prompts": [{
                     "case_id": f"CASE-{index:04d}",
                     "case_title": f"Variation {index}",
+                    "topic_match_hint": "Topic",
+                    "is_activity": False,
+                    "placement_scope": "normal",
                     "examples": [{
                         "source_question_id": f"QINV-{index:04d}",
                         "example_prompt": (
@@ -153,6 +156,36 @@ def test_fragmentation_pause_precedes_sufficiency_mastery_and_culmination(
         "label": "Concept sufficiency timing",
         "text": "Runs once after this decision",
     }
+
+
+def test_generation_gate_uses_parent_count_for_expanded_leaf_inventory(
+    monkeypatch,
+):
+    checkpoint = _question_inventory_checkpoint(count=31)
+    checkpoint["question_task_inventory"]["source_contract"] = {
+        "parent_task_count": 26,
+    }
+    mined = _types(24)
+    _preserve_inventory(monkeypatch)
+    monkeypatch.setattr(
+        g,
+        "_mine_types_from_inventory_via_api",
+        lambda **_kwargs: copy.deepcopy(mined),
+    )
+    monkeypatch.setattr(
+        g,
+        "_consolidate_semantic_types_via_api",
+        lambda current, **_kwargs: copy.deepcopy(current),
+    )
+
+    with pytest.raises(semantic_recovery.HumanDecisionRequired) as caught:
+        _run_pre_final(checkpoint=checkpoint, emitted=[])
+
+    pending = caught.value.pending_decision
+    assert pending["item"]["type_title"] == (
+        "24 Types for 26 parent tasks (31 leaf QIDs)"
+    )
+    assert pending["evidence"][0]["text"].startswith("24/26 (92.3%)")
 
 
 def test_fragmentation_resume_runs_downstream_once_then_promotes_checkpoint(

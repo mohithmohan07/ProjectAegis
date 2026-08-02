@@ -22,6 +22,139 @@ def test_continuous_type_numbering_across_concepts():
     assert "Type 03: Z Case 01: q4" in out[1]["concept_details"]
 
 
+def test_origin_type_identity_reuses_number_and_cases_across_topics():
+    records = [
+        {
+            **_rec(
+                "Giuseppe Mazzini and Young Italy",
+                "Description: d // Types: Type 01: Write a short note on a "
+                "historical person Case 01: Giuseppe Mazzini "
+                "Example: Write a short note on Giuseppe Mazzini. // "
+                "Misconception: m",
+                topic="The Age of Revolutions: 1830-1848",
+            ),
+            "_origin_type_id": "TYPE-SHORT-NOTE-PERSON",
+        },
+        {
+            **_rec(
+                "Count Camillo de Cavour and Italian Unification",
+                "Description: d // Types: Type 01: Write a short note on a "
+                "historical person Case 01: Count Camillo de Cavour "
+                "Example: Write a short note on Count Camillo de Cavour. // "
+                "Misconception: m",
+                topic="The Making of Germany and Italy",
+            ),
+            "_origin_type_id": "TYPE-SHORT-NOTE-PERSON",
+        },
+    ]
+
+    out = cr.renumber_types_continuously(records)
+
+    assert "Type 01: Write a short note" in out[0]["concept_details"]
+    assert "Type 01: Write a short note" in out[1]["concept_details"]
+    assert "Case 01: Giuseppe Mazzini" in out[0]["concept_details"]
+    assert "Case 02: Count Camillo de Cavour" in out[1]["concept_details"]
+    assert all("_origin_type_id" not in record for record in out)
+
+
+def test_rendered_global_type_identity_survives_repeated_renumbering():
+    records = [
+        {
+            **_rec(
+                "Giuseppe Mazzini and Young Italy",
+                "Description: d // Types: Type 01: Write a short note on a "
+                "historical person Case 01: Giuseppe Mazzini // "
+                "Misconception: m",
+                topic="The Age of Revolutions: 1830-1848",
+            ),
+            "_origin_type_id": "TYPE-SHORT-NOTE-PERSON",
+        },
+        {
+            **_rec(
+                "Count Camillo de Cavour and Italian Unification",
+                "Description: d // Types: Type 01: Write a short note on a "
+                "historical person Case 01: Count Camillo de Cavour // "
+                "Misconception: m",
+                topic="The Making of Germany and Italy",
+            ),
+            "_origin_type_id": "TYPE-SHORT-NOTE-PERSON",
+        },
+    ]
+
+    once = cr.renumber_types_continuously(records)
+    twice = cr.renumber_types_continuously(once)
+
+    assert "Type 01: Write a short note" in twice[0]["concept_details"]
+    assert "Type 01: Write a short note" in twice[1]["concept_details"]
+    assert "Case 01: Giuseppe Mazzini" in twice[0]["concept_details"]
+    assert "Case 02: Count Camillo de Cavour" in twice[1]["concept_details"]
+    assert all("_origin_type_id" not in record for record in twice)
+
+
+def test_ordered_origin_type_ids_keep_multiple_types_on_one_record_distinct():
+    records = [
+        {
+            **_rec(
+                "Mazzini",
+                "Description: d // Types: "
+                "Type 01: Write a short note Case 01: Mazzini "
+                "Type 02: Trace a historical process Case 01: Young Italy // "
+                "Misconception: m",
+                topic="The Age of Revolutions: 1830-1848",
+            ),
+            "_origin_type_id": ["TYPE-SHORT-NOTE", "TYPE-TRACE-PROCESS"],
+        },
+        {
+            **_rec(
+                "Cavour and Italian Unification",
+                "Description: d // Types: "
+                "Type 01: Trace a historical process Case 01: Italian "
+                "unification "
+                "Type 02: Write a short note Case 01: Cavour "
+                "// Misconception: m",
+                topic="The Making of Germany and Italy",
+            ),
+            "_origin_type_id": ["TYPE-TRACE-PROCESS", "TYPE-SHORT-NOTE"],
+        },
+    ]
+
+    out = cr.renumber_types_continuously(records)
+
+    assert "Type 01: Write a short note Case 01: Mazzini" in (
+        out[0]["concept_details"])
+    assert "Type 02: Trace a historical process Case 01: Young Italy" in (
+        out[0]["concept_details"])
+    assert "Type 02: Trace a historical process Case 02: Italian" in (
+        out[1]["concept_details"])
+    assert "Type 01: Write a short note Case 02: Cavour" in (
+        out[1]["concept_details"])
+    assert all("_origin_type_id" not in record for record in out)
+
+
+def test_cross_topic_rows_without_origin_keep_legacy_distinct_type_numbers():
+    records = [
+        _rec(
+            "Mazzini",
+            "Description: d // Types: Type 01: Write a short note "
+            "Case 01: Mazzini // Misconception: m",
+            topic="The Age of Revolutions: 1830-1848",
+        ),
+        _rec(
+            "Cavour",
+            "Description: d // Types: Type 01: Write a short note "
+            "Case 01: Cavour // Misconception: m",
+            topic="The Making of Germany and Italy",
+        ),
+    ]
+
+    out = cr.renumber_types_continuously(records)
+
+    assert "Type 01: Write a short note Case 01: Mazzini" in (
+        out[0]["concept_details"])
+    assert "Type 02: Write a short note Case 01: Cavour" in (
+        out[1]["concept_details"])
+
+
 def test_type_refinement_numbers_examples_within_each_case():
     records = [
         _rec(

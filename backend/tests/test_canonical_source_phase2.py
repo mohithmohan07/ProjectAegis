@@ -113,13 +113,193 @@ def test_phase2_rne_inventory_is_source_ordered_and_byte_deterministic():
     assert len({task["identity_key"] for task in tasks}) == 26
 
     inventory = phase2.inventory_from_canonical(first.canonical)
-    assert [item["qid"] for item in inventory["items"]] == [
-        f"QINV-{index:04d}" for index in range(1, 27)
+    expected_inventory_qids = [
+        *[f"QINV-{index:04d}" for index in range(1, 11)],
+        "QINV-0011.1",
+        "QINV-0011.2",
+        *[f"QINV-{index:04d}" for index in range(12, 16)],
+        *[f"QINV-0016.{index}" for index in range(1, 6)],
+        *[f"QINV-{index:04d}" for index in range(17, 27)],
     ]
+    assert [item["qid"] for item in inventory["items"]] == expected_inventory_qids
+    assert inventory["source_contract"]["task_count"] == 26
+    assert inventory["source_contract"]["parent_task_count"] == 26
+    assert inventory["source_contract"]["inventory_item_count"] == 31
     assert inventory["source_contract"]["mode"] == (
         phase2.SOURCE_CONTRACT_MODE
     )
     assert not generation._invalid_inventory_items(inventory)
+
+
+def test_rne_independent_subparts_are_leaf_cases_but_dependent_parts_stay_atomic():
+    source = (DATA / "RNE.mmd").read_text(encoding="utf-8")
+    compiled = phase2.compile_phase2_source(
+        source,
+        source_filename="RNE.mmd",
+        consumer_module="build_concepts",
+    )
+    canonical = compiled.canonical
+    parents = {task["qid"]: task for task in canonical["tasks"]}
+
+    note_parent = parents["QINV-0016"]
+    note_leaves = note_parent["leaf_cases"]
+    assert [leaf["qid"] for leaf in note_leaves] == [
+        f"QINV-0016.{index}" for index in range(1, 6)
+    ]
+    assert {leaf["parent_qid"] for leaf in note_leaves} == {"QINV-0016"}
+    assert [leaf["subpart_label"] for leaf in note_leaves] == [
+        "a)", "b)", "c)", "d)", "e)",
+    ]
+    assert len({leaf["identity_key"] for leaf in note_leaves}) == 5
+    assert [leaf["raw_prompt"] for leaf in note_leaves] == [
+        "a) Guiseppe Mazzini",
+        "b) Count Camillo de Cavour",
+        "c) The Greek war of independence",
+        "d) Frankfurt parliament",
+        "e) The role of women in nationalist struggles",
+    ]
+
+    # These two role perspectives depend on one shared counterfactual and one
+    # shared Germania banner. They must remain one canonical answer unit.
+    dependent = parents["QINV-0015"]
+    assert "(a) as a man" in dependent["raw_prompt"]
+    assert "(b) as a woman" in dependent["raw_prompt"]
+    assert not dependent.get("leaf_cases")
+
+
+def test_rne_reference_taxonomy_is_11_reusable_types_and_31_routable_cases():
+    """Lock the intended method taxonomy without pinning Cases to one host.
+
+    The same reusable method may occur under unrelated chapter concepts.  In
+    particular all five short-note leaves share one Type identity, while each
+    leaf retains an independent route for its own historical subject.
+    """
+    source = (DATA / "RNE.mmd").read_text(encoding="utf-8")
+    compiled = phase2.compile_phase2_source(
+        source,
+        source_filename="RNE.mmd",
+        consumer_module="build_concepts",
+    )
+    inventory = phase2.inventory_from_canonical(compiled.canonical)
+    inventory_qids = [item["qid"] for item in inventory["items"]]
+
+    reusable_groups = [
+        # Visual-source interpretation.
+        ["QINV-0001", "QINV-0005", "QINV-0010", "QINV-0012", "QINV-0013", "QINV-0014"],
+        # Written-source argument/viewpoint interpretation.
+        ["QINV-0002", "QINV-0003", "QINV-0007", "QINV-0009"],
+        # Historical map interpretation, including both Fig. 14 leaves.
+        ["QINV-0004", "QINV-0011.1", "QINV-0011.2"],
+        # Historical role/perspective writing.
+        ["QINV-0008", "QINV-0015"],
+        # Cultural or symbolic contribution/significance.
+        ["QINV-0006", "QINV-0018", "QINV-0022"],
+        # Measures/reforms, purpose and effects.
+        ["QINV-0017", "QINV-0020"],
+        # Concise note on a person, event, institution or social role.
+        [f"QINV-0016.{index}" for index in range(1, 6)],
+        # Nation-building pathways.
+        ["QINV-0019", "QINV-0023", "QINV-0024"],
+        # Multidimensional movement/ideology explanation.
+        ["QINV-0021"],
+        # Interacting causes of nationalist conflict.
+        ["QINV-0025"],
+        # Comparative evidence project.
+        ["QINV-0026"],
+    ]
+    assert len(reusable_groups) == 11
+    assert sorted(qid for group in reusable_groups for qid in group) == sorted(
+        inventory_qids
+    )
+
+    short_note_routes = {
+        "QINV-0016.1": ("The Revolutionaries", "Giuseppe Mazzini"),
+        "QINV-0016.2": ("Italy Unified", "Count Camillo de Cavour"),
+        "QINV-0016.3": ("The Age of Revolutions: 1830–1848", "Greek independence"),
+        "QINV-0016.4": ("The Revolution of the Liberals", "Frankfurt Parliament"),
+        "QINV-0016.5": ("The Revolution of the Liberals", "Women in nationalist struggles"),
+    }
+    types = []
+    for type_index, group in enumerate(reusable_groups, start=1):
+        cases = []
+        for case_index, qid in enumerate(group, start=1):
+            topic, concept = short_note_routes.get(
+                qid,
+                (f"Verified route for {qid}", f"Verified concept for {qid}"),
+            )
+            cases.append({
+                "case_id": f"CASE-{type_index:02d}-{case_index:02d}",
+                "case_title": concept,
+                "topic_match_hint": topic,
+                "concept_match_hint": concept,
+                "is_activity": qid == "QINV-0026",
+                "examples": [{
+                    "source_question_id": qid,
+                    "example_prompt": next(
+                        generation._inventory_task_text(item)
+                        for item in inventory["items"]
+                        if item["qid"] == qid
+                    ),
+                }],
+            })
+        types.append({
+            "type_id": f"TYPE-{type_index:04d}",
+            "type_title": f"Reusable method {type_index}",
+            "type_description": f"Reference reusable method {type_index}.",
+            "task_pattern": f"Apply reusable method {type_index}.",
+            "source_question_ids": list(group),
+            "case_prompts": cases,
+        })
+
+    units = generation._expand_mined_types_to_assignment_units(types)
+    assert len(units) == 31
+    assert len({unit["_origin_type_id"] for unit in units}) == 11
+    assert {
+        qid
+        for unit in units
+        for qid in unit["source_question_ids"]
+    } == set(inventory_qids)
+    assert any(unit["source_question_ids"] == ["QINV-0011.2"] for unit in units)
+
+    short_note_units = [
+        unit for unit in units
+        if unit["source_question_ids"][0].startswith("QINV-0016.")
+    ]
+    assert len(short_note_units) == 5
+    assert {unit["_origin_type_id"] for unit in short_note_units} == {"TYPE-0007"}
+    assert len({unit["type_id"] for unit in short_note_units}) == 5
+    assert {
+        unit["topic_match_hint"] for unit in short_note_units
+    } == {topic for topic, _concept in short_note_routes.values()}
+
+
+def test_rne_second_fig14_activity_prompt_is_a_visual_leaf_of_qinv_0011():
+    source = (DATA / "RNE.mmd").read_text(encoding="utf-8")
+    compiled = phase2.compile_phase2_source(
+        source,
+        source_filename="RNE.mmd",
+        consumer_module="build_concepts",
+    )
+    parent = next(
+        task for task in compiled.canonical["tasks"]
+        if task["qid"] == "QINV-0011"
+    )
+    assert len(parent["leaf_cases"]) == 2
+    second = parent["leaf_cases"][1]
+    assert second["qid"] == "QINV-0011.2"
+    assert second["parent_qid"] == "QINV-0011"
+    assert second["source_block_id"] == "BLK-00260"
+    assert second["explicit_figure_reference_ids"] == ["14(b)"]
+    assert second["figure_refs"] == ["FIG-00016"]
+    assert second["image_urls"] == [
+        "https://cdn.mathpix.com/cropped/6607f4a6-cb7c-4963-a6ea-e5e36dc69d32-19.jpg?height=837&width=744&top_left_y=1273&top_left_x=1149"
+    ]
+
+    inventory = phase2.inventory_from_canonical(compiled.canonical)
+    item = next(row for row in inventory["items"] if row["qid"] == second["qid"])
+    assert item["parent_qid"] == "QINV-0011"
+    assert "Examine Fig. 14(b)." in generation._inventory_task_text(item)
+    assert second["image_urls"][0] in generation._inventory_task_text(item)
 
 
 def test_phase2_inventory_preserves_display_math_and_source_identity():

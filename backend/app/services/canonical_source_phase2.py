@@ -596,72 +596,108 @@ def active_canonical() -> dict[str, Any] | None:
 def inventory_from_canonical(canonical: dict[str, Any]) -> dict[str, Any]:
     """Render the production Question / Task Inventory from ACSD task objects."""
     from . import generation
+    from . import katex_rules as kr
 
     figures, images = _figure_maps(canonical)
     items: list[dict[str, Any]] = []
     for task in canonical.get("tasks") or []:
         if not isinstance(task, dict):
             continue
-        qid = str(task.get("qid") or "").strip()
-        display_prompt = str(task.get("display_prompt") or "").strip()
-        raw_prompt = str(task.get("raw_prompt") or display_prompt).strip()
-        image_urls, image_captions = _task_visual_payload(
-            task,
-            figures,
-            images,
-        )
-        item: dict[str, Any] = {
-            "qid": qid,
-            "order_index": int(task.get("order") or len(items) + 1),
-            "source_kind": str(task.get("source_kind") or "source_task"),
-            "source_label": str(task.get("source_label") or ""),
-            "parent_source_label": str(task.get("parent_source_label") or ""),
-            "topic_hint": str(task.get("topic_hint") or ""),
-            "page_hint": str(task.get("page_hint") or ""),
-            "subpart_label": str(task.get("subpart_label") or ""),
-            "requires_visual": bool(task.get("requires_visual")),
-            "requires_context": bool(task.get("requires_context")),
-            "normalized_task": display_prompt,
-            "raw_task": raw_prompt,
-            "raw_solution_or_answer": str(
-                task.get("raw_solution_or_answer") or ""
-            ),
-            "shared_context": str(task.get("shared_context") or ""),
-            "image_urls": image_urls,
-            "content_objects": copy.deepcopy(task.get("content_objects") or {}),
-            "_activity_origin": bool(task.get("activity_origin")),
-            "_chapter_wide_task": bool(task.get("chapter_wide")),
-            "_topic_scope": (
-                "chapter" if task.get("chapter_wide") else str(
-                    task.get("_topic_scope") or "topic"
-                )
-            ),
-            "_source_section_index": int(
-                task.get("source_section_index") or 0
-            ),
-            "_source_position": int(task.get("source_position") or 0),
-            "_source_task_boundary": str(
-                task.get("_source_task_boundary") or "acsd_task"
-            ),
-            "_image_captions": image_captions,
-            "_figure_images_resolved": bool(
-                not task.get("unresolved_figure_reference_ids")
-                and not task.get("ambiguous_figure_reference_ids")
-                and (not task.get("requires_visual") or image_urls)
-            ),
-            "_source_visual_reference_repairs": copy.deepcopy(
-                task.get("display_overrides") or []
-            ),
-            "_source_visual_display_repair_enabled": bool(
-                task.get("display_overrides")
-            ),
-            "_acsd_task_id": str(task.get("task_id") or ""),
-            "_acsd_identity_key": str(task.get("identity_key") or ""),
-            "_acsd_display_prompt": display_prompt,
-            "_acsd_raw_prompt": raw_prompt,
-            "_acsd_source_contract": SOURCE_CONTRACT_MODE,
-        }
-        items.append(item)
+        leaf_cases = [
+            leaf for leaf in task.get("leaf_cases") or []
+            if isinstance(leaf, dict)
+        ]
+        rows = leaf_cases or [task]
+        for leaf in rows:
+            row = copy.deepcopy(task)
+            row.update(copy.deepcopy(leaf))
+            qid = str(row.get("qid") or "").strip()
+            display_prompt = str(row.get("display_prompt") or "").strip()
+            raw_prompt = str(row.get("raw_prompt") or display_prompt).strip()
+            image_urls, image_captions = _task_visual_payload(
+                row,
+                figures,
+                images,
+            )
+            canonical_display = display_prompt
+            if row.get("parent_qid"):
+                for image_index, url in enumerate(image_urls):
+                    if url in canonical_display:
+                        continue
+                    caption = str(image_captions.get(url) or "").strip()
+                    alt = caption or f"Source visual {image_index + 1}"
+                    canonical_display = (
+                        f"{canonical_display} {kr.image(url, alt)}"
+                    ).strip()
+            parent_qid = str(row.get("parent_qid") or "").strip()
+            parent_task_id = str(
+                row.get("parent_task_id") or task.get("task_id") or ""
+            )
+            parent_identity = str(
+                row.get("parent_identity_key")
+                or task.get("identity_key")
+                or ""
+            )
+            item: dict[str, Any] = {
+                "qid": qid,
+                "case_id": str(row.get("case_id") or ""),
+                "parent_qid": parent_qid,
+                "order_index": len(items) + 1,
+                "parent_order_index": int(task.get("order") or len(items) + 1),
+                "source_kind": str(row.get("source_kind") or "source_task"),
+                "source_label": str(row.get("source_label") or ""),
+                "parent_source_label": str(row.get("parent_source_label") or ""),
+                "topic_hint": str(row.get("topic_hint") or ""),
+                "page_hint": str(row.get("page_hint") or ""),
+                "subpart_label": str(row.get("subpart_label") or ""),
+                "requires_visual": bool(row.get("requires_visual")),
+                "requires_context": bool(row.get("requires_context")),
+                "normalized_task": canonical_display,
+                "raw_task": raw_prompt,
+                "raw_solution_or_answer": str(
+                    row.get("raw_solution_or_answer") or ""
+                ),
+                "shared_context": str(row.get("shared_context") or ""),
+                "image_urls": image_urls,
+                "content_objects": copy.deepcopy(row.get("content_objects") or {}),
+                "_activity_origin": bool(row.get("activity_origin")),
+                "_chapter_wide_task": bool(row.get("chapter_wide")),
+                "_topic_scope": (
+                    "chapter" if row.get("chapter_wide") else str(
+                        row.get("_topic_scope") or "topic"
+                    )
+                ),
+                "_source_section_index": int(
+                    row.get("source_section_index") or 0
+                ),
+                "_source_position": int(row.get("source_position") or 0),
+                "_source_task_boundary": (
+                    "acsd_leaf_case" if parent_qid else str(
+                        row.get("_source_task_boundary") or "acsd_task"
+                    )
+                ),
+                "_image_captions": image_captions,
+                "_figure_images_resolved": bool(
+                    not row.get("unresolved_figure_reference_ids")
+                    and not row.get("ambiguous_figure_reference_ids")
+                    and (not row.get("requires_visual") or image_urls)
+                ),
+                "_source_visual_reference_repairs": copy.deepcopy(
+                    row.get("display_overrides") or []
+                ),
+                "_source_visual_display_repair_enabled": bool(
+                    row.get("display_overrides")
+                ),
+                "_acsd_task_id": parent_task_id,
+                "_acsd_case_id": str(row.get("case_id") or ""),
+                "_acsd_parent_qid": parent_qid,
+                "_acsd_parent_identity_key": parent_identity,
+                "_acsd_identity_key": str(row.get("identity_key") or ""),
+                "_acsd_display_prompt": canonical_display,
+                "_acsd_raw_prompt": raw_prompt,
+                "_acsd_source_contract": SOURCE_CONTRACT_MODE,
+            }
+            items.append(item)
 
     inventory = {
         "items": items,

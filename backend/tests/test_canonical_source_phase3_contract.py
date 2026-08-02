@@ -62,7 +62,12 @@ def test_installed_inventory_wrapper_attaches_graph_ids(monkeypatch):
             meta=_metadata(), sections=[], records=[]
         )
 
-    assert len(inventory["items"]) == 26
+    assert len(inventory["items"]) == 31
+    assert inventory["source_contract"]["parent_task_count"] == 26
+    assert all(item.get("_semantic_topic_id") for item in inventory["items"])
+    assert all(
+        item.get("_semantic_source_task_id") for item in inventory["items"]
+    )
     section_two = [
         item for item in inventory["items"]
         if item.get("_semantic_topic_id") == "TOPIC-0002"
@@ -70,6 +75,161 @@ def test_installed_inventory_wrapper_attaches_graph_ids(monkeypatch):
     assert section_two
     assert all(item.get("_semantic_source_task_id") for item in section_two)
     assert all(item.get("_semantic_graph_contract") == graph["source_contract_hash"] for item in section_two)
+
+    by_qid = {item["qid"]: item for item in inventory["items"]}
+    assert by_qid["QINV-0011.1"]["_semantic_source_task_id"] == "TASK-00011"
+    assert by_qid["QINV-0011.2"]["_semantic_source_task_id"] == "TASK-00011"
+    assert {
+        by_qid[f"QINV-0016.{index}"]["_semantic_source_task_id"]
+        for index in range(1, 6)
+    } == {"TASK-00016"}
+
+
+def test_leaf_routes_override_parent_topic_without_mutating_shared_graph():
+    source = _source()
+    canonical = _canonical(source)
+    graph, _report = phase3.compile_semantic_graph(
+        canonical,
+        source_text=source,
+        metadata=_metadata(),
+    )
+    graph_before = copy.deepcopy(graph)
+    parent = next(
+        task for task in graph["tasks"] if task["qid"] == "QINV-0016"
+    )
+    topic_by_id = {
+        topic["topic_id"]: topic for topic in graph["topics"]
+    }
+    routed_topic_ids = ["TOPIC-0002", "TOPIC-0004"]
+    inventory = {
+        "items": [
+            {
+                "qid": f"QINV-0016.{index}",
+                "parent_qid": "QINV-0016",
+                "_topic_scope": "chapter",
+                "_chapter_wide_task": True,
+                "topic_hint": topic_by_id[topic_id]["title"],
+            }
+            for index, topic_id in enumerate(routed_topic_ids, start=1)
+        ],
+    }
+
+    annotated = phase3.annotate_inventory(inventory, graph)
+
+    assert [
+        item["_semantic_topic_id"] for item in annotated["items"]
+    ] == routed_topic_ids
+    assert {
+        item["_semantic_source_task_id"] for item in annotated["items"]
+    } == {parent["task_id"]}
+    assert graph == graph_before
+
+
+def test_reusable_type_uses_case_routes_without_becoming_cross_topic_synthesis():
+    source = _source()
+    canonical = _canonical(source)
+    graph, _report = phase3.compile_semantic_graph(
+        canonical,
+        source_text=source,
+        metadata=_metadata(),
+    )
+    topic_by_id = {
+        topic["topic_id"]: topic for topic in graph["topics"]
+    }
+    mined = {
+        "types": [{
+            "type_id": "TYPE-SHORT-NOTE",
+            "type_title": "Writing a concise historical note",
+            "placement_scope": "normal",
+            "source_question_ids": ["QINV-0016.1", "QINV-0016.2"],
+            "case_prompts": [
+                {
+                    "case_id": "CASE-MAZZINI",
+                    "topic_match_hint": topic_by_id["TOPIC-0002"]["title"],
+                    "placement_scope": "normal",
+                    "examples": [{
+                        "source_question_id": "QINV-0016.1",
+                        "example_prompt": "Write a note on Giuseppe Mazzini.",
+                    }],
+                },
+                {
+                    "case_id": "CASE-CAVOUR",
+                    "topic_match_hint": topic_by_id["TOPIC-0004"]["title"],
+                    "placement_scope": "normal",
+                    "examples": [{
+                        "source_question_id": "QINV-0016.2",
+                        "example_prompt": "Write a note on Count Cavour.",
+                    }],
+                },
+            ],
+        }],
+    }
+
+    annotated = phase3.annotate_mined_types(mined, graph)
+    reusable = annotated["types"][0]
+
+    assert reusable["_semantic_topic_ids"] == ["TOPIC-0002", "TOPIC-0004"]
+    assert reusable["_semantic_scope"] == "multi_topic_reuse"
+    assert reusable["placement_scope"] == "normal"
+    assert [
+        case["_semantic_topic_id"] for case in reusable["case_prompts"]
+    ] == ["TOPIC-0002", "TOPIC-0004"]
+    assert all(
+        case["placement_scope"] == "normal"
+        for case in reusable["case_prompts"]
+    )
+
+    units = phase3.annotate_assignment_units(
+        generation._expand_mined_types_to_assignment_units(
+            annotated["types"]
+        ),
+        graph,
+    )
+    assert [unit["_semantic_topic_id"] for unit in units] == [
+        "TOPIC-0002", "TOPIC-0004",
+    ]
+    assert all(unit["placement_scope"] == "normal" for unit in units)
+
+
+def test_only_one_integrated_case_is_cross_topic_synthesis():
+    source = _source()
+    canonical = _canonical(source)
+    graph, _report = phase3.compile_semantic_graph(
+        canonical,
+        source_text=source,
+        metadata=_metadata(),
+    )
+    mined = {
+        "types": [{
+            "type_id": "TYPE-COMPARISON",
+            "type_title": "Comparing nation-building pathways",
+            "source_question_ids": ["QINV-0003", "QINV-0006"],
+            "case_prompts": [{
+                "case_id": "CASE-CROSS-TOPIC",
+                "placement_scope": "cross_topic_synthesis",
+                "examples": [
+                    {
+                        "source_question_id": "QINV-0003",
+                        "example_prompt": "Analyse List's economic argument.",
+                    },
+                    {
+                        "source_question_id": "QINV-0006",
+                        "example_prompt": "Explain culture's nationalist role.",
+                    },
+                ],
+            }],
+        }],
+    }
+
+    annotated = phase3.annotate_mined_types(mined, graph)
+    mtype = annotated["types"][0]
+    case = mtype["case_prompts"][0]
+
+    assert len(case["_semantic_topic_ids"]) > 1
+    assert case["_semantic_scope"] == "cross_topic_synthesis"
+    assert case["placement_scope"] == "cross_topic_synthesis"
+    assert mtype["_semantic_scope"] == "multi_topic_reuse"
+    assert mtype["placement_scope"] == "cross_topic_synthesis"
 
 
 def test_concepts_wrapper_activates_verified_graph_and_semantic_source(

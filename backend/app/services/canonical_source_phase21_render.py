@@ -17,25 +17,20 @@ def intact_type_assignment_units(
     generation,
     types: list[dict],
     canonical: dict[str, Any] | None,
+    expand_units=None,
 ) -> list[dict]:
-    """Keep one consolidated mined Type as one placement unit."""
-    units: list[dict] = []
+    """Expand reusable Types into independently routed Case placement units."""
     owners: dict[str, str] = {}
-    topic_by_qid = {
-        str(task.get("qid") or "").strip(): str(task.get("topic_hint") or "").strip()
-        for task in (canonical or {}).get("tasks") or []
-        if isinstance(task, dict) and str(task.get("qid") or "").strip()
-    }
-    for index, raw in enumerate(types, start=1):
-        if not isinstance(raw, dict):
-            continue
-        unit = copy.deepcopy(raw)
-        type_id = str(unit.get("type_id") or f"TYPE-{index:04d}").strip()
-        unit["type_id"] = type_id
-        unit["_origin_type_id"] = type_id
-        unit["_origin_case_count"] = len(unit.get("case_prompts") or [])
+    source_types = [raw for raw in types if isinstance(raw, dict)]
+    if not callable(expand_units):
+        raise RuntimeError(
+            "Phase 2.1 Case-unit expansion requires the unwrapped generation "
+            "expander"
+        )
+    units = expand_units(source_types)
+    for unit in units:
+        type_id = str(unit.get("type_id") or "").strip()
         qids = generation._type_source_qids(unit)
-        unit["source_question_ids"] = qids
         for qid in qids:
             previous = owners.get(qid)
             if previous and previous != type_id:
@@ -44,18 +39,6 @@ def intact_type_assignment_units(
                     f"{qid} belongs to {previous} and {type_id}"
                 )
             owners[qid] = type_id
-        source_topics = {
-            topic_by_qid.get(qid, "") for qid in qids if topic_by_qid.get(qid, "")
-        }
-        placement_scope = str(unit.get("placement_scope") or "").strip().lower()
-        if len(source_topics) > 1 and placement_scope not in {
-            "mixed_synthesis", "cross_topic_synthesis"
-        }:
-            raise RuntimeError(
-                "Phase 2.1 refused to split a consolidated Type across source "
-                f"topics: {type_id} owns {sorted(source_topics)}"
-            )
-        units.append(unit)
     return units
 
 
@@ -204,6 +187,7 @@ def restore_mined_type_taxonomy(
         if not qids:
             continue
         fragments: list[str] = []
+        fragment_origin_ids: list[str] = []
         number = 0
         for mtype in mined:
             filtered = filtered_mined_type(
@@ -214,6 +198,9 @@ def restore_mined_type_taxonomy(
             fragment, number = generation._mined_type_to_body(filtered, number)
             if fragment:
                 fragments.append(fragment)
+                fragment_origin_ids.append(str(
+                    mtype.get("type_id") or ""
+                ).split("::", 1)[0])
         if not fragments:
             continue
         details = record.get("concept_details") or ""
@@ -229,6 +216,10 @@ def restore_mined_type_taxonomy(
         if rebuilt != details:
             record["concept_details"] = rebuilt
             changed += 1
+        # The restoration above numbers fragments only within one row. Hand
+        # the immutable mined-Type identities to the chapter-wide renumbering
+        # pass so the same Type and its Case sequence continue across hosts.
+        record["_origin_type_id"] = fragment_origin_ids
     after_counts = generation._rendered_inventory_example_counts(out, expected_keys)
     if before_counts != after_counts:
         generation.progress.log(
@@ -268,4 +259,5 @@ def normalize_final_records(
             sections.append((label, content))
         record["concept_details"] = generation.cr.join_sections(sections)
         cleaned.append(record)
+    cleaned = generation.cr.renumber_types_continuously(cleaned)
     return generation.cv.ensure_valid_learner_analysis(cleaned)

@@ -448,7 +448,7 @@ _CONCEPT_ID_RE = re.compile(
     r"(?P<number>\d{1,6})\b",
     re.IGNORECASE,
 )
-_QID_RE = re.compile(r"\bQINV-\d{1,8}\b", re.I)
+_QID_RE = re.compile(r"\bQINV-\d{1,8}(?:\.\d{1,4})?\b", re.I)
 _PAGE_RE = re.compile(
     r"\b(?:pdf[- _]?page|audit[- _]?page|page(?:_number)?)\s*"
     r"(?:[=:_-]\s*|\s+)(\d{1,6})\b",

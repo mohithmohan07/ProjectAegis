@@ -37,7 +37,7 @@ def test_complete_rne_is_phase21_ready_with_six_sections_and_26_tasks():
     compiled = _compile(_rne_source())
     canonical = compiled.canonical
 
-    assert canonical["phase21_hardening"]["version"] == "2.1.0"
+    assert canonical["phase21_hardening"]["version"] == "2.1.2"
     assert canonical["phase21_issues"] == []
     assert compiled.report["phase2_issues"] == []
     assert canonical["phase2_inventory_ready"] is True
@@ -50,6 +50,60 @@ def test_complete_rne_is_phase21_ready_with_six_sections_and_26_tasks():
     )
     assert sorted(main_numbers) == [1, 2, 3, 4, 5, 6]
     assert "AEGIS CANONICAL SOURCE PHASE 2.1" in compiled.aegis_mmd
+
+
+def test_only_certified_note_lists_split_and_each_leaf_inherits_context_and_visual():
+    canonical = {
+        "tasks": [{
+            "task_id": "TASK-00001",
+            "qid": "QINV-0001",
+            "identity_key": "parent-identity",
+            "raw_prompt": (
+                "Write short notes on Fig. 7: "
+                "a) Giuseppe Mazzini b) Count Camillo de Cavour"
+            ),
+            "display_prompt": (
+                "Write short notes on Fig. 7: "
+                "a) Giuseppe Mazzini b) Count Camillo de Cavour"
+            ),
+            "shared_context": "Use the supplied biographical source excerpt.",
+            "source_start": 10,
+            "source_end": 100,
+        }],
+        "figures": [{
+            "figure_id": "FIG-00001",
+            "reference_ids": ["7"],
+            "image_urls": ["https://example.test/fig-7.png"],
+        }],
+    }
+
+    assert phase21_structure.materialize_task_leaf_cases(canonical) == 2
+    leaves = canonical["tasks"][0]["leaf_cases"]
+    assert [leaf["qid"] for leaf in leaves] == ["QINV-0001.1", "QINV-0001.2"]
+    assert all(
+        "Use the supplied biographical source excerpt." in leaf["shared_context"]
+        for leaf in leaves
+    )
+    assert all("Write short notes on Fig. 7:" in leaf["shared_context"] for leaf in leaves)
+    assert all(leaf["figure_refs"] == ["FIG-00001"] for leaf in leaves)
+    assert all(leaf["explicit_figure_reference_ids"] == ["7"] for leaf in leaves)
+
+    dependent = {
+        "tasks": [{
+            "task_id": "TASK-00002",
+            "qid": "QINV-0002",
+            "identity_key": "dependent-identity",
+            "raw_prompt": (
+                "Answer the following: a) identify the claim "
+                "b) justify that same claim from the passage"
+            ),
+            "source_start": 0,
+            "source_end": 80,
+        }],
+        "figures": [],
+    }
+    assert phase21_structure.materialize_task_leaf_cases(dependent) == 1
+    assert not dependent["tasks"][0].get("leaf_cases")
 
 
 def test_plain_text_discuss_cue_recovers_renan_without_reordering():
@@ -147,7 +201,7 @@ def test_visual_repairs_are_person_surname_only_and_context_is_linked():
     assert "Broken chains | Being freed" in box["shared_context"]
 
 
-def test_phase21_keeps_one_consolidated_type_as_one_assignment_unit():
+def test_phase21_expands_one_reusable_type_into_case_assignment_units():
     canonical = {
         "phase21_hardening": {"version": phase21.HARDENING_VERSION},
         "tasks": [
@@ -175,10 +229,14 @@ def test_phase21_keeps_one_consolidated_type_as_one_assignment_unit():
     with phase2.activate(canonical):
         units = generation._expand_mined_types_to_assignment_units(mined)
 
-    assert len(units) == 1
-    assert units[0]["type_id"] == "TYPE-0001"
-    assert len(units[0]["case_prompts"]) == 2
-    assert units[0]["source_question_ids"] == ["QINV-0001", "QINV-0002"]
+    assert len(units) == 2
+    assert [unit["_origin_type_id"] for unit in units] == [
+        "TYPE-0001", "TYPE-0001",
+    ]
+    assert [unit["source_question_ids"] for unit in units] == [
+        ["QINV-0001"], ["QINV-0002"],
+    ]
+    assert all(len(unit["case_prompts"]) == 1 for unit in units)
 
 
 def test_taxonomy_restore_replaces_question_fragment_titles_losslessly():
@@ -250,6 +308,90 @@ def test_taxonomy_restore_replaces_question_fragment_titles_losslessly():
     assert "Completing the First National Allegory" not in details
     assert "Explaining What Historical Event" not in details
     assert first in details and second in details
+
+
+def test_final_normalization_preserves_global_type_and_case_numbers_across_hosts():
+    first = "Write a short note on Giuseppe Mazzini."
+    second = "Write a short note on Count Camillo de Cavour."
+    inventory = {"items": [
+        {
+            "qid": "QINV-0016.1",
+            "source_kind": "short_answer",
+            "raw_task": first,
+            "normalized_task": first,
+        },
+        {
+            "qid": "QINV-0016.2",
+            "source_kind": "short_answer",
+            "raw_task": second,
+            "normalized_task": second,
+        },
+    ]}
+    mined = {"types": [{
+        "type_id": "TYPE-SHORT-NOTE",
+        "type_title": "Writing a concise note on a historical figure",
+        "type_description": "Summarise a figure's role and significance.",
+        "source_question_ids": ["QINV-0016.1", "QINV-0016.2"],
+        "case_prompts": [
+            {
+                "case_id": "CASE-MAZZINI",
+                "case_title": "Revolutionary organiser",
+                "topic_match_hint": "The Revolutionaries",
+                "examples": [{
+                    "source_question_id": "QINV-0016.1",
+                    "example_prompt": first,
+                }],
+            },
+            {
+                "case_id": "CASE-CAVOUR",
+                "case_title": "Diplomatic architect of unification",
+                "topic_match_hint": "Italy Unified",
+                "examples": [{
+                    "source_question_id": "QINV-0016.2",
+                    "example_prompt": second,
+                }],
+            },
+        ],
+    }]}
+    records = [
+        {
+            "topic": "The Revolutionaries",
+            "parent_concept": "Revolutionary nationalism",
+            "concept_title": "Giuseppe Mazzini and Young Italy",
+            "concept_details": generation._inject_types(
+                "Description: Mazzini organised revolutionary nationalism.",
+                "Type 01: Writing a concise note Case 01: Mazzini "
+                f"Example 01: {first}",
+            ),
+            "keywords": "Mazzini",
+        },
+        {
+            "topic": "Italy Unified",
+            "parent_concept": "Italian unification",
+            "concept_title": "Cavour and Piedmont-Sardinia",
+            "concept_details": generation._inject_types(
+                "Description: Cavour used diplomacy to advance unification.",
+                "Type 02: Writing a concise note Case 02: Cavour "
+                f"Example 01: {second}",
+            ),
+            "keywords": "Cavour",
+        },
+    ]
+
+    normalized = phase21_render.normalize_final_records(
+        generation, records, inventory, mined
+    )
+
+    assert "Type 01:" in normalized[0]["concept_details"]
+    assert "Case 01: Revolutionary organiser" in normalized[0][
+        "concept_details"
+    ]
+    assert "Type 01:" in normalized[1]["concept_details"]
+    assert "Case 02: Diplomatic architect" in normalized[1][
+        "concept_details"
+    ]
+    assert "Type 02:" not in normalized[1]["concept_details"]
+    assert all("_origin_type_id" not in record for record in normalized)
 
 
 def test_activity_hub_cleanup_removes_repeated_labels():

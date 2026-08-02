@@ -1,6 +1,8 @@
 """Universal quality contracts distilled from the three reviewed chapters."""
 from __future__ import annotations
 
+import copy
+
 import pytest
 
 from app.services import concept_refiner as cr
@@ -391,7 +393,9 @@ def test_semantic_type_consolidation_merges_paraphrases_exactly_once(monkeypatch
     assert not g._duplicate_inventory_assignments(inventory, result["types"])
 
 
-def test_semantic_type_consolidation_rejects_topic_drift(monkeypatch):
+def test_semantic_type_consolidation_preserves_case_routes_across_topics(
+    monkeypatch,
+):
     first = _item("QINV-0001", "Determine the first output.", topic="Topic A")
     second = _item("QINV-0002", "Determine the second output.", topic="Topic B")
     inventory = _inventory(first, second)
@@ -417,7 +421,399 @@ def test_semantic_type_consolidation_rejects_topic_drift(monkeypatch):
 
     result = g._consolidate_semantic_types_via_api(
         original, inventory=inventory, meta={})
-    assert len(result["types"]) == 2
+    assert len(result["types"]) == 1
+    contracts = g._type_qid_contracts(result["types"])
+    assert contracts[first["qid"]][0] == g._topic_comparison_key("Topic A")
+    assert contracts[second["qid"]][0] == g._topic_comparison_key("Topic B")
+
+
+def test_one_reusable_type_keeps_normal_and_activity_cases_independent():
+    normal = _item(
+        "QINV-0011.1",
+        "Interpret the regional identities shown in Fig. 14(a).",
+        topic="Italy Unified",
+    )
+    activity = _item(
+        "QINV-0004",
+        "Plot the territorial changes made by the Congress of Vienna.",
+        topic="A New Conservatism after 1815",
+        source_kind="activity",
+        _activity_origin=True,
+    )
+    inventory = _inventory(normal, activity)
+    reusable = {
+        "type_id": "TYPE-MAP",
+        "type_title": "Historical map interpretation",
+        "source_question_ids": [normal["qid"], activity["qid"]],
+        "case_prompts": [
+            {
+                "case_id": "CASE-ITALY",
+                "case_title": "Infer regional identity",
+                "examples": [{
+                    "source_question_id": normal["qid"],
+                    "example_prompt": normal["raw_task"],
+                }],
+            },
+            {
+                "case_id": "CASE-VIENNA",
+                "case_title": "Plot territorial change",
+                "examples": [{
+                    "source_question_id": activity["qid"],
+                    "example_prompt": activity["raw_task"],
+                }],
+            },
+        ],
+    }
+
+    annotated = g._annotate_mined_type_case_routes([reusable], inventory)
+    assert len(annotated) == 1
+    cases = annotated[0]["case_prompts"]
+    assert [case["topic_match_hint"] for case in cases] == [
+        "Italy Unified",
+        "A New Conservatism after 1815",
+    ]
+    assert [case["is_activity"] for case in cases] == [False, True]
+
+    units = g._expand_mined_types_to_assignment_units(annotated)
+    assert {unit["_origin_type_id"] for unit in units} == {"TYPE-MAP"}
+    by_qid = {unit["source_question_ids"][0]: unit for unit in units}
+    assert by_qid[normal["qid"]]["is_activity"] is False
+    assert by_qid[activity["qid"]]["is_activity"] is True
+    assert by_qid[normal["qid"]]["topic_match_hint"] == "Italy Unified"
+    assert by_qid[activity["qid"]]["topic_match_hint"] == (
+        "A New Conservatism after 1815"
+    )
+
+    for ordered_units in (
+        [by_qid[normal["qid"]], by_qid[activity["qid"]]],
+        [by_qid[activity["qid"]], by_qid[normal["qid"]]],
+    ):
+        collapsed = g._collapse_assignment_units_for_render(ordered_units)
+        assert len(collapsed) == 2
+        by_role = {bool(unit.get("is_activity")): unit for unit in collapsed}
+        assert by_role[False]["source_question_ids"] == [normal["qid"]]
+        assert by_role[True]["source_question_ids"] == [activity["qid"]]
+        assert [
+            case["case_id"] for case in by_role[False]["case_prompts"]
+        ] == ["CASE-ITALY"]
+        assert [
+            case["case_id"] for case in by_role[True]["case_prompts"]
+        ] == ["CASE-VIENNA"]
+
+
+def test_dedupe_rebuild_keeps_cross_topic_type_identity_on_resume():
+    mazzini = (
+        "Write a short note on Giuseppe Mazzini and his role in Young Italy."
+    )
+    cavour = (
+        "Write a short note on Count Camillo de Cavour and Italian "
+        "unification."
+    )
+    duplicate = (
+        "Explain how nationalism influenced political change in "
+        "nineteenth-century Europe."
+    )
+    records = [
+        {
+            "topic": "The Revolutionaries",
+            "parent_concept": "Revolutionary nationalism",
+            "concept_title": "Giuseppe Mazzini and Young Italy",
+            "concept_details": (
+                "Description: Mazzini organised revolutionary nationalism. "
+                "// Types: Type 01: Writing a concise historical note "
+                "Case 01: Revolutionary organiser Example 01: " + mazzini
+                + " Type 02: Explaining political development Case 01: "
+                "Nationalist change Example 01: " + duplicate
+            ),
+            "keywords": "Mazzini",
+            "_origin_type_id": ["TYPE-SHARED-NOTE", "TYPE-LOCAL-A"],
+        },
+        {
+            "topic": "Italy Unified",
+            "parent_concept": "Italian unification",
+            "concept_title": "Cavour and Piedmont-Sardinia",
+            "concept_details": (
+                "Description: Cavour used diplomacy for unification. "
+                "// Types: Type 01: Writing a concise historical note "
+                "Case 01: Diplomatic architect Example 01: " + cavour
+                + " Type 02: Explaining political development Case 01: "
+                "Nationalist change Example 01: " + duplicate
+            ),
+            "keywords": "Cavour",
+            "_origin_type_id": ["TYPE-SHARED-NOTE", "TYPE-LOCAL-B"],
+        },
+    ]
+    inventory = _inventory(
+        _item("QINV-0001", mazzini, topic="The Revolutionaries"),
+        _item("QINV-0002", cavour, topic="Italy Unified"),
+        _item("QINV-0003", duplicate, topic="The Revolutionaries"),
+    )
+
+    rendered = cr.renumber_types_continuously(records)
+    deduped, removed = g._dedupe_rendered_inventory_examples(
+        rendered, inventory)
+    resumed = cr.renumber_types_continuously(copy.deepcopy(deduped))
+    resumed = cr.renumber_types_continuously(copy.deepcopy(resumed))
+
+    assert removed == 1
+    assert "Type 01: Writing a concise historical note" in resumed[0][
+        "concept_details"
+    ]
+    assert "Case 01: Revolutionary organiser" in resumed[0][
+        "concept_details"
+    ]
+    assert "Type 01: Writing a concise historical note" in resumed[1][
+        "concept_details"
+    ]
+    assert "Case 02: Diplomatic architect" in resumed[1][
+        "concept_details"
+    ]
+    assert all("_origin_type_id" not in record for record in resumed)
+    assert all(
+        "TYPE-SHARED-NOTE" not in record["concept_details"]
+        for record in resumed
+    )
+    assert all(
+        cr._TYPE_ORIGIN_SEALS_KEY not in row
+        for row in g._records_to_api_rows(resumed)
+    )
+
+
+def test_salvage_rebuild_keeps_cross_topic_type_identity_on_resume():
+    mazzini = (
+        "Write a short note on Giuseppe Mazzini and his role in Young Italy."
+    )
+    cavour = (
+        "Write a short note on Count Camillo de Cavour and Italian "
+        "unification."
+    )
+    records = [
+        {
+            "topic": "The Revolutionaries",
+            "parent_concept": "Revolutionary nationalism",
+            "concept_title": "Giuseppe Mazzini and Young Italy",
+            "concept_details": (
+                "Description: Mazzini organised revolutionary nationalism. "
+                "// Types: Type 01: Writing a concise historical note "
+                "Case 01: Revolutionary organiser Example 01: " + mazzini
+            ),
+            "keywords": "Mazzini",
+            "_origin_type_id": ["TYPE-SHARED-NOTE"],
+        },
+        {
+            "topic": "Italy Unified",
+            "parent_concept": "Italian unification",
+            "concept_title": "Cavour and Piedmont-Sardinia",
+            "concept_details": (
+                "Description: Cavour used diplomacy for unification. "
+                "// Types: Type 01: Writing a concise historical note "
+                "Case 01: Diplomatic architect Example 01: " + cavour
+                + " Type 02: Interpreting a source Case 01: Stub "
+                "Example 01: x"
+            ),
+            "keywords": "Cavour",
+            "_origin_type_id": ["TYPE-SHARED-NOTE", "TYPE-STUB"],
+        },
+    ]
+    inventory = _inventory(
+        _item("QINV-0001", mazzini, topic="The Revolutionaries"),
+        _item("QINV-0002", cavour, topic="Italy Unified"),
+    )
+
+    rendered = cr.renumber_types_continuously(records)
+    salvaged = g._salvage_short_case_examples(
+        rendered, inventory=inventory)
+    resumed = cr.renumber_types_continuously(copy.deepcopy(salvaged))
+    resumed = cr.renumber_types_continuously(copy.deepcopy(resumed))
+
+    assert "Type 01: Writing a concise historical note" in resumed[0][
+        "concept_details"
+    ]
+    assert "Case 01: Revolutionary organiser" in resumed[0][
+        "concept_details"
+    ]
+    assert "Type 01: Writing a concise historical note" in resumed[1][
+        "concept_details"
+    ]
+    assert "Case 02: Diplomatic architect" in resumed[1][
+        "concept_details"
+    ]
+    assert "Interpreting a source" not in resumed[1]["concept_details"]
+    assert all("_origin_type_id" not in record for record in resumed)
+
+
+def test_visual_drift_audit_keeps_each_qid_on_its_own_case_route():
+    first = _item(
+        "QINV-0001",
+        "Interpret the first visual source.",
+        topic="Topic A",
+        requires_visual=True,
+    )
+    second = _item(
+        "QINV-0002",
+        "Interpret the second visual source.",
+        topic="Topic B",
+        requires_visual=True,
+    )
+    reusable = {
+        "type_id": "TYPE-VISUAL",
+        "type_title": "Visual-source interpretation",
+        "source_question_ids": [first["qid"], second["qid"]],
+        "case_prompts": [
+            {
+                "case_id": "CASE-A",
+                "case_title": "Interpret allegorical symbols",
+                "concept_match_hint": "Concept A",
+                "topic_match_hint": "Topic A",
+                "examples": [{
+                    "source_question_id": first["qid"],
+                    "example_prompt": first["raw_task"],
+                    "requires_visual": True,
+                }],
+            },
+            {
+                "case_id": "CASE-B",
+                "case_title": "Interpret a political caricature",
+                "concept_match_hint": "Concept B",
+                "topic_match_hint": "Topic B",
+                "examples": [{
+                    "source_question_id": second["qid"],
+                    "example_prompt": second["raw_task"],
+                    "requires_visual": True,
+                }],
+            },
+        ],
+    }
+
+    contracts = g._type_qid_semantic_contracts(
+        [reusable],
+        _inventory(first, second),
+        honor_emitted_requires_visual=True,
+        include_case_identity=True,
+    )
+
+    assert contracts[first["qid"]]["concept_match_hint"] == "Concept A"
+    assert contracts[first["qid"]]["case_id"] == "CASE-A"
+    assert contracts[second["qid"]]["concept_match_hint"] == "Concept B"
+    assert contracts[second["qid"]]["case_id"] == "CASE-B"
+
+
+def test_chapter_wide_leaf_cases_are_topic_assigned_independently(monkeypatch):
+    destinations = {
+        "QINV-0016.1": "The Revolutionaries",
+        "QINV-0016.2": "Italy Unified",
+        "QINV-0016.3": "The Age of Revolutions",
+        "QINV-0016.4": "The Revolution of the Liberals",
+        "QINV-0016.5": "Women in Nationalist Struggles",
+    }
+    tasks = {
+        qid: _item(
+            qid,
+            label,
+            topic="",
+            parent_qid="QINV-0016",
+            _topic_scope="chapter",
+        )
+        for qid, label in zip(destinations, (
+            "Write a note on Giuseppe Mazzini.",
+            "Write a note on Count Camillo de Cavour.",
+            "Write a note on the Greek War of Independence.",
+            "Write a note on the Frankfurt Parliament.",
+            "Write a note on women in nationalist struggles.",
+        ))
+    }
+    records = [
+        {
+            "topic": topic,
+            "parent_concept": topic,
+            "concept_title": f"Teach {topic}",
+            "concept_details": f"Description: {topic}",
+            "keywords": "",
+        }
+        for topic in destinations.values()
+    ]
+
+    def fake_openai(_system, user, **_kwargs):
+        assert all(qid in user for qid in destinations)
+        return {"assignments": [
+            {"qid": qid, "topic": topic}
+            for qid, topic in destinations.items()
+        ]}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    inventory = _inventory(*tasks.values())
+    result = g._assign_chapter_wide_inventory_topics_via_api(
+        meta={},
+        inventory=inventory,
+        records=records,
+        source_topic_excerpts=[],
+    )
+
+    assert {
+        item["qid"]: item["topic_hint"] for item in result["items"]
+    } == destinations
+    assert {item["parent_qid"] for item in result["items"]} == {
+        "QINV-0016"
+    }
+
+
+def test_independent_parent_leaves_cannot_be_recombined_into_one_case():
+    topics = {
+        "QINV-0016.1": "The Making of Nationalism in Europe",
+        "QINV-0016.2": "The Making of Nationalism in Europe",
+        "QINV-0016.3": "The Age of Revolutions",
+        "QINV-0016.4": "The Age of Revolutions",
+        "QINV-0016.5": "The Age of Revolutions",
+    }
+    items = [
+        _item(
+            qid,
+            f"Write a note on target {index}.",
+            topic=topic,
+            parent_qid="QINV-0016",
+        )
+        for index, (qid, topic) in enumerate(topics.items(), start=1)
+    ]
+    bundled = {
+        "type_id": "TYPE-SHORT-NOTE",
+        "type_title": "Writing a concise historical note",
+        "source_question_ids": list(topics),
+        "case_prompts": [{
+            "case_id": "CASE-BUNDLED",
+            "case_title": "Specified person, event, institution, or role",
+            "concept_match_hint": "One unsafe shared concept",
+            "parent_concept_match_hint": "One unsafe shared parent",
+            "placement_scope": "mixed_synthesis",
+            "examples": [
+                {
+                    "source_question_id": item["qid"],
+                    "example_prompt": item["raw_task"],
+                }
+                for item in items
+            ],
+        }],
+    }
+
+    annotated = g._annotate_mined_type_case_routes(
+        [bundled], _inventory(*items)
+    )
+    cases = annotated[0]["case_prompts"]
+    assert len(cases) == 5
+    assert [
+        g._assignment_case_qids(case) for case in cases
+    ] == [[qid] for qid in topics]
+    assert [case["topic_match_hint"] for case in cases] == list(
+        topics.values()
+    )
+    assert all(case["placement_scope"] == "normal" for case in cases)
+    assert all(not case.get("concept_match_hint") for case in cases)
+    assert all(not case.get("parent_concept_match_hint") for case in cases)
+
+    units = g._expand_mined_types_to_assignment_units(annotated)
+    assert len(units) == 5
+    assert {unit["_origin_type_id"] for unit in units} == {
+        "TYPE-SHORT-NOTE"
+    }
 
 
 def test_semantic_consolidation_restores_qid_bearing_example_text(monkeypatch):
@@ -889,7 +1285,7 @@ def test_host_entailment_review_preserves_unreviewed_activity_units(
     ] == ["TYPE-0001", "TYPE-ACTIVITY"]
 
 
-def test_case_scoped_host_review_converges_reusable_type_to_one_host(
+def test_case_scoped_host_review_preserves_reusable_type_across_hosts(
     monkeypatch,
 ):
     monkeypatch.setattr(g.config, "use_live_generation", lambda: True)
@@ -990,18 +1386,20 @@ def test_case_scoped_host_review_converges_reusable_type_to_one_host(
 
     hosts = mined[g._PLACEMENT_CERTIFICATIONS_KEY]["hosts"]
     assert hosts["QINV-0001"]["concept"] == "Method Alpha"
-    assert hosts["QINV-0002"]["concept"] == "Method Alpha"
+    assert hosts["QINV-0002"]["concept"] == "Method Beta"
     assert sum(
         "Applying a Supplied Method" in row["concept_details"]
         for row in out
-    ) == 1
+    ) == 2
     alpha = next(
         row for row in out if row["concept_title"] == "Method Alpha")
+    beta = next(
+        row for row in out if row["concept_title"] == "Method Beta")
     assert first_task in alpha["concept_details"]
-    assert second_task in alpha["concept_details"]
+    assert second_task not in alpha["concept_details"]
+    assert second_task in beta["concept_details"]
     assert first_task in g._types_body(out[0]["concept_details"])
-    assert second_task in g._types_body(out[0]["concept_details"])
-    assert not g._types_body(out[1]["concept_details"])
+    assert second_task in g._types_body(out[1]["concept_details"])
     # No blanket Type is created for a theory-only sibling with no source qid.
     assert not g._has_meaningful_types(out[2]["concept_details"])
     assert not g._placement_certification_violations(
@@ -1025,7 +1423,7 @@ def test_case_scoped_host_review_converges_reusable_type_to_one_host(
     }
 
 
-def test_reusable_type_convergence_continues_with_distinct_hosts_when_review_fails(
+def test_reusable_type_hosts_remain_distinct_without_convergence_review(
     monkeypatch,
 ):
     monkeypatch.setattr(g.config, "use_live_generation", lambda: True)
@@ -1067,14 +1465,14 @@ def test_reusable_type_convergence_continues_with_distinct_hosts_when_review_fai
     )
 
     assert set(result) == {"CONCEPT-0001", "CONCEPT-0002"}
-    assert result["CONCEPT-0001"][0]["_origin_type_id"] == (
-        "TYPE-0001::HOST::CONCEPT-0001"
+    assert result["CONCEPT-0001"][0]["_origin_type_id"] == "TYPE-0001"
+    assert result["CONCEPT-0002"][0]["_origin_type_id"] == "TYPE-0001"
+    assert result["CONCEPT-0001"][0]["type_title"] == (
+        "Applying a shared method"
     )
-    assert result["CONCEPT-0002"][0]["_origin_type_id"] == (
-        "TYPE-0001::HOST::CONCEPT-0002"
+    assert result["CONCEPT-0002"][0]["type_title"] == (
+        "Applying a shared method"
     )
-    assert "Method Alpha" in result["CONCEPT-0001"][0]["type_title"]
-    assert "Method Beta" in result["CONCEPT-0002"][0]["type_title"]
 
 
 def test_mined_type_normalization_prunes_examples_without_inventory_qids():

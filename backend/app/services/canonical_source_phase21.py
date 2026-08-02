@@ -9,8 +9,8 @@ from . import canonical_source
 from . import canonical_source_phase21_structure as structure
 from . import canonical_source_phase21_visuals as visuals
 
-HARDENING_VERSION = "2.1.0"
-COMPILER_LABEL = "phase-2.1-source-hardening-1"
+HARDENING_VERSION = "2.1.2"
+COMPILER_LABEL = "phase-2.1-source-leaf-inventory-1"
 
 
 def dedupe_issues(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -48,9 +48,11 @@ def harden_compiled_source(
     recovered = structure.recover_plain_task_cues(canonical)
     boundary_repairs = structure.trim_task_boundaries(canonical)
     structure.renumber_tasks(canonical)
+    followup_prompts = structure.recover_followup_task_prompts(canonical)
     visual_repairs = visuals.normalize_visual_ownership(canonical)
     context_links = visuals.link_shared_context(canonical)
     structure.renumber_tasks(canonical)
+    inventory_items = structure.materialize_task_leaf_cases(canonical)
 
     source_issues = source_boundary_issues(canonical)
     canonical["phase21_hardening"] = {
@@ -58,8 +60,10 @@ def harden_compiled_source(
         "compiler": COMPILER_LABEL,
         "plain_task_cues_recovered": recovered,
         "task_boundaries_repaired": boundary_repairs,
+        "followup_task_prompts_recovered": followup_prompts,
         "visual_ownership_rows_normalized": visual_repairs,
         "shared_context_links": context_links,
+        "inventory_item_count": inventory_items,
         "blocking_issues": len(source_issues),
     }
     canonical["phase21_issues"] = source_issues
@@ -85,6 +89,7 @@ def harden_compiled_source(
     })
     summary = report.setdefault("summary", {})
     summary["tasks"] = len(canonical.get("tasks") or [])
+    summary["inventory_items"] = inventory_items
     summary["phase21_blocking_issues"] = len(source_issues)
     summary["phase2_blocking_issues"] = len(all_issues)
     if active and all_issues:

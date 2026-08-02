@@ -1,14 +1,17 @@
 """Durable human gate for anomalously fragmented mined Type taxonomies.
 
 The gate is deliberately deterministic: it spends no model call deciding
-whether to pause.  A high Type-to-QID ratio after the ordinary consolidation
-pass is evidence that the model may have created one assessment Type per
-question instead of reusable patterns.  The operator can keep that taxonomy,
+whether to pause. A high Type-to-parent-task ratio after ordinary consolidation
+is evidence that the model may have created one assessment Type per source
+task instead of reusable patterns. Independently routed leaf Cases remain in
+the exact-coverage inventory but do not dilute that comparison. The operator
+can keep that taxonomy,
 request one bounded consolidation proposal plus critic, or provide a custom
 grouping instruction.
 
-This decision never weakens exact-once QID coverage, topic/activity/scope
-contracts, source wording, host review, or final validation.
+This decision never weakens exact-once QID coverage, Case-owned
+topic/activity/scope contracts, source wording, host review, or final
+validation.
 """
 from __future__ import annotations
 
@@ -24,7 +27,7 @@ from . import semantic_confidence_policy as confidence_policy
 from .semantic_recovery import HumanDecisionRequired
 
 
-_GATE_VERSION = "type-granularity-human-gate-3"
+_GATE_VERSION = "type-granularity-human-gate-4"
 _MIN_INVENTORY_ITEMS = 12
 _MIN_TYPE_COUNT = 10
 _HIGH_TYPE_QID_RATIO = 0.80
@@ -66,6 +69,46 @@ def _sha256_json(value: Any) -> str:
 
 def _normal(value: object) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip().casefold()
+
+
+def inventory_parent_task_count(
+    inventory: Mapping[str, Any] | None,
+) -> int:
+    """Return the stable parent-task denominator for fragmentation review.
+
+    Independently answerable source subparts are deliberately materialized as
+    leaf QIDs so each Case can be routed to its own concept.  Those extra leaf
+    rows must not make a one-Type-per-parent taxonomy look healthy merely by
+    enlarging the denominator.  Prefer the sealed Phase-2 source contract and
+    otherwise derive parents from ``parent_qid`` with ordinary QIDs counting as
+    their own parents.  Legacy inventories therefore retain their old count.
+    """
+
+    inventory = inventory or {}
+    items = [
+        item for item in inventory.get("items") or []
+        if isinstance(item, Mapping)
+    ]
+    leaf_count = len(items)
+    source_contract = inventory.get("source_contract")
+    if isinstance(source_contract, Mapping):
+        try:
+            sealed_count = int(
+                source_contract.get("parent_task_count") or 0
+            )
+        except (TypeError, ValueError):
+            sealed_count = 0
+        if sealed_count > 0 and (
+            not leaf_count or sealed_count <= leaf_count
+        ):
+            return sealed_count
+
+    parent_ids: set[str] = set()
+    for index, item in enumerate(items, start=1):
+        qid = str(item.get("qid") or "").strip()
+        parent_qid = str(item.get("parent_qid") or "").strip()
+        parent_ids.add(parent_qid or qid or f"__inventory_row_{index}")
+    return len(parent_ids)
 
 
 def _inventory_identity(inventory: Mapping[str, Any] | None) -> list[dict]:
@@ -138,11 +181,38 @@ def _type_identity(mined_types: Mapping[str, Any] | None) -> list[dict]:
                         legacy_prompt.encode("utf-8")
                     ).hexdigest(),
                 })
+
+            def route_value(field: str) -> Any:
+                if field in case and case.get(field) is not None:
+                    return case.get(field)
+                return mtype.get(field)
+
             cases.append({
                 "case_id": str(case.get("case_id") or ""),
                 "case_title": str(case.get("case_title") or ""),
                 "case_signature": str(case.get("case_signature") or ""),
-                "placement_scope": str(case.get("placement_scope") or ""),
+                "concept_match_hint": str(
+                    route_value("concept_match_hint") or ""
+                ),
+                "parent_concept_match_hint": str(
+                    route_value("parent_concept_match_hint") or ""
+                ),
+                "topic_match_hint": str(
+                    route_value("topic_match_hint") or ""
+                ),
+                "difficulty_hint": str(
+                    route_value("difficulty_hint") or ""
+                ),
+                "cognitive_skill_hint": str(
+                    route_value("cognitive_skill_hint") or ""
+                ),
+                "subject_skill_hint": str(
+                    route_value("subject_skill_hint") or ""
+                ),
+                "is_activity": bool(route_value("is_activity")),
+                "placement_scope": str(
+                    route_value("placement_scope") or ""
+                ),
                 "examples": examples,
             })
         out.append({
@@ -180,11 +250,18 @@ def build_review(
     consolidated_type_count: int,
     inventory_count: int,
     sufficiency_added_concepts: int,
+    parent_task_count: int | None = None,
     sufficiency_audit_complete: bool = True,
 ) -> dict[str, Any]:
     """Return the deterministic metrics saved beside the mined taxonomy."""
 
     inventory_count = max(0, int(inventory_count or 0))
+    if parent_task_count is None:
+        parent_task_count = inventory_count
+    parent_task_count = max(0, int(parent_task_count or 0))
+    if not parent_task_count:
+        parent_task_count = inventory_count
+    type_comparison_count = parent_task_count or inventory_count
     consolidated_type_count = max(0, int(consolidated_type_count or 0))
     raw_type_count = max(0, int(raw_type_count or 0))
     return {
@@ -192,6 +269,8 @@ def build_review(
         "raw_type_count": raw_type_count,
         "type_count": consolidated_type_count,
         "inventory_count": inventory_count,
+        "parent_task_count": parent_task_count,
+        "type_comparison_count": type_comparison_count,
         "consolidation_merged_count": max(
             0, raw_type_count - consolidated_type_count),
         "sufficiency_added_concepts": max(
@@ -200,6 +279,10 @@ def build_review(
         "type_qid_ratio": (
             consolidated_type_count / inventory_count
             if inventory_count else 0.0
+        ),
+        "type_comparison_ratio": (
+            consolidated_type_count / type_comparison_count
+            if type_comparison_count else 0.0
         ),
     }
 
@@ -210,12 +293,21 @@ def is_anomalously_fragmented(review: Mapping[str, Any] | None) -> bool:
     review = review or {}
     try:
         inventory_count = int(review.get("inventory_count") or 0)
+        comparison_count = int(
+            review.get("type_comparison_count")
+            or review.get("parent_task_count")
+            or inventory_count
+        )
         type_count = int(review.get("type_count") or 0)
-        ratio = float(review.get("type_qid_ratio") or 0.0)
+        ratio = float(
+            review.get("type_comparison_ratio")
+            if review.get("type_comparison_ratio") is not None
+            else review.get("type_qid_ratio") or 0.0
+        )
     except (TypeError, ValueError):
         return False
     return bool(
-        inventory_count >= _MIN_INVENTORY_ITEMS
+        comparison_count >= _MIN_INVENTORY_ITEMS
         and type_count >= _MIN_TYPE_COUNT
         and ratio >= _HIGH_TYPE_QID_RATIO
     )
@@ -359,14 +451,17 @@ def applied_result_context_hash(
             "raw_type_count",
             "type_count",
             "inventory_count",
+            "parent_task_count",
+            "type_comparison_count",
             "consolidation_merged_count",
             "sufficiency_added_concepts",
             "sufficiency_audit_complete",
             "type_qid_ratio",
+            "type_comparison_ratio",
         )
     }
     return _sha256_json({
-        "version": "type-granularity-applied-result-2",
+        "version": "type-granularity-applied-result-3",
         "semantic_confidence_policy": confidence_policy.cache_identity(),
         "metadata": {
             key: str((meta or {}).get(key) or "")
@@ -396,7 +491,7 @@ def applied_result_semantic_hash(
     """
 
     return _sha256_json({
-        "version": "type-granularity-applied-semantics-1",
+        "version": "type-granularity-applied-semantics-2",
         "semantic_confidence_policy": confidence_policy.cache_identity(),
         "inventory": _inventory_identity(inventory),
         "types": _type_identity(mined_types),
@@ -412,7 +507,16 @@ def _pending_decision(
 ) -> dict[str, Any]:
     type_count = int(review.get("type_count") or 0)
     inventory_count = int(review.get("inventory_count") or 0)
-    ratio = float(review.get("type_qid_ratio") or 0.0)
+    comparison_count = int(
+        review.get("type_comparison_count")
+        or review.get("parent_task_count")
+        or inventory_count
+    )
+    ratio = float(
+        review.get("type_comparison_ratio")
+        if review.get("type_comparison_ratio") is not None
+        else review.get("type_qid_ratio") or 0.0
+    )
     merged = int(review.get("consolidation_merged_count") or 0)
     additions = int(review.get("sufficiency_added_concepts") or 0)
     sufficiency_complete = bool(
@@ -428,8 +532,9 @@ def _pending_decision(
         "proceed without another explicit choice. "
         f"{str(failure)[:1500]}"
         if follow_up else (
-            f"Aegis found {type_count} Types for {inventory_count} source "
-            f"questions/tasks ({ratio:.0%}). The normal consolidation pass "
+            f"Aegis found {type_count} Types for {comparison_count} source "
+            f"parent task(s) ({inventory_count} leaf QID(s); {ratio:.0%}). "
+            "The normal consolidation pass "
             f"merged {merged}. "
             + (
                 "The concept-sufficiency audit will run once after this "
@@ -462,7 +567,12 @@ def _pending_decision(
         "checkpoint_progress": 0.76,
         "item": {
             "type_id": "TYPE-GRANULARITY-REVIEW",
-            "type_title": f"{type_count} Types for {inventory_count} QIDs",
+            "type_title": (
+                f"{type_count} Types for {comparison_count} parent tasks "
+                f"({inventory_count} leaf QIDs)"
+                if comparison_count != inventory_count
+                else f"{type_count} Types for {inventory_count} QIDs"
+            ),
             "qids": qids,
             "questions": [],
             "topic": "Chapter-wide Type taxonomy",
@@ -471,8 +581,17 @@ def _pending_decision(
         "evidence": [
             {
                 "page": "",
-                "label": "Type-to-QID ratio",
-                "text": f"{type_count}/{inventory_count} ({ratio:.1%})",
+                "label": (
+                    "Type-to-parent-task ratio"
+                    if comparison_count != inventory_count
+                    else "Type-to-QID ratio"
+                ),
+                "text": (
+                    f"{type_count}/{comparison_count} ({ratio:.1%}); "
+                    f"{inventory_count} leaf QID(s)"
+                    if comparison_count != inventory_count
+                    else f"{type_count}/{inventory_count} ({ratio:.1%})"
+                ),
             },
             {
                 "page": "",
@@ -578,6 +697,7 @@ __all__ = [
     "applied_result_semantic_hash",
     "build_review",
     "human_resolution_context",
+    "inventory_parent_task_count",
     "is_anomalously_fragmented",
     "resolve_or_pause",
 ]

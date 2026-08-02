@@ -33,6 +33,34 @@ def _inventory(count: int = 12) -> dict:
     }
 
 
+def _parent_expanded_inventory() -> dict:
+    """RNE-shaped inventory: 26 parents materialized as 31 leaf Cases."""
+
+    items = copy.deepcopy(_inventory(24)["items"])
+    for suffix in ("A", "B"):
+        items.append({
+            "qid": f"QINV-0025-{suffix}",
+            "parent_qid": "QINV-0025",
+            "topic_hint": "Italy Unified",
+            "raw_task": f"Interpret Italian map Case {suffix}.",
+            "task_kind": "map_task",
+            "requires_visual": True,
+        })
+    for suffix in ("A", "B", "C", "D", "E"):
+        items.append({
+            "qid": f"QINV-0026-{suffix}",
+            "parent_qid": "QINV-0026",
+            "topic_hint": f"Short-note destination {suffix}",
+            "raw_task": f"Write a note on historical target {suffix}.",
+            "task_kind": "short_answer",
+            "requires_visual": False,
+        })
+    return {
+        "items": items,
+        "stats": {"total_inventory_items": len(items)},
+    }
+
+
 def _types(count: int = 10) -> dict:
     return {
         "types": [
@@ -54,6 +82,14 @@ def _types(count: int = 10) -> dict:
                     "case_id": f"CASE-{index:04d}",
                     "case_title": f"Variation {index}",
                     "case_signature": f"constraint-{index}",
+                    "concept_match_hint": "Shared assessed concept",
+                    "parent_concept_match_hint": "Shared parent concept",
+                    "topic_match_hint": "Topic",
+                    "difficulty_hint": "Intermediate",
+                    "cognitive_skill_hint": "Apply",
+                    "subject_skill_hint": "Source analysis",
+                    "is_activity": False,
+                    "placement_scope": "normal",
                     "examples": [{
                         "source_question_id": f"QINV-{index:04d}",
                         "example_prompt": (
@@ -231,6 +267,54 @@ def test_fragmentation_gate_pauses_when_one_of_24_raw_types_was_merged():
     assert pending["item"]["type_title"] == "23 Types for 24 QIDs"
 
 
+def test_parent_aware_denominator_keeps_leaf_expansion_anomalous():
+    inventory = _parent_expanded_inventory()
+    assert len(inventory["items"]) == 31
+    assert gate.inventory_parent_task_count(inventory) == 26
+
+    review = gate.build_review(
+        raw_type_count=24,
+        consolidated_type_count=24,
+        inventory_count=31,
+        parent_task_count=gate.inventory_parent_task_count(inventory),
+        sufficiency_added_concepts=0,
+    )
+
+    assert review["parent_task_count"] == 26
+    assert review["type_comparison_count"] == 26
+    assert review["type_qid_ratio"] == pytest.approx(24 / 31)
+    assert review["type_comparison_ratio"] == pytest.approx(24 / 26)
+    assert review["type_qid_ratio"] < 0.80
+    assert gate.is_anomalously_fragmented(review)
+
+    with pytest.raises(semantic_recovery.HumanDecisionRequired) as caught:
+        gate.resolve_or_pause(
+            review=review,
+            inventory=inventory,
+            mined_types=_types(24),
+            meta={"subject": "History"},
+        )
+
+    pending = caught.value.pending_decision
+    assert pending["item"]["type_title"] == (
+        "24 Types for 26 parent tasks (31 leaf QIDs)"
+    )
+    assert pending["evidence"][0]["label"] == (
+        "Type-to-parent-task ratio"
+    )
+
+
+def test_parent_count_prefers_valid_sealed_source_contract():
+    inventory = _parent_expanded_inventory()
+    inventory["source_contract"] = {"parent_task_count": 26}
+    # Deliberately remove leaf parent links: the Phase-2 seal remains the
+    # authoritative denominator on a backwards-compatible inventory payload.
+    for item in inventory["items"]:
+        item.pop("parent_qid", None)
+
+    assert gate.inventory_parent_task_count(inventory) == 26
+
+
 def test_applied_result_identity_rejects_source_or_taxonomy_drift():
     review = _review()
     inventory = _inventory()
@@ -283,6 +367,14 @@ def test_applied_result_identity_rejects_source_or_taxonomy_drift():
         ("case", "case_id"),
         ("case", "case_title"),
         ("case", "case_signature"),
+        ("case", "concept_match_hint"),
+        ("case", "parent_concept_match_hint"),
+        ("case", "topic_match_hint"),
+        ("case", "difficulty_hint"),
+        ("case", "cognitive_skill_hint"),
+        ("case", "subject_skill_hint"),
+        ("case_bool", "is_activity"),
+        ("case", "placement_scope"),
         ("inventory", "requires_visual"),
     ],
 )
@@ -309,6 +401,10 @@ def test_applied_result_identities_bind_every_immutable_semantic_field(
         changed_types["types"][0][field] += " changed"
     elif location == "case":
         changed_types["types"][0]["case_prompts"][0][field] += " changed"
+    elif location == "case_bool":
+        changed_types["types"][0]["case_prompts"][0][field] = not (
+            changed_types["types"][0]["case_prompts"][0][field]
+        )
     else:
         changed_inventory["items"][0][field] = not changed_inventory[
             "items"
@@ -471,13 +567,16 @@ def test_human_directed_consolidation_repauses_on_critic_review_band(
         "subject_skill_hint",
     ],
 )
-def test_human_directed_consolidation_rejects_type_semantic_drift_before_critic(
+def test_human_directed_consolidation_rejects_case_semantic_drift_before_critic(
     monkeypatch,
     field,
 ):
     original = _types(2)
-    original["types"][1][field] += " alternate"
+    original["types"][1]["case_prompts"][0][field] += " alternate"
     candidate = _merged_candidate(original)
+    candidate[0]["case_prompts"][1][field] = (
+        original["types"][0]["case_prompts"][0][field]
+    )
     calls = 0
 
     def fake_openai(*_args, **_kwargs):
@@ -632,21 +731,29 @@ def test_human_directed_consolidation_rejects_emitted_visual_semantic_drift(
     assert calls == 1
 
 
-def test_deterministic_type_merge_keeps_skill_profiles_distinct():
+def test_deterministic_type_merge_keeps_case_skill_profiles_distinct():
     original = _types(2)["types"]
     for field in ("type_title", "type_description", "task_pattern"):
         original[1][field] = original[0][field]
-    original[1]["difficulty_hint"] = "Advanced"
+    original[1]["case_prompts"][0]["difficulty_hint"] = "Advanced"
 
-    assert len(g._merge_equivalent_mined_types(original)) == 2
+    merged = g._merge_equivalent_mined_types(original)
+
+    assert len(merged) == 1
+    assert [
+        case["difficulty_hint"] for case in merged[0]["case_prompts"]
+    ] == ["Intermediate", "Advanced"]
 
 
 def test_ordinary_consolidation_also_rejects_immutable_semantic_drift(
     monkeypatch,
 ):
     original = _types(2)
-    original["types"][1]["cognitive_skill_hint"] = "Evaluate"
+    original["types"][1]["case_prompts"][0][
+        "cognitive_skill_hint"
+    ] = "Evaluate"
     candidate = _merged_candidate(original)
+    candidate[0]["case_prompts"][1]["cognitive_skill_hint"] = "Apply"
     monkeypatch.setattr(
         g,
         "_openai_json",
