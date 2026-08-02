@@ -90,6 +90,10 @@ _SOURCE_REVIEW_KEY = "human_source_review"
 _DOWNSTREAM_INVALIDATION_KEY = "downstream_invalidation_required"
 _MACHINE_METADATA_MIGRATION_KEY = "machine_metadata_sanitization"
 _MACHINE_METADATA_MIGRATION_VERSION = 1
+_ADJUDICATED_HEADING_MIGRATION_KEY = (
+    "adjudicated_heading_validation_migration"
+)
+_ADJUDICATED_HEADING_MIGRATION_VERSION = 1
 _NUMBERED_TOPIC_PATCH_VERSION = "phase3-canonical-topic-patch-1"
 
 _SPACE_RE = re.compile(r"\s+")
@@ -744,8 +748,148 @@ def _numbered_main_binding_rows(
             "expected_title": expected_title,
             "source_start": int(block.get("source_start") or 0),
             "resolution_mode": mode,
+            "heading_origin": (
+                "adjudicated_pdf"
+                if block.get("adjudicated_heading") is True
+                else "canonical_block"
+            ),
+            "heading_materialized_in_blocks": not bool(
+                block.get("adjudicated_heading") is True
+            ),
         })
     return bindings
+
+
+def _verified_adjudicated_heading_binding(
+    binding: Mapping[str, Any],
+    *,
+    canonical: Mapping[str, Any],
+) -> bool:
+    """Verify one PDF-recovered heading without inventing a graph block.
+
+    Phase 2.2 deliberately keeps recovered parent headings outside the raw
+    canonical block inventory.  They may stand in for a physical heading block
+    only when the section metadata, overlay, and verified adjudication ledger
+    all seal the same number, title, repair, source offset, and PDF page.
+    """
+
+    if (
+        str(binding.get("heading_origin") or "") != "adjudicated_pdf"
+        or binding.get("heading_materialized_in_blocks") is not False
+    ):
+        return False
+    number = str(binding.get("number") or "")
+    section_id = str(binding.get("resolved_section_id") or "")
+    expected_title = str(binding.get("expected_title") or "")
+    if (
+        not number.isdigit()
+        or not section_id
+        or str(binding.get("claimed_section_id") or "") != section_id
+        or str(binding.get("block_id") or "")
+        != f"ADJUDICATED-{section_id}"
+    ):
+        return False
+    section = next(
+        (
+            row
+            for row in canonical.get("sections") or []
+            if isinstance(row, Mapping)
+            and str(row.get("section_id") or "") == section_id
+        ),
+        None,
+    )
+    if not isinstance(section, Mapping):
+        return False
+    adjudicated = section.get("adjudicated_heading")
+    if not isinstance(adjudicated, Mapping):
+        return False
+    repair_id = str(adjudicated.get("repair_id") or "")
+    raw_text = str(adjudicated.get("raw_text") or "")
+    try:
+        section_number = int(adjudicated.get("section_number") or 0)
+        page_number = int(adjudicated.get("page_number") or 0)
+    except (TypeError, ValueError):
+        return False
+    _raw_number, raw_title = _title_number(
+        adjudicated.get("title"), raw_text)
+    adjudicated_main_sections = canonical.get("adjudicated_main_sections")
+    if not isinstance(adjudicated_main_sections, Mapping):
+        return False
+    if (
+        section_number != int(number)
+        or page_number <= 0
+        or not repair_id
+        or _semantic_title_key(raw_title or adjudicated.get("title"))
+        != _semantic_title_key(expected_title)
+        or _semantic_title_key(section.get("title"))
+        != _semantic_title_key(expected_title)
+        or str(adjudicated_main_sections.get(number) or "") != section_id
+    ):
+        return False
+    overlay = next(
+        (
+            row
+            for row in canonical.get("source_overlays") or []
+            if isinstance(row, Mapping)
+            and str(row.get("repair_id") or "") == repair_id
+            and str(row.get("kind") or "") == "missing_parent_heading"
+        ),
+        None,
+    )
+    overlay_text = str((overlay or {}).get("text") or "")
+    try:
+        raw_overlay_offset = (
+            overlay.get("offset") if isinstance(overlay, Mapping) else None
+        )
+        overlay_offset = (
+            int(raw_overlay_offset)
+            if raw_overlay_offset is not None
+            else -1
+        )
+        section_start = int(section.get("source_start") or 0)
+    except (TypeError, ValueError):
+        return False
+    if (
+        not isinstance(overlay, Mapping)
+        or overlay_offset != section_start
+        or str(overlay.get("text_sha256") or "")
+        != _sha256_text(overlay_text)
+        or not raw_text
+        or raw_text not in overlay_text
+    ):
+        return False
+    marker = canonical.get("source_adjudication")
+    if not isinstance(marker, Mapping) or (
+        str(marker.get("version") or "") != phase22.ADJUDICATION_VERSION
+        or str(marker.get("status") or "") != "verified"
+        or marker.get("raw_mmd_changed") is not False
+    ):
+        return False
+    decision = next(
+        (
+            row
+            for row in marker.get("decisions") or []
+            if isinstance(row, Mapping)
+            and str(row.get("issue_type") or "")
+            == "missing_parent_section"
+            and str(row.get("status") or "") == "verified"
+            and isinstance(row.get("provenance"), Mapping)
+            and str(row["provenance"].get("repair_id") or "") == repair_id
+        ),
+        None,
+    )
+    if not isinstance(decision, Mapping):
+        return False
+    provenance = decision["provenance"]
+    try:
+        provenance_page = int(provenance.get("page_number") or 0)
+    except (TypeError, ValueError):
+        return False
+    return bool(
+        provenance.get("raw_mmd_changed") is False
+        and provenance_page == page_number
+        and str(provenance.get("recovered_text") or "") == raw_text
+    )
 
 
 def _classification_payload(
@@ -4353,16 +4497,27 @@ def _numbered_main_topic_mismatches(
         heading_block = graph_blocks_by_id.get(
             str(binding.get("block_id") or "")
         )
-        if not isinstance(heading_block, dict) or (
-            str(heading_block.get("section_id") or "") != section_id
-        ):
-            reasons.append("heading_block_section_mismatch")
-        if isinstance(topic, dict) and (
-            not isinstance(heading_block, dict)
-            or str(heading_block.get("topic_id") or "")
-            != str(topic.get("topic_id") or "")
-        ):
-            reasons.append("heading_block_topic_mismatch")
+        adjudicated_heading = (
+            str(binding.get("heading_origin") or "")
+            == "adjudicated_pdf"
+        )
+        if adjudicated_heading:
+            if not _verified_adjudicated_heading_binding(
+                binding,
+                canonical=canonical,
+            ):
+                reasons.append("invalid_adjudicated_heading_provenance")
+        else:
+            if not isinstance(heading_block, dict) or (
+                str(heading_block.get("section_id") or "") != section_id
+            ):
+                reasons.append("heading_block_section_mismatch")
+            if isinstance(topic, dict) and (
+                not isinstance(heading_block, dict)
+                or str(heading_block.get("topic_id") or "")
+                != str(topic.get("topic_id") or "")
+            ):
+                reasons.append("heading_block_topic_mismatch")
         if (
             isinstance(topic, dict)
             and not reasons
@@ -4450,7 +4605,8 @@ def validate_graph(
                 + "; ".join(
                     f"{row.get('number')} {row.get('expected_title')}"
                     f" [expected section {row.get('resolved_section_id')}; "
-                    f"actual section {row.get('actual_section_id') or 'missing'}]"
+                    f"actual section {row.get('actual_section_id') or 'missing'}; "
+                    f"reasons {','.join(row.get('reasons') or [])}]"
                     for row in numbered_mismatches
                 )
             ),
@@ -5771,6 +5927,136 @@ def _migrate_machine_metadata_semantic_source(
     return graph, semantic_source
 
 
+def _migrate_adjudicated_heading_validation_false_positive(
+    value: Any,
+    *,
+    canonical: dict[str, Any],
+    semantic_source: str,
+) -> dict[str, Any] | None:
+    """Revalidate one API-verified graph rejected only for a pseudo block.
+
+    Compiler v2 briefly required the intentionally non-materialized Phase 2.2
+    heading ID to appear in ``graph.blocks``.  This migration is deliberately
+    narrower than a general issue reset: every saved mismatch must describe
+    only those impossible physical-block checks, the current canonical repair
+    ledger must still verify the adjudicated heading, and the entire graph must
+    pass the current validator before its stale error is cleared.
+    """
+
+    if not isinstance(value, dict) or (
+        value.get("status") not in {"failed", "review_required"}
+        or value.get("classification_mode")
+        != "api_classified_and_verified"
+        or value.get(_SOURCE_REVIEW_KEY) is not None
+        or value.get("semantic_source_sha256")
+        != _sha256_text(semantic_source)
+    ):
+        return None
+    error_issues = [
+        row
+        for row in value.get("issues") or []
+        if isinstance(row, dict) and row.get("severity") == "error"
+    ]
+    if not error_issues or {
+        str(row.get("code") or "") for row in error_issues
+    } != {"numbered_main_topic_coverage"}:
+        return None
+    mismatches: list[Mapping[str, Any]] = []
+    for issue in error_issues:
+        raw_mismatches = issue.get("mismatches")
+        if (
+            not isinstance(raw_mismatches, list)
+            or not raw_mismatches
+            or any(
+                not isinstance(mismatch, Mapping)
+                for mismatch in raw_mismatches
+            )
+        ):
+            return None
+        mismatches.extend(raw_mismatches)
+    current_bindings = _numbered_main_binding_rows(canonical)
+    allowed_stale_reasons = {
+        "heading_block_section_mismatch",
+        "heading_block_topic_mismatch",
+    }
+    migrated_bindings: list[dict[str, Any]] = []
+    for mismatch in mismatches:
+        binding = next(
+            (
+                row
+                for row in current_bindings
+                if str(row.get("number") or "")
+                == str(mismatch.get("number") or "")
+                and str(row.get("resolved_section_id") or "")
+                == str(mismatch.get("resolved_section_id") or "")
+                and str(row.get("block_id") or "")
+                == str(mismatch.get("block_id") or "")
+            ),
+            None,
+        )
+        reasons = {
+            str(reason) for reason in mismatch.get("reasons") or [] if reason
+        }
+        if (
+            not isinstance(binding, Mapping)
+            or not reasons
+            or not reasons.issubset(allowed_stale_reasons)
+            or not _verified_adjudicated_heading_binding(
+                binding,
+                canonical=canonical,
+            )
+            or str(mismatch.get("actual_section_id") or "")
+            != str(binding.get("resolved_section_id") or "")
+            or _semantic_title_key(mismatch.get("actual_title"))
+            != _semantic_title_key(binding.get("expected_title"))
+            or str(mismatch.get("actual_structural_number") or "")
+            != str(binding.get("number") or "")
+        ):
+            return None
+        migrated_bindings.append(copy.deepcopy(dict(binding)))
+    graph = copy.deepcopy(value)
+    if validate_graph(
+        graph,
+        canonical=canonical,
+        semantic_source=semantic_source,
+    ):
+        return None
+    retained = [
+        copy.deepcopy(issue)
+        for issue in graph.get("issues") or []
+        if isinstance(issue, dict) and issue.get("severity") != "error"
+    ]
+    migration_material = {
+        "version": _ADJUDICATED_HEADING_MIGRATION_VERSION,
+        "source_contract_hash": str(graph.get("source_contract_hash") or ""),
+        "semantic_context_hash": str(
+            graph.get("semantic_context_hash") or ""
+        ),
+        "semantic_source_sha256": _sha256_text(semantic_source),
+        "bindings": migrated_bindings,
+    }
+    migration_hash = _sha256_json(migration_material)
+    graph[_ADJUDICATED_HEADING_MIGRATION_KEY] = {
+        **migration_material,
+        "migration_sha256": migration_hash,
+    }
+    graph["issues"] = [
+        *retained,
+        {
+            "severity": "warning",
+            "code": "adjudicated_heading_validation_migrated",
+            "message": (
+                "Revalidated the API-verified graph against the sealed Phase "
+                "2.2 PDF heading; no source, hierarchy, or topic identity was "
+                "changed."
+            ),
+            "migration_sha256": migration_hash,
+        },
+    ]
+    graph["status"] = "ready"
+    return graph
+
+
 def machine_metadata_migration_seal_valid(
     value: Any,
     *,
@@ -5900,6 +6186,16 @@ def _compatible_source_review_graph(
         if migrated is None:
             return None
         graph, semantic_source = migrated
+    if graph.get("status") != "ready":
+        migrated_heading = (
+            _migrate_adjudicated_heading_validation_false_positive(
+                graph,
+                canonical=canonical,
+                semantic_source=semantic_source,
+            )
+        )
+        if migrated_heading is not None:
+            graph = migrated_heading
     if graph.get("status") == "ready":
         if graph.get(_SOURCE_REVIEW_KEY) is not None:
             return None
@@ -6250,12 +6546,20 @@ def prepare_generation_graph(
                 page_bundle=page_bundle,
             )
             if graph.get("status") == "ready":
-                progress.log(
-                    "Applied the saved human source decision from verified "
-                    "PDF evidence; semantic generation is continuing without "
-                    "repeating hierarchy calls.",
-                    level="success",
-                )
+                if graph.get(_ADJUDICATED_HEADING_MIGRATION_KEY):
+                    progress.log(
+                        "Revalidated the existing API-verified Phase 3 graph "
+                        "against the sealed Phase 2.2 PDF heading; no hierarchy "
+                        "model call was repeated.",
+                        level="success",
+                    )
+                else:
+                    progress.log(
+                        "Applied the saved human source decision from verified "
+                        "PDF evidence; semantic generation is continuing without "
+                        "repeating hierarchy calls.",
+                        level="success",
+                    )
                 if isinstance(session, dict):
                     session["graph"] = graph
                 return graph
