@@ -209,6 +209,22 @@ def _legacy_candidate_matches_current(
                 or saved_text == current_text
             )
         )
+    # Content-addressed replay guard: display text alone is not identity. A
+    # saved candidate that carries evidence edges or a content digest may only
+    # be replayed against a current candidate with the exact same evidence,
+    # otherwise a stale direction could re-assert an outdated evidence mapping
+    # onto a repaired unit.
+    saved_blocks = _candidate_block_ids(saved)
+    if saved_blocks and saved_blocks != _candidate_block_ids(current):
+        return False
+    saved_text_hash = str(saved.get("text_sha256") or "")
+    current_text_hash = str(current.get("text_sha256") or "")
+    if (
+        saved_text_hash
+        and current_text_hash
+        and saved_text_hash != current_text_hash
+    ):
+        return False
     return all(
         _normal(saved.get(field)) == _normal(current.get(field))
         for field in ("title", "topic", "coverage", "gap")
@@ -381,7 +397,15 @@ def resolution_for(
     )
     for raw in reversed(_resolution_rows()):
         status = str(raw.get("status") or "").strip().casefold()
-        if status in {"pending", "awaiting_decision", "cancelled", "rejected"}:
+        if status in {
+            "pending",
+            "awaiting_decision",
+            "cancelled",
+            "rejected",
+            # A semantic repair rewrote the unit this direction was recorded
+            # against; the retired certificate must never be replayed.
+            "superseded",
+        }:
             continue
         if str(raw.get("kind") or "") != kind:
             continue

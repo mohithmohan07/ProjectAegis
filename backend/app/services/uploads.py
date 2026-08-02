@@ -324,7 +324,19 @@ def persist_current_generation_log(
                 "frames": frames,
             },
         }
-        events.append(diagnostic)
+        # Terminal idempotency: one failure produces exactly one persisted
+        # terminal event. The recovery runner (or a prior persistence call)
+        # may already have emitted this same terminal reason as an error log;
+        # do not append an identical duplicate.
+        already_terminal = any(
+            event.get("type") == "log"
+            and event.get("level") == "error"
+            and reason
+            and reason in str(event.get("message") or "")
+            for event in events[-5:]
+        )
+        if not already_terminal:
+            events.append(diagnostic)
         job.detail = f"Generation failed: {reason}{where}"
     job.generation_log = events[-1200:]
     db.commit()
