@@ -26,6 +26,11 @@ def _simple_schema() -> dict:
     }
 
 
+def test_max_reasoning_compacts_on_structured_output_turnover():
+    assert phase34._downgraded_reasoning("max", 1) == "xhigh"
+    assert phase34._downgraded_reasoning("max", 2) == "high"
+
+
 def test_completion_limit_escalates_budget_and_finishes(monkeypatch):
     import openai
 
@@ -115,6 +120,98 @@ def test_complete_json_is_accepted_despite_length_marker(monkeypatch):
 
     assert result == {"ok": True}
     assert calls == 1
+    generation._openai_gate = None
+
+
+def test_incomplete_object_at_provider_max_retries_same_allowance(monkeypatch):
+    import openai
+
+    calls: list[dict] = []
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=self.create)
+            )
+
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            content = (
+                "{}" if len(calls) == 1 else json.dumps({"ok": True})
+            )
+            return SimpleNamespace(
+                choices=[SimpleNamespace(
+                    message=SimpleNamespace(content=content, refusal=None),
+                    finish_reason="length" if len(calls) == 1 else "stop",
+                )]
+            )
+
+    monkeypatch.setattr(openai, "OpenAI", Client)
+    monkeypatch.setattr(config, "OPENAI_MAX_OUTPUT_TOKENS", 128_000)
+    generation._openai_gate = None
+
+    result = phase34._resilient_openai_multimodal_json(
+        system="Return strict JSON.",
+        prompt="payload",
+        pages=[],
+        response_schema=_simple_schema(),
+        purpose="concept_mapping",
+        max_tokens=128_000,
+        model="gpt-5.6-terra",
+    )
+
+    assert result == {"ok": True}
+    assert [call["max_completion_tokens"] for call in calls] == [
+        128_000,
+        128_000,
+    ]
+    assert all(call["model"] == "gpt-5.6-terra" for call in calls)
+    assert "STRUCTURED OUTPUT RECOVERY" in (
+        calls[1]["messages"][0]["content"]
+    )
+    generation._openai_gate = None
+
+
+def test_incomplete_object_at_provider_max_has_bounded_terminal(monkeypatch):
+    import openai
+
+    calls: list[dict] = []
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=self.create)
+            )
+
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                choices=[SimpleNamespace(
+                    message=SimpleNamespace(content="{}", refusal=None),
+                    finish_reason="length",
+                )]
+            )
+
+    monkeypatch.setattr(openai, "OpenAI", Client)
+    monkeypatch.setattr(config, "OPENAI_MAX_OUTPUT_TOKENS", 128_000)
+    monkeypatch.setenv("AEGIS_STRUCTURED_JSON_MAX_TRUNCATION_RETRIES", "2")
+    generation._openai_gate = None
+
+    with pytest.raises(
+        phase34._TerminalStructuredOutputError,
+        match="after 3 bounded response",
+    ):
+        phase34._resilient_openai_multimodal_json(
+            system="Return strict JSON.",
+            prompt="payload",
+            pages=[],
+            response_schema=_simple_schema(),
+            purpose="concept_mapping",
+            max_tokens=128_000,
+        )
+
+    assert len(calls) == 3
+    assert all(call["max_completion_tokens"] == 128_000 for call in calls)
     generation._openai_gate = None
 
 

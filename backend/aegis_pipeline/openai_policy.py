@@ -1,10 +1,12 @@
 """Central OpenAI model, reasoning, and token-capacity policy for Aegis.
 
 Callers identify the business purpose of a request; this module owns the
-quality/cost policy and the provider-capacity contract.  Production treats the
+quality/cost policy and the provider-capacity contract. Production treats the
 configured model's documented context and completion capacity as hard ceilings.
-Smaller purpose-specific budgets remain authoritative; input that cannot fit a
-bounded request must be losslessly batched rather than silently dropped.
+The low-level clamp remains useful to offline callers, while the installed Aegis
+web contract promotes live GPT calls to the full safe completion allowance.
+Input that cannot fit a bounded request must be losslessly batched rather than
+silently dropped.
 """
 from __future__ import annotations
 
@@ -50,20 +52,22 @@ OpenAIPurpose = Literal[
     "concept_mapping",
     "concept_detailing",
     "concept_validation",
+    "semantic_resolution",
     "pre_learning",
     "workbook_planning",
     "workbook_authoring",
     "metadata",
 ]
-ReasoningEffort = Literal["low", "medium", "high", "xhigh"]
+ReasoningEffort = Literal["low", "medium", "high", "xhigh", "max"]
 
 
 # Low: compact classification/metadata work.
 # Medium: grounded extraction and bounded content drafting.
 # High: cross-row reconciliation and long-form planning/authoring.
-# Xhigh: bounded validation/repair passes where missed defects are most costly.
-# ``max`` is intentionally reserved until evaluations show a material quality
-# gain that justifies its additional latency and token cost.
+# Xhigh: bounded validation/repair passes where missed defects are costly.
+# Max: the final agentic pathway decision after ordinary semantic validation
+# has already disagreed; this is precisely where additional deliberation can
+# replace repeated human review without weakening source-integrity checks.
 REASONING_EFFORT_BY_PURPOSE: Final[dict[OpenAIPurpose, ReasoningEffort]] = {
     "assessment_generation": "medium",
     "source_extraction": "medium",
@@ -71,6 +75,7 @@ REASONING_EFFORT_BY_PURPOSE: Final[dict[OpenAIPurpose, ReasoningEffort]] = {
     "concept_mapping": "high",
     "concept_detailing": "medium",
     "concept_validation": "xhigh",
+    "semantic_resolution": "max",
     "pre_learning": "high",
     "workbook_planning": "high",
     "workbook_authoring": "high",

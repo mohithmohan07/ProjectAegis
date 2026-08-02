@@ -1,17 +1,15 @@
-"""Phase 3.5 provider-capacity ceiling contract.
+"""Phase 3.5 provider-capacity allowance contract.
 
-The provider's documented input and output limits are safety ceilings, not a
-reason to inflate every request to the largest possible payload.  Earlier
-Phase 3.5 behavior requested the maximum completion allowance for every live
-call and replaced bounded hierarchy, grounding, topology, and Type-host
-evidence views with full bodies.  That repeated source text across semantic
-passes, increased reasoning spend, and did not add independent verification.
+The provider's documented input and output limits are independent: bounded
+source packets protect the input window, while ``max_completion_tokens`` is an
+allowance rather than a request to manufacture that many output tokens.  A
+small completion allowance can make a reasoning model exhaust its budget before
+it emits a complete strict object even when the input packet is safely bounded.
 
-In live provider-capacity mode this contract:
+In live provider-capacity mode this contract therefore:
 
-* clamps each requested completion allowance to the provider maximum while
-  preserving a smaller purpose-specific request;
-* uses the provider maximum only when a caller genuinely supplies no budget;
+* gives every active web GPT call the configured provider-max completion
+  allowance, including callers that historically supplied a smaller budget;
 * keeps the existing bounded evidence projections for hierarchy, grounding,
   topology, and Type-host review;
 * leaves the durable canonical source untouched and retains lossless MMD
@@ -26,6 +24,8 @@ from __future__ import annotations
 from functools import wraps
 from typing import Any
 
+from aegis_pipeline.openai_policy import provider_token_capacity
+
 from .. import config
 from . import canonical_source_phase22 as phase22
 from . import canonical_source_phase3 as phase3
@@ -33,7 +33,7 @@ from . import canonical_source_phase34_structured_output_contract as phase34
 from . import generation
 from . import progress
 
-_CONTRACT_VERSION = 3
+_CONTRACT_VERSION = 4
 
 
 def _active() -> bool:
@@ -43,11 +43,25 @@ def _active() -> bool:
     )
 
 
-def _bounded_completion(requested: int | None) -> int:
-    maximum = max(1, int(config.OPENAI_MAX_OUTPUT_TOKENS))
-    if requested is None:
-        return maximum
-    return max(1, min(int(requested), maximum))
+def _bounded_completion(
+    requested: int | None,
+    *,
+    model: str | None = None,
+) -> int:
+    """Return the live provider allowance, never an unsafe caller override.
+
+    ``requested`` remains part of the wrapper signature for compatibility with
+    the many purpose-specific call sites.  In active provider-capacity mode a
+    smaller value must not silently reinstate the truncation failure this
+    contract prevents; an oversized value is likewise clamped to the model's
+    configured maximum.
+    """
+    model_maximum = provider_token_capacity(model).max_output_tokens
+    maximum = max(
+        1,
+        min(int(config.OPENAI_MAX_OUTPUT_TOKENS), int(model_maximum)),
+    )
+    return maximum
 
 
 def _log_policy_once() -> None:
@@ -63,8 +77,8 @@ def _log_policy_once() -> None:
     else:
         generation._PHASE35_PROVIDER_CEILING_LOGGED = True
     progress.log(
-        "Provider-capacity ceiling active: request-specific completion budgets "
-        f"are capped at {config.OPENAI_MAX_OUTPUT_TOKENS:,} tokens; bounded "
+        "Provider-capacity allowance active: GPT completion headroom is set to "
+        f"the configured {config.OPENAI_MAX_OUTPUT_TOKENS:,}-token maximum; bounded "
         "evidence packets remain active, while durable canonical source and "
         "lossless batching preserve recoverability.",
         level="success",
@@ -133,10 +147,15 @@ def install() -> None:
         purpose: str = "source_adjudication",
         max_tokens: int = phase22._MAX_OUTPUT_TOKENS,
         single_attempt: bool = False,
+        model: str | None = None,
     ) -> dict[str, Any]:
         _log_policy_once()
-        effective = _bounded_completion(max_tokens) if _active() else max_tokens
-        return phase22._PHASE35_ORIGINAL_OPENAI_MULTIMODAL_JSON(
+        effective = (
+            _bounded_completion(max_tokens, model=model)
+            if _active()
+            else max_tokens
+        )
+        kwargs = dict(
             system=system,
             prompt=prompt,
             pages=pages,
@@ -145,6 +164,11 @@ def install() -> None:
             max_tokens=effective,
             single_attempt=single_attempt,
         )
+        # Older test/injected callables did not expose model selection. Preserve
+        # that compatibility unless a caller explicitly requests an override.
+        if model:
+            kwargs["model"] = model
+        return phase22._PHASE35_ORIGINAL_OPENAI_MULTIMODAL_JSON(**kwargs)
 
     phase22._openai_multimodal_json = multimodal_provider_ceiling
 
@@ -155,11 +179,12 @@ def install() -> None:
     )
     phase34._PHASE35_ORIGINAL_COMPLETION_CAP = original_completion_cap
 
-    def completion_cap(initial: int) -> int:
-        configured = phase34._PHASE35_ORIGINAL_COMPLETION_CAP(initial)
+    def completion_cap(initial: int, *, model: str | None = None) -> int:
         if _active():
-            return min(int(configured), int(config.OPENAI_MAX_OUTPUT_TOKENS))
-        return configured
+            return _bounded_completion(initial, model=model)
+        # The stored callable may come from a pre-v4 long-lived interpreter and
+        # expose only the historical single positional argument.
+        return phase34._PHASE35_ORIGINAL_COMPLETION_CAP(initial)
 
     phase34._completion_cap = completion_cap
 

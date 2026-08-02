@@ -2403,7 +2403,9 @@ def _autonomously_resolve_pending_decision(
         return None
     checkpoint = copy.deepcopy(job.generation_checkpoint or {})
     issue_key = autonomous_resolution.issue_key(pending)
-    capability_key = autonomous_resolution.capability_key(pending)
+    capability_key = autonomous_resolution.capability_key(
+        pending, checkpoint=checkpoint
+    )
     offered_candidate_count = len([
         row for row in pending.get("candidates") or []
         if isinstance(row, dict)
@@ -2424,6 +2426,18 @@ def _autonomously_resolve_pending_decision(
         current_capability_key = str(
             current_review.get("capability_key") or ""
         )
+        if (
+            current_status == "escalated"
+            and str(current_review.get("reason") or "").startswith(
+                "Aegis saved an autonomous action, but the previous worker "
+                "ended before a later checkpoint proved"
+            )
+        ):
+            # This is not a critic pathway turnover: the identical decision
+            # reappeared after a crash at an unknowable boundary. Reapplying
+            # it could duplicate a downstream write, so preserve the explicit
+            # crash-recovery stop instead of billing or mutating again.
+            return None
         if current_status in {"request_started", "resolved"}:
             # Unknown outcomes and saved directives are never replayed.
             return None
@@ -2441,55 +2455,66 @@ def _autonomously_resolve_pending_decision(
     )
     if upgrading_current_review and any(
         str(row.get("issue_key") or "") == issue_key
-        and (
-            str(row.get("capability_key") or "") == capability_key
-            or str(row.get("status") or "") in {
-                "request_started", "resolved"
-            }
-        )
+        and str(row.get("capability_key") or "") == capability_key
         for row in prior_history
     ):
         progress.log(
-            "The upgraded resolver workspace was already used, or a prior "
-            "agent action for this semantic scope already ran. Aegis kept "
-            "the saved pause without another request.",
+            "This exact upgraded resolver workspace was already inspected; "
+            "Aegis kept its checkpoint without repeating the same request.",
+            level="warning",
+        )
+        return None
+    same_scope_attempts = [
+        row for row in attempted
+        if str(row.get("issue_key") or "") == issue_key
+    ]
+    if deterministic_result is None and any(
+        str(row.get("capability_key") or "") == capability_key
+        for row in same_scope_attempts
+    ):
+        # Identical evidence + critic state + prior-pathway history is a true
+        # loop. A changed critic conclusion, evidence set, or prior action has
+        # a different capability key and is sent back to Terra below.
+        progress.log(
+            "This exact semantic workspace was already inspected; Aegis "
+            "did not repeat an identical model request.",
             level="warning",
         )
         return None
     if (
         deterministic_result is None
-        and not upgrading_current_review
-        and any(
-            str(row.get("issue_key") or "") == issue_key
-            for row in attempted
-        )
+        and len(same_scope_attempts)
+        >= autonomous_resolution.maximum_pathway_turns()
     ):
         now = _agent_review_timestamp()
         reason = (
-            "A prior autonomous action for this same semantic scope did not "
-            "finish the issue. Aegis stopped instead of spending on a loop."
+            "This semantic scope exhausted its distinct autonomous repair "
+            "pathways. The checkpoint is preserved because continuing would "
+            "repeat an ineffective action rather than improve the output."
         )
-        _persist_pending_agent_review(
-            db,
-            job,
-            decision_id=pending["decision_id"],
-            context_hash=pending["context_hash"],
-            review={
-                "status": "escalated",
-                "resolver_version": autonomous_resolution.RESOLVER_VERSION,
-                "issue_key": issue_key,
-                **workspace_audit,
-                "started_at": now,
-                "completed_at": now,
-                "reason": reason,
-            },
-            owner_sub=owner_sub,
-        )
+        if not upgrading_current_review:
+            _persist_pending_agent_review(
+                db,
+                job,
+                decision_id=pending["decision_id"],
+                context_hash=pending["context_hash"],
+                review={
+                    "status": "escalated",
+                    "resolver_version": (
+                        autonomous_resolution.RESOLVER_VERSION
+                    ),
+                    "issue_key": issue_key,
+                    **workspace_audit,
+                    "started_at": now,
+                    "completed_at": now,
+                    "reason": reason,
+                },
+                owner_sub=owner_sub,
+            )
         progress.log(reason, level="warning")
         return None
     if (
         deterministic_result is None
-        and not upgrading_current_review
         and len(attempted) >= autonomous_resolution.maximum_decisions()
     ):
         now = _agent_review_timestamp()
@@ -2582,13 +2607,18 @@ def _autonomously_resolve_pending_decision(
             label="Resolution agent — reviewing discrepancy",
         )
         progress.log(
-            "Resolution agent is checking the exact MMD, checkpoint, "
-            "candidates, Types and QIDs once.",
+            "Resolution agent is checking the canonical working source, "
+            "checkpoint, candidates, Types and QIDs; it may expand the exact "
+            "issue evidence once before choosing the safest continuation.",
             level="warning",
         )
         result = autonomous_resolution.resolve_pending(
             pending,
-            source_text=job.mmd_text,
+            # Generation consumes the verified Phase 2.2/Phase 3 rendering,
+            # not the immutable Mathpix audit copy.  Resolution must inspect
+            # that same source contract or a displaced raw-MMD sidebar can
+            # hide the very blocks that support the generated claim.
+            source_text=_semantic_recovery_source_text(job.mmd_text),
             checkpoint=copy.deepcopy(job.generation_checkpoint or {}),
         )
     completed_at = _agent_review_timestamp()

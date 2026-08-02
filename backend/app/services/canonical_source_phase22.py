@@ -576,6 +576,7 @@ def _openai_multimodal_json(
     purpose: str = "source_adjudication",
     max_tokens: int = _MAX_OUTPUT_TOKENS,
     single_attempt: bool = False,
+    model: str | None = None,
 ) -> dict[str, Any]:
     """One bounded strict-schema multimodal call using Aegis controls."""
     from openai import (
@@ -609,7 +610,8 @@ def _openai_multimodal_json(
         APITimeoutError,
         InternalServerError,
     )
-    request_policy = chat_request_policy(purpose, model=config.OPENAI_MODEL)
+    selected_model = str(model or config.OPENAI_MODEL)
+    request_policy = chat_request_policy(purpose, model=selected_model)
     client = OpenAI(timeout=config.OPENAI_REQUEST_TIMEOUT_SECONDS, max_retries=0)
     gate = generation._get_openai_gate()
     transient = 0

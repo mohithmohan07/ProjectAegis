@@ -14,7 +14,7 @@ from decimal import Decimal
 from typing import Any, Iterator
 
 
-PRICING_AS_OF = "2026-07-22"
+PRICING_AS_OF = "2026-08-02"
 DEFAULT_PRICING_SOURCE = "https://developers.openai.com/api/docs/pricing"
 
 
@@ -34,6 +34,19 @@ class Pricing:
 # covers both aliases and dated snapshots (for example gpt-5.4-mini-2026-03-17).
 _PRICING: tuple[tuple[str, Pricing], ...] = (
     (
+        "gpt-5.6-terra",
+        Pricing(
+            Decimal("2.00"),
+            Decimal("0.20"),
+            Decimal("12.00"),
+            "https://developers.openai.com/api/docs/models/gpt-5.6-terra",
+            cache_write_multiplier=Decimal("1.25"),
+            long_context_threshold=272_000,
+            long_input_multiplier=Decimal("2"),
+            long_output_multiplier=Decimal("1.5"),
+        ),
+    ),
+    (
         "gpt-5.4-mini",
         Pricing(
             Decimal("0.75"),
@@ -45,9 +58,9 @@ _PRICING: tuple[tuple[str, Pricing], ...] = (
     (
         "gpt-5.6-luna",
         Pricing(
-            Decimal("1.00"),
-            Decimal("0.10"),
-            Decimal("6.00"),
+            Decimal("0.20"),
+            Decimal("0.02"),
+            Decimal("1.20"),
             "https://developers.openai.com/api/docs/models/gpt-5.6-luna",
             cache_write_multiplier=Decimal("1.25"),
             long_context_threshold=272_000,
