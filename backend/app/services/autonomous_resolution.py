@@ -176,10 +176,10 @@ def is_automatable_choice(choice: object) -> bool:
 def unattended_completion_enabled() -> bool:
     """Whether escalations degrade to the safest offered action, not a pause.
 
-    Unattended completion applies the exact bounded action the review UI
-    would highlight as recommended (or an explicit keep/no-change candidate)
-    when the resolver cannot certify a stronger action. Source replacement
-    and custom instructions always remain user-only.
+    Unattended completion may apply an explicit keep/no-change action, an
+    independently certified recommendation, or a source-preserving Phase 3.3
+    ``create_new`` fallback. A UI recommendation alone is not authority.
+    Source replacement and custom instructions always remain user-only.
     """
 
     raw = os.environ.get("AEGIS_UNATTENDED_COMPLETION", "1")
@@ -189,110 +189,77 @@ def unattended_completion_enabled() -> bool:
 def safe_continuation_option(
     pending: Mapping[str, Any],
 ) -> dict[str, str] | None:
-    """Deterministically choose the safest offered action for one decision.
+    """Choose only a quality-preserving unattended continuation.
 
-    Preference order, all restricted to server-offered automatable actions:
+    A review option is an offered route, not proof that the route is
+    semantically correct.  In particular, neither list order nor the UI's
+    ``recommended`` flag certifies an existing concept as the right host.
+    The deterministic fallback therefore has a deliberately narrow order:
 
-    1. the recommended option, when its target is resolvable;
-    2. the single explicit keep/no-change candidate route;
-    3. the first offered automatable action in server order, binding a
-       candidate-selecting choice to the safest resolvable candidate.
+    1. an explicit keep/no-change route;
+    2. an independently verified, hash-sealed recommendation already carried
+       by the pending payload;
+    3. ``create_new`` for a Phase 3.3 host conflict, where no existing host
+       was certified.
 
-    Tier 3 exists because unattended completion must not depend on the
-    server having marked a recommendation: every offered action is already a
-    bounded, evidence-checked route the pipeline itself proposed, and taking
-    the first one deterministically is exactly what clicking through the
-    review panel would do.
-
-    Returns None only when no bounded automatable action exists at all — for
-    example when the decision's only routes are source replacement or a
-    custom instruction. The caller must keep the human pause in that case.
+    Ambiguous selections, consolidation, expansion and arbitrary first
+    candidates are left to the evidence-bounded resolver.  If it cannot
+    certify one, this helper returns ``None`` instead of manufacturing trust.
     """
 
     candidates = [
         row for row in pending.get("candidates") or []
         if isinstance(row, Mapping)
     ]
-    candidate_target_ids = {
-        str(row.get("target_id") or "") for row in candidates
-    } - {""}
-    candidate_concept_ids = {
-        str(row.get("concept_id") or "") for row in candidates
-    } - {""}
     options = [
         row for row in pending.get("options") or []
         if isinstance(row, Mapping)
     ]
+    options_by_choice = {
+        str(row.get("choice") or ""): row
+        for row in options
+        if str(row.get("choice") or "")
+    }
+
+    # Keeping the current distinct Types is the only targetless option whose
+    # semantics explicitly mean no mutation.  Do not infer safety from a
+    # display label or from ``recommended=True``.
+    if "keep_distinct_types" in options_by_choice:
+        return {
+            "choice": "keep_distinct_types",
+            "target_id": "",
+            "target_concept_id": "",
+        }
+
     keep_candidates = [
         row for row in candidates
         if _normal(row.get("action")) == "keep"
         and str(row.get("target_id") or "")
+        and early_semantic_gate.candidate_binding_is_valid(row)
     ]
 
-    def fallback_candidate(field: str) -> Mapping[str, Any] | None:
-        """Prefer an explicit keep route, else the first offered candidate.
-
-        ``field`` is the identity the chosen action needs: candidate-selector
-        actions bind ``target_id`` while existing-concept actions bind
-        ``concept_id``. Phase 3.3 host conflicts, for example, offer concepts
-        that carry only ``concept_id``.
-        """
-
-        if len(keep_candidates) == 1 and str(
-            keep_candidates[0].get(field) or ""
-        ):
-            return keep_candidates[0]
-        for row in candidates:
-            if str(row.get(field) or ""):
-                return row
-        return None
-
-    def selection(
-        row: Mapping[str, Any],
-        *,
-        bind_candidate: bool = False,
-    ) -> dict[str, str] | None:
-        choice = str(row.get("choice") or "").strip()
-        if not is_automatable_choice(choice):
-            return None
-        target_id = str(row.get("target_id") or "").strip()
-        target_concept_id = str(row.get("target_concept_id") or "").strip()
-        if choice in {"accept_recommended", "select_candidate"}:
-            if target_id not in candidate_target_ids:
-                # ``accept_recommended`` is validated against the option's own
-                # recommended target downstream, so it can never be rebound to
-                # a different candidate here.
-                if not bind_candidate or choice == "accept_recommended":
-                    return None
-                bound = fallback_candidate("target_id")
-                if bound is None:
-                    return None
-                target_id = str(bound.get("target_id") or "")
-                target_concept_id = str(bound.get("concept_id") or "")
-        if choice in {"expand_existing", "select_existing"}:
-            if not target_concept_id or (
-                candidate_concept_ids
-                and target_concept_id not in candidate_concept_ids
-            ):
-                if not bind_candidate:
-                    return None
-                bound = fallback_candidate("concept_id")
-                bound_concept_id = str(
-                    (bound or {}).get("concept_id") or "")
-                if not bound_concept_id:
-                    return None
-                target_concept_id = bound_concept_id
+    # An option may explicitly target a keep candidate.  That is safe because
+    # the action itself is no-change; the recommendation flag is immaterial.
+    keep_by_target = {
+        str(row.get("target_id") or ""): row for row in keep_candidates
+    }
+    for row in options:
+        choice = str(row.get("choice") or "")
+        target_id = str(row.get("target_id") or "")
+        candidate = keep_by_target.get(target_id)
+        if candidate is None or choice not in {
+            "accept_recommended", "select_candidate"
+        }:
+            continue
         return {
             "choice": choice,
             "target_id": target_id,
-            "target_concept_id": target_concept_id,
+            "target_concept_id": str(candidate.get("concept_id") or ""),
         }
 
-    for row in options:
-        if row.get("recommended"):
-            selected = selection(row)
-            if selected is not None:
-                return selected
+    # A targetless selector is unambiguous only when exactly one explicitly
+    # declared keep candidate exists.  Multiple keep candidates are not ranked
+    # by their position in the payload.
     if len(keep_candidates) == 1 and any(
         str(row.get("choice") or "") == "select_candidate"
         for row in options
@@ -303,10 +270,34 @@ def safe_continuation_option(
             "target_id": str(row.get("target_id") or ""),
             "target_concept_id": str(row.get("concept_id") or ""),
         }
-    for row in options:
-        selected = selection(row, bind_candidate=True)
-        if selected is not None:
-            return selected
+
+    # The only independently verifiable recommendation currently carried by
+    # this public payload is the canonical working-source patch.  Its helper
+    # recomputes the patch hash and validates the exact unique offered target.
+    # Candidate ``binding_hash`` values are integrity seals, not independent
+    # semantic recommendation certificates, so they intentionally do not
+    # authorize this fallback.
+    certified = verified_source_patch_resolution(pending)
+    if certified is not None and certified.resolved:
+        return {
+            "choice": certified.choice,
+            "target_id": certified.target_id,
+            "target_concept_id": certified.target_concept_id,
+        }
+
+    # A Phase 3.3 conflict exists precisely because no existing host passed
+    # certification.  Creating a separate source-grounded concept preserves
+    # the Type/QID without guessing between merely plausible hosts.
+    if (
+        _normal(pending.get("kind"))
+        == "phase33_type_host_semantic_conflict"
+        and "create_new" in options_by_choice
+    ):
+        return {
+            "choice": "create_new",
+            "target_id": "",
+            "target_concept_id": "",
+        }
     return None
 
 

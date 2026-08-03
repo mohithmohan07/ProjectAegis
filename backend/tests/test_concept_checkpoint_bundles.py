@@ -6,8 +6,10 @@ import json
 import pytest
 
 from app import models
+from app.db import SessionLocal
 from app.services import (
     build_concepts,
+    canonical_source_phase38_boundary_grounding_turnover_contract as phase38,
     checkpoints,
     generation,
     openai_usage,
@@ -85,6 +87,50 @@ def _resign(bundle):
         checkpoints._json_bytes(bundle["payload"])
     ).hexdigest()
     return bundle
+
+
+def _phase38_ledger(job):
+    fingerprint = str(job.generation_checkpoint.get("fingerprint") or "")
+    return {
+        "version": 1,
+        "contract": "phase3.8-boundary-aware-source-grounding-2",
+        "scope": f"upload-job:{job.id}:{fingerprint}",
+        "source_contract_hash": "a" * 64,
+        "base_candidate_sha256": "b" * 64,
+        "candidate_sha256": "c" * 64,
+        "candidate_history": ["c" * 64],
+        "attempts": 2,
+        "signatures": {"d" * 64: 1},
+        "suppressed_resolution_ids": ["phase38-decision-1"],
+        "feedback": {
+            "TOPOLOGY-CONCEPT-0001": "Atomise every supported clause."
+        },
+        "final_verification_pending": False,
+        "status": "active",
+        "terminal_reason": "",
+    }
+
+
+def _phase38_extended_ledger(job):
+    fingerprint = str(job.generation_checkpoint.get("fingerprint") or "")
+    state = phase38._fresh_convergence_state(
+        scope=f"upload-job:{job.id}:{fingerprint}",
+        source_contract_hash="a" * 64,
+    )
+    state["base_candidate_sha256"] = "b" * 64
+    state["candidate_sha256"] = "c" * 64
+    state["suppressed_resolution_ids"] = ["phase38-decision-1"]
+    bucket = phase38._fresh_issue_bucket()
+    bucket.update({
+        "candidate_history": ["c" * 64],
+        "attempts": 2,
+        "signatures": {"d" * 64: 1},
+        "feedback": {
+            "TOPOLOGY-CONCEPT-0001": "Atomise every supported clause."
+        },
+    })
+    phase38._mirror_active_issue(state, "e" * 64, bucket)
+    return state
 
 
 def _placement_certification_ledger():
@@ -172,6 +218,176 @@ def test_checkpoint_bundle_round_trips_as_new_converted_job(client, db):
         job=imported,
         chapter=chapter,
     )
+
+
+def test_phase38_convergence_ledger_round_trips_with_checkpoint(client, db):
+    original = _job(db)
+    ledger = _phase38_extended_ledger(original)
+    checkpoint = copy.deepcopy(original.generation_checkpoint)
+    checkpoint[build_concepts._PHASE38_CONVERGENCE_KEY] = copy.deepcopy(ledger)
+    original.generation_checkpoint = checkpoint
+    db.commit()
+
+    exported = client.get(
+        f"/build-concepts/uploads/{original.id}/checkpoint"
+    )
+    assert exported.status_code == 200
+    restored = _post_bundle(client, exported.json())
+
+    assert restored.status_code == 200
+    imported = db.get(models.UploadJob, restored.json()["id"])
+    imported_ledger = imported.generation_checkpoint[
+        build_concepts._PHASE38_CONVERGENCE_KEY
+    ]
+    expected_scope = (
+        f"upload-job:{imported.id}:"
+        f"{imported.generation_checkpoint['fingerprint']}"
+    )
+    assert imported_ledger["scope"] == expected_scope
+    expected_ledger = copy.deepcopy(ledger)
+    expected_ledger["scope"] = expected_scope
+    assert imported_ledger == expected_ledger
+    # The first Phase 3.8 call in the restored job must load, rather than
+    # silently reset, the portable attempt budget under its new namespace.
+    normalized = phase38._normalized_convergence_state(
+        imported_ledger,
+        scope=expected_scope,
+    )
+    assert normalized["attempts"] == ledger["attempts"]
+    assert normalized["candidate_history"] == ledger["candidate_history"]
+
+
+def test_phase38_cas_rejects_a_stale_identical_worker(
+    db,
+    monkeypatch,
+):
+    original = _job(db)
+    replacement = _phase38_ledger(original)
+    monkeypatch.setattr(
+        build_concepts.drive_checkpoints,
+        "schedule_checkpoint_backup",
+        lambda _job_id: None,
+    )
+    worker_a = SessionLocal()
+    worker_b = SessionLocal()
+    try:
+        job_a = worker_a.get(models.UploadJob, original.id)
+        job_b = worker_b.get(models.UploadJob, original.id)
+        assert job_a is not None and job_b is not None
+
+        build_concepts._persist_phase38_convergence_state(
+            worker_a,
+            job_a,
+            {},
+            replacement,
+        )
+        # Worker B observed the same empty ledger before A committed. Even an
+        # identical replacement is a stale dispatch claim and must not be
+        # treated as an idempotent success that permits a second model call.
+        with pytest.raises(
+            phase38.Phase38ConvergenceExhausted,
+            match="another worker advanced",
+        ):
+            build_concepts._persist_phase38_convergence_state(
+                worker_b,
+                job_b,
+                {},
+                replacement,
+            )
+
+        db.expire_all()
+        stored = db.get(models.UploadJob, original.id)
+        assert stored is not None
+        assert stored.generation_checkpoint[
+            build_concepts._PHASE38_CONVERGENCE_KEY
+        ] == replacement
+    finally:
+        worker_a.close()
+        worker_b.close()
+
+
+def test_discarding_last_stage_preserves_phase38_control_ledger(
+    client,
+    db,
+):
+    original = _job(db)
+    stored = copy.deepcopy(original.generation_checkpoint)
+    ledger = _phase38_ledger(original)
+    stored[build_concepts._PHASE38_CONVERGENCE_KEY] = copy.deepcopy(ledger)
+    durable = build_concepts._merge_generation_checkpoint_history(
+        stored,
+        {
+            "checkpoint_action": "discard_stage",
+            "stage": "pre_type_assignment",
+        },
+        fingerprint=stored["fingerprint"],
+        target_identity=stored["target_identity"],
+        target_chapter_id=stored["target_chapter_id"],
+    )
+
+    assert durable[build_concepts._PHASE38_CONTROL_ONLY_KEY] is True
+    assert durable["checkpoints"] == []
+    assert durable[build_concepts._PHASE38_CONVERGENCE_KEY] == ledger
+    assert generation._newest_compatible_concept_checkpoint(durable) is None
+
+    original.generation_checkpoint = durable
+    db.commit()
+    exported = client.get(
+        f"/build-concepts/uploads/{original.id}/checkpoint"
+    )
+    assert exported.status_code == 200
+    restored = _post_bundle(client, exported.json())
+    assert restored.status_code == 200
+    imported = db.get(models.UploadJob, restored.json()["id"])
+    imported_ledger = imported.generation_checkpoint[
+        build_concepts._PHASE38_CONVERGENCE_KEY
+    ]
+    assert imported_ledger["attempts"] == ledger["attempts"]
+    assert imported_ledger["candidate_history"] == ledger[
+        "candidate_history"
+    ]
+    assert imported_ledger["scope"].startswith(
+        f"upload-job:{imported.id}:"
+    )
+
+
+def test_compatibility_fallback_keeps_phase38_when_every_stage_is_invalid(db):
+    original = _job(db)
+    stored = copy.deepcopy(original.generation_checkpoint)
+    ledger = _phase38_ledger(original)
+    stored[build_concepts._PHASE38_CONVERGENCE_KEY] = copy.deepcopy(ledger)
+    for entry in stored["checkpoints"]:
+        entry["stage_schema_version"] = 999
+
+    normalized = build_concepts._compatible_generation_checkpoint_envelope(
+        stored,
+        fingerprint=stored["fingerprint"],
+        target_identity=stored["target_identity"],
+        target_chapter_id=stored["target_chapter_id"],
+    )
+
+    assert normalized[build_concepts._PHASE38_CONTROL_ONLY_KEY] is True
+    assert normalized["checkpoints"] == []
+    assert normalized[build_concepts._PHASE38_CONVERGENCE_KEY] == ledger
+
+
+def test_malformed_phase38_candidate_hash_is_rejected(client, db):
+    original = _job(db)
+    bundle = client.get(
+        f"/build-concepts/uploads/{original.id}/checkpoint"
+    ).json()
+    bundle["payload"]["generation_checkpoint"][
+        build_concepts._PHASE38_CONVERGENCE_KEY
+    ] = _phase38_ledger(original)
+    bundle["payload"]["generation_checkpoint"][
+        build_concepts._PHASE38_CONVERGENCE_KEY
+    ]["candidate_sha256"] = "not-a-hash"
+    _resign(bundle)
+
+    response = _post_bundle(client, bundle)
+
+    assert response.status_code == 400
+    assert "candidate_sha256" in response.json()["detail"]
 
 
 def test_placement_certification_ledger_round_trips_in_both_payload_copies(

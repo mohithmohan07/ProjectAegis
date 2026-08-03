@@ -7,7 +7,9 @@ from app import models
 from app.services import (
     build_concepts,
     canonical_source_phase2 as phase2,
+    canonical_source_phase31_grounding_contract as phase31,
     canonical_source_phase3 as phase3,
+    grounding_certificate,
     openai_usage,
 )
 from tests.conftest import convert_concept_upload, stream_events, stream_result
@@ -464,7 +466,7 @@ def test_post_learning_api_discards_invalid_final_and_completes_retry_without_ap
     culmination = {
         "topic": "T",
         "parent_concept": "Culmination",
-        "concept_title": "Culmination - General Term",
+        "concept_title": "Culmination - T",
         "concept_details": (
             "Description: Recap the topic. // Types: Type 01: Mixed reasoning "
             "Case 01: Connect the ideas Example: Combine the listed concepts "
@@ -576,18 +578,46 @@ def test_post_learning_api_discards_invalid_final_and_completes_retry_without_ap
             AssertionError("checkpoint recovery must not call OpenAI")
         ),
     )
+    def prepare_grounded(current, **_kwargs):
+        grounded = copy.deepcopy(current)
+        allowed = set()
+        for index, row in enumerate(grounded, start=1):
+            block_id = f"BLK-TEST-{index:04d}"
+            allowed.add(block_id)
+            row["_source_block_ids"] = [block_id]
+            row["_source_grounding_contract"] = (
+                "api-verified-source-block-ids"
+            )
+            row["_source_grounding_version"] = "checkpoint-test-1"
+        grounding_certificate.seal_records(
+            grounded,
+            source_contract_hash=str(graph["source_contract_hash"]),
+            semantic_topology_sha256=(
+                grounding_certificate.semantic_topology_sha256(graph)
+            ),
+            allowed_block_ids=allowed,
+        )
+        return grounded
+
     monkeypatch.setattr(
         build_concepts.generation,
         "_prepare_final_concept_content",
-        lambda current, **_kwargs: current,
+        prepare_grounded,
+    )
+    # This regression isolates fallback from an uncertified terminal
+    # checkpoint.  The preceding stage now receives a latest-boundary
+    # re-ground whenever deterministic final formatting changes its sealed
+    # claim; emulate that independently verified pass without a provider call.
+    monkeypatch.setattr(
+        phase31,
+        "ground_concepts",
+        lambda current, **_kwargs: prepare_grounded(current),
     )
     validations = []
 
     def validate(current, **_kwargs):
         validations.append([row["concept_title"] for row in current])
-        if len(validations) == 1:
-            raise RuntimeError("legacy final rejected")
-        raise RuntimeError("stop after prior checkpoint was restored")
+        raise RuntimeError("stop after certified prior checkpoint was restored")
 
     monkeypatch.setattr(
         build_concepts.generation, "_validate_final_or_raise", validate)
@@ -602,17 +632,20 @@ def test_post_learning_api_discards_invalid_final_and_completes_retry_without_ap
         json={"target_chapter_id": chapter.id},
     ))
 
-    assert validations[0][0] == "Rejected final concept"
-    assert validations[1][0] == "Prior-stage concept"
+    # A final checkpoint without the new payload/evidence certificate is
+    # incompatible and is never loaded as a candidate. Resume begins at the
+    # preceding certified stage and re-runs final grounding.
+    assert len(validations) == 1
+    assert validations[0][0] == "Prior-stage concept"
+    assert validations[0][1].startswith("Culmination -")
     assert any(
         event.get("type") == "log"
-        and "Discarded durable checkpoint stage: final_content_ready."
-        in event.get("message", "")
+        and "Persisted compatible checkpoint fallback" in event.get("message", "")
         for event in events
     )
     assert any(
         event.get("type") == "error"
-        and "stop after prior checkpoint was restored"
+        and "stop after certified prior checkpoint was restored"
         in event.get("message", "")
         for event in events
     )
@@ -634,6 +667,18 @@ def test_post_learning_api_discards_invalid_final_and_completes_retry_without_ap
 
     def accept(current, **_kwargs):
         accepted.append([row["concept_title"] for row in current])
+        grounding_certificate.seal_records(
+            current,
+            source_contract_hash=str(graph["source_contract_hash"]),
+            semantic_topology_sha256=(
+                grounding_certificate.semantic_topology_sha256(graph)
+            ),
+            allowed_block_ids={
+                block_id
+                for row in current
+                for block_id in row.get("_source_block_ids") or []
+            },
+        )
         return {"ok": True, "errors": [], "summary": {}}
 
     deposited = []
@@ -644,6 +689,9 @@ def test_post_learning_api_discards_invalid_final_and_completes_retry_without_ap
             "written": 0,
             "sources_updated": 0,
             "parent_column": True,
+            "grounding_certificate": copy.deepcopy(
+                _kwargs["final_grounding_certificate"]
+            ),
         }
 
     monkeypatch.setattr(

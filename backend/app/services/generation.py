@@ -26,11 +26,16 @@ from . import concept_cleanup
 from . import concept_validator as cv
 from . import katex_rules as kr
 from . import concept_refiner as cr
+from . import grounding_certificate
 from . import prompts
 from . import progress
 from . import semantic_confidence_policy as confidence_policy
 from . import source_topic_decision
 from . import type_granularity_decision
+from .semantic_recovery import (
+    HumanDecisionRequired,
+    ProviderResponseContractError,
+)
 # Imported for its prompt registrations (assessment.* keys used by _identify_system).
 from . import assessment_prompts as _assessment_prompts_registration  # noqa: F401
 
@@ -13078,7 +13083,35 @@ def _carry_type_origin_metadata(
             source = original[index]
         if source is not None:
             cr.carry_type_origin_metadata(source, row)
+            _carry_source_grounding_attestation(source, row)
     return candidate
+
+
+def _carry_source_grounding_attestation(
+    before: dict, after: dict,
+) -> dict:
+    """Retain the old seal until a row-local rewrite is re-grounded.
+
+    Validation repair responses contain only public concept fields.  Replacing
+    a row with that response used to discard both its stable graph identity and
+    the evidence attestation which proves that the *old* source claim was
+    reviewed.  Keeping the attestation does not certify the rewritten claim:
+    ``verify_row`` hashes the Description and will reject it.  It does preserve
+    enough lineage for the final boundary to distinguish a row-local rewrite
+    (which may be re-grounded once) from deletion/reordering (which must fail
+    closed).
+    """
+
+    for field, value in before.items():
+        if field.startswith("_source_grounding_") or field in {
+            "_source_block_ids",
+            "_semantic_graph_contract",
+            "_semantic_subtopic_id",
+            "_semantic_subtopic_ids",
+            "_semantic_topic_id",
+        }:
+            after[field] = copy.deepcopy(value)
+    return after
 
 
 def _merge_repaired_rows(records: list[dict], repaired: list[dict]) -> list[dict]:
@@ -13095,6 +13128,7 @@ def _merge_repaired_rows(records: list[dict], repaired: list[dict]) -> list[dict
             continue
         replacement = dict(replacement)
         cr.carry_type_origin_metadata(rec, replacement)
+        _carry_source_grounding_attestation(rec, replacement)
         out.append(replacement)
     return out
 
@@ -13260,6 +13294,8 @@ def _repair_records_via_api(
                 if idx < len(next_records):
                     repaired_row = dict(repaired_row)
                     cr.carry_type_origin_metadata(
+                        next_records[idx], repaired_row)
+                    _carry_source_grounding_attestation(
                         next_records[idx], repaired_row)
                     next_records[idx] = repaired_row
             records = next_records
@@ -18602,7 +18638,7 @@ _CONCEPT_CHECKPOINT_STAGES = {
     },
     "final_content_ready": {
         "order": 80,
-        "version": 5,
+        "version": 6,
         "progress": 0.98,
         "label": "Final content ready for deterministic validation",
     },
@@ -18750,7 +18786,11 @@ def _type_granularity_replay_seal_valid(checkpoint: dict) -> bool:
     return stored == expected
 
 
-def _compatible_concept_checkpoint_entry(checkpoint: dict | None) -> bool:
+def _compatible_concept_checkpoint_entry(
+    checkpoint: dict | None,
+    *,
+    require_final_grounding: bool = False,
+) -> bool:
     """Whether this deployment can safely consume one serialized stage."""
     if not isinstance(checkpoint, dict):
         return False
@@ -18879,17 +18919,56 @@ def _compatible_concept_checkpoint_entry(checkpoint: dict | None) -> bool:
         )
     ):
         return False
+    if stage == "final_content_ready":
+        # ``concepts_from_mmd`` is also exercised as a standalone semantic
+        # transformation (including by unit tests) without an active Phase 3
+        # source graph.  Such a result may be resumed by that standalone
+        # caller, but Build Concepts' live publication boundary still rejects
+        # it because it has no certificate.  Missing legacy markers remain
+        # incompatible so an old production checkpoint cannot bypass the new
+        # deposit contract.
+        if checkpoint.get("grounding_certificate_required") is False:
+            if require_final_grounding:
+                return False
+            # A standalone transformation may resume its own uncertified
+            # terminal snapshot.  Once the Phase 3 source graph is active,
+            # however, that same snapshot is not a publishable checkpoint and
+            # must fall back to a grounded stage.
+            from . import canonical_source_phase3 as phase3
+
+            return not isinstance(phase3.active_graph(), dict)
+        try:
+            from . import canonical_source_phase3 as phase3
+
+            active_semantic_graph = phase3.active_graph()
+            grounding_certificate.verify_final_certificate(
+                checkpoint.get("records") or [],
+                checkpoint.get(
+                    grounding_certificate.FINAL_CERTIFICATE_FIELD
+                ),
+                semantic_graph=(
+                    active_semantic_graph
+                    if isinstance(active_semantic_graph, dict)
+                    else None
+                ),
+            )
+        except grounding_certificate.GroundingCertificateError:
+            return False
     return True
 
 
 def _newest_compatible_concept_checkpoint(
     checkpoint: dict | None,
     *, allowed_stages: set[str] | None = None,
+    require_final_grounding: bool = False,
 ) -> dict | None:
     """Select the furthest compatible completed stage, ignoring newer unknowns."""
     candidates: list[tuple[int, int, dict]] = []
     for index, entry in enumerate(_concept_checkpoint_entries(checkpoint)):
-        if not _compatible_concept_checkpoint_entry(entry):
+        if not _compatible_concept_checkpoint_entry(
+            entry,
+            require_final_grounding=require_final_grounding,
+        ):
             continue
         stage = str(entry.get("stage") or "")
         if allowed_stages is not None and stage not in allowed_stages:
@@ -19241,6 +19320,23 @@ def _make_concept_checkpoint(
 ) -> dict:
     spec = _CONCEPT_CHECKPOINT_STAGES[stage]
     value = spec["progress"] if progress_value is None else progress_value
+    if (
+        stage == "final_content_ready"
+        and "grounding_certificate_required" not in payload
+    ):
+        records = payload.get("records") or []
+        payload["grounding_certificate_required"] = any(
+            any(
+                str(record.get(field) or "").strip()
+                for field in (
+                    grounding_certificate.ROW_CERTIFICATE_FIELD,
+                    grounding_certificate.SOURCE_CONTRACT_FIELD,
+                    "_source_grounding_contract",
+                )
+            )
+            for record in records
+            if isinstance(record, dict)
+        )
     return {
         "schema_version": _CONCEPT_CHECKPOINT_SCHEMA,
         "stage_schema_version": spec["version"],
@@ -20893,6 +20989,127 @@ def _repair_final_rich_text_via_api(
     return repaired, repaired != original
 
 
+def _reground_drifted_final_source_claims(
+    records: list[dict],
+) -> list[dict]:
+    """Re-ground row-local post-freeze drift exactly once, or fail closed.
+
+    Phase 3.1 seals the topology before later formatting, Type allocation, and
+    terminal repair passes.  Those passes are allowed to rebuild a row, but a
+    changed Description is a new source claim and must not inherit the old
+    evidence verdict.  The ordered lineage is checked first, so this recovery
+    can never legitimize a deleted, duplicated, or reordered grounded concept.
+
+    Only rows whose attestation no longer verifies have their derived evidence
+    fields cleared.  Phase 3.1's claim-addressed cache therefore reuses every
+    unchanged provider/critic result and sends only changed claims through the
+    real independent grounding pair.  There is deliberately no retry here: a
+    disagreement unwinds to the existing bounded semantic-resolution workflow.
+    """
+
+    from . import canonical_source_phase3 as phase3
+
+    graph = phase3.active_graph()
+    if not isinstance(graph, dict) or not records:
+        return records
+
+    # Verify topology identity separately from row contents. A row-local
+    # Description rewrite retains the old row certificate and passes this
+    # check; a dropped/reordered row cannot be silently resealed as a success.
+    grounding_certificate.verify_lineage(records)
+    drifted: list[int] = []
+    active_source_contract = str(
+        graph.get("source_contract_hash") or ""
+    ).strip()
+    active_semantic_topology = (
+        grounding_certificate.semantic_topology_sha256(graph)
+    )
+    for index, record in enumerate(records):
+        # A rename, parent reassignment, or topic move is a topology change,
+        # not an evidence repair. It must return to topology adjudication and
+        # may never be legitimized by this row-local re-grounding seam.
+        grounding_certificate.verify_row_identity(
+            record, row_index=index
+        )
+        attested_source_contract = str(
+            record.get(grounding_certificate.SOURCE_CONTRACT_FIELD) or ""
+        ).strip()
+        if (
+            not active_source_contract
+            or attested_source_contract != active_source_contract
+        ):
+            raise grounding_certificate.GroundingCertificateError(
+                "grounding certificate source/topology contract drift for "
+                f"CONCEPT-GROUND-{index + 1:04d}: attested "
+                f"{attested_source_contract or 'missing'}, active "
+                f"{active_source_contract or 'missing'}"
+            )
+        attested_semantic_topology = str(
+            record.get(grounding_certificate.SEMANTIC_TOPOLOGY_FIELD) or ""
+        ).strip()
+        if attested_semantic_topology != active_semantic_topology:
+            raise grounding_certificate.GroundingCertificateError(
+                "grounding certificate semantic graph/topology drift for "
+                f"CONCEPT-GROUND-{index + 1:04d}: the active topic, "
+                "subtopic, or block mapping changed after grounding"
+            )
+        try:
+            grounding_certificate.verify_row(record, row_index=index)
+        except grounding_certificate.GroundingCertificateError:
+            drifted.append(index)
+    if not drifted:
+        return records
+
+    candidate = copy.deepcopy(records)
+    for index in drifted:
+        row = candidate[index]
+        for field in list(row):
+            if field.startswith("_source_grounding_"):
+                row.pop(field, None)
+        # Evidence and subtopic placement are conclusions derived from the
+        # claim. Stable main-topic identity remains so a formatting repair
+        # cannot smuggle in an unreviewed topology move at this late boundary.
+        row.pop("_source_block_ids", None)
+        row.pop("_semantic_subtopic_id", None)
+        row.pop("_semantic_subtopic_ids", None)
+
+    from . import canonical_source_phase31_grounding_contract as phase31
+
+    session = phase3.active_session()
+    canonical = (
+        session.get("canonical") or {}
+        if isinstance(session, dict)
+        else {}
+    )
+    progress.log(
+        "Final source-claim integrity check found "
+        f"{len(drifted)} row-local change(s); re-running exact grounding "
+        "once before certification.",
+        level="warning",
+    )
+    regrounded = phase31.ground_concepts(
+        candidate,
+        graph=graph,
+        canonical=canonical,
+    )
+    try:
+        # Phase 3.1 must return one completely sealed ordered payload. Do not
+        # loop or mint a partial certificate when a provider/critic result was
+        # absent, deterministic-only, or otherwise unverified.
+        grounding_certificate.build_final_certificate(regrounded)
+    except grounding_certificate.GroundingCertificateError as exc:
+        raise grounding_certificate.GroundingCertificateError(
+            "final source-claim re-grounding did not produce one complete "
+            f"independently verified payload: {exc}"
+        ) from exc
+    progress.log(
+        "Final source-claim changes passed one exact provider/critic "
+        "re-grounding pass.",
+        level="success",
+    )
+    return regrounded
+
+
 def concepts_from_mmd(
     mmd_text: str, *, subject: str = "", board: str = "", grade: str = "",
     unit: str = "", chapter_title: str = "", chapter_id: int | str | None = None,
@@ -21148,6 +21365,10 @@ def concepts_from_mmd(
             if out != before_final_type_heading_repair:
                 out = cr.renumber_types_continuously(out)
                 final_checkpoint_changed = True
+            before_final_reground = out
+            out = _reground_drifted_final_source_claims(out)
+            if out != before_final_reground:
+                final_checkpoint_changed = True
             _validate_final_or_raise(
                 out,
                 stage="final",
@@ -21156,6 +21377,48 @@ def concepts_from_mmd(
                 method_anchors=method_anchors,
                 source_text=mmd_text,
             )
+            grounding_certificate_required = any(
+                any(
+                    str(record.get(field) or "").strip()
+                    for field in (
+                        grounding_certificate.ROW_CERTIFICATE_FIELD,
+                        grounding_certificate.SOURCE_CONTRACT_FIELD,
+                        "_source_grounding_contract",
+                    )
+                )
+                for record in out
+            )
+            final_grounding_certificate = (
+                grounding_certificate.build_final_certificate(out)
+                if grounding_certificate_required
+                else None
+            )
+            if saved_final and not final_checkpoint_changed:
+                # A restored 98% checkpoint is reusable only when the exact
+                # payload/evidence relationship still matches the certificate
+                # minted after its real grounding provider + critic pass.
+                if grounding_certificate_required:
+                    from . import canonical_source_phase3 as phase3
+
+                    active_semantic_graph = phase3.active_graph()
+                    grounding_certificate.verify_final_certificate(
+                        out,
+                        saved_final.get(
+                            grounding_certificate.FINAL_CERTIFICATE_FIELD
+                        ),
+                        semantic_graph=(
+                            active_semantic_graph
+                            if isinstance(active_semantic_graph, dict)
+                            else None
+                        ),
+                        require_semantic_graph=True,
+                    )
+        except (HumanDecisionRequired, ProviderResponseContractError):
+            # Semantic decisions and mechanical provider-contract failures are
+            # outcomes of the new exact re-grounding request. They must reach
+            # orchestration exactly once; discarding a saved final checkpoint
+            # here would immediately dispatch the same request again.
+            raise
         except RuntimeError:
             if not saved_final:
                 raise
@@ -21195,6 +21458,10 @@ def concepts_from_mmd(
         # ``final_content_ready`` is a promise that the exact materialized rows
         # passed the strict outer gate.  Persist only after that promise is true
         # so a retry cannot loop forever on the same invalid 98% checkpoint.
+        if artifacts is not None and final_grounding_certificate is not None:
+            artifacts[
+                grounding_certificate.FINAL_CERTIFICATE_FIELD
+            ] = copy.deepcopy(final_grounding_certificate)
         if final_checkpoint_changed:
             _emit_concept_checkpoint(
                 checkpoint_callback,
@@ -21204,6 +21471,13 @@ def concepts_from_mmd(
                 mined_types=mined_types,
                 method_row_snapshot=_serialize_method_row_snapshot(
                     method_row_snapshot),
+                **{
+                    grounding_certificate.FINAL_CERTIFICATE_FIELD:
+                    final_grounding_certificate,
+                    "grounding_certificate_required": (
+                        grounding_certificate_required
+                    ),
+                },
             )
         missing = sum(
             1 for r in out

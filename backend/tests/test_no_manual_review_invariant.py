@@ -1,4 +1,4 @@
-"""No semantic pause survives when a bounded automatable action exists.
+"""No semantic pause survives when a quality-safe action exists.
 
 Unattended completion started as a fallback inside the resolution agent, so
 branches that declined *before* the agent ran — a disabled resolver, a
@@ -7,12 +7,15 @@ worker's claim — still paused the run. In production that surfaced as a
 manual review appearing after 90%, during Phase 3.3 Type-host assignment,
 where the offered options can carry no ``recommended`` flag at all.
 
-These tests pin the invariant at the two choke points: whatever declined,
-the run continues with the safest server-offered bounded action, and only a
-genuinely user-only decision (source replacement / custom instruction) or an
-explicit opt-out still pauses.
+These tests pin the invariant at the two choke points: whatever declined, the
+run continues only with an explicit no-change route, a verifiably certified
+recommendation, or a source-preserving new concept. Candidate and option order
+never authorize an existing host. A genuinely user-only decision (source
+replacement / custom instruction) or an explicit opt-out still pauses.
 """
 from __future__ import annotations
+
+import copy
 
 import pytest
 
@@ -99,6 +102,45 @@ def _phase33_pending(*, concepts: bool = True, target_id: str = "") -> dict:
     }
 
 
+def _material_equivalence_pending() -> dict:
+    """Populate every semantic identity used by the durable loop key."""
+
+    pending = _phase33_pending(target_id="CONCEPT-0022")
+    for index, candidate in enumerate(pending["candidates"], start=1):
+        candidate.update({
+            "target_id": f"HOST-TARGET-{index:04d}",
+            "coverage": f"Verified coverage pathway {index}.",
+            "gap": f"Remaining source gap {index}.",
+            "source_block_ids": [
+                f"BLK-{index:05d}",
+                f"BLK-{index + 10:05d}",
+            ],
+            "source_topic_id": "TOPIC-0004",
+            "target_topic_id": "TOPIC-0004",
+            "boundary_relation": "same_topic",
+            "source_kind": "type_host_candidate",
+            "source_page": str(20 + index),
+            "text_sha256": str(index) * 64,
+            "binding_hash": chr(96 + index) * 64,
+        })
+    pending["evidence"][0]["evidence_id"] = "EVIDENCE-0001"
+    pending["evidence"].append({
+        "evidence_id": "EVIDENCE-0002",
+        "page": "22",
+        "label": "BLK-00012",
+        "text": "Germania's sword represents readiness to fight.",
+    })
+    pending["options"][0].update({
+        "target_id": "OPTION-TARGET-0001",
+        "target_concept_id": "CONCEPT-0022",
+    })
+    pending["options"][2].update({
+        "target_id": "OPTION-TARGET-0002",
+        "target_concept_id": "CONCEPT-0021",
+    })
+    return pending
+
+
 def _seed_paused_job(db, chapter, monkeypatch, *, filename: str, raw: dict):
     job = models.UploadJob(
         module="build_concepts",
@@ -157,15 +199,15 @@ def _seed_paused_job(db, chapter, monkeypatch, *, filename: str, raw: dict):
 # Selector: the post-90% shape with no recommended option
 # --------------------------------------------------------------------------- #
 
-def test_phase33_host_conflict_without_recommendation_still_has_a_safe_action():
+def test_phase33_host_conflict_without_certified_host_creates_new():
     selected = autonomous_resolution.safe_continuation_option(
         _phase33_pending())
-    # The first offered automatable action binds to the first candidate
-    # concept, which is what expanding the existing host means.
+    # Neither candidate was certified. Candidate order must not turn the
+    # general "Allegories" row into a host for the Germania-specific Type.
     assert selected == {
-        "choice": "expand_existing",
+        "choice": "create_new",
         "target_id": "",
-        "target_concept_id": "CONCEPT-0021",
+        "target_concept_id": "",
     }
 
 
@@ -179,13 +221,13 @@ def test_phase33_without_concepts_falls_back_to_create_new():
     }
 
 
-def test_recommended_target_still_wins_when_present():
+def test_uncertified_recommended_host_does_not_override_create_new():
     selected = autonomous_resolution.safe_continuation_option(
         _phase33_pending(target_id="CONCEPT-0022"))
     assert selected == {
-        "choice": "expand_existing",
+        "choice": "create_new",
         "target_id": "",
-        "target_concept_id": "CONCEPT-0022",
+        "target_concept_id": "",
     }
 
 
@@ -243,8 +285,8 @@ def test_resolver_declined_branches_continue_without_manual_review(
     ledger = job.generation_checkpoint["human_decisions"]
     assert ledger["pending"] is None
     recorded = ledger["resolutions"][-1]
-    assert recorded["choice"] == "expand_existing"
-    assert recorded["target_concept_id"] == "CONCEPT-0021"
+    assert recorded["choice"] == "create_new"
+    assert recorded["target_concept_id"] == ""
     assert recorded["resolved_by"] == "agent"
     assert recorded["status"] == "consumed"
 
@@ -446,7 +488,7 @@ def test_resolution_cycles_are_bounded_and_name_the_returning_decision(
     raw["decision_id"] = "phase33-host-cyclebound-0001"
     job, pending = _seed_paused_job(
         db, chapter, monkeypatch, filename="cycle-bound.mmd", raw=raw)
-    monkeypatch.setenv("AEGIS_MAX_RESOLUTION_CYCLES", "3")
+    monkeypatch.setenv("AEGIS_MAX_EQUIVALENT_RESOLUTION_ATTEMPTS", "3")
     logs: list[str] = []
     monkeypatch.setattr(
         build_concepts.progress, "log",
@@ -454,18 +496,26 @@ def test_resolution_cycles_are_bounded_and_name_the_returning_decision(
     )
     # The agent always succeeds, and the operation always needs another
     # decision — the exact shape seen in production.
+    resolution_calls = 0
+
+    def resolve(*_args, **_kwargs):
+        nonlocal resolution_calls
+        resolution_calls += 1
+        return "resolved-decision"
+
     monkeypatch.setattr(
-        build_concepts,
-        "_autonomously_resolve_pending_decision",
-        lambda *_a, **_kw: "resolved-decision",
-    )
+        build_concepts, "_autonomously_resolve_pending_decision", resolve)
     monkeypatch.setattr(
         build_concepts,
         "_persist_pending_human_decision",
         lambda *_a, **_kw: pending,
     )
 
+    operation_calls = 0
+
     def never_converges():
+        nonlocal operation_calls
+        operation_calls += 1
         raise semantic_recovery.HumanDecisionRequired({
             "decision_id": pending["decision_id"],
             "context_hash": pending["context_hash"],
@@ -484,11 +534,287 @@ def test_resolution_cycles_are_bounded_and_name_the_returning_decision(
         )
 
     message = str(excinfo.value)
-    assert "3 autonomous decision cycles" in message
+    assert "3 verified autonomous repair attempt(s)" in message
+    # Repair three is rerun before the fourth equivalent pending decision
+    # proves it ineffective.
+    assert operation_calls == 4
+    assert resolution_calls == 3
     # The returning decision is named so the loop is diagnosable.
     assert "phase33_type_host_semantic_conflict" in message
     assert "TYPE-0003" in message
-    assert "AEGIS_MAX_RESOLUTION_CYCLES" in message
+    assert "AEGIS_MAX_EQUIVALENT_RESOLUTION_ATTEMPTS" in message
+    assert sum("Generation stopped after" in row for row in logs) == 1
     # Bounded semantic recovery must not retry a non-converging loop.
     assert semantic_recovery.classify_failure(
         excinfo.value).recoverable is False
+
+
+def test_last_allowed_resolution_receives_a_successful_verification_turn(
+    db,
+    first_chapter,
+    monkeypatch,
+):
+    chapter = db.get(models.Chapter, first_chapter["id"])
+    pending = _phase33_pending()
+    job, pending = _seed_paused_job(
+        db, chapter, monkeypatch, filename="last-turn.mmd", raw=pending)
+    monkeypatch.setenv("AEGIS_MAX_EQUIVALENT_RESOLUTION_ATTEMPTS", "1")
+    monkeypatch.setattr(
+        build_concepts,
+        "_persist_pending_human_decision",
+        lambda *_a, **_kw: pending,
+    )
+    monkeypatch.setattr(
+        build_concepts,
+        "_autonomously_resolve_pending_decision",
+        lambda *_a, **_kw: "resolved-decision",
+    )
+    calls = 0
+
+    def succeeds_after_repair():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise semantic_recovery.HumanDecisionRequired(pending)
+        return "finished"
+
+    paused, result = build_concepts._run_with_human_decision_pause(
+        succeeds_after_repair,
+        db=db,
+        job=job,
+        fingerprint=str(job.generation_checkpoint.get("fingerprint") or ""),
+        target_chapter_id=chapter.id,
+        owner_sub=None,
+    )
+
+    assert paused is None
+    assert result == "finished"
+    assert calls == 2
+
+
+def test_distinct_material_decisions_do_not_share_the_loop_budget(
+    db,
+    first_chapter,
+    monkeypatch,
+):
+    chapter = db.get(models.Chapter, first_chapter["id"])
+    raw = _phase33_pending()
+    job, first = _seed_paused_job(
+        db, chapter, monkeypatch, filename="distinct.mmd", raw=raw)
+    second = copy.deepcopy(first)
+    second["decision_id"] = "phase33-host-distinct-0002"
+    second["context_hash"] = "b" * 64
+    second["item"]["type_id"] = "TYPE-0099"
+    monkeypatch.setenv("AEGIS_MAX_EQUIVALENT_RESOLUTION_ATTEMPTS", "1")
+    monkeypatch.setattr(
+        build_concepts,
+        "_persist_pending_human_decision",
+        lambda _db, _job, raw, **_kw: raw,
+    )
+    monkeypatch.setattr(
+        build_concepts,
+        "_autonomously_resolve_pending_decision",
+        lambda *_a, **_kw: "resolved-decision",
+    )
+    calls = 0
+
+    def two_distinct_decisions():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise semantic_recovery.HumanDecisionRequired(first)
+        if calls == 2:
+            raise semantic_recovery.HumanDecisionRequired(second)
+        return "finished"
+
+    paused, result = build_concepts._run_with_human_decision_pause(
+        two_distinct_decisions,
+        db=db,
+        job=job,
+        fingerprint=str(job.generation_checkpoint.get("fingerprint") or ""),
+        target_chapter_id=chapter.id,
+        owner_sub=None,
+    )
+
+    assert paused is None
+    assert result == "finished"
+    assert calls == 3
+
+
+def test_recommendation_flip_cannot_reset_durable_budget_after_restart(
+    db,
+    first_chapter,
+    monkeypatch,
+):
+    chapter = db.get(models.Chapter, first_chapter["id"])
+    raw = _phase33_pending()
+    job, pending = _seed_paused_job(
+        db,
+        chapter,
+        monkeypatch,
+        filename="recommendation-flip.mmd",
+        raw=raw,
+    )
+    monkeypatch.setenv("AEGIS_MAX_EQUIVALENT_RESOLUTION_ATTEMPTS", "1")
+    assert build_concepts._apply_last_resort_safe_continuation(
+        db, job, pending, owner_sub=None
+    ) == pending["decision_id"]
+    db.refresh(job)
+    stored_resolution = job.generation_checkpoint["human_decisions"][
+        "resolutions"
+    ][0]
+    assert stored_resolution["equivalence_key"]
+
+    followup = copy.deepcopy(pending)
+    followup["decision_id"] = "phase33-host-recommendation-flip-0002"
+    followup["context_hash"] = "b" * 64
+    for option in followup["options"]:
+        option["recommended"] = not bool(option.get("recommended"))
+    assert stored_resolution["equivalence_key"] == (
+        build_concepts._decision_equivalence_key(followup)
+    )
+
+    monkeypatch.setattr(
+        build_concepts,
+        "_autonomously_resolve_pending_decision",
+        lambda *_args, **_kwargs: pytest.fail(
+            "a presentation-only recommendation flip must not get a new turn"
+        ),
+    )
+
+    def recurring_after_restart():
+        raise semantic_recovery.HumanDecisionRequired(followup)
+
+    with pytest.raises(build_concepts.SemanticResolutionCyclesExhausted):
+        build_concepts._run_with_human_decision_pause(
+            recurring_after_restart,
+            db=db,
+            job=job,
+            fingerprint=str(job.generation_checkpoint.get("fingerprint") or ""),
+            target_chapter_id=chapter.id,
+            owner_sub=None,
+        )
+
+
+def test_legacy_resolution_without_material_seal_gets_upgrade_budget():
+    pending = _phase33_pending()
+    legacy_snapshot = copy.deepcopy(pending)
+    legacy_snapshot["evidence"] = []
+    legacy_snapshot["candidates"] = []
+    checkpoint = {
+        "human_decisions": {
+            "version": 1,
+            "resolutions": [{
+                "resolved_by": "agent",
+                "status": "consumed",
+                "pending_decision": legacy_snapshot,
+            }],
+        },
+    }
+    changed_candidate = copy.deepcopy(pending)
+    changed_candidate["decision_id"] = "phase33-host-postupgrade-0002"
+    changed_candidate["context_hash"] = "c" * 64
+    changed_candidate["evidence"][0]["text"] = (
+        "Germania carries a sword and wears a crown of oak leaves."
+    )
+
+    assert build_concepts._equivalent_agent_resolution_count(
+        checkpoint, changed_candidate
+    ) == 0
+
+
+def test_equivalence_ignores_order_and_transport_or_ui_volatility():
+    original = _material_equivalence_pending()
+    reordered = copy.deepcopy(original)
+    reordered["decision_id"] = "phase33-host-transport-replay-0002"
+    reordered["context_hash"] = "d" * 64
+    reordered["checkpoint_progress"] = 0.99
+    reordered["cumulative_usage"] = {"input_tokens": 999_999}
+    reordered["agent_review"] = {"volatile": "transport audit state"}
+    reordered["conflict"] = "  " + "   ".join(
+        original["conflict"].upper().split()
+    )
+    reordered["diagnosis"] = "  " + "   ".join(
+        original["diagnosis"].upper().split()
+    )
+    reordered["decision_question"] = "  " + "   ".join(
+        original["decision_question"].upper().split()
+    )
+    reordered["candidates"].reverse()
+    for candidate in reordered["candidates"]:
+        candidate["source_block_ids"].reverse()
+    reordered["evidence"].reverse()
+    reordered["options"].reverse()
+    for option in reordered["options"]:
+        option["label"] = "Changed presentation label"
+        option["recommended"] = not bool(option.get("recommended"))
+
+    assert build_concepts._decision_equivalence_key(original) == (
+        build_concepts._decision_equivalence_key(reordered)
+    )
+
+
+@pytest.mark.parametrize(
+    ("path", "replacement"),
+    [
+        (("conflict",), "The critic found a different semantic conflict."),
+        (("diagnosis",), "A different repair pathway is now supported."),
+        (("decision_question",), "Should the Type use a new host?"),
+        (("candidates", 0, "target_id"), "HOST-TARGET-CHANGED"),
+        (("candidates", 0, "concept_id"), "CONCEPT-CHANGED"),
+        (("candidates", 0, "binding_hash"), "f" * 64),
+        (("candidates", 0, "coverage"), "Different verified coverage."),
+        (("candidates", 0, "gap"), "Different remaining source gap."),
+        (("candidates", 0, "boundary_relation"), "cross_topic"),
+        (("candidates", 0, "source_kind"), "topology_repair"),
+        (("candidates", 0, "source_page"), "99"),
+        (("evidence", 0, "evidence_id"), "EVIDENCE-CHANGED"),
+        (("options", 0, "target_id"), "OPTION-TARGET-CHANGED"),
+        (("options", 0, "target_concept_id"), "CONCEPT-CHANGED"),
+    ],
+    ids=[
+        "conflict",
+        "diagnosis",
+        "decision-question",
+        "candidate-target",
+        "candidate-concept",
+        "candidate-binding",
+        "candidate-coverage",
+        "candidate-gap",
+        "candidate-boundary",
+        "candidate-source-kind",
+        "candidate-source-page",
+        "evidence-identity",
+        "option-target",
+        "option-concept",
+    ],
+)
+def test_changed_critic_or_candidate_pathway_gets_fresh_budget(
+    path,
+    replacement,
+):
+    original = _material_equivalence_pending()
+    changed = copy.deepcopy(original)
+    cursor = changed
+    for key in path[:-1]:
+        cursor = cursor[key]
+    cursor[path[-1]] = replacement
+    checkpoint = {
+        "human_decisions": {
+            "version": 1,
+            "resolutions": [{
+                "resolved_by": "agent",
+                "status": "consumed",
+                "equivalence_key": (
+                    build_concepts._decision_equivalence_key(original)
+                ),
+            }],
+        },
+    }
+
+    assert build_concepts._decision_equivalence_key(changed) != (
+        build_concepts._decision_equivalence_key(original)
+    )
+    assert build_concepts._equivalent_agent_resolution_count(
+        checkpoint, changed
+    ) == 0

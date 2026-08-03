@@ -35,12 +35,14 @@ from ..bulk_import import workbook_sync, writer
 from . import (
     autonomous_resolution,
     canonical_source_phase22,
+    canonical_source_phase38_boundary_grounding_turnover_contract as phase38,
     chapter_durations,
     concept_cleanup,
     concept_refiner,
     concept_validator,
     drive_checkpoints,
     generation,
+    grounding_certificate,
     mmd,
     openai_usage,
     progress,
@@ -82,6 +84,9 @@ _SEMANTIC_RECOVERY_DISPATCHES_KEY = "semantic_recovery_dispatches"
 _SEMANTIC_RECOVERY_DISPATCHES_VERSION = 1
 _SEMANTIC_RECOVERY_ISSUE_KEY_VERSION = 1
 _MAX_SEMANTIC_RECOVERY_DISPATCHES = 100
+_PHASE38_CONVERGENCE_KEY = "phase38_convergence"
+_PHASE38_CONTROL_ONLY_KEY = "phase38_control_only"
+_DEPOSITED_GROUNDING_CERTIFICATE_KEY = "deposited_grounding_certificate"
 _ACTIVE_AGENT_RESOLUTION_IDS: ContextVar[frozenset[str]] = ContextVar(
     "aegis_active_agent_resolution_ids",
     default=frozenset(),
@@ -233,6 +238,50 @@ def _semantic_recovery_dispatch_ledger(
         return {}
     value = checkpoint.get(_SEMANTIC_RECOVERY_DISPATCHES_KEY)
     return copy.deepcopy(value) if isinstance(value, dict) else {}
+
+
+def _phase38_convergence_ledger(checkpoint: dict | None) -> dict:
+    """Return the JSON-safe per-job Phase 3.8 convergence namespace."""
+
+    if not isinstance(checkpoint, dict):
+        return {}
+    value = checkpoint.get(_PHASE38_CONVERGENCE_KEY)
+    return copy.deepcopy(value) if isinstance(value, dict) else {}
+
+
+def _copy_phase38_convergence_ledger(
+    target: dict,
+    source: dict | None,
+) -> dict:
+    result = copy.deepcopy(target)
+    ledger = _phase38_convergence_ledger(source)
+    if ledger:
+        result[_PHASE38_CONVERGENCE_KEY] = ledger
+    return result
+
+
+def _phase38_control_only_envelope(
+    source: dict | None,
+    *,
+    fingerprint: str,
+    target_identity: dict[str, str],
+    target_chapter_id: int,
+) -> dict:
+    """Preserve a live Phase 3.8 budget when no stage remains resumable."""
+
+    ledger = _phase38_convergence_ledger(source)
+    if not ledger:
+        return {}
+    return {
+        "schema_version": generation._CONCEPT_CHECKPOINT_SCHEMA,
+        "checkpoint_format": generation._CONCEPT_CHECKPOINT_FORMAT,
+        "fingerprint": fingerprint,
+        "target_identity": copy.deepcopy(target_identity),
+        "target_chapter_id": target_chapter_id,
+        _PHASE38_CONTROL_ONLY_KEY: True,
+        "checkpoints": [],
+        _PHASE38_CONVERGENCE_KEY: ledger,
+    }
 
 
 def _copy_semantic_recovery_dispatch_ledger(
@@ -849,12 +898,38 @@ def _deposit_concepts(
     inventory: dict | None = None,
     mined_types: dict | None = None,
     source_text: str = "",
+    final_grounding_certificate: dict | None = None,
+    grounding_certificate_sink: dict | None = None,
 ) -> tuple[list[int], list[int]]:
     """Create concepts under the chapter, reusing existing ones across books.
 
     Returns (created_ids, merged_ids): a same-learning-kind normalized-title
     match is refreshed from the newly validated record and its sources grow.
     """
+    if pre_post == "Post" and final_grounding_certificate is not None:
+        from . import canonical_source_phase3 as phase3
+
+        semantic_graph = phase3.active_graph()
+        if not isinstance(semantic_graph, dict):
+            session = phase3.active_session()
+            semantic_graph = (
+                session.get("graph")
+                if isinstance(session, dict)
+                else None
+            )
+        try:
+            grounding_certificate.verify_final_certificate(
+                records,
+                final_grounding_certificate,
+                semantic_graph=(
+                    semantic_graph
+                    if isinstance(semantic_graph, dict)
+                    else None
+                ),
+                require_semantic_graph=config.use_live_generation(),
+            )
+        except grounding_certificate.GroundingCertificateError as exc:
+            raise DepositValidationError(str(exc)) from exc
     if pre_post == "Post":
         _require_deposit_source_topic_coverage(records, source_text)
     source_topic_safe_records = copy.deepcopy(records)
@@ -1005,6 +1080,30 @@ def _deposit_concepts(
         codes = ", ".join(sorted({e["code"] for e in fatal}))
         raise DepositValidationError(
             f"concept validation failed before deposit: {codes}")
+
+    if pre_post == "Post" and final_grounding_certificate is not None:
+        # Deposit-only cleanup is allowed to normalize presentation, but it
+        # may not rewrite a grounded title/topic/Description or detach its
+        # exact evidence.  Rebuilding the aggregate certificate verifies every
+        # row seal after normalization and happens before the first DB flush.
+        try:
+            deposited_certificate = (
+                grounding_certificate.build_final_certificate(records)
+            )
+        except grounding_certificate.GroundingCertificateError as exc:
+            raise DepositValidationError(str(exc)) from exc
+        if (
+            deposited_certificate.get("lineage_sha256")
+            != final_grounding_certificate.get("lineage_sha256")
+        ):
+            raise DepositValidationError(
+                "deposit normalization changed the ordered grounded concept "
+                "lineage"
+            )
+        if grounding_certificate_sink is not None:
+            grounding_certificate_sink["certificate"] = copy.deepcopy(
+                deposited_certificate
+            )
 
     created_ids: list[int] = []
     merged_ids: list[int] = []
@@ -1275,7 +1374,14 @@ def _store_inventory(job: models.UploadJob, artifacts: dict) -> None:
     """Persist the generation-time inventory + mined Types on the upload job."""
     inventory = artifacts.get("question_task_inventory") or {}
     mined = artifacts.get("mined_types") or {}
-    if not inventory.get("items") and not mined.get("types"):
+    final_grounding = artifacts.get(
+        grounding_certificate.FINAL_CERTIFICATE_FIELD
+    )
+    if (
+        not inventory.get("items")
+        and not mined.get("types")
+        and not isinstance(final_grounding, dict)
+    ):
         return
     stored = {
         "items": inventory.get("items", []),
@@ -1289,6 +1395,10 @@ def _store_inventory(job: models.UploadJob, artifacts: dict) -> None:
         # bundle compatibility while retaining the exact qid -> host evidence
         # needed to audit a successful job after its checkpoint is cleared.
         stored[certification_key] = copy.deepcopy(certification_ledger)
+    if isinstance(final_grounding, dict):
+        stored[
+            grounding_certificate.FINAL_CERTIFICATE_FIELD
+        ] = copy.deepcopy(final_grounding)
     job.question_inventory = stored
 
 
@@ -1443,7 +1553,12 @@ def _merge_generation_checkpoint_history(
             if str(entry.get("stage") or "") != stage
         ]
         if not history:
-            return {}
+            return _phase38_control_only_envelope(
+                stored,
+                fingerprint=fingerprint,
+                target_identity=target_identity,
+                target_chapter_id=target_chapter_id,
+            )
         # A discard control event is not itself a checkpoint. Mirror the
         # furthest remaining durable stage so API/UI consumers immediately see
         # the checkpoint that the next retry will actually resume from.
@@ -1523,6 +1638,7 @@ def _merge_generation_checkpoint_history(
     }
     merged = _copy_human_decision_ledger(merged, stored)
     merged = _copy_semantic_recovery_dispatch_ledger(merged, stored)
+    merged = _copy_phase38_convergence_ledger(merged, stored)
     return _consume_applied_human_decisions(merged, checkpoint)
 
 
@@ -1537,10 +1653,21 @@ def _compatible_generation_checkpoint_envelope(
     history = [
         copy.deepcopy(entry)
         for entry in generation._concept_checkpoint_entries(stored)
-        if generation._compatible_concept_checkpoint_entry(entry)
+        if generation._compatible_concept_checkpoint_entry(
+            entry,
+            # UploadJob checkpoints feed publication, not the standalone
+            # semantic transformer. An uncertified terminal row is never the
+            # durable stage mirrored for Resume in a live run.
+            require_final_grounding=config.use_live_generation(),
+        )
     ]
     if not history:
-        return {}
+        return _phase38_control_only_envelope(
+            stored,
+            fingerprint=fingerprint,
+            target_identity=target_identity,
+            target_chapter_id=target_chapter_id,
+        )
     candidate = {
         "schema_version": generation._CONCEPT_CHECKPOINT_SCHEMA,
         "checkpoint_format": generation._CONCEPT_CHECKPOINT_FORMAT,
@@ -1548,7 +1675,12 @@ def _compatible_generation_checkpoint_envelope(
     }
     newest = generation._newest_compatible_concept_checkpoint(candidate)
     if newest is None:
-        return {}
+        return _phase38_control_only_envelope(
+            stored,
+            fingerprint=fingerprint,
+            target_identity=target_identity,
+            target_chapter_id=target_chapter_id,
+        )
     stage = str(newest.get("stage") or "")
     normalized = {
         "schema_version": generation._CONCEPT_CHECKPOINT_SCHEMA,
@@ -1571,10 +1703,11 @@ def _compatible_generation_checkpoint_envelope(
         retained_stage=stage,
     )
     normalized = _copy_semantic_recovery_dispatch_ledger(normalized, stored)
-    return _prune_semantic_recovery_dispatches_after_checkpoint_fallback(
+    normalized = _prune_semantic_recovery_dispatches_after_checkpoint_fallback(
         normalized,
         retained_stage=stage,
     )
+    return _copy_phase38_convergence_ledger(normalized, stored)
 
 
 def _persist_compatible_generation_checkpoint_mirror(
@@ -1644,6 +1777,60 @@ def _checkpoint_mismatch_message(
         "Select the matching chapter/source, or explicitly start over to clear "
         "the saved checkpoint."
     )
+
+
+def _persist_phase38_convergence_state(
+    db: Session,
+    job: models.UploadJob,
+    expected_state: dict | None,
+    replacement: dict | None,
+) -> None:
+    """CAS one Phase 3.8 transition into this job's durable checkpoint."""
+
+    db.refresh(job)
+    original = copy.deepcopy(job.generation_checkpoint or {})
+    expected = (
+        copy.deepcopy(expected_state)
+        if isinstance(expected_state, dict)
+        else {}
+    )
+    current = _phase38_convergence_ledger(original)
+    if current != expected:
+        db.rollback()
+        db.refresh(job)
+        raise phase38.Phase38ConvergenceExhausted(
+            "Phase 3.8 stopped because another worker advanced this job's "
+            "convergence checkpoint; no stale or duplicate candidate was "
+            "dispatched"
+        )
+    durable = copy.deepcopy(original)
+    if replacement is None:
+        durable.pop(_PHASE38_CONVERGENCE_KEY, None)
+    else:
+        if not isinstance(replacement, dict):
+            raise TypeError("Phase 3.8 convergence state must be an object")
+        durable[_PHASE38_CONVERGENCE_KEY] = copy.deepcopy(replacement)
+    if durable == original:
+        return
+    claimed = db.execute(
+        update(models.UploadJob)
+        .where(
+            models.UploadJob.id == job.id,
+            models.UploadJob.generation_checkpoint == original,
+        )
+        .values(generation_checkpoint=copy.deepcopy(durable))
+        .execution_options(synchronize_session=False)
+    )
+    if claimed.rowcount != 1:
+        db.rollback()
+        db.refresh(job)
+        raise phase38.Phase38ConvergenceExhausted(
+            "Phase 3.8 stopped because another worker changed this job's "
+            "convergence checkpoint; no duplicate candidate was dispatched"
+        )
+    db.commit()
+    db.refresh(job)
+    drive_checkpoints.schedule_checkpoint_backup(job.id)
 
 
 def _semantic_recovery_topic_ids() -> dict[str, str]:
@@ -1884,6 +2071,9 @@ def _persist_semantic_recovery_checkpoint(
     durable = _copy_semantic_recovery_dispatch_ledger(
         durable, source_checkpoint
     )
+    durable = _copy_phase38_convergence_ledger(
+        durable, source_checkpoint
+    )
     if dispatch_issue_key:
         ledger = _semantic_recovery_dispatch_ledger(durable)
         attempts = []
@@ -2068,13 +2258,22 @@ def _deposit_and_publish_concepts(
     inventory: dict | None = None,
     mined_types: dict | None = None,
     source_text: str = "",
-) -> tuple[list[int], list[int], dict[str, int]]:
+    final_grounding_certificate: dict | None = None,
+    grounding_audit_job: models.UploadJob | None = None,
+) -> tuple[list[int], list[int], dict]:
     """Serialize final dedupe, DB commit, and shared workbook publication."""
     # Phase 2.2 may have verified source-visible text that Mathpix omitted.
     # Deposit validation sees the same derived semantic source as concept
     # extraction, while UploadJob.mmd_text remains the immutable audit copy.
     source_text = canonical_source_phase22.active_semantic_source(source_text)
     with workbook_sync.output_workbook_lock():
+        certificate_sink: dict = {}
+        if grounding_audit_job is not None:
+            # The caller has just attached generation artifacts to this job.
+            # Flush them before expiring stale chapter relationships so the
+            # concept/workbook transaction retains both the input certificate
+            # and the deposited-certificate audit record.
+            db.flush()
         db.expire_all()
         chapter = db.get(models.Chapter, chapter_id)
         if chapter is None:
@@ -2088,7 +2287,30 @@ def _deposit_and_publish_concepts(
             inventory=inventory,
             mined_types=mined_types,
             source_text=source_text,
+            final_grounding_certificate=final_grounding_certificate,
+            grounding_certificate_sink=certificate_sink,
         )
+        if (
+            pre_post == "Post"
+            and final_grounding_certificate is not None
+            and not isinstance(certificate_sink.get("certificate"), dict)
+        ):
+            raise DepositValidationError(
+                "post-learning deposit did not produce a verified final "
+                "grounding certificate"
+            )
+        deposited_certificate = certificate_sink.get("certificate")
+        if (
+            isinstance(deposited_certificate, dict)
+            and grounding_audit_job is not None
+        ):
+            inventory_audit = copy.deepcopy(
+                grounding_audit_job.question_inventory or {}
+            )
+            inventory_audit[
+                _DEPOSITED_GROUNDING_CERTIFICATE_KEY
+            ] = copy.deepcopy(deposited_certificate)
+            grounding_audit_job.question_inventory = inventory_audit
         active_ids = set(created_ids + merged_ids)
         _sync_chapter_topic_summary(
             chapter,
@@ -2105,6 +2327,10 @@ def _deposit_and_publish_concepts(
             config.BULK_IMPORT_OUTPUT,
             created_ids + merged_ids,
         )
+        if isinstance(certificate_sink.get("certificate"), dict):
+            written["grounding_certificate"] = copy.deepcopy(
+                certificate_sink["certificate"]
+            )
         return created_ids, merged_ids, written
 
 
@@ -3087,26 +3313,150 @@ def _apply_last_resort_safe_continuation(
 
 
 class SemanticResolutionCyclesExhausted(RuntimeError):
-    """One run resolved decisions repeatedly without ever converging.
-
-    Each mechanism below this is individually bounded - grounding attempts,
-    convergence passes, semantic recovery, per-issue pathway turns. Their
-    composition was not: an autonomous action that resolves one decision can
-    regenerate an equivalent decision under a fresh context hash, which the
-    per-issue caps do not match, so the resolve/restart cycle could spin
-    without limit. This bounds the cycle itself and reports the decision that
-    kept coming back. The wording avoids semantic-failure vocabulary so
-    bounded recovery classifies it non-semantic and does not retry it.
-    """
+    """One equivalent semantic decision returned after every allowed repair."""
 
 
-def _max_resolution_cycles() -> int:
-    raw = os.environ.get("AEGIS_MAX_RESOLUTION_CYCLES", "12")
+def _max_equivalent_resolution_attempts() -> int:
+    raw = os.environ.get(
+        "AEGIS_MAX_EQUIVALENT_RESOLUTION_ATTEMPTS",
+        os.environ.get("AEGIS_MAX_RESOLUTION_CYCLES", "12"),
+    )
     try:
         value = int(raw)
     except (TypeError, ValueError):
         value = 12
     return max(1, min(200, value))
+
+
+def _decision_equivalence_key(pending: dict) -> str:
+    """Bind a recurring issue to its material evidence, not volatile IDs."""
+
+    candidates = []
+    for raw in pending.get("candidates") or []:
+        if not isinstance(raw, dict):
+            continue
+        coverage = str(raw.get("coverage") or "")
+        gap = str(raw.get("gap") or "")
+        candidates.append({
+            "target_id": str(raw.get("target_id") or ""),
+            "concept_id": str(raw.get("concept_id") or ""),
+            "action": _stable_checkpoint_value(raw.get("action")),
+            "title": _stable_checkpoint_value(raw.get("title")),
+            "topic": _stable_checkpoint_value(raw.get("topic")),
+            "coverage_sha256": hashlib.sha256(
+                coverage.encode("utf-8")
+            ).hexdigest(),
+            "gap_sha256": hashlib.sha256(
+                gap.encode("utf-8")
+            ).hexdigest(),
+            "source_block_ids": sorted({
+                str(value) for value in raw.get("source_block_ids") or []
+                if str(value)
+            }),
+            "source_topic_id": str(raw.get("source_topic_id") or ""),
+            "target_topic_id": str(raw.get("target_topic_id") or ""),
+            "boundary_relation": _stable_checkpoint_value(
+                raw.get("boundary_relation")
+            ),
+            "source_kind": _stable_checkpoint_value(raw.get("source_kind")),
+            "source_page": _stable_checkpoint_value(raw.get("source_page")),
+            "text_sha256": str(raw.get("text_sha256") or ""),
+            "binding_hash": str(raw.get("binding_hash") or ""),
+        })
+    evidence = [
+        {
+            "evidence_id": str(raw.get("evidence_id") or ""),
+            "page": _stable_checkpoint_value(raw.get("page")),
+            "label": _stable_checkpoint_value(raw.get("label")),
+            "text": _stable_checkpoint_value(raw.get("text")),
+        }
+        for raw in pending.get("evidence") or []
+        if isinstance(raw, dict)
+    ]
+    options = [
+        {
+            "choice": str(raw.get("choice") or ""),
+            "target_id": str(raw.get("target_id") or ""),
+            "target_concept_id": str(
+                raw.get("target_concept_id") or ""
+            ),
+        }
+        for raw in pending.get("options") or []
+        if isinstance(raw, dict)
+    ]
+    patch = pending.get("source_patch")
+    patch_identity = {
+        key: str(patch.get(key) or "")
+        for key in (
+            "version", "kind", "source_contract_hash",
+            "semantic_context_hash", "before_sha256", "after_sha256",
+            "patch_hash",
+        )
+    } if isinstance(patch, dict) else {}
+    material = {
+        "issue_key": autonomous_resolution.issue_key(pending),
+        "disagreement": {
+            key: _stable_checkpoint_value(pending.get(key))
+            for key in ("conflict", "diagnosis", "decision_question")
+        },
+        "candidates": sorted(
+            candidates,
+            key=lambda row: json.dumps(
+                row, ensure_ascii=False, sort_keys=True,
+                separators=(",", ":"),
+            ),
+        ),
+        "evidence": sorted(
+            evidence,
+            key=lambda row: json.dumps(
+                row, ensure_ascii=False, sort_keys=True,
+                separators=(",", ":"),
+            ),
+        ),
+        "options": sorted(
+            options,
+            key=lambda row: json.dumps(
+                row, ensure_ascii=False, sort_keys=True,
+                separators=(",", ":"),
+            ),
+        ),
+        "source_patch": patch_identity,
+    }
+    return hashlib.sha256(json.dumps(
+        material,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
+
+
+def _equivalent_agent_resolution_count(
+    checkpoint: dict | None,
+    pending: dict,
+) -> int:
+    """Count only prior autonomous repairs for this exact material issue."""
+
+    wanted_equivalence = _decision_equivalence_key(pending)
+    count = 0
+    for row in _human_decision_ledger(checkpoint).get("resolutions") or []:
+        if (
+            not isinstance(row, dict)
+            or str(row.get("resolved_by") or "") != "agent"
+            or str(row.get("status") or "") not in {"ready", "consumed"}
+        ):
+            continue
+        stored_equivalence = str(row.get("equivalence_key") or "")
+        if stored_equivalence:
+            if stored_equivalence == wanted_equivalence:
+                count += 1
+            continue
+        # PR #149 rows predate the material equivalence seal, and their compact
+        # snapshots discard most evidence and candidates. Issue identity alone
+        # cannot prove that a new candidate is materially equivalent. Grant one
+        # fresh post-upgrade budget; every newly recorded row carries the exact
+        # equivalence key and is charged durably on later resumes.
+        continue
+    return count
 
 
 def _decision_identity_text(pending: dict) -> str:
@@ -3132,21 +3482,22 @@ def _decision_identity_text(pending: dict) -> str:
     return ", ".join(parts)
 
 
-def _raise_if_resolution_cycles_exhausted(
+def _raise_if_equivalent_resolution_attempts_exhausted(
     pending: dict,
     *,
-    cycles: int,
+    attempts: int,
     maximum: int,
 ) -> None:
-    if cycles < maximum:
+    if attempts < maximum:
         return
     message = (
-        f"Generation stopped after {cycles} autonomous decision cycles "
-        "without reaching the output. The last decision was "
-        f"[{_decision_identity_text(pending)}]. Each resolution was applied "
-        "and then an equivalent decision returned, so continuing would spend "
-        "without converging. Raise AEGIS_MAX_RESOLUTION_CYCLES to allow more "
-        "cycles, or send this line so the returning decision can be fixed."
+        f"Generation stopped after {attempts} verified autonomous repair "
+        "attempt(s) for the same material decision ["
+        f"{_decision_identity_text(pending)}]. The last allowed repair was "
+        "rerun and the equivalent decision returned, so another repair would "
+        "repeat a proven-ineffective path. Raise "
+        "AEGIS_MAX_EQUIVALENT_RESOLUTION_ATTEMPTS only after correcting that "
+        "decision pathway."
     )
     progress.log(message, level="error")
     raise SemanticResolutionCyclesExhausted(message)
@@ -3207,6 +3558,41 @@ def _raise_if_source_replacement_required(
         )
 
 
+def _reconcile_phase38_decision_returned_claim(
+    checkpoint: dict,
+    pending: dict,
+) -> tuple[dict, bool]:
+    """Clear a Phase 3.8 decision claim only beside its durable pause."""
+
+    result = copy.deepcopy(checkpoint)
+    ledger = _phase38_convergence_ledger(result)
+    if not ledger:
+        return result, False
+    status = str(ledger.get("dispatch_status") or "idle")
+    if status == "request_started":
+        raise phase38.Phase38ConvergenceExhausted(
+            "Phase 3.8 returned a decision without first sealing its provider "
+            "outcome; the unresolved request claim will not be replayed"
+        )
+    if status != "decision_returned":
+        return result, False
+    expected_id = str(ledger.get("dispatch_decision_id") or "")
+    expected_context = str(
+        ledger.get("dispatch_decision_context_hash") or ""
+    )
+    if (
+        expected_id != str(pending.get("decision_id") or "")
+        or expected_context != str(pending.get("context_hash") or "")
+    ):
+        raise phase38.Phase38ConvergenceExhausted(
+            "Phase 3.8 refused to clear a decision-returned claim because "
+            "the durable pause identity did not match the provider outcome"
+        )
+    phase38._clear_dispatch_claim(ledger)
+    result[_PHASE38_CONVERGENCE_KEY] = ledger
+    return result, True
+
+
 def _persist_pending_human_decision(
     db: Session,
     job: models.UploadJob,
@@ -3236,6 +3622,9 @@ def _persist_pending_human_decision(
         pending_payload,
         cumulative_usage=openai_usage.visible_summary(),
     )
+    checkpoint, reconciled_phase38_claim = (
+        _reconcile_phase38_decision_returned_claim(checkpoint, pending)
+    )
     ledger = _human_decision_ledger(checkpoint)
     existing_pending = ledger.get("pending")
     if isinstance(existing_pending, dict):
@@ -3257,6 +3646,11 @@ def _persist_pending_human_decision(
         # result, usage snapshot, or escalation with the raw exception packet.
         # The caller will observe the saved review and cannot start a duplicate
         # provider request.
+        if reconciled_phase38_claim:
+            job.generation_checkpoint = checkpoint
+            db.commit()
+            db.refresh(job)
+            drive_checkpoints.schedule_checkpoint_backup(job.id)
         return copy.deepcopy(existing_pending)
     resolutions = [
         copy.deepcopy(entry)
@@ -3385,13 +3779,16 @@ def _run_with_human_decision_pause(
     """Run a pipeline with bounded agent-first, human-last decision handling."""
 
     active_ids = set(initial_agent_resolution_ids or set())
-    cycles = 0
-    max_cycles = _max_resolution_cycles()
+    local_attempts: dict[str, int] = {}
+    maximum = _max_equivalent_resolution_attempts()
     while True:
         token = _ACTIVE_AGENT_RESOLUTION_IDS.set(frozenset(active_ids))
         try:
             return None, operation()
         except semantic_recovery.HumanDecisionRequired as exc:
+            checkpoint_before_pause = copy.deepcopy(
+                job.generation_checkpoint or {}
+            )
             pending = _persist_pending_human_decision(
                 db,
                 job,
@@ -3400,6 +3797,21 @@ def _run_with_human_decision_pause(
                 target_chapter_id=target_chapter_id,
                 owner_sub=owner_sub,
             )
+            equivalence_key = _decision_equivalence_key(pending)
+            attempts = max(
+                local_attempts.get(equivalence_key, 0),
+                _equivalent_agent_resolution_count(
+                    checkpoint_before_pause, pending
+                ),
+                _equivalent_agent_resolution_count(
+                    job.generation_checkpoint, pending
+                ),
+            )
+            _raise_if_equivalent_resolution_attempts_exhausted(
+                pending,
+                attempts=attempts,
+                maximum=maximum,
+            )
             resolved_id = _autonomously_resolve_pending_decision(
                 db,
                 job,
@@ -3407,9 +3819,7 @@ def _run_with_human_decision_pause(
                 owner_sub=owner_sub,
             )
             if resolved_id:
-                cycles += 1
-                _raise_if_resolution_cycles_exhausted(
-                    pending, cycles=cycles, maximum=max_cycles)
+                local_attempts[equivalence_key] = attempts + 1
                 active_ids.add(resolved_id)
                 continue
             current = _pending_human_decision(job.generation_checkpoint)
@@ -3420,9 +3830,7 @@ def _run_with_human_decision_pause(
                 owner_sub=owner_sub,
             )
             if continued_id:
-                cycles += 1
-                _raise_if_resolution_cycles_exhausted(
-                    current or pending, cycles=cycles, maximum=max_cycles)
+                local_attempts[equivalence_key] = attempts + 1
                 active_ids.add(continued_id)
                 continue
             _raise_if_unattended_cannot_pause(current or pending)
@@ -3599,6 +4007,7 @@ def _record_human_semantic_decision_locked(
     resolution = {
         "decision_id": decision_id,
         "context_hash": str(pending.get("context_hash") or ""),
+        "equivalence_key": _decision_equivalence_key(pending),
         "choice": choice,
         "instruction": instruction,
         "target_id": target_id,
@@ -3860,14 +4269,23 @@ def generate_post_learning(
             )
             else resume_checkpoint
         )
-        with _human_decision_resolution_context(current_resume):
-            return generation.concepts_from_mmd(
-                job.mmd_text,
-                **recovery_metadata,
-                artifacts=artifacts,
-                resume_checkpoint=current_resume,
-                checkpoint_callback=save_checkpoint,
-            )
+        with phase38.convergence_checkpoint_context(
+            scope=f"upload-job:{job.id}:{fingerprint}",
+            state=_phase38_convergence_ledger(current_resume),
+            persist=lambda expected, replacement: (
+                _persist_phase38_convergence_state(
+                    db, job, expected, replacement
+                )
+            ),
+        ):
+            with _human_decision_resolution_context(current_resume):
+                return generation.concepts_from_mmd(
+                    job.mmd_text,
+                    **recovery_metadata,
+                    artifacts=artifacts,
+                    resume_checkpoint=current_resume,
+                    checkpoint_callback=save_checkpoint,
+                )
 
     def repair_checkpoint(
         checkpoint: dict,
@@ -3917,6 +4335,16 @@ def generate_post_learning(
     ]:
         records = generation_attempt()
         _store_inventory(job, artifacts)
+        final_grounding = artifacts.get(
+            grounding_certificate.FINAL_CERTIFICATE_FIELD
+        )
+        if config.use_live_generation() and not isinstance(
+            final_grounding, dict
+        ):
+            raise DepositValidationError(
+                "live post-learning output has no final payload/evidence "
+                "grounding certificate"
+            )
         try:
             created_ids, merged_ids, written = _deposit_and_publish_concepts(
                 db,
@@ -3927,6 +4355,8 @@ def generate_post_learning(
                 inventory=artifacts.get("question_task_inventory"),
                 mined_types=artifacts.get("mined_types"),
                 source_text=job.mmd_text,
+                final_grounding_certificate=final_grounding,
+                grounding_audit_job=job,
             )
         except DepositValidationError:
             db.rollback()
@@ -3994,6 +4424,20 @@ def generate_post_learning(
         return paused
     records, created_ids, merged_ids, written = pipeline_result
 
+    deposited_grounding = written.get("grounding_certificate")
+    if config.use_live_generation() and not isinstance(
+        deposited_grounding, dict
+    ):
+        raise DepositValidationError(
+            "live post-learning publication completed without a verified "
+            "payload/evidence grounding certificate"
+        )
+    if isinstance(deposited_grounding, dict):
+        inventory_audit = copy.deepcopy(job.question_inventory or {})
+        inventory_audit[_DEPOSITED_GROUNDING_CERTIFICATE_KEY] = copy.deepcopy(
+            deposited_grounding
+        )
+        job.question_inventory = inventory_audit
     job.status = "generated"
     job.deposit_scope_type = "chapter"
     job.deposit_scope_ids = [target_chapter_id]
@@ -4022,6 +4466,9 @@ def generate_post_learning(
         "sources_updated": written["sources_updated"],
         "output_workbook": str(config.BULK_IMPORT_OUTPUT),
         "inventory_items": len((job.question_inventory or {}).get("items", [])),
+        "output_certificate_sha256": str(
+            (deposited_grounding or {}).get("certificate_sha256") or ""
+        ),
     }
 
 
@@ -4220,22 +4667,31 @@ def generate_pre_learning_from_upload(
             else resume_checkpoint
         )
         recovery_scope = "post_generation"
-        with _human_decision_resolution_context(current_resume):
-            base = generation.concepts_from_mmd(
-                job.mmd_text,
-                subject=chapter.subject,
-                board=chapter.board,
-                grade=chapter.grade,
-                unit=chapter.unit,
-                chapter_title=chapter.chapter_title,
-                chapter_id=chapter.id,
-                chapter_code=chapter.chapter_code,
-                learning_kind="Post",
-                artifacts=artifacts,
-                resume_checkpoint=current_resume,
-                checkpoint_callback=save_checkpoint,
-                completion_progress=0.98,
-            )
+        with phase38.convergence_checkpoint_context(
+            scope=f"upload-job:{job.id}:{fingerprint}",
+            state=_phase38_convergence_ledger(current_resume),
+            persist=lambda expected, replacement: (
+                _persist_phase38_convergence_state(
+                    db, job, expected, replacement
+                )
+            ),
+        ):
+            with _human_decision_resolution_context(current_resume):
+                base = generation.concepts_from_mmd(
+                    job.mmd_text,
+                    subject=chapter.subject,
+                    board=chapter.board,
+                    grade=chapter.grade,
+                    unit=chapter.unit,
+                    chapter_title=chapter.chapter_title,
+                    chapter_id=chapter.id,
+                    chapter_code=chapter.chapter_code,
+                    learning_kind="Post",
+                    artifacts=artifacts,
+                    resume_checkpoint=current_resume,
+                    checkpoint_callback=save_checkpoint,
+                    completion_progress=0.98,
+                )
         _store_inventory(job, artifacts)
         # The target concept map may have advanced its checkpoint during this
         # attempt. Pre-learning must resume from that current durable envelope,

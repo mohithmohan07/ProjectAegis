@@ -28,11 +28,19 @@ import pytest
 
 from app import models
 from app.bulk_import import workbook_sync
-from app.services import build_concepts, progress, uploads
+from app.services import (
+    build_concepts,
+    canonical_source_phase38_boundary_grounding_turnover_contract as phase38,
+    checkpoints,
+    grounding_certificate,
+    progress,
+    uploads,
+)
 from app.services import semantic_recovery as recovery
 
 
-_STALE_ISSUE_KEY = "issue-key-cg-0023-stale"
+_STALE_ISSUE_KEY = "1" * 64
+_UNRELATED_ISSUE_KEY = "2" * 64
 _GROUND_0023_FAILURE = (
     "Phase 3 concept grounding failed independent verification for topic "
     "'Source Topic' after 3 attempt(s): CONCEPT-GROUND-0023 not fully "
@@ -98,7 +106,24 @@ def _stage(records: list[dict]) -> dict:
     )
 
 
+def _agent_review(issue_key: str) -> dict:
+    return {
+        "status": "resolved",
+        "resolver_version": "phase38-test-resolver-v1",
+        "issue_key": issue_key,
+        "started_at": "2026-08-02T16:45:00+00:00",
+        "completed_at": "2026-08-02T16:45:20+00:00",
+        "choice": "select_candidate",
+        "target_id": "CAND-STALE-0001",
+    }
+
+
 def _stale_resolution(unit_id: str = "CONCEPT-GROUND-0023") -> dict:
+    issue_key = (
+        _STALE_ISSUE_KEY
+        if unit_id == "CONCEPT-GROUND-0023"
+        else _UNRELATED_ISSUE_KEY
+    )
     return {
         "decision_id": f"phase31-ground-stale-{unit_id.lower()}",
         "context_hash": "c" * 64,
@@ -108,11 +133,13 @@ def _stale_resolution(unit_id: str = "CONCEPT-GROUND-0023") -> dict:
         "target_id": "CAND-STALE-0001",
         "target_concept_id": "",
         "resolved_at": "2026-08-02T16:45:25+00:00",
-        "resolved_by": "agent",
+        "resolved_by": "human",
         "pending_decision": {
             "decision_id": f"phase31-ground-stale-{unit_id.lower()}",
             "context_hash": "c" * 64,
             "kind": "phase31_source_grounding_semantic_conflict",
+            "phase": "phase31_source_grounding",
+            "conflict": "The selected evidence does not cover every claim.",
             "checkpoint_progress": 0.81,
             "item": {
                 "unit_id": unit_id,
@@ -130,10 +157,7 @@ def _stale_resolution(unit_id: str = "CONCEPT-GROUND-0023") -> dict:
                     "coverage": "Silesian weavers uprising evidence",
                 }
             ],
-            "agent_review": {
-                "status": "resolved",
-                "issue_key": _STALE_ISSUE_KEY,
-            },
+            "agent_review": _agent_review(issue_key),
         },
     }
 
@@ -159,7 +183,13 @@ def _seed_job(db, chapter, *, filename: str, ledger: dict | None = None):
         target_chapter_id=chapter.id,
     )
     if ledger is not None:
-        envelope[build_concepts._HUMAN_DECISIONS_KEY] = copy.deepcopy(ledger)
+        durable_ledger = copy.deepcopy(ledger)
+        durable_ledger.setdefault("context", {
+            "fingerprint": envelope["fingerprint"],
+            "target_chapter_id": chapter.id,
+        })
+        durable_ledger.setdefault("deferred_assignment_unit_ids", [])
+        envelope[build_concepts._HUMAN_DECISIONS_KEY] = durable_ledger
     job.generation_checkpoint = envelope
     db.commit()
     db.refresh(job)
@@ -365,18 +395,17 @@ def test_repair_persistence_retires_stale_decisions_for_repaired_rows(
             _stale_resolution("CONCEPT-GROUND-0005"),
         ],
         "agent_review_history": [
-            {"issue_key": _STALE_ISSUE_KEY, "status": "resolved"},
-            {"issue_key": "issue-key-unrelated", "status": "resolved"},
+            _agent_review(_STALE_ISSUE_KEY),
+            _agent_review(_UNRELATED_ISSUE_KEY),
         ],
     }
     ledger["resolutions"][1]["decision_id"] = "phase31-ground-unrelated"
     ledger["resolutions"][1]["pending_decision"]["decision_id"] = (
         "phase31-ground-unrelated"
     )
-    ledger["resolutions"][1]["pending_decision"]["agent_review"] = {
-        "status": "resolved",
-        "issue_key": "issue-key-unrelated",
-    }
+    ledger["resolutions"][1]["pending_decision"]["agent_review"] = (
+        _agent_review(_UNRELATED_ISSUE_KEY)
+    )
     job = _seed_job(
         db, chapter, filename="cg-0023-ledger.mmd", ledger=ledger)
     monkeypatch.setattr(
@@ -387,11 +416,12 @@ def test_repair_persistence_retires_stale_decisions_for_repaired_rows(
 
     repaired_records = _records()
     repaired_records[22]["concept_title"] = "Repaired Concept 23"
+    repair_signature = "e" * 64
     result = recovery.RepairResult(
         checkpoint=_stage(repaired_records),
         base_stage="pre_type_assignment",
         changed_row_indexes=(22,),
-        repair_signature="repair-signature-0023",
+        repair_signature=repair_signature,
         scope="checkpoint_rows",
     )
     build_concepts._persist_semantic_recovery_checkpoint(
@@ -414,8 +444,7 @@ def test_repair_persistence_retires_stale_decisions_for_repaired_rows(
     }
     retired = resolutions["phase31-ground-stale-concept-ground-0023"]
     assert retired["status"] == "superseded"
-    assert retired["superseded_by_repair_signature"] == (
-        "repair-signature-0023")
+    assert retired["superseded_by_repair_signature"] == repair_signature
     # A direction for an unrepaired row survives untouched.
     assert resolutions["phase31-ground-unrelated"]["status"] == "ready"
     history_keys = {
@@ -423,7 +452,7 @@ def test_repair_persistence_retires_stale_decisions_for_repaired_rows(
         for row in stored["human_decisions"]["agent_review_history"]
     }
     assert _STALE_ISSUE_KEY not in history_keys
-    assert "issue-key-unrelated" in history_keys
+    assert _UNRELATED_ISSUE_KEY in history_keys
     # The retired direction is invisible to every replay surface.
     assert all(
         row["decision_id"] != "phase31-ground-stale-concept-ground-0023"
@@ -434,6 +463,94 @@ def test_repair_persistence_retires_stale_decisions_for_repaired_rows(
         stored)
     assert newest is not None
     assert newest["records"][22]["concept_title"] == "Repaired Concept 23"
+    # Superseded decisions are a first-class durable state: the repaired
+    # checkpoint must still pass the same strict validation used by portable
+    # export/Drive backup instead of failing Pydantic's extra-field contract.
+    checkpoints._validate_checkpoint(
+        stored,
+        learning_kind=job.learning_kind,
+        mmd_text=job.mmd_text,
+        path="checkpoint",
+    )
+
+
+def test_decision_returned_claim_clears_only_with_pending_decision_commit(
+    db,
+    first_chapter,
+    monkeypatch,
+):
+    chapter = db.get(models.Chapter, first_chapter["id"])
+    job = _seed_job(db, chapter, filename="phase38-decision-bridge.mmd")
+    pending = copy.deepcopy(_stale_resolution()["pending_decision"])
+    pending.pop("agent_review", None)
+    checkpoint = copy.deepcopy(job.generation_checkpoint)
+    fingerprint = checkpoint["fingerprint"]
+    claim = phase38._fresh_convergence_state(
+        scope=f"upload-job:{job.id}:{fingerprint}"
+    )
+    claim["base_candidate_sha256"] = "a" * 64
+    claim["candidate_sha256"] = "a" * 64
+    claim["dispatch_status"] = "decision_returned"
+    claim["dispatch_sequence"] = 1
+    claim["dispatch_candidate_sha256"] = "a" * 64
+    claim["dispatch_decision_id"] = pending["decision_id"]
+    claim["dispatch_decision_context_hash"] = pending["context_hash"]
+    checkpoint[build_concepts._PHASE38_CONVERGENCE_KEY] = claim
+    job.generation_checkpoint = checkpoint
+    db.commit()
+    monkeypatch.setattr(
+        build_concepts.drive_checkpoints,
+        "schedule_checkpoint_backup",
+        lambda *_args, **_kwargs: None,
+    )
+
+    real_commit = db.commit
+    committed_boundaries: list[tuple[str, str]] = []
+
+    def assert_atomic_bridge():
+        durable = job.generation_checkpoint or {}
+        phase_state = durable.get(
+            build_concepts._PHASE38_CONVERGENCE_KEY, {}
+        )
+        human_pending = (
+            (durable.get(build_concepts._HUMAN_DECISIONS_KEY) or {}).get(
+                "pending"
+            )
+            or {}
+        )
+        if phase_state.get("dispatch_status") == "idle":
+            # There is no commit boundary at which the one-shot claim is idle
+            # but its exact provider-returned decision is absent.
+            assert human_pending.get("decision_id") == pending["decision_id"]
+            assert human_pending.get("context_hash") == pending["context_hash"]
+        committed_boundaries.append((
+            str(phase_state.get("dispatch_status") or ""),
+            str(human_pending.get("decision_id") or ""),
+        ))
+        real_commit()
+
+    monkeypatch.setattr(db, "commit", assert_atomic_bridge)
+    stored_pending = build_concepts._persist_pending_human_decision(
+        db,
+        job,
+        pending,
+        fingerprint=fingerprint,
+        target_chapter_id=chapter.id,
+        owner_sub=None,
+    )
+
+    assert stored_pending["decision_id"] == pending["decision_id"]
+    db.refresh(job)
+    durable = job.generation_checkpoint
+    phase_state = durable[build_concepts._PHASE38_CONVERGENCE_KEY]
+    assert phase_state["dispatch_status"] == "idle"
+    assert phase_state["dispatch_decision_id"] == ""
+    assert phase_state["dispatch_decision_context_hash"] == ""
+    assert durable[build_concepts._HUMAN_DECISIONS_KEY]["pending"][
+        "decision_id"
+    ] == pending["decision_id"]
+    assert committed_boundaries
+    assert all(status == "idle" for status, _decision in committed_boundaries)
 
 
 # --------------------------------------------------------------------------- #
@@ -452,7 +569,7 @@ def test_full_lifecycle_repairs_row_22_without_replaying_stale_rejection(
         "pending": None,
         "resolutions": [_stale_resolution("CONCEPT-GROUND-0023")],
         "agent_review_history": [
-            {"issue_key": _STALE_ISSUE_KEY, "status": "resolved"},
+            _agent_review(_STALE_ISSUE_KEY),
         ],
     }
     job = _seed_job(
@@ -460,6 +577,7 @@ def test_full_lifecycle_repairs_row_22_without_replaying_stale_rejection(
 
     generation_calls = 0
     verified_statuses: list[list[str]] = []
+    deposited_evidence: list[str] = []
 
     def generate(
         *_args,
@@ -497,11 +615,32 @@ def test_full_lifecycle_repairs_row_22_without_replaying_stale_rejection(
         assert len(dispatches["attempts"]) == 1
         assert dispatches["attempts"][0]["status"] == "applied"
         assert dispatches["attempts"][0]["candidate_payload_hash"]
+        grounded = copy.deepcopy(saved["records"])
+        for index, row in enumerate(grounded):
+            row["_source_block_ids"] = (
+                ["BLK-00156", "BLK-00176", "BLK-00181"]
+                if index == 22
+                else ["BLK-00176", "BLK-00181"]
+            )
+            row["_source_grounding_contract"] = (
+                "api-verified-source-block-ids"
+            )
+            row["_source_grounding_version"] = "lifecycle-grounding-1"
+        grounding_certificate.seal_records(
+            grounded,
+            source_contract_hash="a" * 64,
+            semantic_topology_sha256="b" * 64,
+            allowed_block_ids={"BLK-00156", "BLK-00176", "BLK-00181"},
+        )
+        certificate = grounding_certificate.build_final_certificate(grounded)
         if artifacts is not None:
             artifacts["question_task_inventory"] = (
                 copy.deepcopy(saved["question_task_inventory"]))
             artifacts["mined_types"] = {"types": []}
-        return copy.deepcopy(saved["records"])
+            artifacts["final_grounding_certificate"] = copy.deepcopy(
+                certificate
+            )
+        return grounded
 
     original_verified = (
         build_concepts._persist_semantic_recovery_dispatch_verified)
@@ -549,15 +688,22 @@ def test_full_lifecycle_repairs_row_22_without_replaying_stale_rejection(
             }],
         },
     )
+    def deposit(*_args, **kwargs):
+        verified = grounding_certificate.verify_final_certificate(
+            kwargs["records"], kwargs["final_grounding_certificate"]
+        )
+        deposited_evidence.extend(
+            kwargs["records"][22]["_source_block_ids"]
+        )
+        return [], [], {
+            "written": 0,
+            "sources_updated": 0,
+            "parent_column": True,
+            "grounding_certificate": verified,
+        }
+
     monkeypatch.setattr(
-        build_concepts,
-        "_deposit_and_publish_concepts",
-        lambda *_args, **_kwargs: (
-            [],
-            [],
-            {"written": 0, "sources_updated": 0, "parent_column": True},
-        ),
-    )
+        build_concepts, "_deposit_and_publish_concepts", deposit)
     monkeypatch.setattr(
         build_concepts.drive_checkpoints,
         "schedule_checkpoint_backup",
@@ -569,6 +715,7 @@ def test_full_lifecycle_repairs_row_22_without_replaying_stale_rejection(
 
     assert result["job_id"] == job.id
     assert generation_calls == 2
+    assert deposited_evidence == ["BLK-00156", "BLK-00176", "BLK-00181"]
     # Postcondition-first success: the dispatch became ``succeeded`` only
     # after the rerun completed without the rejection recurring.
     assert verified_statuses == [["succeeded"]]
@@ -627,3 +774,45 @@ def test_persisted_generation_log_keeps_one_terminal_event(db, first_chapter):
         and "exhausted its bounded" in str(event.get("message") or "")
     ]
     assert len(terminal_events) == 1
+
+
+def test_nonrecoverable_failure_has_one_outer_terminal_event(db, first_chapter):
+    chapter = db.get(models.Chapter, first_chapter["id"])
+    job = _seed_job(db, chapter, filename="provider-contract-terminal.mmd")
+    failure = recovery.ProviderResponseContractError(
+        "provider response contract failed after mechanical correction"
+    )
+
+    def generation_attempt():
+        return recovery.run_with_semantic_recovery(
+            lambda: (_ for _ in ()).throw(failure),
+            checkpoint_snapshot=lambda: copy.deepcopy(
+                job.generation_checkpoint
+            ),
+            repair_checkpoint=lambda *_args: pytest.fail(
+                "a nonrecoverable provider contract failure cannot be repaired"
+            ),
+            persist_repair=lambda *_args: pytest.fail(
+                "a nonrecoverable provider contract failure cannot be saved"
+            ),
+            log=progress.log,
+        )
+
+    history_token = progress._history.set([])
+    try:
+        with pytest.raises(recovery.ProviderResponseContractError):
+            uploads.run_with_openai_usage(db, job.id, generation_attempt)
+    finally:
+        progress._history.reset(history_token)
+    db.refresh(job)
+    errors = [
+        event for event in job.generation_log
+        if event.get("type") == "log" and event.get("level") == "error"
+    ]
+    assert len(errors) == 1
+    assert errors[0]["error"]["exception_type"] == (
+        "ProviderResponseContractError"
+    )
+    assert "Generation stopped without semantic retry" not in errors[0][
+        "message"
+    ]

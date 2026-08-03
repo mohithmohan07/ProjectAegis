@@ -1274,6 +1274,14 @@ def test_full_type_allocator_uses_qid_topic_ancestry_not_stale_subtopic_hint(
         }
 
     monkeypatch.setattr(generation, "_openai_json", fake_openai_json)
+    # This regression isolates QID ancestry in the Type allocator. Source
+    # grounding has its own provider/critic contract and must not consume the
+    # allocator-shaped fake response above.
+    monkeypatch.setattr(
+        phase3,
+        "ground_concepts",
+        lambda current, **_kwargs: current,
+    )
     with phase3.activate(graph):
         assigned = generation._assign_mined_types_via_api(
             records,

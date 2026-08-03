@@ -250,7 +250,7 @@ def test_exact_grounding_can_use_a_boundary_continuation_without_the_wrong_figur
         "BLK-00051",
     ]
     assert grounded[0]["_source_grounding_version"] == (
-        "phase3.8-boundary-aware-source-grounding-1"
+        "phase3.8-boundary-aware-source-grounding-2"
     )
     assert grounded[0]["_source_grounding_contract"] == (
         "api-verified-boundary-aware-source-block-ids"
@@ -303,14 +303,14 @@ def test_targeted_convergence_retries_the_failed_origin_beyond_two_passes():
                 "verification for topic 'Topic A': CONCEPT-GROUND-0002 is not "
                 "fully supported."
             )
-        return _records
+        return copy.deepcopy(repaired)
 
     result = phase38._phase32_adjudicate_with_targeted_convergence(
         original,
         records,
     )
 
-    assert result == records
+    assert result == repaired
     assert calls == 4
     assert seen_feedback[0] == {}
     assert set(seen_feedback[1]) == {"TOPOLOGY-CONCEPT-0002"}
@@ -328,6 +328,10 @@ def test_human_topology_handoff_is_consumed_once_before_directed_pass():
         "concept_title": "Concept A",
         "concept_details": "Description: Unsupported compound claim",
     }]
+    adjudicated = copy.deepcopy(records)
+    adjudicated[0]["_phase32_origin_concept_id"] = (
+        "TOPOLOGY-CONCEPT-0001"
+    )
     decision_id = "phase31-ground-1234567890abcdef12345678"
     calls = 0
 
@@ -342,12 +346,12 @@ def test_human_topology_handoff_is_consumed_once_before_directed_pass():
             )
         assert decision_id in early_gate._SUPPRESSED_RESOLUTION_IDS.get()
         assert phase33._EXTERNAL_GROUNDING_FEEDBACK.get()
-        return _records
+        return copy.deepcopy(adjudicated)
 
     assert phase38._phase32_adjudicate_with_targeted_convergence(
         original,
         records,
-    ) == records
+    ) == adjudicated
     assert calls == 2
 
 
@@ -366,7 +370,7 @@ def test_old_final_topology_cache_is_rejected_but_current_grounding_is_reused(
             "topic": "Topic A",
             "concept_title": "Concept A",
             "_source_grounding_version": (
-                "phase3.8-boundary-aware-source-grounding-1"
+                "phase3.8-boundary-aware-source-grounding-2"
             ),
         }
     ]

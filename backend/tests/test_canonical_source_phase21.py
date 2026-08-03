@@ -300,7 +300,7 @@ def test_all_inventory_bearing_checkpoint_stages_reject_previous_versions():
         generation._TYPE_TAXONOMY_CHECKPOINT_STAGE: 3,
         generation._CONCEPT_CHECKPOINT_STAGE: 3,
         "post_type_assignment": 5,
-        "final_content_ready": 5,
+        "final_content_ready": 6,
     }
 
     assert {

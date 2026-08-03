@@ -28,6 +28,7 @@ from .. import config
 from . import canonical_source_phase3 as phase3
 from . import concept_refiner as cr
 from . import early_semantic_gate as early_gate
+from . import grounding_certificate
 from . import progress
 from . import semantic_confidence_policy as confidence_policy
 from .semantic_recovery import (
@@ -151,23 +152,7 @@ def _description_source_claim(record: dict[str, Any]) -> str:
     generated pedagogical enrichments. They are intentionally excluded from the
     PDF-evidence contract.
     """
-    details = str(
-        record.get("concept_details")
-        or record.get("concept_description")
-        or ""
-    )
-    description = ""
-    for label, content in cr.split_sections(details):
-        if str(label or "").strip().casefold().startswith("description"):
-            description = str(content or "").strip()
-            break
-    description = _MASTERY_TAIL_RE.sub("", description).strip()
-    description = phase3._clean_public_text(description)
-    if description:
-        return description
-    return phase3._clean_public_text(
-        record.get("concept_title") or record.get("concept") or ""
-    )
+    return grounding_certificate.source_claim(record)
 
 
 def _candidate_blocks(
@@ -2283,6 +2268,18 @@ def ground_concepts(
             culmination_indices=culmination_indices,
             candidates=candidates,
         )
+    grounding_certificate.seal_records(
+        out,
+        source_contract_hash=str(graph.get("source_contract_hash") or ""),
+        semantic_topology_sha256=(
+            grounding_certificate.semantic_topology_sha256(graph)
+        ),
+        allowed_block_ids={
+            str(row.get("block_id") or "")
+            for row in graph.get("blocks") or []
+            if isinstance(row, dict) and str(row.get("block_id") or "")
+        },
+    )
     return out
 
 

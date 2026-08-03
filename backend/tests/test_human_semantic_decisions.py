@@ -15,6 +15,7 @@ from app.services import (
     checkpoints,
     early_semantic_gate,
     generation,
+    grounding_certificate,
     semantic_recovery,
     uploads,
 )
@@ -34,6 +35,51 @@ def _attended_decision_mode(monkeypatch):
     """
 
     monkeypatch.setenv("AEGIS_UNATTENDED_COMPLETION", "0")
+
+
+def _seal_live_generation_result(
+    records: list[dict],
+    artifacts: dict,
+) -> list[dict]:
+    """Give a live-mode generation mock the same grounding proof as prod."""
+
+    block_ids: set[str] = set()
+    for index, record in enumerate(records, start=1):
+        block_id = f"BLK-HUMAN-DECISION-{index:04d}"
+        block_ids.add(block_id)
+        record["_source_block_ids"] = [block_id]
+        record["_source_grounding_contract"] = (
+            "api-verified-source-block-ids"
+        )
+        record["_source_grounding_version"] = "human-decision-test-1"
+    grounding_certificate.seal_records(
+        records,
+        source_contract_hash="a" * 64,
+        semantic_topology_sha256="b" * 64,
+        allowed_block_ids=block_ids,
+    )
+    artifacts[grounding_certificate.FINAL_CERTIFICATE_FIELD] = (
+        grounding_certificate.build_final_certificate(records)
+    )
+    return records
+
+
+def _mock_live_deposit(concept_id: int):
+    def deposit(*_args, **kwargs):
+        certificate = kwargs.get("final_grounding_certificate")
+        assert isinstance(certificate, dict)
+        return (
+            [concept_id],
+            [],
+            {
+                "written": 1,
+                "sources_updated": 0,
+                "parent_column": True,
+                "grounding_certificate": copy.deepcopy(certificate),
+            },
+        )
+
+    return deposit
 
 
 def _pending_packet() -> dict:
@@ -407,13 +453,13 @@ def test_clear_pause_is_agent_resolved_and_continues_same_run(
             raise semantic_recovery.HumanDecisionRequired(_pending_packet())
         assert resolution["choice"] == "expand_existing"
         assert resolution["target_concept_id"] == "HOST-CONCEPT-0001"
-        return [{
+        return _seal_live_generation_result([{
             "topic": "The French Revolution",
             "parent_concept": "Nationalism",
             "concept_title": "Ernest Renan's Idea of a Nation",
             "concept_details": "Description: Nations safeguard liberty.",
             "keywords": "Renan, nation, liberty",
-        }]
+        }], _kwargs["artifacts"])
 
     def resolve(*_args, **kwargs):
         nonlocal resolver_calls
@@ -449,10 +495,7 @@ def test_clear_pause_is_agent_resolved_and_continues_same_run(
     monkeypatch.setattr(
         build_concepts,
         "_deposit_and_publish_concepts",
-        lambda *_args, **_kwargs: (
-            [902], [],
-            {"written": 1, "sources_updated": 0, "parent_column": True},
-        ),
+        _mock_live_deposit(902),
     )
     monkeypatch.setattr(
         build_concepts.drive_checkpoints,
@@ -511,7 +554,7 @@ def test_agent_selected_phase31_topology_action_is_consumed_and_continues(
         assert durable["status"] == "consumed"
         assert durable["resolved_by"] == "agent"
         consumed_directives.append(copy.deepcopy(durable))
-        return [{
+        return _seal_live_generation_result([{
             "topic": "The Making of Nationalism in Europe",
             "parent_concept": "Unification of Italy",
             "concept_title": "Cavour's Diplomacy",
@@ -520,7 +563,7 @@ def test_agent_selected_phase31_topology_action_is_consumed_and_continues(
                 "France."
             ),
             "keywords": "Cavour, diplomacy, France",
-        }]
+        }], _kwargs["artifacts"])
 
     def resolve(*_args, **_kwargs):
         nonlocal resolver_calls
@@ -550,10 +593,7 @@ def test_agent_selected_phase31_topology_action_is_consumed_and_continues(
     monkeypatch.setattr(
         build_concepts,
         "_deposit_and_publish_concepts",
-        lambda *_args, **_kwargs: (
-            [904], [],
-            {"written": 1, "sources_updated": 0, "parent_column": True},
-        ),
+        _mock_live_deposit(904),
     )
     monkeypatch.setattr(
         build_concepts.drive_checkpoints,
@@ -921,13 +961,13 @@ def test_incompatible_81_percent_pause_is_pruned_before_agent_dispatch(
             row["stage"]
             for row in resume["semantic_recovery_dispatches"]["attempts"]
         ] == ["description_method_snapshot"]
-        return [{
+        return _seal_live_generation_result([{
             "topic": "The Making of Nationalism in Europe",
             "parent_concept": "Nationalism",
             "concept_title": "Cavour's Diplomacy",
             "concept_details": "Description: Verified source description.",
             "keywords": "Cavour, diplomacy",
-        }]
+        }], kwargs["artifacts"])
 
     monkeypatch.setattr(build_concepts.config, "use_live_generation", lambda: True)
     monkeypatch.setattr(
@@ -939,10 +979,7 @@ def test_incompatible_81_percent_pause_is_pruned_before_agent_dispatch(
     monkeypatch.setattr(
         build_concepts,
         "_deposit_and_publish_concepts",
-        lambda *_args, **_kwargs: (
-            [905], [],
-            {"written": 1, "sources_updated": 0, "parent_column": True},
-        ),
+        _mock_live_deposit(905),
     )
     monkeypatch.setattr(
         build_concepts.drive_checkpoints,
@@ -1034,23 +1071,20 @@ def test_sole_incompatible_same_source_stage_restarts_without_mismatch_error(
         nonlocal generation_calls
         generation_calls += 1
         assert kwargs["resume_checkpoint"] is None
-        return [{
+        return _seal_live_generation_result([{
             "topic": "The Making of Nationalism in Europe",
             "parent_concept": "Nationalism",
             "concept_title": "Cavour's Diplomacy",
             "concept_details": "Description: Rebuilt from the same source.",
             "keywords": "Cavour, diplomacy",
-        }]
+        }], kwargs["artifacts"])
 
     monkeypatch.setattr(build_concepts.config, "use_live_generation", lambda: True)
     monkeypatch.setattr(build_concepts.generation, "concepts_from_mmd", generate)
     monkeypatch.setattr(
         build_concepts,
         "_deposit_and_publish_concepts",
-        lambda *_args, **_kwargs: (
-            [906], [],
-            {"written": 1, "sources_updated": 0, "parent_column": True},
-        ),
+        _mock_live_deposit(906),
     )
     monkeypatch.setattr(
         build_concepts.drive_checkpoints,
@@ -1219,13 +1253,13 @@ def test_saved_agent_directive_replays_without_second_agent_call(
         resolution = phase33._human_resolution_for(identity)
         assert resolution is not None
         assert resolution["choice"] == "expand_existing"
-        return [{
+        return _seal_live_generation_result([{
             "topic": "The French Revolution",
             "parent_concept": "Nationalism",
             "concept_title": "Ernest Renan's Idea of a Nation",
             "concept_details": "Description: Nations safeguard liberty.",
             "keywords": "Renan, liberty",
-        }]
+        }], _kwargs["artifacts"])
 
     monkeypatch.setattr(build_concepts.config, "use_live_generation", lambda: True)
     monkeypatch.setattr(build_concepts.generation, "concepts_from_mmd", generate)
@@ -1239,10 +1273,7 @@ def test_saved_agent_directive_replays_without_second_agent_call(
     monkeypatch.setattr(
         build_concepts,
         "_deposit_and_publish_concepts",
-        lambda *_args, **_kwargs: (
-            [903], [],
-            {"written": 1, "sources_updated": 0, "parent_column": True},
-        ),
+        _mock_live_deposit(903),
     )
     monkeypatch.setattr(
         build_concepts.drive_checkpoints,
@@ -1309,7 +1340,10 @@ def test_changed_same_scope_followup_is_replanned_and_completes(
             raise semantic_recovery.HumanDecisionRequired(first_packet)
         if phase33._human_resolution_for(followup_identity) is None:
             raise semantic_recovery.HumanDecisionRequired(followup)
-        return [{"concept_title": "Renan's nation and liberty"}]
+        return _seal_live_generation_result(
+            [{"concept_title": "Renan's nation and liberty"}],
+            _kwargs["artifacts"],
+        )
 
     def resolve(*_args, **_kwargs):
         nonlocal resolver_calls
@@ -1342,10 +1376,7 @@ def test_changed_same_scope_followup_is_replanned_and_completes(
     monkeypatch.setattr(
         build_concepts,
         "_deposit_and_publish_concepts",
-        lambda *_args, **_kwargs: (
-            [904], [],
-            {"written": 1, "sources_updated": 0, "parent_column": True},
-        ),
+        _mock_live_deposit(904),
     )
     monkeypatch.setattr(
         build_concepts.drive_checkpoints,
