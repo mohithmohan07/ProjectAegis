@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 import os
 import random
 import re
@@ -2071,10 +2072,12 @@ Rules:
 
 prompts.register(
     "concepts.activity_hub.system", category=_CONCEPTS_CAT,
-    label="Activity/Info Hub population system prompt",
+    label="Activity/Info Hub host proposal system prompt",
     default="""\
-Place textbook activities, experiments, and classroom discussion cases into
-Activity/Info Hub on the correct teachable concepts.
+Propose hosts for textbook activities, experiments, and classroom discussion
+cases.  This is a first-pass semantic proposal, not a certification.  A
+separate independent critic receives the source task and the complete allowed
+candidate set before any ambiguous proposal can be certified.
 
 These rules are UNIVERSAL for every upload (any board, subject, or chapter).
 Infer placement from THIS chapter's concept map and inventory — never invent
@@ -2101,6 +2104,38 @@ Rules:
 - Use only provided concept_id and qid values.
 - If several activities belong to one concept, return one placement per qid
   (same concept_id allowed).
+""")
+
+prompts.register(
+    "concepts.activity_hub_critic.system", category=_CONCEPTS_CAT,
+    label="Independent Activity/Info Hub host critic prompt",
+    default="""\
+Independently review proposed Activity/Info Hub hosts.  Do not defer to the
+provider's proposal and do not infer that an allowed concept is necessarily a
+good semantic fit.
+
+Return ONLY strict JSON:
+{"reviews":[{"qid":"QINV-0001","concept_id":"CONCEPT-0001","verdict":"accept|reject","confidence":0.0,"reason":""}]}.
+
+Rules:
+- Return every supplied qid exactly once, with the exact proposed concept_id.
+  Invent no qids or concept IDs.
+- For each qid, independently compare the complete exact source task with the
+  bounded core teaching Description of every supplied allowed candidate.
+  Types, Examples, Activity/Info Hub, and learner-error sections are
+  deliberately excluded: copied task wording there would be circular evidence.
+  Accept only when the proposal is the normal concept whose core teaching the
+  task genuinely practices or illustrates; list order, physical source
+  location, title overlap, and mere structural eligibility are not semantic
+  evidence.
+- Reject a plausible but less specific host when another allowed candidate
+  teaches the task more directly.  Reject Culmination hosts and any candidate
+  outside the already-certified semantic owner topic.
+- confidence is confidence in this critic verdict, from 0 to 1.  reason must
+  state the source-task-to-teaching-content basis for acceptance or rejection.
+- The caller fails closed on missing, duplicate, unknown, mismatched, or
+  malformed reviews.  It certifies only independently accepted proposals that
+  clear the ordinary semantic confidence threshold.
 """)
 
 prompts.register(
@@ -3724,6 +3759,73 @@ def _hub_inventory_items(inventory: dict | None) -> list[dict]:
     ]
 
 
+def _inventory_item_owner_topic(item: dict) -> tuple[str, str]:
+    """Return the certified semantic owner scope for one inventory item.
+
+    ``topic_hint`` remains physical source provenance.  Once Phase 3.3 has
+    attached a v2 Type/Case placement contract, Activity/Info Hub routing must
+    therefore use the contract's owner topic ID instead of treating that
+    physical title as a second semantic authority.  Truly legacy/offline items
+    have no v2 declaration and retain their historical title-based scope.
+    """
+
+    raw = item.get("_type_case_placement_contract")
+    placement = _certified_type_case_placement_contract(raw)
+    if placement is not None:
+        return (
+            str(placement.get("owner_topic_id") or "").strip(),
+            str(
+                placement.get("owner_topic_title")
+                or item.get("owner_topic_title")
+                or ""
+            ).strip(),
+        )
+    if (
+        isinstance(raw, dict)
+        and str(raw.get("version") or "")
+        == str(_TYPE_CASE_PLACEMENT_CONTRACT_VERSION)
+    ):
+        raise RuntimeError(
+            "type_case_owner_uncertified: inventory item "
+            f"{str(item.get('qid') or '<empty>')} declares placement v2 "
+            "without a complete certified owner"
+        )
+    # An item with no v2 declaration is compatible only with an old saved
+    # artifact or an offline/direct helper call.  During a live canonical-
+    # source run Phase 3.3 must have certified every inventory QID before the
+    # post-freeze Hub cluster runs; silently reviving ``topic_hint`` here would
+    # turn physical source location back into semantic ownership.
+    if config.use_live_generation():
+        from . import canonical_source_phase3 as _phase3
+
+        if (
+            isinstance(_phase3.active_graph(), dict)
+            and str(item.get("qid") or "").strip()
+        ):
+            raise RuntimeError(
+                "type_case_owner_uncertified: live inventory item "
+                f"{str(item.get('qid') or '<empty>')} has no "
+                "certified v2 owner"
+            )
+    return "", str(item.get("topic_hint") or "").strip()
+
+
+def _activity_record_matches_owner(record: dict, item: dict) -> bool:
+    """Whether a normal concept row is in an Activity item's owner scope."""
+
+    owner_topic_id, legacy_topic_title = _inventory_item_owner_topic(item)
+    if owner_topic_id:
+        return str(record.get("_semantic_topic_id") or "").strip() == (
+            owner_topic_id
+        )
+    expected_topic = _topic_comparison_key(legacy_topic_title)
+    return (
+        not expected_topic
+        or _topic_comparison_key(record.get("topic") or "")
+        == expected_topic
+    )
+
+
 def _normalize_activity_hubs_from_inventory(
     records: list[dict], inventory: dict | None,
     mined_types: dict | None = None,
@@ -3753,12 +3855,7 @@ def _normalize_activity_hubs_from_inventory(
         record = records[index]
         if cr.is_culmination(record.get("concept_title") or ""):
             return False
-        expected_topic = _topic_comparison_key(item.get("topic_hint") or "")
-        return (
-            not expected_topic
-            or _topic_comparison_key(record.get("topic") or "")
-            == expected_topic
-        )
+        return _activity_record_matches_owner(record, item)
 
     target_by_qid: dict[str, int] = {}
     certification_declared = (
@@ -3889,13 +3986,18 @@ def _hub_inventory_contract_violations(
                 "reason": "culmination_host",
                 "locations": locations,
             })
-        expected_topic = _topic_comparison_key(item.get("topic_hint") or "")
-        actual_topic = _topic_comparison_key(record.get("topic") or "")
-        if expected_topic and actual_topic != expected_topic:
+        if not _activity_record_matches_owner(record, item):
+            owner_topic_id, expected_topic_title = (
+                _inventory_item_owner_topic(item)
+            )
             violations.append({
                 "qid": qid,
                 "reason": "wrong_topic",
-                "expected_topic": item.get("topic_hint") or "",
+                "expected_topic_id": owner_topic_id,
+                "expected_topic": expected_topic_title,
+                "actual_topic_id": str(
+                    record.get("_semantic_topic_id") or ""
+                ),
                 "actual_topic": record.get("topic") or "",
             })
 
@@ -3968,21 +4070,33 @@ def _place_activity_inventory_into_hubs(
     concept_payload = _scope_payload_from_records(out)
     placed = 0
     for item in items:
-        topic_key = _topic_comparison_key(item.get("topic_hint") or "")
+        owner_topic_id, topic_title = _inventory_item_owner_topic(item)
+        topic_key = _topic_comparison_key(topic_title)
         candidate_cids = tuple(
             cid for cid, payload in concept_payload.items()
             if (
                 not payload.get("is_culmination")
                 and (
-                    not topic_key
-                    or _topic_comparison_key(payload.get("topic") or "")
-                    == topic_key
+                    (
+                        bool(owner_topic_id)
+                        and str(payload.get("topic_id") or "")
+                        == owner_topic_id
+                    )
+                    or (
+                        not owner_topic_id
+                        and (
+                            not topic_key
+                            or _topic_comparison_key(
+                                payload.get("topic") or ""
+                            ) == topic_key
+                        )
+                    )
                 )
             )
         )
         evidence_unit = {
             "type_id": str(item.get("qid") or "").strip(),
-            "topic_match_hint": item.get("topic_hint") or "",
+            "topic_match_hint": topic_title,
             "placement_scope": "normal",
             "is_activity": True,
             "_source_task_evidence": _inventory_task_text(item),
@@ -4016,6 +4130,7 @@ def _populate_activity_hubs_via_api(
 ) -> list[dict]:
     """Certify every Activity Hub host; never guess an ambiguous destination."""
     import json as _json
+    import math as _math
 
     # One primary verdict plus one unresolved-QID correction is the complete
     # paid budget. Configuration/callers cannot restore a broad retry loop.
@@ -4052,9 +4167,17 @@ def _populate_activity_hubs_via_api(
         cid = f"CONCEPT-{i:04d}"
         concept_payload.append({
             "concept_id": cid,
+            "topic_id": str(rec.get("_semantic_topic_id") or ""),
             "topic": rec.get("topic", ""),
             "parent_concept": rec.get("parent_concept", ""),
             "concept": rec.get("concept_title", ""),
+            # A candidate is semantically represented by its bounded core
+            # teaching Description.  Full concept_details can contain this
+            # same QID in a Type Example or Hub, which would circularly let an
+            # earlier placement ratify itself and can make the prompt huge.
+            "teaching_description": _concept_description_only(
+                rec.get("concept_details", "")
+            ),
             "is_culmination": cr.is_culmination(rec.get("concept_title", "")),
             "existing_activity_hub": cr.activity_hub_body(
                 rec.get("concept_details") or ""),
@@ -4072,23 +4195,34 @@ def _populate_activity_hubs_via_api(
             "certification ledger"
         )
     for qid, item in items_by_qid.items():
-        expected_topic = _topic_comparison_key(
-            item.get("topic_hint") or "")
+        owner_topic_id, expected_topic_title = (
+            _inventory_item_owner_topic(item)
+        )
+        expected_topic = _topic_comparison_key(expected_topic_title)
         allowed = tuple(
             row["concept_id"]
             for row in concept_payload
             if (
                 not row["is_culmination"]
                 and (
-                    not expected_topic
-                    or _topic_comparison_key(row.get("topic") or "")
-                    == expected_topic
+                    (
+                        bool(owner_topic_id)
+                        and str(row.get("topic_id") or "") == owner_topic_id
+                    )
+                    or (
+                        not owner_topic_id
+                        and (
+                            not expected_topic
+                            or _topic_comparison_key(row.get("topic") or "")
+                            == expected_topic
+                        )
+                    )
                 )
             )
         )
         if not allowed:
             raise RuntimeError(
-                "activity hub placement failed: no exact-topic normal "
+                "activity hub placement failed: no certified-owner normal "
                 f"concept host for {qid}"
             )
         allowed_cids_by_qid[qid] = allowed
@@ -4112,17 +4246,10 @@ def _populate_activity_hubs_via_api(
             if certified_cid not in allowed:
                 raise RuntimeError(
                     "activity hub placement failed: existing certification "
-                    f"for {qid} is not an exact-topic normal host"
+                    f"for {qid} is not a certified-owner normal host"
                 )
             continue
 
-        evidence_unit = {
-            "type_id": qid,
-            "topic_match_hint": item.get("topic_hint") or "",
-            "placement_scope": "normal",
-            "is_activity": True,
-            "_source_task_evidence": _inventory_task_text(item),
-        }
         existing_locations = _activity_hub_locations(records, item)
         existing_cid = (
             f"CONCEPT-{existing_locations[0] + 1:04d}"
@@ -4130,13 +4257,16 @@ def _populate_activity_hubs_via_api(
         )
         if existing_cid not in allowed:
             existing_cid = ""
-        if existing_cid:
+        if existing_cid and len(allowed) == 1:
             proven_cid = existing_cid
         elif len(allowed) == 1:
             proven_cid = allowed[0]
         else:
-            proven_cid = _high_confidence_assignment_override(
-                evidence_unit, allowed, concept_payload_by_id)
+            # More than one structurally valid host is a semantic choice.  A
+            # lexical/title heuristic or a pre-existing Hub location may help
+            # the provider propose a host, but neither is independent evidence
+            # and neither may certify this placement without the critic.
+            proven_cid = ""
         if proven_cid:
             _certify_inventory_host(
                 certification_owner,
@@ -4145,11 +4275,7 @@ def _populate_activity_hubs_via_api(
                 basis=(
                     "existing_activity_hub"
                     if existing_cid
-                    else (
-                        "sole_exact_topic_host"
-                        if len(allowed) == 1
-                        else "source_evidence"
-                    )
+                    else "sole_exact_topic_host"
                 ),
             )
             deterministic += 1
@@ -4159,11 +4285,13 @@ def _populate_activity_hubs_via_api(
     if deterministic:
         progress.log(
             f"Deterministically certified {deterministic} Activity/Info Hub "
-            "host(s) from sole-host or source evidence.",
+            "host(s) from an exact existing placement or sole owner-topic "
+            "host.",
             level="success",
         )
 
-    system = prompts.get_text("concepts.activity_hub.system")
+    provider_system = prompts.get_text("concepts.activity_hub.system")
+    critic_system = prompts.get_text("concepts.activity_hub_critic.system")
     rejection_reason_by_qid: dict[str, str] = {}
     api_certified = 0
     for attempt in range(1, max(1, max_attempts) + 1):
@@ -4176,7 +4304,7 @@ def _populate_activity_hubs_via_api(
                 "source_kind": (
                     item.get("source_kind") or "").strip().lower(),
                 "source_label": item.get("source_label") or "",
-                "topic_hint": item.get("topic_hint") or "",
+                "topic_hint": _inventory_item_owner_topic(item)[1],
                 "raw_task": _inventory_task_text(item),
                 "allowed_concept_ids": list(
                     allowed_cids_by_qid[qid]),
@@ -4199,18 +4327,23 @@ def _populate_activity_hubs_via_api(
             "Reviewing semantic Activity/Info Hub hosts via API for "
             f"{len(inventory_payload)} inventory item(s), attempt {attempt}.")
         data = _openai_json(
-            system, user, purpose="concept_detailing")
+            provider_system, user, purpose="concept_detailing")
         proposed: dict[str, str] = {}
         invalid: set[str] = set()
+        raw_placements = (
+            data.get("placements") if isinstance(data, dict) else None
+        )
+        provider_batch_error = not isinstance(raw_placements, list)
         for placement in (
-            data.get("placements") or []
-            if isinstance(data, dict) else []
+            raw_placements if isinstance(raw_placements, list) else []
         ):
             if not isinstance(placement, dict):
+                provider_batch_error = True
                 continue
             qid = str(placement.get("qid") or "").strip()
             cid = str(placement.get("concept_id") or "").strip()
             if qid not in ambiguous:
+                provider_batch_error = True
                 continue
             if qid in proposed:
                 invalid.add(qid)
@@ -4218,9 +4351,16 @@ def _populate_activity_hubs_via_api(
             if cid not in allowed_cids_by_qid[qid]:
                 invalid.add(qid)
                 rejection_reason_by_qid[qid] = (
-                    "concept_id was not an allowed exact-topic normal host")
+                    "concept_id was not an allowed certified-owner normal host")
                 continue
             proposed[qid] = cid
+        if provider_batch_error:
+            proposed.clear()
+            for qid in ambiguous:
+                rejection_reason_by_qid[qid] = (
+                    "provider returned an unknown qid or malformed placement "
+                    "batch"
+                )
         for qid in invalid:
             proposed.pop(qid, None)
             rejection_reason_by_qid.setdefault(
@@ -4228,12 +4368,135 @@ def _populate_activity_hubs_via_api(
         for qid in set(ambiguous) - set(proposed):
             rejection_reason_by_qid.setdefault(
                 qid, "missing verdict")
-        for qid, cid in proposed.items():
+
+        # A structurally valid provider proposal is not authority.  Send the
+        # exact source task, its complete allowed same-owner candidate records,
+        # and the proposal to a separate semantic critic.  The critic response
+        # is batch-exhaustive: any extra, missing, duplicate, mismatched, or
+        # malformed review invalidates the whole critic batch, leaving every
+        # proposal unresolved for the bounded correction attempt.
+        accepted: dict[str, str] = {}
+        if proposed:
+            critic_items = []
+            for qid, cid in proposed.items():
+                item = ambiguous[qid]
+                critic_items.append({
+                    "qid": qid,
+                    "exact_source_task": _inventory_task_text(item),
+                    "certified_owner_topic_id": (
+                        _inventory_item_owner_topic(item)[0]
+                    ),
+                    "certified_owner_topic": (
+                        _inventory_item_owner_topic(item)[1]
+                    ),
+                    "allowed_candidates": [
+                        {
+                            field: concept_payload_by_id[allowed_cid][field]
+                            for field in (
+                                "concept_id",
+                                "topic_id",
+                                "topic",
+                                "parent_concept",
+                                "concept",
+                                "teaching_description",
+                                "is_culmination",
+                            )
+                        }
+                        for allowed_cid in allowed_cids_by_qid[qid]
+                    ],
+                    "provider_proposal": {
+                        "concept_id": cid,
+                    },
+                })
+            critic_user = (
+                _metadata_block(meta)
+                + "\nIndependently review every pending provider proposal. "
+                "The exact source task and every structurally allowed "
+                "same-owner normal concept are supplied for each qid:\n"
+                + _json.dumps(
+                    {"pending_reviews": critic_items},
+                    ensure_ascii=False,
+                )
+            )
+            progress.log(
+                "Independently criticising semantic Activity/Info Hub hosts "
+                f"for {len(critic_items)} inventory item(s), attempt "
+                f"{attempt}."
+            )
+            critic_data = _openai_json(
+                critic_system,
+                critic_user,
+                purpose="concept_validation",
+            )
+            reviews = (
+                critic_data.get("reviews")
+                if isinstance(critic_data, dict)
+                else None
+            )
+            review_by_qid: dict[str, dict] = {}
+            critic_schema_error = not isinstance(reviews, list)
+            if isinstance(reviews, list):
+                for review in reviews:
+                    if not isinstance(review, dict):
+                        critic_schema_error = True
+                        continue
+                    qid = str(review.get("qid") or "").strip()
+                    cid = str(review.get("concept_id") or "").strip()
+                    verdict = str(review.get("verdict") or "").strip().casefold()
+                    reason = str(review.get("reason") or "").strip()
+                    try:
+                        confidence = float(review.get("confidence"))
+                    except (TypeError, ValueError):
+                        confidence = float("nan")
+                    if (
+                        qid not in proposed
+                        or qid in review_by_qid
+                        or cid != proposed.get(qid)
+                        or verdict not in {"accept", "reject"}
+                        or not reason
+                        or not _math.isfinite(confidence)
+                        or not 0.0 <= confidence <= 1.0
+                    ):
+                        critic_schema_error = True
+                        continue
+                    review_by_qid[qid] = {
+                        "concept_id": cid,
+                        "verdict": verdict,
+                        "confidence": confidence,
+                        "reason": reason,
+                    }
+            if set(review_by_qid) != set(proposed):
+                critic_schema_error = True
+
+            if critic_schema_error:
+                for qid in proposed:
+                    rejection_reason_by_qid[qid] = (
+                        "independent critic returned a missing, duplicate, "
+                        "unknown, mismatched, or malformed exhaustive review"
+                    )
+            else:
+                for qid, review in review_by_qid.items():
+                    confidence = review["confidence"]
+                    if (
+                        review["verdict"] == "accept"
+                        and confidence_policy.semantic_band(confidence)
+                        == "accepted"
+                    ):
+                        accepted[qid] = review["concept_id"]
+                    else:
+                        rejection_reason_by_qid[qid] = (
+                            "independent critic did not certify the proposed "
+                            f"host: verdict={review['verdict']}, "
+                            f"confidence={confidence:.3f}; "
+                            f"{review['reason']}"
+                        )
+
+        for qid, cid in accepted.items():
             _certify_inventory_host(
                 certification_owner,
                 qid,
                 concept_payload_by_id[cid],
-                basis="activity_host_review",
+                basis="activity_host_provider_critic",
             )
             ambiguous.pop(qid, None)
             rejection_reason_by_qid.pop(qid, None)
@@ -8233,12 +8496,341 @@ _CASE_ROUTE_FIELDS = (
     "concept_match_hint",
     "parent_concept_match_hint",
     "topic_match_hint",
+    "source_location_topic_id",
+    "source_location_topic_ids",
+    "owner_topic_id",
+    "owner_topic_title",
+    "_type_case_placement_contract",
     "difficulty_hint",
     "cognitive_skill_hint",
     "subject_skill_hint",
     "is_activity",
     "placement_scope",
 )
+
+_TYPE_CASE_PLACEMENT_CONTRACT_VERSION = 2
+_TYPE_CASE_QID_PLACEMENT_LEDGER_KEY = "_type_case_qid_placement_ledger"
+
+
+def _type_case_placement_digest(value: dict) -> str:
+    material = copy.deepcopy(value)
+    material.pop("placement_certificate_sha256", None)
+    return hashlib.sha256(
+        json.dumps(
+            material,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _valid_type_case_qid_placement_ledger(value: object) -> dict | None:
+    if not isinstance(value, dict):
+        return None
+    try:
+        version = int(value.get("version") or 0)
+    except (TypeError, ValueError):
+        return None
+    material = copy.deepcopy(value)
+    supplied = str(material.pop("certificate_sha256", "") or "")
+    calculated = hashlib.sha256(
+        json.dumps(
+            material,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+    placements = value.get("placements")
+    if (
+        version != _TYPE_CASE_PLACEMENT_CONTRACT_VERSION
+        or value.get("certified") is not True
+        or not str(value.get("policy_version") or "")
+        or not str(value.get("teaching_order_sha256") or "")
+        or not str(value.get("source_contract_hash") or "")
+        or not isinstance(placements, dict)
+        or not placements
+        or supplied != calculated
+        or any(
+            _certified_type_case_placement_contract(contract) is None
+            for contract in placements.values()
+        )
+    ):
+        return None
+    return value
+
+
+def _certified_type_case_placement_contract(value: object) -> dict | None:
+    """Return one structurally usable v2 Type/Case placement contract.
+
+    This is deliberately a consumer-side check, not a source-location
+    fallback.  Only the independently criticised ownership stage may create
+    the contract; normalization may preserve or project it but must never
+    infer its owner from a QID, inventory order, or physical topic.
+    """
+    if not isinstance(value, dict):
+        return None
+    try:
+        version = int(value.get("version") or 0)
+    except (TypeError, ValueError):
+        return None
+    owner_topic_id = str(value.get("owner_topic_id") or "").strip()
+    source_topic_ids = [
+        str(topic_id).strip()
+        for topic_id in (
+            value.get("source_location_topic_ids")
+            or [value.get("source_location_topic_id")]
+        )
+        if str(topic_id or "").strip()
+    ]
+    relationships = [
+        row for row in value.get("topic_relationships") or []
+        if isinstance(row, dict)
+    ]
+    from . import placement_policy as _placement_policy
+
+    allowed_claim_ids = {
+        str(claim_id).strip()
+        for claim_id in (
+            (value.get("qid_claim_ids") or {}).values()
+            if isinstance(value.get("qid_claim_ids"), dict)
+            else [value.get("claim_id")]
+        )
+        if str(claim_id or "").strip()
+    }
+    relationships_valid = bool(relationships)
+    relationship_owning_topics: set[str] = set()
+    relationship_prerequisite_topics: set[str] = set()
+    relationship_reference_edges: set[tuple[str, str]] = set()
+    relationship_illustration_topics: set[str] = set()
+    for row in relationships:
+        kind = _placement_policy.relationship_type(
+            row.get("relationship_type")
+        )
+        claim_id = str(row.get("claim_id") or "").strip()
+        block_ids = tuple(
+            str(block_id).strip()
+            for block_id in row.get("evidence_block_ids") or []
+            if str(block_id or "").strip()
+        )
+        expected_id = (
+            _placement_policy.TopicRelationship(
+                claim_id=claim_id,
+                topic_id=str(row.get("topic_id") or "").strip(),
+                relationship_type=kind,
+                necessity=bool(row.get("necessity")),
+                evidence_block_ids=block_ids,
+            ).relationship_id
+            if kind is not None and claim_id and block_ids
+            else ""
+        )
+        if (
+            kind is None
+            or claim_id not in allowed_claim_ids
+            or not block_ids
+            or str(row.get("relationship_id") or "") != expected_id
+            or str(row.get("critic_verdict") or "").strip().casefold()
+            not in {"accepted", "verified"}
+            or bool(row.get("necessity"))
+            != (kind in _placement_policy.NECESSARY_TYPES)
+        ):
+            relationships_valid = False
+            break
+        topic_id = str(row.get("topic_id") or "").strip()
+        if kind in _placement_policy.OWNING_TYPES:
+            relationship_owning_topics.add(topic_id)
+        elif kind is _placement_policy.RelationshipType.REQUIRED_PREREQUISITE:
+            relationship_prerequisite_topics.add(topic_id)
+        elif kind is (
+            _placement_policy.RelationshipType.SUBSTANTIVE_LATER_ILLUSTRATION
+        ):
+            relationship_illustration_topics.add(topic_id)
+        elif kind in _placement_policy.EDGE_ONLY_TYPES:
+            relationship_reference_edges.add((topic_id, kind.value))
+    declared_reference_edges = {
+        tuple(str(part) for part in edge)
+        for edge in value.get("reference_edges") or []
+        if isinstance(edge, (list, tuple)) and len(edge) == 2
+    }
+    relationships_valid = relationships_valid and all((
+        set(str(topic_id) for topic_id in value.get("required_topic_ids") or [])
+        == relationship_owning_topics | relationship_prerequisite_topics,
+        set(str(topic_id) for topic_id in value.get("prerequisite_topic_ids") or [])
+        == relationship_prerequisite_topics,
+        declared_reference_edges == relationship_reference_edges,
+        set(str(topic_id) for topic_id in value.get("illustration_topic_ids") or [])
+        == relationship_illustration_topics,
+    ))
+    certified_owner_relationship = any(
+        str(row.get("topic_id") or "") == owner_topic_id
+        and str(row.get("relationship_type") or "") in {
+            "CORE_TEACHING", "REQUIRED_LATER_METHOD",
+        }
+        and row.get("necessity") is True
+        and bool(row.get("evidence_block_ids"))
+        and str(row.get("critic_verdict") or "").strip().casefold()
+        in {"accepted", "verified"}
+        for row in relationships
+    )
+    if (
+        version != _TYPE_CASE_PLACEMENT_CONTRACT_VERSION
+        or value.get("certified") is not True
+        or not str(value.get("claim_id") or "").strip()
+        or not owner_topic_id
+        or not source_topic_ids
+        or not relationships
+        or not relationships_valid
+        or not certified_owner_relationship
+        or owner_topic_id not in {
+            str(topic_id) for topic_id in value.get("required_topic_ids") or []
+        }
+        or not str(value.get("policy_version") or "").strip()
+        or not str(value.get("teaching_order_sha256") or "").strip()
+        or not str(value.get("source_contract_hash") or "").strip()
+        or not str(value.get("placement_certificate_sha256") or "").strip()
+        or str(value.get("placement_certificate_sha256") or "")
+        != _type_case_placement_digest(value)
+    ):
+        return None
+    return value
+
+
+def _type_case_contract_for_qid(
+    *,
+    mtype: dict,
+    case: dict,
+    inventory_item: dict,
+    qid: str,
+) -> dict | None:
+    """Resolve a certified QID contract without using first-item authority."""
+    values = (
+        (inventory_item.get("_type_case_placement_contract"), True),
+        (next((
+            example.get("_type_case_placement_contract")
+            for example in _case_examples(case)
+            if str(example.get("source_question_id") or "").strip() == qid
+        ), None), True),
+        (case.get("_type_case_placement_contract"), False),
+        (mtype.get("_type_case_placement_contract"), False),
+    )
+    for value, qid_specific in values:
+        contract = _certified_type_case_placement_contract(value)
+        if contract is None:
+            continue
+        qid_claims = contract.get("qid_claim_ids")
+        if (
+            not qid_specific
+            and isinstance(qid_claims, dict)
+            and qid not in qid_claims
+        ):
+            continue
+        if contract is not None:
+            return contract
+    return None
+
+
+def _aggregate_type_case_placement_contract(
+    contracts_by_qid: dict[str, dict],
+) -> dict:
+    """Bind a same-owner Case to all of its independently certified QIDs."""
+    ordered = [
+        (qid, contracts_by_qid[qid]) for qid in sorted(contracts_by_qid)
+    ]
+    owners = {
+        str(contract.get("owner_topic_id") or "")
+        for _qid, contract in ordered
+    }
+    if len(owners) != 1 or "" in owners:
+        raise RuntimeError(
+            "type_case_owner_uncertified: one Case contains multiple certified "
+            f"owners {sorted(owners)!r}; split it transactionally before routing"
+        )
+    first = ordered[0][1]
+    identity = {
+        (
+            str(contract.get("policy_version") or ""),
+            str(contract.get("teaching_order_sha256") or ""),
+            str(contract.get("source_contract_hash") or ""),
+        )
+        for _qid, contract in ordered
+    }
+    if len(identity) != 1 or any(not part for part in next(iter(identity))):
+        raise RuntimeError(
+            "type_case_owner_uncertified: one Case mixes placement policy, "
+            "teaching-order, or source-contract identities"
+        )
+    source_ids = sorted({
+        str(topic_id)
+        for _qid, contract in ordered
+        for topic_id in (
+            contract.get("source_location_topic_ids")
+            or [contract.get("source_location_topic_id")]
+        )
+        if str(topic_id or "")
+    })
+    required = sorted({
+        str(topic_id)
+        for _qid, contract in ordered
+        for topic_id in contract.get("required_topic_ids") or []
+        if str(topic_id or "")
+    })
+    prerequisites = sorted({
+        str(topic_id)
+        for _qid, contract in ordered
+        for topic_id in contract.get("prerequisite_topic_ids") or []
+        if str(topic_id or "")
+    })
+    references = sorted({
+        tuple(str(part) for part in edge)
+        for _qid, contract in ordered
+        for edge in contract.get("reference_edges") or []
+        if isinstance(edge, (list, tuple)) and len(edge) == 2
+    })
+    relationships = [
+        copy.deepcopy(row)
+        for _qid, contract in ordered
+        for row in contract.get("topic_relationships") or []
+        if isinstance(row, dict)
+    ]
+    child_hashes = {
+        qid: str(contract.get("placement_certificate_sha256") or "")
+        for qid, contract in ordered
+    }
+    material = {
+        "version": _TYPE_CASE_PLACEMENT_CONTRACT_VERSION,
+        "policy_version": str(first.get("policy_version") or ""),
+        "teaching_order_sha256": str(
+            first.get("teaching_order_sha256") or ""),
+        "source_contract_hash": str(first.get("source_contract_hash") or ""),
+        "claim_id": "TYPE-CASE:" + hashlib.sha256(
+            "\n".join(qid for qid, _contract in ordered).encode("utf-8")
+        ).hexdigest()[:24],
+        "qid_claim_ids": {
+            qid: str(contract.get("claim_id") or "")
+            for qid, contract in ordered
+        },
+        "source_location_topic_ids": source_ids,
+        "owner_topic_id": next(iter(owners)),
+        "owner_topic_title": str(first.get("owner_topic_title") or ""),
+        "required_topic_ids": required,
+        "prerequisite_topic_ids": prerequisites,
+        "reference_edges": [list(edge) for edge in references],
+        "illustration_topic_ids": sorted({
+            str(topic_id)
+            for _qid, contract in ordered
+            for topic_id in contract.get("illustration_topic_ids") or []
+            if str(topic_id or "")
+        }),
+        "topic_relationships": relationships,
+        "qid_placement_sha256s": child_hashes,
+        "certified": True,
+    }
+    material["placement_certificate_sha256"] = (
+        _type_case_placement_digest(material))
+    return material
 
 
 def _case_route_value(mtype: dict, case: dict, field: str):
@@ -8264,9 +8856,9 @@ def _annotate_mined_type_case_routes(
     """Make topic, concept and delivery role authoritative per Case.
 
     A reusable Type may span many concepts/topics.  Each Case remains a
-    single-host assignment unit.  When a model grouped Examples from different
-    source topics or mixed Activity and ordinary roles in one Case, split only
-    that Case while retaining the shared Type identity and exact QID wording.
+    single-host assignment unit. Certified v2 Cases split by semantic owner,
+    never by physical source topic; legacy dry/test payloads retain their old
+    source-scoped normalization until the ownership stage certifies them.
     """
     by_qid = {
         str(item.get("qid") or "").strip(): item
@@ -8294,9 +8886,41 @@ def _annotate_mined_type_case_routes(
             case = copy.deepcopy(raw_case)
             qids = _assignment_case_qids(case)
             groups: dict[tuple[str, bool, str], list[str]] = {}
+            contracts_by_qid: dict[str, dict] = {}
             for qid in qids:
                 inventory_item = by_qid.get(qid, {})
-                topic = str(inventory_item.get("topic_hint") or "").strip()
+                contract = _type_case_contract_for_qid(
+                    mtype=mtype,
+                    case=case,
+                    inventory_item=inventory_item,
+                    qid=qid,
+                )
+                if contract is not None:
+                    contracts_by_qid[qid] = contract
+                    route = str(contract.get("owner_topic_id") or "").strip()
+                else:
+                    declared = any(
+                        isinstance(value, dict)
+                        and str(value.get("version") or "") == str(
+                            _TYPE_CASE_PLACEMENT_CONTRACT_VERSION)
+                        for value in (
+                            inventory_item.get(
+                                "_type_case_placement_contract"),
+                            case.get("_type_case_placement_contract"),
+                            mtype.get("_type_case_placement_contract"),
+                        )
+                    )
+                    if declared:
+                        raise RuntimeError(
+                            "type_case_owner_uncertified: QID "
+                            f"{qid or '<empty>'} declares placement v2 without "
+                            "a complete certified owner"
+                        )
+                    route = str(
+                        inventory_item.get("source_location_topic_id")
+                        or inventory_item.get("topic_hint")
+                        or ""
+                    ).strip()
                 # A canonical parent_qid marks a deliberately independent leaf
                 # (for example each target under "Write a note on:"). Never
                 # let a model recombine those leaves into one placement Case,
@@ -8306,19 +8930,34 @@ def _annotate_mined_type_case_routes(
                     else ""
                 )
                 groups.setdefault(
-                    (topic, qid in hub_qids, independent_leaf), []
+                    (route, qid in hub_qids, independent_leaf), []
                 ).append(qid)
+            if contracts_by_qid and set(contracts_by_qid) != set(qids):
+                missing = sorted(set(qids) - set(contracts_by_qid))
+                raise RuntimeError(
+                    "type_case_owner_uncertified: a partially certified Case "
+                    "cannot use source-location fallback for QID(s) "
+                    + ", ".join(missing)
+                )
             if not groups:
+                case_contract = _certified_type_case_placement_contract(
+                    _case_route_value(
+                        mtype, case, "_type_case_placement_contract")
+                )
                 groups[(
-                    str(_case_route_value(
-                        mtype, case, "topic_match_hint") or "").strip(),
+                    (
+                        str(case_contract.get("owner_topic_id") or "").strip()
+                        if case_contract is not None
+                        else str(_case_route_value(
+                            mtype, case, "topic_match_hint") or "").strip()
+                    ),
                     bool(_case_route_value(mtype, case, "is_activity")),
                     "",
                 )] = []
             if len(groups) > 1:
                 split_count += 1
             for group_index, (
-                (topic, is_activity, independent_leaf), group_qids,
+                (route, is_activity, independent_leaf), group_qids,
             ) in enumerate(
                 groups.items(), start=1,
             ):
@@ -8335,10 +8974,52 @@ def _annotate_mined_type_case_routes(
                         if str(example.get(
                             "source_question_id") or "").strip() in qid_set
                     ]
-                routed["topic_match_hint"] = topic
+                group_contracts = {
+                    qid: contracts_by_qid[qid]
+                    for qid in group_qids
+                    if qid in contracts_by_qid
+                }
+                if group_contracts:
+                    aggregate = _aggregate_type_case_placement_contract(
+                        group_contracts)
+                    routed["_type_case_placement_contract"] = aggregate
+                    routed["owner_topic_id"] = aggregate["owner_topic_id"]
+                    routed["owner_topic_title"] = str(
+                        aggregate.get("owner_topic_title") or "")
+                    routed["source_location_topic_ids"] = list(
+                        aggregate.get("source_location_topic_ids") or [])
+                    if len(routed["source_location_topic_ids"]) == 1:
+                        routed["source_location_topic_id"] = (
+                            routed["source_location_topic_ids"][0])
+                    else:
+                        routed.pop("source_location_topic_id", None)
+                    routed["topic_match_hint"] = str(
+                        aggregate.get("owner_topic_title") or "")
+                    for example in _case_examples(routed):
+                        qid = str(
+                            example.get("source_question_id") or "").strip()
+                        contract = group_contracts.get(qid)
+                        if contract is None:
+                            continue
+                        example["_type_case_placement_contract"] = (
+                            copy.deepcopy(contract))
+                        example["source_location_topic_id"] = str(
+                            contract.get("source_location_topic_id") or "")
+                        example["owner_topic_id"] = str(
+                            contract.get("owner_topic_id") or "")
+                else:
+                    routed["topic_match_hint"] = route
                 routed["is_activity"] = is_activity
                 for field in _CASE_ROUTE_FIELDS:
-                    if field in {"topic_match_hint", "is_activity"}:
+                    if field in {
+                        "topic_match_hint",
+                        "source_location_topic_id",
+                        "source_location_topic_ids",
+                        "owner_topic_id",
+                        "owner_topic_title",
+                        "_type_case_placement_contract",
+                        "is_activity",
+                    }:
                         continue
                     if (
                         len(groups) > 1
@@ -8376,8 +9057,21 @@ def _annotate_mined_type_case_routes(
                 mtype[field] = False
             elif field == "placement_scope":
                 mtype[field] = "normal"
+            elif field == "_type_case_placement_contract":
+                mtype.pop(field, None)
             else:
                 mtype[field] = ""
+        case_owner_ids = sorted({
+            str(case.get("owner_topic_id") or "")
+            for case in routed_cases
+            if str(case.get("owner_topic_id") or "")
+        })
+        if case_owner_ids:
+            mtype["owner_topic_ids"] = case_owner_ids
+            if len(case_owner_ids) != 1:
+                mtype["owner_topic_id"] = ""
+                mtype["owner_topic_title"] = ""
+                mtype["topic_match_hint"] = ""
         out.append(mtype)
     if split_count:
         progress.log(
@@ -9785,7 +10479,17 @@ def _type_qid_contracts(types: list[dict]) -> dict[str, tuple[str, bool, str]]:
             if scope not in _ASSIGNMENT_PLACEMENT_SCOPES:
                 scope = type_scope
             for qid in _assignment_case_qids(raw_case):
-                contracts[qid] = (topic, activity, scope)
+                contract = (topic, activity, scope)
+                if qid in contracts and contracts[qid] != contract:
+                    if _certified_type_case_placement_contract(
+                        raw_case.get("_type_case_placement_contract")
+                    ) is not None:
+                        raise RuntimeError(
+                            "type_case_owner_uncertified: duplicate QID "
+                            f"{qid} carries conflicting Case routes"
+                        )
+                else:
+                    contracts[qid] = contract
         fallback = (
             _topic_comparison_key(mtype.get("topic_match_hint") or ""),
             bool(mtype.get("is_activity")),
@@ -12045,6 +12749,7 @@ def _assign_mined_types_via_api(
         cid_map[cid] = rec
         concept_payload.append({
             "concept_id": cid,
+            "topic_id": str(rec.get("_semantic_topic_id") or ""),
             "topic": rec.get("topic", ""),
             "parent_concept": rec.get("parent_concept", ""),
             "concept": rec.get("concept_title", ""),
@@ -12080,10 +12785,15 @@ def _assign_mined_types_via_api(
             "type embedding failed: duplicate case-scoped assignment-unit ID")
 
     concept_ids_by_topic: dict[str, list[str]] = {}
+    concept_ids_by_topic_id: dict[str, list[str]] = {}
     topic_position: dict[str, int] = {}
     for row in concept_payload:
         topic_key = _topic_comparison_key(row.get("topic", ""))
         concept_ids_by_topic.setdefault(topic_key, []).append(row["concept_id"])
+        topic_id = str(row.get("topic_id") or "")
+        if topic_id:
+            concept_ids_by_topic_id.setdefault(topic_id, []).append(
+                row["concept_id"])
         topic_position.setdefault(topic_key, row["chapter_position"])
 
     all_concept_ids = tuple(cid_map)
@@ -12092,13 +12802,23 @@ def _assign_mined_types_via_api(
     candidate_cids_by_tid: dict[str, tuple[str, ...]] = {}
     missing_scopes: list[tuple[str, str, str]] = []
     for tid, mtype in types_by_id.items():
+        placement = _certified_type_case_placement_contract(
+            mtype.get("_type_case_placement_contract"))
         source_topic = (mtype.get("topic_match_hint") or "").strip()
-        topic_key = _topic_comparison_key(source_topic)
-        topic_key_by_tid[tid] = topic_key
-        if topic_key:
-            topic_candidates = set(concept_ids_by_topic.get(topic_key, []))
+        if placement is not None:
+            owner_topic_id = str(
+                placement.get("owner_topic_id") or "").strip()
+            topic_key = f"owner:{owner_topic_id}"
+            topic_candidates = set(
+                concept_ids_by_topic_id.get(owner_topic_id, []))
         else:
-            topic_candidates = set(all_concept_ids)
+            topic_key = _topic_comparison_key(source_topic)
+            if topic_key:
+                topic_candidates = set(
+                    concept_ids_by_topic.get(topic_key, []))
+            else:
+                topic_candidates = set(all_concept_ids)
+        topic_key_by_tid[tid] = topic_key
         normal_candidates = {
             cid for cid in topic_candidates
             if not cr.is_culmination(
@@ -12114,6 +12834,7 @@ def _assign_mined_types_via_api(
         if (
             not mtype.get("is_activity")
             and placement_scope == "cross_topic_synthesis"
+            and placement is None
             and topic_key in topic_position
         ):
             source_position = topic_position[topic_key]
@@ -12386,6 +13107,7 @@ def _scope_payload_from_records(records: list[dict]) -> dict[str, dict]:
     return {
         f"CONCEPT-{index + 1:04d}": {
             "concept_id": f"CONCEPT-{index + 1:04d}",
+            "topic_id": str(record.get("_semantic_topic_id") or ""),
             "topic": record.get("topic") or "",
             "concept": record.get("concept_title") or "",
             "is_culmination": cr.is_culmination(
@@ -12399,6 +13121,14 @@ def _mined_type_allows_record(
     records: list[dict], mtype: dict, record: dict,
 ) -> bool:
     """Whether a rendered target obeys the mined unit's source-topic scope."""
+    placement = _certified_type_case_placement_contract(
+        mtype.get("_type_case_placement_contract"))
+    if placement is not None:
+        actual_topic_id = str(record.get("_semantic_topic_id") or "")
+        if not actual_topic_id:
+            return False
+        return actual_topic_id == str(
+            placement.get("owner_topic_id") or "")
     expected_key = _topic_comparison_key(
         mtype.get("topic_match_hint") or "")
     actual_key = _topic_comparison_key(record.get("topic") or "")
@@ -12614,6 +13344,7 @@ def _rendered_type_placement_violations(
         index_by_cid[cid] = index
         payload = {
             "concept_id": cid,
+            "topic_id": str(record.get("_semantic_topic_id") or ""),
             "topic": record.get("topic") or "",
             "parent_concept": record.get("parent_concept") or "",
             "concept": record.get("concept_title") or "",
@@ -12865,7 +13596,13 @@ def _normal_concept_type_coverage_violations(
 def _inventory_topic_type_coverage_violations(
     records: list[dict], inventory: dict | None,
 ) -> list[dict]:
-    """Topics with assessable inventory but no rendered Types on any concept."""
+    """Semantic owner topics with assessable inventory but no Types.
+
+    Physical ``topic_hint`` remains source provenance after placement v2. A
+    correctly moved Case therefore counts toward its certified owner topic,
+    rather than forcing an unrelated Type onto the page where it was printed.
+    Legacy/offline inventory retains title-based source-topic routing.
+    """
     task_counts: dict[str, dict] = {}
     for item in (inventory or {}).get("items") or []:
         if (
@@ -12877,18 +13614,37 @@ def _inventory_topic_type_coverage_violations(
             # originated inside an activity carry a non-Hub source_kind and
             # remain covered by this gate.
             continue
-        topic = (item.get("topic_hint") or "").strip()
-        key = _topic_comparison_key(topic)
-        if not key:
+        owner_topic_id, topic = _inventory_item_owner_topic(item)
+        topic_key = _topic_comparison_key(topic)
+        if not owner_topic_id and not topic_key:
             continue
+        key = (
+            f"owner:{owner_topic_id}"
+            if owner_topic_id
+            else f"legacy:{topic_key}"
+        )
         entry = task_counts.setdefault(
-            key, {"topic": topic, "inventory_items": 0})
+            key,
+            {
+                "topic": topic or owner_topic_id,
+                "inventory_items": 0,
+                **(
+                    {"topic_id": owner_topic_id}
+                    if owner_topic_id else {}
+                ),
+            },
+        )
         entry["inventory_items"] += 1
-    covered = {
-        _topic_comparison_key(record.get("topic") or "")
-        for record in records
-        if _has_meaningful_types(record.get("concept_details", ""))
-    }
+    covered: set[str] = set()
+    for record in records:
+        if not _has_meaningful_types(record.get("concept_details", "")):
+            continue
+        topic_id = str(record.get("_semantic_topic_id") or "").strip()
+        if topic_id:
+            covered.add(f"owner:{topic_id}")
+        topic_key = _topic_comparison_key(record.get("topic") or "")
+        if topic_key:
+            covered.add(f"legacy:{topic_key}")
     return [
         entry for key, entry in task_counts.items()
         if key not in covered
@@ -14211,10 +14967,282 @@ def _mined_assignment_units_by_qid(
             unit["source_question_ids"] = case_qids
             _apply_case_route_to_unit(unit, raw_case)
             for qid in case_qids:
-                units.setdefault(qid, unit)
+                if qid in units:
+                    if (
+                        _certified_type_case_placement_contract(
+                            unit.get("_type_case_placement_contract"))
+                        is not None
+                        or _certified_type_case_placement_contract(
+                            units[qid].get("_type_case_placement_contract"))
+                        is not None
+                    ):
+                        raise RuntimeError(
+                            "type_case_owner_uncertified: QID "
+                            f"{qid} appears in multiple certified assignment units"
+                        )
+                    continue
+                units[qid] = unit
         for qid in _type_source_qids(mtype):
-            units.setdefault(qid, mtype)
+            if qid not in units:
+                units[qid] = mtype
     return units
+
+
+def _resolved_type_case_qid_placement_ledger(
+    inventory: dict | None,
+    mined_types: dict | None,
+) -> dict | None:
+    """Return one matching, self-addressed per-QID ownership ledger.
+
+    The same ledger is deliberately persisted beside both source inventory and
+    mined Types so a resume can recover either layer.  Divergence is a hard
+    state-integrity failure; physical source location is never used to repair
+    or infer a missing semantic owner here.
+    """
+
+    declared: list[tuple[str, object]] = []
+    for label, container in (
+        ("inventory", inventory),
+        ("mined_types", mined_types),
+    ):
+        if isinstance(container, dict) and (
+            _TYPE_CASE_QID_PLACEMENT_LEDGER_KEY in container
+        ):
+            declared.append((
+                label,
+                container.get(_TYPE_CASE_QID_PLACEMENT_LEDGER_KEY),
+            ))
+    if not declared:
+        return None
+    validated: list[tuple[str, dict]] = []
+    for label, raw in declared:
+        ledger = _valid_type_case_qid_placement_ledger(raw)
+        if ledger is None:
+            raise RuntimeError(
+                "type_case_owner_uncertified: "
+                f"{label} carries an invalid QID placement ledger"
+            )
+        validated.append((label, ledger))
+    reference = validated[0][1]
+    for label, ledger in validated[1:]:
+        if reference != ledger:
+            raise RuntimeError(
+                "type_case_owner_uncertified: inventory and mined-Type QID "
+                f"placement ledgers disagree at {label}"
+            )
+    return copy.deepcopy(reference)
+
+
+def _final_type_case_qid_host_manifests(
+    records: list[dict],
+    inventory: dict | None,
+    mined_types: dict | None,
+) -> tuple[list[dict], dict | None]:
+    """Bind every certified QID to its exact final concept-row destination.
+
+    Phase 3.3 can attest normal Type hosts before topology freeze, but Activity
+    Hubs and synthesis/Culmination Cases obtain their final row only after the
+    legacy allocator and terminal inventory repair.  Rebuild the manifest at
+    this last stable boundary from the independently certified QID ledger and
+    the exact rendered/Hub locations.  Every QID must occur once; no partial
+    manifest can be certified.
+    """
+
+    ledger = _resolved_type_case_qid_placement_ledger(
+        inventory, mined_types
+    )
+    if ledger is None:
+        from . import canonical_source_phase3 as _phase3
+
+        if (
+            config.use_live_generation()
+            and isinstance(_phase3.active_graph(), dict)
+            and (inventory or {}).get("items")
+        ):
+            raise RuntimeError(
+                "type_case_owner_uncertified: live finalization has no "
+                "certified QID placement ledger"
+            )
+        return records, None
+    placements = ledger.get("placements") or {}
+    items = {
+        str(item.get("qid") or "").strip(): item
+        for item in (inventory or {}).get("items") or []
+        if isinstance(item, dict) and str(item.get("qid") or "").strip()
+    }
+    if set(items) != set(placements):
+        missing = sorted(set(items) - set(placements))
+        extra = sorted(set(placements) - set(items))
+        raise RuntimeError(
+            "type_case_owner_uncertified: QID placement ledger and source "
+            "inventory differ; missing=" + ",".join(missing)
+            + "; extra=" + ",".join(extra)
+        )
+    units_by_qid = _mined_assignment_units_by_qid(mined_types)
+    if set(units_by_qid) != set(placements):
+        missing = sorted(set(placements) - set(units_by_qid))
+        extra = sorted(set(units_by_qid) - set(placements))
+        raise RuntimeError(
+            "type_case_owner_uncertified: mined assignment units and QID "
+            "placement ledger differ; missing=" + ",".join(missing)
+            + "; extra=" + ",".join(extra)
+        )
+
+    out = [copy.deepcopy(record) for record in records]
+    for record in out:
+        record.pop(
+            grounding_certificate.TYPE_CASE_HOST_MANIFEST_FIELD, None
+        )
+    manifest_by_index: dict[int, dict] = {}
+    for qid in sorted(placements):
+        item = items[qid]
+        unit = units_by_qid[qid]
+        contract = _certified_type_case_placement_contract(
+            placements[qid]
+        )
+        item_contract = _certified_type_case_placement_contract(
+            item.get("_type_case_placement_contract")
+        )
+        if contract is None or item_contract is None or (
+            contract != item_contract
+        ):
+            raise RuntimeError(
+                "type_case_owner_uncertified: final QID ledger and inventory "
+                f"contract disagree for {qid}"
+            )
+        unit_contract = _certified_type_case_placement_contract(
+            unit.get("_type_case_placement_contract")
+        )
+        if unit_contract is None:
+            raise RuntimeError(
+                "type_case_owner_uncertified: final assignment unit lost its "
+                f"certified placement contract for {qid}"
+            )
+        qid_hashes = unit_contract.get("qid_placement_sha256s") or {}
+        unit_child_hash = str(qid_hashes.get(qid) or "")
+        if unit_child_hash and unit_child_hash != str(
+            contract.get("placement_certificate_sha256") or ""
+        ):
+            raise RuntimeError(
+                "type_case_owner_uncertified: assignment-unit aggregate "
+                f"changed the certified child contract for {qid}"
+            )
+
+        source_kind = str(item.get("source_kind") or "").strip().lower()
+        is_activity = bool(unit.get("is_activity")) or (
+            source_kind in _HUB_INVENTORY_KINDS
+        )
+        locations = (
+            _activity_hub_locations(out, item)
+            if is_activity
+            else _rendered_inventory_example_locations(out, item)
+        )
+        if len(locations) != 1:
+            raise RuntimeError(
+                "type_case_owner_uncertified: final payload places QID "
+                f"{qid} in {len(locations)} destination rows"
+            )
+        row_index = locations[0]
+        destination = out[row_index]
+        owner_topic_id = str(contract.get("owner_topic_id") or "")
+        host_topic_id = str(
+            destination.get("_semantic_topic_id") or ""
+        ).strip()
+        if host_topic_id != owner_topic_id:
+            raise RuntimeError(
+                "type_case_owner_uncertified: final destination topic "
+                f"{host_topic_id!r} disagrees with certified owner "
+                f"{owner_topic_id!r} for {qid}"
+            )
+        raw_case = next(
+            (
+                case for case in unit.get("case_prompts") or []
+                if isinstance(case, dict)
+            ),
+            {},
+        )
+        manifest = manifest_by_index.setdefault(row_index, {
+            "version": _TYPE_CASE_PLACEMENT_CONTRACT_VERSION,
+            "policy_version": str(contract.get("policy_version") or ""),
+            "teaching_order_sha256": str(
+                contract.get("teaching_order_sha256") or ""
+            ),
+            "source_contract_hash": str(
+                contract.get("source_contract_hash") or ""
+            ),
+            "placements": {},
+        })
+        for field in (
+            "policy_version",
+            "teaching_order_sha256",
+            "source_contract_hash",
+        ):
+            if manifest[field] != str(contract.get(field) or ""):
+                raise RuntimeError(
+                    "type_case_owner_uncertified: one destination row mixes "
+                    f"incompatible {field} identities"
+                )
+        manifest["placements"][qid] = {
+            "qid": qid,
+            "claim_id": str(contract.get("claim_id") or ""),
+            "type_id": str(unit.get("type_id") or ""),
+            "origin_type_id": str(
+                unit.get("_origin_type_id") or unit.get("type_id") or ""
+            ).split("::", 1)[0],
+            "case_id": str(raw_case.get("case_id") or ""),
+            "source_location_topic_ids": list(
+                contract.get("source_location_topic_ids")
+                or [contract.get("source_location_topic_id")]
+            ),
+            "owner_topic_id": owner_topic_id,
+            "required_topic_ids": list(
+                contract.get("required_topic_ids") or []
+            ),
+            "prerequisite_topic_ids": list(
+                contract.get("prerequisite_topic_ids") or []
+            ),
+            "reference_edges": copy.deepcopy(
+                contract.get("reference_edges") or []
+            ),
+            "illustration_topic_ids": list(
+                contract.get("illustration_topic_ids") or []
+            ),
+            "topic_relationships": copy.deepcopy(
+                contract.get("topic_relationships") or []
+            ),
+            "placement_contract": copy.deepcopy(contract),
+            "placement_certificate_sha256": str(
+                contract.get("placement_certificate_sha256") or ""
+            ),
+            "host_disposition": (
+                "activity_info_hub" if is_activity else "type_case_example"
+            ),
+            "host_topic_id": host_topic_id,
+            "host_parent_concept": str(
+                destination.get("parent_concept") or ""
+            ),
+            "host_concept_title": str(
+                destination.get("concept_title")
+                or destination.get("concept")
+                or ""
+            ),
+        }
+
+    for row_index, manifest in manifest_by_index.items():
+        material = copy.deepcopy(manifest)
+        manifest["certificate_sha256"] = hashlib.sha256(
+            json.dumps(
+                material,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+        ).hexdigest()
+        out[row_index][
+            grounding_certificate.TYPE_CASE_HOST_MANIFEST_FIELD
+        ] = manifest
+    return out, ledger
 
 
 def _best_record_index_for_inventory_item(
@@ -14496,12 +15524,7 @@ def _align_activity_examples_with_hubs(
             continue
         if cr.is_culmination(out[target].get("concept_title") or ""):
             continue
-        expected_topic = _topic_comparison_key(item.get("topic_hint") or "")
-        if (
-            expected_topic
-            and _topic_comparison_key(out[target].get("topic") or "")
-            != expected_topic
-        ):
+        if not _activity_record_matches_owner(out[target], item):
             continue
 
         # Add the authoritative prompt to the selected row first, then run the
@@ -18632,13 +19655,13 @@ _CONCEPT_CHECKPOINT_STAGES = {
     },
     "post_type_assignment": {
         "order": 70,
-        "version": 5,
+        "version": 6,
         "progress": 0.91,
         "label": "Type assignment and activity hubs complete",
     },
     "final_content_ready": {
         "order": 80,
-        "version": 6,
+        "version": 7,
         "progress": 0.98,
         "label": "Final content ready for deterministic validation",
     },
@@ -18786,6 +19809,97 @@ def _type_granularity_replay_seal_valid(checkpoint: dict) -> bool:
     return stored == expected
 
 
+def _type_case_checkpoint_placement_ledger_valid(checkpoint: dict) -> bool:
+    """Validate the per-QID semantic-owner authority of a late checkpoint.
+
+    ``post_type_assignment`` is the first stage allowed to skip Type/Case
+    ownership certification on resume.  The older qid-to-rendered-host ledger
+    does not prove semantic ownership, so a non-empty inventory is resumable at
+    that boundary only when both serialized containers carry the same valid v2
+    placement ledger and every QID-specific projection still agrees with it.
+
+    Empty-inventory standalone/offline transformations remain portable and do
+    not manufacture a meaningless empty placement ledger.
+    """
+
+    inventory = checkpoint.get("question_task_inventory")
+    mined_types = checkpoint.get("mined_types")
+    if not isinstance(inventory, dict) or not isinstance(mined_types, dict):
+        return False
+    expected_qids = {
+        str(item.get("qid") or "").strip()
+        for item in inventory.get("items") or []
+        if isinstance(item, dict) and str(item.get("qid") or "").strip()
+    }
+    declared = any(
+        isinstance(container, dict)
+        and _TYPE_CASE_QID_PLACEMENT_LEDGER_KEY in container
+        for container in (inventory, mined_types)
+    )
+    if not expected_qids:
+        # A malformed/stale declaration must not become valid merely because
+        # the current source inventory is empty.  Absence is the portable
+        # standalone representation for this case.
+        return not declared
+    if not all(
+        _TYPE_CASE_QID_PLACEMENT_LEDGER_KEY in container
+        for container in (inventory, mined_types)
+    ):
+        return False
+    try:
+        ledger = _resolved_type_case_qid_placement_ledger(
+            inventory, mined_types
+        )
+        units_by_qid = _mined_assignment_units_by_qid(mined_types)
+    except RuntimeError:
+        return False
+    if ledger is None or set(ledger.get("placements") or {}) != expected_qids:
+        return False
+    if not set(units_by_qid).issubset(expected_qids):
+        return False
+    items_by_qid = {
+        str(item.get("qid") or "").strip(): item
+        for item in inventory.get("items") or []
+        if isinstance(item, dict) and str(item.get("qid") or "").strip()
+    }
+    for qid in expected_qids:
+        placement = _certified_type_case_placement_contract(
+            (ledger.get("placements") or {}).get(qid)
+        )
+        item_contract = _certified_type_case_placement_contract(
+            items_by_qid[qid].get("_type_case_placement_contract")
+        )
+        unit = units_by_qid.get(qid)
+        unit_contract = (
+            _type_case_contract_for_qid(
+                mtype=unit,
+                case=(unit.get("case_prompts") or [{}])[0],
+                # Verify the mined assignment projection independently instead
+                # of allowing the inventory copy to mask a stale/missing route.
+                inventory_item={},
+                qid=qid,
+            )
+            if unit is not None
+            else None
+        )
+        pure_hub_item = (
+            str(items_by_qid[qid].get("source_kind") or "")
+            .strip()
+            .casefold()
+            in _HUB_INVENTORY_KINDS
+        )
+        if (
+            placement is None
+            or item_contract != placement
+            or (
+                unit_contract != placement
+                and (unit is not None or not pure_hub_item)
+            )
+        ):
+            return False
+    return True
+
+
 def _compatible_concept_checkpoint_entry(
     checkpoint: dict | None,
     *,
@@ -18919,6 +20033,27 @@ def _compatible_concept_checkpoint_entry(
         )
     ):
         return False
+    require_type_case_owner_ledger = stage in {
+        "post_type_assignment", "final_content_ready",
+    }
+    if (
+        stage == "final_content_ready"
+        and checkpoint.get("grounding_certificate_required") is False
+        and not require_final_grounding
+    ):
+        from . import canonical_source_phase3 as phase3
+
+        # Preserve standalone/offline terminal snapshots. They are never a
+        # production publication authority and are already rejected below as
+        # soon as a live Phase 3 graph or strict caller is present.
+        require_type_case_owner_ledger = isinstance(
+            phase3.active_graph(), dict
+        )
+    if (
+        require_type_case_owner_ledger
+        and not _type_case_checkpoint_placement_ledger_valid(checkpoint)
+    ):
+        return False
     if stage == "final_content_ready":
         # ``concepts_from_mmd`` is also exercised as a standalone semantic
         # transformation (including by unit tests) without an active Phase 3
@@ -18941,6 +20076,12 @@ def _compatible_concept_checkpoint_entry(
             from . import canonical_source_phase3 as phase3
 
             active_semantic_graph = phase3.active_graph()
+            type_case_qid_placement_ledger = (
+                _resolved_type_case_qid_placement_ledger(
+                    checkpoint.get("question_task_inventory"),
+                    checkpoint.get("mined_types"),
+                )
+            )
             grounding_certificate.verify_final_certificate(
                 checkpoint.get("records") or [],
                 checkpoint.get(
@@ -18951,8 +20092,15 @@ def _compatible_concept_checkpoint_entry(
                     if isinstance(active_semantic_graph, dict)
                     else None
                 ),
+                require_placement_contracts=require_final_grounding,
+                type_case_qid_placement_ledger=(
+                    type_case_qid_placement_ledger
+                ),
             )
-        except grounding_certificate.GroundingCertificateError:
+        except (
+            grounding_certificate.GroundingCertificateError,
+            RuntimeError,
+        ):
             return False
     return True
 
@@ -19223,6 +20371,9 @@ def _reconcile_resumed_mined_types(
     use_api: bool,
 ) -> dict:
     """Bring persisted Type/qid assignments forward to a refreshed inventory."""
+    resumed_placement_ledger = _valid_type_case_qid_placement_ledger(
+        (mined_types or {}).get(_TYPE_CASE_QID_PLACEMENT_LEDGER_KEY)
+    )
     types = _normalize_mined_type_candidate(
         copy.deepcopy((mined_types or {}).get("types") or []),
         inventory,
@@ -19262,7 +20413,20 @@ def _reconcile_resumed_mined_types(
             f"{len(remaining_missed)} missing, "
             f"{len(remaining_duplicates)} duplicate assignment(s)"
         )
+    # A host map is valid only for the exact certified owner contract and
+    # frozen concept payload. Resume always lets Phase 3.3 rebuild that map;
+    # retaining an old map here could route a correct QID to a legacy
+    # source-topic host before the new owner is checked.
+    for mtype in types:
+        if not isinstance(mtype, dict):
+            continue
+        for key in list(mtype):
+            if key.startswith("_phase33_"):
+                mtype.pop(key, None)
     reconciled = {"types": types}
+    if resumed_placement_ledger is not None:
+        reconciled[_TYPE_CASE_QID_PLACEMENT_LEDGER_KEY] = copy.deepcopy(
+            resumed_placement_ledger)
     granularity_review = copy.deepcopy(
         (mined_types or {}).get("_granularity_review"))
     if isinstance(granularity_review, dict):
@@ -21095,8 +22259,16 @@ def _reground_drifted_final_source_claims(
     try:
         # Phase 3.1 must return one completely sealed ordered payload. Do not
         # loop or mint a partial certificate when a provider/critic result was
-        # absent, deterministic-only, or otherwise unverified.
-        grounding_certificate.build_final_certificate(regrounded)
+        # absent, deterministic-only, or otherwise unverified.  The complete
+        # Type/Case QID ledger is attached only at the terminal allocation
+        # boundary, so this row-local re-grounding check deliberately verifies
+        # row seals and lineage rather than minting an intermediate final
+        # certificate from a partial normal-host manifest.
+        grounding_certificate.verify_lineage(regrounded)
+        for row_index, record in enumerate(regrounded):
+            grounding_certificate.verify_row(
+                record, row_index=row_index
+            )
     except grounding_certificate.GroundingCertificateError as exc:
         raise grounding_certificate.GroundingCertificateError(
             "final source-claim re-grounding did not produce one complete "
@@ -21149,12 +22321,34 @@ def concepts_from_mmd(
         method_anchors = _method_coverage_anchors(sections)
         headings = _topic_headings(sections)
         source_topic_excerpts = _group_source_topic_excerpts(sections)
-        saved_final = _newest_compatible_concept_checkpoint(
+        # Model-backed (`live`) execution is not automatically a production
+        # publication boundary. Standalone transformations may resume their
+        # explicitly ungrounded terminal snapshots; an active Phase 3 graph
+        # always requires complete grounding and placement authority.
+        from . import canonical_source_phase3 as phase3
+
+        production_grounding_required = isinstance(
+            phase3.active_graph(), dict
+        )
+        # Inspect the newest shape-compatible terminal payload for structural
+        # drift even when live publication cannot reuse it because it predates
+        # the grounding certificate.  Certificate eligibility and rewind
+        # eligibility are deliberately separate: otherwise an uncertified
+        # 98% checkpoint that omits a source topic disappears from this check,
+        # remains selectable by the pre-final stage runner, and incorrectly
+        # enters the legacy human source-topic gate instead of restoring the
+        # complete preceding checkpoint.
+        structural_final = _newest_compatible_concept_checkpoint(
             resume_checkpoint,
             allowed_stages={"final_content_ready"},
         )
+        saved_final = _newest_compatible_concept_checkpoint(
+            resume_checkpoint,
+            allowed_stages={"final_content_ready"},
+            require_final_grounding=production_grounding_required,
+        )
         final_checkpoint_refresh_reasons = _final_checkpoint_refresh_reasons(
-            saved_final,
+            structural_final,
             sections=sections,
             source_topic_excerpts=source_topic_excerpts,
         )
@@ -21377,6 +22571,13 @@ def concepts_from_mmd(
                 method_anchors=method_anchors,
                 source_text=mmd_text,
             )
+            out, final_type_case_qid_placement_ledger = (
+                _final_type_case_qid_host_manifests(
+                    out,
+                    question_task_inventory,
+                    mined_types,
+                )
+            )
             grounding_certificate_required = any(
                 any(
                     str(record.get(field) or "").strip()
@@ -21388,8 +22589,21 @@ def concepts_from_mmd(
                 )
                 for record in out
             )
+            if production_grounding_required and not grounding_certificate_required:
+                raise grounding_certificate.GroundingCertificateError(
+                    "live canonical-source output has no independently "
+                    "grounded placement authority"
+                )
             final_grounding_certificate = (
-                grounding_certificate.build_final_certificate(out)
+                grounding_certificate.build_final_certificate(
+                    out,
+                    type_case_qid_placement_ledger=(
+                        final_type_case_qid_placement_ledger
+                    ),
+                    require_placement_contracts=(
+                        production_grounding_required
+                    ),
+                )
                 if grounding_certificate_required
                 else None
             )
@@ -21412,6 +22626,12 @@ def concepts_from_mmd(
                             else None
                         ),
                         require_semantic_graph=True,
+                        require_placement_contracts=(
+                            production_grounding_required
+                        ),
+                        type_case_qid_placement_ledger=(
+                            final_type_case_qid_placement_ledger
+                        ),
                     )
         except (HumanDecisionRequired, ProviderResponseContractError):
             # Semantic decisions and mechanical provider-contract failures are

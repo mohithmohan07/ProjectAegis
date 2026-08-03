@@ -1265,6 +1265,7 @@ def _validate_inventory(value: Any, path: str) -> None:
     certification_key = generation._PLACEMENT_CERTIFICATIONS_KEY
     final_grounding_key = grounding_certificate.FINAL_CERTIFICATE_FIELD
     deposited_grounding_key = "deposited_grounding_certificate"
+    type_case_ledger_key = generation._TYPE_CASE_QID_PLACEMENT_LEDGER_KEY
     _exact_keys(
         value,
         {
@@ -1272,6 +1273,7 @@ def _validate_inventory(value: Any, path: str) -> None:
             "stats",
             "mined_types",
             certification_key,
+            type_case_ledger_key,
             final_grounding_key,
             deposited_grounding_key,
         },
@@ -1297,6 +1299,18 @@ def _validate_inventory(value: Any, path: str) -> None:
             inventory_items=items,
             path=f"{path}.{certification_key}",
         )
+    validated_type_case_ledger = None
+    if type_case_ledger_key in value:
+        validated_type_case_ledger = (
+            generation._valid_type_case_qid_placement_ledger(
+                value[type_case_ledger_key]
+            )
+        )
+        if validated_type_case_ledger is None:
+            raise ValueError(
+                f"{path}.{type_case_ledger_key} is not a certified, "
+                "self-addressed Type/Case QID placement ledger"
+            )
     verified_certificates: dict[str, dict[str, Any]] = {}
     for certificate_key in (
         final_grounding_key,
@@ -1307,7 +1321,10 @@ def _validate_inventory(value: Any, path: str) -> None:
         try:
             verified_certificates[certificate_key] = (
                 grounding_certificate.verify_certificate_envelope(
-                    value[certificate_key]
+                    value[certificate_key],
+                    type_case_qid_placement_ledger=(
+                        validated_type_case_ledger
+                    ),
                 )
             )
         except grounding_certificate.GroundingCertificateError as exc:
@@ -1315,18 +1332,12 @@ def _validate_inventory(value: Any, path: str) -> None:
     if len(verified_certificates) == 2:
         incoming = verified_certificates[final_grounding_key]
         deposited = verified_certificates[deposited_grounding_key]
-        for field in (
-            "source_contract_hash",
-            "semantic_topology_sha256",
-            "record_count",
-            "lineage_sha256",
-            "grounding_manifest_sha256",
-        ):
-            if incoming[field] != deposited[field]:
-                raise ValueError(
-                    f"{path}.{deposited_grounding_key}.{field} does not "
-                    "match the generation-time grounding certificate"
-                )
+        if incoming != deposited:
+            raise ValueError(
+                f"{path}.{deposited_grounding_key}.certificate_sha256 does "
+                "not match the exact generation-time payload, grounding, "
+                "placement, and Type/Case QID-host certificate"
+            )
     del items  # shape check only
 
 

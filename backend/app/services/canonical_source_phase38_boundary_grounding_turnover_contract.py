@@ -46,15 +46,23 @@ from . import canonical_source_phase33_preflight_contract as phase33
 from . import canonical_source_phase37_visual_topology_convergence_contract as phase37
 from . import concept_refiner as cr
 from . import early_semantic_gate as early_gate
+from . import grounding_certificate
+from . import placement_policy
 from . import progress
 from . import semantic_confidence_policy as confidence_policy
 from . import semantic_recovery
 
-_CONTRACT_VERSION = 2
-_GROUNDING_VERSION = "phase3.8-boundary-aware-source-grounding-2"
+_CONTRACT_VERSION = 5
+_GROUNDING_VERSION = "phase3.8-certified-required-grounding-5"
 
 _LAST_REPAIRED_TOPOLOGY: ContextVar[list[dict[str, Any]] | None] = ContextVar(
     "aegis_phase38_last_repaired_topology",
+    default=None,
+)
+_ACTIVE_GROUNDING_RECORDS: ContextVar[
+    list[dict[str, Any]] | None
+] = ContextVar(
+    "aegis_phase38_active_grounding_records",
     default=None,
 )
 
@@ -652,6 +660,152 @@ def _prerequisite_rows(
     return [row for _score, _order, row in scored[:limit]]
 
 
+def _certified_prerequisite_rows(
+    ordered: list[dict[str, Any]],
+    *,
+    topic_id: str,
+) -> tuple[bool, list[dict[str, Any]]]:
+    """Return exact cross-topic blocks from certified necessary relationships.
+
+    Candidate blocks are shared by all concepts in one topic.  Once any row in
+    that topic declares a certified placement contract, lexical similarity is
+    no longer an admissible evidence authority for the topic: use only the
+    union of exact necessary relationship blocks outside the certified owner
+    topic. This includes earlier ``CORE_TEACHING`` evidence when a later
+    required method owns an irreducible cumulative claim. Incidental mentions
+    and reference-only edges never become grounding candidates.
+    """
+
+    records = _ACTIVE_GROUNDING_RECORDS.get()
+    if not isinstance(records, list):
+        return False, []
+
+    block_by_id = {
+        str(row.get("block_id") or ""): row
+        for row in ordered
+        if isinstance(row, dict) and str(row.get("block_id") or "")
+    }
+    allowed_block_ids = set(block_by_id)
+    certified_contracts: list[dict[str, Any]] = []
+    for row in records:
+        if not isinstance(row, dict):
+            continue
+        raw = row.get(grounding_certificate.PLACEMENT_CONTRACT_FIELD)
+        if not isinstance(raw, dict) or not bool(raw.get("certified")):
+            continue
+        assigned_topic_id = str(row.get("_semantic_topic_id") or "").strip()
+        claimed_owner_id = str(raw.get("owner_topic_id") or "").strip()
+        # Route by the actual candidate row assignment first.  A tampered owner
+        # must be verified and rejected here, not skipped into lexical fallback.
+        row_topic_id = assigned_topic_id or claimed_owner_id
+        if row_topic_id != topic_id:
+            continue
+        try:
+            contract = grounding_certificate.verify_placement_contract(
+                row,
+                allowed_block_ids=allowed_block_ids,
+            )
+        except grounding_certificate.GroundingCertificateError as exc:
+            raise ValueError(
+                "failed exact source-block grounding before freeze: "
+                f"certified placement contract is invalid for topic "
+                f"{topic_id}: {exc}"
+            ) from exc
+        if contract is None:
+            raise ValueError(
+                "failed exact source-block grounding before freeze: "
+                f"topic {topic_id} declared certified placement without a "
+                "verifiable placement contract"
+            )
+        certified_contracts.append(contract)
+
+    if not certified_contracts:
+        return False, []
+
+    selected_ids: set[str] = set()
+    necessary_types = {
+        relationship_type.value
+        for relationship_type in placement_policy.NECESSARY_TYPES
+    }
+    for contract in certified_contracts:
+        required_topics = {
+            str(value).strip()
+            for value in contract.get("required_topic_ids") or []
+            if str(value).strip()
+        }
+        owner_topic_id = str(contract.get("owner_topic_id") or "").strip()
+        covered_topics: set[str] = set()
+        relationships = (
+            contract.get("topic_relationships")
+            or contract.get("relationships")
+            or []
+        )
+        for relation in relationships:
+            if not isinstance(relation, dict):
+                continue
+            relationship_type = str(
+                relation.get("relationship_type") or ""
+            ).strip().upper()
+            if relationship_type not in necessary_types:
+                continue
+            asserted_topic = str(relation.get("topic_id") or "").strip()
+            if asserted_topic not in required_topics:
+                raise ValueError(
+                    "failed exact source-block grounding before freeze: "
+                    "certified necessary relationship names topic "
+                    f"{asserted_topic or '(missing)'} outside the placement "
+                    "required-topic set"
+                )
+            evidence_ids = {
+                str(value).strip()
+                for value in relation.get("evidence_block_ids") or []
+                if str(value).strip()
+            }
+            if not evidence_ids:
+                raise ValueError(
+                    "failed exact source-block grounding before freeze: "
+                    f"certified required topic {asserted_topic} has no "
+                    "exact evidence blocks"
+                )
+            for block_id in evidence_ids:
+                block = block_by_id.get(block_id)
+                if not isinstance(block, dict):
+                    raise ValueError(
+                        "failed exact source-block grounding before freeze: "
+                        f"certified required block {block_id} does not "
+                        "exist in the active semantic graph"
+                    )
+                actual_topic = str(block.get("topic_id") or "").strip()
+                if actual_topic != asserted_topic:
+                    raise ValueError(
+                        "failed exact source-block grounding before freeze: "
+                        f"certified required block {block_id} asserts "
+                        f"topic {asserted_topic}, but the graph assigns "
+                        f"{actual_topic or '(missing)'}"
+                    )
+                if str(block.get("kind") or "") in _EXCLUDED_BLOCK_KINDS:
+                    raise ValueError(
+                        "failed exact source-block grounding before freeze: "
+                        f"certified required block {block_id} is not a "
+                        "semantic evidence block"
+                    )
+                if asserted_topic != owner_topic_id:
+                    selected_ids.add(block_id)
+            covered_topics.add(asserted_topic)
+        missing_topics = sorted(required_topics - covered_topics)
+        if missing_topics:
+            raise ValueError(
+                "failed exact source-block grounding before freeze: "
+                "certified placement has required topic(s) without exact "
+                "relationship evidence: " + ",".join(missing_topics)
+            )
+
+    return True, [
+        row for row in ordered
+        if str(row.get("block_id") or "") in selected_ids
+    ]
+
+
 def _contiguous_boundary_rows(
     rows: list[dict[str, Any]],
     *,
@@ -743,6 +897,26 @@ def _candidate_blocks(
     before = _contiguous_boundary_rows(ordered[:first], reverse=True)
     after = _contiguous_boundary_rows(ordered[last + 1 :], reverse=False)
 
+    strict_prerequisites, exact_prerequisite = _certified_prerequisite_rows(
+        ordered,
+        topic_id=topic_id,
+    )
+    exact_prerequisite_ids = {
+        str(row.get("block_id") or "") for row in exact_prerequisite
+    }
+    if exact_prerequisite_ids:
+        # Exact certified prerequisite authority wins over adjacency labels.
+        # A block cannot be presented as a loose boundary hint when placement
+        # has certified it as a required prerequisite.
+        before = [
+            row for row in before
+            if str(row.get("block_id") or "") not in exact_prerequisite_ids
+        ]
+        after = [
+            row for row in after
+            if str(row.get("block_id") or "") not in exact_prerequisite_ids
+        ]
+
     canonical_blocks = {
         str(row.get("block_id") or ""): row
         for row in canonical.get("blocks") or []
@@ -797,27 +971,34 @@ def _candidate_blocks(
             phase3._sha256_text(native_by_id[block_id].get("text") or ""),
         )
 
-    prerequisite = _prerequisite_rows(
-        ordered,
-        topic_id=topic_id,
-        first_native_index=first,
-        native_tokens={
-            token
-            for row in ordered[first : last + 1]
-            if str(row.get("topic_id") or "") == topic_id
-            for token in _significant_tokens(row.get("text") or "")
-        },
-        excluded_ids={
-            str(row.get("block_id") or "")
-            for row in [*before, *after]
-        }
-        | set(native_by_id),
-    )
+    prerequisite = exact_prerequisite
+    if not strict_prerequisites:
+        prerequisite = _prerequisite_rows(
+            ordered,
+            topic_id=topic_id,
+            first_native_index=first,
+            native_tokens={
+                token
+                for row in ordered[first : last + 1]
+                if str(row.get("topic_id") or "") == topic_id
+                for token in _significant_tokens(row.get("text") or "")
+            },
+            excluded_ids={
+                str(row.get("block_id") or "")
+                for row in [*before, *after]
+            }
+            | set(native_by_id),
+        )
 
     for relation, rows in (
         ("previous_topic_boundary", before),
         ("next_topic_boundary", after),
-        ("prerequisite_topic_evidence", prerequisite),
+        (
+            "certified_required_topic_evidence"
+            if strict_prerequisites
+            else "prerequisite_topic_evidence",
+            prerequisite,
+        ),
     ):
         for block in rows:
             block_id = str(block.get("block_id") or "")
@@ -881,6 +1062,7 @@ def _augment_grounding_payload(
         ],
         "allowed_context_relations": [
             "prerequisite_topic_evidence",
+            "certified_required_topic_evidence",
         ],
         "rule": (
             "An adjacent boundary block may be selected only when it visibly "
@@ -889,22 +1071,35 @@ def _augment_grounding_payload(
         ),
         "prerequisite_rule": (
             "Blocks marked prerequisite_topic_evidence come from an earlier "
-            "topic this one builds on. A concept placed here may rest on them "
-            "as heavily as it needs to, including for its main explanation. "
-            "The only requirement is that it genuinely involves THIS topic: it "
-            "must draw on at least one native_topic block for the part that "
-            "makes it belong here. A concept supported entirely by "
-            "prerequisite blocks involves no content from this topic at all "
-            "and is misplaced: reject it so topology can move it back."
+            "topic this one builds on. They may support the foundational part "
+            "of the claim, but they never establish ownership by themselves. "
+            "The concept must draw on at least one native_topic block that "
+            "supports knowledge, a method, or an interpretive framework from "
+            "THIS topic which is necessary to understand or perform the atomic "
+            "claim. Mere mention, chronology, physical evidence location, or an "
+            "optional later method is insufficient. A concept supported only "
+            "by prerequisite blocks is misplaced: reject it so topology can "
+            "move, refine, or split it."
+        ),
+        "certified_required_evidence_rule": (
+            "Blocks marked certified_required_topic_evidence are the exact "
+            "blocks cited by independently accepted necessary topic "
+            "relationships. They may express REQUIRED_PREREQUISITE, "
+            "CORE_TEACHING, or REQUIRED_LATER_METHOD outside the owner topic; "
+            "they are admissible only for the exact row whose placement "
+            "contract cites them. Reference-only and incidental relationships "
+            "are excluded. They supplement, but never replace, native evidence "
+            "from the certified owner topic."
         ),
         "advanced_placement_rule": (
-            "Placement follows teaching order. If a concept involves content "
-            "from this topic at all, it belongs to THIS later topic, even when "
-            "most of what it explains is foundational material from an earlier "
-            "one - a teacher can only reach it once this topic is taught. Do "
-            "not push such a concept back to the earlier topic on the grounds "
-            "that its main idea looks foundational, and do not reject it "
-            "because most of its evidence appears earlier in the book. "
+            "Placement follows teaching order among genuinely required topics. "
+            "An atomic claim belongs to the latest topic whose knowledge, "
+            "method, or interpretive framework is necessary to understand or "
+            "perform it. A foundational-looking claim may therefore belong to "
+            "a later topic, but touching, mentioning, or physically appearing "
+            "near that topic never establishes ownership. Do not push a concept "
+            "back merely because much of its prerequisite evidence appears "
+            "earlier in the book. "
             "EXCEPTION - retrospective reference: when the later topic only "
             "mentions or illustrates the earlier one, rather than the concept "
             "needing this topic's method to be understood, the concept stays "
@@ -950,13 +1145,17 @@ def _ground_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         "bounded recovery window for converter/page-order drift and may be used "
         "only when their visible content clearly continues the target academic "
         "topic. Blocks marked prerequisite_topic_evidence come from an earlier "
-        "topic this one builds on: cite them as freely as the claim needs, "
-        "including for its main explanation. A concept belongs to this later "
-        "topic whenever it involves this topic's content at all, even if most "
-        "of what it explains is foundational, because teaching only reaches it "
-        "here; require only that it draws on at least one native_topic block. "
-        "Reject it only when it rests entirely on prerequisite blocks and so "
-        "involves nothing from this topic. One exception runs the other way: "
+        "topic this one builds on: cite them when they support the prerequisite "
+        "part of the claim, but never use them to establish this topic's "
+        "ownership. Blocks marked certified_required_topic_evidence are exact "
+        "cross-topic evidence authorized by this row's accepted necessary "
+        "relationships; never transfer them to another row. Require at least "
+        "one native_topic block that supports "
+        "knowledge, a method, or an interpretive framework from this topic "
+        "which is necessary to understand or perform the atomic claim. Mere "
+        "mention, chronology, physical evidence location, or an optional later "
+        "method is insufficient. Reject a mapping supported only by prerequisite "
+        "blocks. One exception runs the other way: "
         "when this topic merely mentions or illustrates the earlier material "
         "rather than being needed to understand it, the concept belongs to the "
         "earlier topic and this one gets its own concept about the "
@@ -998,16 +1197,19 @@ def _critic_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         "smallest sufficient block set. A selected adjacent boundary block is "
         "valid only when its content clearly belongs with the target topic and "
         "repairs local source-order drift. A selected prerequisite_topic_evidence "
-        "block may carry as much of the explanation as the claim needs. "
-        "Accept the mapping when the concept draws on at least one "
-        "native_topic block, treating it as correctly placed advanced material "
-        "even when most of its support is prerequisite: teaching reaches such "
-        "a concept only in this topic. Apply the retrospective-reference "
+        "block may support the prerequisite part of the explanation, but it "
+        "cannot establish this topic's ownership. A selected "
+        "certified_required_topic_evidence block must be authorized by this "
+        "exact row's accepted necessary relationship. Accept the mapping only when "
+        "at least one native_topic block supports knowledge, a method, or an "
+        "interpretive framework from this topic which is necessary to understand "
+        "or perform the atomic claim. Mere mention, chronology, physical "
+        "evidence location, or an optional later method is insufficient. Apply "
+        "the retrospective-reference "
         "exception: when this topic only mentions or illustrates the earlier "
         "material rather than being needed to understand it, reject the "
         "placement so the concept returns to the topic that teaches it. "
-        "Reject also when it rests entirely on "
-        "prerequisite blocks and involves nothing from this topic, when the "
+        "Reject also when it is supported only by prerequisite blocks, when the "
         "boundary blocks instead show that the concept belongs to the adjacent "
         "topic, when the claim over-merges separate ideas, or when a selected "
         "Figure is the wrong visual. In that case state whether topology should "
@@ -1040,17 +1242,87 @@ def _apply_proposals(
     index_by_id: dict[str, int],
     candidates: list[dict[str, Any]],
 ) -> None:
+    topic_by_block = {
+        str(row.get("block_id") or ""): str(row.get("topic_id") or "")
+        for row in candidates
+        if isinstance(row, dict) and str(row.get("block_id") or "")
+    }
+    relation_by_block = {
+        str(row.get("block_id") or ""): str(
+            row.get("boundary_relation") or ""
+        )
+        for row in candidates
+        if isinstance(row, dict) and str(row.get("block_id") or "")
+    }
+    for concept_id, proposal in proposals.items():
+        index = index_by_id[concept_id]
+        record = records[index]
+        raw_contract = record.get(
+            grounding_certificate.PLACEMENT_CONTRACT_FIELD
+        )
+        if not isinstance(raw_contract, dict) or not raw_contract.get(
+            "certified"
+        ):
+            continue
+        try:
+            contract = grounding_certificate.verify_placement_contract(record)
+        except grounding_certificate.GroundingCertificateError as exc:
+            raise ValueError(
+                "failed exact source-block grounding before freeze: "
+                f"{concept_id} has an invalid certified placement contract: "
+                f"{exc}"
+            ) from exc
+        assert contract is not None
+        owner_topic_id = str(contract.get("owner_topic_id") or "")
+        selected_ids = {
+            str(block_id)
+            for block_id in proposal.get("source_block_ids") or []
+            if str(block_id)
+        }
+        native_owner_ids = {
+            block_id
+            for block_id in selected_ids
+            if topic_by_block.get(block_id, "") == owner_topic_id
+            and relation_by_block.get(block_id, "") in {"", "native_topic"}
+        }
+        if not native_owner_ids:
+            raise ValueError(
+                "failed exact source-block grounding before freeze: "
+                f"{concept_id} selected no native block from its certified "
+                f"owner topic {owner_topic_id}"
+            )
+        necessary_types = {
+            relationship_type.value
+            for relationship_type in placement_policy.NECESSARY_TYPES
+        }
+        exact_ids = {
+            str(block_id)
+            for relation in contract.get("topic_relationships") or []
+            if isinstance(relation, dict)
+            and str(relation.get("relationship_type") or "").upper()
+            in necessary_types
+            for block_id in relation.get("evidence_block_ids") or []
+            if str(block_id)
+        }
+        selected_cross_topic_ids = {
+            str(block_id)
+            for block_id in proposal.get("source_block_ids") or []
+            if topic_by_block.get(str(block_id), "") != owner_topic_id
+        }
+        unexpected = sorted(selected_cross_topic_ids - exact_ids)
+        if unexpected:
+            raise ValueError(
+                "failed exact source-block grounding before freeze: "
+                f"{concept_id} selected cross-topic block(s) outside its "
+                "certified placement contract: " + ",".join(unexpected)
+            )
+
     phase31._PHASE38_ORIGINAL_APPLY_PROPOSALS(
         records,
         proposals=proposals,
         index_by_id=index_by_id,
         candidates=candidates,
     )
-    topic_by_block = {
-        str(row.get("block_id") or ""): str(row.get("topic_id") or "")
-        for row in candidates
-        if isinstance(row, dict) and str(row.get("block_id") or "")
-    }
     relation_by_block: dict[str, str] = {}
     target_topic_by_concept = {
         concept_id: str(records[index].get("_semantic_topic_id") or "")
@@ -1081,6 +1353,24 @@ def _apply_proposals(
             ]
         else:
             records[index].pop("_source_grounding_boundary_blocks", None)
+
+
+def _ground_concepts_with_placement_context(
+    records: list[dict[str, Any]],
+    *args: Any,
+    **kwargs: Any,
+) -> list[dict[str, Any]]:
+    """Expose the exact candidate row contracts to topic candidate selection."""
+
+    token = _ACTIVE_GROUNDING_RECORDS.set(copy.deepcopy(records))
+    try:
+        return phase31._PHASE38_ORIGINAL_GROUND_CONCEPTS(
+            records,
+            *args,
+            **kwargs,
+        )
+    finally:
+        _ACTIVE_GROUNDING_RECORDS.reset(token)
 
 
 def _capture_repaired_topology(*args: Any, **kwargs: Any):
@@ -1374,30 +1664,48 @@ def _phase32_adjudicate_with_targeted_convergence(
                     "Phase 3.8 will not replay an unresolved provider "
                     "dispatch claim."
                 )
-            state["dispatch_sequence"] = int(
-                state.get("dispatch_sequence") or 0
-            ) + 1
-            state["dispatch_status"] = "request_started"
-            state["dispatch_candidate_sha256"] = str(
-                state.get("candidate_sha256")
-                or state.get("base_candidate_sha256")
-                or base_candidate_sha256
-            )
-            state["dispatch_issue_key"] = str(
-                state.get("active_issue_key") or ""
-            )
-            # Exactly-once boundary: no provider/critic byte is sent until
-            # this claim wins the durable checkpoint CAS.
-            _persist_convergence_state(state)
+            transport_claimed = False
+
+            def claim_transport() -> None:
+                """Persist once, after local validation and before transport."""
+
+                nonlocal transport_claimed
+                if transport_claimed:
+                    return
+                if state.get("dispatch_status") in {
+                    "request_started", "decision_returned"
+                }:
+                    raise Phase38ConvergenceExhausted(
+                        "Phase 3.8 will not cross an unresolved provider "
+                        "dispatch claim."
+                    )
+                state["dispatch_sequence"] = int(
+                    state.get("dispatch_sequence") or 0
+                ) + 1
+                state["dispatch_status"] = "request_started"
+                state["dispatch_candidate_sha256"] = str(
+                    state.get("candidate_sha256")
+                    or state.get("base_candidate_sha256")
+                    or base_candidate_sha256
+                )
+                state["dispatch_issue_key"] = str(
+                    state.get("active_issue_key") or ""
+                )
+                transport_claimed = True
+                # Exactly-once boundary: the actual OpenAI transport invokes
+                # this callback immediately before its first request byte.
+                _persist_convergence_state(state)
+
             _LAST_REPAIRED_TOPOLOGY.set(None)
             feedback_token = phase33._EXTERNAL_GROUNDING_FEEDBACK.set(feedback)
             try:
-                with early_gate.suppress_resolution_ids(
-                    suppressed_resolutions
-                ):
-                    # Every pass starts from the complete original topology.
-                    # A provider cannot mutate one pass into a reduced next pass.
-                    result = original(copy.deepcopy(records), *args, **kwargs)
+                with phase22.openai_transport_claim(claim_transport):
+                    with early_gate.suppress_resolution_ids(
+                        suppressed_resolutions
+                    ):
+                        # Every pass starts from the complete original topology.
+                        # A provider cannot mutate one pass into a reduced next pass.
+                        result = original(copy.deepcopy(records), *args, **kwargs)
                 if not _candidate_preserves_every_origin(records, result):
                     loss = ValueError(
                         "Phase 3.8 candidate failed exact source-block "
@@ -1414,6 +1722,10 @@ def _phase32_adjudicate_with_targeted_convergence(
                 _clear_convergence_state(scope)
                 return result
             except semantic_recovery.HumanDecisionRequired as exc:
+                if not transport_claimed:
+                    # A local semantic gate paused before transport. It owns no
+                    # paid-request ambiguity and must not poison Resume.
+                    raise
                 # The provider returned a recognized decision, but the outer
                 # orchestration layer has not saved that pause yet. Retain a
                 # bound claim so a crash in between cannot replay the paid
@@ -1441,6 +1753,10 @@ def _phase32_adjudicate_with_targeted_convergence(
                 _persist_convergence_state(state)
                 raise
             except ValueError as exc:
+                if not transport_claimed:
+                    # Deterministic pre-transport validation is ordinary
+                    # actionable failure, not an unknown paid outcome.
+                    raise
                 message = str(exc)
                 if "failed exact source-block grounding before freeze" not in message:
                     # A generic exception does not prove that no paid provider
@@ -1589,7 +1905,11 @@ def _phase32_adjudicate_with_targeted_convergence(
                     level="warning",
                 )
                 continue
+            except Phase38ConvergenceExhausted:
+                raise
             except Exception as exc:
+                if not transport_claimed:
+                    raise
                 # Unknown failures cannot establish whether a paid call began
                 # or completed. Retain request_started so Resume fails closed.
                 raise Phase38ConvergenceExhausted(
@@ -1644,6 +1964,7 @@ def install() -> None:
     phase31._PHASE38_ORIGINAL_GROUND_PROVIDER = phase31._ground_via_openai
     phase31._PHASE38_ORIGINAL_GROUND_CRITIC = phase31._critic_via_openai
     phase31._PHASE38_ORIGINAL_APPLY_PROPOSALS = phase31._apply_proposals
+    phase31._PHASE38_ORIGINAL_GROUND_CONCEPTS = phase31.ground_concepts
     phase32._PHASE38_ORIGINAL_APPLY_DECISIONS = phase32._apply_decisions
     phase32._PHASE38_ORIGINAL_READ_CACHED_RECORDS = phase32._read_cached_records
     phase33._PHASE38_ORIGINAL_CONVERGENCE = (
@@ -1655,6 +1976,9 @@ def install() -> None:
     phase31._ground_via_openai = _ground_via_openai
     phase31._critic_via_openai = _critic_via_openai
     phase31._apply_proposals = _apply_proposals
+    phase31.ground_concepts = _ground_concepts_with_placement_context
+    if phase3.ground_concepts is phase31._PHASE38_ORIGINAL_GROUND_CONCEPTS:
+        phase3.ground_concepts = _ground_concepts_with_placement_context
 
     phase32._apply_decisions = _capture_repaired_topology
     phase32._read_cached_records = _read_cached_records

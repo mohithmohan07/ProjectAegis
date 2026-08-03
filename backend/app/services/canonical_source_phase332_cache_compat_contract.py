@@ -17,8 +17,8 @@ from . import canonical_source_phase32_topology_adjudication_contract as phase32
 from . import canonical_source_phase33_preflight_contract as phase33
 from . import concept_refiner as cr
 
-_CONTRACT_VERSION = 1
-_CACHE_MARKER = "phase3.3-projected-topology-cache-1"
+_CONTRACT_VERSION = 2
+_CACHE_MARKER = "phase3.3-projected-topology-cache-2-placement-policy"
 _CACHE_FIELD = "_phase33_phase32_cache_contract"
 
 

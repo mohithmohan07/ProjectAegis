@@ -20,8 +20,15 @@ from app.services.placement_policy import (
     AtomicClaim,
     PlacementPolicyError,
     RelationshipType as RT,
-    TopicRelationship,
+    TopicRelationship as _TopicRelationship,
 )
+
+
+def TopicRelationship(*args, **kwargs):
+    """Golden fixtures represent already accepted critic classifications."""
+
+    kwargs.setdefault("critic_verdict", "accepted")
+    return _TopicRelationship(*args, **kwargs)
 
 
 def _graph(topics: list[tuple[str, str]], blocks: list[tuple[str, str, int]]):
@@ -72,6 +79,21 @@ def test_teaching_order_hash_changes_only_with_order():
 
     assert a.sha256 == b.sha256
     assert a.sha256 != c.sha256
+
+
+def test_blockless_heading_stays_between_its_declared_source_neighbours():
+    graph = _graph(
+        topics=[("T-A", "Opening"), ("T-B", "Bridge"), ("T-C", "Later")],
+        blocks=[("B1", "T-A", 100), ("B3", "T-C", 200)],
+    )
+
+    order = pp.seal_teaching_order(graph, source_contract_hash="sc")
+
+    assert [
+        topic_id for topic_id, _rank in sorted(
+            order.ranks.items(), key=lambda item: item[1]
+        )
+    ] == ["T-A", "T-B", "T-C"]
 
 
 # --------------------------------------------------------------------------- #
@@ -343,7 +365,7 @@ def test_language_task_is_not_moved_by_incidental_later_grammar():
     )
     rels = [
         TopicRelationship("L", "L1", RT.CORE_TEACHING, True, ("W1",)),
-        TopicRelationship("L", "L2", RT.INCIDENTAL_MENTION, False, ()),
+        TopicRelationship("L", "L2", RT.INCIDENTAL_MENTION, False, ("W2",)),
     ]
     decision = pp.compute_placement(task, rels, order)
 
@@ -423,6 +445,20 @@ def test_critic_rejection_removes_ownership_authority():
     assert pp.compute_placement(claim, rels, AP_ORDER).owner_topic_id == "AP-52"
 
 
+def test_blank_critic_verdict_never_certifies_provider_relationship():
+    claim = AtomicClaim(claim_id="BLANK", normalized_claim="c")
+    relation = _TopicRelationship(
+        "BLANK", "AP-52", RT.CORE_TEACHING, True, ("B52",)
+    )
+
+    assert relation.certified is False
+    assert pp.compute_provisional_placement(
+        claim, [relation], AP_ORDER
+    ).owner_topic_id == "AP-52"
+    with pytest.raises(PlacementPolicyError, match="no certified owning"):
+        pp.compute_placement(claim, [relation], AP_ORDER)
+
+
 def test_claim_with_no_owning_relationship_fails_closed():
     claim = AtomicClaim(claim_id="Z", normalized_claim="c")
     rels = [
@@ -452,17 +488,78 @@ def test_prerequisite_later_than_owner_is_a_contradiction():
 def test_split_survives_when_both_sides_and_all_protected_items_are_kept():
     parent = AtomicClaim(
         claim_id="S", normalized_claim="d affects terms and the finite sum",
+        origin_claim_ids=("S",),
+        split_group_id="SPLIT-S",
         protected_source_items=("QINV-0007", "FIG-0003"),
     )
     children = [
         AtomicClaim(claim_id="S1", normalized_claim="sign of d and terms",
                     origin_claim_ids=("S",),
+                    split_group_id="SPLIT-S",
                     protected_source_items=("QINV-0007",)),
         AtomicClaim(claim_id="S2", normalized_claim="d in the finite sum",
                     origin_claim_ids=("S",),
+                    split_group_id="SPLIT-S",
                     protected_source_items=("FIG-0003",)),
     ]
-    assert pp.audit_split([parent], children).committed is True
+    pending = pp.pending_split_attestation(
+        parent, children, [], split_group_id="SPLIT-S"
+    )
+    accepted = {
+        **pending,
+        "critic_verdict": "accepted",
+        "complete_parent_claim_preserved": True,
+        "protected_items_preserved": True,
+        "irreducible_relationships_preserved": True,
+        "critic_reason": "Every bound parent obligation survives.",
+    }
+    assert pp.audit_split(
+        [parent], children, split_attestation=accepted
+    ).committed is True
+
+
+def test_copied_origin_ids_cannot_certify_a_lossy_zollverein_split():
+    parent = AtomicClaim(
+        claim_id="H1",
+        normalized_claim=(
+            "Economic union through the Zollverein contributed to German "
+            "political unification."
+        ),
+        origin_claim_ids=("H1",),
+        split_group_id="SPLIT-H1",
+    )
+    children = [
+        AtomicClaim(
+            claim_id="H1a",
+            normalized_claim="The Zollverein was a customs union.",
+            origin_claim_ids=("H1",),
+            split_group_id="SPLIT-H1",
+        ),
+        AtomicClaim(
+            claim_id="H1b",
+            normalized_claim="Several German states charged customs duties.",
+            origin_claim_ids=("H1",),
+            split_group_id="SPLIT-H1",
+        ),
+    ]
+    pending = pp.pending_split_attestation(
+        parent, children, [], split_group_id="SPLIT-H1"
+    )
+    rejected = {
+        **pending,
+        "critic_verdict": "rejected",
+        "complete_parent_claim_preserved": False,
+        "protected_items_preserved": True,
+        "irreducible_relationships_preserved": False,
+        "critic_reason": "The causal relationship to unification disappeared.",
+    }
+
+    assert pp.audit_split([parent], children).committed is False
+    audit = pp.audit_split(
+        [parent], children, split_attestation=rejected
+    )
+    assert audit.committed is False
+    assert "irreducible relationships" in audit.reason
 
 
 def test_split_that_drops_a_protected_item_is_refused():

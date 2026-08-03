@@ -39,8 +39,8 @@ def _metadata() -> dict[str, str]:
 
 
 def test_contract_is_installed_after_phase2_contracts():
-    assert phase2._PHASE3_CONTRACT_VERSION == 1
-    assert generation._PHASE3_SEMANTIC_GRAPH_VERSION == 1
+    assert phase2._PHASE3_CONTRACT_VERSION == 2
+    assert generation._PHASE3_SEMANTIC_GRAPH_VERSION == 2
 
 
 def test_installed_inventory_wrapper_attaches_graph_ids(monkeypatch):

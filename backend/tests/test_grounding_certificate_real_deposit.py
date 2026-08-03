@@ -192,8 +192,11 @@ def test_real_certified_deposit_binds_db_audit_and_workbook_atomically(
 
     certified_payloads: list[list[dict]] = []
 
-    def capture_certificate(current_records):
-        certificate = real_build_certificate(current_records)
+    def capture_certificate(current_records, **certificate_options):
+        certificate = real_build_certificate(
+            current_records,
+            **certificate_options,
+        )
         certified_payloads.append(_public_payload(current_records))
         return certificate
 

@@ -457,6 +457,14 @@ def test_every_type_checkpoint_stage_rejects_tampered_human_result(
         "_placement_certification_contract_complete",
         lambda *_args, **_kwargs: True,
     )
+    # This test isolates the human-resolution semantic seal.  Late checkpoint
+    # ownership-ledger migration is covered independently by the Type/Case
+    # checkpoint regressions.
+    monkeypatch.setattr(
+        g,
+        "_type_case_checkpoint_placement_ledger_valid",
+        lambda *_args, **_kwargs: True,
+    )
 
     assert g._compatible_concept_checkpoint_entry(checkpoint)
 

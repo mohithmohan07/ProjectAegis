@@ -54,9 +54,14 @@ def _clean_ledger(monkeypatch):
     phase38.reset_convergence_state()
 
 
-def _run(original, records=None):
+def _run(original, records=None, *, transport=True):
+    def dispatched(rows, *args, **kwargs):
+        if transport:
+            phase38.phase22._notify_openai_transport_started()
+        return original(rows, *args, **kwargs)
+
     return phase38._phase32_adjudicate_with_targeted_convergence(
-        original, records if records is not None else _records()
+        dispatched, records if records is not None else _records()
     )
 
 
@@ -647,3 +652,44 @@ def test_unknown_non_grounding_error_retains_fail_closed_dispatch(monkeypatch):
         ):
             _run(original, records)
     assert calls == 1
+
+
+def test_pretransport_validation_failure_does_not_poison_resume(monkeypatch):
+    records = _records()
+    persisted: list[dict | None] = []
+    calls = 0
+
+    def invalid_before_transport(_rows, *_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise ValueError("local placement contract is incomplete")
+
+    with phase38.convergence_checkpoint_context(
+        scope="upload-job:53",
+        state=None,
+        persist=lambda _expected, value: persisted.append(
+            copy.deepcopy(value)
+        ),
+    ):
+        with pytest.raises(ValueError, match="local placement contract"):
+            _run(invalid_before_transport, records, transport=False)
+
+    latest = next(
+        (value for value in reversed(persisted) if value is not None),
+        None,
+    )
+    assert latest is not None
+    assert latest["dispatch_status"] == "idle"
+    assert latest["dispatch_sequence"] == 0
+
+    with phase38.convergence_checkpoint_context(
+        scope="upload-job:53",
+        state=latest,
+        persist=lambda _expected, value: persisted.append(
+            copy.deepcopy(value)
+        ),
+    ):
+        with pytest.raises(ValueError, match="local placement contract"):
+            _run(invalid_before_transport, records, transport=False)
+
+    assert calls == 2

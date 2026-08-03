@@ -16,7 +16,139 @@ from . import canonical_source_phase31_grounding_contract as phase31
 from . import canonical_source_phase33_preflight_contract as phase33
 from . import concept_refiner as cr
 
-_CONTRACT_VERSION = 1
+_CONTRACT_VERSION = 2
+
+
+def _qid_placement_contract(
+    generation: Any,
+    unit: dict[str, Any],
+    qid: str,
+) -> dict[str, Any] | None:
+    for case in unit.get("case_prompts") or []:
+        if not isinstance(case, dict):
+            continue
+        for example in generation._case_examples(case):
+            if str(example.get("source_question_id") or "").strip() != qid:
+                continue
+            contract = generation._certified_type_case_placement_contract(
+                example.get("_type_case_placement_contract"))
+            if contract is not None:
+                return contract
+    contract = generation._certified_type_case_placement_contract(
+        unit.get("_type_case_placement_contract"))
+    if contract is not None and (
+        len(unit.get("source_question_ids") or []) == 1
+        or qid in (contract.get("qid_claim_ids") or {})
+    ):
+        return contract
+    return None
+
+
+def _attach_qid_host_placement_manifest(
+    generation: Any,
+    record: dict[str, Any],
+    *,
+    unit: dict[str, Any],
+    unit_id: str,
+    destination: dict[str, Any],
+) -> None:
+    qids = [
+        str(value).strip()
+        for value in unit.get("source_question_ids") or []
+        if str(value).strip()
+    ]
+    unit_contract = generation._certified_type_case_placement_contract(
+        unit.get("_type_case_placement_contract"))
+    if unit_contract is None:
+        return
+    manifest = copy.deepcopy(
+        record.get("_type_case_qid_host_placement_manifest") or {})
+    if manifest and int(manifest.get("version") or 0) != 2:
+        raise ValueError(
+            "Phase 3.3 cannot mix legacy and v2 QID host placement manifests"
+        )
+    identity = {
+        "version": 2,
+        "policy_version": str(unit_contract.get("policy_version") or ""),
+        "teaching_order_sha256": str(
+            unit_contract.get("teaching_order_sha256") or ""),
+        "source_contract_hash": str(
+            unit_contract.get("source_contract_hash") or ""),
+    }
+    for key, value in identity.items():
+        if manifest.get(key) not in (None, "", value):
+            raise ValueError(
+                "Phase 3.3 QID host manifest mixed incompatible "
+                f"{key} values"
+            )
+        manifest[key] = value
+    placements = manifest.setdefault("placements", {})
+    for qid in qids:
+        contract = _qid_placement_contract(generation, unit, qid)
+        if contract is None:
+            raise ValueError(
+                "type_case_owner_uncertified: Phase 3.3 has no certified "
+                f"QID placement for {qid}"
+            )
+        owner_topic_id = str(contract.get("owner_topic_id") or "")
+        if str(destination.get("topic_id") or "") != owner_topic_id:
+            raise ValueError(
+                "Phase 3.3 verified host destination disagrees with certified "
+                f"owner for {qid}: owner={owner_topic_id!r}, "
+                f"destination={destination.get('topic_id')!r}"
+            )
+        entry = {
+            "qid": qid,
+            "claim_id": str(
+                (contract.get("qid_claim_ids") or {}).get(qid)
+                or contract.get("claim_id")
+                or ""
+            ),
+            "source_location_topic_ids": list(
+                contract.get("source_location_topic_ids") or []),
+            "owner_topic_id": owner_topic_id,
+            "required_topic_ids": list(
+                contract.get("required_topic_ids") or []),
+            "prerequisite_topic_ids": list(
+                contract.get("prerequisite_topic_ids") or []),
+            "reference_edges": copy.deepcopy(
+                contract.get("reference_edges") or []),
+            "illustration_topic_ids": list(
+                contract.get("illustration_topic_ids") or []),
+            "topic_relationships": copy.deepcopy(
+                contract.get("topic_relationships") or []),
+            # Carry the complete independently certified per-QID contract.
+            # The final grounding certificate must be able to recompute this
+            # contract's digest instead of trusting a detached hash copied
+            # into the host attestation.
+            "placement_contract": copy.deepcopy(contract),
+            "placement_certificate_sha256": str(
+                (
+                    contract.get("qid_placement_sha256s") or {}
+                ).get(qid)
+                or contract.get("placement_certificate_sha256")
+                or ""
+            ),
+            "assignment_unit_id": unit_id,
+            "host_topic_id": str(destination.get("topic_id") or ""),
+            "host_parent_concept": str(
+                destination.get("parent_concept") or ""),
+            "host_concept_title": str(
+                destination.get("concept_title") or ""),
+            "host_decision": str(destination.get("decision") or ""),
+        }
+        prior = placements.get(qid)
+        if prior is not None and phase3._sha256_json(prior) != phase3._sha256_json(
+            entry
+        ):
+            raise ValueError(
+                f"Phase 3.3 assigned QID {qid} conflicting certified hosts"
+            )
+        placements[qid] = entry
+    material = copy.deepcopy(manifest)
+    material.pop("certificate_sha256", None)
+    manifest["certificate_sha256"] = phase3._sha256_json(material)
+    record["_type_case_qid_host_placement_manifest"] = manifest
 
 
 def _apply_host_plan(
@@ -35,6 +167,8 @@ def _apply_host_plan(
     dict[str, dict[str, Any]],
     int,
 ]:
+    from . import generation
+
     out = [copy.deepcopy(row) for row in records]
     concept_by_id = {
         str(row.get("concept_id") or ""): row for row in concept_payload
@@ -42,10 +176,16 @@ def _apply_host_plan(
     unit_by_id = {
         str(row.get("_phase33_assignment_unit_id") or ""): row for row in units
     }
-    unit_topic = {
-        unit_id: str(unit.get("_semantic_topic_id") or "")
-        for unit_id, unit in unit_by_id.items()
-    }
+    unit_topic: dict[str, str] = {}
+    for unit_id, unit in unit_by_id.items():
+        placement = generation._certified_type_case_placement_contract(
+            unit.get("_type_case_placement_contract"))
+        unit_topic[unit_id] = str(
+            placement.get("owner_topic_id")
+            if placement is not None
+            else unit.get("_semantic_topic_id")
+            or ""
+        )
 
     new_record_by_key: dict[tuple[str, str], dict[str, Any]] = {}
     for plan in plans:
@@ -157,6 +297,20 @@ def _apply_host_plan(
                 "decision": str(assignment.get("decision") or ""),
                 "confidence": float(assignment.get("confidence") or 0.0),
             }
+            expected_owner = unit_topic.get(unit_id, "")
+            if expected_owner and destination["topic_id"] != expected_owner:
+                raise ValueError(
+                    "Phase 3.3 host destination changed certified assignment-"
+                    f"unit owner: unit={unit_id!r}, owner={expected_owner!r}, "
+                    f"destination={destination['topic_id']!r}"
+                )
+            _attach_qid_host_placement_manifest(
+                generation,
+                record,
+                unit=unit_by_id.get(unit_id, {}),
+                unit_id=unit_id,
+                destination=destination,
+            )
             host_map[unit_id] = destination
             for qid in unit_by_id.get(unit_id, {}).get("source_question_ids") or []:
                 qid = str(qid or "").strip()

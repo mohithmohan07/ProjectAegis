@@ -906,6 +906,7 @@ def _deposit_concepts(
     Returns (created_ids, merged_ids): a same-learning-kind normalized-title
     match is refreshed from the newly validated record and its sources grow.
     """
+    type_case_qid_placement_ledger: dict | None = None
     if pre_post == "Post" and final_grounding_certificate is not None:
         from . import canonical_source_phase3 as phase3
 
@@ -918,6 +919,12 @@ def _deposit_concepts(
                 else None
             )
         try:
+            type_case_qid_placement_ledger = (
+                generation._resolved_type_case_qid_placement_ledger(
+                    inventory,
+                    mined_types,
+                )
+            )
             grounding_certificate.verify_final_certificate(
                 records,
                 final_grounding_certificate,
@@ -927,8 +934,15 @@ def _deposit_concepts(
                     else None
                 ),
                 require_semantic_graph=config.use_live_generation(),
+                require_placement_contracts=config.use_live_generation(),
+                type_case_qid_placement_ledger=(
+                    type_case_qid_placement_ledger
+                ),
             )
-        except grounding_certificate.GroundingCertificateError as exc:
+        except (
+            grounding_certificate.GroundingCertificateError,
+            RuntimeError,
+        ) as exc:
             raise DepositValidationError(str(exc)) from exc
     if pre_post == "Post":
         _require_deposit_source_topic_coverage(records, source_text)
@@ -1082,24 +1096,31 @@ def _deposit_concepts(
             f"concept validation failed before deposit: {codes}")
 
     if pre_post == "Post" and final_grounding_certificate is not None:
-        # Deposit-only cleanup is allowed to normalize presentation, but it
-        # may not rewrite a grounded title/topic/Description or detach its
-        # exact evidence.  Rebuilding the aggregate certificate verifies every
-        # row seal after normalization and happens before the first DB flush.
+        # Deposit-only cleanup must be fully idempotent with the payload that
+        # cleared generation's final gate.  A lineage-only comparison cannot
+        # see a changed public payload or a removed Type/Case QID-host
+        # manifest, because those attestations intentionally live in the final
+        # aggregate certificate rather than the per-row grounding seal.
+        # Recompute and compare the complete certificate before the first DB
+        # flush; any drift returns to the bounded recovery path instead of
+        # minting a second, divergent "valid" certificate at deposit time.
         try:
-            deposited_certificate = (
-                grounding_certificate.build_final_certificate(records)
+            deposited_certificate = grounding_certificate.verify_final_certificate(
+                records,
+                final_grounding_certificate,
+                semantic_graph=(
+                    semantic_graph
+                    if isinstance(semantic_graph, dict)
+                    else None
+                ),
+                require_semantic_graph=config.use_live_generation(),
+                require_placement_contracts=config.use_live_generation(),
+                type_case_qid_placement_ledger=(
+                    type_case_qid_placement_ledger
+                ),
             )
         except grounding_certificate.GroundingCertificateError as exc:
             raise DepositValidationError(str(exc)) from exc
-        if (
-            deposited_certificate.get("lineage_sha256")
-            != final_grounding_certificate.get("lineage_sha256")
-        ):
-            raise DepositValidationError(
-                "deposit normalization changed the ordered grounded concept "
-                "lineage"
-            )
         if grounding_certificate_sink is not None:
             grounding_certificate_sink["certificate"] = copy.deepcopy(
                 deposited_certificate
@@ -1395,6 +1416,14 @@ def _store_inventory(job: models.UploadJob, artifacts: dict) -> None:
         # bundle compatibility while retaining the exact qid -> host evidence
         # needed to audit a successful job after its checkpoint is cleared.
         stored[certification_key] = copy.deepcopy(certification_ledger)
+    type_case_ledger = generation._resolved_type_case_qid_placement_ledger(
+        inventory,
+        mined,
+    )
+    if isinstance(type_case_ledger, dict):
+        stored[
+            generation._TYPE_CASE_QID_PLACEMENT_LEDGER_KEY
+        ] = copy.deepcopy(type_case_ledger)
     if isinstance(final_grounding, dict):
         stored[
             grounding_certificate.FINAL_CERTIFICATE_FIELD

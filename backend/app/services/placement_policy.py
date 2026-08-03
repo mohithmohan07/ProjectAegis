@@ -39,11 +39,13 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
+from fractions import Fraction
 from typing import Any, Iterable, Mapping, Sequence
 
-POLICY_VERSION = "aegis-placement-policy-1"
+POLICY_VERSION = "aegis-placement-policy-2"
+SPLIT_ATTESTATION_VERSION = "aegis-split-survival-attestation-1"
 
 
 class RelationshipType(str, Enum):
@@ -119,6 +121,12 @@ def _sha256_json(value: Any) -> str:
             separators=(",", ":"), default=str,
         ).encode("utf-8")
     ).hexdigest()
+
+
+def claim_text_sha256(value: object) -> str:
+    """Hash one normalized source-facing claim for split-lineage attestation."""
+
+    return hashlib.sha256(_normal(value).encode("utf-8")).hexdigest()
 
 
 # --------------------------------------------------------------------------- #
@@ -215,15 +223,45 @@ def seal_teaching_order(
         declared.append(topic_id)
         titles[topic_id] = str(topic.get("title") or "")
 
-    # Sort by earliest block; topics without blocks fall back to their
-    # declared index so ordering stays total and stable.
-    fallback_scale = (max(first_block.values()) + 1) if first_block else 1
-    def sort_key(item: tuple[int, str]) -> tuple[int, int]:
+    # Sort by earliest block. A blockless heading is interpolated between its
+    # nearest declared neighbours instead of being pushed to the chapter end.
+    # Fractions make this stable without depending on floating-point rounding.
+    known_indices = [
+        index for index, topic_id in enumerate(declared)
+        if topic_id in first_block
+    ]
+
+    def sort_key(item: tuple[int, str]) -> tuple[Fraction, int]:
         index, topic_id = item
         if topic_id in first_block:
-            return (first_block[topic_id], index)
-        # Anchor a blockless topic between its declared neighbours.
-        return (index * fallback_scale, index)
+            return (Fraction(first_block[topic_id]), index)
+        previous = next(
+            (value for value in reversed(known_indices) if value < index),
+            None,
+        )
+        following = next(
+            (value for value in known_indices if value > index),
+            None,
+        )
+        if previous is not None and following is not None:
+            left = Fraction(first_block[declared[previous]])
+            right = Fraction(first_block[declared[following]])
+            distance = following - previous
+            return (
+                left + (right - left) * Fraction(index - previous, distance),
+                index,
+            )
+        if previous is not None:
+            return (
+                Fraction(first_block[declared[previous]] + index - previous),
+                index,
+            )
+        if following is not None:
+            return (
+                Fraction(first_block[declared[following]] - following + index),
+                index,
+            )
+        return (Fraction(index), index)
 
     ordered = sorted(enumerate(declared), key=sort_key)
     ranks = {topic_id: rank for rank, (_i, topic_id) in enumerate(ordered)}
@@ -277,6 +315,40 @@ class TopicRelationship:
     critic_verdict: str = ""
 
     @property
+    def relationship_id(self) -> str:
+        """Stable identity for one exact claim/topic/evidence assertion.
+
+        A claim can legitimately have more than one relationship to the same
+        topic over its lifetime.  ``claim_id|topic_id`` is therefore not a safe
+        review key: it lets one verdict accidentally certify another relation.
+        The ID binds the relationship kind, necessity assertion and exact
+        evidence set as well.
+        """
+
+        return "REL-" + _sha256_json({
+            "claim_id": self.claim_id,
+            "topic_id": self.topic_id,
+            "relationship_type": self.relationship_type.value,
+            "necessity": bool(self.necessity),
+            "evidence_block_ids": sorted(set(self.evidence_block_ids)),
+        })[:24].upper()
+
+    @property
+    def provisionally_usable(self) -> bool:
+        """Whether provider data is structurally usable for critic orientation.
+
+        This deliberately does *not* mean certified.  It permits code to show
+        the independent critic the owner that the provider's classifications
+        would imply, without granting those classifications commit authority.
+        """
+
+        if not self.evidence_block_ids:
+            return False
+        if self.relationship_type in NECESSARY_TYPES:
+            return bool(self.necessity)
+        return not self.necessity
+
+    @property
     def certified(self) -> bool:
         """Whether this relationship may participate in ownership.
 
@@ -284,11 +356,10 @@ class TopicRelationship:
         no evidence, is inert: it can neither own nor make a topic required.
         """
 
-        if _normal(self.critic_verdict) == "rejected":
-            return False
-        if self.relationship_type in NECESSARY_TYPES:
-            return bool(self.necessity and self.evidence_block_ids)
-        return True
+        return (
+            _normal(self.critic_verdict) in {"accepted", "verified"}
+            and self.provisionally_usable
+        )
 
 
 @dataclass(frozen=True)
@@ -415,6 +486,35 @@ def compute_placement(
     )
 
 
+def compute_provisional_placement(
+    claim: AtomicClaim,
+    relationships: Sequence[TopicRelationship],
+    order: TeachingOrder,
+) -> PlacementDecision:
+    """Compute a non-authoritative owner for the critic review packet.
+
+    The ordinary :func:`compute_placement` accepts only independently accepted
+    relationships.  This helper is intentionally separate so provider-only
+    classifications can never be mistaken for a certified placement by a
+    caller that forgets which stage it is in.
+    """
+
+    provisional = [
+        TopicRelationship(
+            claim_id=relation.claim_id,
+            topic_id=relation.topic_id,
+            relationship_type=relation.relationship_type,
+            necessity=relation.necessity,
+            evidence_block_ids=relation.evidence_block_ids,
+            provider_reason=relation.provider_reason,
+            critic_verdict="accepted",
+        )
+        for relation in relationships
+        if relation.provisionally_usable
+    ]
+    return compute_placement(claim, provisional, order)
+
+
 def compute_placements(
     claims: Sequence[AtomicClaim],
     relationships: Sequence[TopicRelationship],
@@ -440,16 +540,254 @@ class SplitAudit:
     reason: str = ""
 
 
-def audit_split(
+def _split_relationship_material(
+    relation: TopicRelationship,
+) -> dict[str, Any]:
+    """Return the exact relationship assertion a split critic must review."""
+
+    return {
+        "relationship_id": relation.relationship_id,
+        "claim_id": relation.claim_id,
+        "topic_id": relation.topic_id,
+        "relationship_type": relation.relationship_type.value,
+        "necessity": bool(relation.necessity),
+        "evidence_block_ids": sorted(set(relation.evidence_block_ids)),
+    }
+
+
+def split_review_material(
+    parent: AtomicClaim,
+    children: Sequence[AtomicClaim],
+    relationships: Sequence[TopicRelationship],
+    *,
+    split_group_id: str,
+) -> dict[str, Any]:
+    """Build the content-addressed semantic material for one proposed split.
+
+    This deliberately contains no lexical-coverage score.  It binds the exact
+    parent claim, exact child claims, protected inventory, and every typed
+    child/topic/evidence assertion so an independent critic can make the
+    semantic survival judgement over immutable material.
+    """
+
+    child_ids = [str(child.claim_id or "") for child in children]
+    if not split_group_id:
+        raise PlacementPolicyError("split review requires a split_group_id")
+    if not parent.claim_id or not parent.normalized_claim:
+        raise PlacementPolicyError("split review requires one complete parent claim")
+    if not children or any(not child_id for child_id in child_ids):
+        raise PlacementPolicyError("split review requires identified child claims")
+    if len(set(child_ids)) != len(child_ids):
+        raise PlacementPolicyError("split review child claim IDs must be unique")
+
+    known_children = set(child_ids)
+    unknown_relationship_claims = sorted({
+        relation.claim_id
+        for relation in relationships
+        if relation.claim_id not in known_children
+    })
+    if unknown_relationship_claims:
+        raise PlacementPolicyError(
+            "split review relationship material names unknown child claim(s): "
+            + ", ".join(unknown_relationship_claims)
+        )
+
+    return {
+        "version": SPLIT_ATTESTATION_VERSION,
+        "split_group_id": str(split_group_id),
+        "parent": {
+            "claim_id": str(parent.claim_id),
+            "claim_sha256": claim_text_sha256(parent.normalized_claim),
+            "origin_claim_ids": sorted(set(parent.origin_claim_ids)),
+            "protected_source_items": sorted(set(parent.protected_source_items)),
+        },
+        "children": [
+            {
+                "claim_id": str(child.claim_id),
+                "claim_sha256": claim_text_sha256(child.normalized_claim),
+                "origin_claim_ids": sorted(set(child.origin_claim_ids)),
+                "protected_source_items": sorted(
+                    set(child.protected_source_items)
+                ),
+                "irreducible_relationship_material": sorted(
+                    (
+                        _split_relationship_material(relation)
+                        for relation in relationships
+                        if relation.claim_id == child.claim_id
+                    ),
+                    key=lambda row: row["relationship_id"],
+                ),
+            }
+            for child in sorted(children, key=lambda value: value.claim_id)
+        ],
+    }
+
+
+def split_review_id(material: Mapping[str, Any]) -> str:
+    """Return the stable identity of one exact proposed split."""
+
+    return "SPLIT-REVIEW-" + _sha256_json(material)[:24].upper()
+
+
+def pending_split_attestation(
+    parent: AtomicClaim,
+    children: Sequence[AtomicClaim],
+    relationships: Sequence[TopicRelationship],
+    *,
+    split_group_id: str,
+) -> dict[str, Any]:
+    """Create the immutable review packet copied into every split child."""
+
+    material = split_review_material(
+        parent,
+        children,
+        relationships,
+        split_group_id=split_group_id,
+    )
+    return {
+        "version": SPLIT_ATTESTATION_VERSION,
+        "split_review_id": split_review_id(material),
+        "material": material,
+        "critic_verdict": "",
+        "complete_parent_claim_preserved": False,
+        "protected_items_preserved": False,
+        "irreducible_relationships_preserved": False,
+        "critic_reason": "",
+    }
+
+
+def normalized_split_attestation(value: object) -> dict[str, Any]:
+    """Canonicalize an attestation without granting it validity."""
+
+    if not isinstance(value, Mapping) or not value:
+        return {}
+    material = value.get("material")
+    if not isinstance(material, Mapping):
+        material = {}
+    return {
+        "version": str(value.get("version") or ""),
+        "split_review_id": str(value.get("split_review_id") or ""),
+        "material": json.loads(json.dumps(
+            material,
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        )),
+        "critic_verdict": _normal(value.get("critic_verdict")),
+        "complete_parent_claim_preserved": (
+            value.get("complete_parent_claim_preserved") is True
+        ),
+        "protected_items_preserved": (
+            value.get("protected_items_preserved") is True
+        ),
+        "irreducible_relationships_preserved": (
+            value.get("irreducible_relationships_preserved") is True
+        ),
+        "critic_reason": str(value.get("critic_reason") or ""),
+    }
+
+
+def validate_split_attestation(
+    value: object,
+    *,
+    child: AtomicClaim | None = None,
+    relationships: Sequence[TopicRelationship] | None = None,
+    require_accepted: bool = True,
+) -> dict[str, Any]:
+    """Validate one content-addressed, independently reviewed split packet."""
+
+    attestation = normalized_split_attestation(value)
+    if not attestation:
+        raise PlacementPolicyError("split lacks a structured survival attestation")
+    if attestation["version"] != SPLIT_ATTESTATION_VERSION:
+        raise PlacementPolicyError("split survival attestation uses a stale version")
+    material = attestation["material"]
+    if material.get("version") != SPLIT_ATTESTATION_VERSION:
+        raise PlacementPolicyError("split review material uses a stale version")
+    expected_id = split_review_id(material)
+    if attestation["split_review_id"] != expected_id:
+        raise PlacementPolicyError(
+            "split survival attestation has a stale content-addressed identity"
+        )
+    parent = material.get("parent")
+    children = material.get("children")
+    if (
+        not material.get("split_group_id")
+        or not isinstance(parent, Mapping)
+        or not str(parent.get("claim_id") or "")
+        or not re.fullmatch(r"[0-9a-f]{64}", str(parent.get("claim_sha256") or ""))
+        or not isinstance(children, list)
+        or len(children) < 2
+    ):
+        raise PlacementPolicyError("split review material is incomplete")
+    child_ids = [
+        str(row.get("claim_id") or "")
+        for row in children
+        if isinstance(row, Mapping)
+    ]
+    if len(child_ids) != len(children) or len(set(child_ids)) != len(child_ids):
+        raise PlacementPolicyError("split review child identities are incomplete or duplicate")
+    if child is not None:
+        if str(material.get("split_group_id") or "") != child.split_group_id:
+            raise PlacementPolicyError(
+                f"split review group is stale for child {child.claim_id}"
+            )
+        matching = [
+            row for row in children
+            if isinstance(row, Mapping)
+            and str(row.get("claim_id") or "") == child.claim_id
+        ]
+        if len(matching) != 1:
+            raise PlacementPolicyError(
+                f"split review does not identify child {child.claim_id} exactly once"
+            )
+        row = matching[0]
+        if (
+            str(row.get("claim_sha256") or "")
+            != claim_text_sha256(child.normalized_claim)
+            or sorted(set(row.get("origin_claim_ids") or []))
+            != sorted(set(child.origin_claim_ids))
+            or sorted(set(row.get("protected_source_items") or []))
+            != sorted(set(child.protected_source_items))
+        ):
+            raise PlacementPolicyError(
+                f"split review material is stale for child {child.claim_id}"
+            )
+        if relationships is not None:
+            expected_relationships = sorted(
+                (
+                    _split_relationship_material(relation)
+                    for relation in relationships
+                    if relation.claim_id == child.claim_id
+                ),
+                key=lambda relation: relation["relationship_id"],
+            )
+            if row.get("irreducible_relationship_material") != expected_relationships:
+                raise PlacementPolicyError(
+                    f"split relationship material is stale for child {child.claim_id}"
+                )
+    if require_accepted and not (
+        attestation["critic_verdict"] in {"accepted", "verified"}
+        and attestation["complete_parent_claim_preserved"] is True
+        and attestation["protected_items_preserved"] is True
+        and attestation["irreducible_relationships_preserved"] is True
+    ):
+        raise PlacementPolicyError(
+            "split was not independently certified to preserve the complete "
+            "parent claim, protected items, and irreducible relationships"
+        )
+    return attestation
+
+
+def audit_split_structure(
     parents: Sequence[AtomicClaim],
     children: Sequence[AtomicClaim],
 ) -> SplitAudit:
-    """Prove every parent claim and protected item survives in the children.
+    """Check split lineage and protected inventory before semantic review.
 
-    A split is transactional: either all children are committed and every
-    protected parent item is covered, or the split is refused. This is the
-    check that stops "promote the advanced half" from quietly deleting the
-    foundational half.
+    This is intentionally preliminary.  Copied ``origin_claim_ids`` are not
+    proof that the child text preserves the parent meaning; only the structured
+    independent split attestation accepted by :func:`audit_split` can commit.
     """
 
     if not parents:
@@ -496,6 +834,43 @@ def audit_split(
                 ]))
             ),
         )
+    return SplitAudit(committed=True)
+
+
+def audit_split(
+    parents: Sequence[AtomicClaim],
+    children: Sequence[AtomicClaim],
+    *,
+    split_attestation: object | None = None,
+) -> SplitAudit:
+    """Commit a split only after structure and semantic survival are proven."""
+
+    structural = audit_split_structure(parents, children)
+    if not structural.committed:
+        return structural
+    if len(parents) != 1:
+        return SplitAudit(
+            committed=False,
+            reason="split attestation requires one exact parent claim",
+        )
+    try:
+        attestation = validate_split_attestation(split_attestation)
+        material = attestation["material"]
+        parent = material["parent"]
+        if (
+            str(parent.get("claim_id") or "") != parents[0].claim_id
+            or str(parent.get("claim_sha256") or "")
+            != claim_text_sha256(parents[0].normalized_claim)
+            or sorted(set(parent.get("origin_claim_ids") or []))
+            != sorted(set(parents[0].origin_claim_ids))
+            or sorted(set(parent.get("protected_source_items") or []))
+            != sorted(set(parents[0].protected_source_items))
+        ):
+            raise PlacementPolicyError("split review material is stale for its parent")
+        for child in children:
+            validate_split_attestation(attestation, child=child)
+    except PlacementPolicyError as exc:
+        return SplitAudit(committed=False, reason=str(exc))
     return SplitAudit(committed=True)
 
 
@@ -579,8 +954,9 @@ PROVIDER_SYSTEM = (
     "solution method is NOT necessity. Shared terminology is NOT necessity. "
     "Appearing on the same page, in the same section number, or at a "
     "particular point in a chronology is NOT necessity.\n"
-    "Cite exact supplied block IDs as evidence for every relationship where "
-    "necessity is true. Use only supplied claim IDs and topic IDs."
+    "Cite exact supplied block IDs as evidence for every relationship, "
+    "including references and incidental mentions. Use only supplied claim "
+    "IDs and topic IDs."
 )
 
 CRITIC_SYSTEM = (
@@ -641,12 +1017,21 @@ def apply_critic_verdicts(
     relationships: Sequence[TopicRelationship],
     verdicts: Mapping[str, str],
 ) -> list[TopicRelationship]:
-    """Attach critic verdicts keyed by ``claim_id|topic_id``."""
+    """Attach critic verdicts keyed by stable relationship identity.
+
+    ``claim_id|topic_id`` remains a read-only compatibility fallback for old
+    audit fixtures, but a live exhaustive critic response always uses the
+    content-addressed relationship ID.
+    """
 
     out: list[TopicRelationship] = []
     for relation in relationships:
-        key = f"{relation.claim_id}|{relation.topic_id}"
-        verdict = str(verdicts.get(key) or "")
+        legacy_key = f"{relation.claim_id}|{relation.topic_id}"
+        verdict = str(
+            verdicts.get(relation.relationship_id)
+            or verdicts.get(legacy_key)
+            or ""
+        )
         out.append(TopicRelationship(
             claim_id=relation.claim_id,
             topic_id=relation.topic_id,
@@ -657,6 +1042,142 @@ def apply_critic_verdicts(
             critic_verdict=verdict or relation.critic_verdict,
         ))
     return out
+
+
+def relationship_audit_row(relation: TopicRelationship) -> dict[str, Any]:
+    """Return the exact relationship material stored in a placement contract."""
+
+    return {
+        "relationship_id": relation.relationship_id,
+        "claim_id": relation.claim_id,
+        "topic_id": relation.topic_id,
+        "relationship_type": relation.relationship_type.value,
+        "necessity": bool(relation.necessity),
+        "evidence_block_ids": sorted(set(relation.evidence_block_ids)),
+        "provider_reason": relation.provider_reason,
+        "critic_verdict": _normal(relation.critic_verdict),
+    }
+
+
+def claim_placement_certificate_sha256(
+    claim: AtomicClaim,
+    decision: PlacementDecision,
+    relationships: Sequence[TopicRelationship],
+    order: TeachingOrder,
+) -> str:
+    """Bind one final owner to its claim, exact relationships and evidence."""
+
+    return _sha256_json({
+        "policy_version": POLICY_VERSION,
+        "teaching_order_sha256": order.sha256,
+        "claim": {
+            "claim_id": claim.claim_id,
+            "normalized_claim": _normal(claim.normalized_claim),
+            "source_location_topic_id": claim.source_location_topic_id,
+            "evidence_block_ids": sorted(set(claim.evidence_block_ids)),
+            "origin_claim_ids": sorted(set(claim.origin_claim_ids)),
+            "split_group_id": claim.split_group_id,
+            "protected_source_items": sorted(set(claim.protected_source_items)),
+        },
+        "placement": placement_certificate_material(
+            {decision.claim_id: decision}, order
+        )["placements"][0],
+        "relationships": [
+            relationship_audit_row(relation)
+            for relation in sorted(
+                relationships, key=lambda row: row.relationship_id
+            )
+        ],
+    })
+
+
+_PLACEMENT_CONTRACT_FIELDS = (
+    "certified",
+    "policy_version",
+    "teaching_order_sha256",
+    "claim_id",
+    "normalized_claim",
+    "origin_claim_sha256",
+    "source_location_topic_id",
+    "owner_topic_id",
+    "required_topic_ids",
+    "prerequisite_topic_ids",
+    "reference_edges",
+    "illustration_topic_ids",
+    "topic_relationships",
+    "origin_claim_ids",
+    "split_group_id",
+    "protected_source_items",
+    "split_attestation",
+)
+
+
+def normalized_placement_contract(contract: Mapping[str, Any]) -> dict[str, Any]:
+    """Normalize the exact per-row placement material covered by its digest."""
+
+    value = {field: contract.get(field) for field in _PLACEMENT_CONTRACT_FIELDS}
+    value["certified"] = bool(value.get("certified"))
+    value["policy_version"] = str(value.get("policy_version") or "")
+    value["teaching_order_sha256"] = str(
+        value.get("teaching_order_sha256") or ""
+    )
+    value["claim_id"] = str(value.get("claim_id") or "")
+    value["normalized_claim"] = _normal(value.get("normalized_claim"))
+    value["origin_claim_sha256"] = str(
+        value.get("origin_claim_sha256") or ""
+    )
+    value["source_location_topic_id"] = str(
+        value.get("source_location_topic_id") or ""
+    )
+    value["owner_topic_id"] = str(value.get("owner_topic_id") or "")
+    for field in (
+        "required_topic_ids",
+        "prerequisite_topic_ids",
+        "illustration_topic_ids",
+        "origin_claim_ids",
+        "protected_source_items",
+    ):
+        value[field] = sorted({
+            str(item) for item in value.get(field) or [] if str(item)
+        })
+    value["reference_edges"] = sorted({
+        (str(edge[0]), str(edge[1]))
+        for edge in value.get("reference_edges") or []
+        if isinstance(edge, (list, tuple)) and len(edge) == 2
+        and str(edge[0]) and str(edge[1])
+    })
+    value["reference_edges"] = [list(edge) for edge in value["reference_edges"]]
+    relationships: list[dict[str, Any]] = []
+    for raw in value.get("topic_relationships") or []:
+        if not isinstance(raw, Mapping):
+            continue
+        relationships.append({
+            "relationship_id": str(raw.get("relationship_id") or ""),
+            "claim_id": str(raw.get("claim_id") or ""),
+            "topic_id": str(raw.get("topic_id") or ""),
+            "relationship_type": str(raw.get("relationship_type") or ""),
+            "necessity": bool(raw.get("necessity")),
+            "evidence_block_ids": sorted({
+                str(item) for item in raw.get("evidence_block_ids") or []
+                if str(item)
+            }),
+            "provider_reason": str(raw.get("provider_reason") or ""),
+            "critic_verdict": _normal(raw.get("critic_verdict")),
+        })
+    value["topic_relationships"] = sorted(
+        relationships, key=lambda row: row["relationship_id"]
+    )
+    value["split_group_id"] = str(value.get("split_group_id") or "")
+    value["split_attestation"] = normalized_split_attestation(
+        value.get("split_attestation")
+    )
+    return value
+
+
+def placement_contract_sha256(contract: Mapping[str, Any]) -> str:
+    """Hash the authoritative nested placement contract, excluding its digest."""
+
+    return _sha256_json(normalized_placement_contract(contract))
 
 
 # --------------------------------------------------------------------------- #

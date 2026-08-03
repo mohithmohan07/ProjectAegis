@@ -14,7 +14,7 @@ import re
 from functools import wraps
 from typing import Any
 
-_CONTRACT_VERSION = 1
+_CONTRACT_VERSION = 2
 
 
 def _normal(value: object) -> str:
@@ -39,6 +39,13 @@ def install(generation: Any | None = None) -> None:
         concept_payload_by_id: dict[str, dict],
     ) -> str:
         if mtype.get("_phase33_host_verified"):
+            placement = generation._certified_type_case_placement_contract(
+                mtype.get("_type_case_placement_contract"))
+            owner_topic_id = (
+                str(placement.get("owner_topic_id") or "")
+                if placement is not None
+                else ""
+            )
             title = _normal(mtype.get("concept_match_hint"))
             parent = _normal(mtype.get("parent_concept_match_hint"))
             topic = _normal(mtype.get("topic_match_hint"))
@@ -54,8 +61,19 @@ def install(generation: Any | None = None) -> None:
                     == parent
                 )
                 and (
-                    not topic
-                    or _normal(concept_payload_by_id[cid].get("topic")) == topic
+                    (
+                        bool(owner_topic_id)
+                        and str(concept_payload_by_id[cid].get("topic_id") or "")
+                        == owner_topic_id
+                    )
+                    or (
+                        not owner_topic_id
+                        and (
+                            not topic
+                            or _normal(
+                                concept_payload_by_id[cid].get("topic")) == topic
+                        )
+                    )
                 )
             ]
             if len(matches) == 1:
@@ -64,6 +82,7 @@ def install(generation: Any | None = None) -> None:
                 raise RuntimeError(
                     "Phase 3.3 independently verified Type host is absent from "
                     "the frozen concept topology: "
+                    f"owner_topic_id={owner_topic_id!r}, "
                     f"topic={mtype.get('topic_match_hint')!r}, "
                     f"parent={mtype.get('parent_concept_match_hint')!r}, "
                     f"concept={mtype.get('concept_match_hint')!r}"

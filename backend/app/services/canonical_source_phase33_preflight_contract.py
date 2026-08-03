@@ -45,6 +45,8 @@ from . import canonical_source_phase32_topology_adjudication_contract as phase32
 from . import concept_refiner as cr
 from . import concept_topology_contract as topology
 from . import early_semantic_gate as early_gate
+from . import grounding_certificate
+from . import placement_policy
 from . import progress
 from . import semantic_confidence_policy as confidence_policy
 from .semantic_recovery import (
@@ -52,10 +54,18 @@ from .semantic_recovery import (
     ProviderResponseContractError,
 )
 
-_CONTRACT_VERSION = 1
-_DECISION_CACHE_VERSION = "phase3.3-topology-decision-cache-1"
+_CONTRACT_VERSION = 2
+_DECISION_CACHE_VERSION = "phase3.3-certified-placement-decision-cache-3"
 _DECISION_CACHE_FILENAME = "source.phase33-topology-decision-cache.json"
-_HOST_VERSION = "phase3.3-type-host-preflight-4-case-routes"
+_HOST_VERSION = "phase3.3-type-host-preflight-6-certified-mutation-v1"
+_HOST_MUTATION_PLACEMENT_VERSION = 1
+_HOST_MUTATION_ENVELOPE_KEY = "_host_mutation_placement_envelope"
+_HOST_MUTATION_SOURCE_PLAN_KEY = "_phase33_certified_host_mutation_plan"
+_TYPE_CASE_OWNERSHIP_VERSION = 2
+_TYPE_CASE_QID_PLACEMENT_LEDGER_KEY = "_type_case_qid_placement_ledger"
+_TYPE_CASE_PLACEMENT_CACHE_FILENAME = (
+    "source.phase33-type-case-placement-cache.json"
+)
 _HOST_PLAN_CACHE_FILENAME = "source.phase33-type-host-plan-cache.json"
 _HOST_RESULT_CACHE_FILENAME = "source.phase33-type-host-result-cache.json"
 
@@ -70,6 +80,8 @@ TopologyProvider = Callable[[dict[str, Any]], dict[str, Any]]
 TopologyCritic = Callable[[dict[str, Any]], dict[str, Any]]
 HostProvider = Callable[[dict[str, Any]], dict[str, Any]]
 HostCritic = Callable[[dict[str, Any]], dict[str, Any]]
+PlacementProvider = Callable[[dict[str, Any]], dict[str, Any]]
+PlacementCritic = Callable[[dict[str, Any]], dict[str, Any]]
 
 
 @contextmanager
@@ -643,18 +655,92 @@ def _phase32_decision_key(
     payload: dict[str, Any], concept: dict[str, Any]
 ) -> str:
     graph = phase3.active_graph() or {}
+    order = phase32._teaching_order_for(payload)
     return phase3._sha256_json(
         {
             "version": _DECISION_CACHE_VERSION,
             "model": str(config.OPENAI_MODEL),
             "semantic_confidence_policy": confidence_policy.cache_identity(),
             "source": early_gate.source_identity(graph),
+            "placement_policy_version": placement_policy.POLICY_VERSION,
+            "teaching_order_sha256": order.sha256,
             "topics": _topic_evidence_fingerprint(
                 [row for row in payload.get("topics") or [] if isinstance(row, dict)]
             ),
             "concept": phase31._json_safe(concept),
         }
     )
+
+
+def _decision_relationship_ids(decision: object) -> set[str]:
+    if not isinstance(decision, dict):
+        return set()
+    return {
+        str(relation.get("relationship_id") or "")
+        for segment in decision.get("segments") or []
+        if isinstance(segment, dict)
+        for relation in segment.get("topic_relationships") or []
+        if isinstance(relation, dict)
+        and str(relation.get("relationship_id") or "")
+    }
+
+
+def _verified_relationship_reviews(
+    reviews: object,
+    expected_ids: set[str],
+) -> list[dict[str, Any]] | None:
+    rows = [
+        copy.deepcopy(row)
+        for row in reviews or []
+        if isinstance(row, dict)
+        and str(row.get("relationship_id") or "") in expected_ids
+    ] if isinstance(reviews, list) else []
+    _verdicts, errors = phase32._relationship_review_verdicts(
+        {"relationship_reviews": rows}, expected_ids
+    )
+    return None if errors else rows
+
+
+def _decision_split_attestations(
+    decision: object,
+) -> dict[str, dict[str, Any]] | None:
+    if not isinstance(decision, dict):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for segment in decision.get("segments") or []:
+        if not isinstance(segment, dict):
+            continue
+        contract = segment.get("_placement_contract")
+        raw = contract.get("split_attestation") if isinstance(contract, dict) else None
+        if not raw:
+            continue
+        try:
+            pending = placement_policy.validate_split_attestation(
+                raw, require_accepted=False
+            )
+        except placement_policy.PlacementPolicyError:
+            return None
+        review_id = str(pending.get("split_review_id") or "")
+        if review_id in out and out[review_id] != pending:
+            return None
+        out[review_id] = pending
+    return out
+
+
+def _verified_split_reviews(
+    reviews: object,
+    expected: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]] | None:
+    rows = [
+        copy.deepcopy(row)
+        for row in reviews or []
+        if isinstance(row, dict)
+        and str(row.get("split_review_id") or "") in expected
+    ] if isinstance(reviews, list) else []
+    _attestations, errors = phase32._split_review_verdicts(
+        {"split_reviews": rows}, expected
+    )
+    return None if errors else rows
 
 
 def _read_phase32_decision_cache() -> dict[str, Any]:
@@ -815,18 +901,46 @@ def _phase32_critic_with_cache(
     entries = cache.setdefault("entries", {})
     by_id = {str(row.get("concept_id") or ""): row for row in proposed}
     cached_ids: set[str] = set()
+    cached_relationship_reviews: dict[str, list[dict[str, Any]]] = {}
+    cached_split_reviews: dict[str, list[dict[str, Any]]] = {}
     for concept in concepts:
         concept_id = str(concept.get("concept_id") or "")
         key = _phase32_decision_key(payload, concept)
         entry = entries.get(key)
+        expected_relationship_ids = _decision_relationship_ids(
+            by_id.get(concept_id)
+        )
+        verified_reviews = (
+            _verified_relationship_reviews(
+                entry.get("relationship_reviews"),
+                expected_relationship_ids,
+            )
+            if isinstance(entry, dict)
+            else None
+        )
+        expected_split_attestations = _decision_split_attestations(
+            by_id.get(concept_id)
+        )
+        verified_split_reviews = (
+            _verified_split_reviews(
+                entry.get("split_reviews"), expected_split_attestations
+            )
+            if isinstance(entry, dict)
+            and expected_split_attestations is not None
+            else None
+        )
         if (
             concept_id not in feedback
             and isinstance(entry, dict)
             and entry.get("status") == "verified"
             and phase3._sha256_json(entry.get("decision"))
             == phase3._sha256_json(by_id.get(concept_id))
+            and verified_reviews is not None
+            and verified_split_reviews is not None
         ):
             cached_ids.add(concept_id)
+            cached_relationship_reviews[concept_id] = verified_reviews
+            cached_split_reviews[concept_id] = verified_split_reviews
     fresh_concepts = [
         row
         for row in concepts
@@ -844,6 +958,16 @@ def _phase32_critic_with_cache(
             "accepted_concept_ids": ids,
             "rejected_concept_ids": [],
             "issues": [],
+            "relationship_reviews": [
+                copy.deepcopy(review)
+                for concept_id in ids
+                for review in cached_relationship_reviews.get(concept_id, [])
+            ],
+            "split_reviews": [
+                copy.deepcopy(review)
+                for concept_id in ids
+                for review in cached_split_reviews.get(concept_id, [])
+            ],
         }
 
     fresh_ids = {
@@ -856,15 +980,35 @@ def _phase32_critic_with_cache(
         for row in proposed
         if str(row.get("concept_id") or "") in fresh_ids
     ]
+    fresh_relationship_ids = {
+        relationship_id
+        for row in fresh_payload["proposed_decisions"]
+        for relationship_id in _decision_relationship_ids(row)
+    }
+    fresh_split_ids = {
+        review_id
+        for row in fresh_payload["proposed_decisions"]
+        for review_id in (_decision_split_attestations(row) or {})
+    }
+    if isinstance(fresh_payload.get("placement_relationship_evidence"), list):
+        fresh_payload["placement_relationship_evidence"] = [
+            copy.deepcopy(row)
+            for row in fresh_payload["placement_relationship_evidence"]
+            if isinstance(row, dict)
+            and str(row.get("relationship_id") or "")
+            in fresh_relationship_ids
+        ]
+    if isinstance(fresh_payload.get("split_review_attestations"), list):
+        fresh_payload["split_review_attestations"] = [
+            copy.deepcopy(row)
+            for row in fresh_payload["split_review_attestations"]
+            if isinstance(row, dict)
+            and str(row.get("split_review_id") or "") in fresh_split_ids
+        ]
     review = original(fresh_payload)
-    review_gate = (
-        confidence_policy.ConfidenceGate.DESTRUCTIVE
-        if any(
-            row.get("decision") == "retire"
-            for row in fresh_payload["proposed_decisions"]
-        )
-        else confidence_policy.ConfidenceGate.SEMANTIC
-    )
+    # Phase 3.2 has no destructive retirement action.  Every replayed
+    # topology decision uses the ordinary semantic confidence gate.
+    review_gate = confidence_policy.ConfidenceGate.SEMANTIC
     state = phase31._review_state(
         review,
         concept_ids=fresh_ids,
@@ -873,13 +1017,20 @@ def _phase32_critic_with_cache(
     accepted_fresh = (
         set(state["accepted"])
         if confidence_policy.accepts(state["confidence"], review_gate)
-        and (
-            review_gate is confidence_policy.ConfidenceGate.DESTRUCTIVE
-            or early_gate.confidence_band(state["confidence"])
-            == "accepted"
-        )
+        and early_gate.confidence_band(state["confidence"])
+        == "accepted"
         else set()
     )
+    fresh_review_rows = [
+        copy.deepcopy(row)
+        for row in (review or {}).get("relationship_reviews") or []
+        if isinstance(row, dict)
+    ]
+    fresh_split_review_rows = [
+        copy.deepcopy(row)
+        for row in (review or {}).get("split_reviews") or []
+        if isinstance(row, dict)
+    ]
     if accepted_fresh:
         now = time.time()
         for concept in fresh_concepts:
@@ -888,6 +1039,24 @@ def _phase32_critic_with_cache(
                 continue
             decision = by_id.get(concept_id)
             if decision is None:
+                continue
+            expected_relationship_ids = _decision_relationship_ids(decision)
+            verified_reviews = _verified_relationship_reviews(
+                fresh_review_rows,
+                expected_relationship_ids,
+            )
+            expected_split_attestations = _decision_split_attestations(decision)
+            verified_split_reviews = (
+                _verified_split_reviews(
+                    fresh_split_review_rows, expected_split_attestations
+                )
+                if expected_split_attestations is not None
+                else None
+            )
+            if verified_reviews is None or verified_split_reviews is None:
+                # The ordinary live Phase 3.2 post-critic validator will reject
+                # this response.  Never persist a concept whose typed
+                # relationships did not independently clear the same gate.
                 continue
             key = _phase32_decision_key(payload, concept)
             entries[key] = {
@@ -900,6 +1069,8 @@ def _phase32_critic_with_cache(
                 "review_confidence": float(state["confidence"]),
                 "concept_id": concept_id,
                 "decision": copy.deepcopy(decision),
+                "relationship_reviews": verified_reviews,
+                "split_reviews": verified_split_reviews,
             }
         _write_phase32_decision_cache(cache)
     # Already verified IDs are replayed as deterministic accepts. The live
@@ -913,6 +1084,16 @@ def _phase32_critic_with_cache(
         "accepted_concept_ids": sorted(accepted),
         "rejected_concept_ids": sorted(rejected),
         "issues": list(state["issues"]),
+        "relationship_reviews": [
+            copy.deepcopy(review)
+            for concept_id in sorted(cached_ids)
+            for review in cached_relationship_reviews.get(concept_id, [])
+        ] + fresh_review_rows,
+        "split_reviews": [
+            copy.deepcopy(review)
+            for concept_id in sorted(cached_ids)
+            for review in cached_split_reviews.get(concept_id, [])
+        ] + fresh_split_review_rows,
     }
 
 
@@ -1071,6 +1252,907 @@ def _unit_payload(
     }
 
 
+def _type_case_placement_batch_size() -> int:
+    try:
+        value = int(os.environ.get("AEGIS_PHASE33_PLACEMENT_BATCH_SIZE", "12"))
+    except (TypeError, ValueError):
+        value = 12
+    return max(1, min(32, value))
+
+
+def _type_case_placement_schema(
+    claim_ids: list[str],
+    topic_ids: list[str],
+    block_ids: list[str],
+) -> dict[str, Any]:
+    return {
+        "name": "phase33_type_case_topic_relationships",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "relationships": {
+                    "type": "array",
+                    "minItems": len(claim_ids),
+                    "maxItems": max(len(claim_ids), len(claim_ids) * 12),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "claim_id": {"type": "string", "enum": claim_ids},
+                            "topic_id": {"type": "string", "enum": topic_ids},
+                            "relationship_type": {
+                                "type": "string",
+                                "enum": [
+                                    kind.value
+                                    for kind in placement_policy.RelationshipType
+                                ],
+                            },
+                            "necessity": {"type": "boolean"},
+                            "evidence_block_ids": {
+                                "type": "array",
+                                "items": {"type": "string", "enum": block_ids},
+                            },
+                            "reason": {"type": "string", "minLength": 1},
+                        },
+                        "required": [
+                            "claim_id",
+                            "topic_id",
+                            "relationship_type",
+                            "necessity",
+                            "evidence_block_ids",
+                            "reason",
+                        ],
+                        "additionalProperties": False,
+                    },
+                }
+            },
+            "required": ["relationships"],
+            "additionalProperties": False,
+        },
+    }
+
+
+def _type_case_placement_critic_schema(
+    relationship_ids: list[str],
+) -> dict[str, Any]:
+    return {
+        "name": "phase33_type_case_topic_relationship_critic",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "verdict": {
+                    "type": "string",
+                    "enum": ["verified", "rejected"],
+                },
+                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                "issues": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+                "relationship_reviews": {
+                    "type": "array",
+                    "minItems": len(relationship_ids),
+                    "maxItems": len(relationship_ids),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "relationship_id": {
+                                "type": "string",
+                                "enum": relationship_ids,
+                            },
+                            "verdict": {
+                                "type": "string",
+                                "enum": ["accepted", "rejected"],
+                            },
+                            "evidence_supported": {"type": "boolean"},
+                            "necessity_supported": {"type": "boolean"},
+                            "direction_supported": {"type": "boolean"},
+                            "reason": {"type": "string"},
+                        },
+                        "required": [
+                            "relationship_id",
+                            "verdict",
+                            "evidence_supported",
+                            "necessity_supported",
+                            "direction_supported",
+                            "reason",
+                        ],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": [
+                "verdict", "confidence", "issues", "relationship_reviews",
+            ],
+            "additionalProperties": False,
+        },
+    }
+
+
+def _type_case_placement_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
+    claim_ids = [
+        str(row.get("claim_id") or "")
+        for row in payload.get("claims") or []
+        if isinstance(row, dict) and str(row.get("claim_id") or "")
+    ]
+    topic_ids = [
+        str(row.get("topic_id") or "")
+        for row in payload.get("topics") or []
+        if isinstance(row, dict) and str(row.get("topic_id") or "")
+    ]
+    block_ids = [
+        str(value) for value in payload.get("allowed_block_ids") or []
+        if str(value)
+    ]
+    system = (
+        placement_policy.PROVIDER_SYSTEM
+        + "\nEach claim here is one exact textbook QID/task. Classify the "
+        "topics whose knowledge or method is necessary to perform that task. "
+        "The task's physical source topic is provenance only. A reusable Type "
+        "may contain Cases owned by different topics, so judge every claim "
+        "independently. Return at least one CORE_TEACHING or "
+        "REQUIRED_LATER_METHOD relationship for every claim. Every returned "
+        "relationship, including references, illustrations, and incidental "
+        "mentions, must cite at least one exact allowed source block."
+    )
+    return phase3.phase22._openai_multimodal_json(
+        system=system,
+        prompt=json.dumps(payload, ensure_ascii=False, indent=2),
+        pages=[],
+        response_schema=_type_case_placement_schema(
+            claim_ids, topic_ids, block_ids
+        ),
+        purpose="concept_mapping",
+        max_tokens=max(
+            6000,
+            min(config.OPENAI_MAX_OUTPUT_TOKENS, len(claim_ids) * 1400),
+        ),
+    )
+
+
+def _type_case_placement_critic_via_openai(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    relationship_ids = [
+        str(row.get("relationship_id") or "")
+        for row in payload.get("proposed_relationships") or []
+        if isinstance(row, dict) and str(row.get("relationship_id") or "")
+    ]
+    system = (
+        placement_policy.CRITIC_SYSTEM
+        + "\nAudit every QID independently. Confirm the exact cited block, "
+        "necessity, and dependency direction. A later topic owns a task only "
+        "when its method or framework is genuinely required to perform it; "
+        "mere wording, physical location, chronology, or an optional method "
+        "must not move it. Return every relationship_id exactly once."
+    )
+    return phase3.phase22._openai_multimodal_json(
+        system=system,
+        prompt=json.dumps(payload, ensure_ascii=False, indent=2),
+        pages=[],
+        response_schema=_type_case_placement_critic_schema(relationship_ids),
+        purpose="concept_mapping",
+        max_tokens=max(
+            5000,
+            min(config.OPENAI_MAX_OUTPUT_TOKENS, len(relationship_ids) * 350),
+        ),
+    )
+
+
+def _type_case_claim_rows(
+    generation: Any,
+    *,
+    units: list[dict[str, Any]],
+    inventory: dict[str, Any],
+    graph: dict[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
+    task_by_qid = {
+        str(row.get("qid") or ""): row
+        for row in graph.get("tasks") or []
+        if isinstance(row, dict) and str(row.get("qid") or "")
+    }
+    context_by_qid: dict[str, dict[str, Any]] = {}
+    for unit in units:
+        unit_id = str(unit.get("_phase33_assignment_unit_id") or "")
+        cases = [
+            row for row in unit.get("case_prompts") or []
+            if isinstance(row, dict)
+        ]
+        case = cases[0] if cases else {}
+        context = {
+            "assignment_unit_id": unit_id,
+            "type_id": str(unit.get("type_id") or ""),
+            "type_title": str(unit.get("type_title") or unit.get("title") or ""),
+            "task_pattern": str(unit.get("task_pattern") or ""),
+            "case_id": str(case.get("case_id") or ""),
+            "case_title": str(case.get("case_title") or ""),
+            "case_definition": str(case.get("case_definition") or ""),
+        }
+        for raw_qid in unit.get("source_question_ids") or []:
+            qid = str(raw_qid or "").strip()
+            if not qid:
+                continue
+            if qid in context_by_qid:
+                raise RuntimeError(
+                    "type_case_owner_uncertified: QID "
+                    f"{qid} appears in multiple assignment units"
+                )
+            context_by_qid[qid] = copy.deepcopy(context)
+
+    rows_by_qid: dict[str, dict[str, Any]] = {}
+    claims: list[dict[str, Any]] = []
+    for item in (inventory or {}).get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        qid = str(item.get("qid") or "").strip()
+        if not qid:
+            continue
+        if qid in rows_by_qid:
+            raise RuntimeError(
+                f"type_case_owner_uncertified: duplicate inventory QID {qid}"
+            )
+        task = task_by_qid.get(qid)
+        text = generation._inventory_task_text(item)
+        if not isinstance(task, dict) or not text:
+            raise RuntimeError(
+                "type_case_owner_uncertified: QID "
+                f"{qid} has no sealed semantic task/text"
+            )
+        source_topic_id = str(task.get("topic_id") or "").strip()
+        if not source_topic_id:
+            raise RuntimeError(
+                f"type_case_owner_uncertified: QID {qid} has no source topic"
+            )
+        existing_source = str(
+            item.get("source_location_topic_id") or ""
+        ).strip()
+        if existing_source and existing_source != source_topic_id:
+            raise RuntimeError(
+                "type_case_owner_uncertified: QID "
+                f"{qid} source provenance changed from {existing_source} "
+                f"to {source_topic_id}"
+            )
+        item["source_location_topic_id"] = source_topic_id
+        source_topic = next(
+            (
+                row for row in graph.get("topics") or []
+                if isinstance(row, dict)
+                and str(row.get("topic_id") or "") == source_topic_id
+            ),
+            {},
+        )
+        item["source_location_topic_title"] = str(
+            source_topic.get("title") or ""
+        )
+        claim = {
+            "claim_id": f"TASK-{qid}",
+            "qid": qid,
+            "normalized_claim": phase3._clean_public_text(text),
+            "source_location_topic_id": source_topic_id,
+            "type_case_context": copy.deepcopy(context_by_qid.get(qid) or {}),
+        }
+        claims.append(claim)
+        rows_by_qid[qid] = item
+    return claims, rows_by_qid
+
+
+def _type_case_contract_is_current(
+    generation: Any,
+    contract: object,
+    *,
+    claim: dict[str, Any],
+    graph: dict[str, Any],
+    order: placement_policy.TeachingOrder,
+    block_directory: dict[str, dict[str, Any]],
+) -> bool:
+    value = generation._certified_type_case_placement_contract(contract)
+    if value is None:
+        return False
+    if any((
+        str(value.get("policy_version") or "")
+        != placement_policy.POLICY_VERSION,
+        str(value.get("teaching_order_sha256") or "") != order.sha256,
+        str(value.get("source_contract_hash") or "")
+        != str(graph.get("source_contract_hash") or ""),
+        str(value.get("claim_id") or "") != str(claim.get("claim_id") or ""),
+        _normal(value.get("normalized_claim"))
+        != _normal(claim.get("normalized_claim")),
+        str(value.get("source_location_topic_id") or "")
+        != str(claim.get("source_location_topic_id") or ""),
+        not order.known(value.get("owner_topic_id")),
+    )):
+        return False
+    relationships = placement_policy.parse_relationships(
+        {"relationships": [
+            {
+                **row,
+                "reason": str(
+                    row.get("provider_reason") or row.get("reason") or ""
+                ),
+            }
+            for row in value.get("topic_relationships") or []
+            if isinstance(row, dict)
+        ]},
+        known_claim_ids=[str(claim.get("claim_id") or "")],
+        known_topic_ids=order.ranks,
+    )
+    raw_relationships = [
+        row for row in value.get("topic_relationships") or []
+        if isinstance(row, dict)
+    ]
+    if not relationships or len(relationships) != len(raw_relationships):
+        return False
+    reviewed: list[placement_policy.TopicRelationship] = []
+    for relation, raw in zip(relationships, raw_relationships):
+        if not relation.evidence_block_ids:
+            return False
+        exact = [
+            block_directory.get(block_id)
+            for block_id in relation.evidence_block_ids
+        ]
+        if any(
+            not isinstance(block, dict)
+            or str(block.get("topic_id") or "") != relation.topic_id
+            for block in exact
+        ):
+            return False
+        if str(raw.get("relationship_id") or "") != relation.relationship_id:
+            return False
+        reviewed.append(placement_policy.TopicRelationship(
+            claim_id=relation.claim_id,
+            topic_id=relation.topic_id,
+            relationship_type=relation.relationship_type,
+            necessity=relation.necessity,
+            evidence_block_ids=relation.evidence_block_ids,
+            provider_reason=relation.provider_reason,
+            critic_verdict=str(raw.get("critic_verdict") or ""),
+        ))
+    try:
+        decision = placement_policy.compute_placement(
+            placement_policy.AtomicClaim(
+                claim_id=str(claim.get("claim_id") or ""),
+                normalized_claim=str(claim.get("normalized_claim") or ""),
+                source_location_topic_id=str(
+                    claim.get("source_location_topic_id") or ""
+                ),
+                protected_source_items=(str(claim.get("qid") or ""),),
+            ),
+            reviewed,
+            order,
+        )
+    except placement_policy.PlacementPolicyError:
+        return False
+    return (
+        decision.owner_topic_id == str(value.get("owner_topic_id") or "")
+        and list(decision.required_topic_ids)
+        == list(value.get("required_topic_ids") or [])
+        and list(decision.prerequisite_topic_ids)
+        == list(value.get("prerequisite_topic_ids") or [])
+        and [list(edge) for edge in decision.reference_edges]
+        == list(value.get("reference_edges") or [])
+        and list(decision.illustration_topic_ids)
+        == list(value.get("illustration_topic_ids") or [])
+    )
+
+
+def _type_case_placement_cache_key(
+    *,
+    claim: dict[str, Any],
+    graph: dict[str, Any],
+    order: placement_policy.TeachingOrder,
+) -> str:
+    return phase3._sha256_json({
+        "version": _TYPE_CASE_OWNERSHIP_VERSION,
+        "model": str(config.OPENAI_MODEL),
+        "semantic_confidence_policy": confidence_policy.cache_identity(),
+        "source": early_gate.source_identity(graph),
+        "policy_version": placement_policy.POLICY_VERSION,
+        "teaching_order_sha256": order.sha256,
+        "claim": phase31._json_safe(claim),
+    })
+
+
+def _read_type_case_placement_cache(
+    *,
+    graph: dict[str, Any],
+    order: placement_policy.TeachingOrder,
+) -> dict[str, Any]:
+    directory = _artifact_dir()
+    if directory is None:
+        return {"entries": {}}
+    value = _read_json(directory / _TYPE_CASE_PLACEMENT_CACHE_FILENAME)
+    if any((
+        value.get("version") != _TYPE_CASE_OWNERSHIP_VERSION,
+        str(value.get("policy_version") or "")
+        != placement_policy.POLICY_VERSION,
+        str(value.get("teaching_order_sha256") or "") != order.sha256,
+        str(value.get("source_contract_hash") or "")
+        != str(graph.get("source_contract_hash") or ""),
+        not isinstance(value.get("entries"), dict),
+    )):
+        return {"entries": {}}
+    return value
+
+
+def _write_type_case_placement_cache(
+    cache: dict[str, Any],
+    *,
+    graph: dict[str, Any],
+    order: placement_policy.TeachingOrder,
+) -> None:
+    directory = _artifact_dir()
+    if directory is None:
+        return
+    value = {
+        "version": _TYPE_CASE_OWNERSHIP_VERSION,
+        "policy_version": placement_policy.POLICY_VERSION,
+        "teaching_order_sha256": order.sha256,
+        "source_contract_hash": str(graph.get("source_contract_hash") or ""),
+        "entries": copy.deepcopy(cache.get("entries") or {}),
+    }
+    _write_json(directory / _TYPE_CASE_PLACEMENT_CACHE_FILENAME, value)
+
+
+def _validated_type_case_relationships(
+    response: dict[str, Any],
+    *,
+    claims: list[dict[str, Any]],
+    order: placement_policy.TeachingOrder,
+    block_directory: dict[str, dict[str, Any]],
+) -> tuple[dict[str, list[placement_policy.TopicRelationship]], list[str]]:
+    claim_ids = {str(row.get("claim_id") or "") for row in claims}
+    raw = [
+        row for row in (response or {}).get("relationships") or []
+        if isinstance(row, dict)
+    ]
+    parsed = placement_policy.parse_relationships(
+        {"relationships": raw},
+        known_claim_ids=claim_ids,
+        known_topic_ids=order.ranks,
+    )
+    errors: list[str] = []
+    if len(parsed) != len(raw):
+        errors.append("placement provider returned unknown claim/topic/type")
+    grouped: dict[str, list[placement_policy.TopicRelationship]] = {
+        claim_id: [] for claim_id in claim_ids
+    }
+    seen: set[tuple[str, str]] = set()
+    for relation in parsed:
+        key = (relation.claim_id, relation.topic_id)
+        if key in seen:
+            errors.append(
+                f"{relation.claim_id} repeats/conflicts on topic {relation.topic_id}"
+            )
+            continue
+        seen.add(key)
+        necessary = relation.relationship_type in placement_policy.NECESSARY_TYPES
+        if necessary != bool(relation.necessity):
+            errors.append(
+                f"{relation.relationship_id} has inconsistent necessity"
+            )
+        if not relation.provider_reason.strip():
+            errors.append(f"{relation.relationship_id} omitted its reason")
+        if not relation.evidence_block_ids:
+            errors.append(
+                f"{relation.relationship_id} has no exact source evidence"
+            )
+        if len(set(relation.evidence_block_ids)) != len(
+            relation.evidence_block_ids
+        ):
+            errors.append(
+                f"{relation.relationship_id} repeats exact evidence blocks"
+            )
+        for block_id in relation.evidence_block_ids:
+            block = block_directory.get(block_id)
+            if not isinstance(block, dict):
+                errors.append(
+                    f"{relation.relationship_id} cites unknown block {block_id}"
+                )
+            elif str(block.get("topic_id") or "") != relation.topic_id:
+                errors.append(
+                    f"{relation.relationship_id} cites {block_id} from topic "
+                    f"{block.get('topic_id')} as evidence for {relation.topic_id}"
+                )
+        grouped.setdefault(relation.claim_id, []).append(relation)
+    claim_by_id = {
+        str(row.get("claim_id") or ""): row for row in claims
+    }
+    for claim_id, claim in claim_by_id.items():
+        if not grouped.get(claim_id):
+            errors.append(f"{claim_id} has no topic relationships")
+            continue
+        try:
+            placement_policy.compute_provisional_placement(
+                placement_policy.AtomicClaim(
+                    claim_id=claim_id,
+                    normalized_claim=str(claim.get("normalized_claim") or ""),
+                    source_location_topic_id=str(
+                        claim.get("source_location_topic_id") or ""
+                    ),
+                    protected_source_items=(str(claim.get("qid") or ""),),
+                ),
+                grouped[claim_id],
+                order,
+            )
+        except placement_policy.PlacementPolicyError as exc:
+            errors.append(f"{claim_id} placement is uncertifiable: {exc}")
+    return grouped, list(dict.fromkeys(errors))
+
+
+def _certify_type_case_batch(
+    generation: Any,
+    *,
+    claims: list[dict[str, Any]],
+    graph: dict[str, Any],
+    canonical: dict[str, Any],
+    order: placement_policy.TeachingOrder,
+    block_directory: dict[str, dict[str, Any]],
+    provider: PlacementProvider,
+    critic: PlacementCritic,
+) -> dict[str, dict[str, Any]]:
+    topics, _block_order = phase32._topic_evidence(graph, canonical)
+    payload = {
+        "metadata": copy.deepcopy(graph.get("metadata") or {}),
+        "policy_version": placement_policy.POLICY_VERSION,
+        "teaching_order_sha256": order.sha256,
+        "claims": copy.deepcopy(claims),
+        "topics": copy.deepcopy(topics),
+        "allowed_block_ids": sorted(block_directory),
+    }
+    grouped: dict[str, list[placement_policy.TopicRelationship]] = {}
+    errors: list[str] = []
+    for attempt in range(1, 3):
+        request = copy.deepcopy(payload)
+        request["attempt"] = attempt
+        request["critic_feedback"] = {
+            "verdict": "provider_contract_rejected",
+            "issues": copy.deepcopy(errors),
+        } if errors else {}
+        response = provider(request)
+        grouped, errors = _validated_type_case_relationships(
+            response,
+            claims=claims,
+            order=order,
+            block_directory=block_directory,
+        )
+        if not errors:
+            break
+    if errors:
+        raise ProviderResponseContractError(
+            "type_case_owner_uncertified: placement provider failed its "
+            "bounded contract correction: " + "; ".join(errors[:8])
+        )
+
+    proposed = [
+        placement_policy.relationship_audit_row(relation)
+        for claim_id in sorted(grouped)
+        for relation in grouped[claim_id]
+    ]
+    evidence = [
+        {
+            "relationship_id": relation.relationship_id,
+            "claim_id": relation.claim_id,
+            "topic_id": relation.topic_id,
+            "relationship_type": relation.relationship_type.value,
+            "necessity": relation.necessity,
+            "provider_reason": relation.provider_reason,
+            "exact_source_blocks": [
+                copy.deepcopy(block_directory[block_id])
+                for block_id in relation.evidence_block_ids
+            ],
+        }
+        for claim_id in sorted(grouped)
+        for relation in grouped[claim_id]
+    ]
+    review = critic({
+        "metadata": copy.deepcopy(graph.get("metadata") or {}),
+        "policy_version": placement_policy.POLICY_VERSION,
+        "teaching_order_sha256": order.sha256,
+        "claims": copy.deepcopy(claims),
+        "proposed_relationships": proposed,
+        "relationship_evidence": evidence,
+    })
+    confidence = float((review or {}).get("confidence") or 0.0)
+    if (
+        str((review or {}).get("verdict") or "") != "verified"
+        or not confidence_policy.accepts(confidence)
+        or list((review or {}).get("issues") or [])
+    ):
+        raise RuntimeError(
+            "type_case_owner_uncertified: independent placement critic "
+            "rejected the task relationship set"
+        )
+    relationship_ids = {
+        relation.relationship_id
+        for relationships in grouped.values()
+        for relation in relationships
+    }
+    verdicts, review_errors = phase32._relationship_review_verdicts(
+        review, relationship_ids
+    )
+    if review_errors:
+        raise RuntimeError(
+            "type_case_owner_uncertified: " + "; ".join(review_errors[:8])
+        )
+
+    claim_by_id = {
+        str(row.get("claim_id") or ""): row for row in claims
+    }
+    contracts: dict[str, dict[str, Any]] = {}
+    topic_title = {
+        str(row.get("topic_id") or ""): str(row.get("title") or "")
+        for row in graph.get("topics") or [] if isinstance(row, dict)
+    }
+    for claim_id, relationships in grouped.items():
+        reviewed = placement_policy.apply_critic_verdicts(
+            relationships, verdicts
+        )
+        claim_row = claim_by_id[claim_id]
+        claim = placement_policy.AtomicClaim(
+            claim_id=claim_id,
+            normalized_claim=str(claim_row.get("normalized_claim") or ""),
+            source_location_topic_id=str(
+                claim_row.get("source_location_topic_id") or ""
+            ),
+            protected_source_items=(str(claim_row.get("qid") or ""),),
+        )
+        try:
+            decision = placement_policy.compute_placement(
+                claim, reviewed, order
+            )
+        except placement_policy.PlacementPolicyError as exc:
+            raise RuntimeError(
+                f"type_case_owner_uncertified: {claim_id}: {exc}"
+            ) from exc
+        contract = {
+            "version": _TYPE_CASE_OWNERSHIP_VERSION,
+            "certified": True,
+            "policy_version": placement_policy.POLICY_VERSION,
+            "teaching_order_sha256": order.sha256,
+            "source_contract_hash": str(graph.get("source_contract_hash") or ""),
+            "claim_id": claim_id,
+            "qid": str(claim_row.get("qid") or ""),
+            "normalized_claim": str(claim_row.get("normalized_claim") or ""),
+            "source_location_topic_id": claim.source_location_topic_id,
+            "source_location_topic_ids": [claim.source_location_topic_id],
+            "owner_topic_id": decision.owner_topic_id,
+            "owner_topic_title": topic_title.get(decision.owner_topic_id, ""),
+            "required_topic_ids": list(decision.required_topic_ids),
+            "prerequisite_topic_ids": list(decision.prerequisite_topic_ids),
+            "reference_edges": [list(edge) for edge in decision.reference_edges],
+            "illustration_topic_ids": list(
+                decision.illustration_topic_ids
+            ),
+            "illustration_topic_ids": list(decision.illustration_topic_ids),
+            "topic_relationships": [
+                placement_policy.relationship_audit_row(relation)
+                for relation in reviewed
+            ],
+        }
+        contract["placement_certificate_sha256"] = (
+            generation._type_case_placement_digest(contract)
+        )
+        contracts[str(claim_row.get("qid") or "")] = contract
+    return contracts
+
+
+def _type_case_ledger_material(
+    *,
+    graph: dict[str, Any],
+    order: placement_policy.TeachingOrder,
+    contracts: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "version": _TYPE_CASE_OWNERSHIP_VERSION,
+        "certified": True,
+        "policy_version": placement_policy.POLICY_VERSION,
+        "source_contract_hash": str(graph.get("source_contract_hash") or ""),
+        "teaching_order_sha256": order.sha256,
+        "placements": {
+            qid: copy.deepcopy(contracts[qid]) for qid in sorted(contracts)
+        },
+    }
+
+
+def _project_type_case_contracts(
+    generation: Any,
+    *,
+    mined_types: dict[str, Any],
+    inventory: dict[str, Any],
+    rows_by_qid: dict[str, dict[str, Any]],
+    contracts: dict[str, dict[str, Any]],
+    graph: dict[str, Any],
+    order: placement_policy.TeachingOrder,
+) -> None:
+    if set(rows_by_qid) != set(contracts):
+        missing = sorted(set(rows_by_qid) - set(contracts))
+        raise RuntimeError(
+            "type_case_owner_uncertified: no certified placement for QID(s) "
+            + ", ".join(missing)
+        )
+    for qid, item in rows_by_qid.items():
+        item["_type_case_placement_contract"] = copy.deepcopy(contracts[qid])
+        item["owner_topic_id"] = str(
+            contracts[qid].get("owner_topic_id") or ""
+        )
+        item["owner_topic_title"] = str(
+            contracts[qid].get("owner_topic_title") or ""
+        )
+    ledger = _type_case_ledger_material(
+        graph=graph, order=order, contracts=contracts
+    )
+    ledger["certificate_sha256"] = phase3._sha256_json(ledger)
+    inventory[_TYPE_CASE_QID_PLACEMENT_LEDGER_KEY] = ledger
+
+    routed = generation._annotate_mined_type_case_routes(
+        list((mined_types or {}).get("types") or []), inventory
+    )
+    annotated = phase3.annotate_mined_types(
+        {**copy.deepcopy(mined_types), "types": routed}, graph
+    )
+    mined_types.clear()
+    mined_types.update(annotated)
+    mined_types[_TYPE_CASE_QID_PLACEMENT_LEDGER_KEY] = copy.deepcopy(ledger)
+
+
+def _certify_type_case_ownership(
+    generation: Any,
+    *,
+    mined_types: dict[str, Any],
+    inventory: dict[str, Any] | None,
+    units: list[dict[str, Any]],
+    graph: dict[str, Any],
+    canonical: dict[str, Any],
+    provider: PlacementProvider | None = None,
+    critic: PlacementCritic | None = None,
+) -> bool:
+    if not isinstance(inventory, dict) or not (inventory.get("items") or []):
+        return False
+    claims, rows_by_qid = _type_case_claim_rows(
+        generation, units=units, inventory=inventory, graph=graph
+    )
+    if not claims:
+        return False
+    order = placement_policy.seal_teaching_order(
+        graph,
+        source_contract_hash=str(graph.get("source_contract_hash") or ""),
+    )
+    block_directory = phase32._exact_block_directory(graph, canonical)
+    if not block_directory:
+        raise RuntimeError(
+            "type_case_owner_uncertified: semantic graph has no exact blocks"
+        )
+
+    claim_by_qid = {
+        str(row.get("qid") or ""): row for row in claims
+    }
+    contracts: dict[str, dict[str, Any]] = {}
+    inventory_ledger = inventory.get(_TYPE_CASE_QID_PLACEMENT_LEDGER_KEY)
+    mined_ledger = mined_types.get(_TYPE_CASE_QID_PLACEMENT_LEDGER_KEY)
+    if (
+        isinstance(inventory_ledger, dict)
+        and isinstance(mined_ledger, dict)
+        and phase3._sha256_json(inventory_ledger)
+        != phase3._sha256_json(mined_ledger)
+    ):
+        raise RuntimeError(
+            "type_case_owner_uncertified: inventory and mined-Type placement "
+            "ledgers disagree"
+        )
+    ledger = (
+        inventory_ledger
+        if isinstance(inventory_ledger, dict)
+        else mined_ledger
+    )
+    if isinstance(ledger, dict):
+        stored = dict(ledger)
+        stored_digest = str(stored.pop("certificate_sha256", "") or "")
+        if stored_digest == phase3._sha256_json(stored):
+            placements = stored.get("placements")
+            if isinstance(placements, dict):
+                for qid, claim in claim_by_qid.items():
+                    candidate = placements.get(qid)
+                    if _type_case_contract_is_current(
+                        generation,
+                        candidate,
+                        claim=claim,
+                        graph=graph,
+                        order=order,
+                        block_directory=block_directory,
+                    ):
+                        contracts[qid] = copy.deepcopy(candidate)
+        if set(contracts) == set(claim_by_qid):
+            _project_type_case_contracts(
+                generation,
+                mined_types=mined_types,
+                inventory=inventory,
+                rows_by_qid=rows_by_qid,
+                contracts=contracts,
+                graph=graph,
+                order=order,
+            )
+            return True
+        contracts.clear()
+
+    provider = provider or (
+        _type_case_placement_via_openai
+        if phase3.semantic_api_enabled() else None
+    )
+    critic = critic or (
+        _type_case_placement_critic_via_openai
+        if phase3.semantic_api_enabled() else None
+    )
+    if provider is None and critic is None:
+        return False
+    if provider is None or critic is None:
+        raise RuntimeError(
+            "type_case_owner_uncertified: placement provider/critic pair is incomplete"
+        )
+
+    cache = _read_type_case_placement_cache(graph=graph, order=order)
+    entries = cache.setdefault("entries", {})
+    pending: list[dict[str, Any]] = []
+    for claim in claims:
+        qid = str(claim.get("qid") or "")
+        key = _type_case_placement_cache_key(
+            claim=claim, graph=graph, order=order
+        )
+        candidate = entries.get(key)
+        if _type_case_contract_is_current(
+            generation,
+            candidate,
+            claim=claim,
+            graph=graph,
+            order=order,
+            block_directory=block_directory,
+        ):
+            contracts[qid] = copy.deepcopy(candidate)
+        else:
+            pending.append(claim)
+
+    size = _type_case_placement_batch_size()
+    for start in range(0, len(pending), size):
+        batch = pending[start : start + size]
+        fresh = _certify_type_case_batch(
+            generation,
+            claims=batch,
+            graph=graph,
+            canonical=canonical,
+            order=order,
+            block_directory=block_directory,
+            provider=provider,
+            critic=critic,
+        )
+        contracts.update(fresh)
+        for claim in batch:
+            qid = str(claim.get("qid") or "")
+            key = _type_case_placement_cache_key(
+                claim=claim, graph=graph, order=order
+            )
+            entries[key] = copy.deepcopy(fresh[qid])
+        _write_type_case_placement_cache(
+            cache, graph=graph, order=order
+        )
+
+    _project_type_case_contracts(
+        generation,
+        mined_types=mined_types,
+        inventory=inventory,
+        rows_by_qid=rows_by_qid,
+        contracts=contracts,
+        graph=graph,
+        order=order,
+    )
+    progress.log(
+        "Phase 3.3 independently certified semantic topic ownership for "
+        f"{len(contracts)} QID/task(s); physical source location remains "
+        "immutable provenance.",
+        level="success",
+    )
+    return True
+
+
 def _normal_concept_payloads(
     records: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], dict[str, int], dict[str, list[str]]]:
@@ -1098,6 +2180,9 @@ def _normal_concept_payloads(
                     for value in record.get("_source_block_ids") or []
                     if str(value)
                 ],
+                "_placement_contract": copy.deepcopy(
+                    record.get("_placement_contract") or {}
+                ),
             }
         )
     return payload, index_by_id, cids_by_topic
@@ -1175,6 +2260,33 @@ def _host_schema(
     topic_ids: list[str],
     block_ids: list[str],
 ) -> dict[str, Any]:
+    relationship_items = {
+        "type": "object",
+        "properties": {
+            "topic_id": {"type": "string", "enum": topic_ids},
+            "relationship_type": {
+                "type": "string",
+                "enum": [
+                    kind.value for kind in placement_policy.RelationshipType
+                ],
+            },
+            "necessity": {"type": "boolean"},
+            "evidence_block_ids": {
+                "type": "array",
+                "minItems": 1,
+                "items": {"type": "string", "enum": block_ids},
+            },
+            "reason": {"type": "string", "minLength": 1},
+        },
+        "required": [
+            "topic_id",
+            "relationship_type",
+            "necessity",
+            "evidence_block_ids",
+            "reason",
+        ],
+        "additionalProperties": False,
+    }
     return {
         "name": "phase33_type_host_preflight",
         "strict": True,
@@ -1251,6 +2363,11 @@ def _host_schema(
                                 "minItems": 1,
                                 "items": {"type": "string", "enum": block_ids},
                             },
+                            "topic_relationships": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": copy.deepcopy(relationship_items),
+                            },
                             "assignment_unit_ids": {
                                 "type": "array",
                                 "minItems": 1,
@@ -1272,6 +2389,7 @@ def _host_schema(
                             "achieving_mastery",
                             "keywords",
                             "source_block_ids",
+                            "topic_relationships",
                             "assignment_unit_ids",
                             "confidence",
                             "reason",
@@ -1301,6 +2419,11 @@ def _host_schema(
                                 "minItems": 1,
                                 "items": {"type": "string", "enum": block_ids},
                             },
+                            "topic_relationships": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": copy.deepcopy(relationship_items),
+                            },
                             "assignment_unit_ids": {
                                 "type": "array",
                                 "minItems": 1,
@@ -1320,6 +2443,7 @@ def _host_schema(
                             "achieving_mastery",
                             "keywords",
                             "source_block_ids",
+                            "topic_relationships",
                             "assignment_unit_ids",
                             "confidence",
                             "reason",
@@ -1338,7 +2462,11 @@ def _host_schema(
     }
 
 
-def _host_critic_schema(unit_ids: list[str]) -> dict[str, Any]:
+def _host_critic_schema(
+    unit_ids: list[str],
+    relationship_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    relationship_ids = list(dict.fromkeys(relationship_ids or []))
     return {
         "name": "phase33_type_host_preflight_critic",
         "strict": True,
@@ -1356,6 +2484,37 @@ def _host_critic_schema(unit_ids: list[str]) -> dict[str, Any]:
                     "items": {"type": "string", "enum": unit_ids},
                 },
                 "issues": {"type": "array", "items": {"type": "string"}},
+                "relationship_reviews": {
+                    "type": "array",
+                    "minItems": len(relationship_ids),
+                    "maxItems": len(relationship_ids),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "relationship_id": {
+                                "type": "string",
+                                "enum": relationship_ids,
+                            },
+                            "verdict": {
+                                "type": "string",
+                                "enum": ["accepted", "rejected"],
+                            },
+                            "evidence_supported": {"type": "boolean"},
+                            "necessity_supported": {"type": "boolean"},
+                            "direction_supported": {"type": "boolean"},
+                            "reason": {"type": "string"},
+                        },
+                        "required": [
+                            "relationship_id",
+                            "verdict",
+                            "evidence_supported",
+                            "necessity_supported",
+                            "direction_supported",
+                            "reason",
+                        ],
+                        "additionalProperties": False,
+                    },
+                },
             },
             "required": [
                 "verdict",
@@ -1363,6 +2522,7 @@ def _host_critic_schema(unit_ids: list[str]) -> dict[str, Any]:
                 "accepted_concept_ids",
                 "rejected_concept_ids",
                 "issues",
+                "relationship_reviews",
             ],
             "additionalProperties": False,
         },
@@ -1373,7 +2533,15 @@ def _host_plan_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
     unit_ids = [str(row.get("assignment_unit_id") or "") for row in payload.get("assignment_units") or []]
     existing_ids = [str(row.get("concept_id") or "") for row in payload.get("existing_concepts") or []]
     new_keys = [f"NEW-HOST-{index:04d}" for index in range(1, len(unit_ids) + 1)]
-    topic_ids = sorted({str(row.get("topic_id") or "") for row in payload.get("assignment_units") or []})
+    topic_ids = sorted({
+        str(row.get("topic_id") or "")
+        for row in (
+            payload.get("topics")
+            or payload.get("assignment_units")
+            or []
+        )
+        if isinstance(row, dict) and str(row.get("topic_id") or "")
+    })
     block_ids = [str(row.get("block_id") or "") for row in payload.get("source_blocks") or []]
     system = (
         "You are the Aegis Phase 3.3 Type-host preflight resolver. Every supplied "
@@ -1401,7 +2569,14 @@ def _host_plan_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         "source-supported plan exists. If human_resolution is present, follow "
         "that directed choice exactly while still remaining source-grounded. "
         "Never substitute a different semantic choice. On mechanical correction "
-        "retries, repair only the response contract and do not invent broader content."
+        "retries, repair only the response contract and do not invent broader "
+        "content. For every expand_existing update and every create_new concept, "
+        "classify the complete resulting concept claim with concept-level "
+        "topic_relationships. Use the placement-policy relationship enum exactly, "
+        "cite exact supplied blocks for every relationship, and include all topics "
+        "whose knowledge, prerequisite, reference, illustration, or later method "
+        "actually relates to the claim. Do not decide ownership: deterministic "
+        "code will compute the owner from the sealed teaching order."
     )
     return phase3.phase22._openai_multimodal_json(
         system=system,
@@ -1425,6 +2600,11 @@ def _host_plan_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
 
 def _host_critic_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
     unit_ids = [str(row.get("assignment_unit_id") or "") for row in payload.get("assignment_units") or []]
+    relationship_ids = [
+        str(row.get("relationship_id") or "")
+        for row in payload.get("proposed_relationships") or []
+        if isinstance(row, dict) and str(row.get("relationship_id") or "")
+    ]
     system = (
         "You are the independent Aegis Phase 3.3 Type-host critic. Verify every "
         "assignment unit has exactly one semantically valid normal concept host. "
@@ -1446,13 +2626,16 @@ def _host_critic_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         "assignment_unit_id in exactly one "
         "accepted_concept_ids or rejected_concept_ids list. Verified requires all "
         "accepted, none rejected, confidence at least "
-        f"{confidence_policy.threshold_text()}, and no issues."
+        f"{confidence_policy.threshold_text()}, and no issues. Independently "
+        "review every proposed_relationship relationship_id exactly once. Accept "
+        "one only when its exact cited blocks support the relationship, its "
+        "necessity flag is justified, and its dependency direction is correct."
     )
     return phase3.phase22._openai_multimodal_json(
         system=system,
         prompt=json.dumps(payload, ensure_ascii=False, indent=2),
         pages=[],
-        response_schema=_host_critic_schema(unit_ids),
+        response_schema=_host_critic_schema(unit_ids, relationship_ids),
         purpose="concept_mapping",
         max_tokens=max(4000, min(12000, len(unit_ids) * 320)),
         single_attempt=bool(
@@ -1642,6 +2825,9 @@ def _parse_host_plan(
                 if phase3._clean_public_text(value)
             ],
             "source_block_ids": list(dict.fromkeys(block_ids)),
+            "topic_relationships": copy.deepcopy(
+                raw.get("topic_relationships") or []
+            ),
             "assignment_unit_ids": sorted(assigned),
             "confidence": confidence,
             "reason": str(raw.get("reason") or ""),
@@ -1723,6 +2909,9 @@ def _parse_host_plan(
                 if phase3._clean_public_text(value)
             ],
             "source_block_ids": list(dict.fromkeys(block_ids)),
+            "topic_relationships": copy.deepcopy(
+                raw.get("topic_relationships") or []
+            ),
             "assignment_unit_ids": sorted(assigned),
             "confidence": confidence,
             "reason": str(raw.get("reason") or ""),
@@ -1744,6 +2933,676 @@ def _parse_host_plan(
     }, []
 
 
+def _stable_new_host_claim_id(
+    source_contract_hash: str,
+    qids: list[str],
+) -> str:
+    """Return the immutable identity of one source-owned created host claim."""
+
+    values = sorted({str(qid).strip() for qid in qids if str(qid).strip()})
+    if not source_contract_hash or not values:
+        raise ValueError(
+            "Phase 3.3 cannot create a placement claim without a source "
+            "contract and at least one protected QID"
+        )
+    digest = phase3._sha256_json({
+        "version": "phase3.3-created-host-claim-1",
+        "source_contract_hash": source_contract_hash,
+        "qids": values,
+    })
+    return f"HOST-CLAIM-{digest[:24].upper()}"
+
+
+def _host_plan_semantic_material(plan: Mapping[str, Any]) -> dict[str, Any]:
+    """Return only the provider/critic/apply material sealed by the envelope."""
+
+    return {
+        "assignments": copy.deepcopy(plan.get("assignments") or []),
+        "new_concepts": copy.deepcopy(plan.get("new_concepts") or []),
+        "existing_concept_updates": copy.deepcopy(
+            plan.get("existing_concept_updates") or []
+        ),
+    }
+
+
+def _host_mutation_output_digests(
+    plan: Mapping[str, Any],
+) -> dict[str, str] | None:
+    digests: dict[str, str] = {}
+    rows = [
+        ("create", "new_concept_key", row)
+        for row in plan.get("new_concepts") or []
+        if isinstance(row, Mapping)
+    ] + [
+        ("expand", "existing_concept_id", row)
+        for row in plan.get("existing_concept_updates") or []
+        if isinstance(row, Mapping)
+    ]
+    for kind, identity_field, row in rows:
+        identity = str(row.get(identity_field) or "")
+        contract = row.get("_placement_contract")
+        if not identity or not isinstance(contract, Mapping):
+            return None
+        supplied = str(contract.get("placement_certificate_sha256") or "")
+        expected = placement_policy.placement_contract_sha256(contract)
+        if supplied != expected:
+            return None
+        digests[f"{kind}:{identity}"] = expected
+    return dict(sorted(digests.items()))
+
+
+def _host_mutation_authority(
+    generation: Any,
+    *,
+    graph: dict[str, Any],
+    order: placement_policy.TeachingOrder,
+    inventory: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    """Validate and bind the exact per-QID authority used by host mutation."""
+
+    ledger = generation._valid_type_case_qid_placement_ledger(
+        inventory.get(_TYPE_CASE_QID_PLACEMENT_LEDGER_KEY)
+    )
+    if not isinstance(ledger, dict):
+        raise RuntimeError(
+            "type_case_owner_uncertified: Phase 3.3 host mutation has no "
+            "current QID placement ledger"
+        )
+    placements = ledger.get("placements")
+    if not isinstance(placements, dict) or not placements:
+        raise RuntimeError(
+            "type_case_owner_uncertified: Phase 3.3 host mutation QID "
+            "placement ledger is empty"
+        )
+    contracts: dict[str, dict[str, Any]] = {}
+    for raw_qid, raw_contract in placements.items():
+        qid = str(raw_qid or "").strip()
+        contract = generation._certified_type_case_placement_contract(
+            raw_contract
+        )
+        if not qid or contract is None:
+            raise RuntimeError(
+                "type_case_owner_uncertified: Phase 3.3 host mutation found "
+                f"an uncertified QID placement for {qid or '<empty>'}"
+            )
+        contracts[qid] = copy.deepcopy(contract)
+    authority = {
+        "version": _HOST_MUTATION_PLACEMENT_VERSION,
+        "policy_version": placement_policy.POLICY_VERSION,
+        "teaching_order_sha256": order.sha256,
+        "source_contract_hash": str(graph.get("source_contract_hash") or ""),
+        "semantic_topology_sha256": (
+            grounding_certificate.semantic_topology_sha256(graph)
+        ),
+        "qid_ledger_certificate_sha256": str(
+            ledger.get("certificate_sha256") or ""
+        ),
+        "qid_contract_sha256s": {
+            qid: phase3._sha256_json(contracts[qid])
+            for qid in sorted(contracts)
+        },
+        "qid_placement_sha256s": {
+            qid: str(
+                contracts[qid].get("placement_certificate_sha256") or ""
+            )
+            for qid in sorted(contracts)
+        },
+    }
+    if any(not str(authority.get(field) or "") for field in (
+        "policy_version",
+        "teaching_order_sha256",
+        "source_contract_hash",
+        "semantic_topology_sha256",
+        "qid_ledger_certificate_sha256",
+    )):
+        raise RuntimeError(
+            "type_case_owner_uncertified: Phase 3.3 host mutation authority "
+            "is incomplete"
+        )
+    return authority, contracts
+
+
+def _existing_host_contract_is_current(
+    concept: Mapping[str, Any],
+    *,
+    order: placement_policy.TeachingOrder,
+    block_directory: Mapping[str, Mapping[str, Any]],
+) -> bool:
+    """Validate the old placement contract before an expansion may replace it."""
+
+    raw = concept.get("_placement_contract")
+    if not isinstance(raw, Mapping):
+        return False
+    if any((
+        raw.get("certified") is not True,
+        str(raw.get("policy_version") or "") != placement_policy.POLICY_VERSION,
+        str(raw.get("teaching_order_sha256") or "") != order.sha256,
+        str(raw.get("placement_certificate_sha256") or "")
+        != placement_policy.placement_contract_sha256(raw),
+        _normal(raw.get("normalized_claim"))
+        != _normal(concept.get("source_claim")),
+        str(raw.get("owner_topic_id") or "")
+        != str(concept.get("topic_id") or ""),
+    )):
+        return False
+    claim_id = str(raw.get("claim_id") or "")
+    relationships = placement_policy.parse_relationships(
+        {"relationships": [
+            {
+                **copy.deepcopy(row),
+                "reason": str(
+                    row.get("provider_reason") or row.get("reason") or ""
+                ),
+            }
+            for row in raw.get("topic_relationships") or []
+            if isinstance(row, Mapping)
+        ]},
+        known_claim_ids=[claim_id],
+        known_topic_ids=order.ranks,
+    )
+    raw_relationships = [
+        row for row in raw.get("topic_relationships") or []
+        if isinstance(row, Mapping)
+    ]
+    if not claim_id or len(relationships) != len(raw_relationships):
+        return False
+    reviewed: list[placement_policy.TopicRelationship] = []
+    for relation, relation_raw in zip(relationships, raw_relationships):
+        if (
+            not relation.evidence_block_ids
+            or str(relation_raw.get("relationship_id") or "")
+            != relation.relationship_id
+            or any(
+                not isinstance(block_directory.get(block_id), Mapping)
+                or str(block_directory[block_id].get("topic_id") or "")
+                != relation.topic_id
+                for block_id in relation.evidence_block_ids
+            )
+        ):
+            return False
+        reviewed.append(placement_policy.TopicRelationship(
+            claim_id=relation.claim_id,
+            topic_id=relation.topic_id,
+            relationship_type=relation.relationship_type,
+            necessity=relation.necessity,
+            evidence_block_ids=relation.evidence_block_ids,
+            provider_reason=relation.provider_reason,
+            critic_verdict=str(relation_raw.get("critic_verdict") or ""),
+        ))
+    claim = placement_policy.AtomicClaim(
+        claim_id=claim_id,
+        normalized_claim=str(raw.get("normalized_claim") or ""),
+        source_location_topic_id=str(
+            raw.get("source_location_topic_id") or ""
+        ),
+        origin_claim_ids=tuple(
+            str(value) for value in raw.get("origin_claim_ids") or []
+            if str(value)
+        ),
+        split_group_id=str(raw.get("split_group_id") or ""),
+        protected_source_items=tuple(
+            str(value) for value in raw.get("protected_source_items") or []
+            if str(value)
+        ),
+    )
+    try:
+        decision = placement_policy.compute_placement(
+            claim, reviewed, order
+        )
+    except placement_policy.PlacementPolicyError:
+        return False
+    return all((
+        decision.owner_topic_id == str(raw.get("owner_topic_id") or ""),
+        list(decision.required_topic_ids)
+        == sorted({str(value) for value in raw.get("required_topic_ids") or []}),
+        list(decision.prerequisite_topic_ids)
+        == sorted({
+            str(value) for value in raw.get("prerequisite_topic_ids") or []
+        }),
+        [list(edge) for edge in decision.reference_edges]
+        == sorted([
+            list(edge) for edge in raw.get("reference_edges") or []
+            if isinstance(edge, (list, tuple)) and len(edge) == 2
+        ]),
+        list(decision.illustration_topic_ids)
+        == sorted({
+            str(value) for value in raw.get("illustration_topic_ids") or []
+        }),
+    ))
+
+
+def _host_mutation_specs(
+    plan: dict[str, Any],
+    *,
+    plan_topic_id: str,
+    unit_payloads: list[dict[str, Any]],
+    existing_concepts: list[dict[str, Any]],
+    graph: dict[str, Any],
+    order: placement_policy.TeachingOrder,
+    block_directory: dict[str, dict[str, Any]],
+    qid_contracts: dict[str, dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Parse provider relationships without granting them commit authority."""
+
+    unit_by_id = {
+        str(row.get("assignment_unit_id") or ""): row
+        for row in unit_payloads
+        if isinstance(row, dict)
+    }
+    concept_by_id = {
+        str(row.get("concept_id") or ""): row
+        for row in existing_concepts
+        if isinstance(row, dict)
+    }
+    rows = [
+        ("create", "new_concept_key", row)
+        for row in plan.get("new_concepts") or []
+        if isinstance(row, dict)
+    ] + [
+        ("expand", "existing_concept_id", row)
+        for row in plan.get("existing_concept_updates") or []
+        if isinstance(row, dict)
+    ]
+    specs: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for kind, identity_field, row in rows:
+        identity = str(row.get(identity_field) or "")
+        unit_ids = sorted({
+            str(value) for value in row.get("assignment_unit_ids") or []
+            if str(value)
+        })
+        qids = sorted({
+            str(qid).strip()
+            for unit_id in unit_ids
+            for qid in unit_by_id.get(unit_id, {}).get(
+                "source_question_ids"
+            ) or []
+            if str(qid).strip()
+        })
+        missing_qids = [qid for qid in qids if qid not in qid_contracts]
+        if not qids or missing_qids:
+            errors.append(
+                f"{kind}:{identity} has no complete certified QID authority"
+                + (f"; missing {missing_qids}" if missing_qids else "")
+            )
+            continue
+        qid_owners = {
+            str(qid_contracts[qid].get("owner_topic_id") or "")
+            for qid in qids
+        }
+        row_topic_id = str(row.get("topic_id") or "")
+        if (
+            len(qid_owners) != 1
+            or "" in qid_owners
+            or next(iter(qid_owners)) != plan_topic_id
+            or row_topic_id != plan_topic_id
+        ):
+            errors.append(
+                f"{kind}:{identity} owner conflict: QIDs={sorted(qid_owners)}, "
+                f"plan={plan_topic_id!r}, row={row_topic_id!r}"
+            )
+            continue
+        description = str(row.get("description") or "").strip()
+        old_contract: dict[str, Any] | None = None
+        if kind == "expand":
+            concept = concept_by_id.get(identity)
+            if concept is None or not _existing_host_contract_is_current(
+                concept,
+                order=order,
+                block_directory=block_directory,
+            ):
+                errors.append(
+                    f"expand:{identity} has no current certified old placement "
+                    "contract"
+                )
+                continue
+            old_contract = copy.deepcopy(concept["_placement_contract"])
+            claim_id = str(old_contract.get("claim_id") or "")
+            source_location_topic_id = str(
+                old_contract.get("source_location_topic_id") or ""
+            )
+            origin_claim_sha256 = str(
+                old_contract.get("origin_claim_sha256") or ""
+            )
+            origin_claim_ids = tuple(
+                str(value)
+                for value in old_contract.get("origin_claim_ids") or []
+                if str(value)
+            )
+            split_group_id = str(old_contract.get("split_group_id") or "")
+            protected = tuple(sorted({
+                *(
+                    str(value)
+                    for value in old_contract.get("protected_source_items") or []
+                    if str(value)
+                ),
+                *qids,
+            }))
+        else:
+            claim_id = _stable_new_host_claim_id(
+                str(graph.get("source_contract_hash") or ""), qids
+            )
+            source_location_topic_id = row_topic_id
+            origin_claim_sha256 = placement_policy.claim_text_sha256(
+                description
+            )
+            origin_claim_ids = (claim_id,)
+            split_group_id = ""
+            protected = tuple(qids)
+        raw_relationships = [
+            value for value in row.get("topic_relationships") or []
+            if isinstance(value, dict)
+        ]
+        relationships = placement_policy.parse_relationships(
+            {"relationships": [
+                {**copy.deepcopy(value), "claim_id": claim_id}
+                for value in raw_relationships
+            ]},
+            known_claim_ids=[claim_id],
+            known_topic_ids=order.ranks,
+        )
+        if not raw_relationships or len(relationships) != len(raw_relationships):
+            errors.append(
+                f"{kind}:{identity} omitted or malformed topic_relationships"
+            )
+            continue
+        seen_relationship_ids: set[str] = set()
+        invalid = False
+        for relation in relationships:
+            expected_necessity = (
+                relation.relationship_type in placement_policy.NECESSARY_TYPES
+            )
+            if relation.relationship_id in seen_relationship_ids:
+                errors.append(
+                    f"{kind}:{identity} repeated relationship "
+                    f"{relation.relationship_id}"
+                )
+                invalid = True
+            seen_relationship_ids.add(relation.relationship_id)
+            if relation.necessity is not expected_necessity:
+                errors.append(
+                    f"{relation.relationship_id} has inconsistent necessity"
+                )
+                invalid = True
+            if not relation.provider_reason.strip() or not relation.evidence_block_ids:
+                errors.append(
+                    f"{relation.relationship_id} lacks reason or exact evidence"
+                )
+                invalid = True
+            if len(set(relation.evidence_block_ids)) != len(
+                relation.evidence_block_ids
+            ):
+                errors.append(
+                    f"{relation.relationship_id} repeats exact evidence blocks"
+                )
+                invalid = True
+            for block_id in relation.evidence_block_ids:
+                block = block_directory.get(block_id)
+                if not isinstance(block, dict):
+                    errors.append(
+                        f"{relation.relationship_id} cites fabricated block "
+                        f"{block_id}"
+                    )
+                    invalid = True
+                elif str(block.get("topic_id") or "") != relation.topic_id:
+                    errors.append(
+                        f"{relation.relationship_id} cites {block_id} from "
+                        f"{block.get('topic_id')} as evidence for "
+                        f"{relation.topic_id}"
+                    )
+                    invalid = True
+        if invalid:
+            continue
+        claim = placement_policy.AtomicClaim(
+            claim_id=claim_id,
+            normalized_claim=description,
+            source_location_topic_id=source_location_topic_id,
+            origin_claim_ids=origin_claim_ids,
+            split_group_id=split_group_id,
+            protected_source_items=protected,
+        )
+        try:
+            provisional = placement_policy.compute_provisional_placement(
+                claim, relationships, order
+            )
+        except placement_policy.PlacementPolicyError as exc:
+            errors.append(
+                f"{kind}:{identity} placement is uncertifiable: {exc}"
+            )
+            continue
+        if provisional.owner_topic_id != plan_topic_id:
+            errors.append(
+                f"{kind}:{identity} computed owner "
+                f"{provisional.owner_topic_id!r} disagrees with plan/QID owner "
+                f"{plan_topic_id!r}; post-host moves are forbidden"
+            )
+            continue
+        specs.append({
+            "kind": kind,
+            "identity": identity,
+            "row": row,
+            "claim": claim,
+            "origin_claim_sha256": origin_claim_sha256,
+            "old_contract": old_contract,
+            "qids": qids,
+            "relationships": relationships,
+            "provisional": provisional,
+        })
+    return specs, list(dict.fromkeys(errors))
+
+
+def _host_mutation_critic_packet(
+    specs: list[dict[str, Any]],
+    *,
+    block_directory: dict[str, dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    proposed: list[dict[str, Any]] = []
+    evidence: list[dict[str, Any]] = []
+    for spec in specs:
+        for relation in spec["relationships"]:
+            proposed.append(placement_policy.relationship_audit_row(relation))
+            evidence.append({
+                "relationship_id": relation.relationship_id,
+                "claim_id": relation.claim_id,
+                "claim": spec["claim"].normalized_claim,
+                "mutation_kind": spec["kind"],
+                "mutation_identity": spec["identity"],
+                "assigned_qids": list(spec["qids"]),
+                "topic_id": relation.topic_id,
+                "relationship_type": relation.relationship_type.value,
+                "necessity": relation.necessity,
+                "provider_reason": relation.provider_reason,
+                "exact_source_blocks": [
+                    copy.deepcopy(block_directory[block_id])
+                    for block_id in relation.evidence_block_ids
+                ],
+            })
+    return (
+        sorted(proposed, key=lambda row: str(row.get("relationship_id") or "")),
+        sorted(evidence, key=lambda row: str(row.get("relationship_id") or "")),
+    )
+
+
+def _finalize_host_mutation_placement(
+    plan: dict[str, Any],
+    *,
+    specs: list[dict[str, Any]],
+    review: dict[str, Any],
+    authority: dict[str, Any],
+    plan_topic_id: str,
+    order: placement_policy.TeachingOrder,
+) -> dict[str, Any]:
+    expected_ids = {
+        relation.relationship_id
+        for spec in specs
+        for relation in spec["relationships"]
+    }
+    verdicts, errors = phase32._relationship_review_verdicts(
+        review, expected_ids
+    )
+    if errors:
+        raise RuntimeError(
+            "type_host_placement_uncertified: " + "; ".join(errors[:8])
+        )
+    out = copy.deepcopy(plan)
+    output_rows: dict[tuple[str, str], dict[str, Any]] = {
+        ("create", str(row.get("new_concept_key") or "")): row
+        for row in out.get("new_concepts") or []
+        if isinstance(row, dict)
+    }
+    output_rows.update({
+        ("expand", str(row.get("existing_concept_id") or "")): row
+        for row in out.get("existing_concept_updates") or []
+        if isinstance(row, dict)
+    })
+    for spec in specs:
+        reviewed = placement_policy.apply_critic_verdicts(
+            spec["relationships"], verdicts
+        )
+        try:
+            decision = placement_policy.compute_placement(
+                spec["claim"], reviewed, order
+            )
+        except placement_policy.PlacementPolicyError as exc:
+            raise RuntimeError(
+                "type_host_placement_uncertified: "
+                f"{spec['kind']}:{spec['identity']}: {exc}"
+            ) from exc
+        if decision.owner_topic_id != plan_topic_id:
+            raise RuntimeError(
+                "type_host_placement_uncertified: independently reviewed owner "
+                f"{decision.owner_topic_id!r} disagrees with plan/QID owner "
+                f"{plan_topic_id!r}; post-host moves are forbidden"
+            )
+        claim = spec["claim"]
+        relationship_rows = sorted(
+            (
+                placement_policy.relationship_audit_row(relation)
+                for relation in reviewed
+            ),
+            key=lambda row: str(row.get("relationship_id") or ""),
+        )
+        contract = {
+            "certified": True,
+            "policy_version": placement_policy.POLICY_VERSION,
+            "teaching_order_sha256": order.sha256,
+            "claim_id": claim.claim_id,
+            "normalized_claim": claim.normalized_claim,
+            "origin_claim_sha256": spec["origin_claim_sha256"],
+            "source_location_topic_id": claim.source_location_topic_id,
+            "owner_topic_id": decision.owner_topic_id,
+            "required_topic_ids": list(decision.required_topic_ids),
+            "prerequisite_topic_ids": list(decision.prerequisite_topic_ids),
+            "reference_edges": [list(edge) for edge in decision.reference_edges],
+            "illustration_topic_ids": list(decision.illustration_topic_ids),
+            "topic_relationships": relationship_rows,
+            "origin_claim_ids": list(claim.origin_claim_ids),
+            "split_group_id": claim.split_group_id,
+            "protected_source_items": list(claim.protected_source_items),
+        }
+        contract["placement_certificate_sha256"] = (
+            placement_policy.placement_contract_sha256(contract)
+        )
+        row = output_rows[(spec["kind"], spec["identity"])]
+        row["topic_relationships"] = copy.deepcopy(relationship_rows)
+        row["_placement_contract"] = contract
+
+    reviews = sorted(
+        (
+            copy.deepcopy(row)
+            for row in review.get("relationship_reviews") or []
+            if isinstance(row, dict)
+        ),
+        key=lambda row: str(row.get("relationship_id") or ""),
+    )
+    digests = _host_mutation_output_digests(out)
+    if digests is None:
+        raise RuntimeError(
+            "type_host_placement_uncertified: mutation output placement "
+            "contracts are incomplete"
+        )
+    envelope = {
+        "version": _HOST_MUTATION_PLACEMENT_VERSION,
+        "authority": copy.deepcopy(authority),
+        "plan_topic_id": plan_topic_id,
+        "plan_semantic_sha256": phase3._sha256_json(
+            _host_plan_semantic_material(out)
+        ),
+        "output_placement_sha256s": digests,
+        "relationship_reviews": reviews,
+    }
+    envelope["certificate_sha256"] = phase3._sha256_json(envelope)
+    out[_HOST_MUTATION_ENVELOPE_KEY] = envelope
+    return out
+
+
+def _host_mutation_envelope_is_current(
+    plan: object,
+    *,
+    authority: Mapping[str, Any],
+    plan_topic_id: str,
+) -> bool:
+    if not isinstance(plan, Mapping):
+        return False
+    envelope = plan.get(_HOST_MUTATION_ENVELOPE_KEY)
+    if not isinstance(envelope, Mapping):
+        return False
+    stored = copy.deepcopy(dict(envelope))
+    supplied = str(stored.pop("certificate_sha256", "") or "")
+    if supplied != phase3._sha256_json(stored):
+        return False
+    if (
+        stored.get("version") != _HOST_MUTATION_PLACEMENT_VERSION
+        or stored.get("authority") != dict(authority)
+        or str(stored.get("plan_topic_id") or "") != plan_topic_id
+        or str(stored.get("plan_semantic_sha256") or "")
+        != phase3._sha256_json(_host_plan_semantic_material(plan))
+    ):
+        return False
+    digests = _host_mutation_output_digests(plan)
+    if digests is None or stored.get("output_placement_sha256s") != digests:
+        return False
+    expected_ids = {
+        str(relation.get("relationship_id") or "")
+        for collection in (
+            plan.get("new_concepts") or [],
+            plan.get("existing_concept_updates") or [],
+        )
+        for row in collection
+        if isinstance(row, Mapping)
+        for relation in (
+            (row.get("_placement_contract") or {}).get(
+                "topic_relationships"
+            ) or []
+        )
+        if isinstance(relation, Mapping)
+        and str(relation.get("relationship_id") or "")
+    }
+    for collection in (
+        plan.get("new_concepts") or [],
+        plan.get("existing_concept_updates") or [],
+    ):
+        for row in collection:
+            if not isinstance(row, Mapping):
+                return False
+            contract = row.get("_placement_contract")
+            if not isinstance(contract, Mapping) or any((
+                str(contract.get("policy_version") or "")
+                != placement_policy.POLICY_VERSION,
+                str(contract.get("teaching_order_sha256") or "")
+                != str(authority.get("teaching_order_sha256") or ""),
+                str(contract.get("owner_topic_id") or "") != plan_topic_id,
+                _normal(contract.get("normalized_claim"))
+                != _normal(row.get("description")),
+            )):
+                return False
+    _verdicts, review_errors = phase32._relationship_review_verdicts(
+        {"relationship_reviews": stored.get("relationship_reviews") or []},
+        expected_ids,
+    )
+    return not review_errors
+
+
 def _host_plan_cache_key(
     *,
     graph: dict[str, Any],
@@ -1751,6 +3610,7 @@ def _host_plan_cache_key(
     units: list[dict[str, Any]],
     concepts: list[dict[str, Any]],
     source_blocks: list[dict[str, Any]],
+    placement_authority: Mapping[str, Any] | None = None,
 ) -> str:
     return phase3._sha256_json(
         {
@@ -1768,11 +3628,19 @@ def _host_plan_cache_key(
                 }
                 for row in source_blocks
             ],
+            "placement_authority": phase31._json_safe(
+                placement_authority or {}
+            ),
         }
     )
 
 
-def _read_host_plan_cache(key: str) -> dict[str, Any] | None:
+def _read_host_plan_cache(
+    key: str,
+    *,
+    placement_authority: Mapping[str, Any] | None = None,
+    topic_id: str = "",
+) -> dict[str, Any] | None:
     directory = _artifact_dir()
     if directory is None:
         return None
@@ -1783,7 +3651,21 @@ def _read_host_plan_cache(key: str) -> dict[str, Any] | None:
     if not isinstance(entry, dict) or entry.get("status") != "verified":
         return None
     plan = entry.get("plan")
-    return copy.deepcopy(plan) if isinstance(plan, dict) else None
+    if not isinstance(plan, dict):
+        return None
+    if str(entry.get("plan_sha256") or "") != phase3._sha256_json(plan):
+        return None
+    if placement_authority is not None:
+        if (
+            entry.get("placement_authority") != dict(placement_authority)
+            or not _host_mutation_envelope_is_current(
+                plan,
+                authority=placement_authority,
+                plan_topic_id=topic_id,
+            )
+        ):
+            return None
+    return copy.deepcopy(plan)
 
 
 def _write_host_plan_cache(
@@ -1793,6 +3675,7 @@ def _write_host_plan_cache(
     topic_id: str,
     plan: dict[str, Any],
     confidence: float,
+    placement_authority: Mapping[str, Any] | None = None,
 ) -> None:
     directory = _artifact_dir()
     if directory is None:
@@ -1808,6 +3691,10 @@ def _write_host_plan_cache(
         "source_contract_hash": str(graph.get("source_contract_hash") or ""),
         "topic_id": topic_id,
         "review_confidence": float(confidence),
+        "placement_authority": copy.deepcopy(
+            dict(placement_authority or {})
+        ),
+        "plan_sha256": phase3._sha256_json(plan),
         "plan": copy.deepcopy(plan),
     }
     _write_json(path, cache)
@@ -1949,7 +3836,21 @@ def _resolve_host_plan(
     source_blocks: list[dict[str, Any]],
     provider: HostProvider,
     critic: HostCritic,
+    placement_authority: dict[str, Any] | None = None,
+    placement_order: placement_policy.TeachingOrder | None = None,
+    block_directory: dict[str, dict[str, Any]] | None = None,
+    qid_contracts: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    strict_placement = placement_authority is not None
+    if strict_placement and any((
+        placement_order is None,
+        not isinstance(block_directory, dict) or not block_directory,
+        not isinstance(qid_contracts, dict) or not qid_contracts,
+    )):
+        raise RuntimeError(
+            "type_host_placement_uncertified: Phase 3.3 host resolver was "
+            "started with incomplete placement authority"
+        )
     identity = _host_human_context_identity(
         graph=graph,
         topic_id=topic_id,
@@ -1997,8 +3898,13 @@ def _resolve_host_plan(
         units=units,
         concepts=concepts,
         source_blocks=source_blocks,
+        placement_authority=placement_authority,
     )
-    cached = _read_host_plan_cache(key)
+    cached = _read_host_plan_cache(
+        key,
+        placement_authority=placement_authority,
+        topic_id=topic_id,
+    )
     if cached is not None:
         progress.log(
             "Reused API-verified Phase 3.3 Type-host plan for "
@@ -2016,6 +3922,11 @@ def _resolve_host_plan(
         payload = {
             "metadata": copy.deepcopy(graph.get("metadata") or {}),
             "topic": copy.deepcopy(topic),
+            "topics": copy.deepcopy(graph.get("topics") or []),
+            "placement_policy_version": placement_policy.POLICY_VERSION,
+            "placement_authority": copy.deepcopy(
+                placement_authority or {}
+            ),
             "assignment_units": copy.deepcopy(units),
             "existing_concepts": copy.deepcopy(concepts),
             "source_blocks": copy.deepcopy(source_blocks),
@@ -2112,9 +4023,40 @@ def _resolve_host_plan(
                         resolved_choices=resolutions,
                     )
                 )
+        specs: list[dict[str, Any]] = []
+        proposed_relationships: list[dict[str, Any]] = []
+        relationship_evidence: list[dict[str, Any]] = []
+        if strict_placement:
+            assert placement_order is not None
+            assert isinstance(block_directory, dict)
+            assert isinstance(qid_contracts, dict)
+            specs, placement_errors = _host_mutation_specs(
+                plan,
+                plan_topic_id=topic_id,
+                unit_payloads=units,
+                existing_concepts=concepts,
+                graph=graph,
+                order=placement_order,
+                block_directory=block_directory,
+                qid_contracts=qid_contracts,
+            )
+            if placement_errors:
+                raise ProviderResponseContractError(
+                    "type_host_placement_uncertified: provider host mutation "
+                    "contract failed closed: "
+                    + "; ".join(placement_errors[:8])
+                )
+            proposed_relationships, relationship_evidence = (
+                _host_mutation_critic_packet(
+                    specs,
+                    block_directory=block_directory,
+                )
+            )
         review_payload = {
             **copy.deepcopy(payload),
             "proposed_plan": copy.deepcopy(plan),
+            "proposed_relationships": proposed_relationships,
+            "placement_relationship_evidence": relationship_evidence,
         }
         review = critic(copy.deepcopy(review_payload))
         state = phase31._review_state(
@@ -2123,12 +4065,24 @@ def _resolve_host_plan(
         )
         critic_band = confidence_policy.semantic_band(state["confidence"])
         if state["verified"] and critic_band == "accepted":
+            if strict_placement:
+                assert placement_order is not None
+                assert placement_authority is not None
+                plan = _finalize_host_mutation_placement(
+                    plan,
+                    specs=specs,
+                    review=review if isinstance(review, dict) else {},
+                    authority=placement_authority,
+                    plan_topic_id=topic_id,
+                    order=placement_order,
+                )
             _write_host_plan_cache(
                 key,
                 graph=graph,
                 topic_id=topic_id,
                 plan=plan,
                 confidence=float(state["confidence"]),
+                placement_authority=placement_authority,
             )
             progress.log(
                 "Phase 3.3 independently verified "
@@ -2181,12 +4135,45 @@ def _resolve_host_plan(
     )
 
 
+def _record_placement_digests(
+    records: list[dict[str, Any]],
+    *,
+    require_all: bool = False,
+) -> dict[str, str]:
+    digests: dict[str, str] = {}
+    for index, record in enumerate(records):
+        if not isinstance(record, dict):
+            continue
+        contract = record.get("_placement_contract")
+        if not isinstance(contract, Mapping):
+            title = str(
+                record.get("concept_title") or record.get("concept") or ""
+            )
+            if require_all and not cr.is_culmination(title):
+                raise RuntimeError(
+                    "type_host_placement_uncertified: output record is missing "
+                    f"a placement contract at index {index}"
+                )
+            continue
+        digest = str(contract.get("placement_certificate_sha256") or "")
+        if digest != placement_policy.placement_contract_sha256(contract):
+            raise RuntimeError(
+                "type_host_placement_uncertified: output record carries a "
+                f"stale placement contract at index {index}"
+            )
+        if require_all:
+            grounding_certificate.verify_placement_contract(record)
+        digests[f"{index:04d}"] = digest
+    return digests
+
+
 def _host_result_cache_key(
     records: list[dict[str, Any]],
     *,
     graph: dict[str, Any],
     mined_types: dict[str, Any],
     inventory: dict[str, Any] | None,
+    placement_authority: Mapping[str, Any] | None = None,
 ) -> str:
     clean_types = copy.deepcopy((mined_types or {}).get("types") or [])
     for mtype in clean_types:
@@ -2214,22 +4201,66 @@ def _host_result_cache_key(
             "records": phase31._json_safe(records),
             "types": phase31._json_safe(clean_types),
             "inventory": inventory_identity,
+            "placement_authority": phase31._json_safe(
+                placement_authority or {}
+            ),
         }
     )
 
 
-def _read_host_result_cache(key: str) -> dict[str, Any] | None:
+def _read_host_result_cache(
+    key: str,
+    *,
+    placement_authority: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
     directory = _artifact_dir()
     if directory is None:
         return None
     cache = _read_json(directory / _HOST_RESULT_CACHE_FILENAME)
+    records = cache.get("records")
+    host_map = cache.get("host_map")
+    qid_map = cache.get("qid_map")
     if (
         cache.get("version") != _HOST_VERSION
         or cache.get("cache_key") != key
-        or not isinstance(cache.get("records"), list)
-        or not isinstance(cache.get("host_map"), dict)
-        or cache.get("records_sha256") != phase3._sha256_json(cache.get("records"))
+        or not isinstance(records, list)
+        or not isinstance(host_map, dict)
+        or not isinstance(qid_map, dict)
+        or cache.get("records_sha256") != phase3._sha256_json(records)
+        or cache.get("host_map_sha256") != phase3._sha256_json(host_map)
+        or cache.get("qid_map_sha256") != phase3._sha256_json(qid_map)
     ):
+        return None
+    try:
+        output_digests = _record_placement_digests(
+            records, require_all=placement_authority is not None
+        )
+    except RuntimeError:
+        return None
+    if cache.get("output_placement_sha256s") != output_digests:
+        return None
+    if placement_authority is not None and cache.get(
+        "placement_authority"
+    ) != dict(placement_authority):
+        return None
+    envelope = cache.get("result_envelope")
+    if not isinstance(envelope, dict):
+        return None
+    material = {
+        "version": _HOST_MUTATION_PLACEMENT_VERSION,
+        "cache_key": key,
+        "placement_authority": copy.deepcopy(
+            dict(placement_authority or {})
+        ),
+        "records_sha256": str(cache.get("records_sha256") or ""),
+        "host_map_sha256": str(cache.get("host_map_sha256") or ""),
+        "qid_map_sha256": str(cache.get("qid_map_sha256") or ""),
+        "output_placement_sha256s": output_digests,
+    }
+    if envelope != {
+        **material,
+        "certificate_sha256": phase3._sha256_json(material),
+    }:
         return None
     return copy.deepcopy(cache)
 
@@ -2242,10 +4273,29 @@ def _write_host_result_cache(
     host_map: dict[str, dict[str, Any]],
     qid_map: dict[str, dict[str, Any]],
     summary: dict[str, int],
+    placement_authority: Mapping[str, Any] | None = None,
 ) -> None:
     directory = _artifact_dir()
     if directory is None:
         return
+    records_sha256 = phase3._sha256_json(records)
+    host_map_sha256 = phase3._sha256_json(host_map)
+    qid_map_sha256 = phase3._sha256_json(qid_map)
+    output_digests = _record_placement_digests(
+        records, require_all=placement_authority is not None
+    )
+    envelope = {
+        "version": _HOST_MUTATION_PLACEMENT_VERSION,
+        "cache_key": key,
+        "placement_authority": copy.deepcopy(
+            dict(placement_authority or {})
+        ),
+        "records_sha256": records_sha256,
+        "host_map_sha256": host_map_sha256,
+        "qid_map_sha256": qid_map_sha256,
+        "output_placement_sha256s": output_digests,
+    }
+    envelope["certificate_sha256"] = phase3._sha256_json(envelope)
     _write_json(
         directory / _HOST_RESULT_CACHE_FILENAME,
         {
@@ -2254,10 +4304,17 @@ def _write_host_result_cache(
             "created_at": time.time(),
             "model": str(config.OPENAI_MODEL),
             "source_contract_hash": str(graph.get("source_contract_hash") or ""),
-            "records_sha256": phase3._sha256_json(records),
+            "placement_authority": copy.deepcopy(
+                dict(placement_authority or {})
+            ),
+            "records_sha256": records_sha256,
             "records": copy.deepcopy(records),
             "host_map": copy.deepcopy(host_map),
+            "host_map_sha256": host_map_sha256,
             "qid_map": copy.deepcopy(qid_map),
+            "qid_map_sha256": qid_map_sha256,
+            "output_placement_sha256s": output_digests,
+            "result_envelope": envelope,
             "summary": copy.deepcopy(summary),
         },
     )
@@ -2332,6 +4389,8 @@ def _materialize_existing_host_updates(
     normalized_plans = [copy.deepcopy(plan) for plan in plans]
     applied: set[str] = set()
     for plan in normalized_plans:
+        if isinstance(plan.get(_HOST_MUTATION_ENVELOPE_KEY), dict):
+            plan[_HOST_MUTATION_SOURCE_PLAN_KEY] = copy.deepcopy(plan)
         for update in plan.get("existing_concept_updates") or []:
             concept_id = str(update.get("existing_concept_id") or "")
             if concept_id in applied:
@@ -2410,6 +4469,18 @@ def _materialize_existing_host_updates(
             record["_source_grounding_confidence"] = float(
                 update.get("confidence") or 0.0
             )
+            placement_contract = update.get("_placement_contract")
+            if isinstance(placement_contract, dict):
+                if str(placement_contract.get("owner_topic_id") or "") != str(
+                    record.get("_semantic_topic_id") or ""
+                ):
+                    raise ValueError(
+                        "Phase 3.3 expanded host placement owner disagrees "
+                        "with the immutable record topic"
+                    )
+                record["_placement_contract"] = copy.deepcopy(
+                    placement_contract
+                )
             record["_phase33_expanded_type_host"] = True
             record["_phase3_assignment_unit_ids"] = list(
                 dict.fromkeys(
@@ -2506,6 +4577,10 @@ def _apply_host_plan(
                 ),
                 "_phase33_new_type_host": True,
             }
+            if isinstance(definition.get("_placement_contract"), dict):
+                record["_placement_contract"] = copy.deepcopy(
+                    definition["_placement_contract"]
+                )
             new_record_by_key[key] = record
             out.append(record)
 
@@ -2560,6 +4635,163 @@ def _apply_host_plan(
     return out, host_map, qid_map, len(new_record_by_key)
 
 
+def _assert_unchanged_host_contracts_preserved(
+    before: list[dict[str, Any]],
+    after: list[dict[str, Any]],
+) -> None:
+    """Prove ordinary existing hosts were not silently re-certified."""
+
+    if len(after) < len(before):
+        raise ValueError("Phase 3.3 host mutation removed an existing concept")
+    for index, original in enumerate(before):
+        current = after[index]
+        if current.get("_phase33_expanded_type_host"):
+            continue
+        if original.get("_placement_contract") != current.get(
+            "_placement_contract"
+        ):
+            raise ValueError(
+                "Phase 3.3 changed an unchanged existing host placement "
+                f"contract at record index {index}"
+            )
+
+
+def _bind_and_verify_applied_host_mutations(
+    records: list[dict[str, Any]],
+    *,
+    plans: list[dict[str, Any]],
+    host_map: dict[str, dict[str, Any]],
+    qid_map: dict[str, dict[str, Any]],
+    units: list[dict[str, Any]],
+    placement_authority: Mapping[str, Any],
+    qid_contracts: dict[str, dict[str, Any]],
+    graph: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Attach created contracts and reject every post-plan owner mutation."""
+
+    out = [copy.deepcopy(row) for row in records]
+    allowed_block_ids = {
+        str(row.get("block_id") or "")
+        for row in graph.get("blocks") or []
+        if isinstance(row, dict) and str(row.get("block_id") or "")
+    }
+    for plan in plans:
+        certified_plan = plan.get(_HOST_MUTATION_SOURCE_PLAN_KEY)
+        if not isinstance(certified_plan, dict):
+            certified_plan = plan
+        envelope = certified_plan.get(_HOST_MUTATION_ENVELOPE_KEY)
+        plan_topic_id = str(
+            (envelope or {}).get("plan_topic_id") or ""
+        )
+        if not _host_mutation_envelope_is_current(
+            certified_plan,
+            authority=placement_authority,
+            plan_topic_id=plan_topic_id,
+        ):
+            raise ValueError(
+                "Phase 3.3 host mutation plan lost its current placement "
+                "envelope before apply"
+            )
+        for definition in certified_plan.get("new_concepts") or []:
+            if not isinstance(definition, dict):
+                continue
+            contract = definition.get("_placement_contract")
+            topic_id = str(definition.get("topic_id") or "")
+            title = str(definition.get("concept_title") or "")
+            parent = str(definition.get("parent_concept") or "")
+            local_key = str(definition.get("new_concept_key") or "")
+            candidates = [
+                row for row in out
+                if row.get("_phase33_new_type_host")
+                and str(row.get("_semantic_topic_id") or "") == topic_id
+                and str(row.get("concept_title") or "") == title
+                and str(row.get("parent_concept") or "") == parent
+                and str(
+                    row.get("_phase33_local_new_concept_key") or local_key
+                ) == local_key
+            ]
+            if len(candidates) != 1 or not isinstance(contract, dict):
+                raise ValueError(
+                    "Phase 3.3 could not bind one certified placement to "
+                    f"created host {local_key!r}"
+                )
+            existing = candidates[0].get("_placement_contract")
+            if isinstance(existing, dict) and existing != contract:
+                raise ValueError(
+                    "Phase 3.3 created host carried a conflicting placement "
+                    f"contract for {local_key!r}"
+                )
+            candidates[0]["_placement_contract"] = copy.deepcopy(contract)
+
+    record_by_destination: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    for record in out:
+        if not isinstance(record.get("_placement_contract"), dict):
+            continue
+        key = (
+            str(record.get("_semantic_topic_id") or ""),
+            str(record.get("parent_concept") or ""),
+            str(record.get("concept_title") or ""),
+        )
+        record_by_destination.setdefault(key, []).append(record)
+        grounding_certificate.verify_placement_contract(
+            record,
+            allowed_block_ids=allowed_block_ids,
+        )
+
+    unit_by_id = {
+        str(unit.get("_phase33_assignment_unit_id") or ""): unit
+        for unit in units
+        if isinstance(unit, dict)
+    }
+    for unit_id, destination in host_map.items():
+        owner = str(destination.get("topic_id") or "")
+        unit = unit_by_id.get(unit_id)
+        if unit is None:
+            raise ValueError(
+                f"Phase 3.3 host map contains unknown unit {unit_id!r}"
+            )
+        qids = [
+            str(value).strip()
+            for value in unit.get("source_question_ids") or []
+            if str(value).strip()
+        ]
+        if not qids or any(
+            str((qid_contracts.get(qid) or {}).get("owner_topic_id") or "")
+            != owner
+            for qid in qids
+        ):
+            raise ValueError(
+                f"Phase 3.3 host {unit_id!r} disagrees with a certified QID owner"
+            )
+        key = (
+            owner,
+            str(destination.get("parent_concept") or ""),
+            str(destination.get("concept_title") or ""),
+        )
+        matches = record_by_destination.get(key) or []
+        if len(matches) != 1:
+            raise ValueError(
+                f"Phase 3.3 host {unit_id!r} does not resolve to one placed record"
+            )
+        placement_digest = str(
+            matches[0]["_placement_contract"].get(
+                "placement_certificate_sha256"
+            ) or ""
+        )
+        destination["placement_certificate_sha256"] = placement_digest
+        for qid in qids:
+            qid_destination = qid_map.get(qid)
+            if (
+                not isinstance(qid_destination, dict)
+                or str(qid_destination.get("topic_id") or "") != owner
+            ):
+                raise ValueError(
+                    f"Phase 3.3 QID {qid} lost its certified owner during apply"
+                )
+            qid_destination["placement_certificate_sha256"] = placement_digest
+    return out
+
+
 def _reconcile_type_hosts(
     generation: Any,
     records: list[dict[str, Any]],
@@ -2573,6 +4805,8 @@ def _reconcile_type_hosts(
     canonical: dict[str, Any] | None = None,
     provider: HostProvider | None = None,
     critic: HostCritic | None = None,
+    placement_provider: PlacementProvider | None = None,
+    placement_critic: PlacementCritic | None = None,
 ) -> list[dict[str, Any]]:
     graph = graph or phase3.active_graph()
     if not isinstance(graph, dict) or not (mined_types or {}).get("types"):
@@ -2590,6 +4824,28 @@ def _reconcile_type_hosts(
     mined_types.clear()
     mined_types.update(annotated)
     units = _stable_assignment_units(generation, mined_types, graph)
+    ownership_certified = _certify_type_case_ownership(
+        generation,
+        mined_types=mined_types,
+        inventory=question_task_inventory,
+        units=units,
+        graph=graph,
+        canonical=canonical,
+        provider=placement_provider,
+        critic=placement_critic,
+    )
+    if ownership_certified:
+        # Certification may split one reusable Type's Cases by their
+        # independently computed semantic owners.  Never retain the earlier
+        # source-location projection or its assignment-unit identities.
+        units = _stable_assignment_units(generation, mined_types, graph)
+    elif phase3.semantic_api_enabled() and (question_task_inventory or {}).get(
+        "items"
+    ):
+        raise RuntimeError(
+            "type_case_owner_uncertified: production host reconciliation "
+            "cannot use physical source location as semantic ownership"
+        )
     normal_units: list[dict[str, Any]] = []
     task_by_qid, _inventory_rows = _inventory_task_evidence(
         generation, question_task_inventory
@@ -2599,7 +4855,24 @@ def _reconcile_type_hosts(
         if unit.get("is_activity"):
             continue
         scope = generation._assignment_placement_scope(unit, scope_payload)
-        topic_ids = [str(value) for value in unit.get("_semantic_topic_ids") or []]
+        placement = generation._certified_type_case_placement_contract(
+            unit.get("_type_case_placement_contract")
+        )
+        if ownership_certified and placement is None:
+            raise RuntimeError(
+                "type_case_owner_uncertified: assignment unit "
+                f"{unit.get('_phase33_assignment_unit_id') or '<empty>'} "
+                "lost its certified owner before host resolution"
+            )
+        topic_ids = (
+            [str(placement.get("owner_topic_id") or "")]
+            if placement is not None
+            else [
+                str(value)
+                for value in unit.get("_semantic_topic_ids") or []
+            ]
+        )
+        topic_ids = [value for value in topic_ids if value]
         if scope != "normal" or len(topic_ids) != 1:
             continue
         unit["_semantic_topic_id"] = topic_ids[0]
@@ -2611,13 +4884,39 @@ def _reconcile_type_hosts(
     if not normal_units:
         return out
 
+    placement_order: placement_policy.TeachingOrder | None = None
+    placement_authority: dict[str, Any] | None = None
+    qid_contracts: dict[str, dict[str, Any]] = {}
+    block_directory: dict[str, dict[str, Any]] = {}
+    if ownership_certified:
+        placement_order = placement_policy.seal_teaching_order(
+            graph,
+            source_contract_hash=str(graph.get("source_contract_hash") or ""),
+        )
+        block_directory = phase32._exact_block_directory(graph, canonical)
+        if not block_directory:
+            raise RuntimeError(
+                "type_host_placement_uncertified: semantic graph has no exact "
+                "block directory for host mutation"
+            )
+        placement_authority, qid_contracts = _host_mutation_authority(
+            generation,
+            graph=graph,
+            order=placement_order,
+            inventory=question_task_inventory,
+        )
+
     result_key = _host_result_cache_key(
         out,
         graph=graph,
         mined_types=mined_types,
         inventory=question_task_inventory,
+        placement_authority=placement_authority,
     )
-    cached_result = _read_host_result_cache(result_key)
+    cached_result = _read_host_result_cache(
+        result_key,
+        placement_authority=placement_authority,
+    )
     if cached_result is not None:
         _attach_host_maps(
             mined_types,
@@ -2656,6 +4955,11 @@ def _reconcile_type_hosts(
     concept_payload, concept_index, cids_by_topic = _normal_concept_payloads(out)
     concept_by_id = {str(row.get("concept_id") or ""): row for row in concept_payload}
     blocks_by_topic, subtopic_by_block = _topic_source_blocks(graph, canonical)
+    all_source_blocks = [
+        {**copy.deepcopy(row), "topic_id": source_topic_id}
+        for source_topic_id in sorted(blocks_by_topic)
+        for row in blocks_by_topic[source_topic_id]
+    ]
     topic_by_id = {
         str(row.get("topic_id") or ""): row
         for row in graph.get("topics") or []
@@ -2671,11 +4975,8 @@ def _reconcile_type_hosts(
     plans: list[dict[str, Any]] = []
     for topic_id, topic_units in units_by_topic.items():
         topic = topic_by_id.get(topic_id)
-        source_blocks = [
-            {**copy.deepcopy(row), "topic_id": topic_id}
-            for row in blocks_by_topic.get(topic_id, [])
-        ]
-        if topic is None or not source_blocks:
+        topic_source_blocks = blocks_by_topic.get(topic_id, [])
+        if topic is None or not topic_source_blocks:
             raise ValueError(
                 "Phase 3.3 cannot certify Type hosts because canonical topic "
                 f"{topic_id or '<empty>'} has no usable source blocks"
@@ -2692,12 +4993,17 @@ def _reconcile_type_hosts(
                 topic=topic,
                 units=topic_units,
                 concepts=existing,
-                source_blocks=source_blocks,
+                source_blocks=all_source_blocks,
                 provider=provider,
                 critic=critic,
+                placement_authority=placement_authority,
+                placement_order=placement_order,
+                block_directory=block_directory,
+                qid_contracts=qid_contracts,
             )
         )
 
+    pre_mutation_records = copy.deepcopy(out)
     out, concept_payload, plans, expanded = _materialize_existing_host_updates(
         out,
         plans=plans,
@@ -2715,6 +5021,21 @@ def _reconcile_type_hosts(
         subtopic_by_block=subtopic_by_block,
         units=normal_units,
     )
+    _assert_unchanged_host_contracts_preserved(
+        pre_mutation_records,
+        reconciled,
+    )
+    if placement_authority is not None:
+        reconciled = _bind_and_verify_applied_host_mutations(
+            reconciled,
+            plans=plans,
+            host_map=host_map,
+            qid_map=qid_map,
+            units=normal_units,
+            placement_authority=placement_authority,
+            qid_contracts=qid_contracts,
+            graph=graph,
+        )
     # Re-run exact grounding. Existing rows reuse Phase 3.1 caches; new hosts carry
     # independently verified block IDs and are preserved by that contract.
     reconciled = phase31.ground_concepts(
@@ -2722,6 +5043,18 @@ def _reconcile_type_hosts(
         graph=graph,
         canonical=canonical,
     )
+    if placement_authority is not None:
+        allowed_blocks = set(block_directory)
+        for record in reconciled:
+            title = str(
+                record.get("concept_title") or record.get("concept") or ""
+            )
+            if cr.is_culmination(title):
+                continue
+            grounding_certificate.verify_placement_contract(
+                record,
+                allowed_block_ids=allowed_blocks,
+            )
     reconciled = phase32._order_grounded_records(
         reconciled,
         graph=graph,
@@ -2767,6 +5100,7 @@ def _reconcile_type_hosts(
         host_map=host_map,
         qid_map=qid_map,
         summary=summary,
+        placement_authority=placement_authority,
     )
     progress.log(
         "Phase 3.3 certified every normal Type/Case unit before topology freeze: "

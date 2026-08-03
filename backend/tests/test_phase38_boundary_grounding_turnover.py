@@ -250,7 +250,7 @@ def test_exact_grounding_can_use_a_boundary_continuation_without_the_wrong_figur
         "BLK-00051",
     ]
     assert grounded[0]["_source_grounding_version"] == (
-        "phase3.8-boundary-aware-source-grounding-2"
+        "phase3.8-certified-required-grounding-5"
     )
     assert grounded[0]["_source_grounding_contract"] == (
         "api-verified-boundary-aware-source-block-ids"
@@ -289,6 +289,7 @@ def test_targeted_convergence_retries_the_failed_origin_beyond_two_passes():
 
     def original(_records, *_args, **_kwargs):
         nonlocal calls
+        phase38.phase22._notify_openai_transport_started()
         calls += 1
         feedback = copy.deepcopy(
             phase33._EXTERNAL_GROUNDING_FEEDBACK.get() or {}
@@ -337,6 +338,7 @@ def test_human_topology_handoff_is_consumed_once_before_directed_pass():
 
     def original(_records, *_args, **_kwargs):
         nonlocal calls
+        phase38.phase22._notify_openai_transport_started()
         calls += 1
         if calls == 1:
             raise early_gate.TopologyRepairRequired(
@@ -370,7 +372,7 @@ def test_old_final_topology_cache_is_rejected_but_current_grounding_is_reused(
             "topic": "Topic A",
             "concept_title": "Concept A",
             "_source_grounding_version": (
-                "phase3.8-boundary-aware-source-grounding-2"
+                "phase3.8-certified-required-grounding-5"
             ),
         }
     ]

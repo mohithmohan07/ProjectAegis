@@ -149,6 +149,14 @@ def _split_response(payload: dict) -> dict:
                             "from rule based only on a monarch."
                         ),
                         "keywords": ["nation-state", "shared identity"],
+                        "protected_source_items": [],
+                        "topic_relationships": [{
+                            "topic_id": "TOPIC-0001",
+                            "relationship_type": "CORE_TEACHING",
+                            "necessity": True,
+                            "evidence_block_ids": ["BLK-00015"],
+                            "reason": "This block directly teaches the claim.",
+                        }],
                         "confidence": 0.999,
                         "reason": "The first source block supports this durable idea.",
                     },
@@ -174,6 +182,14 @@ def _split_response(payload: dict) -> dict:
                             "cantons",
                             "Habsburg Empire",
                         ],
+                        "protected_source_items": [],
+                        "topic_relationships": [{
+                            "topic_id": "TOPIC-0002",
+                            "relationship_type": "CORE_TEACHING",
+                            "necessity": True,
+                            "evidence_block_ids": ["BLK-00031"],
+                            "reason": "This block directly teaches the claim.",
+                        }],
                         "confidence": 0.999,
                         "reason": "The second source block supports this separate idea.",
                     },
@@ -190,12 +206,48 @@ def _split_response(payload: dict) -> dict:
 
 def _verified_topology_review(payload: dict) -> dict:
     ids = [row["concept_id"] for row in payload["concepts"]]
+    relationship_ids = [
+        relation["relationship_id"]
+        for decision in payload.get("proposed_decisions") or []
+        for segment in decision.get("segments") or []
+        for relation in segment.get("topic_relationships") or []
+    ]
+    split_review_ids = list(dict.fromkeys(
+        str(attestation.get("split_review_id") or "")
+        for decision in payload.get("proposed_decisions") or []
+        for segment in decision.get("segments") or []
+        for contract in [segment.get("_placement_contract") or {}]
+        for attestation in [contract.get("split_attestation") or {}]
+        if str(attestation.get("split_review_id") or "")
+    ))
     return {
         "verdict": "verified",
         "confidence": 0.999,
         "accepted_concept_ids": ids,
         "rejected_concept_ids": [],
         "issues": [],
+        "relationship_reviews": [
+            {
+                "relationship_id": relationship_id,
+                "verdict": "accepted",
+                "evidence_supported": True,
+                "necessity_supported": True,
+                "direction_supported": True,
+                "reason": "Exact source evidence supports this relationship.",
+            }
+            for relationship_id in relationship_ids
+        ],
+        "split_reviews": [
+            {
+                "split_review_id": review_id,
+                "verdict": "accepted",
+                "complete_parent_claim_preserved": True,
+                "protected_items_preserved": True,
+                "irreducible_relationships_preserved": True,
+                "reason": "The split preserves the complete parent meaning.",
+            }
+            for review_id in split_review_ids
+        ],
     }
 
 
@@ -260,6 +312,12 @@ def test_rne_cross_topic_overmerge_is_split_before_topology_freeze():
     assert "Nation-States and Dynastic Europe" not in {
         row["concept_title"] for row in repaired
     }
+    contracts = [row["_placement_contract"] for row in repaired]
+    assert contracts[0]["origin_claim_sha256"] == contracts[1][
+        "origin_claim_sha256"
+    ]
+    assert contracts[0]["origin_claim_ids"] == contracts[1]["origin_claim_ids"]
+    assert contracts[0]["split_group_id"] == contracts[1]["split_group_id"]
 
 
 def test_whole_claim_is_moved_instead_of_unnecessarily_split():
@@ -283,18 +341,21 @@ def test_whole_claim_is_moved_instead_of_unnecessarily_split():
                 "segments": [{
                     "topic_id": "TOPIC-0002",
                     "concept_title": "Political Fragmentation in Dynastic Europe",
-                    "parent_concept": "Europe Before Nation-States",
-                    "description": (
-                        "Mid-eighteenth-century Germany, Italy and Switzerland "
-                        "were divided into kingdoms, duchies and cantons, while "
-                        "the Habsburg Empire bound diverse peoples through "
-                        "allegiance to the emperor."
-                    ),
+                    "parent_concept": "Nation and State",
+                    "description": payload["concepts"][0]["source_claim"],
                     "achieving_mastery": (
                         "Explain why fragmented dynastic territories were not "
                         "nation-states."
                     ),
                     "keywords": ["dynastic Europe", "Habsburg Empire"],
+                    "protected_source_items": [],
+                    "topic_relationships": [{
+                        "topic_id": "TOPIC-0002",
+                        "relationship_type": "CORE_TEACHING",
+                        "necessity": True,
+                        "evidence_block_ids": ["BLK-00031"],
+                        "reason": "This block directly teaches the claim.",
+                    }],
                     "confidence": 0.999,
                     "reason": "The complete claim belongs to Topic 2.",
                 }],
@@ -317,6 +378,115 @@ def test_whole_claim_is_moved_instead_of_unnecessarily_split():
     assert repaired[0]["topic"] == "The Making of Nationalism in Europe"
     assert repaired[0]["_phase32_topology_decision"] == "move"
     assert repaired[0]["_source_block_ids"] == ["BLK-00031"]
+
+
+def test_explicit_legacy_provider_without_relationships_is_grounded_then_sealed():
+    graph, canonical = _graph_and_canonical()
+    record = {
+        "topic": "The French Revolution and the Idea of the Nation",
+        "parent_concept": "Idea of the Nation",
+        "concept_title": "Nation-State as Shared Political Identity",
+        "concept_details": (
+            "Description: A nation-state develops common identity and shared "
+            "history through political struggle.\n"
+            "Achieving Mastery: Explain the role of shared identity."
+        ),
+        "_semantic_topic_id": "TOPIC-0001",
+        "_semantic_graph_contract": "RNE-SOURCE-CONTRACT",
+    }
+
+    def legacy_provider(payload: dict) -> dict:
+        concept = payload["concepts"][0]
+        return {
+            "concepts": [{
+                "concept_id": concept["concept_id"],
+                "decision": "keep",
+                "segments": [{
+                    "topic_id": concept["current_topic_id"],
+                    "concept_title": concept["concept_title"],
+                    "parent_concept": concept["parent_concept"],
+                    "description": concept["source_claim"],
+                    "achieving_mastery": concept["existing_mastery"],
+                    "keywords": [],
+                    "confidence": 0.999,
+                    "reason": "Legacy injected fixture.",
+                }],
+                "confidence": 0.999,
+                "reason": "Legacy injected fixture.",
+            }]
+        }
+
+    repaired = phase32.adjudicate_topology(
+        [record],
+        graph=graph,
+        canonical=canonical,
+        provider=legacy_provider,
+        critic=_verified_topology_review,
+        grounding_provider=_grounding_provider,
+        grounding_critic=_verified_grounding_review,
+    )
+
+    contract = repaired[0]["_placement_contract"]
+    assert contract["certified"] is True
+    assert contract["owner_topic_id"] == "TOPIC-0001"
+    assert contract["topic_relationships"][0]["evidence_block_ids"] == [
+        "BLK-00015"
+    ]
+
+
+def test_explicit_provider_cannot_omit_relationships_in_live_mode(monkeypatch):
+    graph, canonical = _graph_and_canonical()
+    record = {
+        "topic": "The French Revolution and the Idea of the Nation",
+        "parent_concept": "Idea of the Nation",
+        "concept_title": "Nation-State as Shared Political Identity",
+        "concept_details": (
+            "Description: A nation-state develops common identity and shared "
+            "history through political struggle.\n"
+            "Achieving Mastery: Explain the role of shared identity."
+        ),
+        "_semantic_topic_id": "TOPIC-0001",
+    }
+    calls = 0
+
+    def provider(payload: dict) -> dict:
+        nonlocal calls
+        calls += 1
+        concept = payload["concepts"][0]
+        return {
+            "concepts": [{
+                "concept_id": concept["concept_id"],
+                "decision": "keep",
+                "segments": [{
+                    "topic_id": concept["current_topic_id"],
+                    "concept_title": concept["concept_title"],
+                    "parent_concept": concept["parent_concept"],
+                    "description": concept["source_claim"],
+                    "achieving_mastery": concept["existing_mastery"],
+                    "keywords": [],
+                    "confidence": 0.999,
+                    "reason": "Missing typed relationships.",
+                }],
+                "confidence": 0.999,
+                "reason": "Missing typed relationships.",
+            }]
+        }
+
+    monkeypatch.setattr(phase32.config, "allow_dry", lambda: False)
+    with pytest.raises(semantic_recovery.ProviderResponseContractError):
+        phase32.adjudicate_topology(
+            [record],
+            graph=graph,
+            canonical=canonical,
+            provider=provider,
+            critic=lambda _payload: (_ for _ in ()).throw(
+                AssertionError("uncertified relationships must not reach critic")
+            ),
+            grounding_provider=_grounding_provider,
+            grounding_critic=_verified_grounding_review,
+        )
+
+    assert calls == 2
 
 
 def test_critic_disagreement_pauses_then_resume_uses_one_directed_pair(
@@ -508,6 +678,13 @@ def test_low_segment_confidence_pauses_without_a_retry_or_critic(monkeypatch):
     assert phase32._topology_parse_errors_are_mechanical([
         "TOPOLOGY-CONCEPT-0001 retirement confidence 0.950 is below 0.960"
     ]) is False
+    assert phase32._topology_parse_errors_are_mechanical([
+        "TOPOLOGY-CONCEPT-0001 changed source claim and changed owner in one "
+        "operation; move+refine is not a certified Phase 3.2 action"
+    ]) is False
+    assert phase32._topology_parse_errors_are_mechanical([
+        "TOPOLOGY-CONCEPT-0001 segment 1 used unknown topic TOPIC-X"
+    ]) is True
 
 
 def test_keep_decision_cannot_silently_rewrite_the_existing_claim(monkeypatch):

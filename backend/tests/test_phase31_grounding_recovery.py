@@ -9,6 +9,7 @@ from app import schemas
 from app.services import canonical_source_phase3 as phase3
 from app.services import canonical_source_phase31_grounding_contract as phase31
 from app.services import canonical_source_phase33_preflight_contract as phase33
+from app.services import grounding_certificate
 from app.services import semantic_recovery
 
 
@@ -511,7 +512,6 @@ def test_many_evidence_candidates_keep_repairs_and_exact_block_bindings():
         "refine",
         "split",
         "move",
-        "retire",
     }
     assert {
         row["target_topic_id"]
@@ -1436,3 +1436,54 @@ def test_validated_final_topology_cache_skips_repeated_learner_analysis(
     assert first == second
     assert "Misconception/ Error Analysis" in second[0]["concept_details"]
     assert (tmp_path / phase31._TOPOLOGY_CACHE_FILENAME).exists()
+
+
+def test_final_topology_cache_rejects_active_semantic_block_drift(tmp_path):
+    graph, canonical = _source_graph()
+    records = [_record()]
+    calls = 0
+
+    def original_prepare(rows, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return copy.deepcopy(rows)
+
+    kwargs = {
+        "subject": "History",
+        "mmd_text": "canonical semantic source",
+        "meta": {},
+        "source_sections": [],
+        "source_topic_excerpts": [],
+        "method_anchors": [],
+    }
+    session = {"artifact_dir": tmp_path, "canonical": canonical}
+    with phase3.activate_session(session), phase3.activate(graph):
+        phase31._prepare_topology_with_cache(
+            original_prepare,
+            copy.deepcopy(records),
+            (),
+            copy.deepcopy(kwargs),
+        )
+
+    drifted = copy.deepcopy(graph)
+    drifted["blocks"][0]["kind"] = "figure"
+    with phase3.activate_session(session), phase3.activate(drifted):
+        phase31._prepare_topology_with_cache(
+            original_prepare,
+            copy.deepcopy(records),
+            (),
+            copy.deepcopy(kwargs),
+        )
+
+    assert calls == 2
+
+
+def test_production_grounding_rejects_a_normal_row_without_placement_authority():
+    with pytest.raises(
+        grounding_certificate.GroundingCertificateError,
+        match="placement contract row 0 is missing",
+    ):
+        phase31._verify_preserved_placement_contracts(
+            [{"concept_title": "Normal source concept"}],
+            require_all=True,
+        )

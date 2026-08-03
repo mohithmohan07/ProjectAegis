@@ -79,7 +79,9 @@ def test_provider_proposal_is_overridden_by_the_computed_owner():
 
     assert segment["topic_id"] == "T-54"
     assert segment["_placement_proposed_topic_id"] == "T-52"
-    assert segment["_placement_certified"] is True
+    # Provider-only enforcement is deliberately provisional.  The live seam
+    # grants certification only after the independent relationship review.
+    assert segment["_placement_certified"] is False
     assert segment["_placement_prerequisites"] == ["T-52"]
 
 
@@ -92,7 +94,7 @@ def test_retrospective_reference_does_not_drag_the_concept_forward():
              "necessity": True, "evidence_block_ids": ["B52"], "reason": "r"},
             {"topic_id": "T-54",
              "relationship_type": "RETROSPECTIVE_REFERENCE",
-             "necessity": False, "evidence_block_ids": [], "reason": "r"},
+             "necessity": False, "evidence_block_ids": ["B54"], "reason": "r"},
         ],
     )
     segment = _segment(phase32._enforce_placement_policy(_payload(), data))
@@ -181,6 +183,19 @@ def test_schema_requires_typed_relationships_from_the_provider():
     assert set(rel["relationship_type"]["enum"]) == {
         kind.value for kind in pp.RelationshipType
     }
+
+
+def test_critic_output_budget_scales_with_exhaustive_relationship_count(
+    monkeypatch,
+):
+    monkeypatch.setattr(phase32.config, "OPENAI_MAX_OUTPUT_TOKENS", 128_000)
+
+    small = phase32._critic_output_token_budget(1, 1)
+    large = phase32._critic_output_token_budget(12, 240)
+
+    assert small == 6000
+    assert large > small
+    assert large <= 128_000
 
 
 def test_graph_block_order_is_preferred_over_payload_order(monkeypatch):
