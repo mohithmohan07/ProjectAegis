@@ -422,3 +422,73 @@ def test_opt_out_restores_the_manual_pause(
         db, job, pending, owner_sub=None) is None
     db.refresh(job)
     assert job.generation_checkpoint["human_decisions"]["pending"] is not None
+
+
+# --------------------------------------------------------------------------- #
+# The decision/resolution loop itself is bounded
+# --------------------------------------------------------------------------- #
+
+def test_resolution_cycles_are_bounded_and_name_the_returning_decision(
+    db,
+    first_chapter,
+    monkeypatch,
+):
+    """An always-resolvable decision that keeps returning must terminate.
+
+    Every mechanism under this loop is individually bounded, but their
+    composition was not: an action that resolves one decision can regenerate
+    an equivalent decision under a fresh context hash, which the per-issue
+    caps never match.
+    """
+
+    chapter = db.get(models.Chapter, first_chapter["id"])
+    raw = _phase33_pending()
+    raw["decision_id"] = "phase33-host-cyclebound-0001"
+    job, pending = _seed_paused_job(
+        db, chapter, monkeypatch, filename="cycle-bound.mmd", raw=raw)
+    monkeypatch.setenv("AEGIS_MAX_RESOLUTION_CYCLES", "3")
+    logs: list[str] = []
+    monkeypatch.setattr(
+        build_concepts.progress, "log",
+        lambda message, **_kw: logs.append(str(message)),
+    )
+    # The agent always succeeds, and the operation always needs another
+    # decision — the exact shape seen in production.
+    monkeypatch.setattr(
+        build_concepts,
+        "_autonomously_resolve_pending_decision",
+        lambda *_a, **_kw: "resolved-decision",
+    )
+    monkeypatch.setattr(
+        build_concepts,
+        "_persist_pending_human_decision",
+        lambda *_a, **_kw: pending,
+    )
+
+    def never_converges():
+        raise semantic_recovery.HumanDecisionRequired({
+            "decision_id": pending["decision_id"],
+            "context_hash": pending["context_hash"],
+        })
+
+    with pytest.raises(
+        build_concepts.SemanticResolutionCyclesExhausted,
+    ) as excinfo:
+        build_concepts._run_with_human_decision_pause(
+            never_converges,
+            db=db,
+            job=job,
+            fingerprint=str(job.generation_checkpoint.get("fingerprint") or ""),
+            target_chapter_id=chapter.id,
+            owner_sub=None,
+        )
+
+    message = str(excinfo.value)
+    assert "3 autonomous decision cycles" in message
+    # The returning decision is named so the loop is diagnosable.
+    assert "phase33_type_host_semantic_conflict" in message
+    assert "TYPE-0003" in message
+    assert "AEGIS_MAX_RESOLUTION_CYCLES" in message
+    # Bounded semantic recovery must not retry a non-converging loop.
+    assert semantic_recovery.classify_failure(
+        excinfo.value).recoverable is False

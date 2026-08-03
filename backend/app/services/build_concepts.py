@@ -3086,6 +3086,72 @@ def _apply_last_resort_safe_continuation(
     return decision_id
 
 
+class SemanticResolutionCyclesExhausted(RuntimeError):
+    """One run resolved decisions repeatedly without ever converging.
+
+    Each mechanism below this is individually bounded - grounding attempts,
+    convergence passes, semantic recovery, per-issue pathway turns. Their
+    composition was not: an autonomous action that resolves one decision can
+    regenerate an equivalent decision under a fresh context hash, which the
+    per-issue caps do not match, so the resolve/restart cycle could spin
+    without limit. This bounds the cycle itself and reports the decision that
+    kept coming back. The wording avoids semantic-failure vocabulary so
+    bounded recovery classifies it non-semantic and does not retry it.
+    """
+
+
+def _max_resolution_cycles() -> int:
+    raw = os.environ.get("AEGIS_MAX_RESOLUTION_CYCLES", "12")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = 12
+    return max(1, min(200, value))
+
+
+def _decision_identity_text(pending: dict) -> str:
+    """Name a decision in the run log so a loop is diagnosable."""
+
+    item = pending.get("item") if isinstance(pending.get("item"), dict) else {}
+    parts = [
+        f"kind={str(pending.get('kind') or '') or 'unknown'}",
+        f"phase={str(pending.get('phase') or '') or 'unknown'}",
+    ]
+    for label, value in (
+        ("unit", item.get("unit_id")),
+        ("type", item.get("type_id")),
+        ("topic", item.get("topic")),
+    ):
+        if str(value or "").strip():
+            parts.append(f"{label}={str(value).strip()}")
+    try:
+        parts.append(
+            f"issue={autonomous_resolution.issue_key(pending)[:12]}")
+    except Exception:
+        pass
+    return ", ".join(parts)
+
+
+def _raise_if_resolution_cycles_exhausted(
+    pending: dict,
+    *,
+    cycles: int,
+    maximum: int,
+) -> None:
+    if cycles < maximum:
+        return
+    message = (
+        f"Generation stopped after {cycles} autonomous decision cycles "
+        "without reaching the output. The last decision was "
+        f"[{_decision_identity_text(pending)}]. Each resolution was applied "
+        "and then an equivalent decision returned, so continuing would spend "
+        "without converging. Raise AEGIS_MAX_RESOLUTION_CYCLES to allow more "
+        "cycles, or send this line so the returning decision can be fixed."
+    )
+    progress.log(message, level="error")
+    raise SemanticResolutionCyclesExhausted(message)
+
+
 def _raise_if_unattended_cannot_pause(pending: dict) -> None:
     """End an unattended run instead of parking it in ``awaiting_decision``.
 
@@ -3297,8 +3363,10 @@ def _persist_pending_human_decision(
         label="Paused for your decision",
     )
     progress.log(
-        "Saved the semantic decision before resolution. Any enabled "
-        "autonomous review starts only after this commit and runs once.",
+        "Saved the semantic decision before resolution ["
+        + _decision_identity_text(pending)
+        + "]. Any enabled autonomous review starts only after this commit "
+        "and runs once.",
         level="warning",
     )
     return pending
@@ -3317,6 +3385,8 @@ def _run_with_human_decision_pause(
     """Run a pipeline with bounded agent-first, human-last decision handling."""
 
     active_ids = set(initial_agent_resolution_ids or set())
+    cycles = 0
+    max_cycles = _max_resolution_cycles()
     while True:
         token = _ACTIVE_AGENT_RESOLUTION_IDS.set(frozenset(active_ids))
         try:
@@ -3337,6 +3407,9 @@ def _run_with_human_decision_pause(
                 owner_sub=owner_sub,
             )
             if resolved_id:
+                cycles += 1
+                _raise_if_resolution_cycles_exhausted(
+                    pending, cycles=cycles, maximum=max_cycles)
                 active_ids.add(resolved_id)
                 continue
             current = _pending_human_decision(job.generation_checkpoint)
@@ -3347,6 +3420,9 @@ def _run_with_human_decision_pause(
                 owner_sub=owner_sub,
             )
             if continued_id:
+                cycles += 1
+                _raise_if_resolution_cycles_exhausted(
+                    current or pending, cycles=cycles, maximum=max_cycles)
                 active_ids.add(continued_id)
                 continue
             _raise_if_unattended_cannot_pause(current or pending)
