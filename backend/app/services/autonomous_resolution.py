@@ -191,11 +191,22 @@ def safe_continuation_option(
 ) -> dict[str, str] | None:
     """Deterministically choose the safest offered action for one decision.
 
-    Returns the server-recommended automatable option when its target is
-    fully specified, otherwise the single explicit keep/no-change candidate
-    route. Returns None when no safe bounded action is offered — the caller
-    must then keep the human pause (for example when the only remaining
-    action is a source replacement).
+    Preference order, all restricted to server-offered automatable actions:
+
+    1. the recommended option, when its target is resolvable;
+    2. the single explicit keep/no-change candidate route;
+    3. the first offered automatable action in server order, binding a
+       candidate-selecting choice to the safest resolvable candidate.
+
+    Tier 3 exists because unattended completion must not depend on the
+    server having marked a recommendation: every offered action is already a
+    bounded, evidence-checked route the pipeline itself proposed, and taking
+    the first one deterministically is exactly what clicking through the
+    review panel would do.
+
+    Returns None only when no bounded automatable action exists at all — for
+    example when the decision's only routes are source replacement or a
+    custom instruction. The caller must keep the human pause in that case.
     """
 
     candidates = [
@@ -212,22 +223,65 @@ def safe_continuation_option(
         row for row in pending.get("options") or []
         if isinstance(row, Mapping)
     ]
+    keep_candidates = [
+        row for row in candidates
+        if _normal(row.get("action")) == "keep"
+        and str(row.get("target_id") or "")
+    ]
 
-    def selection(row: Mapping[str, Any]) -> dict[str, str] | None:
+    def fallback_candidate(field: str) -> Mapping[str, Any] | None:
+        """Prefer an explicit keep route, else the first offered candidate.
+
+        ``field`` is the identity the chosen action needs: candidate-selector
+        actions bind ``target_id`` while existing-concept actions bind
+        ``concept_id``. Phase 3.3 host conflicts, for example, offer concepts
+        that carry only ``concept_id``.
+        """
+
+        if len(keep_candidates) == 1 and str(
+            keep_candidates[0].get(field) or ""
+        ):
+            return keep_candidates[0]
+        for row in candidates:
+            if str(row.get(field) or ""):
+                return row
+        return None
+
+    def selection(
+        row: Mapping[str, Any],
+        *,
+        bind_candidate: bool = False,
+    ) -> dict[str, str] | None:
         choice = str(row.get("choice") or "").strip()
         if not is_automatable_choice(choice):
             return None
         target_id = str(row.get("target_id") or "").strip()
         target_concept_id = str(row.get("target_concept_id") or "").strip()
         if choice in {"accept_recommended", "select_candidate"}:
-            if not target_id or target_id not in candidate_target_ids:
-                return None
+            if target_id not in candidate_target_ids:
+                # ``accept_recommended`` is validated against the option's own
+                # recommended target downstream, so it can never be rebound to
+                # a different candidate here.
+                if not bind_candidate or choice == "accept_recommended":
+                    return None
+                bound = fallback_candidate("target_id")
+                if bound is None:
+                    return None
+                target_id = str(bound.get("target_id") or "")
+                target_concept_id = str(bound.get("concept_id") or "")
         if choice in {"expand_existing", "select_existing"}:
             if not target_concept_id or (
                 candidate_concept_ids
                 and target_concept_id not in candidate_concept_ids
             ):
-                return None
+                if not bind_candidate:
+                    return None
+                bound = fallback_candidate("concept_id")
+                bound_concept_id = str(
+                    (bound or {}).get("concept_id") or "")
+                if not bound_concept_id:
+                    return None
+                target_concept_id = bound_concept_id
         return {
             "choice": choice,
             "target_id": target_id,
@@ -239,11 +293,6 @@ def safe_continuation_option(
             selected = selection(row)
             if selected is not None:
                 return selected
-    keep_candidates = [
-        row for row in candidates
-        if _normal(row.get("action")) == "keep"
-        and str(row.get("target_id") or "")
-    ]
     if len(keep_candidates) == 1 and any(
         str(row.get("choice") or "") == "select_candidate"
         for row in options
@@ -254,6 +303,10 @@ def safe_continuation_option(
             "target_id": str(row.get("target_id") or ""),
             "target_concept_id": str(row.get("concept_id") or ""),
         }
+    for row in options:
+        selected = selection(row, bind_candidate=True)
+        if selected is not None:
+            return selected
     return None
 
 

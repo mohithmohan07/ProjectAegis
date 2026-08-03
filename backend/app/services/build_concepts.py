@@ -2386,6 +2386,25 @@ def _existing_human_decision_pause(
         pending = _pending_human_decision(job.generation_checkpoint)
         if pending is None:
             return None
+    # Last choke point on the resume path: a saved pause whose resolver
+    # pathways are exhausted still continues with the safest offered action
+    # rather than waiting for a manual review click.
+    continued_id = _apply_last_resort_safe_continuation(
+        db,
+        job,
+        pending,
+        owner_sub=owner_sub,
+    )
+    if continued_id:
+        if agent_resolution_ids is not None:
+            agent_resolution_ids.add(continued_id)
+        if isinstance(checkpoint, dict):
+            refreshed_checkpoint = copy.deepcopy(
+                job.generation_checkpoint or {}
+            )
+            checkpoint.clear()
+            checkpoint.update(refreshed_checkpoint)
+        return None
     progress.set_progress(
         job.checkpoint_progress,
         label="Paused for your decision",
@@ -2991,6 +3010,70 @@ def _autonomously_resolve_pending_decision(
     return decision_id
 
 
+def _apply_last_resort_safe_continuation(
+    db: Session,
+    job: models.UploadJob,
+    pending: dict,
+    *,
+    owner_sub: str | None,
+) -> str | None:
+    """Continue unattended when every resolver pathway declined to decide.
+
+    This is the single choke point that makes "no manual review" an
+    invariant rather than a property of individual branches. Whatever caused
+    the resolver to decline — it is disabled, the identical workspace was
+    already inspected, a safety cap fired, a crash-recovery guard fired, the
+    review escalated, or another worker holds the claim — the run still
+    continues by recording the safest server-offered bounded action.
+
+    It returns None only when no bounded automatable action exists (for
+    example a source replacement, which no automation may perform), or when
+    unattended completion is switched off.
+    """
+
+    if not autonomous_resolution.unattended_completion_enabled():
+        return None
+    safe_option = autonomous_resolution.safe_continuation_option(pending)
+    if safe_option is None:
+        return None
+    review = pending.get("agent_review")
+    declined_reason = (
+        str(review.get("reason") or "").strip()
+        if isinstance(review, dict) else ""
+    )
+    try:
+        recorded = _record_human_semantic_decision_locked(
+            db,
+            job,
+            str(pending.get("decision_id") or ""),
+            choice=safe_option["choice"],
+            instruction="",
+            target_id=safe_option["target_id"],
+            target_concept_id=safe_option["target_concept_id"],
+            resolved_by="agent",
+            resolution_status="consumed",
+        )
+    except (HumanDecisionConflictError, ValueError) as exc:
+        # The decision changed underneath this worker, or the safest offered
+        # action failed deterministic validation. Both are real stops.
+        progress.log(
+            "Aegis could not apply a safe continuation for the saved "
+            f"semantic decision ({type(exc).__name__}: {exc}).",
+            level="warning",
+        )
+        return None
+    decision_id = str(recorded["resolved_decision"]["decision_id"])
+    progress.log(
+        "Safe continuation: no autonomous review pathway remained"
+        + (f" ({declined_reason})" if declined_reason else "")
+        + ". Aegis applied the safest server-offered bounded action "
+        f"({safe_option['choice']}) and generation is continuing without "
+        "manual review.",
+        level="warning",
+    )
+    return decision_id
+
+
 def _source_replacement_required(checkpoint: dict | None) -> bool:
     """Whether a source-review answer terminally requires a new conversion."""
 
@@ -3217,6 +3300,15 @@ def _run_with_human_decision_pause(
                 active_ids.add(resolved_id)
                 continue
             current = _pending_human_decision(job.generation_checkpoint)
+            continued_id = _apply_last_resort_safe_continuation(
+                db,
+                job,
+                current or pending,
+                owner_sub=owner_sub,
+            )
+            if continued_id:
+                active_ids.add(continued_id)
+                continue
             return _awaiting_human_decision_result(
                 job, current or pending
             ), None
