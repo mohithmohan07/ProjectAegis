@@ -77,6 +77,136 @@ def _max_convergence_passes() -> int:
     )
 
 
+def _max_retired_fraction() -> float:
+    """Share of normal concepts that may be retired before the run stops.
+
+    A handful of ungroundable concepts is an ordinary per-concept problem and
+    must not cost the whole chapter. A large share is a source or extraction
+    problem, and silently shipping a thin map would hide it.
+    """
+
+    try:
+        value = float(
+            os.environ.get("AEGIS_PHASE38_MAX_RETIRED_FRACTION", "0.25")
+        )
+    except (TypeError, ValueError):
+        value = 0.25
+    return max(0.0, min(1.0, value))
+
+
+_MAX_CONVERGENCE_LEDGER_SCOPES = 32
+# Convergence control state, keyed by source contract.
+#
+# This deliberately outlives one call of the convergence loop. A semantic
+# decision raises HumanDecisionRequired (a RuntimeError), which unwinds the
+# whole loop; the resolution agent then answers it and the orchestrator
+# re-runs generation from the durable checkpoint. Keeping the attempt count,
+# repeat detector, suppressed resolutions, and retirements in function locals
+# meant every one of those cycles restarted at pass 1 with an empty repeat
+# detector, so the bounded budget was never consumed and the same rejection
+# could recur indefinitely.
+_CONVERGENCE_LEDGER: "dict[str, dict[str, Any]]" = {}
+
+
+def _row_identity(row: Any) -> tuple[str, str]:
+    """Identity that survives row reordering across a restart."""
+
+    if not isinstance(row, dict):
+        return ("", "")
+    return (
+        _normal(row.get("concept_title") or row.get("concept")),
+        _normal(row.get("topic")),
+    )
+
+
+def _convergence_scope_key(records: list[dict[str, Any]]) -> str:
+    """Key convergence state to the source contract this run is grounded in."""
+
+    contract = ""
+    try:
+        graph = phase3.active_graph()
+        if isinstance(graph, dict):
+            contract = str(graph.get("source_contract_hash") or "")
+    except Exception:
+        contract = ""
+    if contract:
+        return contract
+    return phase3._sha256_json(sorted(
+        "|".join(_row_identity(row))
+        for row in records
+        if isinstance(row, dict)
+    ))
+
+
+def _convergence_state(scope: str) -> dict[str, Any]:
+    state = _CONVERGENCE_LEDGER.get(scope)
+    if state is None:
+        if len(_CONVERGENCE_LEDGER) >= _MAX_CONVERGENCE_LEDGER_SCOPES:
+            _CONVERGENCE_LEDGER.pop(next(iter(_CONVERGENCE_LEDGER)), None)
+        state = {
+            "attempts": 0,
+            "signatures": {},
+            "suppressed": set(),
+            "retired": set(),
+            "feedback": {},
+        }
+        _CONVERGENCE_LEDGER[scope] = state
+    return state
+
+
+def reset_convergence_state(scope: str | None = None) -> None:
+    """Clear convergence control state (operational and test hook)."""
+
+    if scope is None:
+        _CONVERGENCE_LEDGER.clear()
+    else:
+        _CONVERGENCE_LEDGER.pop(scope, None)
+
+
+def _precise_failure_identities(
+    exc: Exception,
+    *,
+    repaired_records: list[dict[str, Any]] | None,
+    working: list[dict[str, Any]],
+) -> set[tuple[str, str]]:
+    """Identify only the concepts a diagnostic actually names.
+
+    The broad "every concept in the chapter" fallback used for repair
+    feedback must never drive retirement: retiring on a catch-all would empty
+    the map for one unattributable rejection.
+    """
+
+    origins: dict[str, Any] = {}
+    if repaired_records:
+        try:
+            origins = phase33._grounding_feedback_origins(
+                exc, records=repaired_records) or {}
+        except Exception:
+            origins = {}
+    if not origins:
+        topic_match = phase33._GROUNDING_TOPIC_RE.search(str(exc))
+        if topic_match:
+            topic_key = _normal(topic_match.group("topic"))
+            origins = {
+                concept_id: True
+                for concept_id, row in _original_concept_directory(
+                    working).items()
+                if _normal(row.get("topic")) == topic_key
+            }
+    identities: set[tuple[str, str]] = set()
+    for concept_id in origins:
+        match = re.fullmatch(
+            r"TOPOLOGY-CONCEPT-(\d{1,6})", str(concept_id).upper())
+        if match is None:
+            continue
+        index = int(match.group(1)) - 1
+        if 0 <= index < len(working):
+            identity = _row_identity(working[index])
+            if any(identity):
+                identities.add(identity)
+    return identities
+
+
 def _normal(value: object) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip().casefold()
 
@@ -540,23 +670,57 @@ def _phase32_adjudicate_with_targeted_convergence(
         return original(records, *args, **kwargs)
 
     passes = _max_convergence_passes()
-    feedback: dict[str, str] = {}
-    signatures: dict[str, int] = {}
-    suppressed_resolutions: set[str] = set()
+    scope = _convergence_scope_key(records)
+    state = _convergence_state(scope)
+    signatures: dict[str, int] = state["signatures"]
+    suppressed_resolutions: set[str] = state["suppressed"]
+    retired: set[tuple[str, str]] = state["retired"]
+    feedback: dict[str, str] = state["feedback"]
+    normal_total = len([
+        row for row in records
+        if isinstance(row, dict)
+        and not cr.is_culmination(
+            str(row.get("concept_title") or row.get("concept") or "")
+        )
+    ])
+    retire_budget = int(normal_total * _max_retired_fraction())
+
+    def _working_records() -> list[dict[str, Any]]:
+        if not retired:
+            return records
+        return [
+            row for row in records
+            if _row_identity(row) not in retired
+        ]
+
+    working = _working_records()
+    if retired:
+        progress.log(
+            f"Phase 3.8 is continuing without {len(retired)} previously "
+            "retired ungroundable concept(s) from this source.",
+            level="warning",
+        )
     repaired_token = _LAST_REPAIRED_TOPOLOGY.set(None)
     try:
-        for convergence_pass in range(1, passes + 1):
+        while True:
             _LAST_REPAIRED_TOPOLOGY.set(None)
             feedback_token = phase33._EXTERNAL_GROUNDING_FEEDBACK.set(feedback)
             try:
                 with early_gate.suppress_resolution_ids(
                     suppressed_resolutions
                 ):
-                    return original(records, *args, **kwargs)
+                    result = original(working, *args, **kwargs)
+                # Converged: this source no longer needs its retry budget.
+                state["attempts"] = 0
+                state["signatures"] = signatures = {}
+                state["feedback"] = feedback = {}
+                return result
             except ValueError as exc:
                 message = str(exc)
                 if "failed exact source-block grounding before freeze" not in message:
                     raise
+                state["attempts"] += 1
+                attempts = state["attempts"]
                 signature = phase3._sha256_json(
                     {
                         "message": _normal(message),
@@ -567,27 +731,72 @@ def _phase32_adjudicate_with_targeted_convergence(
                 repeated = signatures[signature] > 1
                 if isinstance(exc, early_gate.TopologyRepairRequired):
                     suppressed_resolutions.add(exc.decision_id)
-                if convergence_pass >= passes:
-                    raise
                 repaired = _LAST_REPAIRED_TOPOLOGY.get()
-                feedback = _feedback_for_failure(
+                if attempts < passes:
+                    feedback = _feedback_for_failure(
+                        exc,
+                        original_records=working,
+                        repaired_records=repaired,
+                        repeated=repeated,
+                    )
+                    state["feedback"] = feedback
+                    progress.log(
+                        "Phase 3.8 mapped exact grounding rejection back to "
+                        f"{len(feedback)} original topology concept(s); only "
+                        "those concepts will be reconsidered in convergence "
+                        f"pass {attempts + 1}/{passes}.",
+                        level="warning",
+                    )
+                    continue
+
+                # Budget spent. Repairing this concept has not worked, so
+                # dispose of it deterministically instead of holding the whole
+                # chapter hostage: retire only the concepts the diagnostic
+                # actually names, then let the reduced map converge. Types are
+                # allocated after topology freeze, so no host certification
+                # depends on a concept retired here, and source questions live
+                # in the deterministic QID inventory whose exact-once coverage
+                # gate still runs at deposit.
+                failing = _precise_failure_identities(
                     exc,
-                    original_records=records,
                     repaired_records=repaired,
-                    repeated=repeated,
-                )
+                    working=working,
+                ) - retired
+                if not failing:
+                    raise
+                if len(retired) + len(failing) > retire_budget:
+                    progress.log(
+                        "Phase 3.8 stopped instead of retiring "
+                        f"{len(retired) + len(failing)} of {normal_total} "
+                        "concept(s): that many ungroundable concepts indicates "
+                        "a source or extraction problem rather than a "
+                        "per-concept one.",
+                        level="error",
+                    )
+                    raise
+                retired.update(failing)
+                titles = ", ".join(sorted(
+                    title for title, _topic in failing if title
+                ))
                 progress.log(
-                    "Phase 3.8 mapped exact grounding rejection back to "
-                    f"{len(feedback)} original topology concept(s); only those "
-                    "concepts will be reconsidered in convergence pass "
-                    f"{convergence_pass + 1}/{passes}.",
-                    level="warning",
+                    f"Phase 3.8 exhausted {passes} bounded convergence "
+                    f"attempt(s) for {len(failing)} concept(s) that remain "
+                    "unsupported by exact source evidence. Retiring them so "
+                    "the chapter completes; every retained concept is still "
+                    f"independently source-verified. Retired: {titles}.",
+                    level="error",
                 )
+                working = _working_records()
+                # The problem set materially changed, so the reduced map gets
+                # a fresh budget. Each disposition strictly shrinks the map and
+                # the retire budget bounds the total, so this terminates.
+                state["attempts"] = 0
+                state["signatures"] = signatures = {}
+                state["feedback"] = feedback = {}
             finally:
                 phase33._EXTERNAL_GROUNDING_FEEDBACK.reset(feedback_token)
     finally:
         _LAST_REPAIRED_TOPOLOGY.reset(repaired_token)
-    raise RuntimeError("Phase 3.8 topology convergence ended unexpectedly")
 
 
 def _cached_records_have_current_grounding(
