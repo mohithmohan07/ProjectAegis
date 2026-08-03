@@ -213,10 +213,16 @@ def test_contract_prefers_split_so_the_earlier_topic_keeps_a_concept():
     )["boundary_grounding_contract"]
 
     route = contract["repair_route"]
-    assert "prefer SPLIT" in route
-    assert "foundational part in the earlier topic" in route
+    assert "SPLIT it and keep BOTH parts" in route
+    # Neither topic may be left without its concept: the earlier topic keeps
+    # the foundational idea, the later topic gains how it behaves there.
+    assert "earlier topic keeps a concept" in route
+    assert "later topic gains a concept" in route
+    assert "never leave either topic without its concept" in route
     # Advanced placement is legitimate, not an error to be repaired away.
-    assert "advanced material" in contract["advanced_placement_rule"]
+    advanced = contract["advanced_placement_rule"]
+    assert "advanced material" in advanced
+    assert "belongs to the LATER topic" in advanced
 
 
 def test_both_provider_prompts_carry_the_prerequisite_rules(monkeypatch):
@@ -249,3 +255,90 @@ def test_both_provider_prompts_carry_the_prerequisite_rules(monkeypatch):
     # The contract travels with the prompt so the rules are auditable.
     sent = json.loads(captured[0]["prompt"])
     assert "prerequisite_rule" in sent["boundary_grounding_contract"]
+
+
+# --------------------------------------------------------------------------- #
+# Advanced placement is universal, not chapter-specific
+# --------------------------------------------------------------------------- #
+
+def test_split_keeps_a_concept_in_both_topics():
+    """The d / Sn case: 5.2 keeps "d", 5.4 gains "how d affects Sn".
+
+    Promoting the advanced behaviour must not delete the foundational
+    concept, and keeping the foundational concept must not leave the
+    advanced behaviour untaught.
+    """
+
+    route = phase38._augment_grounding_payload(
+        {"concepts": [], "source_blocks": []},
+        page_numbers=[],
+    )["boundary_grounding_contract"]["repair_route"]
+
+    assert "earlier topic keeps a concept" in route
+    assert "later topic gains a concept" in route
+    assert "do not delete the foundational concept" in route
+    assert "do not leave the advanced behaviour untaught" in route
+
+
+def test_advanced_placement_rule_is_subject_agnostic():
+    from app.services import generation
+
+    # Both the prompt that authors a Type's topic and the one that reviews
+    # that placement carry the same universal rule.
+    for key in (
+        "concepts.type_mining.system",
+        "concepts.type_alignment_review.system",
+    ):
+        rule = generation.prompts.get_text(key)
+        assert "LATEST of those topics" in rule, key
+        # Stated for every subject, not only numerically ordered sections.
+        assert "every subject and chapter" in rule, key
+        assert "prerequisite, not the owner" in rule, key
+
+
+@pytest.mark.parametrize(
+    ("qids", "expected"),
+    [
+        # The later topic owns an unattributed qid regardless of how many
+        # questions each topic contributes.
+        (["QINV-0001", "QINV-0002", "QINV-0003"], "Later Topic"),
+        (["QINV-0003", "QINV-0001", "QINV-0002"], "Later Topic"),
+    ],
+)
+def test_unattributed_qid_follows_the_latest_topic_not_the_largest(
+    qids, expected,
+):
+    from app.services import generation
+
+    inventory = {"items": [
+        {"qid": "QINV-0001", "topic_hint": "Earlier Topic",
+         "raw_task": "Foundational task."},
+        {"qid": "QINV-0002", "topic_hint": "Earlier Topic",
+         "raw_task": "Another foundational task."},
+        {"qid": "QINV-0003", "topic_hint": "Later Topic",
+         "raw_task": "Advanced task."},
+        {"qid": "QINV-0004", "topic_hint": "",
+         "raw_task": "Combined task using both methods."},
+    ]}
+    types = [{
+        "type_id": "TYPE-0001",
+        "type_title": "Applying the rules together",
+        "source_question_ids": [*qids, "QINV-0004"],
+        "case_prompts": [{
+            "case_title": "Use the relevant rule",
+            "examples": [
+                {"source_question_id": qid, "example_prompt": "task"}
+                for qid in [*qids, "QINV-0004"]
+            ],
+        }],
+    }]
+
+    out = generation._split_mined_types_by_source_topic(types, inventory)
+    owner = {
+        item["topic_match_hint"]: item["source_question_ids"]
+        for item in out
+    }
+    # The earlier topic supplies two questions and the later only one, so a
+    # majority rule would have filed the combined task under the earlier one.
+    assert "QINV-0004" in owner[expected]
+    assert "QINV-0004" not in owner["Earlier Topic"]

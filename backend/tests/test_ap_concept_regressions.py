@@ -1594,7 +1594,14 @@ def test_cross_topic_mined_type_is_split_at_source_topic_boundary():
     )
 
 
-def test_cross_topic_split_keeps_empty_topic_qids_on_first_dominant_topic():
+def test_cross_topic_split_sends_unattributed_qids_to_the_later_topic():
+    """Advanced placement decides an unattributed qid's topic.
+
+    A task that draws on more than one topic can only be attempted once the
+    later topic is reached, so the later topic owns it and the earlier one is
+    a prerequisite. This previously followed the most populous topic, which
+    could file combined nth-term/sum work under the earlier section.
+    """
     inventory = {"items": [
         {"qid": "QINV-0001", "topic_hint": "nth Term", "raw_task": "Find a term."},
         {"qid": "QINV-0002", "topic_hint": "", "raw_task": "Interpret the result."},
@@ -1621,8 +1628,8 @@ def test_cross_topic_split_keeps_empty_topic_qids_on_first_dominant_topic():
         item["topic_match_hint"]: item["source_question_ids"] for item in out
     }
     assert qids_by_topic == {
-        "nth Term": ["QINV-0001", "QINV-0002"],
-        "Sum": ["QINV-0003"],
+        "nth Term": ["QINV-0001"],
+        "Sum": ["QINV-0002", "QINV-0003"],
     }
     assert sorted(qid for item in out for qid in item["source_question_ids"]) == [
         "QINV-0001", "QINV-0002", "QINV-0003",

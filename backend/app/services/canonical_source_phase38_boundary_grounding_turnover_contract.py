@@ -529,18 +529,26 @@ def _augment_grounding_payload(
             "prerequisite blocks, the concept is misplaced: reject it."
         ),
         "advanced_placement_rule": (
-            "A concept that legitimately applies an earlier topic inside this "
-            "later one is correctly placed here, as advanced material, and must "
-            "not be rejected merely because part of its evidence is earlier in "
-            "the book. Accept it when its principal claim is native and the "
-            "earlier material is cited as prerequisite context."
+            "When material spans topics, the behaviour of an earlier idea "
+            "inside a later topic belongs to the LATER topic, because "
+            "understanding it requires the later topic's method. A concept "
+            "that applies an earlier topic here is therefore correctly placed "
+            "as advanced material and must not be rejected merely because part "
+            "of its evidence appears earlier in the book. Accept it when its "
+            "principal claim is native and the earlier material is cited as "
+            "prerequisite context."
         ),
         "repair_route": (
-            "If the claim genuinely teaches two topics at once, prefer SPLIT: "
-            "keep the advanced part in this later topic and leave the "
-            "foundational part in the earlier topic, so the earlier topic "
-            "retains a concept of its own. Use move only when the whole claim "
-            "belongs elsewhere, and retire only when no topic supports it."
+            "If the claim genuinely teaches two topics at once, SPLIT it and "
+            "keep BOTH parts: the earlier topic keeps a concept covering the "
+            "foundational idea on its own terms, and this later topic gains a "
+            "concept covering how that idea behaves under this topic's method. "
+            "Splitting must never leave either topic without its concept - do "
+            "not delete the foundational concept when promoting the advanced "
+            "one, and do not leave the advanced behaviour untaught by keeping "
+            "everything in the earlier topic. Use move only when the whole "
+            "claim belongs elsewhere, and retire only when no topic supports "
+            "it."
         ),
     }
     value["original_pdf_visual_page_ids"] = [
