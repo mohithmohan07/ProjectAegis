@@ -20,6 +20,22 @@ from app.services import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _attended_decision_mode(monkeypatch):
+    """Pin this module to attended-pause semantics.
+
+    Unattended completion (the production default) deliberately continues
+    these pauses with the safest server-offered action. This module is the
+    contract suite for the attended pause machinery itself — checkpoint
+    preservation, claim guards, crash recovery, and API-free replay — which
+    remains the behavior whenever AEGIS_UNATTENDED_COMPLETION is off or no
+    bounded automatable action exists. The no-pause invariant is covered by
+    tests/test_no_manual_review_invariant.py.
+    """
+
+    monkeypatch.setenv("AEGIS_UNATTENDED_COMPLETION", "0")
+
+
 def _pending_packet() -> dict:
     context_hash = "a" * 64
     return {
@@ -625,9 +641,6 @@ def test_agent_abstention_persists_pause_and_is_not_called_on_replay(
     first_chapter,
     monkeypatch,
 ):
-    # This test pins the attended pause contract; unattended completion
-    # (the default) would instead apply the safest offered action.
-    monkeypatch.setenv("AEGIS_UNATTENDED_COMPLETION", "0")
     job, chapter = _job_at_81_percent(db, first_chapter)
     resolver_calls = 0
     generation_calls = 0
@@ -694,9 +707,6 @@ def test_saved_pause_gets_one_output_contract_upgrade_on_resume(
     legacy_status,
     legacy_version,
 ):
-    # This test pins the attended pause-upgrade contract; unattended
-    # completion (the default) would instead apply the safest offered action.
-    monkeypatch.setenv("AEGIS_UNATTENDED_COMPLETION", "0")
     job, chapter = _job_at_81_percent(db, first_chapter)
     pending = _attach_pending(db, job, chapter)
     issue_key = autonomous_resolution.issue_key(pending)
