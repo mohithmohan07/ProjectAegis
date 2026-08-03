@@ -189,7 +189,7 @@ def test_earliest_topic_gets_no_prerequisite_evidence(wired):
 # The contract keeps the misplacement detector intact
 # --------------------------------------------------------------------------- #
 
-def test_contract_requires_the_principal_claim_to_stay_native():
+def test_contract_requires_only_that_the_concept_touches_this_topic():
     contract = phase38._augment_grounding_payload(
         {"concepts": [], "source_blocks": []},
         page_numbers=[],
@@ -199,10 +199,14 @@ def test_contract_requires_the_principal_claim_to_stay_native():
         "prerequisite_topic_evidence"
     ]
     prerequisite_rule = contract["prerequisite_rule"]
-    assert "PRINCIPAL claim" in prerequisite_rule
-    assert "native_topic blocks" in prerequisite_rule
-    # The escape hatch must stay closed: needing prerequisite blocks for the
-    # principal claim is still a misplacement.
+    # Placement follows teaching order: a concept may lean on prerequisite
+    # material as heavily as it needs, including for its main explanation.
+    assert "as heavily as it needs" in prerequisite_rule
+    assert "including for its main explanation" in prerequisite_rule
+    # The only remaining guard: a concept touching nothing in this topic is
+    # genuinely misplaced and must go back.
+    assert "at least one native_topic block" in prerequisite_rule
+    assert "supported entirely by" in prerequisite_rule
     assert "misplaced" in prerequisite_rule
 
 
@@ -221,8 +225,10 @@ def test_contract_prefers_split_so_the_earlier_topic_keeps_a_concept():
     assert "never leave either topic without its concept" in route
     # Advanced placement is legitimate, not an error to be repaired away.
     advanced = contract["advanced_placement_rule"]
-    assert "advanced material" in advanced
-    assert "belongs to the LATER topic" in advanced
+    assert "belongs to THIS later topic" in advanced
+    # Foundational-looking content is no longer a reason to push it back.
+    assert "most of what it explains is foundational" in advanced
+    assert "Do not push such a concept back" in advanced
 
 
 def test_both_provider_prompts_carry_the_prerequisite_rules(monkeypatch):
@@ -247,11 +253,12 @@ def test_both_provider_prompts_carry_the_prerequisite_rules(monkeypatch):
     mapper, critic = captured[0]["system"], captured[1]["system"]
     for system in (mapper, critic):
         assert "prerequisite_topic_evidence" in system
-        assert "principal claim" in system
-    assert "advanced material" in mapper
-    assert "advanced material" in critic
-    # The critic still owns the rejection rule for a misplaced principal claim.
-    assert "principal claim itself rests on prerequisite blocks" in critic
+        assert "at least one native_topic block" in system
+    # Teaching order, stated to both roles.
+    assert "even if most" in mapper
+    assert "even when most of its support is prerequisite" in critic
+    # The critic still owns the one rejection rule that survives.
+    assert "rests entirely on prerequisite blocks" in critic
     # The contract travels with the prompt so the rules are auditable.
     sent = json.loads(captured[0]["prompt"])
     assert "prerequisite_rule" in sent["boundary_grounding_contract"]
