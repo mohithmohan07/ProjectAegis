@@ -20,6 +20,8 @@ import json
 import os
 import re
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable
@@ -56,8 +58,35 @@ _MAX_OUTPUT_TOKENS = max(
 )
 _CACHE_DIR = config.DATA_DIR / "source-adjudication-cache"
 
+_BEFORE_OPENAI_TRANSPORT: ContextVar[Callable[[], None] | None] = ContextVar(
+    "aegis_before_openai_transport",
+    default=None,
+)
+
 _SPACE_RE = re.compile(r"\s+")
 _NON_WORD_RE = re.compile(r"[^0-9a-z]+")
+
+
+@contextmanager
+def openai_transport_claim(callback: Callable[[], None]):
+    """Run ``callback`` immediately before the first actual API transport.
+
+    Higher-level recovery code uses this boundary to persist an exactly-once
+    claim after all local validation but before any paid request byte is sent.
+    The ContextVar keeps concurrent jobs isolated.
+    """
+
+    token = _BEFORE_OPENAI_TRANSPORT.set(callback)
+    try:
+        yield
+    finally:
+        _BEFORE_OPENAI_TRANSPORT.reset(token)
+
+
+def _notify_openai_transport_started() -> None:
+    callback = _BEFORE_OPENAI_TRANSPORT.get()
+    if callable(callback):
+        callback()
 _MATHPIX_PAGE_RE = re.compile(r"-(?P<page>\d{1,4})\.jpg(?:\?|$)", re.IGNORECASE)
 _SOURCE_LABELS = {
     "activity": "Activity",
@@ -621,6 +650,7 @@ def _openai_multimodal_json(
         try:
             generation._acquire_openai_slot(gate, purpose=purpose)
             try:
+                _notify_openai_transport_started()
                 response = client.chat.completions.create(
                     **request_policy,
                     messages=[

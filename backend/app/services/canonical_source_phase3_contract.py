@@ -11,7 +11,7 @@ from . import canonical_source_phase2 as phase2
 from . import canonical_source_phase22 as phase22
 from . import canonical_source_phase3 as phase3
 
-_CONTRACT_VERSION = 1
+_CONTRACT_VERSION = 2
 
 
 def install(generation: ModuleType | None = None) -> None:

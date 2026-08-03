@@ -15,7 +15,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from .. import models, schemas
-from . import generation, uploads
+from . import generation, grounding_certificate, uploads
 
 
 BUNDLE_FORMAT = "aegis-concept-checkpoint"
@@ -692,6 +692,14 @@ def _validate_human_decisions(
         ):
             raise ValueError(
                 f"{resolution_path}.instruction must not be empty")
+        if (
+            resolution.equivalence_key
+            and not _SHA256_RE.fullmatch(resolution.equivalence_key)
+        ):
+            raise ValueError(
+                f"{resolution_path}.equivalence_key must be a lowercase "
+                "SHA-256 when present"
+            )
         _timestamp(resolution.resolved_at, f"{resolution_path}.resolved_at")
         if resolution.status == "consumed":
             if not resolution.consumed_at:
@@ -704,6 +712,18 @@ def _validate_human_decisions(
         elif resolution.consumed_at:
             raise ValueError(
                 f"{resolution_path}.consumed_at requires consumed status")
+        repair_signature = resolution.superseded_by_repair_signature
+        if resolution.status == "superseded":
+            if not _SHA256_RE.fullmatch(repair_signature):
+                raise ValueError(
+                    f"{resolution_path}.superseded_by_repair_signature must "
+                    "be a lowercase SHA-256"
+                )
+        elif repair_signature:
+            raise ValueError(
+                f"{resolution_path}.superseded_by_repair_signature requires "
+                "superseded status"
+            )
         original = resolution.pending_decision
         if (
             original.decision_id != resolution.decision_id
@@ -718,10 +738,10 @@ def _validate_human_decisions(
                     f"{resolution_path} is agent-resolved without a "
                     "validated agent review"
                 )
-            if resolution.status != "consumed":
+            if resolution.status not in {"consumed", "superseded"}:
                 raise ValueError(
                     f"{resolution_path} agent resolution must be durably "
-                    "sealed as consumed"
+                    "sealed as consumed or superseded"
                 )
             if resolution.choice not in _AGENT_AUTOMATABLE_CHOICES:
                 raise ValueError(
@@ -789,13 +809,18 @@ def _validate_semantic_recovery_dispatches(value: Any, path: str) -> None:
         raise ValueError(f"{path}.version is not supported")
     attempts = _object_list(value["attempts"], f"{path}.attempts", 100)
     issue_keys: set[str] = set()
-    fields = {
+    required_fields = {
         "issue_key", "failure_signature", "status", "started_at",
         "completed_at", "failure_type", "stage",
     }
+    fields = {
+        *required_fields,
+        "candidate_payload_hash",
+        "verified_at",
+    }
     for index, row in enumerate(attempts):
         row_path = f"{path}.attempts[{index}]"
-        _exact_keys(row, fields, row_path)
+        _exact_keys(row, fields, row_path, required=required_fields)
         issue_key = _string(
             row["issue_key"], f"{row_path}.issue_key", 64, nonempty=True
         )
@@ -817,14 +842,35 @@ def _validate_semantic_recovery_dispatches(value: Any, path: str) -> None:
         status = _string(
             row["status"], f"{row_path}.status", 32, nonempty=True
         )
-        if status not in {"request_started", "succeeded"}:
+        if status not in {"request_started", "applied", "succeeded"}:
             raise ValueError(f"{row_path}.status is not supported")
         _timestamp(row["started_at"], f"{row_path}.started_at")
-        if status == "succeeded":
+        if status in {"applied", "succeeded"}:
             _timestamp(row["completed_at"], f"{row_path}.completed_at")
+            candidate_hash = _string(
+                row.get("candidate_payload_hash"),
+                f"{row_path}.candidate_payload_hash",
+                64,
+                nonempty=True,
+            )
+            if not _SHA256_RE.fullmatch(candidate_hash):
+                raise ValueError(
+                    f"{row_path}.candidate_payload_hash must be a "
+                    "lowercase SHA-256"
+                )
         elif row["completed_at"]:
             raise ValueError(
-                f"{row_path}.completed_at requires succeeded status"
+                f"{row_path}.completed_at requires applied or succeeded status"
+            )
+        elif row.get("candidate_payload_hash"):
+            raise ValueError(
+                f"{row_path}.candidate_payload_hash requires applied status"
+            )
+        if status == "succeeded":
+            _timestamp(row.get("verified_at"), f"{row_path}.verified_at")
+        elif row.get("verified_at"):
+            raise ValueError(
+                f"{row_path}.verified_at requires succeeded status"
             )
         _string(
             row["failure_type"],
@@ -833,6 +879,292 @@ def _validate_semantic_recovery_dispatches(value: Any, path: str) -> None:
             nonempty=True,
         )
         _string(row["stage"], f"{row_path}.stage", 128)
+
+
+def _validate_phase38_issue_bucket(value: Any, path: str) -> None:
+    if not isinstance(value, dict):
+        raise ValueError(f"{path} must be an object")
+    fields = {
+        "candidate_history", "attempts", "signatures", "feedback",
+        "final_verification_pending", "status", "terminal_reason",
+    }
+    _exact_keys(value, fields, path)
+    history = value["candidate_history"]
+    if not isinstance(history, list) or len(history) > 24:
+        raise ValueError(
+            f"{path}.candidate_history must contain at most 24 hashes"
+        )
+    if len(history) != len(set(history)):
+        raise ValueError(f"{path}.candidate_history contains duplicates")
+    for index, digest in enumerate(history):
+        digest = _string(
+            digest, f"{path}.candidate_history[{index}]", 64,
+            nonempty=True,
+        )
+        if not _SHA256_RE.fullmatch(digest):
+            raise ValueError(
+                f"{path}.candidate_history[{index}] must be a lowercase "
+                "SHA-256"
+            )
+    _integer(value["attempts"], f"{path}.attempts", 1_000, minimum=0)
+    signatures = value["signatures"]
+    if not isinstance(signatures, dict) or len(signatures) > 100:
+        raise ValueError(f"{path}.signatures must contain at most 100 entries")
+    for signature, count in signatures.items():
+        if not isinstance(signature, str) or not _SHA256_RE.fullmatch(signature):
+            raise ValueError(
+                f"{path}.signatures keys must be lowercase SHA-256 values"
+            )
+        _integer(count, f"{path}.signatures.{signature}", 1_000, minimum=1)
+    feedback = value["feedback"]
+    if not isinstance(feedback, dict) or len(feedback) > 5_000:
+        raise ValueError(f"{path}.feedback must contain at most 5,000 entries")
+    for concept_id, instruction in feedback.items():
+        _string(str(concept_id), f"{path}.feedback key", 128, nonempty=True)
+        _string(instruction, f"{path}.feedback.{concept_id}", 16_000)
+    if not isinstance(value["final_verification_pending"], bool):
+        raise ValueError(f"{path}.final_verification_pending must be boolean")
+    status = _string(value["status"], f"{path}.status", 64, nonempty=True)
+    if status not in {"active", "final_verification_pending", "exhausted"}:
+        raise ValueError(f"{path}.status is not supported")
+    terminal_reason = _string(
+        value["terminal_reason"], f"{path}.terminal_reason", 8_000
+    )
+    if status == "final_verification_pending" and not value[
+        "final_verification_pending"
+    ]:
+        raise ValueError(
+            f"{path}.final_verification_pending must be true for its status"
+        )
+    if status == "exhausted" and not terminal_reason.strip():
+        raise ValueError(f"{path}.terminal_reason is required when exhausted")
+
+
+def _validate_phase38_convergence(value: Any, path: str) -> None:
+    """Validate the bounded, JSON-only per-job Phase 3.8 ledger."""
+
+    if not isinstance(value, dict):
+        raise ValueError(f"{path} must be an object")
+    legacy_fields = {
+        "version", "contract", "scope", "source_contract_hash",
+        "base_candidate_sha256", "candidate_sha256", "candidate_history",
+        "attempts", "signatures", "suppressed_resolution_ids", "feedback",
+        "final_verification_pending", "status", "terminal_reason",
+    }
+    extension_fields = {
+        "issue_buckets", "active_issue_key", "legacy_unscoped_issue",
+        "dispatch_status", "dispatch_sequence",
+        "dispatch_candidate_sha256", "dispatch_issue_key",
+        "dispatch_decision_id", "dispatch_decision_context_hash",
+    }
+    _exact_keys(
+        value,
+        legacy_fields | extension_fields,
+        path,
+        required=legacy_fields,
+    )
+    if _integer(value["version"], f"{path}.version", 100, minimum=1) != 1:
+        raise ValueError(f"{path}.version is not supported")
+    _string(value["contract"], f"{path}.contract", 128, nonempty=True)
+    _string(value["scope"], f"{path}.scope", 512, nonempty=True)
+    for field in (
+        "source_contract_hash",
+        "base_candidate_sha256",
+        "candidate_sha256",
+    ):
+        digest = _string(value[field], f"{path}.{field}", 64)
+        if digest and not _SHA256_RE.fullmatch(digest):
+            raise ValueError(
+                f"{path}.{field} must be a lowercase SHA-256 when present"
+            )
+    history = value["candidate_history"]
+    if not isinstance(history, list) or len(history) > 24:
+        raise ValueError(
+            f"{path}.candidate_history must contain at most 24 hashes"
+        )
+    if len(history) != len(set(history)):
+        raise ValueError(f"{path}.candidate_history contains duplicates")
+    for index, digest in enumerate(history):
+        digest = _string(
+            digest, f"{path}.candidate_history[{index}]", 64,
+            nonempty=True,
+        )
+        if not _SHA256_RE.fullmatch(digest):
+            raise ValueError(
+                f"{path}.candidate_history[{index}] must be a lowercase "
+                "SHA-256"
+            )
+    _integer(value["attempts"], f"{path}.attempts", 1_000, minimum=0)
+    signatures = value["signatures"]
+    if not isinstance(signatures, dict) or len(signatures) > 100:
+        raise ValueError(f"{path}.signatures must contain at most 100 entries")
+    for signature, count in signatures.items():
+        if not isinstance(signature, str) or not _SHA256_RE.fullmatch(signature):
+            raise ValueError(
+                f"{path}.signatures keys must be lowercase SHA-256 values"
+            )
+        _integer(count, f"{path}.signatures.{signature}", 1_000, minimum=1)
+    suppressed = value["suppressed_resolution_ids"]
+    if not isinstance(suppressed, list) or len(suppressed) > 5_000:
+        raise ValueError(
+            f"{path}.suppressed_resolution_ids must contain at most 5,000 IDs"
+        )
+    for index, decision_id in enumerate(suppressed):
+        decision_id = _string(
+            decision_id,
+            f"{path}.suppressed_resolution_ids[{index}]",
+            128,
+            nonempty=True,
+        )
+        if not _DECISION_ID_RE.fullmatch(decision_id):
+            raise ValueError(
+                f"{path}.suppressed_resolution_ids[{index}] is invalid"
+            )
+    feedback = value["feedback"]
+    if not isinstance(feedback, dict) or len(feedback) > 5_000:
+        raise ValueError(f"{path}.feedback must contain at most 5,000 entries")
+    for concept_id, instruction in feedback.items():
+        _string(str(concept_id), f"{path}.feedback key", 128, nonempty=True)
+        _string(instruction, f"{path}.feedback.{concept_id}", 16_000)
+    if not isinstance(value["final_verification_pending"], bool):
+        raise ValueError(f"{path}.final_verification_pending must be boolean")
+    status = _string(value["status"], f"{path}.status", 64, nonempty=True)
+    if status not in {"active", "final_verification_pending", "exhausted"}:
+        raise ValueError(f"{path}.status is not supported")
+    terminal_reason = _string(
+        value["terminal_reason"], f"{path}.terminal_reason", 8_000
+    )
+    if status == "final_verification_pending" and not value[
+        "final_verification_pending"
+    ]:
+        raise ValueError(
+            f"{path}.final_verification_pending must be true for its status"
+        )
+    if status == "exhausted" and not terminal_reason.strip():
+        raise ValueError(f"{path}.terminal_reason is required when exhausted")
+
+    present_extensions = extension_fields & set(value)
+    if not present_extensions:
+        return
+    if present_extensions != extension_fields:
+        missing = ", ".join(sorted(extension_fields - present_extensions))
+        raise ValueError(
+            f"{path} is missing Phase 3.8 extension field(s): {missing}"
+        )
+    buckets = value["issue_buckets"]
+    if not isinstance(buckets, dict) or len(buckets) > 100:
+        raise ValueError(f"{path}.issue_buckets must contain at most 100 issues")
+    for issue_key, bucket in buckets.items():
+        if not isinstance(issue_key, str) or not _SHA256_RE.fullmatch(issue_key):
+            raise ValueError(
+                f"{path}.issue_buckets keys must be lowercase SHA-256 values"
+            )
+        _validate_phase38_issue_bucket(
+            bucket, f"{path}.issue_buckets.{issue_key}"
+        )
+    active_issue_key = _string(
+        value.get("active_issue_key"),
+        f"{path}.active_issue_key",
+        64,
+    )
+    if active_issue_key and active_issue_key not in buckets:
+        raise ValueError(
+            f"{path}.active_issue_key does not identify an issue bucket"
+        )
+    if buckets and not active_issue_key:
+        raise ValueError(f"{path}.active_issue_key is required for issue buckets")
+    legacy_unscoped = value.get("legacy_unscoped_issue")
+    if not isinstance(legacy_unscoped, bool):
+        raise ValueError(f"{path}.legacy_unscoped_issue must be boolean")
+    if legacy_unscoped and (buckets or active_issue_key):
+        raise ValueError(
+            f"{path}.legacy_unscoped_issue cannot coexist with issue buckets"
+        )
+    if active_issue_key:
+        active = buckets[active_issue_key]
+        for field in (
+            "candidate_history", "attempts", "signatures", "feedback",
+            "final_verification_pending", "status", "terminal_reason",
+        ):
+            if value[field] != active[field]:
+                raise ValueError(
+                    f"{path}.{field} must mirror the active issue bucket"
+                )
+
+    dispatch_status = _string(
+        value.get("dispatch_status"),
+        f"{path}.dispatch_status",
+        32,
+        nonempty=True,
+    )
+    if dispatch_status not in {
+        "idle", "request_started", "decision_returned"
+    }:
+        raise ValueError(f"{path}.dispatch_status is not supported")
+    dispatch_sequence = _integer(
+        value.get("dispatch_sequence"),
+        f"{path}.dispatch_sequence",
+        1_000_000,
+        minimum=0,
+    )
+    dispatch_candidate = _string(
+        value.get("dispatch_candidate_sha256"),
+        f"{path}.dispatch_candidate_sha256",
+        64,
+    )
+    dispatch_issue_key = _string(
+        value.get("dispatch_issue_key"),
+        f"{path}.dispatch_issue_key",
+        64,
+    )
+    dispatch_decision_id = _string(
+        value.get("dispatch_decision_id"),
+        f"{path}.dispatch_decision_id",
+        128,
+    )
+    dispatch_decision_context_hash = _string(
+        value.get("dispatch_decision_context_hash"),
+        f"{path}.dispatch_decision_context_hash",
+        64,
+    )
+    if dispatch_candidate and not _SHA256_RE.fullmatch(dispatch_candidate):
+        raise ValueError(
+            f"{path}.dispatch_candidate_sha256 must be a lowercase SHA-256"
+        )
+    if dispatch_issue_key and not _SHA256_RE.fullmatch(dispatch_issue_key):
+        raise ValueError(
+            f"{path}.dispatch_issue_key must be a lowercase SHA-256"
+        )
+    if dispatch_status in {"request_started", "decision_returned"}:
+        if dispatch_sequence < 1 or not dispatch_candidate:
+            raise ValueError(
+                f"{path}.{dispatch_status} requires a sequence and candidate "
+                "hash"
+            )
+        if dispatch_issue_key and dispatch_issue_key != active_issue_key:
+            raise ValueError(
+                f"{path}.dispatch_issue_key must match the active issue"
+            )
+    if dispatch_status == "decision_returned":
+        if not _DECISION_ID_RE.fullmatch(dispatch_decision_id):
+            raise ValueError(
+                f"{path}.dispatch_decision_id is invalid"
+            )
+        if not _SHA256_RE.fullmatch(dispatch_decision_context_hash):
+            raise ValueError(
+                f"{path}.dispatch_decision_context_hash must be a lowercase "
+                "SHA-256"
+            )
+    elif dispatch_decision_id or dispatch_decision_context_hash:
+        raise ValueError(
+            f"{path}.{dispatch_status} cannot retain decision identity"
+        )
+    if dispatch_status == "idle" and (
+        dispatch_candidate or dispatch_issue_key
+    ):
+        raise ValueError(
+            f"{path}.idle dispatch cannot retain candidate or issue identity"
+        )
 
 
 def _validate_checkpoint(
@@ -851,6 +1183,9 @@ def _validate_checkpoint(
         value.get("checkpoint_format")
         == generation._CONCEPT_CHECKPOINT_FORMAT
     )
+    control_only = value.get("phase38_control_only") is True
+    if "phase38_control_only" in value and not control_only:
+        raise ValueError(f"{path}.phase38_control_only must be true")
     if "checkpoint_format" in value and not is_envelope:
         raise ValueError(f"{path}.checkpoint_format is not supported")
     if is_envelope:
@@ -861,8 +1196,16 @@ def _validate_checkpoint(
             f"{path}.checkpoints",
             MAX_CHECKPOINT_STAGES,
         )
-        if not history:
+        if not history and not control_only:
             raise ValueError(f"{path}.checkpoints must not be empty")
+        if control_only and history:
+            raise ValueError(
+                f"{path}.phase38_control_only cannot contain saved stages"
+            )
+        if control_only and "phase38_convergence" not in value:
+            raise ValueError(
+                f"{path}.phase38_control_only requires its convergence ledger"
+            )
         stages: set[str] = set()
         for index, entry in enumerate(history):
             _validate_checkpoint_entry(
@@ -872,11 +1215,12 @@ def _validate_checkpoint(
                 raise ValueError(
                     f"{path}.checkpoints contains duplicate stage {stage!r}")
             stages.add(stage)
-        active_stage = _string(
-            value.get("stage"), f"{path}.stage", 128, nonempty=True)
-        if active_stage not in stages:
-            raise ValueError(
-                f"{path}.stage does not identify a saved history entry")
+        if not control_only:
+            active_stage = _string(
+                value.get("stage"), f"{path}.stage", 128, nonempty=True)
+            if active_stage not in stages:
+                raise ValueError(
+                    f"{path}.stage does not identify a saved history entry")
     else:
         # A bare stage without target metadata can never match a resumed run.
         if value.get("schema_version") != generation._CONCEPT_CHECKPOINT_SCHEMA:
@@ -903,6 +1247,13 @@ def _validate_checkpoint(
             value["semantic_recovery_dispatches"],
             f"{path}.semantic_recovery_dispatches",
         )
+    if "phase38_convergence" in value:
+        _validate_phase38_convergence(
+            value["phase38_convergence"],
+            f"{path}.phase38_convergence",
+        )
+    if control_only:
+        return
     if not generation._valid_concept_checkpoint(value):
         raise ValueError(
             f"{path} does not contain a compatible completed stage")
@@ -912,9 +1263,20 @@ def _validate_inventory(value: Any, path: str) -> None:
     if not isinstance(value, dict):
         raise ValueError(f"{path} must be an object")
     certification_key = generation._PLACEMENT_CERTIFICATIONS_KEY
+    final_grounding_key = grounding_certificate.FINAL_CERTIFICATE_FIELD
+    deposited_grounding_key = "deposited_grounding_certificate"
+    type_case_ledger_key = generation._TYPE_CASE_QID_PLACEMENT_LEDGER_KEY
     _exact_keys(
         value,
-        {"items", "stats", "mined_types", certification_key},
+        {
+            "items",
+            "stats",
+            "mined_types",
+            certification_key,
+            type_case_ledger_key,
+            final_grounding_key,
+            deposited_grounding_key,
+        },
         path,
         required=set(),
     )
@@ -937,6 +1299,45 @@ def _validate_inventory(value: Any, path: str) -> None:
             inventory_items=items,
             path=f"{path}.{certification_key}",
         )
+    validated_type_case_ledger = None
+    if type_case_ledger_key in value:
+        validated_type_case_ledger = (
+            generation._valid_type_case_qid_placement_ledger(
+                value[type_case_ledger_key]
+            )
+        )
+        if validated_type_case_ledger is None:
+            raise ValueError(
+                f"{path}.{type_case_ledger_key} is not a certified, "
+                "self-addressed Type/Case QID placement ledger"
+            )
+    verified_certificates: dict[str, dict[str, Any]] = {}
+    for certificate_key in (
+        final_grounding_key,
+        deposited_grounding_key,
+    ):
+        if certificate_key not in value:
+            continue
+        try:
+            verified_certificates[certificate_key] = (
+                grounding_certificate.verify_certificate_envelope(
+                    value[certificate_key],
+                    type_case_qid_placement_ledger=(
+                        validated_type_case_ledger
+                    ),
+                )
+            )
+        except grounding_certificate.GroundingCertificateError as exc:
+            raise ValueError(f"{path}.{certificate_key} is invalid: {exc}") from exc
+    if len(verified_certificates) == 2:
+        incoming = verified_certificates[final_grounding_key]
+        deposited = verified_certificates[deposited_grounding_key]
+        if incoming != deposited:
+            raise ValueError(
+                f"{path}.{deposited_grounding_key}.certificate_sha256 does "
+                "not match the exact generation-time payload, grounding, "
+                "placement, and Type/Case QID-host certificate"
+            )
     del items  # shape check only
 
 
@@ -1183,6 +1584,24 @@ def _portable_payload(job: models.UploadJob) -> dict:
     }
 
 
+def _rebind_phase38_convergence_scope(
+    checkpoint: dict,
+    *,
+    job_id: int,
+) -> dict:
+    """Move a portable convergence budget into the imported job namespace."""
+
+    rebound = copy.deepcopy(checkpoint)
+    ledger = rebound.get("phase38_convergence")
+    if not isinstance(ledger, dict):
+        return rebound
+    fingerprint = str(rebound.get("fingerprint") or "")
+    updated = copy.deepcopy(ledger)
+    updated["scope"] = f"upload-job:{int(job_id)}:{fingerprint}"
+    rebound["phase38_convergence"] = updated
+    return rebound
+
+
 def _contains_unresolved_source_review(checkpoint: Any) -> bool:
     return any(
         str(entry.get("stage") or "") == "source_graph_review"
@@ -1353,6 +1772,14 @@ def import_bundle(
     )
     try:
         db.add(imported)
+        # The bundle's source job ID is intentionally not portable. Allocate
+        # this job's identity first, then preserve the exact convergence
+        # counters/status while rebinding only their isolation namespace.
+        db.flush()
+        imported.generation_checkpoint = _rebind_phase38_convergence_scope(
+            imported.generation_checkpoint,
+            job_id=imported.id,
+        )
         db.commit()
         db.refresh(imported)
     except Exception:

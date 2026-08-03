@@ -2276,13 +2276,26 @@ def test_gpt_selected_activity_hub_relocates_exact_assessable_example(monkeypatc
             "keywords": "",
         },
     ]
-    monkeypatch.setattr(
-        g, "_openai_json",
-        lambda *args, **kwargs: {"placements": [{
+    def activity_host_provider_and_critic(*_args, **kwargs):
+        if kwargs.get("purpose") == "concept_validation":
+            return {"reviews": [{
+                "qid": "QINV-0001",
+                "concept_id": "CONCEPT-0002",
+                "verdict": "accept",
+                "confidence": 0.97,
+                "reason": (
+                    "This concept directly teaches comparison of measured "
+                    "voltage and current."
+                ),
+            }]}
+        return {"placements": [{
             "qid": "QINV-0001",
             "concept_id": "CONCEPT-0002",
             "hub_note": f"Activity: Measure V and I. {prompt}",
-        }]},
+        }]}
+
+    monkeypatch.setattr(
+        g, "_openai_json", activity_host_provider_and_critic,
     )
 
     out = g._populate_activity_hubs_via_api(
@@ -2359,7 +2372,9 @@ def test_activity_alignment_keeps_hub_copy_when_exact_example_is_duplicated():
     ) == ["02"]
 
 
-def test_preexisting_activity_hub_is_aligned_without_an_api_call(monkeypatch):
+def test_preexisting_activity_hub_requires_review_when_owner_has_multiple_hosts(
+    monkeypatch,
+):
     prompt = "Record the current while increasing the number of cells."
     inventory = {"items": [{
         "qid": "QINV-0001",
@@ -2393,14 +2408,31 @@ def test_preexisting_activity_hub_is_aligned_without_an_api_call(monkeypatch):
         },
     ]
 
-    monkeypatch.setattr(
-        g, "_openai_json",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("an existing Hub must not trigger an API call")),
-    )
+    calls: list[str] = []
+
+    def provider_and_critic(*_args, **kwargs):
+        calls.append(kwargs["purpose"])
+        if kwargs["purpose"] == "concept_validation":
+            return {"reviews": [{
+                "qid": "QINV-0001",
+                "concept_id": "CONCEPT-0002",
+                "verdict": "accept",
+                "confidence": 0.99,
+                "reason": (
+                    "The experiment concept directly teaches the changing-"
+                    "cell current investigation."
+                ),
+            }]}
+        return {"placements": [{
+            "qid": "QINV-0001",
+            "concept_id": "CONCEPT-0002",
+        }]}
+
+    monkeypatch.setattr(g, "_openai_json", provider_and_critic)
     out = g._populate_activity_hubs_via_api(
         records, inventory, meta=g._metadata(subject="Physics"))
 
+    assert calls == ["concept_detailing", "concept_validation"]
     assert g._rendered_inventory_example_locations(
         out, inventory["items"][0]) == [1]
     assert g._rendered_inventory_coverage_defects(out, inventory) == {

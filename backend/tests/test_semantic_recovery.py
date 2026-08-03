@@ -8,6 +8,7 @@ from app import models
 from app.bulk_import import writer
 from app.db import SessionLocal
 from app.services import build_concepts
+from app.services import grounding_certificate
 from app.services import semantic_recovery as recovery
 
 
@@ -242,6 +243,7 @@ def test_provider_response_contract_failure_is_never_semantically_repaired():
     )
     assessment = recovery.classify_failure(failure)
     calls = {"operation": 0, "repair": 0}
+    terminal_logs: list[tuple[str, str]] = []
 
     def operation():
         calls["operation"] += 1
@@ -261,11 +263,96 @@ def test_provider_response_contract_failure_is_never_semantically_repaired():
             persist_repair=lambda *_args: pytest.fail(
                 "mechanical provider output must not alter a checkpoint"
             ),
+            log=lambda message, *, level="info": terminal_logs.append(
+                (message, level)
+            ),
         )
 
     assert assessment.kind is recovery.FailureKind.PROVIDER
     assert assessment.recoverable is False
     assert calls == {"operation": 1, "repair": 0}
+    # The outer generation boundary owns the one structured terminal event.
+    # A generic precursor here previously produced two fatal log rows.
+    assert terminal_logs == []
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_kind"),
+    [
+        (
+            "grounding certificate lineage mismatch for "
+            "CONCEPT-GROUND-0023",
+            recovery.FailureKind.NON_SEMANTIC,
+        ),
+        (
+            "grounding certificate semantic graph/topology drift for "
+            "CONCEPT-GROUND-0023",
+            recovery.FailureKind.SOURCE_IDENTITY,
+        ),
+        (
+            "final grounding certificate does not match the exact concept "
+            "payload and evidence set",
+            recovery.FailureKind.NON_SEMANTIC,
+        ),
+    ],
+)
+def test_grounding_certificate_integrity_failure_never_dispatches_repair(
+    message,
+    expected_kind,
+):
+    failure = grounding_certificate.GroundingCertificateError(message)
+    assessment = recovery.classify_failure(failure)
+    calls = {
+        "operation": 0,
+        "before_repair": 0,
+        "repair": 0,
+        "persist": 0,
+        "verified": 0,
+    }
+    recovery_logs: list[tuple[str, str]] = []
+
+    def operation():
+        calls["operation"] += 1
+        raise failure
+
+    def forbidden(name):
+        def call(*_args, **_kwargs):
+            calls[name] += 1
+            pytest.fail(
+                "certificate integrity failures must not enter semantic "
+                f"recovery ({name})"
+            )
+
+        return call
+
+    with pytest.raises(
+        grounding_certificate.GroundingCertificateError,
+        match=message,
+    ):
+        recovery.run_with_semantic_recovery(
+            operation,
+            checkpoint_snapshot=lambda: _checkpoint([_row("Safe Row")]),
+            before_repair=forbidden("before_repair"),
+            repair_checkpoint=forbidden("repair"),
+            persist_repair=forbidden("persist"),
+            on_recovery_verified=forbidden("verified"),
+            log=lambda text, *, level="info": recovery_logs.append(
+                (str(text), level)
+            ),
+        )
+
+    assert assessment.kind is expected_kind
+    assert assessment.recoverable is False
+    assert calls == {
+        "operation": 1,
+        "before_repair": 0,
+        "repair": 0,
+        "persist": 0,
+        "verified": 0,
+    }
+    # The outer generation boundary owns the one structured terminal event;
+    # recovery emits no generic precursor for a typed integrity failure.
+    assert recovery_logs == []
 
 
 def test_runner_repairs_checkpoint_and_continues_same_operation():
@@ -1571,6 +1658,9 @@ def test_post_learning_recovers_semantic_rejection_in_same_run(
         if artifacts is not None:
             artifacts["question_task_inventory"] = {"items": [], "stats": {}}
             artifacts["mined_types"] = {"types": []}
+            artifacts["final_grounding_certificate"] = {
+                "certificate_sha256": "a" * 64,
+            }
         return copy.deepcopy(saved["records"])
 
     monkeypatch.setattr(
@@ -1609,6 +1699,9 @@ def test_post_learning_recovers_semantic_rejection_in_same_run(
                 "written": 0,
                 "sources_updated": 0,
                 "parent_column": True,
+                "grounding_certificate": {
+                    "certificate_sha256": "a" * 64,
+                },
             },
         ),
     )
@@ -1683,6 +1776,9 @@ def test_post_learning_recovers_deposit_semantics_without_manual_resume(
         if artifacts is not None:
             artifacts["question_task_inventory"] = {"items": [], "stats": {}}
             artifacts["mined_types"] = {"types": []}
+            artifacts["final_grounding_certificate"] = {
+                "certificate_sha256": "a" * 64,
+            }
         return records
 
     def deposit(*_args, **_kwargs):
@@ -1697,6 +1793,9 @@ def test_post_learning_recovers_deposit_semantics_without_manual_resume(
             "written": 0,
             "sources_updated": 0,
             "parent_column": True,
+            "grounding_certificate": {
+                "certificate_sha256": "a" * 64,
+            },
         }
 
     monkeypatch.setattr(

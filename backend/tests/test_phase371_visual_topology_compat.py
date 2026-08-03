@@ -34,7 +34,6 @@ def _keep_row(concept: dict) -> dict:
                 "reason": "Fully supported.",
             }
         ],
-        "retire_into_concept_id": "NONE",
         "confidence": 0.99,
         "reason": "Fully supported.",
     }
@@ -60,7 +59,7 @@ def test_plain_source_block_retains_exact_legacy_payload_shape():
     assert value == "Exact source evidence without a synthetic label."
 
 
-def test_retirement_target_must_be_decided_in_the_same_batch():
+def test_retirement_is_unavailable_even_when_target_is_outside_batch():
     retiring = _concept("TOPOLOGY-CONCEPT-0001", "Unsupported visual inference")
     outside = _concept("TOPOLOGY-CONCEPT-0002", "Existing censorship concept")
     directory = {
@@ -89,10 +88,10 @@ def test_retirement_target_must_be_decided_in_the_same_batch():
         phase37._ACTIVE_CONCEPT_DIRECTORY.reset(token)
 
     assert retiring["concept_id"] not in parsed
-    assert any("same topology batch" in error for error in errors)
+    assert any("retirement is disabled" in error for error in errors)
 
 
-def test_retirement_can_target_a_non_retiring_concept_in_the_same_batch():
+def test_retirement_is_unavailable_even_with_a_same_batch_survivor():
     retiring = _concept("TOPOLOGY-CONCEPT-0001", "Unsupported visual inference")
     survivor = _concept("TOPOLOGY-CONCEPT-0002", "Existing censorship concept")
     directory = {
@@ -121,9 +120,11 @@ def test_retirement_can_target_a_non_retiring_concept_in_the_same_batch():
     finally:
         phase37._ACTIVE_CONCEPT_DIRECTORY.reset(token)
 
-    assert errors == []
-    assert parsed[retiring["concept_id"]]["decision"] == "retire"
-    assert parsed[survivor["concept_id"]]["decision"] == "keep"
+    assert any("retirement is disabled" in error for error in errors)
+    assert retiring["concept_id"] not in parsed
+    # A mixed packet containing a destructive action is rejected atomically;
+    # its otherwise valid survivor row must be resubmitted in a clean packet.
+    assert parsed == {}
 
 
 def test_apply_pass_clears_stale_provisional_retirement_audit():

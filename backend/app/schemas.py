@@ -318,8 +318,10 @@ class ResolvedSemanticDecision(BaseModel):
     target_id: str = Field(default="", max_length=512)
     target_concept_id: str = Field(default="", max_length=256)
     resolved_at: str = Field(min_length=1, max_length=64)
-    status: Literal["ready", "consumed"] = "ready"
+    equivalence_key: str = Field(default="", max_length=64)
+    status: Literal["ready", "consumed", "superseded"] = "ready"
     consumed_at: str = Field(default="", max_length=64)
+    superseded_by_repair_signature: str = Field(default="", max_length=64)
     resolved_by: Literal["human", "agent"] = "human"
     pending_decision: PendingSemanticDecision
 

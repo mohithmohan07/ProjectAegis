@@ -24,6 +24,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
+from . import grounding_certificate
+
 
 class FailureKind(str, Enum):
     """Disposition of a generation failure at the orchestration boundary."""
@@ -286,6 +288,31 @@ def classify_failure(exc: Exception) -> FailureAssessment:
         )
     text = re.sub(r"\s+", " ", str(exc or "")).strip()
     lowered = text.casefold()
+    if isinstance(exc, grounding_certificate.GroundingCertificateError):
+        # A certificate failure is an integrity result, not a model verdict.
+        # It may contain words such as "grounding", "concept", or "topology"
+        # which the broad legacy semantic patterns below intentionally match.
+        # Typed dispatch must take precedence so a stale lineage/evidence seal
+        # can never authorize an unrelated paid checkpoint rewrite.
+        if any(
+            marker in lowered
+            for marker in (
+                "semantic graph/topology",
+                "semantic graph",
+                "source/topology contract",
+                "source contract",
+            )
+        ):
+            return FailureAssessment(
+                FailureKind.SOURCE_IDENTITY,
+                "the certified source/topology identity changed; semantic "
+                "checkpoint repair is forbidden",
+            )
+        return FailureAssessment(
+            FailureKind.NON_SEMANTIC,
+            "certified payload/evidence integrity failed; semantic "
+            "checkpoint repair is unsafe",
+        )
     if isinstance(exc, (OSError, IOError)):
         return FailureAssessment(
             FailureKind.PERSISTENCE,
@@ -404,8 +431,10 @@ def run_with_semantic_recovery(
     Success is postcondition-first: an applied repair is only reported as
     pending re-verification.  The repaired candidate is certified — and
     ``on_recovery_verified`` invoked — only when ``operation`` subsequently
-    completes without the issue recurring.  Exactly one terminal outcome is
-    raised per run; the terminal log is emitted here exactly once.
+    completes without the issue recurring. Exactly one terminal outcome is
+    raised per run. Recovery exhaustion is logged here once; a non-recoverable
+    exception is re-raised without a generic precursor so the outer persistence
+    boundary owns its one structured terminal event.
     """
     policy = policy or RecoveryPolicy.from_environment()
     attempt = 0
@@ -434,12 +463,6 @@ def run_with_semantic_recovery(
             issue = issue_signature(exc)
             candidate = checkpoint_signature(checkpoint)
             if not assessment.recoverable:
-                if log is not None:
-                    log(
-                        "Generation stopped without semantic retry: "
-                        f"{assessment.reason}.",
-                        level="error",
-                    )
                 raise
             if (
                 signature in policy.seen_failure_signatures
@@ -1282,9 +1305,12 @@ def repair_concept_checkpoint_via_gpt(
         if any(before.get(field) != after.get(field) for field in semantic_fields):
             # Grounding and subtopic decisions are derived from these fields and
             # must be independently rerun from the retained source graph.
-            after.pop("_source_grounding_contract", None)
+            for field in list(after):
+                if field.startswith("_source_grounding_"):
+                    after.pop(field, None)
             after.pop("_source_block_ids", None)
             after.pop("_semantic_subtopic_id", None)
+            after.pop("_semantic_subtopic_ids", None)
             records[row_index] = after
             replacements[row_index] = (before, after)
 

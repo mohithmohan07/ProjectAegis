@@ -8,21 +8,17 @@ therefore be generated from the semantic source and then rejected by Phase 3.2
 because its own grounding packet no longer contained the Figure evidence.
 
 This contract makes source-visible visual evidence first-class throughout the
-topology, exact-grounding, and Type-host lanes.  It also adds one safe convergence
-outcome for a genuinely unsupported duplicate: ``retire``.  Retirement is
-independently reviewed, happens before topology freeze and Type allocation, and
-is permitted only when no distinct source-supported teaching objective is lost.
-The later Type-host preflight remains authoritative and will create a necessary
-source-grounded concept if a mined method would otherwise be left without a host.
-Visual packets retain both source openings and caption-rich endings within a
-bounded per-block view; the exact canonical blocks remain unchanged.
+topology, exact-grounding, and Type-host lanes. Unsupported topology must be
+refined, moved, split without loss, or rejected; automatic retirement is not a
+convergence action. Visual packets retain both source openings and caption-rich
+endings within a bounded per-block view; the exact canonical blocks remain
+unchanged.
 """
 from __future__ import annotations
 
 import copy
 import json
 import re
-import time
 from contextvars import ContextVar
 from functools import wraps
 from pathlib import Path
@@ -40,10 +36,9 @@ from . import concept_refiner as cr
 from . import progress
 from . import semantic_confidence_policy as confidence_policy
 
-_CONTRACT_VERSION = 1
-_TOPOLOGY_VERSION = "phase3.7-visual-evidence-retirement-1"
-_DECISION_CACHE_VERSION = "phase3.7-visual-evidence-retirement-decision-cache-1"
-_RETIREMENT_FILENAME = "source.phase37-topology-retirements.json"
+_CONTRACT_VERSION = 2
+_TOPOLOGY_VERSION = "phase3.7-visual-certified-placement-2"
+_DECISION_CACHE_VERSION = "phase3.7-visual-certified-placement-decision-cache-2"
 
 _ACTIVE_CONCEPT_DIRECTORY: ContextVar[dict[str, dict[str, Any]]] = ContextVar(
     "aegis_phase37_concept_directory",
@@ -539,19 +534,12 @@ def _augment_topology_payload(
     value["original_pdf_visual_page_ids"] = [
         f"PDF-PAGE-{number:04d}" for number in page_numbers
     ]
-    value["retirement_contract"] = {
-        "decision": "retire",
-        "segments": [],
-        "retire_into_concept_id": (
-            "Use an existing normal concept ID only when it fully subsumes every "
-            "source-supported part of the retiring row; otherwise use NONE only "
-            "when the row has no distinct source-supported teaching objective."
-        ),
+    value["terminal_topology_contract"] = {
+        "allowed_decisions": ["keep", "move", "refine", "split"],
         "guardrail": (
-            "Prefer keep, move, refine, or split whenever source text, a Figure "
-            "caption, or an original PDF image supports a durable concept. Never "
-            "retire a row merely because confidence is low or visual text is hard "
-            "to read."
+            "Automatic retirement/deletion is disabled. Preserve source-supported "
+            "content through keep, move, refine or transactional split; otherwise "
+            "return a structured failure."
         ),
     }
     return value
@@ -564,18 +552,6 @@ def _adjudication_schema(
     schema = copy.deepcopy(
         phase32._PHASE37_ORIGINAL_ADJUDICATION_SCHEMA(concept_ids, topic_ids)
     )
-    directory_ids = sorted(
-        set(_ACTIVE_CONCEPT_DIRECTORY.get() or {}) | set(concept_ids)
-    )
-    item = (
-        schema["schema"]["properties"]["concepts"]["items"]
-    )
-    item["properties"]["retire_into_concept_id"] = {
-        "type": "string",
-        "enum": ["NONE", *directory_ids],
-    }
-    if "retire_into_concept_id" not in item["required"]:
-        item["required"].append("retire_into_concept_id")
     return schema
 
 
@@ -601,15 +577,10 @@ def _adjudicate_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         "concept in its topic. move preserves the complete concept in a different "
         "topic. refine narrows unsupported wording while retaining one durable "
         "idea. split creates two to four independently teachable source-supported "
-        "ideas. retire removes a row only when it has no distinct durable "
-        "source-supported objective, or when every supported part is fully "
-        "subsumed by one existing normal concept named in retire_into_concept_id. "
-        "For retire return zero segments. Use retire_into_concept_id=NONE only "
-        "for a source-unsupported over-inference with no unique idea. For every "
-        "other decision use retire_into_concept_id=NONE. A Figure caption and "
+        "ideas. Automatic retirement or deletion is forbidden. A Figure caption and "
         "legible original-page visual are authoritative source evidence. Prefer "
         "refining a visual concept to what the caption/image actually supports "
-        "rather than retiring it. Never retire because confidence is low. For "
+        "rather than discarding it. For "
         "keep/move/refine return one segment; for split return two to four. Use "
         "only supplied opaque IDs. Return every requested concept exactly once. "
         "On retries repair only rejected IDs using previous_decisions and "
@@ -617,6 +588,7 @@ def _adjudicate_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         "refine/move/split/keep direction or custom instruction exactly, then "
         "return the ordinary proposal for independent criticism; the human "
         "direction is not verification."
+        + phase32.PLACEMENT_PROVIDER_INSTRUCTIONS
     )
     return phase22._openai_multimodal_json(
         system=system,
@@ -634,6 +606,9 @@ def _critic_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         str(row.get("concept_id") or "")
         for row in payload.get("concepts") or []
     ]
+    relationship_count = len(
+        phase32._relationship_ids_from_review_payload(payload)
+    )
     pages, page_numbers = _visual_evidence_pages(payload)
     augmented = _augment_topology_payload(
         payload,
@@ -641,32 +616,30 @@ def _critic_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
     )
     system = (
         "You are the independent Aegis Phase 3.7 topology critic. Verify every "
-        "keep, move, refine, split, or retire decision against canonical text, "
-        "verified Figure captions, and supplied original PDF page images. A "
-        "retire decision is valid only when no distinct source-supported teaching "
-        "objective is lost. If retire_into_concept_id names a concept, verify that "
-        "the target fully subsumes every supported part of the retiring row. If it "
-        "is NONE, verify that the row is an unsupported over-inference rather than "
-        "a weakly worded but recoverable concept. Reject retirement when a caption "
-        "or visual supports a distinct idea, when refinement is possible, when "
-        "the target is itself retiring, or when a mined question method may need "
-        "the row as a durable host. For non-retire decisions, apply the existing "
+        "keep, move, refine, or split decision against canonical text, "
+        "verified Figure captions, and supplied original PDF page images. Reject "
+        "retirement, deletion, a zero-segment result, or any loss of a distinct "
+        "source-supported objective. Apply the existing "
         "source-support, granularity, topic, duplication, and mastery rules. Put "
         "every concept ID in exactly one accepted or rejected list. For batches "
-        "containing only non-retire decisions, a verified verdict requires all "
+        "containing topology decisions, a verified verdict requires all "
         "accepted, none rejected, confidence at least "
-        f"{confidence_policy.threshold_text()}, and no issues. Any batch "
-        "approving a retire decision requires confidence at least "
-        f"{confidence_policy.threshold_text(confidence_policy.ConfidenceGate.DESTRUCTIVE)}, "
-        "all accepted, none rejected, and no issues. Do not rewrite proposals."
+        f"{confidence_policy.threshold_text()}, and no issues. Do not rewrite proposals."
+        + phase32.PLACEMENT_CRITIC_INSTRUCTIONS
     )
     return phase22._openai_multimodal_json(
         system=system,
         prompt=json.dumps(augmented, ensure_ascii=False, indent=2),
         pages=pages,
-        response_schema=phase32._critic_schema(concept_ids),
+        response_schema=phase32._critic_schema(
+            concept_ids,
+            phase32._relationship_ids_from_review_payload(payload),
+            phase32._split_review_ids_from_review_payload(payload),
+        ),
         purpose="concept_mapping",
-        max_tokens=config.OPENAI_MAX_OUTPUT_TOKENS,
+        max_tokens=phase32._critic_output_token_budget(
+            len(concept_ids), relationship_count
+        ),
         single_attempt=bool(payload.get("human_resolutions")),
     )
 
@@ -680,177 +653,31 @@ def _parse_decisions(
     rows = response.get("concepts") if isinstance(response, dict) else None
     if not isinstance(rows, list):
         return {}, ["topology adjudicator returned no concepts array"]
-
-    counts: dict[str, int] = {}
-    for row in rows:
-        if isinstance(row, dict):
-            concept_id = str(row.get("concept_id") or "")
-            counts[concept_id] = counts.get(concept_id, 0) + 1
-    duplicate_ids = {
-        concept_id for concept_id, count in counts.items() if concept_id and count > 1
-    }
-
-    directory = _ACTIVE_CONCEPT_DIRECTORY.get() or {}
-    retiring_ids = {
-        str(row.get("concept_id") or "")
-        for row in rows
-        if isinstance(row, dict)
-        and str(row.get("decision") or "") == "retire"
-    }
-    retirement_proposals: dict[str, dict[str, Any]] = {}
-    retirement_errors: list[str] = []
-    filtered_rows: list[dict[str, Any]] = []
-
-    for row in rows:
-        if not isinstance(row, dict):
-            filtered_rows.append(row)
-            continue
-        concept_id = str(row.get("concept_id") or "")
-        decision = str(row.get("decision") or "")
-        target = str(row.get("retire_into_concept_id") or "NONE")
-        if decision != "retire":
-            if target != "NONE":
-                retirement_errors.append(
-                    f"{concept_id or '<empty>'} used retire_into_concept_id "
-                    "without a retire decision"
-                )
-            filtered_rows.append(copy.deepcopy(row))
-            continue
-
-        if concept_id in duplicate_ids:
-            retirement_errors.append(f"duplicate concept ID {concept_id}")
-            continue
-        if concept_id not in concepts:
-            retirement_errors.append(
-                f"unknown concept ID {concept_id or '<empty>'}"
-            )
-            continue
-        confidence = float(row.get("confidence") or 0.0)
-        segments = row.get("segments")
-        reason = str(row.get("reason") or "").strip()
-        if not confidence_policy.accepts(
-            confidence,
-            confidence_policy.ConfidenceGate.DESTRUCTIVE,
-        ):
-            retirement_errors.append(
-                f"{concept_id} retirement confidence {confidence:.3f} "
-                "is below "
-                f"{confidence_policy.threshold_text(confidence_policy.ConfidenceGate.DESTRUCTIVE)}"
-            )
-            continue
-        if not isinstance(segments, list) or segments:
-            retirement_errors.append(
-                f"{concept_id} retire decision must return zero segments"
-            )
-            continue
-        if not reason:
-            retirement_errors.append(
-                f"{concept_id} retire decision omitted its evidence reason"
-            )
-            continue
-        if target == concept_id:
-            retirement_errors.append(
-                f"{concept_id} cannot retire into itself"
-            )
-            continue
-        if target != "NONE" and target not in directory:
-            retirement_errors.append(
-                f"{concept_id} retire decision used unknown target {target}"
-            )
-            continue
-        if target in retiring_ids:
-            retirement_errors.append(
-                f"{concept_id} cannot retire into another retiring concept {target}"
-            )
-            continue
-        retirement_proposals[concept_id] = {
-            "concept_id": concept_id,
-            "decision": "retire",
-            "segments": [],
-            "retire_into_concept_id": target,
-            "confidence": confidence,
-            "reason": reason,
-        }
-
-    remaining_concepts = {
-        concept_id: concept
-        for concept_id, concept in concepts.items()
-        if concept_id not in retirement_proposals
-    }
-    parsed, errors = phase32._PHASE37_ORIGINAL_PARSE_DECISIONS(
-        {"concepts": filtered_rows},
-        concepts=remaining_concepts,
-        topic_ids=topic_ids,
-    )
-    errors.extend(retirement_errors)
-    overlap = set(parsed) & set(retirement_proposals)
-    if overlap:
-        errors.append(
-            "concept ID(s) received both retire and non-retire decisions: "
-            + ", ".join(sorted(overlap))
-        )
-    parsed.update(retirement_proposals)
-    missing = sorted(set(concepts) - set(parsed))
-    if missing and not any(
-        "missing or invalid concept ID(s)" in error for error in errors
-    ):
-        errors.append("missing or invalid concept ID(s): " + ", ".join(missing))
-    return parsed, list(dict.fromkeys(errors))
-
-
-def _retirement_audit_value(
-    records: list[dict[str, Any]],
-    *,
-    concepts: list[dict[str, Any]],
-    decisions: dict[str, dict[str, Any]],
-    graph: dict[str, Any],
-) -> dict[str, Any]:
-    concept_by_id = {
-        str(row.get("concept_id") or ""): row
-        for row in concepts
-        if isinstance(row, dict)
-    }
     retired = [
-        {
-            "concept_id": concept_id,
-            "concept_title": str(
-                concept_by_id.get(concept_id, {}).get("concept_title") or ""
-            ),
-            "current_topic_id": str(
-                concept_by_id.get(concept_id, {}).get("current_topic_id") or ""
-            ),
-            "retire_into_concept_id": str(
-                decision.get("retire_into_concept_id") or "NONE"
-            ),
-            "confidence": float(decision.get("confidence") or 0.0),
-            "reason": str(decision.get("reason") or ""),
-        }
-        for concept_id, decision in sorted(decisions.items())
-        if decision.get("decision") == "retire"
+        str(row.get("concept_id") or "<empty>")
+        for row in rows
+        if isinstance(row, dict) and str(row.get("decision") or "") == "retire"
     ]
-    if not retired:
-        return {}
-    return {
-        "version": _TOPOLOGY_VERSION,
-        "status": "verified_and_grounded",
-        "created_at": time.time(),
-        "source_contract_hash": str(graph.get("source_contract_hash") or ""),
-        "input_row_count": len(records),
-        "retired_count": len(retired),
-        "retired": retired,
-    }
+    if retired:
+        return {}, [
+            "automatic concept retirement is disabled; refine, move, split, "
+            "keep, or fail closed instead: " + ", ".join(retired)
+        ]
 
-
-def _write_retirement_audit(value: dict[str, Any]) -> None:
-    if not value:
-        return
-    session = phase3.active_session()
-    if not isinstance(session, dict) or not session.get("artifact_dir"):
-        return
-    path = Path(session["artifact_dir"]) / _RETIREMENT_FILENAME
-    phase3._atomic_write(
-        path,
-        json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+    invalid_target_fields = [
+        str(row.get("concept_id") or "<empty>")
+        for row in rows
+        if isinstance(row, dict) and "retire_into_concept_id" in row
+    ]
+    if invalid_target_fields:
+        return {}, [
+            "retire_into_concept_id is not part of the topology contract: "
+            + ", ".join(invalid_target_fields)
+        ]
+    return phase32._PHASE37_ORIGINAL_PARSE_DECISIONS(
+        response,
+        concepts=concepts,
+        topic_ids=topic_ids,
     )
 
 
@@ -867,55 +694,18 @@ def _apply_decisions(
         for concept_id, decision in decisions.items()
         if decision.get("decision") == "retire"
     }
-    if not retire_ids:
-        return phase32._PHASE37_ORIGINAL_APPLY_DECISIONS(
-            records,
-            concepts=concepts,
-            index_by_id=index_by_id,
-            decisions=decisions,
-            graph=graph,
+    if retire_ids:
+        raise ValueError(
+            "automatic concept retirement is disabled: "
+            + ", ".join(sorted(retire_ids))
         )
-
-    # The established applicator already preserves every keep row and culmination
-    # exactly. Temporarily project retire decisions to keep, then remove only those
-    # origin IDs before exact grounding and topology freeze.
-    projected = copy.deepcopy(decisions)
-    for concept_id in retire_ids:
-        projected[concept_id] = {
-            "concept_id": concept_id,
-            "decision": "keep",
-            "segments": [],
-            "confidence": float(decisions[concept_id].get("confidence") or 0.0),
-            "reason": str(decisions[concept_id].get("reason") or ""),
-        }
-    applied = phase32._PHASE37_ORIGINAL_APPLY_DECISIONS(
+    return phase32._PHASE37_ORIGINAL_APPLY_DECISIONS(
         records,
         concepts=concepts,
         index_by_id=index_by_id,
-        decisions=projected,
+        decisions=decisions,
         graph=graph,
     )
-    output = [
-        row
-        for row in applied
-        if str(row.get("_phase32_origin_concept_id") or "") not in retire_ids
-    ]
-    _PENDING_RETIREMENT_AUDIT.set(
-        _retirement_audit_value(
-            records,
-            concepts=concepts,
-            decisions=decisions,
-            graph=graph,
-        )
-    )
-    progress.log(
-        "Phase 3.7 independently selected "
-        f"{len(retire_ids)} unsupported/subsumed concept row(s) for pre-freeze "
-        "retirement. Exact grounding must still pass before the retirement is "
-        "committed.",
-        level="warning",
-    )
-    return output
 
 
 def _adjudicate_with_directory(
@@ -937,19 +727,7 @@ def _adjudicate_with_directory(
     token = _ACTIVE_CONCEPT_DIRECTORY.set(directory)
     audit_token = _PENDING_RETIREMENT_AUDIT.set(None)
     try:
-        result = original(records, *args, **kwargs)
-        audit = _PENDING_RETIREMENT_AUDIT.get()
-        if audit:
-            audit = copy.deepcopy(audit)
-            audit["output_row_count"] = len(result)
-            _write_retirement_audit(audit)
-            progress.log(
-                "Phase 3.7 retirement committed after independent topology "
-                "review and exact source-block grounding. Type-host "
-                "certification remains authoritative for every mined method.",
-                level="success",
-            )
-        return result
+        return original(records, *args, **kwargs)
     finally:
         _PENDING_RETIREMENT_AUDIT.reset(audit_token)
         _ACTIVE_CONCEPT_DIRECTORY.reset(token)
@@ -965,7 +743,7 @@ def install() -> None:
     phase32._PHASE37_ORIGINAL_ADJUDICATE_TOPOLOGY = phase32.adjudicate_topology
 
     phase32._ALLOWED_DECISIONS = frozenset(
-        set(phase32._ALLOWED_DECISIONS) | {"retire"}
+        set(phase32._ALLOWED_DECISIONS) - {"retire"}
     )
     phase32._TOPOLOGY_VERSION = _TOPOLOGY_VERSION
     phase33._DECISION_CACHE_VERSION = _DECISION_CACHE_VERSION
@@ -988,6 +766,10 @@ def install() -> None:
         )
 
     def cached_visual_critic(payload: dict[str, Any]) -> dict[str, Any]:
+        # Phase 3.3's current cache replays only an exact decision together
+        # with exhaustive accepted relationship reviews, keyed by the placement
+        # policy and sealed teaching order.  Route visual packets through that
+        # same cache so replay preserves the evidence authority Phase 3.2 needs.
         return phase33._phase32_critic_with_cache(
             _critic_via_openai,
             payload,

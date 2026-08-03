@@ -2,9 +2,8 @@
 
 Phase 3.7 enriches source packets with labelled visual evidence. This small
 follow-up preserves the legacy exact plain-text payload shape for non-visual
-blocks, prevents a retirement target from depending on an undecided concept in
-another batch, and clears any pending retirement audit before each convergence
-pass.
+blocks and clears stale compatibility context before each convergence pass.
+Automatic concept retirement is rejected by Phase 3.7 itself.
 """
 from __future__ import annotations
 
@@ -14,7 +13,7 @@ from typing import Any
 from . import canonical_source_phase32_topology_adjudication_contract as phase32
 from . import canonical_source_phase37_visual_topology_convergence_contract as phase37
 
-_CONTRACT_VERSION = 1
+_CONTRACT_VERSION = 2
 _SOURCE_TEXT_PREFIX = "[Source text] "
 
 
@@ -52,45 +51,13 @@ def install() -> None:
             concepts=concepts,
             topic_ids=topic_ids,
         )
-        rows = [
-            row
-            for row in (response or {}).get("concepts") or []
-            if isinstance(row, dict)
-        ]
-        decided_here = {
-            str(row.get("concept_id") or ""): str(row.get("decision") or "")
-            for row in rows
-            if str(row.get("concept_id") or "")
-        }
-        for concept_id, decision in list(parsed.items()):
-            if decision.get("decision") != "retire":
-                continue
-            target = str(decision.get("retire_into_concept_id") or "NONE")
-            if target == "NONE":
-                continue
-            # A target in another unresolved batch might later be moved, split,
-            # or retired. Require the survivor to be explicitly decided in this
-            # same independently reviewed response.
-            if target not in decided_here:
-                errors.append(
-                    f"{concept_id} retirement target {target} was not decided in "
-                    "the same topology batch"
-                )
-                parsed.pop(concept_id, None)
-                continue
-            if decided_here[target] == "retire":
-                errors.append(
-                    f"{concept_id} cannot retire into another retiring concept "
-                    f"{target}"
-                )
-                parsed.pop(concept_id, None)
         return parsed, list(dict.fromkeys(errors))
 
     @wraps(original_apply_decisions)
     def apply_decisions(*args: Any, **kwargs: Any):
         # Phase 3.3 may rerun the entire topology after exact-grounding feedback.
-        # A later pass with no retirement must not inherit the prior pass's
-        # provisional audit record.
+        # Clear context left by older workers before entering the settled
+        # no-retirement contract.
         phase37._PENDING_RETIREMENT_AUDIT.set(None)
         return original_apply_decisions(*args, **kwargs)
 

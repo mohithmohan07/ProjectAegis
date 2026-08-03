@@ -1,19 +1,21 @@
-"""Unattended completion: escalations degrade to the safest offered action.
+"""Unattended completion uses only quality-preserving fallback actions.
 
 The audited production runs repeatedly reached the required output only to
 pause for a manual review click whenever the bounded resolution agent
 escalated (for example: "This source-critical action lacks issue-matched
-canonical MMD evidence."). These tests pin the corrected posture: when a safe
-server-offered bounded action exists — the same one the review UI highlights
-as recommended, or an explicit keep/no-change candidate — the run applies it
-deterministically with a full audit trail instead of stopping. Decisions whose
-only meaningful action is user-only (source replacement, custom instruction)
-still pause, and the operator can restore the old behavior with
+canonical MMD evidence."). These tests pin the quality-first posture: an
+explicit keep/no-change route may be applied, but a UI recommendation or list
+position is never treated as semantic proof. Phase 3.3 preserves an unhosted
+Type by creating a separate source-grounded concept. Decisions whose only
+meaningful action is user-only (source replacement, custom instruction) still
+pause, and the operator can restore the old behavior with
 AEGIS_UNATTENDED_COMPLETION=0.
 """
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 
 import pytest
 
@@ -147,7 +149,7 @@ def _seed_paused_job(db, chapter, monkeypatch, *, filename: str, raw=None):
 # Deterministic safe-option selection
 # --------------------------------------------------------------------------- #
 
-def test_recommended_automatable_option_is_selected():
+def test_uncertified_recommended_mutation_is_not_selected():
     selected = autonomous_resolution.safe_continuation_option({
         "options": [
             {"choice": "consolidate_types", "recommended": True},
@@ -155,8 +157,19 @@ def test_recommended_automatable_option_is_selected():
         ],
         "candidates": [],
     })
+    assert selected is None
+
+
+def test_explicit_no_change_wins_over_recommended_consolidation():
+    selected = autonomous_resolution.safe_continuation_option({
+        "options": [
+            {"choice": "consolidate_types", "recommended": True},
+            {"choice": "keep_distinct_types", "recommended": False},
+        ],
+        "candidates": [],
+    })
     assert selected == {
-        "choice": "consolidate_types",
+        "choice": "keep_distinct_types",
         "target_id": "",
         "target_concept_id": "",
     }
@@ -215,6 +228,80 @@ def test_recommended_candidate_choice_requires_a_known_target():
     # The unknown recommended target is refused; the keep route is not
     # offered as an option here, so nothing safe exists.
     assert selected is None
+
+
+def test_multiple_keep_candidates_are_not_ranked_by_list_order():
+    selected = autonomous_resolution.safe_continuation_option({
+        "options": [
+            {"choice": "select_candidate", "recommended": False},
+        ],
+        "candidates": [
+            {"target_id": "CAND-KEEP-0001", "action": "keep"},
+            {"target_id": "CAND-KEEP-0002", "action": "keep"},
+        ],
+    })
+    assert selected is None
+
+
+def test_keep_candidate_with_stale_binding_is_not_selected():
+    selected = autonomous_resolution.safe_continuation_option({
+        "options": [
+            {"choice": "select_candidate", "recommended": False},
+        ],
+        "candidates": [{
+            "target_id": "CAND-KEEP-STALE",
+            "action": "keep",
+            "binding_hash": "0" * 64,
+        }],
+    })
+    assert selected is None
+
+
+def test_hash_sealed_source_patch_is_the_only_certified_recommendation():
+    material = {
+        "version": "phase3-canonical-topic-patch-1",
+        "kind": "canonical_topic_binding",
+        "target": "working_derived_source",
+        "raw_source_mutated": False,
+        "source_contract_hash": "1" * 64,
+        "semantic_context_hash": "2" * 64,
+        "before_sha256": "3" * 64,
+        "after_sha256": "4" * 64,
+        "operations": ["Restore numbered main topic 2"],
+    }
+    patch_hash = hashlib.sha256(json.dumps(
+        material,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
+    target_id = f"canonical-topic-patch-{patch_hash[:24]}"
+    pending = {
+        "kind": "phase3_source_graph_review",
+        "item": {"type_id": "numbered_main_topic_coverage"},
+        "candidates": [{"target_id": target_id}],
+        "options": [{
+            "choice": "accept_recommended",
+            "label": "Apply verified working-source patch",
+            "recommended": True,
+            "target_id": target_id,
+        }],
+        "source_patch": {
+            **material,
+            "verified": True,
+            "patch_hash": patch_hash,
+            "target_id": target_id,
+        },
+    }
+
+    assert autonomous_resolution.safe_continuation_option(pending) == {
+        "choice": "accept_recommended",
+        "target_id": target_id,
+        "target_concept_id": "",
+    }
+
+    pending["source_patch"]["after_sha256"] = "5" * 64
+    assert autonomous_resolution.safe_continuation_option(pending) is None
 
 
 def test_unattended_completion_is_env_gated(monkeypatch):

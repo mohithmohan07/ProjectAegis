@@ -28,6 +28,8 @@ from .. import config
 from . import canonical_source_phase3 as phase3
 from . import concept_refiner as cr
 from . import early_semantic_gate as early_gate
+from . import grounding_certificate
+from . import placement_policy
 from . import progress
 from . import semantic_confidence_policy as confidence_policy
 from .semantic_recovery import (
@@ -35,13 +37,68 @@ from .semantic_recovery import (
     ProviderResponseContractError,
 )
 
-_CONTRACT_VERSION = 2
-_GROUNDING_VERSION = "phase3.1-source-claim-grounding-2"
-_CONCEPT_GROUNDING_CACHE_VERSION = "phase3.1-per-concept-grounding-4"
+_CONTRACT_VERSION = 3
+_GROUNDING_VERSION = "phase3.1-source-claim-grounding-3"
+_CONCEPT_GROUNDING_CACHE_VERSION = "phase3.1-per-concept-grounding-5"
 _GROUNDING_CACHE_FILENAME = "source.phase31-concept-grounding-cache.json"
 _TOPOLOGY_CACHE_FILENAME = "source.phase31-final-topology-cache.json"
 _PUBLIC_GROUNDING_CANDIDATE_LIMIT = 100
 _MAX_COMPOUND_EVIDENCE_BLOCKS = 8
+
+
+def _verify_preserved_placement_contracts(
+    records: list[dict[str, Any]],
+    *,
+    require_all: bool = False,
+) -> None:
+    """Reject placement drift before grounding row certificates are sealed."""
+
+    for index, record in enumerate(records):
+        title = str(record.get("concept_title") or record.get("concept") or "")
+        if cr.is_culmination(title):
+            continue
+        contract = record.get("_placement_contract")
+        # Phase 3.1 is also a public standalone grounding contract. Explicit
+        # legacy/offline callers may supply an entirely pre-placement batch,
+        # but a production or partially certified batch may not mix governed
+        # rows with rows that silently escaped placement authority.
+        if not contract:
+            if require_all:
+                raise grounding_certificate.GroundingCertificateError(
+                    f"placement contract row {index} is missing"
+                )
+            continue
+        if not isinstance(contract, dict) or contract.get("certified") is not True:
+            raise grounding_certificate.GroundingCertificateError(
+                f"placement contract row {index} is not independently certified"
+            )
+        if str(contract.get("policy_version") or "") != placement_policy.POLICY_VERSION:
+            raise grounding_certificate.GroundingCertificateError(
+                f"placement contract row {index} uses a stale policy version"
+            )
+        if str(contract.get("owner_topic_id") or "") != str(
+            record.get("_semantic_topic_id") or ""
+        ):
+            raise grounding_certificate.GroundingCertificateError(
+                f"placement contract row {index} owner/topic mismatch"
+            )
+        expected = placement_policy.placement_contract_sha256(contract)
+        if str(contract.get("placement_certificate_sha256") or "") != expected:
+            raise grounding_certificate.GroundingCertificateError(
+                f"placement contract row {index} has a stale certificate"
+            )
+        sealed_claim = re.sub(
+            r"\s+", " ", str(contract.get("normalized_claim") or "")
+        ).strip().casefold()
+        live_claim = re.sub(
+            r"\s+", " ", _description_source_claim(record)
+        ).strip().casefold()
+        if sealed_claim != live_claim:
+            raise grounding_certificate.GroundingCertificateError(
+                f"placement contract row {index} source claim changed before grounding"
+            )
+
+
 _PUBLIC_EVIDENCE_TEXT_LIMIT = 8_000
 _MASTERY_TAIL_RE = re.compile(
     r"(?:\r?\n|\\n)\s*Achieving\s+Mastery\s*:\s*.*\Z",
@@ -151,23 +208,7 @@ def _description_source_claim(record: dict[str, Any]) -> str:
     generated pedagogical enrichments. They are intentionally excluded from the
     PDF-evidence contract.
     """
-    details = str(
-        record.get("concept_details")
-        or record.get("concept_description")
-        or ""
-    )
-    description = ""
-    for label, content in cr.split_sections(details):
-        if str(label or "").strip().casefold().startswith("description"):
-            description = str(content or "").strip()
-            break
-    description = _MASTERY_TAIL_RE.sub("", description).strip()
-    description = phase3._clean_public_text(description)
-    if description:
-        return description
-    return phase3._clean_public_text(
-        record.get("concept_title") or record.get("concept") or ""
-    )
+    return grounding_certificate.source_claim(record)
 
 
 def _candidate_blocks(
@@ -1199,23 +1240,6 @@ def _grounding_candidates(
                 "Return this concept to topology and separate durable claims."
             ),
         },
-        {
-            "action": "retire",
-            "source_block_ids": [],
-            "source_topic_id": current_topic_id,
-            "target_topic_id": "",
-            "boundary_relation": "retire_if_unsupported_or_duplicate",
-            "source_kind": "",
-            "source_page": "",
-            "text_sha256": "",
-            "title": "Retire an unsupported or fully duplicated claim",
-            "topic": str(concept.get("current_topic_title") or ""),
-            "coverage": "Topology repair: retire only if unsupported or duplicate.",
-            "gap": (
-                "Destructive retirement still requires the stricter "
-                "independent gate."
-            ),
-        },
     ]
     for topic in graph.get("topics") or []:
         if not isinstance(topic, dict):
@@ -1269,7 +1293,7 @@ def _grounding_candidates(
         )
 
     # Evidence remains first in both the UI and autonomous packet. Reserve the
-    # complete bounded topology catalog (refine/split/retire plus every source
+    # complete bounded topology catalog (refine/split plus every source
     # topic move) before filling the remaining rows with evidence. Otherwise a
     # large topic could expose 97 BLKs yet omit the one valid destination move.
     selected_topology = topology_candidates[:max(
@@ -1604,7 +1628,7 @@ def _grounding_pending_decision(
             ),
             "decision_question": (
                 "Should Aegis use different verified evidence, or return the "
-                "claim to topology to refine, move, split, or retire it before "
+                "claim to topology to refine, move, or split it before "
                 "independent review?"
             ),
             "item": {
@@ -1797,6 +1821,7 @@ def ground_concepts(
     provider: GroundingProvider | None = None,
     critic: GroundingCritic | None = None,
 ) -> list[dict[str, Any]]:
+    explicit_provider = provider is not None
     graph = graph or phase3.active_graph()
     if not isinstance(graph, dict) or not records:
         return records
@@ -1989,13 +2014,13 @@ def ground_concepts(
                 if resolution.get("choice") == "custom_instruction":
                     instruction = str(resolution.get("instruction") or "")
                     match = re.search(
-                        r"\b(refine|split|move|retire)\b",
+                        r"\b(refine|split|move)\b",
                         instruction,
                         re.IGNORECASE,
                     )
                     if match:
                         action = match.group(1).casefold()
-                if action not in {"refine", "split", "move", "retire"}:
+                if action not in {"refine", "split", "move"}:
                     continue
                 target = (
                     str(selected.get("target_topic_id") or "")
@@ -2283,6 +2308,31 @@ def ground_concepts(
             culmination_indices=culmination_indices,
             candidates=candidates,
         )
+    _verify_preserved_placement_contracts(
+        out,
+        require_all=(
+            (config.use_live_generation() and not explicit_provider)
+            or any(
+                isinstance(row, dict) and bool(row.get("_placement_contract"))
+                for row in out
+                if not cr.is_culmination(
+                    str(row.get("concept_title") or row.get("concept") or "")
+                )
+            )
+        ),
+    )
+    grounding_certificate.seal_records(
+        out,
+        source_contract_hash=str(graph.get("source_contract_hash") or ""),
+        semantic_topology_sha256=(
+            grounding_certificate.semantic_topology_sha256(graph)
+        ),
+        allowed_block_ids={
+            str(row.get("block_id") or "")
+            for row in graph.get("blocks") or []
+            if isinstance(row, dict) and str(row.get("block_id") or "")
+        },
+    )
     return out
 
 
@@ -2299,6 +2349,16 @@ def _topology_cache_key(
             "source_contract_hash": str(
                 graph.get("source_contract_hash") or ""
             ),
+            "semantic_topology_sha256": (
+                grounding_certificate.semantic_topology_sha256(graph)
+            ),
+            "placement_policy_version": placement_policy.POLICY_VERSION,
+            "teaching_order_sha256": placement_policy.seal_teaching_order(
+                graph,
+                source_contract_hash=str(
+                    graph.get("source_contract_hash") or ""
+                ),
+            ).sha256,
             "records": _json_safe(records),
             "subject": str(kwargs.get("subject") or ""),
             "mmd_sha256": phase3._sha256_text(
@@ -2330,11 +2390,20 @@ def _prepare_topology_with_cache(
         return original_prepare(records, *args, **kwargs)
 
     cache_key = _topology_cache_key(records, kwargs, graph)
+    semantic_topology = grounding_certificate.semantic_topology_sha256(graph)
+    teaching_order = placement_policy.seal_teaching_order(
+        graph,
+        source_contract_hash=str(graph.get("source_contract_hash") or ""),
+    ).sha256
     path = directory / _TOPOLOGY_CACHE_FILENAME
     cache = _read_json(path)
     if (
         cache.get("version") == _GROUNDING_VERSION
         and cache.get("cache_key") == cache_key
+        and cache.get("semantic_topology_sha256") == semantic_topology
+        and cache.get("placement_policy_version")
+        == placement_policy.POLICY_VERSION
+        and cache.get("teaching_order_sha256") == teaching_order
         and isinstance(cache.get("records"), list)
         and cache.get("records_sha256")
         == phase3._sha256_json(cache.get("records"))
@@ -2357,6 +2426,9 @@ def _prepare_topology_with_cache(
             "source_contract_hash": str(
                 graph.get("source_contract_hash") or ""
             ),
+            "semantic_topology_sha256": semantic_topology,
+            "placement_policy_version": placement_policy.POLICY_VERSION,
+            "teaching_order_sha256": teaching_order,
             "records_sha256": phase3._sha256_json(prepared),
             "records": copy.deepcopy(prepared),
         },

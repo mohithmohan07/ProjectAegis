@@ -126,11 +126,10 @@ from .canonical_source_phase311_acsd_visual_display_projection_contract import (
 # token contract so any remaining PDF source-critical failure is automatically
 # promoted to the full verified GPT PDF-to-ACSD lane during conversion or Resume.
 # Phase 3.7 installs last so visual captions/original-page evidence survive every
-# topology/grounding/Type-host packet. It also permits an independently verified
-# pre-freeze retirement only for unsupported or fully subsumed duplicate rows.
-# Phase 3.7.1 preserves exact plain-text compatibility, constrains retirement to
-# a survivor decided in the same batch, and clears provisional audit state between
-# topology convergence passes. Phase 3.8 installs after every earlier topology
+# topology/grounding/Type-host packet. Automatic retirement/deletion is disabled:
+# a row must be kept, moved, refined, transactionally split, or fail closed.
+# Phase 3.7.1 preserves exact plain-text compatibility and clears provisional
+# audit state between topology convergence passes. Phase 3.8 installs after every earlier topology
 # wrapper so exact grounding can inspect bounded adjacent-topic continuation
 # evidence and feed only the rejected original concept back through convergence.
 # Phase 3.9 installs last so source-owned Activity/Info Hub notes and their private

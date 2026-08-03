@@ -271,7 +271,7 @@ def test_caricature_query_selects_the_verified_figure_page():
     assert selected[0] == 9
 
 
-def test_schema_exposes_retire_only_with_an_explicit_target_field():
+def test_schema_does_not_expose_automatic_retirement():
     directory = {
         "TOPOLOGY-CONCEPT-0001": {
             "concept_id": "TOPOLOGY-CONCEPT-0001",
@@ -290,16 +290,13 @@ def test_schema_exposes_retire_only_with_an_explicit_target_field():
         phase37._ACTIVE_CONCEPT_DIRECTORY.reset(token)
 
     item = schema["schema"]["properties"]["concepts"]["items"]
-    assert "retire" in item["properties"]["decision"]["enum"]
-    assert "retire_into_concept_id" in item["required"]
-    assert set(item["properties"]["retire_into_concept_id"]["enum"]) == {
-        "NONE",
-        *directory,
-    }
+    assert "retire" not in item["properties"]["decision"]["enum"]
+    assert "retire_into_concept_id" not in item["required"]
+    assert "retire_into_concept_id" not in item["properties"]
 
 
-def test_independently_reviewable_retire_removes_only_the_duplicate_row():
-    records, concepts, index_by_id, graph = _concept_rows()
+def test_retirement_response_is_rejected_instead_of_deleting_content():
+    _records, concepts, _index_by_id, _graph = _concept_rows()
     directory = {row["concept_id"]: row for row in concepts}
     response = {
         "concepts": [
@@ -343,27 +340,14 @@ def test_independently_reviewable_retire_removes_only_the_duplicate_row():
             concepts=directory,
             topic_ids={"TOPIC-0001"},
         )
-        output = phase32._apply_decisions(
-            records,
-            concepts=concepts,
-            index_by_id=index_by_id,
-            decisions=parsed,
-            graph=graph,
-        )
     finally:
         phase37._ACTIVE_CONCEPT_DIRECTORY.reset(token)
 
-    assert errors == []
-    assert parsed["TOPOLOGY-CONCEPT-0002"]["decision"] == "retire"
-    normal_titles = [
-        row["concept_title"]
-        for row in output
-        if not row["concept_title"].startswith("Culmination -")
-    ]
-    assert normal_titles == ["Censorship under conservative regimes"]
+    assert "TOPOLOGY-CONCEPT-0002" not in parsed
+    assert any("retirement is disabled" in error for error in errors)
 
 
-def test_retirement_cannot_target_another_retiring_concept():
+def test_two_retirement_responses_are_both_rejected():
     _records, concepts, _index_by_id, _graph = _concept_rows()
     directory = {row["concept_id"]: row for row in concepts}
     response = {
@@ -397,4 +381,4 @@ def test_retirement_cannot_target_another_retiring_concept():
     finally:
         phase37._ACTIVE_CONCEPT_DIRECTORY.reset(token)
 
-    assert any("another retiring concept" in error for error in errors)
+    assert any("retirement is disabled" in error for error in errors)

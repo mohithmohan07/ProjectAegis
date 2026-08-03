@@ -30,6 +30,8 @@ from . import canonical_source_phase3 as phase3
 from . import canonical_source_phase31_grounding_contract as phase31
 from . import concept_refiner as cr
 from . import early_semantic_gate as early_gate
+from . import grounding_certificate
+from . import placement_policy
 from . import progress
 from . import semantic_confidence_policy as confidence_policy
 from .semantic_recovery import (
@@ -37,9 +39,10 @@ from .semantic_recovery import (
     ProviderResponseContractError,
 )
 
-_CONTRACT_VERSION = 1
-_TOPOLOGY_VERSION = "phase3.2-source-verified-topology-1"
+_CONTRACT_VERSION = 3
+_TOPOLOGY_VERSION = "phase3.2-certified-placement-topology-3"
 _CACHE_FILENAME = "source.phase32-topology-adjudication-cache.json"
+
 _ALLOWED_DECISIONS = frozenset({"keep", "move", "split", "refine", "review_required"})
 _TRANSIENT_FIELDS = frozenset({
     "_source_block_ids",
@@ -53,7 +56,42 @@ _TRANSIENT_FIELDS = frozenset({
     "_phase32_origin_concept_id",
     "_phase32_segment_order",
     "_phase32_source_order",
+    "_placement_contract",
 })
+
+PLACEMENT_PROVIDER_INSTRUCTIONS = (
+    "\nPLACEMENT RELATIONSHIP CONTRACT: you do not have final ownership "
+    "authority. For every returned segment classify topic_relationships. "
+    "Deterministic code computes the owner as the latest teaching-ranked "
+    "topic whose knowledge, method or interpretive framework is genuinely "
+    "necessary to understand or perform the claim. Use CORE_TEACHING for a "
+    "topic that directly teaches it; REQUIRED_PREREQUISITE for necessary "
+    "earlier knowledge; REQUIRED_LATER_METHOD for a necessary later method; "
+    "RETROSPECTIVE_REFERENCE for a later back-reference; "
+    "SUBSTANTIVE_LATER_ILLUSTRATION for a separately taught later illustration "
+    "or consequence; and INCIDENTAL_MENTION for a passing name-check. "
+    "Set necessity=true only for CORE_TEACHING, REQUIRED_PREREQUISITE and "
+    "REQUIRED_LATER_METHOD, and cite exact supplied block IDs for every "
+    "relationship. Shared wording, "
+    "physical location, section numbering, chronology and optional methods are "
+    "not necessity. For a non-split result preserve every supplied protected "
+    "source item. For a split, partition protected_source_items across children "
+    "without loss or duplication. Do not split an irreducible relationship into "
+    "disconnected facts."
+)
+
+PLACEMENT_CRITIC_INSTRUCTIONS = (
+    "\nPLACEMENT RELATIONSHIP AUDIT: independently review every supplied "
+    "relationship_id. Verify that its exact cited block supports the stated "
+    "claim/topic relationship, that the necessity assertion is genuine, and "
+    "that prerequisite/later-method/reference direction is correct. Mere mention, "
+    "shared terminology, physical position, chronology or an optional method "
+    "must be rejected as necessity. Return every relationship ID exactly once. "
+    "A relationship is accepted only when evidence_supported, necessity_supported "
+    "and direction_supported are all true. For split concepts also reject the "
+    "concept unless the children collectively preserve the complete parent claim, "
+    "every irreducible relationship and every protected source item."
+)
 
 TopologyProvider = Callable[[dict[str, Any]], dict[str, Any]]
 TopologyCritic = Callable[[dict[str, Any]], dict[str, Any]]
@@ -79,6 +117,19 @@ def _batch_size() -> int:
             int(os.environ.get("AEGIS_PHASE32_TOPOLOGY_BATCH_CONCEPTS", "12")),
         ),
     )
+
+
+def _critic_output_token_budget(
+    concept_count: int,
+    relationship_count: int,
+) -> int:
+    """Reserve enough output for one exhaustive verdict per relationship."""
+
+    required = max(
+        6000,
+        int(concept_count) * 500 + int(relationship_count) * 240,
+    )
+    return min(max(1, int(config.OPENAI_MAX_OUTPUT_TOKENS)), required)
 
 
 def _topic_evidence_limit() -> int:
@@ -210,6 +261,125 @@ def _topic_evidence(
     return out, block_order
 
 
+_PROTECTED_ID_RE = re.compile(
+    r"\b(?:QINV-[0-9]+(?:\.[0-9]+)?|FIG-[0-9]+)\b",
+    re.IGNORECASE,
+)
+_IMAGE_URL_RE = re.compile(r"https?://[^\s\\\]\)\}\"']+", re.IGNORECASE)
+_KATEX_RE = re.compile(
+    r"\[katex\]\s*(?P<body>.*?)\s*\[/katex\]",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _protected_source_items(record: dict[str, Any]) -> list[str]:
+    """Collect source identities that a topology split may not lose.
+
+    Phase 3.2 runs before Type mining, so many concepts carry no task identities
+    yet.  When a checkpoint/recovery row does carry QIDs, Figures, images or
+    KaTeX, however, they become transactional split inventory here.
+    """
+
+    items: list[str] = []
+    for field in (
+        "protected_source_items",
+        "source_question_ids",
+        "_activity_hub_qids",
+        "figure_ids",
+        "image_urls",
+    ):
+        raw = record.get(field)
+        values = raw if isinstance(raw, (list, tuple, set)) else [raw]
+        items.extend(str(value).strip() for value in values if str(value or "").strip())
+    rendered = json.dumps(record, ensure_ascii=False, sort_keys=True, default=str)
+    items.extend(match.group(0).upper() for match in _PROTECTED_ID_RE.finditer(rendered))
+    items.extend(
+        "IMAGE:" + match.group(0).rstrip(".,;:!?")
+        for match in _IMAGE_URL_RE.finditer(rendered)
+    )
+    items.extend(
+        "KATEX:" + phase3._sha256_text(match.group("body").strip())
+        for match in _KATEX_RE.finditer(rendered)
+        if match.group("body").strip()
+    )
+    return list(dict.fromkeys(items))
+
+
+_PROTECTED_SOURCE_LIST_FIELDS = (
+    "source_question_ids",
+    "_activity_hub_qids",
+    "figure_ids",
+    "image_urls",
+)
+
+
+def _protected_field_aliases(field: str, value: object) -> set[str]:
+    text = str(value or "").strip()
+    if not text:
+        return set()
+    aliases = {text, text.upper()}
+    if field == "image_urls":
+        aliases.add("IMAGE:" + text)
+    return aliases
+
+
+def _project_split_source_inventory(
+    base: dict[str, Any],
+    out: dict[str, Any],
+    *,
+    protected_items: list[str],
+) -> None:
+    """Project parent-owned source identities onto exactly one split child.
+
+    A split record starts as a copy of its parent for ordinary metadata, but
+    source-owned identities are not ordinary metadata: copying them would put
+    every QID, Figure and image on every child.  The independently reviewed
+    segment partition is therefore authoritative for these fields.
+    """
+
+    selected = {str(item) for item in protected_items if str(item)}
+    selected_upper = {item.upper() for item in selected}
+    for field in _PROTECTED_SOURCE_LIST_FIELDS:
+        raw = base.get(field)
+        values = raw if isinstance(raw, (list, tuple, set)) else [raw]
+        kept = [
+            copy.deepcopy(value)
+            for value in values
+            if _protected_field_aliases(field, value) & (
+                selected | selected_upper
+            )
+        ]
+        if kept:
+            out[field] = kept if isinstance(raw, (list, tuple, set)) else kept[0]
+        else:
+            out.pop(field, None)
+    # Keep one explicit, child-scoped inventory even when a source identity
+    # originated only in recovery metadata rather than a dedicated list field.
+    out["protected_source_items"] = list(dict.fromkeys(protected_items))
+
+
+def _embedded_protected_source_items(record: dict[str, Any]) -> set[str]:
+    """Return source identities present outside placement/inventory metadata."""
+
+    value = copy.deepcopy(record)
+    value.pop("_placement_contract", None)
+    value.pop("protected_source_items", None)
+    rendered = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+    items = {
+        match.group(0).upper() for match in _PROTECTED_ID_RE.finditer(rendered)
+    }
+    items.update(
+        "IMAGE:" + match.group(0).rstrip(".,;:!?")
+        for match in _IMAGE_URL_RE.finditer(rendered)
+    )
+    items.update(
+        "KATEX:" + phase3._sha256_text(match.group("body").strip())
+        for match in _KATEX_RE.finditer(rendered)
+        if match.group("body").strip()
+    )
+    return items
+
+
 def _concept_rows(
     records: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
@@ -220,6 +390,12 @@ def _concept_rows(
         if cr.is_culmination(title):
             continue
         concept_id = f"TOPOLOGY-CONCEPT-{index + 1:04d}"
+        existing_placement = (
+            record.get("_placement_contract")
+            if isinstance(record.get("_placement_contract"), dict)
+            else {}
+        )
+        source_claim = phase31._description_source_claim(record)
         index_by_id[concept_id] = index
         concepts.append(
             {
@@ -229,8 +405,28 @@ def _concept_rows(
                 "current_topic_title": str(record.get("topic") or ""),
                 "concept_title": title,
                 "parent_concept": str(record.get("parent_concept") or ""),
-                "source_claim": phase31._description_source_claim(record),
+                "source_claim": source_claim,
                 "existing_mastery": _existing_mastery(record),
+                "source_location_topic_id": str(
+                    (record.get("_placement_contract") or {}).get(
+                        "source_location_topic_id"
+                    )
+                    or record.get("_semantic_topic_id")
+                    or ""
+                ),
+                "protected_source_items": _protected_source_items(record),
+                "origin_claim_sha256": str(
+                    existing_placement.get("origin_claim_sha256")
+                    or placement_policy.claim_text_sha256(source_claim)
+                ),
+                "origin_claim_ids": [
+                    str(value)
+                    for value in existing_placement.get("origin_claim_ids") or []
+                    if str(value)
+                ],
+                "split_group_id": str(
+                    existing_placement.get("split_group_id") or ""
+                ),
             }
         )
     return concepts, index_by_id
@@ -255,6 +451,45 @@ def _segment_schema(topic_ids: list[str]) -> dict[str, Any]:
                 "maximum": 1,
             },
             "reason": {"type": "string"},
+            "protected_source_items": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            # Typed relationships are the provider's real output for
+            # placement. ``topic_id`` above is only a proposal: deterministic
+            # code recomputes ownership from these and overrides it.
+            "topic_relationships": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 12,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "topic_id": {"type": "string", "enum": topic_ids},
+                        "relationship_type": {
+                            "type": "string",
+                            "enum": [
+                                kind.value
+                                for kind in placement_policy.RelationshipType
+                            ],
+                        },
+                        "necessity": {"type": "boolean"},
+                        "evidence_block_ids": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "reason": {"type": "string"},
+                    },
+                    "required": [
+                        "topic_id",
+                        "relationship_type",
+                        "necessity",
+                        "evidence_block_ids",
+                        "reason",
+                    ],
+                    "additionalProperties": False,
+                },
+            },
         },
         "required": [
             "topic_id",
@@ -265,6 +500,8 @@ def _segment_schema(topic_ids: list[str]) -> dict[str, Any]:
             "keywords",
             "confidence",
             "reason",
+            "protected_source_items",
+            "topic_relationships",
         ],
         "additionalProperties": False,
     }
@@ -324,7 +561,13 @@ def _adjudication_schema(
     }
 
 
-def _critic_schema(concept_ids: list[str]) -> dict[str, Any]:
+def _critic_schema(
+    concept_ids: list[str],
+    relationship_ids: list[str] | None = None,
+    split_review_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    relationship_ids = list(dict.fromkeys(relationship_ids or []))
+    split_review_ids = list(dict.fromkeys(split_review_ids or []))
     return {
         "name": "phase32_source_verified_concept_topology_critic",
         "strict": True,
@@ -358,6 +601,74 @@ def _critic_schema(concept_ids: list[str]) -> dict[str, Any]:
                     "type": "array",
                     "items": {"type": "string"},
                 },
+                "relationship_reviews": {
+                    "type": "array",
+                    "minItems": len(relationship_ids),
+                    "maxItems": len(relationship_ids),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "relationship_id": {
+                                "type": "string",
+                                "enum": relationship_ids or ["NONE"],
+                            },
+                            "verdict": {
+                                "type": "string",
+                                "enum": ["accepted", "rejected"],
+                            },
+                            "evidence_supported": {"type": "boolean"},
+                            "necessity_supported": {"type": "boolean"},
+                            "direction_supported": {"type": "boolean"},
+                            "reason": {"type": "string"},
+                        },
+                        "required": [
+                            "relationship_id",
+                            "verdict",
+                            "evidence_supported",
+                            "necessity_supported",
+                            "direction_supported",
+                            "reason",
+                        ],
+                        "additionalProperties": False,
+                    },
+                },
+                "split_reviews": {
+                    "type": "array",
+                    "minItems": len(split_review_ids),
+                    "maxItems": len(split_review_ids),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "split_review_id": {
+                                "type": "string",
+                                "enum": split_review_ids or ["NONE"],
+                            },
+                            "verdict": {
+                                "type": "string",
+                                "enum": ["accepted", "rejected"],
+                            },
+                            "complete_parent_claim_preserved": {
+                                "type": "boolean",
+                            },
+                            "protected_items_preserved": {
+                                "type": "boolean",
+                            },
+                            "irreducible_relationships_preserved": {
+                                "type": "boolean",
+                            },
+                            "reason": {"type": "string"},
+                        },
+                        "required": [
+                            "split_review_id",
+                            "verdict",
+                            "complete_parent_claim_preserved",
+                            "protected_items_preserved",
+                            "irreducible_relationships_preserved",
+                            "reason",
+                        ],
+                        "additionalProperties": False,
+                    },
+                },
             },
             "required": [
                 "verdict",
@@ -365,10 +676,930 @@ def _critic_schema(concept_ids: list[str]) -> dict[str, Any]:
                 "accepted_concept_ids",
                 "rejected_concept_ids",
                 "issues",
+                "relationship_reviews",
+                "split_reviews",
             ],
             "additionalProperties": False,
         },
     }
+
+
+def _teaching_order_for(
+    payload: dict[str, Any],
+    *,
+    graph: dict[str, Any] | None = None,
+) -> placement_policy.TeachingOrder:
+    """Seal the teaching order for this adjudication payload.
+
+    Prefers the verified semantic graph, whose block order is the sealed
+    source contract. Falls back to the payload's own topic order, which is
+    itself derived from that graph. Section numbers are never parsed.
+    """
+
+    if not isinstance(graph, dict):
+        try:
+            graph = phase3.active_graph()
+        except Exception:
+            graph = None
+    if isinstance(graph, dict) and graph.get("topics"):
+        return placement_policy.seal_teaching_order(
+            graph,
+            source_contract_hash=str(graph.get("source_contract_hash") or ""),
+        )
+    return placement_policy.seal_teaching_order(
+        {
+            "topics": [
+                {
+                    "topic_id": str(row.get("topic_id") or ""),
+                    "title": str(row.get("title") or row.get("topic") or ""),
+                }
+                for row in payload.get("topics") or []
+                if isinstance(row, dict)
+            ],
+            "blocks": [],
+        }
+    )
+
+
+def _enforce_placement_policy(
+    payload: dict[str, Any],
+    data: dict[str, Any],
+) -> dict[str, Any]:
+    """Recompute each segment's owning topic deterministically.
+
+    The provider proposes ``topic_id`` and classifies typed relationships.
+    This replaces the proposal with the owner computed by
+    :mod:`placement_policy`, so ownership stops being a free-form model
+    choice inside the stage that actually moves concepts.
+
+    A segment whose relationships cannot certify an owner keeps the
+    provider's proposal and is marked uncertified, so downstream grounding
+    and the final certificate can still reject it. Placement is never
+    silently invented here.
+    """
+
+    order = _teaching_order_for(payload)
+    topic_ids = [
+        str(row.get("topic_id") or "")
+        for row in payload.get("topics") or []
+        if isinstance(row, dict) and str(row.get("topic_id") or "")
+    ]
+    corrected = 0
+    uncertified = 0
+
+    for concept in data.get("concepts") or []:
+        if not isinstance(concept, dict):
+            continue
+        concept_id = str(concept.get("concept_id") or "")
+        for index, segment in enumerate(concept.get("segments") or []):
+            if not isinstance(segment, dict):
+                continue
+            claim_id = f"{concept_id}#{index}"
+            relationships = placement_policy.parse_relationships(
+                {"relationships": [
+                    {**row, "claim_id": claim_id}
+                    for row in segment.get("topic_relationships") or []
+                    if isinstance(row, dict)
+                ]},
+                known_claim_ids=[claim_id],
+                known_topic_ids=topic_ids,
+            )
+            claim = placement_policy.AtomicClaim(
+                claim_id=claim_id,
+                normalized_claim=str(segment.get("description") or ""),
+                source_location_topic_id=str(segment.get("topic_id") or ""),
+            )
+            try:
+                decision = placement_policy.compute_provisional_placement(
+                    claim, relationships, order)
+            except placement_policy.PlacementPolicyError as exc:
+                uncertified += 1
+                segment["_placement_certified"] = False
+                segment["_placement_note"] = str(exc)[:500]
+                continue
+            proposed = str(segment.get("topic_id") or "")
+            # Compatibility helper only.  Live production finalisation happens
+            # centrally after an exhaustive independent relationship review.
+            segment["_placement_certified"] = False
+            segment["_placement_owner"] = decision.owner_topic_id
+            segment["_placement_prerequisites"] = list(
+                decision.prerequisite_topic_ids)
+            segment["_placement_reference_edges"] = [
+                list(edge) for edge in decision.reference_edges
+            ]
+            segment["_placement_policy_version"] = decision.policy_version
+            if decision.owner_topic_id != proposed:
+                corrected += 1
+                segment["_placement_proposed_topic_id"] = proposed
+                segment["topic_id"] = decision.owner_topic_id
+
+    if corrected:
+        progress.log(
+            f"Placement policy corrected {corrected} proposed topic "
+            "assignment(s) to the latest genuinely required topic.",
+            level="warning",
+        )
+    if uncertified:
+        progress.log(
+            f"{uncertified} segment(s) carried no certifiable ownership "
+            "relationship; the proposal was kept for independent grounding "
+            "rather than treated as certified placement.",
+            level="warning",
+        )
+    return data
+
+
+def _exact_block_directory(
+    graph: dict[str, Any],
+    canonical: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    canonical_by_id = {
+        str(row.get("block_id") or ""): row
+        for row in canonical.get("blocks") or []
+        if isinstance(row, dict) and str(row.get("block_id") or "")
+    }
+    directory: dict[str, dict[str, Any]] = {}
+    for block in graph.get("blocks") or []:
+        if not isinstance(block, dict):
+            continue
+        block_id = str(block.get("block_id") or "")
+        topic_id = str(block.get("topic_id") or "")
+        kind = str(block.get("kind") or "")
+        if (
+            not block_id
+            or not topic_id
+            or kind in {"layout", "heading", "navigation"}
+        ):
+            continue
+        source = canonical_by_id.get(block_id, {})
+        text = phase3._clean_public_text(
+            phase3._graph_block_text(block, source)
+        )
+        directory[block_id] = {
+            "block_id": block_id,
+            "topic_id": topic_id,
+            "kind": kind,
+            "subtopic_id": str(block.get("subtopic_id") or ""),
+            "text": text,
+            "text_sha256": phase3._sha256_text(text),
+        }
+    return directory
+
+
+def _relationship_ids_from_review_payload(payload: dict[str, Any]) -> list[str]:
+    return list(dict.fromkeys(
+        str(relation.get("relationship_id") or "")
+        for decision in payload.get("proposed_decisions") or []
+        if isinstance(decision, dict)
+        for segment in decision.get("segments") or []
+        if isinstance(segment, dict)
+        for relation in segment.get("topic_relationships") or []
+        if isinstance(relation, dict) and str(relation.get("relationship_id") or "")
+    ))
+
+
+def _split_review_ids_from_review_payload(payload: dict[str, Any]) -> list[str]:
+    return list(dict.fromkeys(
+        str(attestation.get("split_review_id") or "")
+        for decision in payload.get("proposed_decisions") or []
+        if isinstance(decision, dict)
+        for segment in decision.get("segments") or []
+        if isinstance(segment, dict)
+        for contract in [segment.get("_placement_contract")]
+        if isinstance(contract, dict)
+        for attestation in [contract.get("split_attestation")]
+        if isinstance(attestation, dict)
+        and str(attestation.get("split_review_id") or "")
+    ))
+
+
+def _response_omits_all_relationships(response: object) -> bool:
+    if not isinstance(response, dict):
+        return False
+    segments = [
+        segment
+        for row in response.get("concepts") or []
+        if isinstance(row, dict)
+        for segment in row.get("segments") or []
+        if isinstance(segment, dict)
+    ]
+    return bool(segments) and all(
+        "topic_relationships" not in segment for segment in segments
+    )
+
+
+def _segment_changed(
+    segment: dict[str, Any],
+    original: dict[str, Any],
+) -> bool:
+    return any((
+        _normal(segment.get("concept_title"))
+        != _normal(original.get("concept_title")),
+        _normal(segment.get("parent_concept"))
+        != _normal(original.get("parent_concept")),
+        _normal(segment.get("description"))
+        != _normal(original.get("source_claim")),
+    ))
+
+
+def _segment_change_fields(
+    segment: dict[str, Any],
+    original: dict[str, Any],
+) -> list[str]:
+    comparisons = (
+        ("concept_title", segment.get("concept_title"), original.get("concept_title")),
+        ("parent_concept", segment.get("parent_concept"), original.get("parent_concept")),
+        ("source_claim", segment.get("description"), original.get("source_claim")),
+    )
+    return [name for name, proposed, prior in comparisons if _normal(proposed) != _normal(prior)]
+
+
+def _derive_final_action(
+    decision: dict[str, Any],
+    original: dict[str, Any],
+) -> tuple[str, str]:
+    segments = [
+        row for row in decision.get("segments") or [] if isinstance(row, dict)
+    ]
+    if len(segments) > 1:
+        return "split", ""
+    if len(segments) != 1:
+        return "", "topology decision has no commit segment"
+    segment = segments[0]
+    changed_fields = _segment_change_fields(segment, original)
+    changed = bool(changed_fields)
+    moved = str(segment.get("topic_id") or "") != str(
+        original.get("current_topic_id") or ""
+    )
+    if changed and moved:
+        return "", (
+            "changed source claim and changed owner in one operation; "
+            "move+refine is not a certified Phase 3.2 action (changed: "
+            + ", ".join(changed_fields)
+            + ")"
+        )
+    if moved:
+        return "move", ""
+    if changed:
+        return "refine", ""
+    return "keep", ""
+
+
+def _prepare_placement_review(
+    response: dict[str, Any],
+    *,
+    payload: dict[str, Any],
+    concepts: dict[str, dict[str, Any]],
+    graph: dict[str, Any],
+    canonical: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[str]]:
+    """Validate provider relationships and build a provisional critic packet."""
+
+    value = copy.deepcopy(response)
+    rows = value.get("concepts") if isinstance(value, dict) else None
+    if not isinstance(rows, list):
+        return value, [], ["topology adjudicator returned no concepts array"]
+    order = _teaching_order_for(payload, graph=graph)
+    topic_ids = set(order.ranks)
+    blocks = _exact_block_directory(graph, canonical)
+    evidence_packet: list[dict[str, Any]] = []
+    errors: list[str] = []
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        concept_id = str(row.get("concept_id") or "")
+        original = concepts.get(concept_id)
+        if original is None:
+            continue
+        segments = row.get("segments")
+        if not isinstance(segments, list):
+            continue
+        parent_items = list(original.get("protected_source_items") or [])
+        existing_origin_ids = [
+            str(item)
+            for item in original.get("origin_claim_ids") or []
+            if str(item)
+        ]
+        origin_ids = tuple(dict.fromkeys(
+            existing_origin_ids
+            + ([concept_id] if len(segments) > 1 else [])
+            or [concept_id]
+        ))
+        child_item_counts: dict[str, int] = {}
+        split_children: list[placement_policy.AtomicClaim] = []
+        split_relationships: list[placement_policy.TopicRelationship] = []
+        parent_claim = placement_policy.AtomicClaim(
+            claim_id=concept_id,
+            normalized_claim=str(original.get("source_claim") or ""),
+            source_location_topic_id=str(
+                original.get("source_location_topic_id")
+                or original.get("current_topic_id")
+                or ""
+            ),
+            origin_claim_ids=origin_ids,
+            split_group_id=(
+                str(original.get("split_group_id") or "")
+                or (concept_id if len(segments) > 1 else "")
+            ),
+            protected_source_items=tuple(parent_items),
+        )
+        source_location_topic_id = str(
+            original.get("source_location_topic_id")
+            or original.get("current_topic_id")
+            or ""
+        )
+        for index, segment in enumerate(segments):
+            if not isinstance(segment, dict):
+                continue
+            # The independent split review must bind the exact public claim
+            # text that the parser will later materialize.  Normalizing only
+            # in ``_parse_decisions`` made otherwise valid attestations stale
+            # whenever provider text contained markup or other public-text
+            # cleanup targets (for example KaTeX wrappers).
+            for field in (
+                "concept_title",
+                "parent_concept",
+                "description",
+                "achieving_mastery",
+            ):
+                segment[field] = phase3._clean_public_text(
+                    segment.get(field) or ""
+                )
+            segment["keywords"] = [
+                phase3._clean_public_text(value)
+                for value in segment.get("keywords") or []
+                if phase3._clean_public_text(value)
+            ]
+            claim_id = f"{concept_id}#{index + 1}"
+            normalized_segment_claim = phase3._clean_public_text(
+                segment.get("description") or ""
+            )
+            raw_relationships = [
+                item for item in segment.get("topic_relationships") or []
+                if isinstance(item, dict)
+            ]
+            relationships = placement_policy.parse_relationships(
+                {"relationships": [
+                    {**item, "claim_id": claim_id}
+                    for item in raw_relationships
+                ]},
+                known_claim_ids=[claim_id],
+                known_topic_ids=topic_ids,
+            )
+            if not raw_relationships:
+                errors.append(f"{concept_id} segment {index + 1} has no topic relationships")
+                continue
+            if len(relationships) != len(raw_relationships):
+                errors.append(
+                    f"{concept_id} segment {index + 1} has an invalid relationship ID/type"
+                )
+                continue
+            seen_topics: set[str] = set()
+            invalid_relationship = False
+            normalized_relationships: list[dict[str, Any]] = []
+            for relation in relationships:
+                if relation.topic_id in seen_topics:
+                    errors.append(
+                        f"{claim_id} repeats or conflicts on topic {relation.topic_id}"
+                    )
+                    invalid_relationship = True
+                    continue
+                seen_topics.add(relation.topic_id)
+                if not relation.provider_reason.strip():
+                    errors.append(f"{relation.relationship_id} omitted its relationship reason")
+                    invalid_relationship = True
+                necessary = relation.relationship_type in placement_policy.NECESSARY_TYPES
+                if necessary != bool(relation.necessity):
+                    errors.append(
+                        f"{relation.relationship_id} has an inconsistent necessity flag"
+                    )
+                    invalid_relationship = True
+                if not relation.evidence_block_ids:
+                    errors.append(
+                        f"{relation.relationship_id} has no exact relationship evidence"
+                    )
+                    invalid_relationship = True
+                if len(set(relation.evidence_block_ids)) != len(relation.evidence_block_ids):
+                    errors.append(f"{relation.relationship_id} repeats evidence blocks")
+                    invalid_relationship = True
+                exact_blocks: list[dict[str, Any]] = []
+                for block_id in relation.evidence_block_ids:
+                    block = blocks.get(block_id)
+                    if block is None:
+                        errors.append(
+                            f"{relation.relationship_id} cites unknown source block {block_id}"
+                        )
+                        invalid_relationship = True
+                        continue
+                    if block["topic_id"] != relation.topic_id:
+                        errors.append(
+                            f"{relation.relationship_id} cites {block_id} from topic "
+                            f"{block['topic_id']} as evidence for {relation.topic_id}"
+                        )
+                        invalid_relationship = True
+                        continue
+                    exact_blocks.append(copy.deepcopy(block))
+                normalized = placement_policy.relationship_audit_row(relation)
+                normalized["reason"] = normalized.pop("provider_reason")
+                normalized["critic_verdict"] = ""
+                normalized_relationships.append(normalized)
+                evidence_packet.append({
+                    "relationship_id": relation.relationship_id,
+                    "claim_id": claim_id,
+                    "claim": normalized_segment_claim,
+                    "topic_id": relation.topic_id,
+                    "relationship_type": relation.relationship_type.value,
+                    "necessity": bool(relation.necessity),
+                    "reason": relation.provider_reason,
+                    "exact_source_blocks": exact_blocks,
+                })
+            if invalid_relationship:
+                continue
+            split_relationships.extend(relationships)
+            claim = placement_policy.AtomicClaim(
+                claim_id=claim_id,
+                normalized_claim=normalized_segment_claim,
+                source_location_topic_id=source_location_topic_id,
+                origin_claim_ids=origin_ids,
+                split_group_id=(
+                    str(original.get("split_group_id") or "")
+                    or (concept_id if len(segments) > 1 else "")
+                ),
+                protected_source_items=tuple(
+                    str(item) for item in segment.get("protected_source_items") or []
+                    if str(item)
+                ),
+            )
+            if len(segments) == 1:
+                claim = placement_policy.AtomicClaim(
+                    claim_id=claim.claim_id,
+                    normalized_claim=claim.normalized_claim,
+                    source_location_topic_id=claim.source_location_topic_id,
+                    origin_claim_ids=claim.origin_claim_ids,
+                    split_group_id=claim.split_group_id,
+                    protected_source_items=tuple(parent_items),
+                )
+                segment["protected_source_items"] = list(parent_items)
+            else:
+                unknown_items = sorted(
+                    set(claim.protected_source_items) - set(parent_items)
+                )
+                if unknown_items:
+                    errors.append(
+                        f"{claim_id} invented protected source item(s): "
+                        + ", ".join(unknown_items)
+                    )
+                for item in claim.protected_source_items:
+                    child_item_counts[item] = child_item_counts.get(item, 0) + 1
+            split_children.append(claim)
+            try:
+                provisional = placement_policy.compute_provisional_placement(
+                    claim, relationships, order
+                )
+            except placement_policy.PlacementPolicyError as exc:
+                errors.append(f"{claim_id} placement is uncertifiable: {exc}")
+                continue
+            segment["topic_id"] = provisional.owner_topic_id
+            segment["topic_relationships"] = normalized_relationships
+            segment["_placement_contract"] = {
+                "certified": False,
+                "policy_version": placement_policy.POLICY_VERSION,
+                "teaching_order_sha256": order.sha256,
+                "claim_id": claim.claim_id,
+                "normalized_claim": claim.normalized_claim,
+                "origin_claim_sha256": str(
+                    original.get("origin_claim_sha256")
+                    or placement_policy.claim_text_sha256(
+                        original.get("source_claim") or ""
+                    )
+                ),
+                "source_location_topic_id": claim.source_location_topic_id,
+                "owner_topic_id": provisional.owner_topic_id,
+                "required_topic_ids": list(provisional.required_topic_ids),
+                "prerequisite_topic_ids": list(provisional.prerequisite_topic_ids),
+                "reference_edges": [list(edge) for edge in provisional.reference_edges],
+                "illustration_topic_ids": list(provisional.illustration_topic_ids),
+                "topic_relationships": normalized_relationships,
+                "origin_claim_ids": list(claim.origin_claim_ids),
+                "split_group_id": claim.split_group_id,
+                "protected_source_items": list(claim.protected_source_items),
+                "split_attestation": {},
+                "placement_certificate_sha256": "",
+            }
+        if len(segments) > 1:
+            duplicates = sorted(
+                item for item, count in child_item_counts.items() if count > 1
+            )
+            if duplicates:
+                errors.append(
+                    f"{concept_id} split duplicates protected source item(s): "
+                    + ", ".join(duplicates)
+                )
+            audit = placement_policy.audit_split_structure(
+                [parent_claim], split_children
+            )
+            if not audit.committed:
+                errors.append(f"{concept_id} {audit.reason}")
+            elif len(split_children) == len(segments):
+                try:
+                    attestation = placement_policy.pending_split_attestation(
+                        parent_claim,
+                        split_children,
+                        split_relationships,
+                        split_group_id=parent_claim.split_group_id,
+                    )
+                except placement_policy.PlacementPolicyError as exc:
+                    errors.append(f"{concept_id} split review failed: {exc}")
+                else:
+                    for segment in segments:
+                        if not isinstance(segment, dict):
+                            continue
+                        contract = segment.get("_placement_contract")
+                        if isinstance(contract, dict):
+                            contract["split_attestation"] = copy.deepcopy(
+                                attestation
+                            )
+        action, action_error = _derive_final_action(row, original)
+        if action_error:
+            errors.append(f"{concept_id} {action_error}")
+        elif action:
+            row["decision"] = action
+    return value, evidence_packet, list(dict.fromkeys(errors))
+
+
+def _relationship_review_verdicts(
+    review: dict[str, Any],
+    expected_ids: set[str],
+) -> tuple[dict[str, str], list[str]]:
+    rows = review.get("relationship_reviews") if isinstance(review, dict) else None
+    if not isinstance(rows, list):
+        return {}, ["placement critic returned no relationship_reviews array"]
+    verdicts: dict[str, str] = {}
+    errors: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            errors.append("placement critic returned a non-object relationship review")
+            continue
+        relationship_id = str(row.get("relationship_id") or "")
+        if relationship_id not in expected_ids:
+            errors.append(
+                f"placement critic returned unknown relationship {relationship_id or '<empty>'}"
+            )
+            continue
+        if relationship_id in verdicts:
+            errors.append(f"placement critic duplicated relationship {relationship_id}")
+            continue
+        accepted = (
+            str(row.get("verdict") or "") == "accepted"
+            and row.get("evidence_supported") is True
+            and row.get("necessity_supported") is True
+            and row.get("direction_supported") is True
+        )
+        verdicts[relationship_id] = "accepted" if accepted else "rejected"
+        if not accepted:
+            errors.append(
+                f"{relationship_id} was not independently certified: "
+                + str(row.get("reason") or "rejected")[:500]
+            )
+    missing = sorted(expected_ids - set(verdicts))
+    if missing:
+        errors.append(
+            "placement critic omitted relationship(s): " + ", ".join(missing)
+        )
+    return verdicts, errors
+
+
+def _split_review_verdicts(
+    review: dict[str, Any],
+    expected: dict[str, dict[str, Any]],
+) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    """Require one exhaustive semantic-survival verdict per exact split."""
+
+    rows = review.get("split_reviews") if isinstance(review, dict) else None
+    if not expected:
+        if rows in (None, []):
+            return {}, []
+        return {}, ["placement critic returned an unexpected split review"]
+    if not isinstance(rows, list):
+        return {}, ["placement critic returned no split_reviews array"]
+    accepted: dict[str, dict[str, Any]] = {}
+    seen: set[str] = set()
+    errors: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            errors.append("placement critic returned a non-object split review")
+            continue
+        review_id = str(row.get("split_review_id") or "")
+        pending = expected.get(review_id)
+        if pending is None:
+            errors.append(
+                "placement critic returned unknown or stale split review "
+                + (review_id or "<empty>")
+            )
+            continue
+        if review_id in seen:
+            errors.append(f"placement critic duplicated split review {review_id}")
+            continue
+        seen.add(review_id)
+        complete = (
+            str(row.get("verdict") or "") == "accepted"
+            and row.get("complete_parent_claim_preserved") is True
+            and row.get("protected_items_preserved") is True
+            and row.get("irreducible_relationships_preserved") is True
+        )
+        attestation = {
+            **copy.deepcopy(pending),
+            "critic_verdict": "accepted" if complete else "rejected",
+            "complete_parent_claim_preserved": (
+                row.get("complete_parent_claim_preserved") is True
+            ),
+            "protected_items_preserved": (
+                row.get("protected_items_preserved") is True
+            ),
+            "irreducible_relationships_preserved": (
+                row.get("irreducible_relationships_preserved") is True
+            ),
+            "critic_reason": str(row.get("reason") or "")[:2000],
+        }
+        if not complete:
+            errors.append(
+                f"{review_id} was not independently certified to preserve "
+                "the parent claim, protected items, and irreducible relationships: "
+                + str(row.get("reason") or "rejected")[:500]
+            )
+            continue
+        try:
+            placement_policy.validate_split_attestation(attestation)
+        except placement_policy.PlacementPolicyError as exc:
+            errors.append(f"{review_id} split attestation is invalid: {exc}")
+            continue
+        accepted[review_id] = attestation
+    missing = sorted(set(expected) - set(accepted))
+    if missing:
+        errors.append("placement critic omitted split review(s): " + ", ".join(missing))
+    return accepted, errors
+
+
+def _finalize_certified_placements(
+    decisions: dict[str, dict[str, Any]],
+    *,
+    review: dict[str, Any],
+    payload: dict[str, Any],
+    concepts: dict[str, dict[str, Any]],
+    graph: dict[str, Any],
+) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    order = _teaching_order_for(payload, graph=graph)
+    expected_ids = {
+        str(relation.get("relationship_id") or "")
+        for decision in decisions.values()
+        for segment in decision.get("segments") or []
+        if isinstance(segment, dict)
+        for relation in segment.get("topic_relationships") or []
+        if isinstance(relation, dict) and str(relation.get("relationship_id") or "")
+    }
+    verdicts, errors = _relationship_review_verdicts(review, expected_ids)
+    expected_splits: dict[str, dict[str, Any]] = {}
+    for concept_id, decision in decisions.items():
+        segments = [
+            segment for segment in decision.get("segments") or []
+            if isinstance(segment, dict)
+        ]
+        review_ids: set[str] = set()
+        for segment in segments:
+            contract = segment.get("_placement_contract")
+            raw_attestation = (
+                contract.get("split_attestation")
+                if isinstance(contract, dict)
+                else None
+            )
+            if not raw_attestation:
+                continue
+            try:
+                pending = placement_policy.validate_split_attestation(
+                    raw_attestation, require_accepted=False
+                )
+            except placement_policy.PlacementPolicyError as exc:
+                errors.append(f"{concept_id} has invalid pending split review: {exc}")
+                continue
+            review_id = str(pending.get("split_review_id") or "")
+            review_ids.add(review_id)
+            prior = expected_splits.get(review_id)
+            if prior is not None and prior != pending:
+                errors.append(
+                    f"{concept_id} reuses {review_id} for different split material"
+                )
+            expected_splits[review_id] = pending
+        if len(segments) > 1 and len(review_ids) != 1:
+            errors.append(
+                f"{concept_id} split children do not share one exact split review"
+            )
+        if len(segments) == 1 and review_ids:
+            errors.append(f"{concept_id} non-split decision carried a split review")
+
+    accepted_splits, split_review_errors = _split_review_verdicts(
+        review, expected_splits
+    )
+    errors.extend(split_review_errors)
+    if errors:
+        return decisions, list(dict.fromkeys(errors))
+
+    finalized = copy.deepcopy(decisions)
+    for concept_id, decision in finalized.items():
+        original = concepts[concept_id]
+        segment_results: list[tuple[
+            dict[str, Any],
+            placement_policy.AtomicClaim,
+            list[placement_policy.TopicRelationship],
+            placement_policy.PlacementDecision,
+        ]] = []
+        for index, segment in enumerate(decision.get("segments") or []):
+            claim_id = f"{concept_id}#{index + 1}"
+            relationships = placement_policy.parse_relationships(
+                {"relationships": [
+                    {
+                        **relation,
+                        "claim_id": claim_id,
+                        "reason": str(
+                            relation.get("reason")
+                            or relation.get("provider_reason")
+                            or ""
+                        ),
+                    }
+                    for relation in segment.get("topic_relationships") or []
+                    if isinstance(relation, dict)
+                ]},
+                known_claim_ids=[claim_id],
+                known_topic_ids=order.ranks,
+            )
+            relationships = placement_policy.apply_critic_verdicts(
+                relationships, verdicts
+            )
+            protected = tuple(
+                str(item) for item in segment.get("protected_source_items") or []
+                if str(item)
+            )
+            claim = placement_policy.AtomicClaim(
+                claim_id=claim_id,
+                normalized_claim=str(segment.get("description") or ""),
+                source_location_topic_id=str(
+                    original.get("source_location_topic_id")
+                    or original.get("current_topic_id")
+                    or ""
+                ),
+                origin_claim_ids=tuple(dict.fromkeys(
+                    [
+                        str(item)
+                        for item in original.get("origin_claim_ids") or []
+                        if str(item)
+                    ]
+                    + (
+                        [concept_id]
+                        if len(decision.get("segments") or []) > 1
+                        else []
+                    )
+                    or [concept_id]
+                )),
+                split_group_id=(
+                    str(original.get("split_group_id") or "")
+                    or (
+                        concept_id
+                        if len(decision.get("segments") or []) > 1
+                        else ""
+                    )
+                ),
+                protected_source_items=protected,
+            )
+            try:
+                placement = placement_policy.compute_placement(
+                    claim, relationships, order
+                )
+            except placement_policy.PlacementPolicyError as exc:
+                errors.append(f"{claim_id} certified placement failed: {exc}")
+                continue
+            segment["topic_id"] = placement.owner_topic_id
+            segment_results.append((segment, claim, relationships, placement))
+
+        split_attestation: dict[str, Any] = {}
+        if len(segment_results) > 1:
+            provisional_ids = {
+                str(
+                    (
+                        (segment.get("_placement_contract") or {}).get(
+                            "split_attestation"
+                        ) or {}
+                    ).get("split_review_id")
+                    or ""
+                )
+                for segment, _claim, _relations, _placement in segment_results
+            }
+            provisional_ids.discard("")
+            if len(provisional_ids) != 1:
+                errors.append(
+                    f"{concept_id} finalized split lost its shared review identity"
+                )
+            else:
+                review_id = next(iter(provisional_ids))
+                parent = placement_policy.AtomicClaim(
+                    claim_id=concept_id,
+                    normalized_claim=str(original.get("source_claim") or ""),
+                    source_location_topic_id=str(
+                        original.get("source_location_topic_id")
+                        or original.get("current_topic_id")
+                        or ""
+                    ),
+                    origin_claim_ids=tuple(dict.fromkeys(
+                        [
+                            str(item)
+                            for item in original.get("origin_claim_ids") or []
+                            if str(item)
+                        ]
+                        + [concept_id]
+                    )),
+                    split_group_id=segment_results[0][1].split_group_id,
+                    protected_source_items=tuple(
+                        str(item)
+                        for item in original.get("protected_source_items") or []
+                        if str(item)
+                    ),
+                )
+                rebuilt = placement_policy.pending_split_attestation(
+                    parent,
+                    [claim for _segment, claim, _relations, _placement in segment_results],
+                    [
+                        relation
+                        for _segment, _claim, relationships, _placement in segment_results
+                        for relation in relationships
+                    ],
+                    split_group_id=parent.split_group_id,
+                )
+                pending = expected_splits.get(review_id)
+                split_attestation = accepted_splits.get(review_id, {})
+                if pending != rebuilt:
+                    errors.append(
+                        f"{concept_id} split material changed after independent review "
+                        f"(pending={phase3._sha256_json(pending)}, "
+                        f"rebuilt={phase3._sha256_json(rebuilt)})"
+                    )
+                else:
+                    audit = placement_policy.audit_split(
+                        [parent],
+                        [
+                            claim
+                            for _segment, claim, _relationships, _placement
+                            in segment_results
+                        ],
+                        split_attestation=split_attestation,
+                    )
+                    if not audit.committed:
+                        errors.append(f"{concept_id} {audit.reason}")
+
+        for segment, claim, relationships, placement in segment_results:
+            relationship_rows = [
+                placement_policy.relationship_audit_row(relation)
+                for relation in relationships
+            ]
+            contract = {
+                "certified": True,
+                "policy_version": placement_policy.POLICY_VERSION,
+                "teaching_order_sha256": order.sha256,
+                "claim_id": claim.claim_id,
+                "normalized_claim": claim.normalized_claim,
+                "origin_claim_sha256": str(
+                    original.get("origin_claim_sha256")
+                    or placement_policy.claim_text_sha256(
+                        original.get("source_claim") or ""
+                    )
+                ),
+                "source_location_topic_id": claim.source_location_topic_id,
+                "owner_topic_id": placement.owner_topic_id,
+                "required_topic_ids": list(placement.required_topic_ids),
+                "prerequisite_topic_ids": list(placement.prerequisite_topic_ids),
+                "reference_edges": [list(edge) for edge in placement.reference_edges],
+                "illustration_topic_ids": list(placement.illustration_topic_ids),
+                "topic_relationships": relationship_rows,
+                "origin_claim_ids": list(claim.origin_claim_ids),
+                "split_group_id": claim.split_group_id,
+                "protected_source_items": list(claim.protected_source_items),
+                "split_attestation": copy.deepcopy(split_attestation),
+            }
+            contract["placement_certificate_sha256"] = (
+                placement_policy.placement_contract_sha256(contract)
+            )
+            segment["topic_relationships"] = [
+                {
+                    **row,
+                    "reason": row.get("provider_reason") or "",
+                }
+                for row in relationship_rows
+            ]
+            segment["_placement_contract"] = contract
+        action, action_error = _derive_final_action(decision, original)
+        if action_error:
+            errors.append(f"{concept_id} {action_error}")
+        elif action:
+            decision["decision"] = action
+    return finalized, list(dict.fromkeys(errors))
 
 
 def _adjudicate_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
@@ -404,6 +1635,7 @@ def _adjudicate_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         "supplied, apply its selected refine/move/split/keep direction or custom "
         "instruction exactly, then return the ordinary proposal for independent "
         "criticism; the human direction is not verification."
+        + PLACEMENT_PROVIDER_INSTRUCTIONS
     )
     return phase3.phase22._openai_multimodal_json(
         system=system,
@@ -421,6 +1653,8 @@ def _critic_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         str(row.get("concept_id") or "")
         for row in payload.get("concepts") or []
     ]
+    relationship_count = len(_relationship_ids_from_review_payload(payload))
+    split_review_ids = _split_review_ids_from_review_payload(payload)
     system = (
         "You are the independent Aegis Phase 3.2 concept-topology critic. "
         "Verify every proposed keep, move, refine, or split against the supplied "
@@ -437,14 +1671,21 @@ def _critic_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         "requires all accepted, none rejected, confidence at least "
         f"{confidence_policy.threshold_text()}, and no issues. Do not rewrite "
         "the proposals."
+        + PLACEMENT_CRITIC_INSTRUCTIONS
     )
     return phase3.phase22._openai_multimodal_json(
         system=system,
         prompt=json.dumps(payload, ensure_ascii=False, indent=2),
         pages=[],
-        response_schema=_critic_schema(concept_ids),
+        response_schema=_critic_schema(
+            concept_ids,
+            _relationship_ids_from_review_payload(payload),
+            split_review_ids,
+        ),
         purpose="concept_mapping",
-        max_tokens=max(4000, min(12000, len(concept_ids) * 300)),
+        max_tokens=_critic_output_token_budget(
+            len(concept_ids), relationship_count
+        ),
         single_attempt=bool(payload.get("human_resolutions")),
     )
 
@@ -558,6 +1799,17 @@ def _parse_decisions(
                     "keywords": keywords,
                     "confidence": segment_confidence,
                     "reason": str(segment.get("reason") or ""),
+                    "protected_source_items": [
+                        str(value)
+                        for value in segment.get("protected_source_items") or []
+                        if str(value)
+                    ],
+                    "topic_relationships": copy.deepcopy(
+                        segment.get("topic_relationships") or []
+                    ),
+                    "_placement_contract": copy.deepcopy(
+                        segment.get("_placement_contract") or {}
+                    ),
                 }
             )
         if invalid_segment:
@@ -650,7 +1902,101 @@ def _changed_record(
     out["_phase32_origin_concept_id"] = concept_id
     out["_phase32_segment_order"] = int(segment_order)
     out["_phase32_source_order"] = int(source_order)
+    out["_placement_contract"] = copy.deepcopy(
+        segment.get("_placement_contract") or {}
+    )
+    if decision == "split":
+        _project_split_source_inventory(
+            base,
+            out,
+            protected_items=[
+                str(item)
+                for item in segment.get("protected_source_items") or []
+                if str(item)
+            ],
+        )
     return out
+
+
+def _verify_materialized_split_inventory(
+    records: list[dict[str, Any]],
+    *,
+    concepts: list[dict[str, Any]],
+    decisions: dict[str, dict[str, Any]],
+) -> None:
+    """Require split inventory to survive once in records and contracts."""
+
+    expected_by_id = {
+        str(concept.get("concept_id") or ""): {
+            str(item)
+            for item in concept.get("protected_source_items") or []
+            if str(item)
+        }
+        for concept in concepts
+    }
+    children_by_id: dict[str, list[dict[str, Any]]] = {}
+    for record in records:
+        origin = str(record.get("_phase32_origin_concept_id") or "")
+        if origin:
+            children_by_id.setdefault(origin, []).append(record)
+
+    for concept_id, decision in decisions.items():
+        if str(decision.get("decision") or "") != "split":
+            continue
+        expected = expected_by_id.get(concept_id, set())
+        children = children_by_id.get(concept_id, [])
+        if len(children) != len(decision.get("segments") or []):
+            raise ValueError(
+                f"{concept_id} split materialization changed its child count"
+            )
+        physical_owners: dict[str, list[int]] = {
+            item: [] for item in expected
+        }
+        contract_owners: dict[str, list[int]] = {
+            item: [] for item in expected
+        }
+        for child_index, child in enumerate(children, start=1):
+            physical = set(_protected_source_items({
+                key: copy.deepcopy(value)
+                for key, value in child.items()
+                if key != "_placement_contract"
+            }))
+            embedded = _embedded_protected_source_items(child)
+            contract = child.get("_placement_contract") or {}
+            contracted = {
+                str(item)
+                for item in contract.get("protected_source_items") or []
+                if str(item)
+            }
+            unexpected = sorted((physical | contracted) - expected)
+            if unexpected:
+                raise ValueError(
+                    f"{concept_id} split child {child_index} invented protected "
+                    "source item(s): " + ", ".join(unexpected)
+                )
+            for item in expected:
+                if item in physical:
+                    physical_owners[item].append(child_index)
+                if item in contracted:
+                    contract_owners[item].append(child_index)
+                if item.startswith(("IMAGE:", "KATEX:")) and (
+                    item in contracted and item not in embedded
+                ):
+                    raise ValueError(
+                        f"{concept_id} split child {child_index} declares {item} "
+                        "without retaining its exact rendered source content"
+                    )
+        for item in sorted(expected):
+            if len(physical_owners[item]) != 1:
+                raise ValueError(
+                    f"{concept_id} split materialized protected source item "
+                    f"{item} in {len(physical_owners[item])} child rows"
+                )
+            if contract_owners[item] != physical_owners[item]:
+                raise ValueError(
+                    f"{concept_id} split record/contract ownership disagrees "
+                    f"for protected source item {item}"
+                )
 
 
 def _apply_decisions(
@@ -711,6 +2057,12 @@ def _apply_decisions(
             kept["_phase32_origin_concept_id"] = concept_id
             kept["_phase32_segment_order"] = 1
             kept["_phase32_source_order"] = source_order
+            kept["_placement_contract"] = copy.deepcopy(
+                (decision.get("segments") or [{}])[0].get(
+                    "_placement_contract"
+                )
+                or {}
+            )
             out.append(kept)
             continue
         for segment_order, segment in enumerate(decision["segments"], start=1):
@@ -726,7 +2078,173 @@ def _apply_decisions(
                     graph=graph,
                 )
             )
+    _verify_materialized_split_inventory(
+        out,
+        concepts=concepts,
+        decisions=decisions,
+    )
     return out
+
+
+def _seal_legacy_injected_placements(
+    records: list[dict[str, Any]],
+    *,
+    legacy_concept_ids: set[str],
+    concepts: list[dict[str, Any]],
+    graph: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Seal test-injected legacy decisions after exact grounding.
+
+    Production providers must classify typed relationships before their topic
+    choice can acquire authority.  A small number of explicit unit-test
+    providers predate that contract and intentionally exercise unrelated
+    Phase 3.2 mechanics.  They remain supported only at this injected seam:
+    exact Phase 3.1 grounding supplies the evidence, the final semantic topic
+    supplies the sole CORE_TEACHING relationship, and the ordinary placement
+    digest is then produced.  Nothing from this compatibility path is used
+    for an OpenAI/effective production provider.
+    """
+
+    if not legacy_concept_ids:
+        return records
+    order = placement_policy.seal_teaching_order(
+        graph,
+        source_contract_hash=str(graph.get("source_contract_hash") or ""),
+    )
+    concept_by_id = {
+        str(concept.get("concept_id") or ""): concept
+        for concept in concepts
+        if isinstance(concept, dict)
+    }
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for record in records:
+        origin_id = str(record.get("_phase32_origin_concept_id") or "")
+        if origin_id in legacy_concept_ids:
+            grouped.setdefault(origin_id, []).append(record)
+
+    for origin_id, children in grouped.items():
+        original = concept_by_id.get(origin_id)
+        if original is None:
+            raise ValueError(
+                f"legacy placement sealing lost original concept {origin_id}"
+            )
+        origin_claim_ids = tuple(
+            str(item)
+            for item in original.get("origin_claim_ids") or [origin_id]
+            if str(item)
+        )
+        source_location_topic_id = str(
+            original.get("source_location_topic_id")
+            or original.get("current_topic_id")
+            or ""
+        )
+        parent_items = tuple(
+            str(item)
+            for item in original.get("protected_source_items") or []
+            if str(item)
+        )
+        parents = [
+            placement_policy.AtomicClaim(
+                claim_id=claim_id,
+                normalized_claim=str(original.get("source_claim") or ""),
+                source_location_topic_id=source_location_topic_id,
+                protected_source_items=parent_items,
+            )
+            for claim_id in origin_claim_ids
+        ]
+        child_claims: list[placement_policy.AtomicClaim] = []
+        child_inventory: dict[str, tuple[str, ...]] = {}
+        for record in children:
+            segment_order = int(record.get("_phase32_segment_order") or 1)
+            claim_id = f"{origin_id}#{segment_order}"
+            items = tuple(_protected_source_items(record))
+            child_inventory[claim_id] = items
+            child_claims.append(
+                placement_policy.AtomicClaim(
+                    claim_id=claim_id,
+                    normalized_claim=phase31._description_source_claim(record),
+                    source_location_topic_id=source_location_topic_id,
+                    origin_claim_ids=origin_claim_ids,
+                    split_group_id=(
+                        str(original.get("split_group_id") or "")
+                        or (origin_id if len(children) > 1 else "")
+                    ),
+                    protected_source_items=items,
+                )
+            )
+        if len(children) > 1:
+            raise ValueError(
+                f"legacy injected split {origin_id} has no independent "
+                "structured split-survival attestation"
+            )
+
+        claim_by_id = {claim.claim_id: claim for claim in child_claims}
+        for record in children:
+            segment_order = int(record.get("_phase32_segment_order") or 1)
+            claim = claim_by_id[f"{origin_id}#{segment_order}"]
+            owner_topic_id = str(record.get("_semantic_topic_id") or "")
+            evidence_block_ids = tuple(
+                str(block_id)
+                for block_id in record.get("_source_block_ids") or []
+                if str(block_id)
+            )
+            relation = placement_policy.TopicRelationship(
+                claim_id=claim.claim_id,
+                topic_id=owner_topic_id,
+                relationship_type=placement_policy.RelationshipType.CORE_TEACHING,
+                necessity=True,
+                evidence_block_ids=evidence_block_ids,
+                provider_reason=(
+                    "legacy injected provider compatibility; exact Phase 3.1 "
+                    "grounding independently verified this final topic"
+                ),
+                critic_verdict="accepted",
+            )
+            try:
+                placement = placement_policy.compute_placement(
+                    claim, [relation], order
+                )
+            except placement_policy.PlacementPolicyError as exc:
+                raise ValueError(
+                    f"legacy placement for {claim.claim_id} is uncertifiable: {exc}"
+                ) from exc
+            relationship_rows = [
+                placement_policy.relationship_audit_row(relation)
+            ]
+            contract = {
+                "certified": True,
+                "policy_version": placement_policy.POLICY_VERSION,
+                "teaching_order_sha256": order.sha256,
+                "claim_id": claim.claim_id,
+                "normalized_claim": claim.normalized_claim,
+                "origin_claim_sha256": str(
+                    original.get("origin_claim_sha256")
+                    or placement_policy.claim_text_sha256(
+                        original.get("source_claim") or ""
+                    )
+                ),
+                "source_location_topic_id": claim.source_location_topic_id,
+                "owner_topic_id": placement.owner_topic_id,
+                "required_topic_ids": list(placement.required_topic_ids),
+                "prerequisite_topic_ids": list(
+                    placement.prerequisite_topic_ids
+                ),
+                "reference_edges": [
+                    list(edge) for edge in placement.reference_edges
+                ],
+                "illustration_topic_ids": list(
+                    placement.illustration_topic_ids
+                ),
+                "topic_relationships": relationship_rows,
+                "origin_claim_ids": list(claim.origin_claim_ids),
+                "split_group_id": claim.split_group_id,
+                "protected_source_items": list(child_inventory[claim.claim_id]),
+            }
+            contract["placement_certificate_sha256"] = (
+                placement_policy.placement_contract_sha256(contract)
+            )
+            record["_placement_contract"] = contract
+    return records
 
 
 def _order_grounded_records(
@@ -805,6 +2323,14 @@ def _cache_key(
             "version": _TOPOLOGY_VERSION,
             "model": str(config.OPENAI_MODEL),
             "semantic_confidence_policy": confidence_policy.cache_identity(),
+            "placement_policy_version": placement_policy.POLICY_VERSION,
+            "teaching_order_sha256": placement_policy.seal_teaching_order(
+                graph,
+                source_contract_hash=str(graph.get("source_contract_hash") or ""),
+            ).sha256,
+            "semantic_topology_sha256": (
+                grounding_certificate.semantic_topology_sha256(graph)
+            ),
             "source": early_gate.source_identity(graph),
             "records": phase31._json_safe(records),
             "concepts": concepts,
@@ -826,6 +2352,22 @@ def _read_cached_records(cache_key: str) -> list[dict[str, Any]] | None:
         != phase3._sha256_json(cache.get("records"))
     ):
         return None
+    for record in cache.get("records") or []:
+        title = str(record.get("concept_title") or record.get("concept") or "")
+        if cr.is_culmination(title):
+            continue
+        contract = record.get("_placement_contract")
+        if (
+            not isinstance(contract, dict)
+            or contract.get("certified") is not True
+            or str(contract.get("policy_version") or "")
+            != placement_policy.POLICY_VERSION
+            or str(contract.get("owner_topic_id") or "")
+            != str(record.get("_semantic_topic_id") or "")
+            or str(contract.get("placement_certificate_sha256") or "")
+            != placement_policy.placement_contract_sha256(contract)
+        ):
+            return None
     return copy.deepcopy(cache["records"])
 
 
@@ -906,36 +2448,6 @@ def _topology_candidates(
                 "gap": "Move without changing the claim; the critic must verify the target.",
             }
         )
-    if "retire" in _ALLOWED_DECISIONS:
-        seeds.append(
-            {
-                "action": "retire",
-                "retire_into_concept_id": "NONE",
-                "target_topic_id": "",
-                "title": "Retire an unsupported claim with no survivor",
-                "topic": str(concept.get("current_topic_title") or ""),
-                "coverage": str(concept.get("source_claim") or ""),
-                "gap": "Use only when no distinct source-supported objective is lost.",
-            }
-        )
-        for survivor in all_concepts or []:
-            survivor_id = str(survivor.get("concept_id") or "")
-            if not survivor_id or survivor_id == str(concept.get("concept_id") or ""):
-                continue
-            seeds.append(
-                {
-                    "action": "retire",
-                    "retire_into_concept_id": survivor_id,
-                    "target_topic_id": "",
-                    "title": "Retire this duplicate into a verified survivor",
-                    "topic": str(survivor.get("current_topic_title") or ""),
-                    "coverage": str(survivor.get("source_claim") or ""),
-                    "gap": (
-                        "Destructive retirement requires the stricter independent "
-                        f"gate and must preserve {survivor_id}."
-                    ),
-                }
-            )
     candidates: list[dict[str, Any]] = []
     for seed in seeds[:100]:
         candidates.append(
@@ -1158,15 +2670,14 @@ def _topology_pending_decision(
 
 
 def _topology_parse_errors_are_mechanical(errors: list[str]) -> bool:
-    semantic_fragments = (
-        " confidence ",
-        "requires human review",
-        "rewrote the existing concept",
-        "keep decision changed its topic",
-        "move decision retained its current topic",
-        "refine decision changed its topic",
-        "returned duplicate split segments",
-    )
+    """Return true only for an exhaustively known response-shape defect.
+
+    Placement, evidence, and source-survival failures are semantic by default.
+    The former ``TOPOLOGY-CONCEPT-`` catch-all accidentally retried a rejected
+    refine-and-move as if it were malformed JSON, obscuring the real failure
+    behind a later provider-contract error.
+    """
+
     meaningful = [
         value
         for value in errors
@@ -1174,16 +2685,26 @@ def _topology_parse_errors_are_mechanical(errors: list[str]) -> bool:
     ]
     if not meaningful:
         return True
-    if any(fragment in value for value in meaningful for fragment in semantic_fragments):
-        return False
-    prefixes = (
-        "topology adjudicator returned no concepts array",
-        "topology adjudicator returned a non-object row",
-        "unknown concept ID ",
-        "duplicate concept ID ",
-        "TOPOLOGY-CONCEPT-",
+    mechanical_patterns = (
+        r"topology adjudicator returned no concepts array",
+        r"topology adjudicator returned a non-object row",
+        r"unknown concept ID .+",
+        r"duplicate concept ID .+",
+        r"TOPOLOGY-CONCEPT-[^ ]+ returned invalid decision .+",
+        r"TOPOLOGY-CONCEPT-[^ ]+ returned no segments array",
+        r"TOPOLOGY-CONCEPT-[^ ]+ decision [^ ]+ returned [0-9]+ segment\(s\)",
+        r"TOPOLOGY-CONCEPT-[^ ]+ segment [0-9]+ is not an object",
+        r"TOPOLOGY-CONCEPT-[^ ]+ segment [0-9]+ used unknown topic .+",
+        r"TOPOLOGY-CONCEPT-[^ ]+ segment [0-9]+ omitted title, parent, "
+        r"Description, or Achieving Mastery",
+        r"TOPOLOGY-CONCEPT-[^ ]+ segment [0-9]+ has an invalid "
+        r"relationship ID/type",
+        r"TOPOLOGY-CONCEPT-[^ ]+ segment [0-9]+ has no topic relationships",
     )
-    return all(value.startswith(prefixes) for value in meaningful)
+    return all(
+        any(re.fullmatch(pattern, value) for pattern in mechanical_patterns)
+        for value in meaningful
+    )
 
 
 def _topology_directed_issues(
@@ -1216,18 +2737,6 @@ def _topology_directed_issues(
                     f"{concept_id} moved to {actual_topic or '<empty>'} instead "
                     f"of the human-selected topic {expected_topic}"
                 )
-        elif expected_action == "retire":
-            expected_survivor = str(
-                selected.get("retire_into_concept_id") or "NONE"
-            )
-            actual_survivor = str(
-                decision.get("retire_into_concept_id") or "NONE"
-            )
-            if actual_survivor != expected_survivor:
-                issues.append(
-                    f"{concept_id} retired into {actual_survivor} instead of "
-                    f"the human-selected survivor {expected_survivor}"
-                )
     return issues
 
 
@@ -1241,6 +2750,7 @@ def adjudicate_topology(
     grounding_provider: GroundingProvider | None = None,
     grounding_critic: GroundingCritic | None = None,
 ) -> list[dict[str, Any]]:
+    explicit_provider = provider is not None
     graph = graph or phase3.active_graph()
     if not isinstance(graph, dict) or not records:
         return records
@@ -1299,6 +2809,7 @@ def adjudicate_topology(
     )
 
     decisions: dict[str, dict[str, Any]] = {}
+    legacy_concept_ids: set[str] = set()
     size = _batch_size()
     concept_by_id = {
         str(row.get("concept_id") or ""): row for row in concepts
@@ -1378,6 +2889,8 @@ def adjudicate_topology(
         accepted: dict[str, dict[str, Any]] = {}
         response: dict[str, Any] | None = None
         parse_errors: list[str] = []
+        placement_evidence: list[dict[str, Any]] = []
+        legacy_relationship_mode = False
         for attempt in range(1, max_provider_attempts + 1):
             payload = {
                 "metadata": copy.deepcopy(graph.get("metadata") or {}),
@@ -1403,14 +2916,45 @@ def adjudicate_topology(
                     for concept_id in sorted(resolutions)
                 ]
             response = provider(copy.deepcopy(payload))
-            parsed, parse_errors = _parse_decisions(
-                response,
-                concepts={
-                    concept_id: concept_by_id[concept_id]
-                    for concept_id in batch_ids
-                },
-                topic_ids=topic_ids,
+            legacy_relationship_mode = bool(
+                explicit_provider
+                and config.allow_dry()
+                and _response_omits_all_relationships(response)
             )
+            if not legacy_relationship_mode:
+                response, placement_evidence, placement_errors = (
+                    _prepare_placement_review(
+                        response,
+                        payload=payload,
+                        concepts={
+                            concept_id: concept_by_id[concept_id]
+                            for concept_id in batch_ids
+                        },
+                        graph=graph,
+                        canonical=canonical,
+                    )
+                )
+                if placement_errors:
+                    parse_errors = placement_errors
+                    parsed = {}
+                else:
+                    parsed, parse_errors = _parse_decisions(
+                        response,
+                        concepts={
+                            concept_id: concept_by_id[concept_id]
+                            for concept_id in batch_ids
+                        },
+                        topic_ids=topic_ids,
+                    )
+            else:
+                parsed, parse_errors = _parse_decisions(
+                    response,
+                    concepts={
+                        concept_id: concept_by_id[concept_id]
+                        for concept_id in batch_ids
+                    },
+                    topic_ids=topic_ids,
+                )
             review_band_ids = [
                 concept_id
                 for concept_id, decision in parsed.items()
@@ -1512,6 +3056,22 @@ def adjudicate_topology(
                 copy.deepcopy(accepted[concept_id])
                 for concept_id in sorted(batch_ids)
             ],
+            "placement_relationship_evidence": copy.deepcopy(
+                placement_evidence
+            ),
+            "split_review_attestations": list({
+                str(attestation.get("split_review_id") or ""): copy.deepcopy(
+                    attestation
+                )
+                for decision in accepted.values()
+                for segment in decision.get("segments") or []
+                if isinstance(segment, dict)
+                for contract in [segment.get("_placement_contract")]
+                if isinstance(contract, dict)
+                for attestation in [contract.get("split_attestation")]
+                if isinstance(attestation, dict)
+                and attestation.get("split_review_id")
+            }.values()),
         }
         if resolutions:
             review_payload["human_resolutions"] = [
@@ -1519,14 +3079,7 @@ def adjudicate_topology(
                 for concept_id in sorted(resolutions)
             ]
         review = critic(copy.deepcopy(review_payload))
-        review_gate = (
-            confidence_policy.ConfidenceGate.DESTRUCTIVE
-            if any(
-                decision.get("decision") == "retire"
-                for decision in accepted.values()
-            )
-            else confidence_policy.ConfidenceGate.SEMANTIC
-        )
+        review_gate = confidence_policy.ConfidenceGate.SEMANTIC
         state = phase31._review_state(
             review,
             concept_ids=batch_ids,
@@ -1570,6 +3123,45 @@ def adjudicate_topology(
                     resolution=resolutions.get(concept_id),
                 )
             )
+        if not legacy_relationship_mode:
+            accepted, placement_review_errors = _finalize_certified_placements(
+                accepted,
+                review=review,
+                payload=review_payload,
+                concepts={
+                    concept_id: concept_by_id[concept_id]
+                    for concept_id in batch_ids
+                },
+                graph=graph,
+            )
+            if placement_review_errors:
+                concept_id = next(
+                    (
+                        value for value in sorted(batch_ids)
+                        if any(
+                            value in issue for issue in placement_review_errors
+                        )
+                    ),
+                    sorted(batch_ids)[0],
+                )
+                raise HumanDecisionRequired(
+                    _topology_pending_decision(
+                        identity=gate_identities[concept_id],
+                        graph=graph,
+                        concept=concept_by_id[concept_id],
+                        topics=topics,
+                        candidates=gate_candidates[concept_id],
+                        issues=placement_review_errors,
+                        rejected_ids=sorted(batch_ids),
+                        proposed_decision=accepted.get(concept_id),
+                        resolution=resolutions.get(concept_id),
+                    )
+                )
+        else:
+            # Compatibility is limited to an explicitly injected provider.
+            # These rows are sealed only after exact grounding below; an
+            # effective production provider can never enter this branch.
+            legacy_concept_ids.update(batch_ids)
         progress.log(
             "Phase 3.2 independently verified topology decisions for "
             f"{len(batch_ids)} concept(s) in batch {batch_index}.",
@@ -1584,6 +3176,19 @@ def adjudicate_topology(
         decisions=decisions,
         graph=graph,
     )
+    if legacy_concept_ids:
+        # An empty provisional mapping is still "placement metadata" to the
+        # grounding certificate and must fail closed.  Explicit legacy test
+        # providers are the sole exception: remove only their empty placeholder
+        # so Phase 3.1 can establish exact evidence, then seal the ordinary
+        # certified contract immediately after grounding below.
+        for record in repaired:
+            if (
+                str(record.get("_phase32_origin_concept_id") or "")
+                in legacy_concept_ids
+                and not record.get("_placement_contract")
+            ):
+                record.pop("_placement_contract", None)
     # Exact source-block grounding is authoritative. Running it before learner
     # analysis proves the repaired topology can actually be frozen.
     try:
@@ -1602,6 +3207,13 @@ def adjudicate_topology(
             "the repaired rows still failed exact source-block grounding before "
             f"freeze: {exc}"
         ) from exc
+
+    grounded = _seal_legacy_injected_placements(
+        grounded,
+        legacy_concept_ids=legacy_concept_ids,
+        concepts=concepts,
+        graph=graph,
+    )
 
     grounded = _order_grounded_records(
         grounded,

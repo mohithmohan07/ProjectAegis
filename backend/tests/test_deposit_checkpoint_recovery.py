@@ -3,17 +3,27 @@ import copy
 import pytest
 
 from app import models
-from app.services import build_concepts, openai_usage
+from app.services import build_concepts, grounding_certificate, openai_usage
 
 
 def _concept_records(title: str) -> list[dict]:
-    return [{
+    records = [{
         "topic": "Checkpoint Topic",
         "parent_concept": "Checkpoint Parent",
         "concept_title": title,
         "concept_details": "Description: Saved checkpoint content.",
         "keywords": "",
+        "_source_block_ids": ["BLK-00001"],
+        "_source_grounding_contract": "api-verified-source-block-ids",
+        "_source_grounding_version": "checkpoint-test-1",
     }]
+    grounding_certificate.seal_records(
+        records,
+        source_contract_hash="a" * 64,
+        semantic_topology_sha256="b" * 64,
+        allowed_block_ids={"BLK-00001"},
+    )
+    return records
 
 
 def _usage_summary() -> dict:
@@ -59,9 +69,13 @@ def _job_with_terminal_history(
         records=_concept_records("Retained 91 Percent Concept"),
         **common,
     )
+    final_records = _concept_records("Rejected 98 Percent Concept")
     final = build_concepts.generation._make_concept_checkpoint(
         "final_content_ready",
-        records=_concept_records("Rejected 98 Percent Concept"),
+        records=final_records,
+        final_grounding_certificate=(
+            grounding_certificate.build_final_certificate(final_records)
+        ),
         **common,
     )
     checkpoint_args = {
@@ -99,16 +113,25 @@ def _fake_generation(resume_stages: list[str]):
                 "stats": {},
             }
             artifacts["mined_types"] = {"types": []}
+            artifacts["final_grounding_certificate"] = (
+                grounding_certificate.build_final_certificate(
+                    saved["records"]
+                )
+            )
         return copy.deepcopy(saved["records"])
 
     return generate
 
 
 def _successful_deposit(*_args, **_kwargs):
+    records = _kwargs.get("records") or []
     return [], [], {
         "written": 0,
         "sources_updated": 0,
         "parent_column": True,
+        "grounding_certificate": (
+            grounding_certificate.build_final_certificate(records)
+        ),
     }
 
 
@@ -135,7 +158,7 @@ def test_typed_deposit_failure_rewinds_final_then_retry_resumes_prior(
         if deposit_attempts == 1:
             raise build_concepts.DepositValidationError(
                 "deposit validation failed: rich_text_format")
-        return _successful_deposit()
+        return _successful_deposit(*_args, **_kwargs)
 
     monkeypatch.setattr(
         build_concepts.generation,
@@ -298,4 +321,82 @@ def test_deposit_certified_hub_normalization_failure_is_typed(
             "",
             inventory={"items": [], "stats": {}},
             mined_types={"types": []},
+        )
+
+
+def test_deposit_cannot_remint_certificate_after_cleanup_drops_row(
+    db,
+    first_chapter,
+    monkeypatch,
+):
+    chapter = db.get(models.Chapter, first_chapter["id"])
+    records = _concept_records("Grounded First")
+    second = copy.deepcopy(records[0])
+    second["concept_title"] = "Grounded Second"
+    records.append(second)
+    grounding_certificate.seal_records(
+        records,
+        source_contract_hash="a" * 64,
+        semantic_topology_sha256="b" * 64,
+        allowed_block_ids={"BLK-00001"},
+    )
+    final_certificate = grounding_certificate.build_final_certificate(records)
+
+    monkeypatch.setattr(
+        build_concepts.concept_cleanup,
+        "filter_review_violations",
+        lambda current, **_kwargs: current[:1],
+    )
+    monkeypatch.setattr(
+        build_concepts.concept_cleanup,
+        "dedupe_similar_titles_chapter_wide",
+        lambda current: current,
+    )
+    monkeypatch.setattr(
+        build_concepts.concept_refiner,
+        "refine_chapter",
+        lambda current: current,
+    )
+    monkeypatch.setattr(
+        build_concepts.concept_validator,
+        "ensure_valid_learner_analysis",
+        lambda current: current,
+    )
+    monkeypatch.setattr(
+        build_concepts.generation,
+        "_ensure_mastery_lines_via_api",
+        lambda current, **_kwargs: current,
+    )
+    monkeypatch.setattr(
+        build_concepts.generation,
+        "_ensure_terminal_culmination_contract",
+        lambda current: current,
+    )
+    monkeypatch.setattr(
+        build_concepts.generation,
+        "_canonicalize_concept_rich_text",
+        lambda current: current,
+    )
+    monkeypatch.setattr(
+        build_concepts.concept_validator,
+        "validate_concept_rows",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "errors": [],
+            "summary": {"warnings": 0},
+        },
+    )
+
+    with pytest.raises(
+        build_concepts.DepositValidationError,
+        match=r"grounding attested 2 record\(s\).*contains 1",
+    ):
+        build_concepts._deposit_concepts(
+            db,
+            chapter,
+            records,
+            "Post",
+            "",
+            final_grounding_certificate=final_certificate,
+            grounding_certificate_sink={},
         )

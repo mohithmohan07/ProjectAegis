@@ -241,7 +241,7 @@ def test_topology_and_type_hosts_accept_semantic_boundary(monkeypatch):
     assert host_plan["assignments"][0]["confidence"] == 0.92
 
 
-def test_retirement_requires_destructive_proposal_and_review_gate(monkeypatch):
+def test_retirement_is_rejected_instead_of_using_a_destructive_gate(monkeypatch):
     _clear_overrides(monkeypatch)
     concept_id = "TOPOLOGY-CONCEPT-0001"
     concepts = {
@@ -271,24 +271,8 @@ def test_retirement_requires_destructive_proposal_and_review_gate(monkeypatch):
         concepts=concepts,
         topic_ids={"TOPIC-0001"},
     )
-    assert any(
-        "retirement confidence 0.950 is below 0.960" in error
-        for error in errors
-    )
-
-    review = {
-        "verdict": "verified",
-        "confidence": 0.92,
-        "accepted_concept_ids": [concept_id],
-        "rejected_concept_ids": [],
-        "issues": [],
-    }
-    assert phase31._review_state(
-        review,
-        concept_ids={concept_id},
-    )["verified"]
-    assert not phase31._review_state(
-        review,
-        concept_ids={concept_id},
-        confidence_gate=policy.ConfidenceGate.DESTRUCTIVE,
-    )["verified"]
+    assert _parsed == {}
+    assert errors == [
+        "automatic concept retirement is disabled; refine, move, split, "
+        "keep, or fail closed instead: TOPOLOGY-CONCEPT-0001"
+    ]

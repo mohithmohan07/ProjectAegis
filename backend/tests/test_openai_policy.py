@@ -166,7 +166,9 @@ def test_all_active_runtime_calls_declare_a_known_purpose():
         and isinstance(node.func, ast.Name)
         and node.func.id == "_openai_json"
     ]
-    assert len(generation_calls) == 42
+    # Ambiguous Activity/Info Hub placement now uses a distinct provider and
+    # independent critic request, so both calls must remain purpose-labelled.
+    assert len(generation_calls) == 43
     generation_purposes = [
         ast.literal_eval(keyword.value)
         for node in generation_calls

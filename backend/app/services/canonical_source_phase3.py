@@ -4771,6 +4771,8 @@ def annotate_inventory(inventory: dict[str, Any], graph: dict[str, Any] | None =
     graph = graph or active_graph()
     if not isinstance(graph, dict):
         return inventory
+    from . import generation
+
     out = copy.deepcopy(inventory or {})
     task_by_qid = {
         str(row.get("qid") or ""): row for row in graph.get("tasks") or []
@@ -4796,6 +4798,7 @@ def annotate_inventory(inventory: dict[str, Any], graph: dict[str, Any] | None =
         if not task:
             continue
         assigned_topic = None
+        physical_task_topic_id = str(task.get("topic_id") or "")
         if (
             item.get("_chapter_wide_task")
             or item.get("_topic_scope") == "chapter"
@@ -4810,6 +4813,42 @@ def annotate_inventory(inventory: dict[str, Any], graph: dict[str, Any] | None =
             # legitimately belonging to different source topics.
             semantic_topic_id = str(assigned_topic.get("topic_id") or "")
             semantic_subtopic_id = ""
+        source_location_topic_id = str(
+            item.get("source_location_topic_id")
+            or physical_task_topic_id
+            or ""
+        )
+        # Once recorded, physical source provenance is immutable. A certified
+        # owner may change semantic routing but can never rewrite this field.
+        item["source_location_topic_id"] = source_location_topic_id
+        source_topic = topic_by_id.get(source_location_topic_id, {})
+        if source_topic.get("title"):
+            item["source_location_topic_title"] = str(
+                source_topic.get("title") or "")
+        placement = generation._certified_type_case_placement_contract(
+            item.get("_type_case_placement_contract")
+        )
+        if (
+            placement is None
+            and isinstance(item.get("_type_case_placement_contract"), dict)
+            and str(item["_type_case_placement_contract"].get("version") or "")
+            == str(generation._TYPE_CASE_PLACEMENT_CONTRACT_VERSION)
+        ):
+            raise RuntimeError(
+                "type_case_owner_uncertified: inventory QID placement v2 is "
+                "present but its certificate is invalid"
+            )
+        if placement is not None:
+            semantic_topic_id = str(placement.get("owner_topic_id") or "")
+            if semantic_topic_id != source_location_topic_id:
+                semantic_subtopic_id = ""
+            item["owner_topic_id"] = semantic_topic_id
+            owner_topic = topic_by_id.get(semantic_topic_id, {})
+            item["owner_topic_title"] = str(
+                placement.get("owner_topic_title")
+                or owner_topic.get("title")
+                or ""
+            )
         topic = topic_by_id.get(semantic_topic_id, {})
         subtopic = subtopic_by_id.get(semantic_subtopic_id, {})
         item["_semantic_topic_id"] = semantic_topic_id
@@ -4818,7 +4857,7 @@ def annotate_inventory(inventory: dict[str, Any], graph: dict[str, Any] | None =
         item["_semantic_source_task_id"] = str(task.get("task_id") or "")
         # The visible hint remains for legacy prompts, but structural identity is
         # now the graph ID and always uses the canonical main-topic title.
-        if topic.get("title"):
+        if topic.get("title") and placement is None:
             item["topic_hint"] = str(topic["title"])
         if subtopic.get("title"):
             item["_semantic_subtopic_title"] = str(subtopic["title"])
@@ -4881,6 +4920,7 @@ def annotate_mined_types(
         case_topic_ids: list[str] = []
         case_subtopic_ids: list[str] = []
         case_owned_qids: set[str] = set()
+        certified_case_count = 0
         cases = [
             case for case in mtype.get("case_prompts") or []
             if isinstance(case, dict)
@@ -4888,20 +4928,54 @@ def annotate_mined_types(
         for case in cases:
             case_qids = generation._assignment_case_qids(case)
             case_owned_qids.update(case_qids)
-            raw_topics, _raw_subtopics = _qid_scope(graph, case_qids)
-            explicit_cross_topic = (
-                str(case.get("placement_scope") or "").strip().lower()
-                == "cross_topic_synthesis"
-                and len(raw_topics) > 1
+            placement = generation._certified_type_case_placement_contract(
+                case.get("_type_case_placement_contract")
             )
-            case_topics, case_subtopics = _qid_scope(
-                graph,
-                case_qids,
-                topic_hint=(
-                    "" if explicit_cross_topic
-                    else case.get("topic_match_hint") or ""
-                ),
-            )
+            if placement is not None:
+                certified_case_count += 1
+                owner_topic_id = str(
+                    placement.get("owner_topic_id") or "")
+                if owner_topic_id not in topic_by_id:
+                    raise RuntimeError(
+                        "type_case_owner_uncertified: Case uses unknown owner "
+                        f"topic {owner_topic_id or '<empty>'}"
+                    )
+                case_topics = [owner_topic_id]
+                case_subtopics: list[str] = []
+                case["owner_topic_id"] = owner_topic_id
+                case["owner_topic_title"] = str(
+                    placement.get("owner_topic_title")
+                    or topic_by_id[owner_topic_id].get("title")
+                    or ""
+                )
+                case["source_location_topic_ids"] = list(
+                    placement.get("source_location_topic_ids") or [])
+                case["topic_match_hint"] = case["owner_topic_title"]
+            else:
+                declared = isinstance(
+                    case.get("_type_case_placement_contract"), dict
+                ) and str(
+                    case["_type_case_placement_contract"].get("version") or ""
+                ) == str(generation._TYPE_CASE_PLACEMENT_CONTRACT_VERSION)
+                if declared:
+                    raise RuntimeError(
+                        "type_case_owner_uncertified: Case placement v2 is "
+                        "present but its certificate is invalid"
+                    )
+                raw_topics, _raw_subtopics = _qid_scope(graph, case_qids)
+                explicit_cross_topic = (
+                    str(case.get("placement_scope") or "").strip().lower()
+                    == "cross_topic_synthesis"
+                    and len(raw_topics) > 1
+                )
+                case_topics, case_subtopics = _qid_scope(
+                    graph,
+                    case_qids,
+                    topic_hint=(
+                        "" if explicit_cross_topic
+                        else case.get("topic_match_hint") or ""
+                    ),
+                )
             case["_semantic_topic_ids"] = case_topics
             case["_semantic_subtopic_ids"] = case_subtopics
             for topic_id in case_topics:
@@ -4945,8 +5019,15 @@ def annotate_mined_types(
             topic = topic_by_id.get(topic_ids[0], {})
             if topic.get("title"):
                 mtype["topic_match_hint"] = str(topic["title"])
+            if cases and certified_case_count == len(cases):
+                mtype["owner_topic_id"] = topic_ids[0]
+                mtype["owner_topic_ids"] = list(topic_ids)
             mtype["_semantic_scope"] = "topic"
         elif len(topic_ids) > 1:
+            if cases and certified_case_count == len(cases):
+                mtype["owner_topic_id"] = ""
+                mtype["owner_topic_ids"] = list(topic_ids)
+                mtype["topic_match_hint"] = ""
             mtype["_semantic_scope"] = "multi_topic_reuse"
             integrated_cross_topic_case = bool(
                 len(cases) == 1
@@ -4965,12 +5046,50 @@ def annotate_assignment_units(
     graph = graph or active_graph()
     if not isinstance(graph, dict):
         return units
+    from . import generation
+
     topic_by_id = {
         str(row.get("topic_id") or ""): row for row in graph.get("topics") or []
         if isinstance(row, dict)
     }
     out = copy.deepcopy(units)
     for unit in out:
+        placement = generation._certified_type_case_placement_contract(
+            unit.get("_type_case_placement_contract")
+        )
+        if placement is not None:
+            owner_topic_id = str(placement.get("owner_topic_id") or "")
+            topic = topic_by_id.get(owner_topic_id)
+            if topic is None:
+                raise RuntimeError(
+                    "type_case_owner_uncertified: assignment unit uses unknown "
+                    f"owner topic {owner_topic_id or '<empty>'}"
+                )
+            unit["owner_topic_id"] = owner_topic_id
+            unit["owner_topic_title"] = str(
+                placement.get("owner_topic_title")
+                or topic.get("title")
+                or ""
+            )
+            unit["source_location_topic_ids"] = list(
+                placement.get("source_location_topic_ids") or [])
+            unit["_semantic_topic_ids"] = [owner_topic_id]
+            unit["_semantic_topic_id"] = owner_topic_id
+            unit["_semantic_subtopic_ids"] = []
+            unit["topic_match_hint"] = unit["owner_topic_title"]
+            if unit.get("placement_scope") == "cross_topic_synthesis":
+                unit["placement_scope"] = "mixed_synthesis"
+            continue
+        declared = isinstance(
+            unit.get("_type_case_placement_contract"), dict
+        ) and str(
+            unit["_type_case_placement_contract"].get("version") or ""
+        ) == str(generation._TYPE_CASE_PLACEMENT_CONTRACT_VERSION)
+        if declared:
+            raise RuntimeError(
+                "type_case_owner_uncertified: assignment-unit placement v2 "
+                "is present but its certificate is invalid"
+            )
         qids = list(unit.get("source_question_ids") or [])
         raw_topic_ids, _raw_subtopic_ids = _qid_scope(graph, qids)
         explicit_cross_topic = (
