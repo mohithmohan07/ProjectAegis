@@ -40,6 +40,8 @@ from .semantic_recovery import (
 _CONTRACT_VERSION = 1
 _TOPOLOGY_VERSION = "phase3.2-source-verified-topology-1"
 _CACHE_FILENAME = "source.phase32-topology-adjudication-cache.json"
+from . import placement_policy
+
 _ALLOWED_DECISIONS = frozenset({"keep", "move", "split", "refine", "review_required"})
 _TRANSIENT_FIELDS = frozenset({
     "_source_block_ids",
@@ -255,6 +257,40 @@ def _segment_schema(topic_ids: list[str]) -> dict[str, Any]:
                 "maximum": 1,
             },
             "reason": {"type": "string"},
+            # Typed relationships are the provider's real output for
+            # placement. ``topic_id`` above is only a proposal: deterministic
+            # code recomputes ownership from these and overrides it.
+            "topic_relationships": {
+                "type": "array",
+                "maxItems": 12,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "topic_id": {"type": "string", "enum": topic_ids},
+                        "relationship_type": {
+                            "type": "string",
+                            "enum": [
+                                kind.value
+                                for kind in placement_policy.RelationshipType
+                            ],
+                        },
+                        "necessity": {"type": "boolean"},
+                        "evidence_block_ids": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "reason": {"type": "string"},
+                    },
+                    "required": [
+                        "topic_id",
+                        "relationship_type",
+                        "necessity",
+                        "evidence_block_ids",
+                        "reason",
+                    ],
+                    "additionalProperties": False,
+                },
+            },
         },
         "required": [
             "topic_id",
@@ -265,6 +301,7 @@ def _segment_schema(topic_ids: list[str]) -> dict[str, Any]:
             "keywords",
             "confidence",
             "reason",
+            "topic_relationships",
         ],
         "additionalProperties": False,
     }
@@ -371,6 +408,125 @@ def _critic_schema(concept_ids: list[str]) -> dict[str, Any]:
     }
 
 
+def _teaching_order_for(payload: dict[str, Any]) -> placement_policy.TeachingOrder:
+    """Seal the teaching order for this adjudication payload.
+
+    Prefers the verified semantic graph, whose block order is the sealed
+    source contract. Falls back to the payload's own topic order, which is
+    itself derived from that graph. Section numbers are never parsed.
+    """
+
+    graph = None
+    try:
+        graph = phase3.active_graph()
+    except Exception:
+        graph = None
+    if isinstance(graph, dict) and graph.get("topics"):
+        return placement_policy.seal_teaching_order(
+            graph,
+            source_contract_hash=str(graph.get("source_contract_hash") or ""),
+        )
+    return placement_policy.seal_teaching_order(
+        {
+            "topics": [
+                {
+                    "topic_id": str(row.get("topic_id") or ""),
+                    "title": str(row.get("title") or row.get("topic") or ""),
+                }
+                for row in payload.get("topics") or []
+                if isinstance(row, dict)
+            ],
+            "blocks": [],
+        }
+    )
+
+
+def _enforce_placement_policy(
+    payload: dict[str, Any],
+    data: dict[str, Any],
+) -> dict[str, Any]:
+    """Recompute each segment's owning topic deterministically.
+
+    The provider proposes ``topic_id`` and classifies typed relationships.
+    This replaces the proposal with the owner computed by
+    :mod:`placement_policy`, so ownership stops being a free-form model
+    choice inside the stage that actually moves concepts.
+
+    A segment whose relationships cannot certify an owner keeps the
+    provider's proposal and is marked uncertified, so downstream grounding
+    and the final certificate can still reject it. Placement is never
+    silently invented here.
+    """
+
+    order = _teaching_order_for(payload)
+    topic_ids = [
+        str(row.get("topic_id") or "")
+        for row in payload.get("topics") or []
+        if isinstance(row, dict) and str(row.get("topic_id") or "")
+    ]
+    corrected = 0
+    uncertified = 0
+
+    for concept in data.get("concepts") or []:
+        if not isinstance(concept, dict):
+            continue
+        concept_id = str(concept.get("concept_id") or "")
+        for index, segment in enumerate(concept.get("segments") or []):
+            if not isinstance(segment, dict):
+                continue
+            claim_id = f"{concept_id}#{index}"
+            relationships = placement_policy.parse_relationships(
+                {"relationships": [
+                    {**row, "claim_id": claim_id}
+                    for row in segment.get("topic_relationships") or []
+                    if isinstance(row, dict)
+                ]},
+                known_claim_ids=[claim_id],
+                known_topic_ids=topic_ids,
+            )
+            claim = placement_policy.AtomicClaim(
+                claim_id=claim_id,
+                normalized_claim=str(segment.get("description") or ""),
+                source_location_topic_id=str(segment.get("topic_id") or ""),
+            )
+            try:
+                decision = placement_policy.compute_placement(
+                    claim, relationships, order)
+            except placement_policy.PlacementPolicyError as exc:
+                uncertified += 1
+                segment["_placement_certified"] = False
+                segment["_placement_note"] = str(exc)[:500]
+                continue
+            proposed = str(segment.get("topic_id") or "")
+            segment["_placement_certified"] = True
+            segment["_placement_owner"] = decision.owner_topic_id
+            segment["_placement_prerequisites"] = list(
+                decision.prerequisite_topic_ids)
+            segment["_placement_reference_edges"] = [
+                list(edge) for edge in decision.reference_edges
+            ]
+            segment["_placement_policy_version"] = decision.policy_version
+            if decision.owner_topic_id != proposed:
+                corrected += 1
+                segment["_placement_proposed_topic_id"] = proposed
+                segment["topic_id"] = decision.owner_topic_id
+
+    if corrected:
+        progress.log(
+            f"Placement policy corrected {corrected} proposed topic "
+            "assignment(s) to the latest genuinely required topic.",
+            level="warning",
+        )
+    if uncertified:
+        progress.log(
+            f"{uncertified} segment(s) carried no certifiable ownership "
+            "relationship; the proposal was kept for independent grounding "
+            "rather than treated as certified placement.",
+            level="warning",
+        )
+    return data
+
+
 def _adjudicate_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
     concept_ids = [
         str(row.get("concept_id") or "")
@@ -399,13 +555,31 @@ def _adjudicate_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         "facing claim. Achieving Mastery is generated pedagogy and must state an "
         "observable learner capability. Use only supplied opaque topic and concept "
         "IDs. Do not create culmination rows, Types, Cases, questions, activities, "
-        "or unsupported facts. On retries, repair only requested rejected IDs "
+        "or unsupported facts.\n"
+        "PLACEMENT: you do NOT choose the owning topic. For every segment "
+        "classify topic_relationships, and deterministic code computes the "
+        "owner as the latest teaching-ranked topic whose knowledge, method or "
+        "interpretive framework is genuinely necessary to understand or "
+        "perform the claim. Use CORE_TEACHING for the topic that teaches it; "
+        "REQUIRED_PREREQUISITE for an earlier topic it cannot be understood "
+        "without; REQUIRED_LATER_METHOD for a later topic whose method is "
+        "needed to understand or perform it; RETROSPECTIVE_REFERENCE when a "
+        "later topic merely points back at it; "
+        "SUBSTANTIVE_LATER_ILLUSTRATION when a later topic independently "
+        "teaches an illustration or consequence of it; INCIDENTAL_MENTION for "
+        "a passing name-check. Set necessity=true only where the claim truly "
+        "cannot be understood or performed without that topic, and cite exact "
+        "block IDs for it. Shared terminology, page position, section "
+        "numbering, chronology and optional alternative methods are NOT "
+        "necessity. An irreducible relationship such as one idea contributing "
+        "to a later outcome is a single claim owned by the later topic; do "
+        "not split it into unrelated parts. On retries, repair only requested rejected IDs "
         "using critic_feedback and previous_decisions. If human_resolutions is "
         "supplied, apply its selected refine/move/split/keep direction or custom "
         "instruction exactly, then return the ordinary proposal for independent "
         "criticism; the human direction is not verification."
     )
-    return phase3.phase22._openai_multimodal_json(
+    data = phase3.phase22._openai_multimodal_json(
         system=system,
         prompt=json.dumps(payload, ensure_ascii=False, indent=2),
         pages=[],
@@ -414,6 +588,9 @@ def _adjudicate_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         max_tokens=max(6000, min(32000, len(concept_ids) * 1100)),
         single_attempt=bool(payload.get("human_resolutions")),
     )
+    if isinstance(data, dict):
+        return _enforce_placement_policy(payload, data)
+    return data
 
 
 def _critic_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
