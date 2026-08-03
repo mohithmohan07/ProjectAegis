@@ -1670,6 +1670,18 @@ CASE WORDING (each Case must be properly defined):
 - Independently answerable child items with stable ``parent_qid`` identities
   become separate Cases and may be routed to separate concepts. Dependent
   subparts that share evidence or form one integrated response stay together.
+- Advanced placement: when one Case or task requires methods from more than one
+  source topic, set its topic_match_hint to the LATEST of those topics, never an
+  earlier one, because a learner can only attempt it after reaching that topic.
+  Needing an earlier topic's definition or formula makes that topic a
+  prerequisite, not the owner. This holds for every subject and chapter, not
+  only where sections look numerically ordered.
+- Retrospective reference is the exception: if the later topic only mentions or
+  illustrates the earlier material, rather than being needed to attempt the
+  task, the task stays with the topic that teaches it and the later topic keeps
+  its own separate task about the illustration. Ask which direction the
+  dependence runs. Chronological or thematic chapters refer backwards often, so
+  appearing later in the book does not by itself mean later in teaching.
 - Set every Case's topic_match_hint, concept_match_hint,
   parent_concept_match_hint, difficulty/cognitive/subject skill hints,
   is_activity, and placement_scope independently. Set placement_scope to
@@ -1995,6 +2007,18 @@ Rules:
   concept_match_hint, parent_concept_match_hint, topic order, and the actual
   question wording. Do not attach a later-section question to an earlier
   concept just because formulas overlap.
+- Advanced placement: when one task requires methods from more than one source
+  topic, it belongs to the LATEST of those topics, never an earlier one, because
+  a learner can only attempt it after reaching that topic. Solving it may need
+  an earlier topic's definition or formula; that makes the earlier topic a
+  prerequisite, not the owner. Apply this to every subject and chapter, not only
+  where the topics look numerically ordered.
+- Retrospective reference is the exception: if the later topic only mentions or
+  illustrates the earlier material, rather than being needed to attempt the
+  task, the task stays with the topic that teaches it and the later topic keeps
+  its own separate task about the illustration. Ask which direction the
+  dependence runs. Chronological or thematic chapters refer backwards often, so
+  appearing later in the book does not by itself mean later in teaching.
 - If a question combines several concepts from one topic, place it on that
   topic's culmination concept. If it genuinely spans concepts across different
   source topics and fits neither an ordinary concept nor one topic's
@@ -8360,6 +8384,23 @@ def _annotate_mined_type_case_routes(
     return out
 
 
+_QID_SORT_RE = re.compile(r"(\d+)(?:\.(\d+))?\s*$")
+
+
+def _inventory_qid_sort_key(qid: object) -> tuple[int, int]:
+    """Order source QIDs the way the source issues them.
+
+    QIDs are allocated in reading order (QINV-0001, QINV-0002, ...), so a
+    higher qid means later in the book. Sub-part suffixes such as
+    ``QINV-0011.2`` order after their parent.
+    """
+
+    match = _QID_SORT_RE.search(str(qid or ""))
+    if match is None:
+        return (-1, -1)
+    return (int(match.group(1)), int(match.group(2) or 0))
+
+
 def _split_mined_types_by_source_topic(
     types: list[dict], inventory: dict,
 ) -> list[dict]:
@@ -8388,11 +8429,19 @@ def _split_mined_types_by_source_topic(
             continue
 
         split_count += 1
-        # A blank/unknown hint is not permission to discard the qid. Attach
-        # those qids to the topic with the most sourced items; ties preserve
-        # source order because ``nonempty_topics`` follows insertion order.
+        # A blank/unknown hint is not permission to discard the qid. Advanced
+        # placement decides where it lands: a task that draws on more than one
+        # topic belongs to the latest of them, because it can only be attempted
+        # once that topic is reached, so an unattributed qid follows the most
+        # advanced topic in this Type rather than the most populous one. QIDs
+        # are issued in source order, so the topic owning the highest qid is
+        # the latest topic.
         dominant_topic = max(
-            nonempty_topics, key=lambda topic: len(groups[topic]))
+            nonempty_topics,
+            key=lambda topic: max(
+                _inventory_qid_sort_key(qid) for qid in groups[topic]
+            ),
+        )
         for topic in nonempty_topics:
             qids = [
                 qid for qid in source_qids

@@ -59,6 +59,17 @@ class HumanDecisionConflictError(ValueError):
     """A semantic decision is stale, already answered, or not currently open."""
 
 
+class UnattendedDecisionUnavailable(RuntimeError):
+    """Unattended generation reached a decision only a person could answer.
+
+    Raised instead of parking the run in ``awaiting_decision``. An unattended
+    batch cannot act on a pause, so a stalled job is strictly worse than a
+    terminal failure: this ends the run with the reason on the record. The
+    wording deliberately avoids the semantic-failure vocabulary so bounded
+    semantic recovery classifies it as non-semantic and does not retry it.
+    """
+
+
 _HUMAN_DECISIONS_KEY = "human_decisions"
 _HUMAN_DECISIONS_VERSION = 1
 _HUMAN_DECISION_ID_RE = re.compile(
@@ -2405,6 +2416,7 @@ def _existing_human_decision_pause(
             checkpoint.clear()
             checkpoint.update(refreshed_checkpoint)
         return None
+    _raise_if_unattended_cannot_pause(pending)
     progress.set_progress(
         job.checkpoint_progress,
         label="Paused for your decision",
@@ -3074,6 +3086,34 @@ def _apply_last_resort_safe_continuation(
     return decision_id
 
 
+def _raise_if_unattended_cannot_pause(pending: dict) -> None:
+    """End an unattended run instead of parking it in ``awaiting_decision``.
+
+    Reached only when every automatic pathway declined and the decision's
+    remaining routes all require a person: replacing the uploaded document or
+    writing an instruction. Neither can be synthesized, and an unattended
+    batch cannot answer a pause, so the run stops with the reason recorded
+    rather than waiting indefinitely for a click that will not come.
+    """
+
+    if not autonomous_resolution.unattended_completion_enabled():
+        return
+    choices = sorted({
+        str(row.get("choice") or "")
+        for row in pending.get("options") or []
+        if isinstance(row, dict) and str(row.get("choice") or "")
+    })
+    message = (
+        "Unattended generation stopped: the saved decision offers only "
+        "actions that a person must take (" + (", ".join(choices) or "none")
+        + "). Aegis will not alter the uploaded document by itself. Upload a "
+        "corrected document and convert it again, or set "
+        "AEGIS_UNATTENDED_COMPLETION=0 to answer this decision manually."
+    )
+    progress.log(message, level="error")
+    raise UnattendedDecisionUnavailable(message)
+
+
 def _source_replacement_required(checkpoint: dict | None) -> bool:
     """Whether a source-review answer terminally requires a new conversion."""
 
@@ -3309,6 +3349,7 @@ def _run_with_human_decision_pause(
             if continued_id:
                 active_ids.add(continued_id)
                 continue
+            _raise_if_unattended_cannot_pause(current or pending)
             return _awaiting_human_decision_result(
                 job, current or pending
             ), None

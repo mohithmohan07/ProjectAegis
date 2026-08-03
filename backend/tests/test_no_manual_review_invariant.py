@@ -18,6 +18,7 @@ import pytest
 
 from app import models
 from app.services import autonomous_resolution, build_concepts
+from app.services import semantic_recovery
 
 
 def _phase33_pending(*, concepts: bool = True, target_id: str = "") -> dict:
@@ -289,7 +290,70 @@ def test_resume_path_continues_instead_of_returning_a_pause(
     assert checkpoint["human_decisions"]["pending"] is None
 
 
-def test_user_only_decision_still_pauses_on_resume(
+def test_user_only_decision_ends_the_run_instead_of_parking_it(
+    db,
+    first_chapter,
+    monkeypatch,
+):
+    """Unattended runs never park in ``awaiting_decision``.
+
+    A decision whose only routes are replacing the uploaded document or
+    writing an instruction cannot be synthesized. An unattended batch cannot
+    answer a pause either, so a stalled job is strictly worse than a terminal
+    failure: the run ends with the reason recorded.
+    """
+
+    chapter = db.get(models.Chapter, first_chapter["id"])
+    raw = _phase33_pending(concepts=False)
+    raw["decision_id"] = "phase33-host-useronly-unattended"
+    raw["options"] = [
+        {
+            "choice": "replace_source",
+            "label": "Replace the uploaded source",
+            "recommended": True,
+        },
+        {
+            "choice": "custom_instruction",
+            "label": "Give a custom instruction",
+            "recommended": False,
+        },
+    ]
+    job, _pending = _seed_paused_job(
+        db,
+        chapter,
+        monkeypatch,
+        filename="user-only-unattended.mmd",
+        raw=raw,
+    )
+    monkeypatch.delenv("AEGIS_UNATTENDED_COMPLETION", raising=False)
+    monkeypatch.setattr(
+        build_concepts,
+        "_autonomously_resolve_pending_decision",
+        lambda *_args, **_kwargs: None,
+    )
+
+    with pytest.raises(
+        build_concepts.UnattendedDecisionUnavailable,
+        match="a person must take",
+    ) as excinfo:
+        build_concepts._existing_human_decision_pause(
+            db,
+            job,
+            dict(job.generation_checkpoint or {}),
+            agent_resolution_ids=set(),
+            owner_sub=None,
+        )
+
+    # The message names the blocked routes and how to proceed.
+    assert "replace_source" in str(excinfo.value)
+    assert "AEGIS_UNATTENDED_COMPLETION=0" in str(excinfo.value)
+    # Bounded semantic recovery must not retry a decision only a person can
+    # answer, so it is classified non-semantic.
+    assert semantic_recovery.classify_failure(
+        excinfo.value).recoverable is False
+
+
+def test_user_only_decision_still_pauses_when_attended(
     db,
     first_chapter,
     monkeypatch,
@@ -316,7 +380,7 @@ def test_user_only_decision_still_pauses_on_resume(
         filename="user-only-pauses.mmd",
         raw=raw,
     )
-    monkeypatch.delenv("AEGIS_UNATTENDED_COMPLETION", raising=False)
+    monkeypatch.setenv("AEGIS_UNATTENDED_COMPLETION", "0")
     monkeypatch.setattr(
         build_concepts,
         "_autonomously_resolve_pending_decision",

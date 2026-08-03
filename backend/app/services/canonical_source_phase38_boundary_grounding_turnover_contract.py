@@ -77,6 +77,136 @@ def _max_convergence_passes() -> int:
     )
 
 
+def _max_retired_fraction() -> float:
+    """Share of normal concepts that may be retired before the run stops.
+
+    A handful of ungroundable concepts is an ordinary per-concept problem and
+    must not cost the whole chapter. A large share is a source or extraction
+    problem, and silently shipping a thin map would hide it.
+    """
+
+    try:
+        value = float(
+            os.environ.get("AEGIS_PHASE38_MAX_RETIRED_FRACTION", "0.25")
+        )
+    except (TypeError, ValueError):
+        value = 0.25
+    return max(0.0, min(1.0, value))
+
+
+_MAX_CONVERGENCE_LEDGER_SCOPES = 32
+# Convergence control state, keyed by source contract.
+#
+# This deliberately outlives one call of the convergence loop. A semantic
+# decision raises HumanDecisionRequired (a RuntimeError), which unwinds the
+# whole loop; the resolution agent then answers it and the orchestrator
+# re-runs generation from the durable checkpoint. Keeping the attempt count,
+# repeat detector, suppressed resolutions, and retirements in function locals
+# meant every one of those cycles restarted at pass 1 with an empty repeat
+# detector, so the bounded budget was never consumed and the same rejection
+# could recur indefinitely.
+_CONVERGENCE_LEDGER: "dict[str, dict[str, Any]]" = {}
+
+
+def _row_identity(row: Any) -> tuple[str, str]:
+    """Identity that survives row reordering across a restart."""
+
+    if not isinstance(row, dict):
+        return ("", "")
+    return (
+        _normal(row.get("concept_title") or row.get("concept")),
+        _normal(row.get("topic")),
+    )
+
+
+def _convergence_scope_key(records: list[dict[str, Any]]) -> str:
+    """Key convergence state to the source contract this run is grounded in."""
+
+    contract = ""
+    try:
+        graph = phase3.active_graph()
+        if isinstance(graph, dict):
+            contract = str(graph.get("source_contract_hash") or "")
+    except Exception:
+        contract = ""
+    if contract:
+        return contract
+    return phase3._sha256_json(sorted(
+        "|".join(_row_identity(row))
+        for row in records
+        if isinstance(row, dict)
+    ))
+
+
+def _convergence_state(scope: str) -> dict[str, Any]:
+    state = _CONVERGENCE_LEDGER.get(scope)
+    if state is None:
+        if len(_CONVERGENCE_LEDGER) >= _MAX_CONVERGENCE_LEDGER_SCOPES:
+            _CONVERGENCE_LEDGER.pop(next(iter(_CONVERGENCE_LEDGER)), None)
+        state = {
+            "attempts": 0,
+            "signatures": {},
+            "suppressed": set(),
+            "retired": set(),
+            "feedback": {},
+        }
+        _CONVERGENCE_LEDGER[scope] = state
+    return state
+
+
+def reset_convergence_state(scope: str | None = None) -> None:
+    """Clear convergence control state (operational and test hook)."""
+
+    if scope is None:
+        _CONVERGENCE_LEDGER.clear()
+    else:
+        _CONVERGENCE_LEDGER.pop(scope, None)
+
+
+def _precise_failure_identities(
+    exc: Exception,
+    *,
+    repaired_records: list[dict[str, Any]] | None,
+    working: list[dict[str, Any]],
+) -> set[tuple[str, str]]:
+    """Identify only the concepts a diagnostic actually names.
+
+    The broad "every concept in the chapter" fallback used for repair
+    feedback must never drive retirement: retiring on a catch-all would empty
+    the map for one unattributable rejection.
+    """
+
+    origins: dict[str, Any] = {}
+    if repaired_records:
+        try:
+            origins = phase33._grounding_feedback_origins(
+                exc, records=repaired_records) or {}
+        except Exception:
+            origins = {}
+    if not origins:
+        topic_match = phase33._GROUNDING_TOPIC_RE.search(str(exc))
+        if topic_match:
+            topic_key = _normal(topic_match.group("topic"))
+            origins = {
+                concept_id: True
+                for concept_id, row in _original_concept_directory(
+                    working).items()
+                if _normal(row.get("topic")) == topic_key
+            }
+    identities: set[tuple[str, str]] = set()
+    for concept_id in origins:
+        match = re.fullmatch(
+            r"TOPOLOGY-CONCEPT-(\d{1,6})", str(concept_id).upper())
+        if match is None:
+            continue
+        index = int(match.group(1)) - 1
+        if 0 <= index < len(working):
+            identity = _row_identity(working[index])
+            if any(identity):
+                identities.add(identity)
+    return identities
+
+
 def _normal(value: object) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip().casefold()
 
@@ -96,6 +226,62 @@ def _semantic_blocks(graph: dict[str, Any]) -> list[dict[str, Any]]:
             str(row.get("block_id") or ""),
         ),
     )
+
+
+def _prerequisite_block_limit() -> int:
+    """Bounded number of earlier-topic blocks offered as prerequisite context."""
+
+    try:
+        value = int(
+            os.environ.get("AEGIS_PHASE38_PREREQUISITE_BLOCKS", "12")
+        )
+    except (TypeError, ValueError):
+        value = 12
+    return max(0, min(40, value))
+
+
+_TOKEN_RE = re.compile(r"[^\W_]{4,}", re.UNICODE)
+
+
+def _significant_tokens(text: str) -> set[str]:
+    return {token.casefold() for token in _TOKEN_RE.findall(str(text or ""))}
+
+
+def _prerequisite_rows(
+    ordered: list[dict[str, Any]],
+    *,
+    topic_id: str,
+    first_native_index: int,
+    native_tokens: set[str],
+    excluded_ids: set[str],
+) -> list[dict[str, Any]]:
+    """Select earlier-topic blocks a later topic visibly builds on.
+
+    Textbook reasoning is cumulative: a section legitimately depends on a
+    definition established several sections earlier, which the immediate
+    adjacent window cannot reach. Selection is deterministic and relevance
+    ranked - an earlier block is offered only when it shares meaningful
+    vocabulary with the target topic's own blocks - so this stays a bounded
+    prerequisite channel rather than "the whole chapter".
+    """
+
+    limit = _prerequisite_block_limit()
+    if limit <= 0 or not native_tokens:
+        return []
+    scored: list[tuple[int, int, dict[str, Any]]] = []
+    for index, row in enumerate(ordered[:first_native_index]):
+        block_id = str(row.get("block_id") or "")
+        if not block_id or block_id in excluded_ids:
+            continue
+        if str(row.get("topic_id") or "") in {"", topic_id}:
+            continue
+        overlap = len(
+            _significant_tokens(row.get("text") or "") & native_tokens
+        )
+        if overlap >= 2:
+            scored.append((-overlap, -index, row))
+    scored.sort(key=lambda item: (item[0], item[1]))
+    return [row for _score, _order, row in scored[:limit]]
 
 
 def _contiguous_boundary_rows(
@@ -243,9 +429,27 @@ def _candidate_blocks(
             phase3._sha256_text(native_by_id[block_id].get("text") or ""),
         )
 
+    prerequisite = _prerequisite_rows(
+        ordered,
+        topic_id=topic_id,
+        first_native_index=first,
+        native_tokens={
+            token
+            for row in ordered[first : last + 1]
+            if str(row.get("topic_id") or "") == topic_id
+            for token in _significant_tokens(row.get("text") or "")
+        },
+        excluded_ids={
+            str(row.get("block_id") or "")
+            for row in [*before, *after]
+        }
+        | set(native_by_id),
+    )
+
     for relation, rows in (
         ("previous_topic_boundary", before),
         ("next_topic_boundary", after),
+        ("prerequisite_topic_evidence", prerequisite),
     ):
         for block in rows:
             block_id = str(block.get("block_id") or "")
@@ -307,14 +511,53 @@ def _augment_grounding_payload(
             "previous_topic_boundary",
             "next_topic_boundary",
         ],
+        "allowed_context_relations": [
+            "prerequisite_topic_evidence",
+        ],
         "rule": (
             "An adjacent boundary block may be selected only when it visibly "
             "continues the target topic despite converter/page reading-order drift. "
             "It must not be used to keep a concept under the wrong academic topic."
         ),
+        "prerequisite_rule": (
+            "Blocks marked prerequisite_topic_evidence come from an earlier "
+            "topic this one builds on. A concept placed here may rest on them "
+            "as heavily as it needs to, including for its main explanation. "
+            "The only requirement is that it genuinely involves THIS topic: it "
+            "must draw on at least one native_topic block for the part that "
+            "makes it belong here. A concept supported entirely by "
+            "prerequisite blocks involves no content from this topic at all "
+            "and is misplaced: reject it so topology can move it back."
+        ),
+        "advanced_placement_rule": (
+            "Placement follows teaching order. If a concept involves content "
+            "from this topic at all, it belongs to THIS later topic, even when "
+            "most of what it explains is foundational material from an earlier "
+            "one - a teacher can only reach it once this topic is taught. Do "
+            "not push such a concept back to the earlier topic on the grounds "
+            "that its main idea looks foundational, and do not reject it "
+            "because most of its evidence appears earlier in the book. "
+            "EXCEPTION - retrospective reference: when the later topic only "
+            "mentions or illustrates the earlier one, rather than the concept "
+            "needing this topic's method to be understood, the concept stays "
+            "in the earlier topic and this topic instead gains its own concept "
+            "about the illustration. Test the direction of dependence: if "
+            "understanding the concept requires this topic, place it here; if "
+            "this topic merely refers back to it, leave it where it is taught. "
+            "Chronological or thematic chapters refer backwards often, so "
+            "later in the book does not by itself mean later in teaching."
+        ),
         "repair_route": (
-            "If the claim truly combines different topics, reject the mapping so "
-            "topology turnover can move, refine, split, or retire the concept."
+            "If the claim genuinely teaches two topics at once, SPLIT it and "
+            "keep BOTH parts: the earlier topic keeps a concept covering the "
+            "foundational idea on its own terms, and this later topic gains a "
+            "concept covering how that idea behaves under this topic's method. "
+            "Splitting must never leave either topic without its concept - do "
+            "not delete the foundational concept when promoting the advanced "
+            "one, and do not leave the advanced behaviour untaught by keeping "
+            "everything in the earlier topic. Use move only when the whole "
+            "claim belongs elsewhere, and retire only when no topic supports "
+            "it."
         ),
     }
     value["original_pdf_visual_page_ids"] = [
@@ -337,7 +580,19 @@ def _ground_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         "Blocks marked previous_topic_boundary or next_topic_boundary are a "
         "bounded recovery window for converter/page-order drift and may be used "
         "only when their visible content clearly continues the target academic "
-        "topic. Never use boundary evidence to conceal a genuinely cross-topic or "
+        "topic. Blocks marked prerequisite_topic_evidence come from an earlier "
+        "topic this one builds on: cite them as freely as the claim needs, "
+        "including for its main explanation. A concept belongs to this later "
+        "topic whenever it involves this topic's content at all, even if most "
+        "of what it explains is foundational, because teaching only reaches it "
+        "here; require only that it draws on at least one native_topic block. "
+        "Reject it only when it rests entirely on prerequisite blocks and so "
+        "involves nothing from this topic. One exception runs the other way: "
+        "when this topic merely mentions or illustrates the earlier material "
+        "rather than being needed to understand it, the concept belongs to the "
+        "earlier topic and this one gets its own concept about the "
+        "illustration. Never use boundary or "
+        "prerequisite evidence to conceal a genuinely cross-topic or "
         "over-merged concept. If the claim belongs elsewhere or needs narrowing or "
         "splitting, return a low-confidence mapping and explain that topology "
         "repair is required. Figure captions and supplied original PDF pages are "
@@ -373,11 +628,23 @@ def _critic_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         "that every source_claim is fully and visibly supported by the proposed "
         "smallest sufficient block set. A selected adjacent boundary block is "
         "valid only when its content clearly belongs with the target topic and "
-        "repairs local source-order drift. Reject a mapping when the boundary "
-        "blocks instead show that the concept belongs to the adjacent topic, when "
-        "the claim over-merges separate ideas, or when a selected Figure is the "
-        "wrong visual. In that case state whether topology should move, refine, "
-        "split, or retire the row. Figure captions and supplied original PDF pages "
+        "repairs local source-order drift. A selected prerequisite_topic_evidence "
+        "block may carry as much of the explanation as the claim needs. "
+        "Accept the mapping when the concept draws on at least one "
+        "native_topic block, treating it as correctly placed advanced material "
+        "even when most of its support is prerequisite: teaching reaches such "
+        "a concept only in this topic. Apply the retrospective-reference "
+        "exception: when this topic only mentions or illustrates the earlier "
+        "material rather than being needed to understand it, reject the "
+        "placement so the concept returns to the topic that teaches it. "
+        "Reject also when it rests entirely on "
+        "prerequisite blocks and involves nothing from this topic, when the "
+        "boundary blocks instead show that the concept belongs to the adjacent "
+        "topic, when the claim over-merges separate ideas, or when a selected "
+        "Figure is the wrong visual. In that case state whether topology should "
+        "move, refine, split, or retire the row, preferring split - advanced part "
+        "here, foundational part in the earlier topic - when the claim genuinely "
+        "teaches both. Figure captions and supplied original PDF pages "
         "are authoritative. Do not demand source support for mastery, learner "
         "analysis, Types, hubs, keywords, or parent labels. Put every concept ID "
         "in exactly one accepted or rejected list. Verification requires all "
@@ -540,23 +807,57 @@ def _phase32_adjudicate_with_targeted_convergence(
         return original(records, *args, **kwargs)
 
     passes = _max_convergence_passes()
-    feedback: dict[str, str] = {}
-    signatures: dict[str, int] = {}
-    suppressed_resolutions: set[str] = set()
+    scope = _convergence_scope_key(records)
+    state = _convergence_state(scope)
+    signatures: dict[str, int] = state["signatures"]
+    suppressed_resolutions: set[str] = state["suppressed"]
+    retired: set[tuple[str, str]] = state["retired"]
+    feedback: dict[str, str] = state["feedback"]
+    normal_total = len([
+        row for row in records
+        if isinstance(row, dict)
+        and not cr.is_culmination(
+            str(row.get("concept_title") or row.get("concept") or "")
+        )
+    ])
+    retire_budget = int(normal_total * _max_retired_fraction())
+
+    def _working_records() -> list[dict[str, Any]]:
+        if not retired:
+            return records
+        return [
+            row for row in records
+            if _row_identity(row) not in retired
+        ]
+
+    working = _working_records()
+    if retired:
+        progress.log(
+            f"Phase 3.8 is continuing without {len(retired)} previously "
+            "retired ungroundable concept(s) from this source.",
+            level="warning",
+        )
     repaired_token = _LAST_REPAIRED_TOPOLOGY.set(None)
     try:
-        for convergence_pass in range(1, passes + 1):
+        while True:
             _LAST_REPAIRED_TOPOLOGY.set(None)
             feedback_token = phase33._EXTERNAL_GROUNDING_FEEDBACK.set(feedback)
             try:
                 with early_gate.suppress_resolution_ids(
                     suppressed_resolutions
                 ):
-                    return original(records, *args, **kwargs)
+                    result = original(working, *args, **kwargs)
+                # Converged: this source no longer needs its retry budget.
+                state["attempts"] = 0
+                state["signatures"] = signatures = {}
+                state["feedback"] = feedback = {}
+                return result
             except ValueError as exc:
                 message = str(exc)
                 if "failed exact source-block grounding before freeze" not in message:
                     raise
+                state["attempts"] += 1
+                attempts = state["attempts"]
                 signature = phase3._sha256_json(
                     {
                         "message": _normal(message),
@@ -567,27 +868,72 @@ def _phase32_adjudicate_with_targeted_convergence(
                 repeated = signatures[signature] > 1
                 if isinstance(exc, early_gate.TopologyRepairRequired):
                     suppressed_resolutions.add(exc.decision_id)
-                if convergence_pass >= passes:
-                    raise
                 repaired = _LAST_REPAIRED_TOPOLOGY.get()
-                feedback = _feedback_for_failure(
+                if attempts < passes:
+                    feedback = _feedback_for_failure(
+                        exc,
+                        original_records=working,
+                        repaired_records=repaired,
+                        repeated=repeated,
+                    )
+                    state["feedback"] = feedback
+                    progress.log(
+                        "Phase 3.8 mapped exact grounding rejection back to "
+                        f"{len(feedback)} original topology concept(s); only "
+                        "those concepts will be reconsidered in convergence "
+                        f"pass {attempts + 1}/{passes}.",
+                        level="warning",
+                    )
+                    continue
+
+                # Budget spent. Repairing this concept has not worked, so
+                # dispose of it deterministically instead of holding the whole
+                # chapter hostage: retire only the concepts the diagnostic
+                # actually names, then let the reduced map converge. Types are
+                # allocated after topology freeze, so no host certification
+                # depends on a concept retired here, and source questions live
+                # in the deterministic QID inventory whose exact-once coverage
+                # gate still runs at deposit.
+                failing = _precise_failure_identities(
                     exc,
-                    original_records=records,
                     repaired_records=repaired,
-                    repeated=repeated,
-                )
+                    working=working,
+                ) - retired
+                if not failing:
+                    raise
+                if len(retired) + len(failing) > retire_budget:
+                    progress.log(
+                        "Phase 3.8 stopped instead of retiring "
+                        f"{len(retired) + len(failing)} of {normal_total} "
+                        "concept(s): that many ungroundable concepts indicates "
+                        "a source or extraction problem rather than a "
+                        "per-concept one.",
+                        level="error",
+                    )
+                    raise
+                retired.update(failing)
+                titles = ", ".join(sorted(
+                    title for title, _topic in failing if title
+                ))
                 progress.log(
-                    "Phase 3.8 mapped exact grounding rejection back to "
-                    f"{len(feedback)} original topology concept(s); only those "
-                    "concepts will be reconsidered in convergence pass "
-                    f"{convergence_pass + 1}/{passes}.",
-                    level="warning",
+                    f"Phase 3.8 exhausted {passes} bounded convergence "
+                    f"attempt(s) for {len(failing)} concept(s) that remain "
+                    "unsupported by exact source evidence. Retiring them so "
+                    "the chapter completes; every retained concept is still "
+                    f"independently source-verified. Retired: {titles}.",
+                    level="error",
                 )
+                working = _working_records()
+                # The problem set materially changed, so the reduced map gets
+                # a fresh budget. Each disposition strictly shrinks the map and
+                # the retire budget bounds the total, so this terminates.
+                state["attempts"] = 0
+                state["signatures"] = signatures = {}
+                state["feedback"] = feedback = {}
             finally:
                 phase33._EXTERNAL_GROUNDING_FEEDBACK.reset(feedback_token)
     finally:
         _LAST_REPAIRED_TOPOLOGY.reset(repaired_token)
-    raise RuntimeError("Phase 3.8 topology convergence ended unexpectedly")
 
 
 def _cached_records_have_current_grounding(

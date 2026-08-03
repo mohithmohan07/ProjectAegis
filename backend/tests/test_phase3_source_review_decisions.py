@@ -1321,6 +1321,10 @@ def test_pending_source_review_preserves_usage_and_repeat_generate_is_free(
     first_chapter,
     monkeypatch: pytest.MonkeyPatch,
 ):
+    # Billing preservation across a saved pause is an attended-mode contract.
+    # Unattended runs cannot answer a source-replacement decision, so they end
+    # the run instead of parking it (see test_no_manual_review_invariant.py).
+    monkeypatch.setenv("AEGIS_UNATTENDED_COMPLETION", "0")
     chapter = db.get(models.Chapter, first_chapter["id"])
     job = models.UploadJob(
         owner_sub=auth.LOCAL_OWNER_SUB,
