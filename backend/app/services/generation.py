@@ -1676,6 +1676,12 @@ CASE WORDING (each Case must be properly defined):
   Needing an earlier topic's definition or formula makes that topic a
   prerequisite, not the owner. This holds for every subject and chapter, not
   only where sections look numerically ordered.
+- Retrospective reference is the exception: if the later topic only mentions or
+  illustrates the earlier material, rather than being needed to attempt the
+  task, the task stays with the topic that teaches it and the later topic keeps
+  its own separate task about the illustration. Ask which direction the
+  dependence runs. Chronological or thematic chapters refer backwards often, so
+  appearing later in the book does not by itself mean later in teaching.
 - Set every Case's topic_match_hint, concept_match_hint,
   parent_concept_match_hint, difficulty/cognitive/subject skill hints,
   is_activity, and placement_scope independently. Set placement_scope to
@@ -2007,6 +2013,12 @@ Rules:
   an earlier topic's definition or formula; that makes the earlier topic a
   prerequisite, not the owner. Apply this to every subject and chapter, not only
   where the topics look numerically ordered.
+- Retrospective reference is the exception: if the later topic only mentions or
+  illustrates the earlier material, rather than being needed to attempt the
+  task, the task stays with the topic that teaches it and the later topic keeps
+  its own separate task about the illustration. Ask which direction the
+  dependence runs. Chronological or thematic chapters refer backwards often, so
+  appearing later in the book does not by itself mean later in teaching.
 - If a question combines several concepts from one topic, place it on that
   topic's culmination concept. If it genuinely spans concepts across different
   source topics and fits neither an ordinary concept nor one topic's

@@ -349,3 +349,69 @@ def test_unattributed_qid_follows_the_latest_topic_not_the_largest(
     # majority rule would have filed the combined task under the earlier one.
     assert "QINV-0004" in owner[expected]
     assert "QINV-0004" not in owner["Earlier Topic"]
+
+
+# --------------------------------------------------------------------------- #
+# Retrospective reference: the exception for chronological/thematic chapters
+# --------------------------------------------------------------------------- #
+
+def test_retrospective_reference_keeps_the_concept_where_it_is_taught():
+    """History refers backwards; that must not drag a concept forward.
+
+    The Germania banner (Visualising the Nation) names the Frankfurt
+    Parliament (1848 revolutions). The later topic only illustrates the
+    earlier one, so the Frankfurt Parliament concept stays where it is
+    taught and the allegory topic gains its own concept.
+    """
+
+    advanced = phase38._augment_grounding_payload(
+        {"concepts": [], "source_blocks": []},
+        page_numbers=[],
+    )["boundary_grounding_contract"]["advanced_placement_rule"]
+
+    assert "EXCEPTION - retrospective reference" in advanced
+    assert "only " in advanced and "illustrates the earlier one" in advanced
+    assert "leave it where it is taught" in advanced
+    # The decisive test is stated, not left implicit.
+    assert "direction of dependence" in advanced
+    # And the reason book order is not teaching order in such chapters.
+    assert "later in the book does not by itself mean later in teaching" in (
+        advanced
+    )
+
+
+def test_both_provider_prompts_carry_the_exception(monkeypatch):
+    captured: list[dict] = []
+    monkeypatch.setattr(
+        phase38.phase22, "_openai_multimodal_json",
+        lambda **kwargs: captured.append(kwargs) or {},
+    )
+    monkeypatch.setattr(
+        phase38.phase37, "_visual_evidence_pages", lambda _payload: ([], []))
+    monkeypatch.setattr(
+        phase38.phase31, "_grounding_schema", lambda *_a, **_k: {"x": 1})
+    monkeypatch.setattr(
+        phase38.phase31, "_critic_schema", lambda *_a, **_k: {"x": 1})
+
+    payload = {"concepts": [], "source_blocks": []}
+    phase38._ground_via_openai(payload)
+    phase38._critic_via_openai(payload)
+    mapper, critic = captured[0]["system"], captured[1]["system"]
+
+    assert "mentions or illustrates the earlier material" in mapper
+    assert "retrospective-reference" in critic
+    # The critic must actively reject a forward-dragged concept.
+    assert "returns to the topic that teaches it" in critic
+
+
+def test_type_prompts_carry_the_exception():
+    from app.services import generation
+
+    for key in (
+        "concepts.type_mining.system",
+        "concepts.type_alignment_review.system",
+    ):
+        rule = generation.prompts.get_text(key)
+        assert "Retrospective reference is the exception" in rule, key
+        assert "stays with the topic that teaches it" in rule, key
+        assert "Ask which direction the" in rule, key
