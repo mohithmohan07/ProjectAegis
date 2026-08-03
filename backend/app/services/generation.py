@@ -7233,9 +7233,59 @@ def _assign_chapter_wide_inventory_topics_via_api(
             )
     missing = sorted(target_qids - set(assigned))
     if missing:
-        raise RuntimeError(
-            "chapter-wide task placement did not return exact valid assignments: "
-            f"missing={missing}"
+        # The provider echoes qids as free text here, and a sub-part qid such
+        # as QINV-0016.2 is routinely collapsed to its parent, so those rows
+        # are rejected deterministically on every attempt. Losing them used to
+        # end the whole run. Placement of a chapter-wide review task is a
+        # routing decision over topics that are already certified, so it is
+        # resolved deterministically rather than abandoned.
+        #
+        # Order of preference: the parent qid's topic, an assigned sibling
+        # sub-part, then - per the advanced-placement rule - the latest
+        # teaching-ranked topic already assigned in this set. A chapter-wide
+        # review task draws on the whole chapter, so the latest required topic
+        # is the defensible default, never the first or most populous.
+        topic_rank = {
+            topic: index
+            for index, topic in enumerate(
+                entry["topic"] for entry in topics
+            )
+        }
+        assigned_by_qid_order = sorted(
+            assigned.items(), key=lambda item: _inventory_qid_sort_key(item[0])
+        )
+        latest_assigned_topic = ""
+        if assigned:
+            latest_assigned_topic = max(
+                assigned.values(),
+                key=lambda topic: topic_rank.get(topic, -1),
+            )
+        resolved: list[str] = []
+        for qid in missing:
+            parent = qid.split(".")[0]
+            inherited = assigned.get(parent, "")
+            if not inherited:
+                inherited = next(
+                    (
+                        topic for sibling, topic in assigned_by_qid_order
+                        if sibling.split(".")[0] == parent
+                    ),
+                    "",
+                )
+            if not inherited:
+                inherited = latest_assigned_topic
+            if not inherited:
+                inherited = topics[-1]["topic"]
+            assigned[qid] = inherited
+            resolved.append(f"{qid}->{inherited}")
+        progress.log(
+            "Chapter-wide task placement resolved "
+            f"{len(resolved)} unrouted task(s) deterministically "
+            f"({', '.join(resolved[:8])}"
+            + (", ..." if len(resolved) > 8 else "")
+            + "). Sub-part qids are inherited from their parent or latest "
+            "assigned topic rather than dropped.",
+            level="warning",
         )
     for item in targets:
         item["topic_hint"] = assigned[(item.get("qid") or "").strip()]
