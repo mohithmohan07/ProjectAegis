@@ -228,6 +228,62 @@ def _semantic_blocks(graph: dict[str, Any]) -> list[dict[str, Any]]:
     )
 
 
+def _prerequisite_block_limit() -> int:
+    """Bounded number of earlier-topic blocks offered as prerequisite context."""
+
+    try:
+        value = int(
+            os.environ.get("AEGIS_PHASE38_PREREQUISITE_BLOCKS", "12")
+        )
+    except (TypeError, ValueError):
+        value = 12
+    return max(0, min(40, value))
+
+
+_TOKEN_RE = re.compile(r"[^\W_]{4,}", re.UNICODE)
+
+
+def _significant_tokens(text: str) -> set[str]:
+    return {token.casefold() for token in _TOKEN_RE.findall(str(text or ""))}
+
+
+def _prerequisite_rows(
+    ordered: list[dict[str, Any]],
+    *,
+    topic_id: str,
+    first_native_index: int,
+    native_tokens: set[str],
+    excluded_ids: set[str],
+) -> list[dict[str, Any]]:
+    """Select earlier-topic blocks a later topic visibly builds on.
+
+    Textbook reasoning is cumulative: a section legitimately depends on a
+    definition established several sections earlier, which the immediate
+    adjacent window cannot reach. Selection is deterministic and relevance
+    ranked - an earlier block is offered only when it shares meaningful
+    vocabulary with the target topic's own blocks - so this stays a bounded
+    prerequisite channel rather than "the whole chapter".
+    """
+
+    limit = _prerequisite_block_limit()
+    if limit <= 0 or not native_tokens:
+        return []
+    scored: list[tuple[int, int, dict[str, Any]]] = []
+    for index, row in enumerate(ordered[:first_native_index]):
+        block_id = str(row.get("block_id") or "")
+        if not block_id or block_id in excluded_ids:
+            continue
+        if str(row.get("topic_id") or "") in {"", topic_id}:
+            continue
+        overlap = len(
+            _significant_tokens(row.get("text") or "") & native_tokens
+        )
+        if overlap >= 2:
+            scored.append((-overlap, -index, row))
+    scored.sort(key=lambda item: (item[0], item[1]))
+    return [row for _score, _order, row in scored[:limit]]
+
+
 def _contiguous_boundary_rows(
     rows: list[dict[str, Any]],
     *,
@@ -373,9 +429,27 @@ def _candidate_blocks(
             phase3._sha256_text(native_by_id[block_id].get("text") or ""),
         )
 
+    prerequisite = _prerequisite_rows(
+        ordered,
+        topic_id=topic_id,
+        first_native_index=first,
+        native_tokens={
+            token
+            for row in ordered[first : last + 1]
+            if str(row.get("topic_id") or "") == topic_id
+            for token in _significant_tokens(row.get("text") or "")
+        },
+        excluded_ids={
+            str(row.get("block_id") or "")
+            for row in [*before, *after]
+        }
+        | set(native_by_id),
+    )
+
     for relation, rows in (
         ("previous_topic_boundary", before),
         ("next_topic_boundary", after),
+        ("prerequisite_topic_evidence", prerequisite),
     ):
         for block in rows:
             block_id = str(block.get("block_id") or "")
@@ -437,14 +511,36 @@ def _augment_grounding_payload(
             "previous_topic_boundary",
             "next_topic_boundary",
         ],
+        "allowed_context_relations": [
+            "prerequisite_topic_evidence",
+        ],
         "rule": (
             "An adjacent boundary block may be selected only when it visibly "
             "continues the target topic despite converter/page reading-order drift. "
             "It must not be used to keep a concept under the wrong academic topic."
         ),
+        "prerequisite_rule": (
+            "Blocks marked prerequisite_topic_evidence come from an earlier "
+            "topic this one builds on. A concept may cite them to support a "
+            "SUPPORTING clause - a definition, symbol, or result established "
+            "earlier and applied here. The concept's PRINCIPAL claim, the skill "
+            "or idea it exists to teach, must still be supported by "
+            "native_topic blocks. If the principal claim itself needs "
+            "prerequisite blocks, the concept is misplaced: reject it."
+        ),
+        "advanced_placement_rule": (
+            "A concept that legitimately applies an earlier topic inside this "
+            "later one is correctly placed here, as advanced material, and must "
+            "not be rejected merely because part of its evidence is earlier in "
+            "the book. Accept it when its principal claim is native and the "
+            "earlier material is cited as prerequisite context."
+        ),
         "repair_route": (
-            "If the claim truly combines different topics, reject the mapping so "
-            "topology turnover can move, refine, split, or retire the concept."
+            "If the claim genuinely teaches two topics at once, prefer SPLIT: "
+            "keep the advanced part in this later topic and leave the "
+            "foundational part in the earlier topic, so the earlier topic "
+            "retains a concept of its own. Use move only when the whole claim "
+            "belongs elsewhere, and retire only when no topic supports it."
         ),
     }
     value["original_pdf_visual_page_ids"] = [
@@ -467,7 +563,14 @@ def _ground_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         "Blocks marked previous_topic_boundary or next_topic_boundary are a "
         "bounded recovery window for converter/page-order drift and may be used "
         "only when their visible content clearly continues the target academic "
-        "topic. Never use boundary evidence to conceal a genuinely cross-topic or "
+        "topic. Blocks marked prerequisite_topic_evidence come from an earlier "
+        "topic this one builds on: cite them to support a supporting clause that "
+        "applies earlier material, while the concept's principal claim must "
+        "still be supported by native_topic blocks. A concept that applies an "
+        "earlier topic inside this later one is correctly placed here as "
+        "advanced material and must not be rejected merely because part of its "
+        "evidence appears earlier in the book. Never use boundary or "
+        "prerequisite evidence to conceal a genuinely cross-topic or "
         "over-merged concept. If the claim belongs elsewhere or needs narrowing or "
         "splitting, return a low-confidence mapping and explain that topology "
         "repair is required. Figure captions and supplied original PDF pages are "
@@ -503,11 +606,18 @@ def _critic_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         "that every source_claim is fully and visibly supported by the proposed "
         "smallest sufficient block set. A selected adjacent boundary block is "
         "valid only when its content clearly belongs with the target topic and "
-        "repairs local source-order drift. Reject a mapping when the boundary "
-        "blocks instead show that the concept belongs to the adjacent topic, when "
-        "the claim over-merges separate ideas, or when a selected Figure is the "
-        "wrong visual. In that case state whether topology should move, refine, "
-        "split, or retire the row. Figure captions and supplied original PDF pages "
+        "repairs local source-order drift. A selected prerequisite_topic_evidence "
+        "block is valid only as support for a clause that applies earlier "
+        "material: accept it when the concept's principal claim is still "
+        "supported by native_topic blocks, and treat such a concept as correctly "
+        "placed advanced material rather than a cross-topic error. Reject when "
+        "the principal claim itself rests on prerequisite blocks, when the "
+        "boundary blocks instead show that the concept belongs to the adjacent "
+        "topic, when the claim over-merges separate ideas, or when a selected "
+        "Figure is the wrong visual. In that case state whether topology should "
+        "move, refine, split, or retire the row, preferring split - advanced part "
+        "here, foundational part in the earlier topic - when the claim genuinely "
+        "teaches both. Figure captions and supplied original PDF pages "
         "are authoritative. Do not demand source support for mastery, learner "
         "analysis, Types, hubs, keywords, or parent labels. Put every concept ID "
         "in exactly one accepted or rejected list. Verification requires all "
