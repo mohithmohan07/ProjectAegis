@@ -1,7 +1,7 @@
 """Unattended release staging for user-facing Build Concepts generation.
 
 The low-level generation services retain their original contracts for internal
-callers, tests, recovery tools and any deliberately programmatic workflow. The
+callers, tests, recovery tools and deliberately programmatic workflows. The
 Build Concepts upload API calls the wrappers in this module, which stage a
 release instead of publishing directly or surfacing a semantic choice.
 """
@@ -19,7 +19,7 @@ from . import build_concepts_release as release
 from . import build_concepts_release_files as release_files
 
 
-_CONTRACT_VERSION = 3
+_CONTRACT_VERSION = 4
 _RELEASE_MODE: ContextVar[bool] = ContextVar(
     "aegis_build_concepts_release_mode", default=False
 )
@@ -150,17 +150,6 @@ def _run_generation_release(
     owner_sub = kwargs.get("owner_sub")
     mode_token = _RELEASE_MODE.set(True)
     capture_token = _RELEASE_CAPTURE.set(None)
-    original_deposit = build_concepts._deposit_and_publish_concepts
-
-    @wraps(original_deposit)
-    def capture_only(*deposit_args, **deposit_kwargs):
-        return _capture_deposit(
-            original_deposit,
-            deposit_args,
-            deposit_kwargs,
-        )
-
-    build_concepts._deposit_and_publish_concepts = capture_only
     try:
         try:
             result = original(
@@ -171,9 +160,9 @@ def _run_generation_release(
                 **kwargs,
             )
         except Exception as exc:
-            # A failure after the old deposit boundary may occur after the
-            # final rows were already captured. Releasing only the newest
-            # checkpoint here would throw away the most complete candidate.
+            # A failure after the deposit boundary may occur after the final
+            # rows were already captured. Releasing only the newest checkpoint
+            # here would throw away the most complete candidate.
             captured = copy.deepcopy(_RELEASE_CAPTURE.get())
             db.rollback()
             job = uploads.get_job(
@@ -226,7 +215,6 @@ def _run_generation_release(
             captured=captured,
         )
     finally:
-        build_concepts._deposit_and_publish_concepts = original_deposit
         _RELEASE_CAPTURE.reset(capture_token)
         _RELEASE_MODE.reset(mode_token)
 
@@ -266,7 +254,7 @@ def generate_pre_learning_from_upload(
 
 
 def _wrap_generation(original):
-    """Test/helper adapter retaining the earlier wrapper-shaped interface."""
+    """Test/helper adapter retaining a wrapper-shaped interface."""
 
     @wraps(original)
     def wrapped(db, job_id: int, target_chapter_id: int, *args, **kwargs):
@@ -337,17 +325,34 @@ def _install_manifest_extension() -> None:
     models.UploadJob.source_artifacts = property(source_artifacts)
 
 
-def install() -> None:
-    """Install only the release artifact projection.
+def _install_deposit_interceptor() -> None:
+    current = build_concepts._deposit_and_publish_concepts
+    if getattr(current, "_aegis_release_interceptor", False):
+        return
+    original = current
 
-    Generation services are intentionally not monkey-patched. The user-facing
-    API invokes the scoped wrappers above, while low-level internal callers keep
-    their established success, failure and checkpoint contracts.
+    @wraps(original)
+    def deposit_and_publish(*args, **kwargs):
+        if not _RELEASE_MODE.get():
+            return original(*args, **kwargs)
+        return _capture_deposit(original, args, kwargs)
+
+    deposit_and_publish._aegis_release_interceptor = True
+    deposit_and_publish._aegis_release_original = original
+    build_concepts._deposit_and_publish_concepts = deposit_and_publish
+
+
+def install() -> None:
+    """Install context-aware release capture and artifact projection.
+
+    Only the user-facing API wrappers set ``_RELEASE_MODE``. Every other caller
+    traverses the original deposit and generation contracts unchanged.
     """
 
     if getattr(models.UploadJob, "_RELEASE_STAGING_CONTRACT_VERSION", 0) >= (
         _CONTRACT_VERSION
     ):
         return
+    _install_deposit_interceptor()
     _install_manifest_extension()
     models.UploadJob._RELEASE_STAGING_CONTRACT_VERSION = _CONTRACT_VERSION
