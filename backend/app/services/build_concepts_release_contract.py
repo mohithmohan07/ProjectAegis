@@ -1,11 +1,17 @@
-"""Install unattended release staging around Build Concepts generation."""
+"""Unattended release staging for user-facing Build Concepts generation.
+
+The low-level generation services retain their original contracts for internal
+callers, tests, recovery tools and any deliberately programmatic workflow. The
+Build Concepts upload API calls the wrappers in this module, which stage a
+release instead of publishing directly or surfacing a semantic choice.
+"""
 from __future__ import annotations
 
 import copy
 import inspect
 from contextvars import ContextVar
 from functools import wraps
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from .. import models
 from . import build_concepts, uploads
@@ -13,7 +19,7 @@ from . import build_concepts_release as release
 from . import build_concepts_release_files as release_files
 
 
-_CONTRACT_VERSION = 2
+_CONTRACT_VERSION = 3
 _RELEASE_MODE: ContextVar[bool] = ContextVar(
     "aegis_build_concepts_release_mode", default=False
 )
@@ -68,9 +74,9 @@ def _capture_deposit(original, args, kwargs) -> tuple[list[int], list[int], dict
         "pre_post": str(values.get("pre_post") or ""),
         "source_book": str(values.get("source_book") or ""),
     })
-    # The original generation functions inspect this object for publication
-    # metadata. It is deliberately truthful: no DB row and no shared workbook
-    # has been written yet.
+    # The legacy generation function reads this object after its deposit call.
+    # It is deliberately truthful: no DB row and no shared workbook has been
+    # written yet; the complete rows were captured for the released artifact.
     written = {
         "written": len(records),
         "sources_updated": 0,
@@ -133,86 +139,145 @@ def _release_after_result(
     )
 
 
-def _wrap_generation(original):
-    @wraps(original)
-    def wrapped(
-        db,
-        job_id: int,
-        target_chapter_id: int,
-        *args,
-        **kwargs,
-    ):
-        owner_sub = kwargs.get("owner_sub")
-        mode_token = _RELEASE_MODE.set(True)
-        capture_token = _RELEASE_CAPTURE.set(None)
+def _run_generation_release(
+    original: Callable[..., object],
+    db,
+    job_id: int,
+    target_chapter_id: int,
+    *args,
+    **kwargs,
+) -> dict[str, Any]:
+    owner_sub = kwargs.get("owner_sub")
+    mode_token = _RELEASE_MODE.set(True)
+    capture_token = _RELEASE_CAPTURE.set(None)
+    original_deposit = build_concepts._deposit_and_publish_concepts
+
+    @wraps(original_deposit)
+    def capture_only(*deposit_args, **deposit_kwargs):
+        return _capture_deposit(
+            original_deposit,
+            deposit_args,
+            deposit_kwargs,
+        )
+
+    build_concepts._deposit_and_publish_concepts = capture_only
+    try:
         try:
-            try:
-                result = original(
-                    db,
-                    job_id,
-                    target_chapter_id,
-                    *args,
-                    **kwargs,
-                )
-            except Exception as exc:
-                # A failure after the old deposit boundary may occur after the
-                # final rows were already captured. Releasing only the newest
-                # checkpoint here would throw away the most complete candidate,
-                # exactly when the user needs it most.
-                captured = copy.deepcopy(_RELEASE_CAPTURE.get())
-                db.rollback()
-                job = uploads.get_job(
-                    db,
-                    job_id,
-                    owner_sub=owner_sub,
-                    module="build_concepts",
-                )
-                if captured:
-                    return release.stage_release(
-                        db,
-                        job,
-                        target_chapter_id=target_chapter_id,
-                        records=captured.get("records") or [],
-                        inventory=captured.get("inventory") or {},
-                        mined_types=captured.get("mined_types") or {},
-                        final_grounding_certificate=(
-                            captured.get("final_grounding_certificate") or {}
-                        ),
-                        checkpoint=(
-                            captured.get("checkpoint")
-                            or job.generation_checkpoint
-                        ),
-                        error=exc,
-                        reason=(
-                            "Generation failed after its final rows were "
-                            "materialized. Aegis released those captured rows "
-                            "with the failure attached instead of falling back "
-                            "to an older or empty checkpoint."
-                        ),
-                    )
+            result = original(
+                db,
+                job_id,
+                target_chapter_id,
+                *args,
+                **kwargs,
+            )
+        except Exception as exc:
+            # A failure after the old deposit boundary may occur after the
+            # final rows were already captured. Releasing only the newest
+            # checkpoint here would throw away the most complete candidate.
+            captured = copy.deepcopy(_RELEASE_CAPTURE.get())
+            db.rollback()
+            job = uploads.get_job(
+                db,
+                job_id,
+                owner_sub=owner_sub,
+                module="build_concepts",
+            )
+            if captured:
                 return release.stage_release(
                     db,
                     job,
                     target_chapter_id=target_chapter_id,
+                    records=captured.get("records") or [],
+                    inventory=captured.get("inventory") or {},
+                    mined_types=captured.get("mined_types") or {},
+                    final_grounding_certificate=(
+                        captured.get("final_grounding_certificate") or {}
+                    ),
+                    checkpoint=(
+                        captured.get("checkpoint")
+                        or job.generation_checkpoint
+                    ),
                     error=exc,
                     reason=(
-                        "Generation failed after creating a durable checkpoint. "
-                        "Aegis released the newest available rows with the "
-                        "failure attached instead of returning no output."
+                        "Generation failed after its final rows were "
+                        "materialized. Aegis released those captured rows "
+                        "with the failure attached instead of falling back "
+                        "to an older or empty checkpoint."
                     ),
                 )
-            captured = copy.deepcopy(_RELEASE_CAPTURE.get())
-            return _release_after_result(
+            return release.stage_release(
                 db,
-                job_id,
-                target_chapter_id,
-                owner_sub=owner_sub,
-                result=result,
-                captured=captured,
+                job,
+                target_chapter_id=target_chapter_id,
+                error=exc,
+                reason=(
+                    "Generation failed after creating a durable checkpoint. "
+                    "Aegis released the newest available rows with the "
+                    "failure attached instead of returning no output."
+                ),
             )
-        finally:
-            _RELEASE_CAPTURE.reset(capture_token)
-            _RELEASE_MODE.reset(mode_token)
+        captured = copy.deepcopy(_RELEASE_CAPTURE.get())
+        return _release_after_result(
+            db,
+            job_id,
+            target_chapter_id,
+            owner_sub=owner_sub,
+            result=result,
+            captured=captured,
+        )
+    finally:
+        build_concepts._deposit_and_publish_concepts = original_deposit
+        _RELEASE_CAPTURE.reset(capture_token)
+        _RELEASE_MODE.reset(mode_token)
+
+
+def generate_post_learning(
+    db,
+    job_id: int,
+    target_chapter_id: int,
+    *args,
+    **kwargs,
+) -> dict[str, Any]:
+    return _run_generation_release(
+        build_concepts.generate_post_learning,
+        db,
+        job_id,
+        target_chapter_id,
+        *args,
+        **kwargs,
+    )
+
+
+def generate_pre_learning_from_upload(
+    db,
+    job_id: int,
+    target_chapter_id: int,
+    *args,
+    **kwargs,
+) -> dict[str, Any]:
+    return _run_generation_release(
+        build_concepts.generate_pre_learning_from_upload,
+        db,
+        job_id,
+        target_chapter_id,
+        *args,
+        **kwargs,
+    )
+
+
+def _wrap_generation(original):
+    """Test/helper adapter retaining the earlier wrapper-shaped interface."""
+
+    @wraps(original)
+    def wrapped(db, job_id: int, target_chapter_id: int, *args, **kwargs):
+        return _run_generation_release(
+            original,
+            db,
+            job_id,
+            target_chapter_id,
+            *args,
+            **kwargs,
+        )
 
     return wrapped
 
@@ -272,47 +337,17 @@ def _install_manifest_extension() -> None:
     models.UploadJob.source_artifacts = property(source_artifacts)
 
 
-def _hide_manual_pending_property() -> None:
-    current = getattr(models.UploadJob, "pending_decision", None)
-    if not isinstance(current, property):
-        return
-    getter = current.fget
-    if getter is None or getattr(getter, "_aegis_unattended", False):
-        return
-
-    def pending_decision(job: models.UploadJob):
-        # Build Concepts retains the complete decision inside its exported
-        # checkpoint/release audit, but the public job contract never asks the
-        # user to select a semantic action during generation.
-        if str(getattr(job, "module", "")) == "build_concepts":
-            return None
-        return getter(job)
-
-    pending_decision._aegis_unattended = True
-    models.UploadJob.pending_decision = property(pending_decision)
-
-
 def install() -> None:
-    if getattr(build_concepts, "_RELEASE_STAGING_CONTRACT_VERSION", 0) >= (
+    """Install only the release artifact projection.
+
+    Generation services are intentionally not monkey-patched. The user-facing
+    API invokes the scoped wrappers above, while low-level internal callers keep
+    their established success, failure and checkpoint contracts.
+    """
+
+    if getattr(models.UploadJob, "_RELEASE_STAGING_CONTRACT_VERSION", 0) >= (
         _CONTRACT_VERSION
     ):
         return
-
-    original_deposit = build_concepts._deposit_and_publish_concepts
-
-    @wraps(original_deposit)
-    def deposit_and_publish(*args, **kwargs):
-        if not _RELEASE_MODE.get():
-            return original_deposit(*args, **kwargs)
-        return _capture_deposit(original_deposit, args, kwargs)
-
-    build_concepts._deposit_and_publish_concepts = deposit_and_publish
-    build_concepts.generate_post_learning = _wrap_generation(
-        build_concepts.generate_post_learning
-    )
-    build_concepts.generate_pre_learning_from_upload = _wrap_generation(
-        build_concepts.generate_pre_learning_from_upload
-    )
     _install_manifest_extension()
-    _hide_manual_pending_property()
-    build_concepts._RELEASE_STAGING_CONTRACT_VERSION = _CONTRACT_VERSION
+    models.UploadJob._RELEASE_STAGING_CONTRACT_VERSION = _CONTRACT_VERSION
