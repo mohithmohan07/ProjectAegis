@@ -1784,7 +1784,14 @@ def _response_schema(
                         else ["apply", "request_evidence", "ask_human"]
                     ),
                 },
-                "choice": {"type": "string", "enum": ["", *choices]},
+                # A final call may only ``apply``, so an empty choice is not a
+                # usable answer: the validator rejects it and the run stops.
+                # Do not offer the model a response it cannot legally mean.
+                # Earlier passes keep "" for request_evidence / ask_human.
+                "choice": {
+                    "type": "string",
+                    "enum": [*choices] if (final and choices) else ["", *choices],
+                },
                 "target_id": {
                     "type": "string", "enum": ["", *target_ids]
                 },
@@ -2011,7 +2018,18 @@ def _validate_response(
         if isinstance(row, Mapping) and row.get("choice")
     }
     if choice not in offered:
-        return ResolutionResult("escalated", "The agent selected an action that was not offered.")
+        return ResolutionResult(
+            "escalated",
+            (
+                # Distinguish the two cases: naming an unoffered action is a
+                # semantic mistake, returning none at all is a contract defect
+                # and was previously reported as the former.
+                "The agent applied no choice; an apply disposition must name "
+                "one offered action."
+                if not choice
+                else "The agent selected an action that was not offered."
+            ),
+        )
     if choice in USER_ONLY_CHOICES:
         return ResolutionResult(
             "escalated",

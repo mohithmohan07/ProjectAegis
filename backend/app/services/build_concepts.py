@@ -3549,9 +3549,25 @@ def _raise_if_unattended_cannot_pause(pending: dict) -> None:
         for row in pending.get("options") or []
         if isinstance(row, dict) and str(row.get("choice") or "")
     })
+    # Listing every offered choice claimed that automatable routes such as
+    # accept_recommended required a person, which sent diagnosis after the
+    # wrong thing. Name what actually remains, and say the automatic
+    # pathways declined rather than were never offered.
+    user_only = [
+        value for value in choices
+        if value in autonomous_resolution.USER_ONLY_CHOICES
+    ]
+    automatable = [value for value in choices if value not in user_only]
     message = (
-        "Unattended generation stopped: the saved decision offers only "
-        "actions that a person must take (" + (", ".join(choices) or "none")
+        "Unattended generation stopped: every automatic pathway declined this "
+        "decision"
+        + (
+            f" (automatable routes offered: {', '.join(automatable)})"
+            if automatable
+            else ""
+        )
+        + ", leaving only actions a person must take ("
+        + (", ".join(user_only) or "none")
         + "). Aegis will not alter the uploaded document by itself. Upload a "
         "corrected document and convert it again, or set "
         "AEGIS_UNATTENDED_COMPLETION=0 to answer this decision manually."

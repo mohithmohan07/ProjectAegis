@@ -70,6 +70,12 @@ def _terminal_issue(payload: Mapping[str, Any]) -> dict[str, Any]:
 _FAILURE_CLASSES: dict[str, type[BaseException]] = {
     "GroundingCertificateError": grounding_certificate.GroundingCertificateError,
     "ProviderResponseContractError": semantic_recovery.ProviderResponseContractError,
+    # Declared in build_concepts as a RuntimeError subclass. Named here rather
+    # than imported, so the report never pulls the generation stack into an
+    # export, and so an unattended stop reports a disposition instead of
+    # "cannot be recomputed".
+    "UnattendedDecisionUnavailable": RuntimeError,
+    "SemanticResolutionCyclesExhausted": RuntimeError,
     "ValueError": ValueError,
     "RuntimeError": RuntimeError,
     "OSError": OSError,
