@@ -2378,6 +2378,44 @@ def _topology_cache_key(
     )
 
 
+def _cached_topology_preserves_placement_authority(
+    records: list[dict[str, Any]],
+) -> bool:
+    """Refuse a cached payload the grounding boundary can never accept.
+
+    Phase 3.2 already declines to reuse its own cached records once a normal
+    row has lost its certified placement contract.  This cache holds the later,
+    post-learner-analysis payload, so it needs the same guard: a row-local
+    repair that dropped placement authority used to be sealed into the cache
+    and replayed on every resume, which turned one recoverable rewrite into a
+    permanent ``placement contract row N is missing`` failure.  Verify against
+    the identical contract ``ground_concepts`` applies and rebuild instead.
+    """
+
+    try:
+        _verify_preserved_placement_contracts(
+            records,
+            require_all=(
+                config.use_live_generation()
+                or any(
+                    isinstance(row, dict)
+                    and bool(row.get("_placement_contract"))
+                    for row in records
+                    if not cr.is_culmination(
+                        str(
+                            row.get("concept_title")
+                            or row.get("concept")
+                            or ""
+                        )
+                    )
+                )
+            ),
+        )
+    except grounding_certificate.GroundingCertificateError:
+        return False
+    return True
+
+
 def _prepare_topology_with_cache(
     original_prepare: Callable[..., list[dict[str, Any]]],
     records: list[dict[str, Any]],
@@ -2408,13 +2446,20 @@ def _prepare_topology_with_cache(
         and cache.get("records_sha256")
         == phase3._sha256_json(cache.get("records"))
     ):
+        if _cached_topology_preserves_placement_authority(cache["records"]):
+            progress.log(
+                "Reused the validated final concept topology, including "
+                "specific learner analysis, from the current source contract; "
+                "no learner-analysis model call was repeated.",
+                level="success",
+            )
+            return copy.deepcopy(cache["records"])
         progress.log(
-            "Reused the validated final concept topology, including specific "
-            "learner analysis, from the current source contract; no learner-"
-            "analysis model call was repeated.",
-            level="success",
+            "Discarded the cached final concept topology: a row no longer "
+            "carries its certified placement contract, so the topology and "
+            "learner analysis are being rebuilt under placement authority.",
+            level="warning",
         )
-        return copy.deepcopy(cache["records"])
 
     prepared = original_prepare(records, *args, **kwargs)
     _write_json(

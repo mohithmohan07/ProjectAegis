@@ -10,6 +10,7 @@ from app.services import canonical_source_phase3 as phase3
 from app.services import canonical_source_phase31_grounding_contract as phase31
 from app.services import canonical_source_phase33_preflight_contract as phase33
 from app.services import grounding_certificate
+from app.services import placement_policy
 from app.services import semantic_recovery
 
 
@@ -1487,3 +1488,63 @@ def test_production_grounding_rejects_a_normal_row_without_placement_authority()
             [{"concept_title": "Normal source concept"}],
             require_all=True,
         )
+
+
+def _certified_placement(record: dict) -> dict:
+    contract = {
+        "certified": True,
+        "policy_version": placement_policy.POLICY_VERSION,
+        "owner_topic_id": str(record.get("_semantic_topic_id") or ""),
+        "normalized_claim": grounding_certificate.source_claim(record),
+    }
+    contract["placement_certificate_sha256"] = (
+        placement_policy.placement_contract_sha256(contract)
+    )
+    return contract
+
+
+def test_final_topology_cache_is_rebuilt_when_a_row_lost_placement_authority(
+    tmp_path,
+):
+    graph, canonical = _source_graph()
+    records = [_record(), _record(title="The Zollverein and Economic Union")]
+    prepared: list[list[dict]] = []
+
+    def original_prepare(rows, **_kwargs):
+        out = copy.deepcopy(rows)
+        for row in out:
+            row["_placement_contract"] = _certified_placement(row)
+        # A stage-"final" validation repair replaces one row with a
+        # public-fields-only response, so that row reaches the cache without
+        # its certified placement contract.
+        if len(prepared) == 0:
+            out[1].pop("_placement_contract")
+        prepared.append(copy.deepcopy(out))
+        return out
+
+    kwargs = {
+        "subject": "History",
+        "mmd_text": "canonical semantic source",
+        "meta": {},
+        "source_sections": [],
+        "source_topic_excerpts": [],
+        "method_anchors": [],
+    }
+    session = {"artifact_dir": tmp_path, "canonical": canonical}
+    with phase3.activate_session(session), phase3.activate(graph):
+        phase31._prepare_topology_with_cache(
+            original_prepare, copy.deepcopy(records), (), copy.deepcopy(kwargs)
+        )
+        second = phase31._prepare_topology_with_cache(
+            original_prepare, copy.deepcopy(records), (), copy.deepcopy(kwargs)
+        )
+        third = phase31._prepare_topology_with_cache(
+            original_prepare, copy.deepcopy(records), (), copy.deepcopy(kwargs)
+        )
+
+    # The poisoned payload is rebuilt rather than replayed, and the rebuilt one
+    # is reused normally.
+    assert len(prepared) == 2
+    assert all(row.get("_placement_contract") for row in second)
+    assert third == second
+    phase31._verify_preserved_placement_contracts(third, require_all=True)
