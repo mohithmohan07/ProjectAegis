@@ -228,10 +228,18 @@ def persist_ledger(
     required: bool,
 ) -> None:
     detached = plain_json(value)
+    checkpoint_required = _phase38_feedback() is not None
     checkpoint_ok = _checkpoint_write(context_hash, detached)
     disk_ok = _disk_write(context_hash, detached, cache_dir)
-    if required and not (checkpoint_ok or disk_ok):
+    if not required:
+        return
+    if checkpoint_required and not checkpoint_ok:
         raise EvidenceNarrowingError(
-            "terminal semantic disposition could not persist its exactly-once "
-            "claim before model transport"
+            "terminal semantic disposition could not persist its portable "
+            "Phase 3.8 exactly-once claim before model transport"
+        )
+    if not checkpoint_required and not disk_ok:
+        raise EvidenceNarrowingError(
+            "terminal semantic disposition could not persist its local "
+            "exactly-once claim before model transport"
         )
