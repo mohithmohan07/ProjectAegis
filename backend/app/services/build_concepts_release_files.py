@@ -13,6 +13,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 from .. import models
+from . import concept_run_report
 from . import uploads
 from .build_concepts_release import (
     RELEASE_ROW_BLOCKS_FIELD,
@@ -297,10 +298,14 @@ def _index_string_block_references(
 
 def _artifact_directory(job: models.UploadJob) -> Path | None:
     helper = getattr(uploads, "source_artifact_directory", None)
-    if not callable(helper):
+    if not callable(helper) or not getattr(job, "id", None):
         return None
     try:
-        path = Path(helper(job)).resolve()
+        # The helper is keyed by job id, not by the job row.  Passing the row
+        # raised inside this guard, so every export silently shipped without
+        # the canonical artifacts the README promises -- including the Phase
+        # 3.1/3.2 caches that explain a failure repeating across resumes.
+        path = Path(helper(int(job.id))).resolve()
     except Exception:
         return None
     return path if path.is_dir() else None
@@ -337,19 +342,36 @@ def build_diagnostics_zip(job: models.UploadJob) -> bytes:
                 blocks.setdefault(block_id, block)
     _index_string_block_references(blocks, payload)
 
+    run_report = concept_run_report.build_run_report(
+        payload,
+        generation_log=job.generation_log or [],
+        generation_checkpoint=job.generation_checkpoint or {},
+    )
+
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr(
             "README.txt",
             (
                 "Project Aegis diagnostic context export\n\n"
-                "This archive keeps the released workbook beside the complete "
-                "saved generation log, checkpoint, source evidence, BLK index, "
-                "Question/Task Inventory, Type/Case routing, original upload, "
-                "and canonical-source artifacts. The release is not proof that "
-                "every highlighted row is error-free. See Release Issues.\n"
+                "Start with RUN_REPORT.txt: it states what stopped the run, "
+                "why the orchestration boundary did or did not recover from "
+                "it, which rows the failure implicates, and whether the same "
+                "failure repeated across resumes. context/run_report.json "
+                "carries the same facts with exact log indexes.\n\n"
+                "The rest of the archive keeps the released workbook beside "
+                "the complete saved generation log, checkpoint, source "
+                "evidence, BLK index, Question/Task Inventory, Type/Case "
+                "routing, original upload, and canonical-source artifacts. "
+                "The release is not proof that every highlighted row is "
+                "error-free. See Release Issues.\n"
             ),
         )
+        archive.writestr(
+            "RUN_REPORT.txt",
+            concept_run_report.render_run_report(run_report).encode("utf-8"),
+        )
+        archive.writestr("context/run_report.json", _json_bytes(run_report))
         archive.writestr("release/released_concepts.xlsx", release_workbook)
         archive.writestr("release/release_payload.json", _json_bytes(payload))
         archive.writestr(

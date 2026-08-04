@@ -94,8 +94,20 @@ def _verify_preserved_placement_contracts(
             r"\s+", " ", _description_source_claim(record)
         ).strip().casefold()
         if sealed_claim != live_claim:
-            raise grounding_certificate.GroundingCertificateError(
-                f"placement contract row {index} source claim changed before grounding"
+            # A row-local rewrite — a stage-"final" validation repair, a
+            # mastery or learner-analysis pass — legitimately changes the claim
+            # placement was certified for.  The claim is not corrupt; it needs
+            # re-placing.  Return it to Phase 3.2 authority on the bounded
+            # topology-repair road instead of raising a certificate error,
+            # which ``semantic_recovery.classify_failure`` types as an
+            # integrity failure it is forbidden to repair — ending the run.
+            # The concept ID and title keep the repair scoped to this row.
+            raise early_gate.TopologyRepairRequired(
+                "failed exact source-block grounding before freeze: "
+                f"CONCEPT-GROUND-{index + 1:04d} "
+                f"({title or 'concept'}) source claim changed after its "
+                "placement contract was certified and requires re-placement",
+                decision_id="",
             )
 
 
@@ -2411,7 +2423,10 @@ def _cached_topology_preserves_placement_authority(
                 )
             ),
         )
-    except grounding_certificate.GroundingCertificateError:
+    except (
+        grounding_certificate.GroundingCertificateError,
+        early_gate.TopologyRepairRequired,
+    ):
         return False
     return True
 

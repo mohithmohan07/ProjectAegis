@@ -2035,7 +2035,12 @@ def _phase32_adjudicate_with_targeted_convergence(
                 )
                 signatures[signature] = signatures.get(signature, 0) + 1
                 repeated = signatures[signature] > 1
-                if isinstance(exc, early_gate.TopologyRepairRequired):
+                if (
+                    isinstance(exc, early_gate.TopologyRepairRequired)
+                    and exc.decision_id
+                ):
+                    # A drift-triggered repair carries no saved resolution to
+                    # suppress; only a human-directed one does.
                     suppressed_resolutions.add(exc.decision_id)
                 repaired = _LAST_REPAIRED_TOPOLOGY.get()
                 candidate_sha256 = _candidate_sha256(

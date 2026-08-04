@@ -11,6 +11,7 @@ from app.services import grounding_certificate as certificate
 from app.services import build_concepts
 from app.services import canonical_source_phase3 as phase3
 from app.services import canonical_source_phase31_grounding_contract as phase31
+from app.services import early_semantic_gate as early_gate
 from app.services import checkpoints
 from app.services import placement_policy
 from app.services import semantic_recovery
@@ -1754,7 +1755,7 @@ def test_validation_repair_keeps_placement_authority_on_a_pedagogy_rewrite():
     phase31._verify_preserved_placement_contracts([after], require_all=True)
 
 
-def test_validation_repair_reports_a_changed_claim_not_a_missing_contract():
+def test_validation_repair_returns_a_changed_claim_to_placement_authority():
     before = _sealed_placement_records()[0]
     after = _repair_response_row(
         before,
@@ -1766,10 +1767,68 @@ def test_validation_repair_reports_a_changed_claim_not_a_missing_contract():
 
     generation._carry_source_grounding_attestation(before, after)
 
-    with pytest.raises(
-        certificate.GroundingCertificateError,
-        match="placement contract row 0 source claim changed before grounding",
-    ):
+    with pytest.raises(early_gate.TopologyRepairRequired) as raised:
         phase31._verify_preserved_placement_contracts(
             [after], require_all=True
         )
+
+    # The row is named so the bounded repair stays row-local, and the failure
+    # is recoverable so the run returns to Phase 3.2 instead of ending.
+    assert "CONCEPT-GROUND-0001" in str(raised.value)
+    assert before["concept_title"] in str(raised.value)
+    assert semantic_recovery.classify_failure(raised.value).recoverable
+
+
+def test_a_row_that_escaped_placement_authority_still_fails_closed():
+    # Only a changed claim is a re-placement request.  A row with no contract,
+    # or one whose certificate no longer matches its material, is an integrity
+    # failure that semantic recovery must never be allowed to rewrite.
+    escaped = _repair_response_row(
+        _sealed_placement_records()[0], "Description: An unplaced claim."
+    )
+    tampered = copy.deepcopy(_sealed_placement_records()[0])
+    tampered[certificate.PLACEMENT_CONTRACT_FIELD]["owner_topic_id"] = (
+        "TOPIC-9999"
+    )
+
+    for row in (escaped, tampered):
+        with pytest.raises(certificate.GroundingCertificateError) as raised:
+            phase31._verify_preserved_placement_contracts(
+                [row], require_all=True
+            )
+        assert not semantic_recovery.classify_failure(
+            raised.value
+        ).recoverable
+
+
+def test_changed_claim_repair_is_scoped_to_the_rewritten_row():
+    before = _sealed_placement_records()[0]
+    after = _repair_response_row(
+        before,
+        before["concept_details"].replace(
+            "faced insecure work",
+            "endured more precarious home-based work",
+        ),
+    )
+    generation._carry_source_grounding_attestation(before, after)
+    checkpoint = {
+        "stage": "pre_type_assignment",
+        "records": [
+            {"concept_title": "An unrelated earlier concept", "topic": "Other"},
+            {
+                "concept_title": before["concept_title"],
+                "topic": before["topic"],
+            },
+        ],
+    }
+
+    with pytest.raises(early_gate.TopologyRepairRequired) as raised:
+        phase31._verify_preserved_placement_contracts(
+            [copy.deepcopy(after)] * 2, require_all=True
+        )
+
+    # Row 0 fails first, and the diagnostic resolves to that row alone rather
+    # than rewriting the whole checkpoint.
+    assert semantic_recovery.implicated_row_indexes(
+        checkpoint, raised.value
+    ) == (0,)
