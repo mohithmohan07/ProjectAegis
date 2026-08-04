@@ -232,3 +232,56 @@ def test_terminal_model_output_budget_inherits_provider_ceiling(monkeypatch):
 
     monkeypatch.setenv("AEGIS_EVIDENCE_NARROWING_MAX_OUTPUT_TOKENS", "64000")
     assert models._model_output_tokens() == 64_000
+
+
+def test_reverification_keep_restores_the_original_description(tmp_path):
+    original = _row(
+        "The common difference is fixed. It also determines matrix eigenvalues."
+    )
+    accepted, _audit = en.narrow_records(
+        [original],
+        graph=_graph("-first-keep"),
+        canonical=_canonical(),
+        provider=_transported(
+            lambda payload: _decision(
+                payload,
+                description="The common difference is fixed.",
+            )
+        ),
+        critic=_transported(_verified),
+        cache_dir=tmp_path,
+    )
+
+    def keep_original(payload):
+        phase22._notify_openai_transport_started()
+        concept = payload["concepts"][0]
+        assert concept["description"] == (
+            "The common difference is fixed. It also determines matrix eigenvalues."
+        )
+        return {
+            "decisions": [{
+                "concept_id": concept["concept_id"],
+                "action": "keep",
+                "rewrite_kind": "unchanged",
+                "description": concept["description"],
+                "evidence_block_ids": ["B-1"],
+                "kept_claims": [concept["description"]],
+                "dropped_claims": [],
+                "reason": "The changed source now supports the complete Description.",
+            }]
+        }
+
+    released, audit = en.narrow_records(
+        accepted,
+        graph=_graph("-changed-keep"),
+        canonical=_canonical(
+            _SOURCE + " The complete Description is now explicitly supported."
+        ),
+        provider=keep_original,
+        critic=_transported(_verified),
+        cache_dir=tmp_path,
+    )
+
+    assert released == [original]
+    assert audit.rows[0].kind == "unchanged"
+    assert audit.rows[0].verified is True
