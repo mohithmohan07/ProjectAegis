@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from .. import schemas
@@ -43,7 +43,6 @@ def post_learning_release_generate(
     user: auth.Principal = Depends(auth.require_user),
 ):
     """Generate a review release; never deposit from the generation request."""
-
     try:
         job = uploads.get_job(
             db,
@@ -94,12 +93,11 @@ def post_learning_release_generate(
 @router.post("/pre-learning/uploads/{job_id}/generate")
 def pre_learning_release_generate(
     job_id: int,
-    req: schemas.PreLearningUploadGenerateRequest,
+    req: schemas.PostLearningGenerateRequest,
     db: Session = Depends(get_db),
     user: auth.Principal = Depends(auth.require_user),
 ):
     """Generate a Pre Learning review release with no implicit deposit."""
-
     try:
         job = uploads.get_job(
             db,
@@ -192,7 +190,6 @@ def download_release_context(
     user: auth.Principal = Depends(auth.require_user),
 ):
     """Download a release ZIP, or snapshot the currently saved issue context."""
-
     try:
         path, release_id = release.release_file(
             db,
@@ -243,7 +240,6 @@ def upload_release_to_database(
     user: auth.Principal = Depends(auth.require_user),
 ):
     """Explicitly publish a reviewed release; generation never calls this."""
-
     if uploads.is_job_running(job_id):
         raise HTTPException(
             409,
@@ -268,7 +264,6 @@ def context_available(
     user: auth.Principal = Depends(auth.require_user),
 ):
     """Cheap owner-scoped probe used by the UI while a run is incomplete."""
-
     try:
         job = uploads.get_job(
             db, job_id, owner_sub=user.sub, module="build_concepts"
