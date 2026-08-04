@@ -13,7 +13,7 @@ from . import build_concepts_release as release
 from . import build_concepts_release_files as release_files
 
 
-_CONTRACT_VERSION = 1
+_CONTRACT_VERSION = 2
 _RELEASE_MODE: ContextVar[bool] = ContextVar(
     "aegis_build_concepts_release_mode", default=False
 )
@@ -155,6 +155,11 @@ def _wrap_generation(original):
                     **kwargs,
                 )
             except Exception as exc:
+                # A failure after the old deposit boundary may occur after the
+                # final rows were already captured. Releasing only the newest
+                # checkpoint here would throw away the most complete candidate,
+                # exactly when the user needs it most.
+                captured = copy.deepcopy(_RELEASE_CAPTURE.get())
                 db.rollback()
                 job = uploads.get_job(
                     db,
@@ -162,6 +167,29 @@ def _wrap_generation(original):
                     owner_sub=owner_sub,
                     module="build_concepts",
                 )
+                if captured:
+                    return release.stage_release(
+                        db,
+                        job,
+                        target_chapter_id=target_chapter_id,
+                        records=captured.get("records") or [],
+                        inventory=captured.get("inventory") or {},
+                        mined_types=captured.get("mined_types") or {},
+                        final_grounding_certificate=(
+                            captured.get("final_grounding_certificate") or {}
+                        ),
+                        checkpoint=(
+                            captured.get("checkpoint")
+                            or job.generation_checkpoint
+                        ),
+                        error=exc,
+                        reason=(
+                            "Generation failed after its final rows were "
+                            "materialized. Aegis released those captured rows "
+                            "with the failure attached instead of falling back "
+                            "to an older or empty checkpoint."
+                        ),
+                    )
                 return release.stage_release(
                     db,
                     job,
