@@ -448,6 +448,33 @@ def _grounding_review(payload: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _cleared_subtopic_labels(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Return inventory rows whose subtopic label the source contradicted.
+
+    A two-column page can linearize an Activity box after the next subheading,
+    splitting it from its own figure.  Phase 3 clears the label rather than
+    assert one the source contradicts, and clearing is silent -- so surface it
+    here: the row kept its main topic but lost the finer placement signal.
+    """
+
+    inventory = payload.get("question_task_inventory")
+    items = (
+        inventory.get("items") if isinstance(inventory, Mapping) else None
+    ) or []
+    return [
+        {
+            "qid": _normal(row.get("qid")),
+            "figure_id": _normal(row.get("_semantic_subtopic_boundary_artifact")),
+            "topic": _normal(
+                row.get("source_location_topic_title") or row.get("topic_hint")
+            ),
+        }
+        for row in items
+        if isinstance(row, Mapping)
+        and _normal(row.get("_semantic_subtopic_boundary_artifact"))
+    ]
+
+
 def _accepted_with_risk(
     payload: Mapping[str, Any],
     log: Sequence[Any],
@@ -478,6 +505,7 @@ def _accepted_with_risk(
         "human_decision_count": sum(
             1 for row in decisions if row.get("resolved_by") == "human"
         ),
+        "cleared_subtopic_labels": _cleared_subtopic_labels(payload),
         "non_error_issues": non_error_issues,
         "type_case_rows_needing_review": [
             {
@@ -604,6 +632,16 @@ def _render_accepted(report: Mapping[str, Any]) -> list[str]:
         lines.append(
             f"  semantic conflicts resolved: {agent} by agent, {human} by human"
         )
+
+    cleared = accepted.get("cleared_subtopic_labels") or []
+    if cleared:
+        quiet = False
+        lines.append(f"  subtopic labels cleared as layout artifacts: {len(cleared)}")
+        for row in cleared[:10]:
+            lines.append(
+                f"    {row['qid']}: split from {row['figure_id']} by a page "
+                f"boundary; kept topic {row['topic'] or '<unknown>'}"
+            )
 
     rewrites = accepted.get("content_rewrites") or {}
     if rewrites:

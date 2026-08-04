@@ -4958,6 +4958,14 @@ def _qid_scope(
             continue
         topic_id = str(task.get("topic_id") or "")
         subtopic_id = str(task.get("subtopic_id") or "")
+        # Type/Case scope reads the graph task directly, so the page-layout
+        # guard that ``annotate_inventory`` applies has to be applied here too.
+        # Otherwise a unit built from this task keeps asserting the subtopic
+        # its own figure contradicts.
+        if subtopic_id and _subtopic_split_from_task_figure(
+            graph, task, subtopic_id
+        ):
+            subtopic_id = ""
         if topic_id and topic_id not in topic_ids:
             topic_ids.append(topic_id)
         if subtopic_id and subtopic_id not in subtopic_ids:

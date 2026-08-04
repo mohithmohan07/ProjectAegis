@@ -348,3 +348,41 @@ def test_a_clean_completed_run_says_nothing_was_flagged():
     )
 
     assert "Nothing flagged" in rendered
+
+
+def test_report_surfaces_subtopic_labels_cleared_as_layout_artifacts():
+    payload = _completed_payload([_grounded_row()])
+    payload["question_task_inventory"] = {"items": [
+        {
+            "qid": "QINV-0011.1",
+            "_semantic_subtopic_boundary_artifact": "FIG-00014",
+            "source_location_topic_title": "The Making of Germany and Italy",
+        },
+        {"qid": "QINV-0012"},
+    ]}
+
+    report = run_report.build_run_report(
+        payload, generation_log=[], generation_checkpoint={}
+    )
+    cleared = report["accepted_with_risk"]["cleared_subtopic_labels"]
+
+    assert cleared == [{
+        "qid": "QINV-0011.1",
+        "figure_id": "FIG-00014",
+        "topic": "The Making of Germany and Italy",
+    }]
+    rendered = run_report.render_run_report(report)
+    assert "subtopic labels cleared as layout artifacts: 1" in rendered
+    assert "split from FIG-00014 by a page boundary" in rendered
+
+
+def test_report_is_quiet_when_no_subtopic_label_was_cleared():
+    payload = _completed_payload([_grounded_row()])
+    payload["question_task_inventory"] = {"items": [{"qid": "QINV-0012"}]}
+
+    report = run_report.build_run_report(
+        payload, generation_log=[], generation_checkpoint={}
+    )
+
+    assert report["accepted_with_risk"]["cleared_subtopic_labels"] == []
+    assert "subtopic labels cleared" not in run_report.render_run_report(report)
