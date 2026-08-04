@@ -32,6 +32,7 @@ _READY_FILL = PatternFill("solid", fgColor="D9EAD3")
 _TYPE_FILL = PatternFill("solid", fgColor="D9EAF7")
 _CASE_FILL = PatternFill("solid", fgColor="EADCF8")
 _EXAMPLE_FILL = PatternFill("solid", fgColor="F3F3F3")
+_BLOCK_ID_RE = re.compile(r"\bBLK-[A-Za-z0-9_-]+\b")
 
 
 def _json_bytes(value: Any) -> bytes:
@@ -244,6 +245,56 @@ def _iter_blocks(value: object) -> Iterable[dict[str, Any]]:
             yield from _iter_blocks(raw)
 
 
+def _add_block_reference(
+    blocks: dict[str, dict[str, Any]],
+    block_id: object,
+    *,
+    reference: str,
+) -> None:
+    value = str(block_id or "").strip()
+    if not value:
+        return
+    current = blocks.setdefault(value, {
+        "block_id": value,
+        "record_status": "referenced_id_only",
+        "references": [],
+    })
+    references = current.setdefault("references", [])
+    if isinstance(references, list) and reference not in references:
+        references.append(reference)
+
+
+def _index_string_block_references(
+    blocks: dict[str, dict[str, Any]],
+    payload: Mapping[str, Any],
+) -> None:
+    for index, record in enumerate(payload.get("records") or [], start=1):
+        if not isinstance(record, Mapping):
+            continue
+        for block_id in record.get(RELEASE_ROW_BLOCKS_FIELD) or []:
+            _add_block_reference(
+                blocks,
+                block_id,
+                reference=f"released_record:{index}",
+            )
+    for index, issue in enumerate(payload.get("issues") or [], start=1):
+        if not isinstance(issue, Mapping):
+            continue
+        for block_id in issue.get("block_ids") or []:
+            _add_block_reference(
+                blocks,
+                block_id,
+                reference=f"release_issue:{index}",
+            )
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+    for block_id in sorted(set(_BLOCK_ID_RE.findall(raw))):
+        _add_block_reference(
+            blocks,
+            block_id,
+            reference="release_payload_text",
+        )
+
+
 def _artifact_directory(job: models.UploadJob) -> Path | None:
     helper = getattr(uploads, "source_artifact_directory", None)
     if not callable(helper):
@@ -281,7 +332,10 @@ def build_diagnostics_zip(job: models.UploadJob) -> bytes:
         source_manifest,
     ):
         for block in _iter_blocks(source):
-            blocks.setdefault(str(block.get("block_id")), block)
+            block_id = str(block.get("block_id") or "")
+            if block_id:
+                blocks.setdefault(block_id, block)
+    _index_string_block_references(blocks, payload)
 
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
