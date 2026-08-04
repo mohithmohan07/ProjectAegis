@@ -411,7 +411,13 @@ export default function DocumentUpload({
 
   const generated = job.status === "generated";
   const released = job.status === "released";
-  const converted = job.status === "converted" || generated || released;
+  const converted = (
+    job.status === "converted"
+    || generated
+    || released
+    || Boolean(job.mmd_text)
+    || job.checkpoint_available
+  );
 
   // Step 3 — uploaded (and maybe converted).
   return (
