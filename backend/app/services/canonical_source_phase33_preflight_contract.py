@@ -1492,12 +1492,34 @@ def _type_case_claim_rows(
             raise RuntimeError(
                 f"type_case_owner_uncertified: duplicate inventory QID {qid}"
             )
-        task = task_by_qid.get(qid)
+        # Phase 2.1 keeps the original canonical task objects and materializes
+        # independently answerable leaves (QINV-0011 -> .1/.2) only in the
+        # production inventory, so a leaf owns its own text and route while the
+        # graph still owns the parent task.  A raw per-QID lookup therefore
+        # fails closed here on a fully governed leaf; use the shared resolver.
+        task = phase3._graph_task_for_qid(
+            task_by_qid,
+            qid,
+            parent_qid=item.get("parent_qid") or item.get("_acsd_parent_qid"),
+        )
         text = generation._inventory_task_text(item)
         if not isinstance(task, dict) or not text:
             raise RuntimeError(
                 "type_case_owner_uncertified: QID "
                 f"{qid} has no sealed semantic task/text"
+            )
+        # This is a certification boundary, so where a leaf carries its parent's
+        # sealed identity the inherited task must actually match it.  Leaves
+        # from older inventories carry no key and keep the resolver's behaviour.
+        parent_identity = str(item.get("_acsd_parent_identity_key") or "").strip()
+        if (
+            parent_identity
+            and str(task.get("qid") or "") != qid
+            and str(task.get("identity_key") or "") != parent_identity
+        ):
+            raise RuntimeError(
+                "type_case_owner_uncertified: QID "
+                f"{qid} does not match its sealed parent task identity"
             )
         source_topic_id = str(task.get("topic_id") or "").strip()
         if not source_topic_id:
