@@ -12,6 +12,9 @@ from .db import SessionLocal, init_db
 from .services import syllabus_import as syllabus_svc
 from .services import auth as auth_svc
 from .services import drive_checkpoints
+from .services import build_concepts_release_api_contract
+from .services import build_concepts_release_contract
+from .services import build_concepts_release_manifest
 from .api import (
     admin as admin_api,
     auth as auth_api,
@@ -29,6 +32,8 @@ from .api import (
 def bootstrap() -> None:
     """Initialize the database schema and preload syllabus structure if empty."""
     auth_svc.validate_configuration()
+    build_concepts_release_manifest.install()
+    build_concepts_release_contract.install()
     init_db()
     db = SessionLocal()
     try:
@@ -71,6 +76,11 @@ app.add_middleware(
 def health():
     return {"status": "ok"}
 
+
+# Patch only the user-facing Build Concepts upload routes before FastAPI copies
+# them into the application. Internal generation services keep their original
+# contracts for recovery tooling and programmatic callers.
+build_concepts_release_api_contract.install(build_concepts_api.router)
 
 app.include_router(auth_api.router)
 app.include_router(source_assets_api.router)

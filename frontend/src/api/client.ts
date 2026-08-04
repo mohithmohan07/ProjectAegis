@@ -232,6 +232,15 @@ export const api = {
         body: JSON.stringify(submission),
       },
     ),
+  releaseConceptOutput: (jobId: number) =>
+    http<UploadJob>(`/build-concepts/uploads/${jobId}/release`, {
+      method: "POST",
+    }),
+  uploadConceptRelease: (jobId: number) =>
+    http<Record<string, unknown>>(
+      `/build-concepts/uploads/${jobId}/upload-release`,
+      { method: "POST" },
+    ),
 
   // Streaming endpoint paths (consumed via streamNdjson / RunConsole)
   paths: {

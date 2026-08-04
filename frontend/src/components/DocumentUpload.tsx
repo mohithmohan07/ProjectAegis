@@ -7,6 +7,18 @@ import SourceBookInput from "./SourceBookInput";
 
 type Module = "assessments" | "concepts";
 
+type ActionableArtifact = {
+  kind: string;
+  label: string;
+  filename: string;
+  media_type: string;
+  size_bytes: number;
+  download_url: string;
+  action?: "download" | "post" | string;
+  disabled?: boolean;
+  requires_confirmation?: boolean;
+};
+
 const DRIVE_BACKUP_FOLDER_URL =
   import.meta.env.VITE_CHECKPOINT_DRIVE_FOLDER_URL?.trim() || "";
 
@@ -299,6 +311,19 @@ export default function DocumentUpload({
     }
   }
 
+  async function releaseLatestOutput() {
+    if (!job || disabled || module !== "concepts") return;
+    setBusy(true);
+    setError(null);
+    try {
+      emit(await api.releaseConceptOutput(job.id));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function reset() {
     if (disabled) return;
     invalidateSavedJobRestore();
@@ -385,7 +410,14 @@ export default function DocumentUpload({
   }
 
   const generated = job.status === "generated";
-  const converted = job.status === "converted" || generated;
+  const released = job.status === "released";
+  const converted = (
+    job.status === "converted"
+    || generated
+    || released
+    || Boolean(job.mmd_text)
+    || job.checkpoint_available
+  );
 
   // Step 3 — uploaded (and maybe converted).
   return (
@@ -393,15 +425,17 @@ export default function DocumentUpload({
       <div className="row">
         <span className={`badge ${converted ? "green" : "accent"}`}>
           {generated
-            ? "generation complete"
-            : converted
-              ? "converted to MMD"
-              : "uploaded (not processed)"}
+            ? "uploaded to database"
+            : released
+              ? "output released for review"
+              : converted
+                ? "converted to MMD"
+                : "uploaded (not processed)"}
         </span>
         <span className="muted mono">{job.filename}</span>
         {job.source_book && <span className="badge accent">{job.source_book}</span>}
         <div className="spacer" />
-        {!generated && (
+        {!generated && !released && (
           <label
             className="upload-label"
             style={{ opacity: controlsDisabled ? 0.5 : 1 }}
@@ -440,25 +474,35 @@ export default function DocumentUpload({
       {converted && job.mmd_text && (
         <pre className="mmd-preview">{job.mmd_text.slice(0, 800)}</pre>
       )}
-      {converted && <SourceArtifactsCard manifest={job.source_artifacts} />}
+      {converted && (
+        <SourceArtifactsCard
+          manifest={job.source_artifacts}
+          jobId={job.id}
+          onPublished={(freshJob) => emit(freshJob)}
+        />
+      )}
       {module === "concepts" && converted && (
         <div className={`checkpoint-card ${
           job.checkpoint_available ? "checkpoint-ready" : ""
         }`}>
           <div>
             <strong>
-              {job.checkpoint_available
-                ? `Saved checkpoint at ${Math.round(
-                  (job.checkpoint_progress ?? 0) * 100,
-                )}%`
-                : "Portable converted-source backup"}
+              {released
+                ? "Released output is ready"
+                : job.checkpoint_available
+                  ? `Saved checkpoint at ${Math.round(
+                    (job.checkpoint_progress ?? 0) * 100,
+                  )}%`
+                  : "Portable converted-source backup"}
             </strong>
             <div className="muted">
-              {job.checkpoint_available
-                ? `Stage: ${formatCheckpointStage(
-                  job.checkpoint_stage,
-                )}. The next run resumes automatically.`
-                : "Download this to preserve the converted MMD across deployments."}
+              {released
+                ? "Download the workbook or full diagnostic context. Database publication is a separate explicit action."
+                : job.checkpoint_available
+                  ? `Stage: ${formatCheckpointStage(
+                    job.checkpoint_stage,
+                  )}. The next run resumes automatically.`
+                  : "Download this to preserve the converted MMD across deployments."}
             </div>
             {job.checkpoint_target_identity
               && Object.keys(job.checkpoint_target_identity).length > 0 && (
@@ -474,6 +518,15 @@ export default function DocumentUpload({
             </div>
           </div>
           <div className="row">
+            {!released && !generated && (
+              <button
+                className="ghost"
+                disabled={controlsDisabled}
+                onClick={releaseLatestOutput}
+              >
+                Release latest output
+              </button>
+            )}
             <a
               className="button-link ghost"
               href={api.checkpointUrl(job.id)}
@@ -491,7 +544,7 @@ export default function DocumentUpload({
                 Open Google Drive backup folder
               </a>
             )}
-            {job.checkpoint_available && (
+            {job.checkpoint_available && !released && !generated && (
               <button
                 className="ghost"
                 disabled={controlsDisabled}
@@ -511,9 +564,15 @@ export default function DocumentUpload({
 
 function SourceArtifactsCard({
   manifest,
+  jobId,
+  onPublished,
 }: {
   manifest?: UploadJob["source_artifacts"];
+  jobId: number;
+  onPublished: (job: UploadJob) => void;
 }) {
+  const [actionBusy, setActionBusy] = useState(false);
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
   if (!manifest?.available) return null;
   const summary = manifest.summary ?? {};
   const phase2 = manifest.generation_usage?.mode === "source-critical";
@@ -597,6 +656,28 @@ function SourceArtifactsCard({
     .map(([label, value]) => `${value} ${label}`)
     .join(" · ");
 
+  async function publishRelease(artifact: ActionableArtifact) {
+    if (actionBusy || artifact.disabled) return;
+    if (
+      artifact.requires_confirmation
+      && !window.confirm(
+        "Upload the released rows to the database now? Highlighted rows and their audit remain in the release export.",
+      )
+    ) return;
+    setActionBusy(true);
+    setActionMessage(null);
+    try {
+      await api.uploadConceptRelease(jobId);
+      const fresh = await api.getUploadJob("concepts", jobId);
+      onPublished(fresh);
+      setActionMessage("Released rows were uploaded to the database.");
+    } catch (e) {
+      setActionMessage(String(e));
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
   return (
     <div className="checkpoint-card" style={{ marginTop: 10 }}>
       <div>
@@ -627,19 +708,41 @@ function SourceArtifactsCard({
           ACSD {manifest.schema_version} · compiler {manifest.compiler_version}
           {manifest.phase ? ` · ${manifest.phase.replace(/-/g, " ")}` : ""}
         </div>
+        {actionMessage && (
+          <div className="muted" role="status" style={{ marginTop: 6 }}>
+            {actionMessage}
+          </div>
+        )}
       </div>
       <div className="row">
-        {manifest.files.map((artifact) => (
-          <a
-            className="button-link ghost"
-            href={artifact.download_url}
-            download={artifact.filename}
-            key={artifact.kind}
-            title={`${artifact.label} · ${formatBytes(artifact.size_bytes)}`}
-          >
-            {artifact.label}
-          </a>
-        ))}
+        {manifest.files.map((rawArtifact) => {
+          const artifact = rawArtifact as ActionableArtifact;
+          if (artifact.action === "post") {
+            return (
+              <button
+                className="ghost"
+                disabled={actionBusy || artifact.disabled}
+                key={artifact.kind}
+                onClick={() => void publishRelease(artifact)}
+              >
+                {actionBusy ? "Uploading…" : artifact.label}
+              </button>
+            );
+          }
+          return (
+            <a
+              className="button-link ghost"
+              href={artifact.download_url}
+              download={artifact.filename || undefined}
+              key={artifact.kind}
+              title={artifact.size_bytes > 0
+                ? `${artifact.label} · ${formatBytes(artifact.size_bytes)}`
+                : artifact.label}
+            >
+              {artifact.label}
+            </a>
+          );
+        })}
       </div>
     </div>
   );
