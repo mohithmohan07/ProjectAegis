@@ -1,571 +1,605 @@
-"""Terminal disposition: narrow a concept to what its evidence supports.
+"""Model-certified terminal disposition for source-grounding failures.
 
-Every earlier rung of the grounding ladder tries to make a concept correct:
-Phase 3.1 grounds it, Phase 3.2 moves/refines/splits it, Phase 3.8 spends a
-bounded convergence budget and then one final atomisation pass.  This module
-is the rung *after* all of those, and it exists because of one product rule:
+Every earlier Phase 3 rung gets the cheaper and better opportunity to repair a
+concept normally. This module is used only after that bounded ladder is spent.
+Its product contract is deliberately narrow:
 
-    A run must always produce the output workbook.  It may not stop, and it
-    may not delete a concept in order to finish.
+* the run still returns one row for every input row;
+* semantic support is decided by a model, never by token containment;
+* an independent critic must verify every accepted rewrite against exact
+  canonical block IDs;
+* the accepted decision is persisted before it is returned, so Resume replays
+  the stored answer without another paid request; and
+* an ambiguous or unavailable API never authorises deterministic semantic
+  trimming. The concept ships unchanged and is reported as unverified.
 
-The disposition therefore does the only thing that satisfies both halves:
-it **modifies the concept to match its evidence**.  Clauses the canonical
-source blocks actually support are kept; clauses they do not support are
-removed and named in the audit.  If nothing in the written claim survives,
-the concept is restated from the source text itself, verbatim, so that what
-ships is supported by construction.
-
-Three properties make this safe to run unattended:
-
-* **Deterministic.**  No provider call, no sampling, no ordering luck.  The
-  same records and the same canonical source always yield the same output,
-  so a Resume reproduces the disposition byte for byte rather than paying
-  for a new one.
-* **Conservative.**  A clause is kept only when every content token in it
-  appears in the cited evidence.  The test errs towards dropping a clause,
-  never towards keeping an unsupported one.
-* **Lossless in count.**  Rows are rewritten, never removed.  The caller
-  receives exactly the concepts it passed in.
-
-What this module does *not* do is decide placement.  Ownership is settled by
-``placement_policy``; narrowing only ever changes what a concept claims, not
-which topic teaches it.
+Deterministic code owns identity, exact block addressing, schema validation,
+count preservation, checkpoint transactions and Description-only projection.
+The provider and critic own the semantic judgement.
 """
 from __future__ import annotations
 
 import copy
-import re
-from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-from . import concept_refiner as cr
-from . import grounding_certificate
-
-
-DISPOSITION_VERSION = "aegis-evidence-narrowing-1"
-
-#: Written onto every row this module rewrites.
-NARROWED_FLAG_FIELD = "_evidence_narrowed"
-NARROWED_KIND_FIELD = "_evidence_narrowed_kind"
-NARROWED_DROPPED_FIELD = "_evidence_narrowed_dropped_clauses"
-NARROWED_EVIDENCE_FIELD = "_evidence_narrowed_block_ids"
-NARROWED_NOTE_FIELD = "_evidence_narrowed_note"
-NARROWED_ORIGINAL_FIELD = "_evidence_narrowed_original_claim"
-
-#: Grounding contract recorded for a claim rebuilt out of source text.  It is
-#: deliberately distinct from the model-verified contracts so an auditor can
-#: separate "a provider asserted this is grounded" from "deterministic code
-#: proved every token came from the cited blocks".
-NARROWED_CONTRACT = "deterministic-evidence-narrowed-source-claim"
-
-_DESCRIPTION_LABEL = "Description"
-
-#: Longest verbatim restatement kept for a concept with no surviving clause.
-_MAX_RESTATEMENT_CHARS = 600
-
-_SPACE_RE = re.compile(r"\s+")
-_TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
-
-# Sentence break: a terminator followed by whitespace, not preceded by a digit
-# (so "5.4" and "1.5 m" stay intact) and not part of a common abbreviation.
-_SENTENCE_BREAK_RE = re.compile(r"(?<![0-9])(?<!\be\.g)(?<!\bi\.e)([.!?;])\s+")
-
-# Inline and display maths are opaque to clause splitting; a "." inside them
-# is notation, not punctuation.
-_MATH_SPAN_RE = re.compile(
-    r"(\$\$.*?\$\$|\$[^$\n]*\$|\\\(.*?\\\)|\\\[.*?\\\])",
-    re.DOTALL,
+from .. import config
+from .evidence_narrowing_cache import (
+    bind_state_mirror,
+    load_ledger,
+    persist_ledger,
+    reset_state_mirror,
+)
+from .evidence_narrowing_models import (
+    Critic,
+    Provider,
+    critic_accepts,
+    default_critic,
+    default_provider,
+    invoke_model_stage,
+    validated_critic,
+    validated_provider_decisions,
+)
+from .evidence_narrowing_source import (
+    build_evidence,
+    concept_packets,
+    context_material,
+    replace_description,
+)
+from .evidence_narrowing_types import (
+    CACHE_PREFIX,
+    DISPOSITION_VERSION,
+    NARROWED_CONTRACT,
+    NARROWED_CONTRACT_FIELD,
+    NARROWED_DROPPED_FIELD,
+    NARROWED_EVIDENCE_FIELD,
+    NARROWED_FLAG_FIELD,
+    NARROWED_KIND_FIELD,
+    NARROWED_NOTE_FIELD,
+    NARROWED_ORIGINAL_FIELD,
+    UNVERIFIED_CONTRACT,
+    ConceptPacket,
+    EvidenceNarrowingError,
+    NarrowedRow,
+    NarrowingAudit,
+    TopicEvidence,
+    normal,
+    sha256_json,
 )
 
-# Words that carry no claim of their own.  A clause is judged on its content
-# tokens; requiring the source to also contain "therefore" or "which" would
-# reject supported material for stylistic reasons.
-_STOPWORDS = frozenset({
-    "a", "about", "above", "after", "again", "against", "all", "also", "an",
-    "and", "any", "are", "as", "at", "be", "because", "been", "before",
-    "being", "below", "between", "both", "but", "by", "can", "cannot",
-    "could", "did", "do", "does", "doing", "done", "down", "during", "each",
-    "either", "else", "even", "ever", "every", "few", "for", "from",
-    "further", "had", "has", "have", "having", "he", "hence", "her", "here",
-    "hers", "herself", "him", "himself", "his", "how", "however", "i", "if",
-    "in", "into", "is", "it", "its", "itself", "just", "may", "me", "might",
-    "more", "most", "much", "must", "my", "myself", "neither", "no", "nor",
-    "not", "now", "of", "off", "on", "once", "one", "only", "or", "other",
-    "otherwise", "ought", "our", "ours", "ourselves", "out", "over", "own",
-    "rather", "same", "shall", "she", "should", "so", "some", "such", "than",
-    "that", "the", "their", "theirs", "them", "themselves", "then", "there",
-    "therefore", "these", "they", "this", "those", "through", "thus", "to",
-    "too", "under", "until", "up", "very", "was", "we", "were", "what",
-    "when", "where", "whether", "which", "while", "who", "whom", "why",
-    "will", "with", "would", "you", "your", "yours", "yourself",
-})
-
-# Suffix folding keeps "increases"/"increasing"/"increase" one token without
-# pulling in a stemmer dependency.  Order matters: longest suffix first.
-_SUFFIXES = ("ations", "ation", "ingly", "ising", "izing", "ised", "ized",
-             "ing", "ies", "ied", "ers", "er", "est", "ed", "es", "ly", "s")
+# Compatibility for audit code and tests that inspect the reserved namespace.
+_CACHE_PREFIX = CACHE_PREFIX
 
 
-class EvidenceNarrowingError(RuntimeError):
-    """Raised only for programmer error, never for unsupported content."""
-
-
-@dataclass(frozen=True)
-class NarrowedRow:
-    """One row's disposition, reportable in the run log and the workbook."""
-
-    concept_title: str
-    topic: str
-    kind: str
-    kept_clauses: tuple[str, ...] = ()
-    dropped_clauses: tuple[str, ...] = ()
-    evidence_block_ids: tuple[str, ...] = ()
-    note: str = ""
-
-    @property
-    def changed(self) -> bool:
-        return self.kind != "unchanged"
-
-
-@dataclass
-class NarrowingAudit:
-    """What the disposition did across a whole candidate."""
-
-    version: str = DISPOSITION_VERSION
-    rows: list[NarrowedRow] = field(default_factory=list)
-
-    @property
-    def changed_rows(self) -> list[NarrowedRow]:
-        return [row for row in self.rows if row.changed]
-
-    def summary(self) -> str:
-        if not self.changed_rows:
-            return "no concept required evidence narrowing"
-        narrowed = [row for row in self.changed_rows if row.kind == "narrowed"]
-        restated = [row for row in self.changed_rows if row.kind == "restated"]
-        parts: list[str] = []
-        if narrowed:
-            parts.append(
-                f"{len(narrowed)} concept(s) narrowed to their supported "
-                "clauses"
-            )
-        if restated:
-            parts.append(
-                f"{len(restated)} concept(s) restated verbatim from canonical "
-                "source text"
-            )
-        return "; ".join(parts)
-
-
-# --------------------------------------------------------------------------- #
-# Text handling
-# --------------------------------------------------------------------------- #
-
-def _normal(value: object) -> str:
-    return _SPACE_RE.sub(" ", str(value or "")).strip()
-
-
-def _drop_silent_e(stem: str) -> str:
-    """Fold "increase"/"increases" onto one root.
-
-    Suffix stripping alone leaves them apart: "increases" loses "es" and
-    becomes "increas", while "increase" ends in "se" and matches no suffix at
-    all.  Dropping a trailing "e" from both sides closes that gap, which
-    matters because a textbook writes the verb and a concept writes the noun.
-    """
-
-    return stem[:-1] if len(stem) > 3 and stem.endswith("e") else stem
-
-
-def _fold(token: str) -> str:
-    """Return a crude morphological root so inflections compare equal."""
-
-    lowered = token.casefold()
-    if lowered.isdigit():
-        return lowered
-    for suffix in _SUFFIXES:
-        if len(lowered) > len(suffix) + 2 and lowered.endswith(suffix):
-            stem = lowered[: -len(suffix)]
-            if suffix == "ies":
-                return stem + "y"
-            return _drop_silent_e(stem)
-    return _drop_silent_e(lowered)
-
-
-def content_tokens(text: str) -> set[str]:
-    """Return the claim-bearing tokens of ``text``.
-
-    Stopwords and one- or two-character words are dropped: they express
-    grammar rather than content, and demanding the source repeat them would
-    reject supported material over phrasing.
-    """
-
-    out: set[str] = set()
-    for match in _TOKEN_RE.finditer(str(text or "")):
-        raw = match.group(0)
-        lowered = raw.casefold()
-        if lowered in _STOPWORDS:
-            continue
-        if len(lowered) < 3 and not lowered.isdigit():
-            continue
-        out.add(_fold(lowered))
-    return out
-
-
-def split_clauses(text: str) -> list[str]:
-    """Split a Description into ordered clause units.
-
-    Maths spans are masked first so that a decimal point or a ``\\[ ... \\]``
-    body cannot be mistaken for a sentence boundary.
-    """
-
-    text = _normal(text)
-    if not text:
-        return []
-
-    spans: list[str] = []
-
-    def _mask(match: re.Match[str]) -> str:
-        spans.append(match.group(0))
-        return f"\x00{len(spans) - 1}\x00"
-
-    masked = _MATH_SPAN_RE.sub(_mask, text)
-    # Keep the terminator with its clause so restored text reads naturally.
-    parts = _SENTENCE_BREAK_RE.sub(lambda m: m.group(1) + "\x01", masked)
-
-    def _unmask(value: str) -> str:
-        return re.sub(
-            r"\x00(\d+)\x00",
-            lambda m: spans[int(m.group(1))],
-            value,
-        )
-
-    clauses = [
-        _normal(_unmask(part))
-        for part in parts.split("\x01")
-    ]
-    return [clause for clause in clauses if clause]
-
-
-def _sentences(text: str) -> list[str]:
-    """Split source text into candidate restatement units."""
-
+def _copy_records(records: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     return [
-        clause
-        for clause in split_clauses(text)
-        if len(content_tokens(clause)) >= 3
+        copy.deepcopy(dict(row)) if isinstance(row, Mapping) else copy.deepcopy(row)
+        for row in records
     ]
 
 
-# --------------------------------------------------------------------------- #
-# Evidence
-# --------------------------------------------------------------------------- #
-
-@dataclass(frozen=True)
-class TopicEvidence:
-    """The canonical text a topic may be grounded against."""
-
-    topic_id: str
-    topic_title: str
-    blocks: tuple[tuple[str, str], ...] = ()
-
-    @property
-    def tokens(self) -> set[str]:
-        out: set[str] = set()
-        for _block_id, text in self.blocks:
-            out |= content_tokens(text)
-        return out
-
-    @property
-    def block_ids(self) -> tuple[str, ...]:
-        return tuple(block_id for block_id, _text in self.blocks)
-
-    @property
-    def empty(self) -> bool:
-        return not self.blocks
-
-
-_EXCLUDED_BLOCK_KINDS = frozenset({"layout", "heading", "navigation"})
-
-
-def build_evidence(
-    graph: Mapping[str, Any] | None,
-    canonical: Mapping[str, Any] | None,
-) -> dict[str, TopicEvidence]:
-    """Index every topic's usable canonical block text by ``topic_id``.
-
-    Both the graph and the canonical bundle are read defensively: this
-    function runs on the terminal path, where refusing to work because a
-    field is shaped unexpectedly would reintroduce the stop it exists to
-    remove.
-    """
-
-    if not isinstance(graph, Mapping):
-        return {}
-    canonical_blocks = {
-        str(row.get("block_id") or ""): row
-        for row in (canonical or {}).get("blocks") or []
+def _apply_accepted(
+    records: Sequence[Mapping[str, Any]],
+    packets: Sequence[ConceptPacket],
+    decisions: Sequence[Mapping[str, Any]],
+    review: Mapping[str, Any],
+    *,
+    context_hash: str,
+    cache_status: str,
+    unavailable: Sequence[NarrowedRow],
+) -> tuple[list[dict[str, Any]], NarrowingAudit]:
+    out = _copy_records(records)
+    decision_by_id = {str(row.get("concept_id") or ""): row for row in decisions}
+    review_by_id = {
+        str(row.get("concept_id") or ""): row
+        for row in review.get("decisions") or []
         if isinstance(row, Mapping)
     }
-    titles = {
-        str(row.get("topic_id") or ""): str(row.get("title") or "")
-        for row in graph.get("topics") or []
-        if isinstance(row, Mapping)
+    audit = NarrowingAudit(
+        context_hash=context_hash,
+        cache_status=cache_status,
+        rows=list(unavailable),
+    )
+    for packet in packets:
+        decision = decision_by_id[packet.concept_id]
+        critic_row = review_by_id[packet.concept_id]
+        action = str(decision.get("action") or "")
+        kind = str(decision.get("rewrite_kind") or "")
+        evidence_ids = tuple(dict.fromkeys(
+            str(value)
+            for value in critic_row.get("evidence_block_ids") or []
+            if str(value)
+        )) or tuple(
+            str(value) for value in decision.get("evidence_block_ids") or []
+        )
+        if action == "keep":
+            audit.rows.append(NarrowedRow(
+                concept_title=packet.concept_title,
+                topic=packet.topic,
+                kind="unchanged",
+                kept_clauses=tuple(decision.get("kept_claims") or []),
+                evidence_block_ids=evidence_ids,
+                note="the original Description was independently verified",
+                verified=True,
+            ))
+            continue
+
+        row = out[packet.row_index]
+        details = str(
+            row.get("concept_details")
+            or row.get("concept_description")
+            or ""
+        )
+        description = str(decision.get("description") or "")
+        row["concept_details"] = replace_description(details, description)
+        row[NARROWED_FLAG_FIELD] = True
+        row[NARROWED_KIND_FIELD] = kind
+        row[NARROWED_DROPPED_FIELD] = list(decision.get("dropped_claims") or [])
+        row[NARROWED_ORIGINAL_FIELD] = packet.description
+        row[NARROWED_EVIDENCE_FIELD] = list(evidence_ids)
+        row[NARROWED_NOTE_FIELD] = str(decision.get("reason") or "")
+        row[NARROWED_CONTRACT_FIELD] = {
+            "version": DISPOSITION_VERSION,
+            "basis": NARROWED_CONTRACT,
+            "context_hash": context_hash,
+            "concept_id": packet.concept_id,
+            "provider_action": action,
+            "rewrite_kind": kind,
+            "critic_verdict": "verified",
+            "critic_confidence": float(review.get("confidence") or 0.0),
+            "evidence_block_ids": list(evidence_ids),
+        }
+        audit.rows.append(NarrowedRow(
+            concept_title=packet.concept_title,
+            topic=packet.topic,
+            kind=kind,
+            kept_clauses=tuple(decision.get("kept_claims") or []),
+            dropped_clauses=tuple(decision.get("dropped_claims") or []),
+            evidence_block_ids=evidence_ids,
+            note=str(decision.get("reason") or ""),
+            verified=True,
+        ))
+    if len(out) != len(records):  # pragma: no cover - defensive invariant
+        raise EvidenceNarrowingError(
+            "terminal disposition must return exactly one row per input row"
+        )
+    return out, audit
+
+
+def _unmodified_result(
+    records: Sequence[Mapping[str, Any]],
+    packets: Sequence[ConceptPacket],
+    *,
+    context_hash: str,
+    reason: str,
+    cache_status: str,
+    unavailable: Sequence[NarrowedRow],
+) -> tuple[list[dict[str, Any]], NarrowingAudit]:
+    audit = NarrowingAudit(
+        context_hash=context_hash,
+        cache_status=cache_status,
+        rows=list(unavailable),
+    )
+    for packet in packets:
+        audit.rows.append(NarrowedRow(
+            concept_title=packet.concept_title,
+            topic=packet.topic,
+            kind="unmodified_unverified",
+            note=reason,
+            verified=False,
+        ))
+    return _copy_records(records), audit
+
+
+def _fallback_and_persist(
+    records: Sequence[Mapping[str, Any]],
+    packets: Sequence[ConceptPacket],
+    *,
+    context_hash: str,
+    cache_dir: Path | str | None,
+    ledger: dict[str, Any],
+    reason: str,
+    unavailable: Sequence[NarrowedRow],
+) -> tuple[list[dict[str, Any]], NarrowingAudit]:
+    ledger.update({
+        "status": "unmodified",
+        "basis": UNVERIFIED_CONTRACT,
+        "failure": normal(reason)[:4_000],
+    })
+    try:
+        persist_ledger(context_hash, ledger, cache_dir, required=False)
+    except Exception:
+        pass
+    return _unmodified_result(
+        records,
+        packets,
+        context_hash=context_hash,
+        reason=(
+            normal(reason)
+            or "no critic-verified semantic narrowing decision was available"
+        ),
+        cache_status="unmodified",
+        unavailable=unavailable,
+    )
+
+
+def _accept_and_persist(
+    records: Sequence[Mapping[str, Any]],
+    packets: Sequence[ConceptPacket],
+    decisions: Sequence[Mapping[str, Any]],
+    review: Mapping[str, Any],
+    *,
+    context_hash: str,
+    cache_dir: Path | str | None,
+    ledger: dict[str, Any],
+    cache_status: str,
+    unavailable: Sequence[NarrowedRow],
+) -> tuple[list[dict[str, Any]], NarrowingAudit]:
+    accepted = {
+        **ledger,
+        "status": "accepted",
+        "basis": NARROWED_CONTRACT,
+        "decisions": {"decisions": list(decisions)},
+        "review": dict(review),
     }
-    collected: dict[str, list[tuple[str, str]]] = {}
-    for block in graph.get("blocks") or []:
-        if not isinstance(block, Mapping):
-            continue
-        if str(block.get("kind") or "") in _EXCLUDED_BLOCK_KINDS:
-            continue
-        topic_id = str(block.get("topic_id") or "")
-        block_id = str(block.get("block_id") or "")
-        if not topic_id or not block_id:
-            continue
-        text = _block_text(block, canonical_blocks.get(block_id))
-        if not text:
-            continue
-        collected.setdefault(topic_id, []).append((block_id, text))
-
-    return {
-        topic_id: TopicEvidence(
-            topic_id=topic_id,
-            topic_title=titles.get(topic_id, topic_id),
-            blocks=tuple(blocks),
+    try:
+        persist_ledger(context_hash, accepted, cache_dir, required=True)
+    except Exception as exc:
+        return _fallback_and_persist(
+            records,
+            packets,
+            context_hash=context_hash,
+            cache_dir=cache_dir,
+            ledger=ledger,
+            reason=f"accepted narrowing could not be durably committed: {exc}",
+            unavailable=unavailable,
         )
-        for topic_id, blocks in collected.items()
+    return _apply_accepted(
+        records,
+        packets,
+        decisions,
+        review,
+        context_hash=context_hash,
+        cache_status=cache_status,
+        unavailable=unavailable,
+    )
+
+
+def _narrow_records_impl(
+    records: Sequence[Mapping[str, Any]],
+    *,
+    graph: Mapping[str, Any] | None = None,
+    canonical: Mapping[str, Any] | None = None,
+    evidence: Mapping[str, TopicEvidence] | None = None,
+    concept_titles: Iterable[str] | None = None,
+    provider: Provider | None = None,
+    critic: Critic | None = None,
+    cache_dir: Path | str | None = None,
+    max_attempts: int = 2,
+) -> tuple[list[dict[str, Any]], NarrowingAudit]:
+    if evidence is None:
+        evidence = build_evidence(graph, canonical)
+    packets, unavailable = concept_packets(
+        records,
+        evidence=evidence,
+        concept_titles=concept_titles,
+    )
+    if not packets:
+        return _copy_records(records), NarrowingAudit(
+            rows=list(unavailable), cache_status="no_evidence"
+        )
+
+    material = context_material(
+        packets,
+        graph=graph,
+        version=DISPOSITION_VERSION,
+        model=str(getattr(config, "OPENAI_MODEL", "")),
+    )
+    context_hash = sha256_json(material)
+    ledger = load_ledger(context_hash, cache_dir) or {
+        "version": DISPOSITION_VERSION,
+        "context_hash": context_hash,
+        "status": "new",
+        "attempt": 0,
+        "model": str(getattr(config, "OPENAI_MODEL", "")),
     }
+    status = str(ledger.get("status") or "")
 
-
-def _block_text(
-    graph_block: Mapping[str, Any],
-    canonical_block: Mapping[str, Any] | None,
-) -> str:
-    override = graph_block.get("source_override")
-    if isinstance(override, Mapping):
-        resolved = str(override.get("resolved_text") or "")
-        if resolved:
-            return _normal(resolved)
-    source = canonical_block or {}
-    return _normal(
-        source.get("display_text")
-        or source.get("raw_text")
-        or graph_block.get("text")
-        or ""
-    )
-
-
-def _evidence_for_row(
-    row: Mapping[str, Any],
-    evidence: Mapping[str, TopicEvidence],
-) -> TopicEvidence | None:
-    """Resolve a record to its topic evidence by ID, then by title."""
-
-    topic_id = str(row.get("_semantic_topic_id") or "")
-    if topic_id and topic_id in evidence:
-        return evidence[topic_id]
-    wanted = _normal(row.get("topic")).casefold()
-    if not wanted:
-        return None
-    for candidate in evidence.values():
-        if _normal(candidate.topic_title).casefold() == wanted:
-            return candidate
-    return None
-
-
-# --------------------------------------------------------------------------- #
-# Support test
-# --------------------------------------------------------------------------- #
-
-def clause_supported(clause: str, evidence_tokens: Iterable[str]) -> bool:
-    """Is every content token of ``clause`` present in the evidence?
-
-    Subset containment is the whole guarantee.  A partially matching clause
-    is treated as unsupported, because the part that does not match is
-    exactly the over-inference the grounding verifier rejected.
-    """
-
-    tokens = content_tokens(clause)
-    if len(tokens) < 2:
-        # A fragment with at most one content word asserts nothing checkable;
-        # keeping it would smuggle unverified text through a subset test that
-        # it passes only for being short.
-        return False
-    return tokens <= set(evidence_tokens)
-
-
-def _restatement(
-    row: Mapping[str, Any],
-    topic_evidence: TopicEvidence,
-) -> tuple[str, tuple[str, ...]]:
-    """Return the best verbatim source sentence for this concept.
-
-    Selection is by content-token overlap with the concept's title and
-    original claim, tie-broken by block order and then sentence order, so a
-    rerun always chooses the same sentence.
-    """
-
-    wanted = content_tokens(
-        f"{row.get('concept_title') or row.get('concept') or ''} "
-        f"{grounding_certificate.source_claim(row)}"
-    )
-    best: tuple[int, int, int] | None = None
-    best_text = ""
-    best_block = ""
-    for block_index, (block_id, text) in enumerate(topic_evidence.blocks):
-        for sentence_index, sentence in enumerate(_sentences(text)):
-            overlap = len(content_tokens(sentence) & wanted)
-            if overlap <= 0:
-                continue
-            # Higher overlap wins; earlier block and sentence break ties.
-            key = (-overlap, block_index, sentence_index)
-            if best is None or key < best:
-                best = key
-                best_text = sentence
-                best_block = block_id
-    if not best_text:
-        # No sentence shares a content word with the concept.  Fall back to
-        # the topic's first usable sentence rather than inventing wording.
-        for block_id, text in topic_evidence.blocks:
-            sentences = _sentences(text)
-            if sentences:
-                best_text = sentences[0]
-                best_block = block_id
-                break
-    if not best_text:
-        return "", ()
-    return best_text[:_MAX_RESTATEMENT_CHARS].strip(), (best_block,)
-
-
-# --------------------------------------------------------------------------- #
-# Row rewriting
-# --------------------------------------------------------------------------- #
-
-def _replace_description(details: str, description: str) -> str:
-    sections = cr.split_sections(details)
-    replaced = False
-    out: list[tuple[str, str]] = []
-    for label, content in sections:
-        if (
-            not replaced
-            and str(label or "").strip().casefold().startswith("description")
-        ):
-            out.append((label, description))
-            replaced = True
-            continue
-        out.append((label, content))
-    if not replaced:
-        out.insert(0, (_DESCRIPTION_LABEL, description))
-    return cr.join_sections(out)
-
-
-def narrow_row(
-    row: Mapping[str, Any],
-    topic_evidence: TopicEvidence | None,
-) -> tuple[dict[str, Any], NarrowedRow]:
-    """Return ``row`` restricted to what ``topic_evidence`` supports.
-
-    The row is always returned.  Only its source-facing Description can
-    change; title, topic, parent and every pedagogical section are left
-    exactly as the topology decided them.
-    """
-
-    out = copy.deepcopy(dict(row))
-    title = _normal(out.get("concept_title") or out.get("concept"))
-    topic = _normal(out.get("topic"))
-    claim = grounding_certificate.source_claim(out)
-
-    if topic_evidence is None or topic_evidence.empty:
-        # No canonical text is indexed for this topic.  That is a source or
-        # graph defect rather than an over-inference by this concept, so the
-        # claim is left untouched and named in the audit.  Nothing is written
-        # onto the row: an unchanged concept must stay byte-identical, or a
-        # bookkeeping field would perturb downstream identity hashing.
-        note = (
-            "no canonical source blocks are indexed for this topic; the "
-            "claim was left unchanged and reported"
+    if status == "accepted":
+        decisions, provider_errors = validated_provider_decisions(
+            ledger.get("decisions") or {}, packets
         )
-        return out, NarrowedRow(
-            concept_title=title,
-            topic=topic,
-            kind="unchanged",
-            note=note,
+        review, critic_errors = validated_critic(
+            ledger.get("review") or {}, packets
+        )
+        if not provider_errors and not critic_errors and review and critic_accepts(review):
+            return _apply_accepted(
+                records,
+                packets,
+                decisions,
+                review,
+                context_hash=context_hash,
+                cache_status="accepted_replay",
+                unavailable=unavailable,
+            )
+        return _fallback_and_persist(
+            records,
+            packets,
+            context_hash=context_hash,
+            cache_dir=cache_dir,
+            ledger=ledger,
+            reason="stored terminal disposition failed deterministic contract validation",
+            unavailable=unavailable,
+        )
+    if status == "unmodified":
+        return _unmodified_result(
+            records,
+            packets,
+            context_hash=context_hash,
+            reason=str(ledger.get("failure") or "stored unverified terminal fallback"),
+            cache_status="unmodified_replay",
+            unavailable=unavailable,
+        )
+    if status in {"provider_started", "critic_started"}:
+        return _fallback_and_persist(
+            records,
+            packets,
+            context_hash=context_hash,
+            cache_dir=cache_dir,
+            ledger=ledger,
+            reason=(
+                f"Resume found a durable {status} claim. The request may have "
+                "been paid, so it was not replayed; the concept was released "
+                "unchanged and flagged unverified"
+            ),
+            unavailable=unavailable,
         )
 
-    tokens = topic_evidence.tokens
-    clauses = split_clauses(claim)
-    kept = [clause for clause in clauses if clause_supported(clause, tokens)]
-    dropped = [clause for clause in clauses if clause not in kept]
+    provider_call = provider or default_provider
+    critic_call = critic or default_critic
+    attempts = max(1, min(2, int(max_attempts or 1)))
+    prior_feedback: dict[str, Any] = {}
+    attempt = max(1, int(ledger.get("attempt") or 1))
+    resumed_decisions: list[dict[str, Any]] | None = None
 
-    if kept and not dropped:
-        return out, NarrowedRow(
-            concept_title=title,
-            topic=topic,
-            kind="unchanged",
-            kept_clauses=tuple(kept),
-            evidence_block_ids=topic_evidence.block_ids,
+    if status in {"provider_returned", "critic_pending", "critic_returned"}:
+        resumed_decisions, provider_errors = validated_provider_decisions(
+            ledger.get("provider_response") or {}, packets
         )
+        if provider_errors:
+            return _fallback_and_persist(
+                records,
+                packets,
+                context_hash=context_hash,
+                cache_dir=cache_dir,
+                ledger=ledger,
+                reason=(
+                    "stored provider decision failed deterministic contract "
+                    "validation: " + "; ".join(provider_errors[:8])
+                ),
+                unavailable=unavailable,
+            )
 
-    if kept:
-        description = " ".join(kept)
-        out["concept_details"] = _replace_description(
-            str(out.get("concept_details") or out.get("concept_description") or ""),
-            description,
+    if status == "critic_returned":
+        resumed_review, critic_errors = validated_critic(
+            ledger.get("critic_response") or {}, packets
         )
-        out[NARROWED_FLAG_FIELD] = True
-        out[NARROWED_KIND_FIELD] = "narrowed"
-        out[NARROWED_DROPPED_FIELD] = list(dropped)
-        out[NARROWED_ORIGINAL_FIELD] = claim
-        out[NARROWED_EVIDENCE_FIELD] = list(topic_evidence.block_ids)
-        out[NARROWED_NOTE_FIELD] = (
-            f"{len(dropped)} unsupported clause(s) removed; the concept now "
-            "states only what its topic's canonical blocks support"
-        )
-        return out, NarrowedRow(
-            concept_title=title,
-            topic=topic,
-            kind="narrowed",
-            kept_clauses=tuple(kept),
-            dropped_clauses=tuple(dropped),
-            evidence_block_ids=topic_evidence.block_ids,
-            note=out[NARROWED_NOTE_FIELD],
-        )
+        if critic_errors or resumed_review is None:
+            return _fallback_and_persist(
+                records,
+                packets,
+                context_hash=context_hash,
+                cache_dir=cache_dir,
+                ledger=ledger,
+                reason=(
+                    "stored critic decision failed deterministic contract "
+                    "validation: " + "; ".join(critic_errors[:8])
+                ),
+                unavailable=unavailable,
+            )
+        if critic_accepts(resumed_review):
+            return _accept_and_persist(
+                records,
+                packets,
+                resumed_decisions or [],
+                resumed_review,
+                context_hash=context_hash,
+                cache_dir=cache_dir,
+                ledger=ledger,
+                cache_status="accepted_replay",
+                unavailable=unavailable,
+            )
+        prior_feedback = {
+            "overall_verdict": resumed_review.get("verdict"),
+            "confidence": resumed_review.get("confidence"),
+            "issues": resumed_review.get("issues") or [],
+            "concept_reviews": resumed_review.get("decisions") or [],
+            "instruction": (
+                "Correct only the critic-identified semantic defects. Preserve "
+                "already-supported propositions and exact IDs."
+            ),
+        }
+        attempt += 1
+        resumed_decisions = None
+        if attempt > attempts:
+            return _fallback_and_persist(
+                records,
+                packets,
+                context_hash=context_hash,
+                cache_dir=cache_dir,
+                ledger=ledger,
+                reason=(
+                    "independent critic rejected every bounded terminal "
+                    "narrowing candidate; no lexical or deterministic semantic "
+                    "substitute was used"
+                ),
+                unavailable=unavailable,
+            )
 
-    restatement, blocks = _restatement(out, topic_evidence)
-    if not restatement:
-        note = (
-            "the topic's canonical blocks yielded no usable sentence; the "
-            "claim was left unchanged and reported"
-        )
-        return out, NarrowedRow(
-            concept_title=title,
-            topic=topic,
-            kind="unchanged",
-            dropped_clauses=tuple(dropped),
-            note=note,
-        )
+    while attempt <= attempts:
+        if resumed_decisions is not None:
+            decisions = resumed_decisions
+            resumed_decisions = None
+        else:
+            provider_payload = {
+                "contract_version": DISPOSITION_VERSION,
+                "context_hash": context_hash,
+                "attempt": attempt,
+                "concepts": [packet.payload() for packet in packets],
+                "previous_critic_feedback": copy.deepcopy(prior_feedback),
+            }
+            try:
+                provider_response = invoke_model_stage(
+                    provider_call,
+                    provider_payload,
+                    ledger=ledger,
+                    context_hash=context_hash,
+                    cache_dir=cache_dir,
+                    stage="provider",
+                    attempt=attempt,
+                )
+            except Exception as exc:
+                return _fallback_and_persist(
+                    records,
+                    packets,
+                    context_hash=context_hash,
+                    cache_dir=cache_dir,
+                    ledger=ledger,
+                    reason=f"terminal narrowing provider was unavailable or unsafe: {exc}",
+                    unavailable=unavailable,
+                )
+            decisions, provider_errors = validated_provider_decisions(
+                provider_response, packets
+            )
+            if provider_errors:
+                return _fallback_and_persist(
+                    records,
+                    packets,
+                    context_hash=context_hash,
+                    cache_dir=cache_dir,
+                    ledger=ledger,
+                    reason=(
+                        "terminal narrowing provider violated its exact contract: "
+                        + "; ".join(provider_errors[:8])
+                    ),
+                    unavailable=unavailable,
+                )
+            ledger.update({
+                "status": "provider_returned",
+                "attempt": attempt,
+                "provider_response": {"decisions": decisions},
+            })
+            try:
+                persist_ledger(context_hash, ledger, cache_dir, required=True)
+            except Exception as exc:
+                return _fallback_and_persist(
+                    records,
+                    packets,
+                    context_hash=context_hash,
+                    cache_dir=cache_dir,
+                    ledger=ledger,
+                    reason=f"provider decision could not be persisted before criticism: {exc}",
+                    unavailable=unavailable,
+                )
 
-    out["concept_details"] = _replace_description(
-        str(out.get("concept_details") or out.get("concept_description") or ""),
-        restatement,
-    )
-    out[NARROWED_FLAG_FIELD] = True
-    out[NARROWED_KIND_FIELD] = "restated"
-    out[NARROWED_DROPPED_FIELD] = list(dropped)
-    out[NARROWED_ORIGINAL_FIELD] = claim
-    out[NARROWED_EVIDENCE_FIELD] = list(blocks)
-    out[NARROWED_NOTE_FIELD] = (
-        "no written clause was supported; the concept was restated verbatim "
-        "from its canonical source block"
-    )
-    return out, NarrowedRow(
-        concept_title=title,
-        topic=topic,
-        kind="restated",
-        kept_clauses=(restatement,),
-        dropped_clauses=tuple(dropped),
-        evidence_block_ids=blocks,
-        note=out[NARROWED_NOTE_FIELD],
+        critic_payload = {
+            "contract_version": DISPOSITION_VERSION,
+            "context_hash": context_hash,
+            "attempt": attempt,
+            "concepts": [packet.payload() for packet in packets],
+            "proposed_decisions": copy.deepcopy(decisions),
+        }
+        try:
+            critic_response = invoke_model_stage(
+                critic_call,
+                critic_payload,
+                ledger=ledger,
+                context_hash=context_hash,
+                cache_dir=cache_dir,
+                stage="critic",
+                attempt=attempt,
+            )
+        except Exception as exc:
+            return _fallback_and_persist(
+                records,
+                packets,
+                context_hash=context_hash,
+                cache_dir=cache_dir,
+                ledger=ledger,
+                reason=f"independent narrowing critic was unavailable or unsafe: {exc}",
+                unavailable=unavailable,
+            )
+        review, critic_errors = validated_critic(critic_response, packets)
+        if critic_errors or review is None:
+            return _fallback_and_persist(
+                records,
+                packets,
+                context_hash=context_hash,
+                cache_dir=cache_dir,
+                ledger=ledger,
+                reason=(
+                    "independent narrowing critic violated its exact contract: "
+                    + "; ".join(critic_errors[:8])
+                ),
+                unavailable=unavailable,
+            )
+        ledger.update({
+            "status": "critic_returned",
+            "attempt": attempt,
+            "provider_response": {"decisions": decisions},
+            "critic_response": review,
+        })
+        try:
+            persist_ledger(context_hash, ledger, cache_dir, required=True)
+        except Exception as exc:
+            return _fallback_and_persist(
+                records,
+                packets,
+                context_hash=context_hash,
+                cache_dir=cache_dir,
+                ledger=ledger,
+                reason=f"critic decision could not be persisted before release: {exc}",
+                unavailable=unavailable,
+            )
+
+        if critic_accepts(review):
+            return _accept_and_persist(
+                records,
+                packets,
+                decisions,
+                review,
+                context_hash=context_hash,
+                cache_dir=cache_dir,
+                ledger=ledger,
+                cache_status="accepted_fresh",
+                unavailable=unavailable,
+            )
+
+        prior_feedback = {
+            "overall_verdict": review.get("verdict"),
+            "confidence": review.get("confidence"),
+            "issues": review.get("issues") or [],
+            "concept_reviews": review.get("decisions") or [],
+            "instruction": (
+                "Correct only the critic-identified semantic defects. Preserve "
+                "already-supported propositions and exact IDs."
+            ),
+        }
+        ledger.pop("provider_response", None)
+        ledger.pop("critic_response", None)
+        attempt += 1
+
+    return _fallback_and_persist(
+        records,
+        packets,
+        context_hash=context_hash,
+        cache_dir=cache_dir,
+        ledger=ledger,
+        reason=(
+            "independent critic rejected every bounded terminal narrowing "
+            "candidate; no lexical or deterministic semantic substitute was used"
+        ),
+        unavailable=unavailable,
     )
 
 
@@ -576,38 +610,31 @@ def narrow_records(
     canonical: Mapping[str, Any] | None = None,
     evidence: Mapping[str, TopicEvidence] | None = None,
     concept_titles: Iterable[str] | None = None,
+    provider: Provider | None = None,
+    critic: Critic | None = None,
+    cache_dir: Path | str | None = None,
+    max_attempts: int = 2,
 ) -> tuple[list[dict[str, Any]], NarrowingAudit]:
-    """Apply the terminal disposition across a candidate.
+    """Return every row, accepting only a critic-verified semantic rewrite.
 
-    ``concept_titles`` restricts the rewrite to the concepts a grounding
-    diagnostic actually named; omit it to consider every row.  Rows outside
-    the selection are returned untouched, and no row is ever removed.
+    The accepted result is keyed by exact candidate and source evidence,
+    persisted into the active Phase 3.8 checkpoint and a local cache, and
+    replayed on Resume. A durable ``*_started`` marker is never replayed because
+    a paid request may already have crossed the transport boundary.
     """
 
-    if evidence is None:
-        evidence = build_evidence(graph, canonical)
-    wanted = (
-        {_normal(title).casefold() for title in concept_titles}
-        if concept_titles is not None
-        else None
-    )
-
-    audit = NarrowingAudit()
-    out: list[dict[str, Any]] = []
-    for row in records:
-        if not isinstance(row, Mapping):
-            out.append(copy.deepcopy(row))
-            continue
-        title = _normal(row.get("concept_title") or row.get("concept"))
-        if wanted is not None and title.casefold() not in wanted:
-            out.append(copy.deepcopy(dict(row)))
-            continue
-        narrowed, report = narrow_row(row, _evidence_for_row(row, evidence))
-        out.append(narrowed)
-        audit.rows.append(report)
-
-    if len(out) != len(records):  # pragma: no cover - defensive
-        raise EvidenceNarrowingError(
-            "evidence narrowing must return one row per input record"
+    token = bind_state_mirror()
+    try:
+        return _narrow_records_impl(
+            records,
+            graph=graph,
+            canonical=canonical,
+            evidence=evidence,
+            concept_titles=concept_titles,
+            provider=provider,
+            critic=critic,
+            cache_dir=cache_dir,
+            max_attempts=max_attempts,
         )
-    return out, audit
+    finally:
+        reset_state_mirror(token)
