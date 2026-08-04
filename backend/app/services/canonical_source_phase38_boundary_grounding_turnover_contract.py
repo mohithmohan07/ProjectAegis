@@ -21,10 +21,24 @@ This contract:
 * allows several targeted convergence passes with cycle-aware instructions rather
   than replaying the whole chapter twice and stopping;
 * gives an exhausted concept one final quality-first atomisation/minimal-concept
-  verification pass, then fails closed without deleting any source concept;
+  verification pass;
+* and, when even that fails, disposes of the candidate deterministically —
+  narrowing each unsupported concept to exactly what its canonical evidence
+  states — so the run always reaches the output workbook without deleting a
+  concept or waiting for a person;
 * invalidates cached final topology rows grounded under an older contract.
 
 No textbook wording, QID, Figure, or source identity is invented or removed.
+
+The terminal disposition deserves a note, because it inverts what this module
+used to do.  Every bounded repair above it exists to make a concept correct;
+none of them may run forever, so something has to happen when the last one
+fails.  Raising was the old answer, and it was the wrong one: it stopped a
+nine-tenths-finished job that nobody was watching, and it stopped it *after*
+the expensive work was already paid for.  ``evidence_narrowing`` replaces it
+with a rewrite the source itself dictates — no provider call, no invention, no
+deletion — so the failure mode becomes "this concept says less than it wanted
+to, and the log says which clause went" instead of "there is no workbook".
 """
 from __future__ import annotations
 
@@ -46,6 +60,7 @@ from . import canonical_source_phase33_preflight_contract as phase33
 from . import canonical_source_phase37_visual_topology_convergence_contract as phase37
 from . import concept_refiner as cr
 from . import early_semantic_gate as early_gate
+from . import evidence_narrowing
 from . import progress
 from . import semantic_confidence_policy as confidence_policy
 from . import semantic_recovery
@@ -60,6 +75,9 @@ _LAST_REPAIRED_TOPOLOGY: ContextVar[list[dict[str, Any]] | None] = ContextVar(
 
 _EXCLUDED_BLOCK_KINDS = frozenset({"layout", "heading", "navigation"})
 _MAX_CONVERGENCE_ISSUES = 100
+#: Statuses meaning "this issue will receive no further paid pass".
+#: ``exhausted`` is the pre-disposition spelling and is still read.
+_TERMINAL_STATUSES = frozenset({"exhausted", "disposed"})
 _GROUNDING_ISSUE_ID_RE = re.compile(
     r"\b(?:CONCEPT-GROUND|TOPOLOGY-CONCEPT)-\d{1,6}\b",
     re.IGNORECASE,
@@ -136,6 +154,10 @@ def _fresh_convergence_state(
         "final_verification_pending": False,
         "status": "active",
         "terminal_reason": "",
+        # Names the deterministic disposition that produced the final
+        # candidate, so an auditor can tell a converged run from a disposed
+        # one without re-reading the log.
+        "disposition": "",
         # Phase 3.8 originally kept one global attempt counter.  Keep those
         # top-level fields as a mirror of the active issue so existing UI,
         # exports, and checkpoints remain readable, while the durable buckets
@@ -204,13 +226,18 @@ def _normalized_issue_bucket(value: Any) -> dict[str, Any]:
         )
     )[:_max_convergence_candidates()]
     status = str(value.get("status") or "active")
-    if status not in {"active", "final_verification_pending", "exhausted"}:
+    # "exhausted" is retained for version-1 checkpoints written before the
+    # terminal disposition existed; both terminal statuses mean the same
+    # thing to the reader -- no further paid pass for this issue.
+    if status not in _TERMINAL_STATUSES | {
+        "active", "final_verification_pending"
+    }:
         status = "active"
     final_pending = bool(
         value.get("final_verification_pending")
         or status == "final_verification_pending"
     )
-    if final_pending and status != "exhausted":
+    if final_pending and status not in _TERMINAL_STATUSES:
         status = "final_verification_pending"
     bucket.update({
         "candidate_history": history,
@@ -407,6 +434,7 @@ def _normalized_convergence_state(
         ],
         "status": legacy_bucket["status"],
         "terminal_reason": legacy_bucket["terminal_reason"],
+        "disposition": str(loaded.get("disposition") or "")[:128],
         "issue_buckets": issue_buckets,
         "active_issue_key": active_issue_key,
         "legacy_unscoped_issue": legacy_unscoped_issue,
@@ -1243,25 +1271,138 @@ def _candidate_preserves_every_origin(
     return bool(actual) and expected <= actual
 
 
-def _terminal_convergence_error(
+def _final_turn_for_claim(state: dict[str, Any]) -> bool:
+    """Is the dispatch in flight the issue's last allowed turn?
+
+    A pause raised before the final turn still deserves the upstream
+    agent-first repair ladder, which can fix the concept properly.  A pause
+    raised *on* the final turn has nothing left above it, so the only choices
+    are a deterministic disposition or a stopped run.
+    """
+
+    claimed = str(state.get("dispatch_issue_key") or "")
+    if not claimed:
+        return bool(state.get("final_verification_pending"))
+    bucket = _normalized_issue_bucket(
+        (state.get("issue_buckets") or {}).get(claimed)
+    )
+    return bool(
+        bucket.get("final_verification_pending")
+        or bucket.get("status") == "final_verification_pending"
+    )
+
+
+def _diagnostic_concept_titles(
+    exc: Exception | None,
+    candidate: list[dict[str, Any]],
+    repaired: list[dict[str, Any]] | None,
+) -> list[str] | None:
+    """Return the titles in ``candidate`` a grounding diagnostic named.
+
+    ``None`` means "the diagnostic identified nobody in this candidate",
+    which the disposition reads as "consider every row".  That is the safe
+    default in both directions: narrowing an already-supported row is a
+    no-op, whereas a selection that misses the real offender would leave the
+    ungroundable claim in the workbook untouched.
+    """
+
+    if exc is None:
+        return None
+    origins: dict[str, str] = {}
+    for source in (repaired, candidate):
+        if not source:
+            continue
+        try:
+            origins = phase33._grounding_feedback_origins(
+                exc,
+                records=source,
+            )
+        except Exception:  # pragma: no cover - diagnostics must never stop us
+            origins = {}
+        if origins:
+            break
+    if not origins:
+        return None
+
+    titles: list[str] = []
+    directory = _original_concept_directory(candidate)
+    for row in candidate:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("_phase32_origin_concept_id") or "") in origins:
+            title = str(row.get("concept_title") or row.get("concept") or "")
+            if title:
+                titles.append(title)
+    # A candidate that lost its origin seals still has to be reachable, so
+    # fall back to the positional directory the diagnostic IDs index into.
+    for concept_id in origins:
+        row = directory.get(concept_id)
+        if row and str(row.get("concept_title") or ""):
+            titles.append(str(row["concept_title"]))
+    return list(dict.fromkeys(titles)) or None
+
+
+def _terminal_disposition(
     state: dict[str, Any],
     *,
     scope: str,
-    exc: Exception,
-) -> Phase38ConvergenceExhausted:
-    """Persist one terminal outcome so Resume cannot replay the final pass."""
+    records: list[dict[str, Any]],
+    repaired: list[dict[str, Any]] | None = None,
+    exc: Exception | None = None,
+    reason: str,
+) -> list[dict[str, Any]]:
+    """Produce the final candidate deterministically. Never raises.
+
+    This is the last rung of the ladder.  It makes no provider request, so a
+    sealed ``request_started`` claim stays sealed and nothing is paid for
+    twice; it removes no concept, so the topology the user approved survives;
+    and it returns records, so the caller reaches the output workbook.
+
+    The rewrite is a pure function of the candidate and the canonical source,
+    which is what lets Resume repeat it instead of re-earning it.
+    """
+
+    candidate = records
+    if (
+        isinstance(repaired, list)
+        and repaired
+        and _candidate_preserves_every_origin(records, repaired)
+    ):
+        # The last repaired topology is strictly closer to grounded than the
+        # untouched input, provided it still carries every original lineage.
+        candidate = repaired
+
+    graph = phase3.active_graph()
+    canonical = (phase3.active_session() or {}).get("canonical") or {}
+    try:
+        disposed, audit = evidence_narrowing.narrow_records(
+            candidate,
+            graph=graph,
+            canonical=canonical,
+            concept_titles=_diagnostic_concept_titles(
+                exc, candidate, repaired
+            ),
+        )
+    except Exception as narrowing_error:  # pragma: no cover - last resort
+        # Even a defect inside the disposition must not become a stopped run.
+        # Shipping the unmodified candidate is worse than narrowing it and
+        # better than producing nothing at all, so it is what happens.
+        disposed = [copy.deepcopy(row) for row in candidate]
+        audit = evidence_narrowing.NarrowingAudit()
+        progress.log(
+            "Phase 3.8 evidence narrowing failed internally "
+            f"({narrowing_error}); the unmodified final candidate was "
+            "released so the run still produces its workbook.",
+            level="warning",
+        )
 
     diagnostic = (
-        "Phase 3.8 exhausted its bounded topology/grounding convergence and "
-        "the final atomisation/minimal-source-concept candidate still failed "
-        "independent exact source-block grounding. No concept was retired or "
-        f"deleted; the original topology remains intact. Last diagnostic: {exc}"
+        f"{reason} The run continued: {audit.summary()}. No concept was "
+        "retired or deleted."
     )
-    public_reason = (
-        "Phase 3.8 quality-first attempt budget ended after its final "
-        "evidence-check turn. No concept was retired or deleted, and Resume "
-        "is blocked for this unchanged candidate."
-    )
+    if exc is not None:
+        diagnostic += f" Last diagnostic: {exc}"
+
     issue_key = str(state.get("active_issue_key") or "")
     bucket = (
         copy.deepcopy((state.get("issue_buckets") or {}).get(issue_key))
@@ -1269,18 +1410,30 @@ def _terminal_convergence_error(
         else None
     )
     if isinstance(bucket, dict):
-        bucket["status"] = "exhausted"
+        bucket["status"] = "disposed"
         bucket["final_verification_pending"] = False
         bucket["terminal_reason"] = diagnostic[:4000]
         _mirror_active_issue(state, issue_key, bucket)
     else:
-        state["status"] = "exhausted"
+        state["status"] = "disposed"
         state["final_verification_pending"] = False
         state["terminal_reason"] = diagnostic[:4000]
     state["scope"] = scope
+    state["disposition"] = evidence_narrowing.DISPOSITION_VERSION
+    # A returned decision or an unobserved request is settled the moment the
+    # disposition takes over: nothing further will be dispatched for it, so
+    # holding the claim would only block a future run for no benefit.
     _clear_dispatch_claim(state)
     _persist_convergence_state(state)
-    return Phase38ConvergenceExhausted(public_reason)
+
+    for row in audit.changed_rows:
+        progress.log(
+            f"Phase 3.8 terminal disposition {row.kind} "
+            f"'{row.concept_title}' under '{row.topic}': {row.note}",
+            level="warning",
+        )
+    progress.log(diagnostic, level="warning")
+    return disposed
 
 
 def _phase32_adjudicate_with_targeted_convergence(
@@ -1302,11 +1455,18 @@ def _phase32_adjudicate_with_targeted_convergence(
         "request_started", "decision_returned"
     }:
         status = str(state.get("dispatch_status") or "")
-        raise Phase38ConvergenceExhausted(
-            f"Phase 3.8 found a durable provider {status} claim that has not "
-            "been atomically reconciled. It will not issue a duplicate paid "
-            "request; operator reconciliation or a materially new checkpoint "
-            "is required."
+        # An unreconciled claim still forbids a duplicate paid request, and
+        # the disposition makes none. Refusing to continue would leave the
+        # job parked on a claim only an operator could clear.
+        return _terminal_disposition(
+            state,
+            scope=scope,
+            records=records,
+            reason=(
+                f"Phase 3.8 found a durable provider {status} claim that was "
+                "never reconciled. It issued no duplicate paid request and "
+                "disposed of the candidate deterministically instead."
+            ),
         )
     source_contract_hash = ""
     graph = phase3.active_graph()
@@ -1351,11 +1511,18 @@ def _phase32_adjudicate_with_targeted_convergence(
     if initial_changed:
         _persist_convergence_state(state)
 
-    if state.get("status") == "exhausted":
-        raise Phase38ConvergenceExhausted(
-            "Phase 3.8 quality-first attempt budget already ended for this "
-            "unchanged candidate; Resume will not replay the final evidence "
-            "check."
+    if state.get("status") in _TERMINAL_STATUSES:
+        # Resume reaches the same terminal rung. Narrowing is deterministic,
+        # so it reproduces the earlier output without replaying a paid pass.
+        return _terminal_disposition(
+            state,
+            scope=scope,
+            records=records,
+            reason=(
+                "Phase 3.8 had already spent its quality-first attempt budget "
+                "for this unchanged candidate. Resume replayed no paid "
+                "evidence check and reproduced the deterministic disposition."
+            ),
         )
 
     suppressed_resolutions = {
@@ -1370,9 +1537,16 @@ def _phase32_adjudicate_with_targeted_convergence(
             if state.get("dispatch_status") in {
                 "request_started", "decision_returned"
             }:
-                raise Phase38ConvergenceExhausted(
-                    "Phase 3.8 will not replay an unresolved provider "
-                    "dispatch claim."
+                return _terminal_disposition(
+                    state,
+                    scope=scope,
+                    records=records,
+                    repaired=_LAST_REPAIRED_TOPOLOGY.get(),
+                    reason=(
+                        "Phase 3.8 would have had to replay an unresolved "
+                        "provider dispatch claim to continue converging. It "
+                        "disposed of the candidate deterministically instead."
+                    ),
                 )
             state["dispatch_sequence"] = int(
                 state.get("dispatch_sequence") or 0
@@ -1429,12 +1603,37 @@ def _phase32_adjudicate_with_targeted_convergence(
                     )
                     or not re.fullmatch(r"[0-9a-f]{64}", context_hash)
                 ):
-                    # The provider outcome is not safe to bridge into the
-                    # durable decision schema. Leave request_started intact.
-                    raise Phase38ConvergenceExhausted(
-                        "Phase 3.8 received an invalid decision identity; its "
-                        "provider request remains sealed and will not replay."
-                    ) from exc
+                    # The outcome is not safe to bridge into the durable
+                    # decision schema, so there is no pause to raise and no
+                    # repair left to try. Dispose rather than stop.
+                    return _terminal_disposition(
+                        state,
+                        scope=scope,
+                        records=records,
+                        repaired=_LAST_REPAIRED_TOPOLOGY.get(),
+                        exc=exc,
+                        reason=(
+                            "Phase 3.8 received an invalid decision identity "
+                            "and issued no further provider request."
+                        ),
+                    )
+                if _final_turn_for_claim(state):
+                    # The upstream agent-first ladder has already had every
+                    # bounded turn for this issue. Raising the pause again
+                    # could only end in a stop or a park, and neither may
+                    # happen while a deterministic disposition exists.
+                    return _terminal_disposition(
+                        state,
+                        scope=scope,
+                        records=records,
+                        repaired=_LAST_REPAIRED_TOPOLOGY.get(),
+                        exc=exc,
+                        reason=(
+                            "Phase 3.8 reached a semantic decision on its "
+                            "final verification turn, after the autonomous "
+                            "repair ladder was spent."
+                        ),
+                    )
                 state["dispatch_status"] = "decision_returned"
                 state["dispatch_decision_id"] = decision_id
                 state["dispatch_decision_context_hash"] = context_hash
@@ -1443,15 +1642,20 @@ def _phase32_adjudicate_with_targeted_convergence(
             except ValueError as exc:
                 message = str(exc)
                 if "failed exact source-block grounding before freeze" not in message:
-                    # A generic exception does not prove that no paid provider
-                    # byte was sent. Leave request_started durable and fail
-                    # closed; only recognized grounding rejection, verified
-                    # success, or atomically saved decision may clear it.
-                    raise Phase38ConvergenceExhausted(
-                        "Phase 3.8 stopped on an unrecognized provider outcome. "
-                        "Its durable request_started claim remains sealed, so "
-                        "neither this run nor Resume will replay the request."
-                    ) from exc
+                    # An unrecognized outcome cannot prove whether a paid byte
+                    # was sent, so no further request is made. The disposition
+                    # makes none either, which is what lets the run continue.
+                    return _terminal_disposition(
+                        state,
+                        scope=scope,
+                        records=records,
+                        repaired=_LAST_REPAIRED_TOPOLOGY.get(),
+                        exc=exc,
+                        reason=(
+                            "Phase 3.8 met an unrecognized provider outcome "
+                            "and made no further request."
+                        ),
+                    )
 
                 observed_issue_key = _grounding_issue_key(exc)
                 buckets = dict(state.get("issue_buckets") or {})
@@ -1486,18 +1690,18 @@ def _phase32_adjudicate_with_targeted_convergence(
                 else:
                     bucket = _normalized_issue_bucket(buckets.get(issue_key))
                 if issue_key not in buckets and len(buckets) >= _MAX_CONVERGENCE_ISSUES:
-                    state["status"] = "exhausted"
-                    state["final_verification_pending"] = False
-                    state["terminal_reason"] = (
-                        "Phase 3.8 refused more than 100 distinct grounding "
-                        "issue identities in one job."
+                    return _terminal_disposition(
+                        state,
+                        scope=scope,
+                        records=records,
+                        repaired=_LAST_REPAIRED_TOPOLOGY.get(),
+                        exc=exc,
+                        reason=(
+                            "Phase 3.8 reached its bounded distinct-issue "
+                            f"safety limit of {_MAX_CONVERGENCE_ISSUES} in one "
+                            "job and made no further provider request."
+                        ),
                     )
-                    _clear_dispatch_claim(state)
-                    _persist_convergence_state(state)
-                    raise Phase38ConvergenceExhausted(
-                        "Phase 3.8 reached its bounded distinct-issue safety "
-                        "limit; no additional provider request will be made."
-                    ) from exc
 
                 final_verification_pending = bool(
                     bucket.get("final_verification_pending")
@@ -1538,11 +1742,23 @@ def _phase32_adjudicate_with_targeted_convergence(
 
                 if final_verification_pending:
                     _mirror_active_issue(state, issue_key, bucket)
-                    raise _terminal_convergence_error(
+                    # Every bounded repair is spent, including the final
+                    # atomisation pass. What is left is the concept's own
+                    # evidence, so the concept is rewritten to match it.
+                    return _terminal_disposition(
                         state,
                         scope=scope,
+                        records=records,
+                        repaired=repaired,
                         exc=exc,
-                    ) from exc
+                        reason=(
+                            "Phase 3.8 exhausted its bounded topology and "
+                            "grounding convergence, and the final "
+                            "atomisation/minimal-source-concept candidate "
+                            "still failed independent exact source-block "
+                            "grounding."
+                        ),
+                    )
 
                 budget_spent = (
                     attempts >= passes
@@ -1590,13 +1806,22 @@ def _phase32_adjudicate_with_targeted_convergence(
                 )
                 continue
             except Exception as exc:
-                # Unknown failures cannot establish whether a paid call began
-                # or completed. Retain request_started so Resume fails closed.
-                raise Phase38ConvergenceExhausted(
-                    "Phase 3.8 stopped on an unrecognized provider outcome. "
-                    "Its durable request_started claim remains sealed, so "
-                    "neither this run nor Resume will replay the request."
-                ) from exc
+                # An unknown failure cannot establish whether a paid call
+                # began or completed, so none is retried. It also cannot be
+                # allowed to end the job: this is the catch-all that used to
+                # turn any unexpected defect anywhere below Phase 3.8 into a
+                # run with no workbook.
+                return _terminal_disposition(
+                    state,
+                    scope=scope,
+                    records=records,
+                    repaired=_LAST_REPAIRED_TOPOLOGY.get(),
+                    exc=exc,
+                    reason=(
+                        "Phase 3.8 met an unrecognized failure "
+                        f"({type(exc).__name__}) and retried nothing."
+                    ),
+                )
             finally:
                 phase33._EXTERNAL_GROUNDING_FEEDBACK.reset(feedback_token)
     finally:

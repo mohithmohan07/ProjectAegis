@@ -50,6 +50,13 @@ _TARGET_FIELDS = (
 )
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _DECISION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+# Phase 3.8 issue statuses that mean "no further paid pass for this issue".
+# ``exhausted`` is the spelling used before the terminal disposition existed
+# and is still accepted so older exported bundles remain importable.
+_PHASE38_TERMINAL_STATUSES = frozenset({"exhausted", "disposed"})
+_PHASE38_STATUSES = _PHASE38_TERMINAL_STATUSES | {
+    "active", "final_verification_pending",
+}
 _AGENT_AUTOMATABLE_CHOICES = {
     "expand_existing",
     "create_new",
@@ -925,7 +932,7 @@ def _validate_phase38_issue_bucket(value: Any, path: str) -> None:
     if not isinstance(value["final_verification_pending"], bool):
         raise ValueError(f"{path}.final_verification_pending must be boolean")
     status = _string(value["status"], f"{path}.status", 64, nonempty=True)
-    if status not in {"active", "final_verification_pending", "exhausted"}:
+    if status not in _PHASE38_STATUSES:
         raise ValueError(f"{path}.status is not supported")
     terminal_reason = _string(
         value["terminal_reason"], f"{path}.terminal_reason", 8_000
@@ -936,8 +943,9 @@ def _validate_phase38_issue_bucket(value: Any, path: str) -> None:
         raise ValueError(
             f"{path}.final_verification_pending must be true for its status"
         )
-    if status == "exhausted" and not terminal_reason.strip():
-        raise ValueError(f"{path}.terminal_reason is required when exhausted")
+    if status in _PHASE38_TERMINAL_STATUSES and not terminal_reason.strip():
+        raise ValueError(
+            f"{path}.terminal_reason is required when {status}")
 
 
 def _validate_phase38_convergence(value: Any, path: str) -> None:
@@ -957,9 +965,12 @@ def _validate_phase38_convergence(value: Any, path: str) -> None:
         "dispatch_candidate_sha256", "dispatch_issue_key",
         "dispatch_decision_id", "dispatch_decision_context_hash",
     }
+    # ``disposition`` names the deterministic terminal rewrite that produced
+    # the final candidate. It is independent of the all-or-nothing extension
+    # set above, so a ledger written before it existed still validates.
     _exact_keys(
         value,
-        legacy_fields | extension_fields,
+        legacy_fields | extension_fields | {"disposition"},
         path,
         required=legacy_fields,
     )
@@ -1029,7 +1040,7 @@ def _validate_phase38_convergence(value: Any, path: str) -> None:
     if not isinstance(value["final_verification_pending"], bool):
         raise ValueError(f"{path}.final_verification_pending must be boolean")
     status = _string(value["status"], f"{path}.status", 64, nonempty=True)
-    if status not in {"active", "final_verification_pending", "exhausted"}:
+    if status not in _PHASE38_STATUSES:
         raise ValueError(f"{path}.status is not supported")
     terminal_reason = _string(
         value["terminal_reason"], f"{path}.terminal_reason", 8_000
@@ -1040,8 +1051,11 @@ def _validate_phase38_convergence(value: Any, path: str) -> None:
         raise ValueError(
             f"{path}.final_verification_pending must be true for its status"
         )
-    if status == "exhausted" and not terminal_reason.strip():
-        raise ValueError(f"{path}.terminal_reason is required when exhausted")
+    if status in _PHASE38_TERMINAL_STATUSES and not terminal_reason.strip():
+        raise ValueError(
+            f"{path}.terminal_reason is required when {status}")
+    if "disposition" in value:
+        _string(value["disposition"], f"{path}.disposition", 128)
 
     present_extensions = extension_fields & set(value)
     if not present_extensions:
