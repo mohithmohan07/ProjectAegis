@@ -184,7 +184,7 @@ def _unmodified_result(
             note=reason,
             verified=False,
         ))
-    return restore_original_records(records), audit
+    return _copy_records(records), audit
 
 
 def _fallback_and_persist(
@@ -273,12 +273,19 @@ def _narrow_records_impl(
     cache_dir: Path | str | None = None,
     max_attempts: int = 2,
 ) -> tuple[list[dict[str, Any]], NarrowingAudit]:
+    selected_titles = (
+        tuple(concept_titles) if concept_titles is not None else None
+    )
+    records = restore_original_records(
+        records,
+        concept_titles=selected_titles,
+    )
     if evidence is None:
         evidence = build_evidence(graph, canonical)
     packets, unavailable = concept_packets(
         records,
         evidence=evidence,
-        concept_titles=concept_titles,
+        concept_titles=selected_titles,
     )
     if not packets:
         return _copy_records(records), NarrowingAudit(
