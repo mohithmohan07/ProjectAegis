@@ -4,6 +4,10 @@ These routes are intentionally included before the legacy generation router.
 They own the same uploaded-source generation URLs, but return a review release
 instead of depositing concepts. Database publication is a separate explicit
 POST after the release passes its deterministic gates.
+
+Dry-mode test/development keeps the historical direct-deposit behaviour. That
+compatibility lane is impossible in live generation, where release-first is a
+product invariant rather than an optional UI preference.
 """
 from __future__ import annotations
 
@@ -13,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
-from .. import schemas
+from .. import config, schemas
 from ..db import SessionLocal, get_db
 from ..services import auth
 from ..services import concept_release as release
@@ -21,6 +25,12 @@ from ..services import drive_checkpoints, progress, uploads
 
 
 router = APIRouter(prefix="/build-concepts", tags=["concept-releases"])
+
+
+def _dry_legacy_generation() -> bool:
+    """Preserve legacy fixture semantics only when OpenAI generation is off."""
+
+    return bool(config.allow_dry() and not config.use_live_generation())
 
 
 def _download(path: Path, filename: str, media_type: str) -> FileResponse:
@@ -42,7 +52,7 @@ def post_learning_release_generate(
     db: Session = Depends(get_db),
     user: auth.Principal = Depends(auth.require_user),
 ):
-    """Generate a review release; never deposit from the generation request."""
+    """Generate a review release; live generation never deposits here."""
     try:
         job = uploads.get_job(
             db,
@@ -53,7 +63,7 @@ def post_learning_release_generate(
         )
     except uploads.UploadJobNotFound as exc:
         raise HTTPException(404, str(exc))
-    if job.status == "generated":
+    if job.status == "generated" and not _dry_legacy_generation():
         raise HTTPException(
             409,
             "this release has already been uploaded to the database; start a "
@@ -69,15 +79,24 @@ def post_learning_release_generate(
     def work():
         worker_db = SessionLocal()
         try:
-            return uploads.run_with_openai_usage(
-                worker_db,
-                job_id,
-                lambda: release.generate_post_learning_release(
+            if _dry_legacy_generation():
+                action = lambda: release.build_concepts.generate_post_learning(
                     worker_db,
                     job_id,
                     req.target_chapter_id,
                     owner_sub=user.sub,
-                ),
+                )
+            else:
+                action = lambda: release.generate_post_learning_release(
+                    worker_db,
+                    job_id,
+                    req.target_chapter_id,
+                    owner_sub=user.sub,
+                )
+            return uploads.run_with_openai_usage(
+                worker_db,
+                job_id,
+                action,
                 owner_sub=user.sub,
             )
         finally:
@@ -86,7 +105,11 @@ def post_learning_release_generate(
 
     return progress.stream(
         work,
-        title="Build Concepts — post-learning review release",
+        title=(
+            "Build Concepts — post-learning generation"
+            if _dry_legacy_generation()
+            else "Build Concepts — post-learning review release"
+        ),
     )
 
 
@@ -97,7 +120,7 @@ def pre_learning_release_generate(
     db: Session = Depends(get_db),
     user: auth.Principal = Depends(auth.require_user),
 ):
-    """Generate a Pre Learning review release with no implicit deposit."""
+    """Generate a Pre Learning review release with no live implicit deposit."""
     try:
         job = uploads.get_job(
             db,
@@ -108,7 +131,7 @@ def pre_learning_release_generate(
         )
     except uploads.UploadJobNotFound as exc:
         raise HTTPException(404, str(exc))
-    if job.status == "generated":
+    if job.status == "generated" and not _dry_legacy_generation():
         raise HTTPException(
             409,
             "this release has already been uploaded to the database; start a "
@@ -124,15 +147,24 @@ def pre_learning_release_generate(
     def work():
         worker_db = SessionLocal()
         try:
-            return uploads.run_with_openai_usage(
-                worker_db,
-                job_id,
-                lambda: release.generate_pre_learning_release(
+            if _dry_legacy_generation():
+                action = lambda: release.build_concepts.generate_pre_learning_from_upload(
                     worker_db,
                     job_id,
                     req.target_chapter_id,
                     owner_sub=user.sub,
-                ),
+                )
+            else:
+                action = lambda: release.generate_pre_learning_release(
+                    worker_db,
+                    job_id,
+                    req.target_chapter_id,
+                    owner_sub=user.sub,
+                )
+            return uploads.run_with_openai_usage(
+                worker_db,
+                job_id,
+                action,
                 owner_sub=user.sub,
             )
         finally:
@@ -141,7 +173,11 @@ def pre_learning_release_generate(
 
     return progress.stream(
         work,
-        title="Build Concepts — pre-learning review release",
+        title=(
+            "Build Concepts — pre-learning generation"
+            if _dry_legacy_generation()
+            else "Build Concepts — pre-learning review release"
+        ),
     )
 
 
