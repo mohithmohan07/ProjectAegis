@@ -12,6 +12,7 @@ from .db import SessionLocal, init_db
 from .services import syllabus_import as syllabus_svc
 from .services import auth as auth_svc
 from .services import drive_checkpoints
+from .services import build_concepts_release_contract
 from .api import (
     admin as admin_api,
     auth as auth_api,
@@ -29,6 +30,7 @@ from .api import (
 def bootstrap() -> None:
     """Initialize the database schema and preload syllabus structure if empty."""
     auth_svc.validate_configuration()
+    build_concepts_release_contract.install()
     init_db()
     db = SessionLocal()
     try:
