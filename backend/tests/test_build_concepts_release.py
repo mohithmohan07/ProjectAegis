@@ -378,3 +378,98 @@ def test_explicit_upload_publishes_flagged_rows_and_is_idempotent(db, monkeypatc
     db.refresh(job)
     assert job.status == "generated"
     assert release.release_payload(job)["summary"]["database_uploaded"] is True
+
+
+# --------------------------------------------------------------------------- #
+# No generation outcome reaches the user as a decision
+# --------------------------------------------------------------------------- #
+#
+# The 81%/89% selection screen was the last place a run could stop and wait.
+# These pin every way generation can end badly, and prove each one produces a
+# release instead of a question.
+
+def _run_wrapped(db, job, chapter, outcome):
+    """Drive the installed release wrapper around one generation outcome."""
+
+    release_contract.install()
+
+    def original(_db, _job_id, _target_chapter_id, **_kwargs):
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    return release_contract._run_generation_release(
+        original,
+        db,
+        job.id,
+        chapter.id,
+        owner_sub=None,
+    )
+
+
+def test_an_unattended_decision_stop_becomes_a_release(db):
+    """The stop that fired when only human-only actions remained."""
+    job, chapter = _job(db)
+
+    result = _run_wrapped(
+        db, job, chapter,
+        build_concepts.UnattendedDecisionUnavailable(
+            "Unattended generation stopped: the saved decision offers only "
+            "actions that a person must take (replace_source)."
+        ),
+    )
+
+    assert result["status"] == release.RELEASE_STATUS
+    db.refresh(job)
+    assert job.status == release.RELEASE_STATUS
+    payload = release.release_payload(job)
+    # The issue is coded by the exception class, so the export names the
+    # exact stop that was converted rather than a generic "it failed".
+    codes = {issue["code"] for issue in payload["issues"]}
+    assert "UnattendedDecisionUnavailable" in codes
+    # The reason survives so the export explains why the run ended where it did.
+    assert any(
+        "replace_source" in str(issue.get("message", ""))
+        + str(issue.get("details", ""))
+        for issue in payload["issues"]
+    )
+
+
+def test_a_returned_pending_decision_becomes_a_release(db):
+    """Generation answering with awaiting_decision must not reach the UI."""
+    job, chapter = _job(db)
+
+    result = _run_wrapped(db, job, chapter, {
+        "job_id": job.id,
+        "status": "awaiting_decision",
+        "pending_decision": _pending(),
+        "resume_required": False,
+    })
+
+    assert result["status"] == release.RELEASE_STATUS
+    assert "pending_decision" not in result
+    db.refresh(job)
+    assert build_concepts._pending_human_decision(job.generation_checkpoint) is None
+    payload = release.release_payload(job)
+    # The issue is not discarded -- it travels with the release.
+    assert payload["pending_decision_snapshot"]
+    # The decision's own kind is the issue code, so the export says which
+    # semantic question went unanswered.
+    assert any(
+        issue["code"] == _pending()["kind"] for issue in payload["issues"]
+    )
+
+
+def test_an_ordinary_generation_failure_becomes_a_release(db):
+    job, chapter = _job(db)
+
+    result = _run_wrapped(
+        db, job, chapter, RuntimeError("phase 3.3 contract is unavailable"),
+    )
+
+    assert result["status"] == release.RELEASE_STATUS
+    payload = release.release_payload(job)
+    assert any(
+        "phase 3.3 contract is unavailable" in str(issue.get("message", ""))
+        for issue in payload["issues"]
+    )

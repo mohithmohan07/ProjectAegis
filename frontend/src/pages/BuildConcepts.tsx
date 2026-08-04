@@ -11,12 +11,6 @@ import type {
   OpenAIUsage,
   PendingSemanticDecision,
   ResumableCheckpoint,
-  SemanticDecisionChoice,
-  SemanticDecisionCandidate,
-  SemanticDecisionEvidence,
-  SemanticDecisionOption,
-  SemanticDecisionSubmission,
-  SemanticDecisionSubmissionResult,
   Scope,
   UploadJob,
 } from "../types";
@@ -255,7 +249,9 @@ function PostLearningFlow({
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
   const [resultResumed, setResultResumed] = useState(false);
   const [treeReload, setTreeReload] = useState(0);
-  const [pendingDecision, setPendingDecision] =
+  // Read-only record of a semantic issue the run carried into its release.
+  // It never gates the page: Aegis does not ask the user to choose mid-run.
+  const [carriedIssue, setCarriedIssue] =
     useState<PendingSemanticDecision | null>(
       initialJob?.pending_decision ?? null,
     );
@@ -263,13 +259,13 @@ function PostLearningFlow({
   useEffect(() => {
     if (initialJob) {
       setJob(initialJob);
-      setPendingDecision(initialJob.pending_decision ?? null);
+      setCarriedIssue(initialJob.pending_decision ?? null);
     }
   }, [initialJob]);
 
   const handleJob = useCallback((nextJob: UploadJob | null) => {
     setJob(nextJob);
-    setPendingDecision(nextJob?.pending_decision ?? null);
+    setCarriedIssue(nextJob?.pending_decision ?? null);
     setError(null);
     setResult(null);
   }, []);
@@ -280,7 +276,7 @@ function PostLearningFlow({
     setBusy(true);
     setError(null);
     setResult(null);
-    setPendingDecision(null);
+    setCarriedIssue(null);
     setResultResumed(resumedFromCheckpoint);
     try {
       const data = await run<Record<string, unknown>>(
@@ -302,14 +298,12 @@ function PostLearningFlow({
       } catch {
         // The result remains usable even if refreshing the completed job fails.
       }
-      const decision = pendingDecisionFrom(data)
-        ?? refreshedJob?.pending_decision
-        ?? null;
-      if (decision) {
-        setPendingDecision(decision);
-      } else {
-        setResult(data);
-      }
+      // A semantic issue is carried into the release, never turned back into
+      // a mid-run question. Anything still attached is shown read-only.
+      setCarriedIssue(
+        pendingDecisionFrom(data) ?? refreshedJob?.pending_decision ?? null,
+      );
+      setResult(data);
     } catch (e) {
       let refreshedJob: UploadJob | null = null;
       try {
@@ -318,25 +312,11 @@ function PostLearningFlow({
       } catch {
         // Keep the generation error visible if refreshing job state also fails.
       }
-      if (refreshedJob?.pending_decision) {
-        setPendingDecision(refreshedJob.pending_decision);
-        setError(null);
-      } else {
-        setError(formatGenerationError(e));
-      }
+      setCarriedIssue(refreshedJob?.pending_decision ?? null);
+      setError(formatGenerationError(e));
     } finally {
       setBusy(false);
     }
-  }
-
-  function submitDecision(
-    decisionId: string,
-    submission: SemanticDecisionSubmission,
-  ): Promise<SemanticDecisionSubmissionResult> {
-    if (!job) {
-      return Promise.reject(new Error("The saved generation job is unavailable."));
-    }
-    return api.submitConceptDecision(job.id, decisionId, submission);
   }
 
   return (
@@ -360,7 +340,7 @@ function PostLearningFlow({
         />
       )}
 
-      {job && (job.status === "converted" || pendingDecision) && (
+      {job && job.status === "converted" && (
         <>
           <div className="section-title">2 · Deposit concepts under a chapter</div>
           <div className="card">
@@ -374,7 +354,7 @@ function PostLearningFlow({
             <div className="row" style={{ marginTop: 12 }}>
               <span className="muted">{scope ? `Chapter: ${scope.label}` : "Pick a chapter"}</span>
               <div className="spacer" />
-              {!pendingDecision && (
+              {(
                 <button disabled={!scope || busy} onClick={generate}>
                   {job.checkpoint_available
                     ? `Resume from ${Math.round(
@@ -388,17 +368,10 @@ function PostLearningFlow({
         </>
       )}
 
-      {pendingDecision && (
-        <SemanticDecisionPanel
-          key={pendingDecision.decision_id}
-          decision={pendingDecision}
-          busy={busy}
-          canResume={Boolean(scope)}
-          onSubmit={submitDecision}
-          onResume={generate}
-        />
+      {carriedIssue && (
+        <CarriedSemanticIssue issue={carriedIssue} />
       )}
-      {error && !pendingDecision && (
+      {error && (
         <div className="error-box" style={{ marginTop: 16 }}>{error}</div>
       )}
       {result && (
@@ -463,7 +436,9 @@ function PreLearningUpload({
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
   const [resultResumed, setResultResumed] = useState(false);
   const [treeReload, setTreeReload] = useState(0);
-  const [pendingDecision, setPendingDecision] =
+  // Read-only record of a semantic issue the run carried into its release.
+  // It never gates the page: Aegis does not ask the user to choose mid-run.
+  const [carriedIssue, setCarriedIssue] =
     useState<PendingSemanticDecision | null>(
       initialJob?.pending_decision ?? null,
     );
@@ -471,13 +446,13 @@ function PreLearningUpload({
   useEffect(() => {
     if (initialJob) {
       setJob(initialJob);
-      setPendingDecision(initialJob.pending_decision ?? null);
+      setCarriedIssue(initialJob.pending_decision ?? null);
     }
   }, [initialJob]);
 
   const handleJob = useCallback((nextJob: UploadJob | null) => {
     setJob(nextJob);
-    setPendingDecision(nextJob?.pending_decision ?? null);
+    setCarriedIssue(nextJob?.pending_decision ?? null);
     setError(null);
     setResult(null);
   }, []);
@@ -488,7 +463,7 @@ function PreLearningUpload({
     setBusy(true);
     setError(null);
     setResult(null);
-    setPendingDecision(null);
+    setCarriedIssue(null);
     setResultResumed(resumedFromCheckpoint);
     try {
       const data = await run<Record<string, unknown>>(
@@ -510,14 +485,12 @@ function PreLearningUpload({
       } catch {
         // The result remains usable even if refreshing the completed job fails.
       }
-      const decision = pendingDecisionFrom(data)
-        ?? refreshedJob?.pending_decision
-        ?? null;
-      if (decision) {
-        setPendingDecision(decision);
-      } else {
-        setResult(data);
-      }
+      // A semantic issue is carried into the release, never turned back into
+      // a mid-run question. Anything still attached is shown read-only.
+      setCarriedIssue(
+        pendingDecisionFrom(data) ?? refreshedJob?.pending_decision ?? null,
+      );
+      setResult(data);
     } catch (e) {
       let refreshedJob: UploadJob | null = null;
       try {
@@ -526,25 +499,11 @@ function PreLearningUpload({
       } catch {
         // Keep the generation error visible if refreshing job state also fails.
       }
-      if (refreshedJob?.pending_decision) {
-        setPendingDecision(refreshedJob.pending_decision);
-        setError(null);
-      } else {
-        setError(formatGenerationError(e));
-      }
+      setCarriedIssue(refreshedJob?.pending_decision ?? null);
+      setError(formatGenerationError(e));
     } finally {
       setBusy(false);
     }
-  }
-
-  function submitDecision(
-    decisionId: string,
-    submission: SemanticDecisionSubmission,
-  ): Promise<SemanticDecisionSubmissionResult> {
-    if (!job) {
-      return Promise.reject(new Error("The saved generation job is unavailable."));
-    }
-    return api.submitConceptDecision(job.id, decisionId, submission);
   }
 
   return (
@@ -567,7 +526,7 @@ function PreLearningUpload({
           resumed={Boolean(job?.checkpoint_available)}
         />
       )}
-      {job && (job.status === "converted" || pendingDecision) && (
+      {job && job.status === "converted" && (
         <>
           <div className="section-title">2 · Deposit pre-learning concepts under a chapter</div>
           <div className="card">
@@ -581,7 +540,7 @@ function PreLearningUpload({
             <div className="row" style={{ marginTop: 12 }}>
               <span className="muted">{scope ? `Chapter: ${scope.label}` : "Pick a chapter"}</span>
               <div className="spacer" />
-              {!pendingDecision && (
+              {(
                 <button disabled={!scope || busy} onClick={generate}>
                   {job.checkpoint_available
                     ? `Resume from ${Math.round(
@@ -594,17 +553,10 @@ function PreLearningUpload({
           </div>
         </>
       )}
-      {pendingDecision && (
-        <SemanticDecisionPanel
-          key={pendingDecision.decision_id}
-          decision={pendingDecision}
-          busy={busy}
-          canResume={Boolean(scope)}
-          onSubmit={submitDecision}
-          onResume={generate}
-        />
+      {carriedIssue && (
+        <CarriedSemanticIssue issue={carriedIssue} />
       )}
-      {error && !pendingDecision && (
+      {error && (
         <div className="error-box" style={{ marginTop: 16 }}>{error}</div>
       )}
       {result && (
@@ -679,942 +631,60 @@ function PreLearningExisting({ bookSources }: { bookSources: string[] }) {
   );
 }
 
-type SemanticDecisionUiChoice = SemanticDecisionChoice;
-
-function SemanticDecisionPanel({
-  decision,
-  busy,
-  canResume,
-  onSubmit,
-  onResume,
-}: {
-  decision: PendingSemanticDecision;
-  busy: boolean;
-  canResume: boolean;
-  onSubmit: (
-    decisionId: string,
-    submission: SemanticDecisionSubmission,
-  ) => Promise<SemanticDecisionSubmissionResult>;
-  onResume: () => void;
-}) {
-  const item = semanticDecisionItem(decision);
-  const sourceReview = isSourceReviewDecision(decision);
-  const workingSourcePatch = isWorkingSourcePatchDecision(decision);
-  const sourceTopicReview = isSourceTopicReviewDecision(decision);
-  const typeGranularity = isTypeGranularityDecision(decision);
-  const topologyReview = isTopologyReviewDecision(decision);
-  const groundingReview = isGroundingReviewDecision(decision);
-  const candidates = decision.candidates ?? [];
-  const suppliedOptions = (decision.options ?? []).filter((option) =>
-    Boolean(option?.choice && option?.label));
-  const fallbackOptions: SemanticDecisionOption[] = sourceReview
-    ? []
-    : [
-      {
-        choice: "expand_existing",
-        label: "Expand existing concept",
-        recommended: false,
-      },
-      {
-        choice: "create_new",
-        label: "Create separate concept",
-        recommended: false,
-      },
-      {
-        choice: "select_existing",
-        label: "Select another existing concept",
-        recommended: false,
-      },
-    ];
-  const optionSeed = suppliedOptions.length ? suppliedOptions : fallbackOptions;
-  const customInstructionOption: SemanticDecisionOption = {
-    choice: "custom_instruction",
-    label: "Give a custom instruction",
-    recommended: false,
-  };
-  const availableOptions: SemanticDecisionOption[] = sourceReview
-    ? optionSeed
-    : optionSeed.some((option) => option.choice === "custom_instruction")
-      ? optionSeed
-      : [...optionSeed, customInstructionOption];
-  const expandOption = availableOptions.find((option) =>
-    option.choice === "expand_existing");
-  const recommendedOption = availableOptions.find((option) =>
-    option.recommended);
-  const recommendedId = optionTargetIdentifier(
-    recommendedOption ?? expandOption,
-  );
-  const recommendedCandidate = candidates.find((candidate) =>
-    candidateIdentifier(candidate) === recommendedId);
-  const selectableCandidates = candidates.filter((candidate) =>
-    Boolean(candidateIdentifier(candidate)));
-  const selectableCandidateGroups = groupSemanticCandidates(
-    selectableCandidates,
-  );
-  const displayedCandidateGroups = groupSemanticCandidates(candidates);
-  const [choice, setChoice] =
-    useState<SemanticDecisionUiChoice | "">("");
-  const [targetId, setTargetId] = useState("");
-  const [instruction, setInstruction] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [recorded, setRecorded] = useState(false);
-  const [submitError, setSubmitError] = useState<string | null>(null);
-  const titleId = `semantic-decision-${decision.decision_id}`;
-  const questions = item.questions.length
-    ? item.questions
-    : decision.questions?.length
-      ? decision.questions
-      : decision.question
-        ? [decision.question]
-        : [];
-  const diagnosis = firstNonEmptyString(
-    decision.diagnosis,
-    decision.conflict,
-    decision.reason,
-    decision.mismatch,
-  ) || (
-    workingSourcePatch
-      ? "The numbered topic spine in the derived working MMD needs a verified repair before generation can continue."
-      : sourceReview
-      ? "The Phase 3 source graph needs human review before it can be used safely."
-      : "Aegis found more than one defensible concept placement."
-  );
-  const decisionQuestion = firstNonEmptyString(
-    decision.decision_question,
-    decision.prompt,
-    decision.review_question,
-    sourceReview ? item.type_title : "",
-  ) || (
-    workingSourcePatch
-      ? "Should Aegis apply the verified patch to the derived working MMD while preserving the uploaded raw MMD?"
-      : sourceReview
-      ? "Which verified source evidence should Aegis use to resolve this discrepancy?"
-      : "How should Aegis handle this semantic mismatch?"
-  );
-  const sourceReplacementRequired = choice === "replace_source";
-  function choose(nextChoice: SemanticDecisionUiChoice) {
-    setChoice(nextChoice);
-    setSubmitError(null);
-    const option = availableOptions.find((candidate) =>
-      candidate.choice === nextChoice);
-    const suppliedTarget = optionTargetIdentifier(option);
-    setTargetId(suppliedTarget);
-  }
-
-  async function saveDecision() {
-    if (!choice) {
-      setSubmitError("Choose what Aegis should do before saving.");
-      return;
-    }
-    const trimmedInstruction = instruction.trim();
-    if (choice === "custom_instruction" && !trimmedInstruction) {
-      setSubmitError("Write the instruction Aegis should follow.");
-      return;
-    }
-    if (decisionChoiceRequiresTarget(choice) && !targetId) {
-      setSubmitError(
-        sourceTopicReview
-          ? "Select the source-topic recovery plan Aegis should use."
-          : topologyReview
-            ? "Select the source-supported concept action Aegis should use."
-            : groundingReview
-              ? "Select verified evidence or a topology repair."
-              : sourceReview
-                ? "Select the verified source evidence Aegis should use."
-                : choice === "expand_existing"
-                  ? "Select the existing concept Aegis should expand."
-                  : "Select the existing concept Aegis should use.",
-      );
-      return;
-    }
-
-    const submission: SemanticDecisionSubmission = choice === "custom_instruction"
-      ? {
-        choice,
-        instruction: trimmedInstruction,
-      }
-      : choice === "create_new"
-        ? { choice: "create_new" }
-        : choice === "select_existing" || choice === "expand_existing"
-          ? {
-            choice,
-            target_concept_id: targetId,
-          }
-          : {
-            choice,
-            ...(targetId ? { target_id: targetId } : {}),
-          };
-
-    setSaving(true);
-    setSubmitError(null);
-    try {
-      const response = await onSubmit(decision.decision_id, submission);
-      if (response.status !== "decision_recorded") {
-        throw new Error(`Unexpected decision status: ${response.status}`);
-      }
-      setRecorded(true);
-    } catch (error) {
-      setSubmitError(`Could not save this decision: ${String(error)}`);
-    } finally {
-      setSaving(false);
-    }
-  }
-
+function CarriedSemanticIssue({ issue }: { issue: PendingSemanticDecision }) {
+  // Aegis no longer asks the user to resolve a semantic issue during a run.
+  // The issue travels into the release with its evidence, so this panel is
+  // deliberately read-only -- there is nothing here to click.
+  const topic = issue.item?.topic ?? "";
+  const typeTitle = issue.item?.type_title ?? "";
+  const qids = issue.item?.qids ?? [];
   return (
-    <section
-      className="card semantic-decision-card"
-      role="region"
-      aria-labelledby={titleId}
-    >
-      <div className="semantic-decision-head">
-        <div>
-          <span className="badge yellow">Human decision required</span>
-          <h2 id={titleId}>Paused for your decision</h2>
-          <p className="semantic-pause-assurance" role="status">
-            No API request is running while paused.
-          </p>
-        </div>
-        {typeof decision.checkpoint_progress === "number" && (
-          <span className="badge accent">
-            {Math.round(decision.checkpoint_progress * 100)}% checkpoint
-          </span>
-        )}
-      </div>
-
-      <p className="muted semantic-decision-intro">
-        {typeGranularity
-          ? "Aegis detected a deterministic Type-fragmentation risk before "
-            + "the expensive host and topology stages. Review the counts, "
-            + "choose whether to keep or consolidate the taxonomy, save that "
-            + "decision, and then resume explicitly."
-          : workingSourcePatch
-            ? "Aegis found that the Phase 3 semantic graph omitted or changed a "
-              + "numbered main topic. Review the exact before-and-after repair to "
-              + "the derived working MMD, choose whether to apply it or provide "
-              + "guidance, save that decision, and then resume explicitly. Your "
-              + "uploaded raw MMD is never modified."
-          : sourceTopicReview
-            ? "Aegis found a numbered main topic in the source that has no "
-              + "normal concept in the generated map. Review the exact source "
-              + "and generated topic lists, choose one recovery direction, "
-              + "save it, and then resume explicitly. One answer authorizes "
-              + "at most one bounded recovery request."
-          : topologyReview
-            ? "GPT and its independent critic disagreed about a concept "
-              + "boundary. Choose a source-supported refine, move, split, keep, "
-              + "or retire action; the resumed proposal is independently "
-              + "reviewed once before it can continue."
-            : groundingReview
-              ? "The independent grounding check could not certify this claim. "
-                + "Choose verified evidence, send it to one bounded topology "
-                + "repair, replace the source, or give a custom instruction."
-              : sourceReview
-                ? "GPT found a source-graph discrepancy it could not resolve without "
-                  + "risking the source meaning. Review its diagnosis and the "
-                  + "verified source evidence, choose what should happen, save that "
-                  + "decision, and then resume explicitly."
-                : "Generation reached a semantic choice that cannot be resolved "
-                  + "safely from the source alone. Review the exact mismatch, choose "
-                  + "what should happen, save your decision, and then resume explicitly."}
+    <div className="card" style={{ marginTop: 16 }}>
+      <div className="section-title">Semantic issue carried into the release</div>
+      <p className="muted">
+        Generation did not stop for this. The issue and its source evidence are
+        included in the release workbook and the diagnostics export, where the
+        affected rows are highlighted.
       </p>
-
-      {decision.agent_review && (
-        <div className="semantic-mismatch" role="status">
-          <div className="row">
-            <strong>Aegis autonomous review</strong>
-            <div className="spacer" />
-            <span className="badge yellow">
-              Saved status: {agentReviewStatusLabel(decision.agent_review.status)}
-            </span>
-          </div>
-          <p>{agentReviewStatusExplanation(decision.agent_review.status)}</p>
-          <p className="semantic-agent-boundary">
-            <strong>Bounded search:</strong>{" "}
-            {agentReviewBoundary(decision)} Rendering this decision screen does
-            not run the resolver or make another API request.
-          </p>
-          {firstNonEmptyString(decision.agent_review.reason) && (
-            <p>
-              <strong>Saved reason:</strong>{" "}
-              {firstNonEmptyString(decision.agent_review.reason)}
-            </p>
-          )}
-        </div>
-      )}
-
-      <dl className="semantic-decision-details">
-        {(item.unit_id || decision.item_id) && (
-          <div>
-            <dt>Item / TYPE</dt>
-            <dd className="mono">
-              {[item.unit_id || decision.item_id, item.type_id]
-                .filter(Boolean).join(" · ")}
-            </dd>
-          </div>
-        )}
-        {(item.qids.length > 0 || (decision.qids?.length ?? 0) > 0) && (
-          <div>
-            <dt>Question IDs</dt>
-            <dd className="mono">
-              {(item.qids.length ? item.qids : decision.qids ?? []).join(", ")}
-            </dd>
-          </div>
-        )}
-        {!sourceReview && (item.type_title || decision.type) && (
-          <div>
-            <dt>Type</dt>
-            <dd>
-              {item.type_title
-                ? item.type_title
-                : formatSemanticValue(decision.type!)}
-            </dd>
-          </div>
-        )}
-        {(item.topic || decision.topic) && (
-          <div>
-            <dt>Topic</dt>
-            <dd>
-              {item.topic
-                ? item.topic
-                : formatSemanticValue(decision.topic!)}
-            </dd>
-          </div>
-        )}
-      </dl>
-
-      {questions.length > 0 && (
-        <div className="semantic-decision-section">
-          <h3>
-            {workingSourcePatch
-              ? questions.length === 1
-                ? "Affected numbered main topic"
-                : "Affected numbered main topics"
-              : sourceTopicReview
-              ? questions.length === 1
-                ? "Missing source topic"
-                : "Missing source topics"
-              : questions.length === 1
-                ? "Question"
-                : "Questions"}
-          </h3>
-          <ul>
-            {questions.map((question, index) => (
-              <li key={`${index}-${question}`}>{question}</li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      <div className="semantic-mismatch semantic-diagnosis">
-        <strong>
-          {typeGranularity
-            ? "Aegis quality check"
-            : workingSourcePatch
-              ? "Working-source integrity diagnosis"
-            : sourceTopicReview
-              ? "Source-topic integrity diagnosis"
-              : topologyReview
-                ? "Concept-boundary diagnosis"
-                : groundingReview
-                  ? "Grounding-critic diagnosis"
-                  : sourceReview
-                    ? "GPT diagnosis"
-                    : "What could not be matched"}
-        </strong>
-        <p>{diagnosis}</p>
-      </div>
-
-      <div className="semantic-decision-question">
-        <strong>Decision needed</strong>
-        <p>{decisionQuestion}</p>
-      </div>
-
-      {workingSourcePatch && decision.source_patch && (
-        <section
-          className="semantic-source-patch"
-          aria-label="Verified working-source patch"
-        >
-          <div className="semantic-source-patch-head">
-            <div>
-              <span className={decision.source_patch.verified
-                ? "badge green"
-                : "badge yellow"}
-              >
-                {decision.source_patch.verified
-                  ? "Verified derived-source patch"
-                  : "Derived-source patch preview"}
-              </span>
-              <h3>Working MMD topic-spine repair</h3>
-            </div>
-            <span className="badge mono">Raw MMD unchanged</span>
-          </div>
-
-          <p className="semantic-source-patch-assurance" role="status">
-            Your uploaded raw MMD remains byte-for-byte unchanged. Only the
-            derived working MMD used by this generation run will be repaired
-            after you save this decision and explicitly resume.
-          </p>
-
-          <div className="semantic-source-patch-diff">
-            <div className="semantic-source-patch-pane">
-              <strong>Before · current derived working MMD</strong>
-              <pre>{decision.source_patch.before
-                || "No current topic-spine text was supplied."}</pre>
-            </div>
-            <div className="semantic-source-patch-pane">
-              <strong>After · verified derived working MMD</strong>
-              <pre>{decision.source_patch.after
-                || "No patched topic-spine text was supplied."}</pre>
-            </div>
-          </div>
-
-          {decision.source_patch.operations.length > 0 && (
-            <div className="semantic-source-patch-operations">
-              <strong>Verified patch operations</strong>
-              <ul>
-                {decision.source_patch.operations.map((operation, index) => (
-                  <li key={`${index}-${operation}`}>{operation}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          <p className="muted mono semantic-source-patch-id">
-            Patch target: {decision.source_patch.target_id}
-            {decision.source_patch.patch_hash
-              ? ` · ${decision.source_patch.patch_hash.slice(0, 12)}…`
-              : ""}
-          </p>
-        </section>
-      )}
-
-      {candidates.length > 0 && !workingSourcePatch && (
-        <div className="semantic-decision-section">
-          <h3>
-            {topologyReview
-              ? "Source-supported concept actions"
-              : sourceTopicReview
-                ? "Source-topic recovery plan"
-                : groundingReview
-                  ? "Bound source candidates and topology repairs"
-                  : sourceReview
-                    ? "Bound source candidates"
-                    : "Candidate concepts"}
-          </h3>
-          {groundingReview && (
-            <p className="muted semantic-candidate-verification-note">
-              Binding proves each BLK&apos;s identity and exact text. Semantic
-              support is still checked by the mapper and independent critic
-              after a candidate is selected.
-            </p>
-          )}
-          <div className="semantic-candidate-groups">
-            {displayedCandidateGroups.map((group) => (
-              <details
-                className="semantic-candidate-group"
-                key={group.kind}
-                role="region"
-                aria-label={candidateGroupLabel(group.kind)}
-              >
-                <summary>
-                  <strong>{candidateGroupLabel(group.kind)}</strong>
-                  <span className="badge">{group.candidates.length}</span>
-                  <span className="muted">Show exact candidates</span>
-                </summary>
-                <div className="semantic-candidate-list">
-                  {group.candidates.map((candidate, index) => (
-                    <div
-                      className="semantic-candidate"
-                      key={candidateIdentifier(candidate) || index}
-                    >
-                      <div className="row semantic-candidate-heading">
-                        <strong>{candidateDisplayTitle(candidate)}</strong>
-                        {candidateIdentifier(candidate) === recommendedId && (
-                          <span className="badge green">Recommended</span>
-                        )}
-                        {candidateActionLabel(candidate) && (
-                          <span className="badge">
-                            {candidateActionLabel(candidate)}
-                          </span>
-                        )}
-                        {candidateIdentifier(candidate) && (
-                          <span className="badge mono">
-                            {candidateIdentifier(candidate)}
-                          </span>
-                        )}
-                      </div>
-                      {candidateSummary(
-                        candidate,
-                        sourceReview
-                          && !sourceTopicReview
-                          && !topologyReview,
-                      ) && (
-                        <p className="muted">
-                          {candidateSummary(
-                            candidate,
-                            sourceReview
-                              && !sourceTopicReview
-                              && !topologyReview,
-                          )}
-                        </p>
-                      )}
-                      <CandidateSourceBinding candidate={candidate} />
-                    </div>
-                  ))}
-                </div>
-              </details>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {decision.evidence && decision.evidence.length > 0 && (
-        <details className="semantic-evidence" open={sourceReview}>
-          <summary>Source evidence ({decision.evidence.length})</summary>
-          <div className="semantic-evidence-list">
-            {decision.evidence.map((evidence, index) => (
-              <blockquote key={index}>
-                {formatEvidence(evidence)}
-              </blockquote>
-            ))}
-          </div>
-        </details>
-      )}
-
-      <ApiUsageSummary
-        usage={decision.cumulative_usage}
-        cumulative
-      />
-
-      {!recorded ? (
-        availableOptions.length > 0 ? (
+      <dl className="mono">
+        {topic && (
           <>
-            <fieldset className="semantic-choice-list" disabled={saving || busy}>
-              <legend>What should Aegis do?</legend>
-              <p className="muted semantic-choice-instruction">
-                No action is selected automatically. Choose one option below.
-              </p>
-              {availableOptions.map((option) => {
-                const optionSelected = choice === option.choice;
-                const suppliedTarget = optionTargetIdentifier(option);
-                const needsTarget = decisionChoiceRequiresTarget(
-                  option.choice,
-                );
-                const showTargetPicker = optionSelected
-                  && needsTarget
-                  && !suppliedTarget;
-                const needsInstruction = option.choice === "custom_instruction";
-                return (
-                  <label className="semantic-choice" key={option.choice}>
-                    <input
-                      type="radio"
-                      name={`semantic-choice-${decision.decision_id}`}
-                      value={option.choice}
-                      checked={optionSelected}
-                      onChange={() => choose(option.choice)}
-                    />
-                    <span>
-                      <strong>
-                        {option.label}
-                        {option.recommended ? " (recommended)" : ""}
-                      </strong>
-                      <small>
-                        {decisionOptionDescription(
-                          option,
-                          decision,
-                          recommendedCandidate,
-                        )}
-                      </small>
-                      {showTargetPicker
-                        && selectableCandidates.length > 0 && (
-                        <select
-                          aria-label={decisionTargetLabel(
-                            option.choice,
-                            decision,
-                          )}
-                          value={targetId}
-                          onChange={(event) => {
-                            setTargetId(event.target.value);
-                            setSubmitError(null);
-                          }}
-                        >
-                          <option value="">Choose an option…</option>
-                          {selectableCandidateGroups.map((group) => (
-                            <optgroup
-                              key={group.kind}
-                              label={candidateGroupLabel(group.kind)}
-                            >
-                              {group.candidates.map((candidate) => (
-                                <option
-                                  key={candidateIdentifier(candidate)}
-                                  value={candidateIdentifier(candidate)}
-                                >
-                                  {candidateSelectLabel(candidate)}
-                                </option>
-                              ))}
-                            </optgroup>
-                          ))}
-                        </select>
-                      )}
-                      {showTargetPicker
-                        && selectableCandidates.length === 0 && (
-                        <small className="semantic-required-warning">
-                          No safe candidate was supplied. Choose another action
-                          or give a custom instruction; Aegis will not guess a
-                          target.
-                        </small>
-                      )}
-                      {optionSelected && needsInstruction && (
-                        <textarea
-                          aria-label="Custom instruction"
-                          rows={4}
-                          value={instruction}
-                          onChange={(event) => {
-                            setInstruction(event.target.value);
-                            setSubmitError(null);
-                          }}
-                          placeholder={typeGranularity
-                            ? "For example: target 12-16 reusable Types, keeping genuinely different methods separate."
-                            : topologyReview || groundingReview
-                              ? "Describe the exact source-supported refine, move, split, keep, retire, or evidence action to review."
-                              : workingSourcePatch
-                                ? "Describe how the derived working MMD topic spine should be corrected. The uploaded raw MMD will remain unchanged."
-                              : sourceReview
-                                ? "Describe exactly how Aegis should resolve this source discrepancy."
-                                : "For example: expand the Renan concept to cover both attributes and the importance of nations."}
-                        />
-                      )}
-                    </span>
-                  </label>
-                );
-              })}
-            </fieldset>
-
-            {submitError && <div className="error-box">{submitError}</div>}
-            <div className="row semantic-decision-actions">
-              <span className="muted">
-                Saving this choice does not call GPT or resume generation.
-              </span>
-              <div className="spacer" />
-              <button
-                type="button"
-                disabled={saving || busy || !choice}
-                onClick={() => void saveDecision()}
-              >
-                {saving ? "Saving decision…" : "Save decision"}
-              </button>
-            </div>
+            <dt>Topic</dt>
+            <dd>{topic}</dd>
           </>
-        ) : (
-          <div className="semantic-missing-context" role="alert">
-            <strong>No safe action remains for this checkpoint.</strong>
-            <p>
-              Aegis could not safely apply the previous guidance. Correct or
-              replace the identified source material before continuing; it
-              will not invent another decision or retry in a loop.
-            </p>
-          </div>
-        )
-      ) : (
-        <div className="semantic-decision-recorded" role="status">
-          <div>
-            <strong>Decision saved.</strong>
-            {sourceReplacementRequired ? (
-              <p>
-                Generation remains stopped. Replace or correct the source file
-                using the upload controls above, convert it again, and then
-                start or resume from the new verified source. Aegis will not
-                alter the file automatically.
-              </p>
-            ) : workingSourcePatch ? (
-              <p>
-                The verified patch is recorded at this checkpoint. It will be
-                applied only to the derived working MMD when you explicitly
-                resume. Your uploaded raw MMD remains unchanged.
-              </p>
-            ) : (
-              <p>
-                It is recorded at this checkpoint. No generation request has
-                started yet.
-              </p>
-            )}
-            {!sourceReplacementRequired && !canResume && (
-              <p className="muted">
-                Select or restore the destination chapter above before resuming.
-              </p>
-            )}
-          </div>
-          {!sourceReplacementRequired && (
-            <button
-              type="button"
-              disabled={busy || !canResume}
-              onClick={onResume}
-            >
-              {busy ? "Resuming…" : "Resume generation"}
-            </button>
-          )}
-        </div>
-      )}
-    </section>
+        )}
+        {typeTitle && (
+          <>
+            <dt>Type</dt>
+            <dd>{typeTitle}</dd>
+          </>
+        )}
+        {qids.length > 0 && (
+          <>
+            <dt>QIDs</dt>
+            <dd>{qids.join(", ")}</dd>
+          </>
+        )}
+        <dt>Reference</dt>
+        <dd>{issue.decision_id}</dd>
+      </dl>
+      {issue.conflict && <p className="mono">{issue.conflict}</p>}
+    </div>
   );
 }
 
-type NormalizedSemanticDecisionItem = {
-  unit_id: string;
-  type_id: string;
-  type_title: string;
-  qids: string[];
-  questions: string[];
-  topic: string;
-};
 
-function semanticDecisionItem(
-  decision: PendingSemanticDecision,
-): NormalizedSemanticDecisionItem {
-  const item = decision.item;
-  return {
-    unit_id: item?.unit_id ?? decision.item_id ?? "",
-    type_id: item?.type_id ?? "",
-    type_title: item?.type_title
-      ?? (typeof decision.type === "string" ? decision.type : ""),
-    qids: item?.qids ?? decision.qids ?? [],
-    questions: item?.questions
-      ?? decision.questions
-      ?? (
-        decision.question && !isSourceReviewDecision(decision)
-          ? [decision.question]
-          : []
-      ),
-    topic: item?.topic
-      ?? (typeof decision.topic === "string" ? decision.topic : ""),
-  };
-}
 
-function isSourceReviewDecision(decision: PendingSemanticDecision): boolean {
-  const kind = firstNonEmptyString(decision.kind).toLowerCase();
-  return kind.includes("source_graph")
-    || kind.includes("source_review")
-    || isSourceTopicReviewDecision(decision)
-    || decision.options?.some((option) =>
-      option.choice === "accept_recommended"
-      || option.choice === "select_candidate")
-    || false;
-}
 
-function isWorkingSourcePatchDecision(
-  decision: PendingSemanticDecision,
-): boolean {
-  return firstNonEmptyString(decision.item?.type_id).toLowerCase()
-      === "numbered_main_topic_coverage"
-    && decision.source_patch?.kind === "canonical_topic_binding"
-    && decision.source_patch.target === "working_derived_source";
-}
 
-function isSourceTopicReviewDecision(
-  decision: PendingSemanticDecision,
-): boolean {
-  return firstNonEmptyString(decision.kind).toLowerCase()
-    === "source_topic_coverage_review";
-}
 
-function isTypeGranularityDecision(
-  decision: PendingSemanticDecision,
-): boolean {
-  return firstNonEmptyString(decision.kind).toLowerCase()
-    === "type_granularity_review";
-}
 
-function isTopologyReviewDecision(
-  decision: PendingSemanticDecision,
-): boolean {
-  return firstNonEmptyString(decision.kind).toLowerCase().includes(
-    "phase32_concept_blueprint",
-  );
-}
 
-function isGroundingReviewDecision(
-  decision: PendingSemanticDecision,
-): boolean {
-  return firstNonEmptyString(decision.kind).toLowerCase().includes(
-    "phase31_source_grounding",
-  );
-}
 
-function agentReviewStatusLabel(status: string): string {
-  if (status === "escalated") return "Human judgment needed";
-  if (status === "unavailable") return "No safe decision returned";
-  if (status === "request_started") return "Attempt recorded";
-  if (status === "resolved") return "Review completed";
-  return "Human judgment needed";
-}
 
-function agentReviewStatusExplanation(status: string): string {
-  if (status === "request_started") {
-    return "Aegis saved the start of one bounded autonomous search, but no "
-      + "safe completed decision was persisted. To avoid a duplicate paid "
-      + "request, it will not repeat the review or search while this checkpoint "
-      + "is paused.";
-  }
-  if (status === "unavailable") {
-    return "Aegis searched the saved source and candidate packet once, within "
-      + "a bounded autonomous review, but no safe usable decision was returned. "
-      + "It will not run another review while this checkpoint is paused.";
-  }
-  if (status === "resolved") {
-    return "Aegis searched the saved source and candidate packet once and "
-      + "completed its bounded autonomous review. This checkpoint still "
-      + "requires confirmation; displaying it cannot start another review.";
-  }
-  return "Aegis tried one bounded autonomous review and searched the saved "
-    + "source and candidate packet once. Deterministic checks could not certify "
-    + "one safe action, so it will not run another autonomous review while paused.";
-}
 
-function agentReviewBoundary(decision: PendingSemanticDecision): string {
-  const review = decision.agent_review;
-  if (!review) return "The resolver was limited to one saved attempt.";
-  const offeredCandidateCount = firstFiniteNumber(
-    review.offered_candidate_count,
-  ) ?? decision.candidates.length;
-  const inspectedCandidateCount = firstFiniteNumber(
-    review.inspected_candidate_count,
-    review.searched_candidate_count,
-    review.considered_candidate_count,
-    review.candidate_count,
-  );
-  const evidenceCount = Array.isArray(review.evidence_refs)
-    ? review.evidence_refs.filter((value) => Boolean(String(value).trim())).length
-    : 0;
-  const inspectionBoundary = review.status === "request_started"
-    ? "; detail inspection outcome unknown"
-    : inspectedCandidateCount === null
-      ? ""
-      : `; ${inspectedCandidateCount} expanded with source detail`;
-  const scope = [
-    `${offeredCandidateCount} sealed candidate${offeredCandidateCount === 1 ? "" : "s"} catalogued`
-      + inspectionBoundary,
-    evidenceCount > 0
-      ? `${evidenceCount} evidence reference${evidenceCount === 1 ? "" : "s"}`
-      : "the saved source evidence",
-    "the checkpoint, Types and QIDs",
-  ].join(", ");
-  return `The resolver was limited to one saved search over ${scope}.`;
-}
 
-function optionTargetIdentifier(
-  option?: SemanticDecisionOption,
-): string {
-  if (!option) return "";
-  return firstNonEmptyString(
-    option.target_id,
-    option.target_concept_id,
-  );
-}
 
-function decisionChoiceRequiresTarget(
-  choice: SemanticDecisionUiChoice,
-): boolean {
-  return choice === "expand_existing"
-    || choice === "select_existing"
-    || choice === "accept_recommended"
-    || choice === "select_candidate";
-}
-
-function decisionTargetLabel(
-  choice: SemanticDecisionUiChoice,
-  decision: PendingSemanticDecision,
-): string {
-  if (isWorkingSourcePatchDecision(decision)) {
-    return "Verified working-source patch";
-  }
-  if (isSourceTopicReviewDecision(decision)) {
-    return "Source-topic recovery plan";
-  }
-  if (isTopologyReviewDecision(decision)) {
-    return "Source-supported concept action";
-  }
-  if (isGroundingReviewDecision(decision)) return "Evidence or topology repair";
-  const sourceReview = isSourceReviewDecision(decision);
-  if (sourceReview) return "Verified source evidence";
-  return choice === "expand_existing"
-    ? "Concept to expand"
-    : "Existing concept";
-}
-
-function decisionOptionDescription(
-  option: SemanticDecisionOption,
-  decision: PendingSemanticDecision,
-  recommendedCandidate?: SemanticDecisionCandidate,
-): string {
-  const topologyReview = isTopologyReviewDecision(decision);
-  const groundingReview = isGroundingReviewDecision(decision);
-  const sourceTopicReview = isSourceTopicReviewDecision(decision);
-  const workingSourcePatch = isWorkingSourcePatchDecision(decision);
-  const sourceReview = isSourceReviewDecision(decision);
-  if (option.choice === "accept_recommended") {
-    if (workingSourcePatch) {
-      return "Apply the exact verified topic-spine repair shown above; the uploaded raw MMD stays unchanged.";
-    }
-    if (sourceTopicReview) {
-      return "Preserve every numbered main topic and authorize one bounded recovery request.";
-    }
-    if (topologyReview) {
-      return recommendedCandidate
-        ? `Use ${candidateTitle(recommendedCandidate)} as the source-supported concept action.`
-        : "Use GPT's proposed concept action, then require independent criticism.";
-    }
-    return recommendedCandidate
-      ? `Use ${candidateTitle(recommendedCandidate)} as the verified source evidence.`
-      : "Use the exact verified source evidence recommended by GPT.";
-  }
-  if (option.choice === "select_candidate") {
-    if (topologyReview) {
-      return "Choose refine, move, split, keep, or retire; Aegis will still require independent criticism.";
-    }
-    if (groundingReview) {
-      return "Choose verified evidence or send the claim back for refine, move, split, or retirement.";
-    }
-    return "Choose a different verified page or source block; Aegis will not pick one for you.";
-  }
-  if (option.choice === "replace_source") {
-    if (workingSourcePatch) {
-      return "Reject this derived-source patch and upload a different source file; the current raw MMD is not modified.";
-    }
-    return "Stop at this checkpoint so you can correct or replace the source file; Aegis will not change it automatically.";
-  }
-  if (option.choice === "consolidate_types") {
-    return "Run one bounded GPT proposal plus an independent critic; exact QID coverage, source wording, topic, activity, and scope checks still apply.";
-  }
-  if (option.choice === "keep_distinct_types") {
-    return "Keep the current source-complete taxonomy and continue to the normal Type-host and final validation gates.";
-  }
-  if (option.choice === "expand_existing") {
-    return recommendedCandidate
-      ? `Extend ${candidateTitle(recommendedCandidate)} so it covers the missing requirement.`
-      : "Choose which existing concept should be extended to cover the missing requirement.";
-  }
-  if (option.choice === "create_new") {
-    return "Keep the unmatched requirement as a distinct, source-grounded concept.";
-  }
-  if (option.choice === "select_existing") {
-    return "Choose a different verified concept host from the candidates.";
-  }
-  if (option.choice === "custom_instruction") {
-    if (workingSourcePatch) {
-      return "Tell Aegis how to revise the derived working MMD topic spine; the raw upload remains unchanged.";
-    }
-    if (topologyReview || groundingReview) {
-      return "Tell Aegis the exact source-supported evidence or concept action to review once on Resume.";
-    }
-    if (sourceTopicReview) {
-      return "Tell Aegis how to recover the missing source topics without silently merging or dropping them.";
-    }
-    return sourceReview
-      ? "Tell Aegis exactly how to resolve this source discrepancy."
-      : "Tell Aegis exactly how this item should be handled.";
-  }
-  return "Apply this action to the paused generation checkpoint.";
-}
 
 function pendingDecisionFrom(
   result: Record<string, unknown>,
@@ -1628,382 +698,27 @@ function pendingDecisionFrom(
   return candidate as PendingSemanticDecision;
 }
 
-function firstNonEmptyString(...values: unknown[]): string {
-  for (const value of values) {
-    if (typeof value === "string" && value.trim()) return value.trim();
-  }
-  return "";
-}
 
-function candidateIdentifier(
-  candidate?: SemanticDecisionCandidate,
-): string {
-  if (!candidate) return "";
-  return firstNonEmptyString(
-    candidate.target_id,
-    candidate.concept_id,
-    candidate.candidate_id,
-    candidate.id,
-    candidate.source_id,
-    candidate.section_id,
-  );
-}
 
-function candidateTitle(candidate: SemanticDecisionCandidate): string {
-  return firstNonEmptyString(
-    candidate.title,
-    candidate.label,
-    candidate.concept_title,
-    candidate.name,
-    candidateIdentifier(candidate),
-  ) || "Existing concept";
-}
 
-type SemanticCandidateGroupKind = "evidence" | "topology" | "candidate";
 
-type SemanticCandidateGroup = {
-  kind: SemanticCandidateGroupKind;
-  candidates: SemanticDecisionCandidate[];
-};
 
-function candidateAction(candidate: SemanticDecisionCandidate): string {
-  const explicit = firstNonEmptyString(
-    candidate.action,
-    candidate.action_kind,
-    candidate.repair_action,
-  ).toLowerCase().split("-").join("_").split(" ").join("_");
-  if (explicit) return explicit;
-  const title = candidateTitle(candidate).toLowerCase();
-  if (title.includes("verified evidence") || title.startsWith("pdf page")) {
-    return "use_verified_evidence";
-  }
-  for (const action of ["refine", "split", "move", "retire", "keep"]) {
-    if (title.startsWith(action) || title.includes(` ${action} `)) return action;
-  }
-  return "";
-}
 
-function candidateGroupKind(
-  candidate: SemanticDecisionCandidate,
-): SemanticCandidateGroupKind {
-  const action = candidateAction(candidate);
-  const blocks = candidateBlockIds(candidate);
-  if (
-    blocks.length > 0
-    || action.includes("evidence")
-    || firstNonEmptyString(candidate.source_kind)
-  ) {
-    return "evidence";
-  }
-  if (
-    ["refine", "split", "move", "retire", "keep"].includes(action)
-    || firstNonEmptyString(
-      candidate.target_topic_id,
-      candidate.boundary_relation,
-    )
-  ) {
-    return "topology";
-  }
-  return "candidate";
-}
 
-function candidateGroupLabel(kind: SemanticCandidateGroupKind): string {
-  if (kind === "evidence") return "Bound source candidates";
-  if (kind === "topology") return "Topology repairs";
-  return "Other candidates";
-}
 
-function groupSemanticCandidates(
-  candidates: SemanticDecisionCandidate[],
-): SemanticCandidateGroup[] {
-  const grouped: Record<SemanticCandidateGroupKind, SemanticDecisionCandidate[]> = {
-    evidence: [],
-    topology: [],
-    candidate: [],
-  };
-  for (const candidate of candidates) {
-    grouped[candidateGroupKind(candidate)].push(candidate);
-  }
-  return (["evidence", "topology", "candidate"] as const)
-    .filter((kind) => grouped[kind].length > 0)
-    .map((kind) => ({ kind, candidates: grouped[kind] }));
-}
 
-function candidateActionLabel(candidate: SemanticDecisionCandidate): string {
-  const action = candidateAction(candidate);
-  const labels: Record<string, string> = {
-    evidence: "Evidence",
-    use_verified_evidence: "Evidence",
-    refine: "Refine",
-    split: "Split",
-    move: "Move",
-    retire: "Retire",
-    keep: "Keep",
-  };
-  return labels[action] ?? (action
-    ? action.split("_").filter(Boolean).map((part) =>
-      `${part.charAt(0).toUpperCase()}${part.slice(1)}`).join(" ")
-    : "");
-}
 
-function candidateMoveTarget(candidate: SemanticDecisionCandidate): string {
-  if (candidateAction(candidate) !== "move") return "";
-  return firstNonEmptyString(
-    candidate.target_topic_title,
-    candidate.target_topic,
-    candidate.topic,
-    candidate.target_topic_id,
-  );
-}
 
-function candidateDisplayTitle(candidate: SemanticDecisionCandidate): string {
-  const title = candidateTitle(candidate);
-  const moveTarget = candidateMoveTarget(candidate);
-  return moveTarget && !title.toLowerCase().includes(moveTarget.toLowerCase())
-    ? `${title} → ${moveTarget}`
-    : title;
-}
 
-function candidateSelectLabel(candidate: SemanticDecisionCandidate): string {
-  const title = candidateDisplayTitle(candidate);
-  if (candidateGroupKind(candidate) !== "evidence") return title;
-  const blocks = candidateBlockIds(candidate).filter((block) =>
-    !title.toLowerCase().includes(block.toLowerCase()));
-  const page = candidateSourcePage(candidate);
-  const topic = candidateSourceTopic(candidate);
-  const details = [
-    blocks.join(", "),
-    page ? `page ${page}` : "",
-    topic && !title.toLowerCase().includes(topic.toLowerCase()) ? topic : "",
-  ].filter(Boolean);
-  return details.length ? `${title} — ${details.join(" · ")}` : title;
-}
 
-function candidateBlockIds(candidate: SemanticDecisionCandidate): string[] {
-  const values = Array.isArray(candidate.source_block_ids)
-    ? candidate.source_block_ids
-    : [];
-  const fallback = firstNonEmptyString(
-    candidate.source_block_id,
-    candidate.block_id,
-  );
-  const all = [...values, ...(fallback ? [fallback] : [])]
-    .map((value) => String(value).trim())
-    .filter(Boolean);
-  return [...new Set(all)];
-}
 
-function candidateSourcePage(candidate: SemanticDecisionCandidate): string {
-  return firstScalarText(
-    candidate.source_page,
-    candidate.page,
-    candidate.page_number,
-    candidate.pdf_page,
-  );
-}
 
-function candidateSourceTopic(candidate: SemanticDecisionCandidate): string {
-  const action = candidateAction(candidate);
-  return firstNonEmptyString(
-    candidate.source_topic_title,
-    candidate.source_topic,
-    action === "move" ? "" : candidate.topic,
-    candidate.source_topic_id,
-  );
-}
 
-function candidateHasExplicitBinding(
-  candidate: SemanticDecisionCandidate,
-): boolean {
-  return candidateBlockIds(candidate).length > 0
-    || Boolean(candidateSourcePage(candidate))
-    || Boolean(firstNonEmptyString(
-      candidate.source_topic_id,
-      candidate.text_sha256,
-      candidate.binding_hash,
-    ));
-}
 
-function CandidateSourceBinding({
-  candidate,
-}: {
-  candidate: SemanticDecisionCandidate;
-}) {
-  const action = candidateAction(candidate);
-  const blocks = candidateBlockIds(candidate);
-  const page = candidateSourcePage(candidate);
-  const sourceTopic = candidateSourceTopic(candidate);
-  const sourceTopicId = firstNonEmptyString(candidate.source_topic_id);
-  const targetTopic = candidateMoveTarget(candidate);
-  const targetTopicId = firstNonEmptyString(candidate.target_topic_id);
-  const sourceKind = firstNonEmptyString(candidate.source_kind);
-  const boundary = firstNonEmptyString(candidate.boundary_relation);
-  const textHash = firstNonEmptyString(candidate.text_sha256);
-  const bindingHash = firstNonEmptyString(candidate.binding_hash);
-  const snippet = candidateGroupKind(candidate) === "evidence"
-    && candidateHasExplicitBinding(candidate)
-    ? firstNonEmptyString(candidate.coverage)
-    : "";
-  if (!(
-    blocks.length || page || sourceTopic || targetTopic || targetTopicId
-    || sourceKind || boundary || textHash || bindingHash || snippet
-  )) return null;
-  return (
-    <div className="semantic-candidate-binding">
-      <dl>
-        {blocks.length > 0 && (
-          <div><dt>Source block</dt><dd className="mono">{blocks.join(", ")}</dd></div>
-        )}
-        {page && <div><dt>PDF page</dt><dd>{page}</dd></div>}
-        {(sourceTopic || sourceTopicId) && (
-          <div>
-            <dt>Source topic</dt>
-            <dd>
-              {[sourceTopic, sourceTopicId]
-                .filter((value, index, values) => value
-                  && values.indexOf(value) === index).join(" · ")}
-            </dd>
-          </div>
-        )}
-        {action === "move" && (targetTopic || targetTopicId) && (
-          <div>
-            <dt>Move target</dt>
-            <dd>
-              {[targetTopic, targetTopicId]
-                .filter((value, index, values) => value
-                  && values.indexOf(value) === index).join(" · ")}
-            </dd>
-          </div>
-        )}
-        {sourceKind && <div><dt>Source kind</dt><dd>{sourceKind}</dd></div>}
-        {boundary && <div><dt>Boundary</dt><dd>{boundary}</dd></div>}
-      </dl>
-      {snippet && (
-        <blockquote className="semantic-candidate-snippet">
-          <strong>Exact bound source text</strong>
-          <span>{snippet}</span>
-        </blockquote>
-      )}
-      {(textHash || bindingHash) && (
-        <details className="semantic-candidate-seal">
-          <summary>
-            Exact source binding
-            {bindingHash ? ` · ${bindingHash.slice(0, 16)}…` : ""}
-          </summary>
-          {textHash && (
-            <p><strong>Text SHA-256</strong><code>{textHash}</code></p>
-          )}
-          {bindingHash && (
-            <p><strong>Binding seal</strong><code>{bindingHash}</code></p>
-          )}
-        </details>
-      )}
-    </div>
-  );
-}
 
-function candidateSummary(
-  candidate: SemanticDecisionCandidate,
-  sourceReview = false,
-): string {
-  const explanation = firstNonEmptyString(
-    candidate.reason,
-    candidate.description,
-    candidate.match_reason,
-  );
-  const coverage = candidateGroupKind(candidate) === "evidence"
-      && candidateHasExplicitBinding(candidate)
-    ? ""
-    : firstNonEmptyString(candidate.coverage);
-  const gap = firstNonEmptyString(candidate.gap);
-  return [
-    explanation,
-    coverage
-      ? labeledSemanticText(
-        sourceReview ? "Verified source text" : "Current coverage",
-        coverage,
-      )
-      : "",
-    gap
-      ? labeledSemanticText(
-        sourceReview ? "Diagnostic issue" : "Missing requirement",
-        gap,
-      )
-      : "",
-  ].filter(Boolean).join(" ");
-}
 
-function firstScalarText(...values: unknown[]): string {
-  for (const value of values) {
-    if (typeof value === "string" && value.trim()) return value.trim();
-    if (typeof value === "number" && Number.isFinite(value)) return String(value);
-  }
-  return "";
-}
 
-function firstFiniteNumber(...values: unknown[]): number | null {
-  for (const value of values) {
-    const parsed = typeof value === "number"
-      ? value
-      : typeof value === "string" && value.trim()
-        ? Number(value)
-        : Number.NaN;
-    if (Number.isFinite(parsed) && parsed >= 0) return Math.floor(parsed);
-  }
-  return null;
-}
 
-function labeledSemanticText(label: string, value: string): string {
-  const trimmed = value.trim();
-  const punctuation = /[.!?]$/.test(trimmed) ? "" : ".";
-  return `${label}: ${trimmed}${punctuation}`;
-}
-
-function formatSemanticValue(value: string | Record<string, unknown>): string {
-  if (typeof value === "string") return value;
-  const identifier = firstNonEmptyString(
-    value.id,
-    value.type_id,
-    value.topic_id,
-  );
-  const title = firstNonEmptyString(
-    value.title,
-    value.type_title,
-    value.topic_title,
-    value.name,
-  );
-  const method = firstNonEmptyString(
-    value.method,
-    value.method_summary,
-    value.description,
-  );
-  const headline = [identifier, title].filter(Boolean).join(" — ");
-  return [headline, method].filter(Boolean).join(": ")
-    || JSON.stringify(value);
-}
-
-function formatEvidence(
-  evidence: string | SemanticDecisionEvidence,
-): string {
-  if (typeof evidence === "string") return evidence;
-  const label = firstNonEmptyString(
-    evidence.label,
-    evidence.source,
-  );
-  const pageValue = evidence.page === undefined || evidence.page === null
-    ? ""
-    : String(evidence.page).trim();
-  const page = pageValue ? `page ${pageValue}` : "";
-  const text = firstNonEmptyString(
-    evidence.excerpt,
-    evidence.text,
-    evidence.quote,
-  );
-  const prefix = [label, page].filter(Boolean).join(" · ");
-  return prefix && text
-    ? `${prefix}: ${text}`
-    : prefix || text || JSON.stringify(evidence);
-}
 
 function ResumeCheckpointPrompt({
   job,
