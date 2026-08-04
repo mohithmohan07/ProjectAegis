@@ -13,7 +13,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 from .. import models
-from . import concept_stop_report
+from . import concept_run_report
 from . import uploads
 from .build_concepts_release import (
     RELEASE_ROW_BLOCKS_FIELD,
@@ -342,7 +342,7 @@ def build_diagnostics_zip(job: models.UploadJob) -> bytes:
                 blocks.setdefault(block_id, block)
     _index_string_block_references(blocks, payload)
 
-    stop_report = concept_stop_report.build_stop_report(
+    run_report = concept_run_report.build_run_report(
         payload,
         generation_log=job.generation_log or [],
         generation_checkpoint=job.generation_checkpoint or {},
@@ -354,10 +354,10 @@ def build_diagnostics_zip(job: models.UploadJob) -> bytes:
             "README.txt",
             (
                 "Project Aegis diagnostic context export\n\n"
-                "Start with STOP_REPORT.txt: it states what stopped the run, "
+                "Start with RUN_REPORT.txt: it states what stopped the run, "
                 "why the orchestration boundary did or did not recover from "
                 "it, which rows the failure implicates, and whether the same "
-                "failure repeated across resumes. context/stop_report.json "
+                "failure repeated across resumes. context/run_report.json "
                 "carries the same facts with exact log indexes.\n\n"
                 "The rest of the archive keeps the released workbook beside "
                 "the complete saved generation log, checkpoint, source "
@@ -368,10 +368,10 @@ def build_diagnostics_zip(job: models.UploadJob) -> bytes:
             ),
         )
         archive.writestr(
-            "STOP_REPORT.txt",
-            concept_stop_report.render_stop_report(stop_report).encode("utf-8"),
+            "RUN_REPORT.txt",
+            concept_run_report.render_run_report(run_report).encode("utf-8"),
         )
-        archive.writestr("context/stop_report.json", _json_bytes(stop_report))
+        archive.writestr("context/run_report.json", _json_bytes(run_report))
         archive.writestr("release/released_concepts.xlsx", release_workbook)
         archive.writestr("release/release_payload.json", _json_bytes(payload))
         archive.writestr(

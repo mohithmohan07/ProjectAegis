@@ -1,17 +1,24 @@
-"""Explain, in one place, exactly what stopped a Build Concepts run.
+"""Explain, in one place, how a Build Concepts run ended and what it accepted.
 
 A diagnostics export already carries the log, the checkpoint, the payload and
-the source.  Reconstructing *why the run stopped* from those still means
+the source.  Answering the two questions that matter from those still means
 correlating a terminal message against the recovery dispatch ledger, the
 resolution history and several resume segments of the log by hand.
 
-The decisive fact is usually not the message itself but its disposition:
-``semantic_recovery.classify_failure`` types every ``GroundingCertificateError``
-as an integrity failure it is forbidden to repair, so a run carrying one stops
-outright while a recoverable failure of similar wording would have retried.
-This module recomputes that verdict at export time, resolves the failure to the
-rows it implicates, and counts how many resumes replayed the same failure --
-the signature of a poisoned durable cache rather than a one-off rejection.
+**Why did it stop?**  The decisive fact is usually not the message but its
+disposition: ``semantic_recovery.classify_failure`` types every
+``GroundingCertificateError`` as an integrity failure it is forbidden to
+repair, so a run carrying one stops outright while a recoverable failure of
+similar wording would have retried.  This module recomputes that verdict,
+resolves the failure to the rows it implicates, and reports the stage each
+resume restarted from -- the signature of a poisoned durable cache rather than
+a one-off rejection.
+
+**What did it accept?**  Completing is not the same as being correct.  A run
+can deposit rows the validator gave up repairing, rows grounded deterministically
+rather than by independent review, rows with no source evidence, and semantic
+conflicts an agent resolved unattended.  None of that raises an error, so the
+report states it plainly for a completed run and a stopped one alike.
 
 Everything here is derived from already-saved state.  Nothing is inferred from
 a live exception object, so the report is reproducible from the archive alone.
@@ -315,7 +322,177 @@ def _decision_history(checkpoint: Mapping[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
-def build_stop_report(
+_UNREPAIRED_RE = re.compile(
+    r"unrepaired \[(?P<code>[^\]]+)\] row (?P<row>\d+) '(?P<title>[^']*)'",
+    re.IGNORECASE,
+)
+_KEPT_BEST_RE = re.compile(
+    r"(?P<stage>\w+): keeping best output with (?P<count>\d+) validation error",
+    re.IGNORECASE,
+)
+_REWRITE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("validation_repairs", re.compile(
+        r"repaired (\d+) row\(s\) on attempt", re.IGNORECASE)),
+    ("learner_analysis_retries", re.compile(
+        r"retrying specific learner analysis for (\d+)", re.IGNORECASE)),
+    ("recovered_missing_rows", re.compile(
+        r"recovered (\d+) missing", re.IGNORECASE)),
+    ("granularity_rows_added", re.compile(
+        r"added (\d+) source-grounded concept", re.IGNORECASE)),
+    ("semantic_recovery_repairs", re.compile(
+        r"semantic recovery attempt \d+/\d+ applied", re.IGNORECASE)),
+)
+
+
+def _unrepaired_validation_errors(log: Sequence[Any]) -> list[dict[str, Any]]:
+    """Return rows the validator gave up on and deposited anyway.
+
+    ``_validate_and_repair`` logs this explicitly when it exhausts its repair
+    budget, so a completed run can still carry rows it knows are malformed.
+    """
+
+    out: list[dict[str, Any]] = []
+    for index, entry in enumerate(log):
+        message = _message_of(entry)
+        kept = _KEPT_BEST_RE.search(message)
+        if kept:
+            out.append({
+                "log_index": index,
+                "stage": kept.group("stage"),
+                "error_count": int(kept.group("count")),
+                "code": "",
+                "row_index": None,
+                "concept_title": "",
+            })
+            continue
+        detail = _UNREPAIRED_RE.search(message)
+        if detail:
+            out.append({
+                "log_index": index,
+                "stage": "",
+                "error_count": 1,
+                "code": detail.group("code"),
+                "row_index": int(detail.group("row")),
+                "concept_title": detail.group("title"),
+            })
+    return out
+
+
+def _content_rewrites(log: Sequence[Any]) -> dict[str, int]:
+    """Count the places the pipeline regenerated content rather than kept it."""
+
+    counts: dict[str, int] = {}
+    for entry in log:
+        message = _message_of(entry)
+        for name, pattern in _REWRITE_PATTERNS:
+            match = pattern.search(message)
+            if not match:
+                continue
+            amount = int(match.group(1)) if match.groups() else 1
+            counts[name] = counts.get(name, 0) + amount
+    return counts
+
+
+def _grounding_review(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Describe how strongly the released rows are actually grounded.
+
+    A release staged from a checkpoint carries public fields only, so say when
+    there was no grounding metadata to inspect rather than implying every row
+    passed.
+    """
+
+    records = [row for row in payload.get("records") or [] if isinstance(row, Mapping)]
+    inspected = [
+        row for row in records
+        if any(str(key).startswith("_source_grounding_") for key in row)
+    ]
+    if not inspected:
+        return {
+            "grounding_metadata_present": False,
+            "inspected_rows": 0,
+            "note": (
+                "This payload carries public concept fields only, so per-row "
+                "grounding strength could not be inspected."
+            ),
+        }
+
+    unverified: list[dict[str, Any]] = []
+    without_evidence: list[dict[str, Any]] = []
+    review_band: list[dict[str, Any]] = []
+    for index, row in enumerate(records):
+        if not any(str(key).startswith("_source_grounding_") for key in row):
+            continue
+        identity = {
+            "row_index": index,
+            "concept_title": _normal(
+                row.get("concept_title") or row.get("concept")
+            ),
+            "topic": _normal(row.get("topic")),
+        }
+        contract = _normal(row.get("_source_grounding_contract"))
+        if contract not in grounding_certificate.VERIFIED_GROUNDING_CONTRACTS:
+            unverified.append({**identity, "grounding_contract": contract})
+        if not (row.get("_source_block_ids") or []):
+            without_evidence.append(identity)
+        confidence = row.get("_source_grounding_confidence")
+        if confidence is not None and early_gate.confidence_band(
+            confidence
+        ) == "human_review":
+            review_band.append({**identity, "confidence": confidence})
+    return {
+        "grounding_metadata_present": True,
+        "inspected_rows": len(inspected),
+        "rows_without_independent_grounding": unverified,
+        "rows_without_source_evidence": without_evidence,
+        "rows_in_human_review_band": review_band,
+    }
+
+
+def _accepted_with_risk(
+    payload: Mapping[str, Any],
+    log: Sequence[Any],
+    decisions: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Summarize what this run accepted without full independent verification."""
+
+    non_error_issues = [
+        {
+            "code": _normal(row.get("code")),
+            "severity": _normal(row.get("severity")),
+            "message": _normal(row.get("message"))[:400],
+        }
+        for row in payload.get("issues") or []
+        if isinstance(row, Mapping) and _normal(row.get("severity")) != "error"
+    ]
+    routed = [
+        row for row in payload.get("type_case_rows") or []
+        if isinstance(row, Mapping)
+        and _normal(row.get("audit_status")) not in {"", "ready"}
+    ]
+    return {
+        "unrepaired_validation_errors": _unrepaired_validation_errors(log),
+        "content_rewrites": _content_rewrites(log),
+        "autonomous_decision_count": sum(
+            1 for row in decisions if row.get("resolved_by") == "agent"
+        ),
+        "human_decision_count": sum(
+            1 for row in decisions if row.get("resolved_by") == "human"
+        ),
+        "non_error_issues": non_error_issues,
+        "type_case_rows_needing_review": [
+            {
+                "type_id": _normal(row.get("type_id")),
+                "case_id": _normal(row.get("case_id")),
+                "audit_status": _normal(row.get("audit_status")),
+                "error": _normal(row.get("error"))[:300],
+            }
+            for row in routed
+        ],
+        "grounding": _grounding_review(payload),
+    }
+
+
+def build_run_report(
     payload: Mapping[str, Any],
     *,
     generation_log: Sequence[Any] | None = None,
@@ -332,9 +509,11 @@ def build_stop_report(
     summary = payload.get("summary")
     summary = summary if isinstance(summary, Mapping) else {}
 
+    decisions = _decision_history(checkpoint)
     return {
-        "version": "aegis-concept-stop-report-1",
+        "version": "aegis-concept-run-report-1",
         "stopped": bool(issue),
+        "outcome": "stopped" if issue else "completed",
         "job_id": payload.get("job_id"),
         "stage": _normal(payload.get("checkpoint_stage")),
         "stage_label": _normal(_stage_checkpoint(checkpoint).get("stage_label")),
@@ -365,7 +544,8 @@ def build_stop_report(
             "final_segment_cache_reuse": _final_segment_reuse(log),
         },
         "recovery_history": _recovery_history(checkpoint),
-        "decision_history": _decision_history(checkpoint),
+        "decision_history": decisions,
+        "accepted_with_risk": _accepted_with_risk(payload, log, decisions),
         "pending_decision": {
             key: _normal(value)
             for key, value in (payload.get("pending_decision_snapshot") or {}).items()
@@ -375,19 +555,113 @@ def build_stop_report(
     }
 
 
-def render_stop_report(report: Mapping[str, Any]) -> str:
+def _render_accepted(report: Mapping[str, Any]) -> list[str]:
+    """Render what was accepted without full independent verification."""
+
+    accepted = report.get("accepted_with_risk") or {}
+    grounding = accepted.get("grounding") or {}
+    lines = ["", "ACCEPTED WITH RISK"]
+    quiet = True
+
+    unrepaired = accepted.get("unrepaired_validation_errors") or []
+    if unrepaired:
+        quiet = False
+        lines.append(f"  unrepaired validation errors: {len(unrepaired)}")
+        for row in unrepaired[:10]:
+            where = (
+                f"row {row['row_index']} {row['concept_title']!r}"
+                if row.get("row_index") is not None
+                else f"stage {row.get('stage')}"
+            )
+            lines.append(
+                f"    [{row.get('code') or 'summary'}] {where} "
+                f"(log {row['log_index']})"
+            )
+
+    if not grounding.get("grounding_metadata_present"):
+        lines.append(f"  grounding: {grounding.get('note')}")
+    else:
+        for key, label in (
+            ("rows_without_independent_grounding",
+             "rows not independently grounded"),
+            ("rows_without_source_evidence", "rows with no source evidence"),
+            ("rows_in_human_review_band", "rows in the human-review band"),
+        ):
+            rows = grounding.get(key) or []
+            if not rows:
+                continue
+            quiet = False
+            lines.append(f"  {label}: {len(rows)}")
+            for row in rows[:10]:
+                lines.append(
+                    f"    row {row['row_index']}: {row['concept_title']}"
+                )
+
+    agent = accepted.get("autonomous_decision_count") or 0
+    human = accepted.get("human_decision_count") or 0
+    if agent or human:
+        quiet = False
+        lines.append(
+            f"  semantic conflicts resolved: {agent} by agent, {human} by human"
+        )
+
+    rewrites = accepted.get("content_rewrites") or {}
+    if rewrites:
+        quiet = False
+        lines.append(f"  content rewrites: {rewrites}")
+
+    routed = accepted.get("type_case_rows_needing_review") or []
+    if routed:
+        quiet = False
+        lines.append(f"  Type/Case rows needing review: {len(routed)}")
+
+    issues = accepted.get("non_error_issues") or []
+    if issues:
+        quiet = False
+        lines.append(f"  non-error release issues: {len(issues)}")
+        for row in issues[:6]:
+            lines.append(f"    [{row['severity']}] {row['code']}: {row['message'][:120]}")
+
+    if quiet:
+        lines.append(
+            "  Nothing flagged. Every released row carried independently "
+            "verified grounding,"
+        )
+        lines.append(
+            "  no validation error survived repair, and no semantic conflict "
+            "needed resolving."
+        )
+    return lines
+
+
+def render_run_report(report: Mapping[str, Any]) -> str:
     """Render the same facts as the first thing a human opens."""
 
     if not report.get("stopped"):
-        return (
-            "Project Aegis run stop report\n\n"
-            "No terminal failure was recorded for this release.\n"
-        )
+        return "\n".join([
+            "Project Aegis run report",
+            "",
+            f"Stage      : {report.get('stage')} ({report.get('stage_label')})",
+            f"Progress   : {report.get('progress')}",
+            f"Released   : {report.get('released_row_count')} row(s); "
+            f"database_uploaded={report.get('database_uploaded')}",
+            "",
+            "OUTCOME",
+            "  The run completed; no terminal failure was recorded.",
+            "  Completing is not the same as being correct. What this run "
+            "accepted without",
+            "  full independent verification is below.",
+            *_render_accepted(report),
+            "",
+            "Full detail, including exact log indexes, is in "
+            "context/run_report.json.",
+            "",
+        ])
     failure = report.get("terminal_failure") or {}
     disposition = report.get("disposition") or {}
     resumes = report.get("resumes") or {}
     lines = [
-        "Project Aegis run stop report",
+        "Project Aegis run report",
         "",
         f"Stage      : {report.get('stage')} ({report.get('stage_label')})",
         f"Progress   : {report.get('progress')}",
@@ -451,10 +725,12 @@ def render_stop_report(report: Mapping[str, Any]) -> str:
             f"{row['choice']}"
             for row in decisions
         ]
+    # A stopped run still released rows, so the same quality question applies.
+    lines += _render_accepted(report)
     lines += [
         "",
         "Full detail, including exact log indexes, is in "
-        "context/stop_report.json.",
+        "context/run_report.json.",
         "",
     ]
     return "\n".join(lines)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.services import concept_stop_report as stop_report
+from app.services import concept_run_report as run_report
 
 
 def _payload(**overrides) -> dict:
@@ -87,7 +87,7 @@ def _log(resumes: int = 3) -> list[dict]:
 
 
 def test_report_states_why_an_integrity_failure_could_not_recover():
-    report = stop_report.build_stop_report(
+    report = run_report.build_run_report(
         _payload(), generation_log=_log(), generation_checkpoint=_checkpoint()
     )
 
@@ -109,7 +109,7 @@ def test_report_states_when_a_failure_would_have_recovered():
         "details": {"exception_type": "TopologyRepairRequired"},
     }])
 
-    report = stop_report.build_stop_report(
+    report = run_report.build_run_report(
         payload, generation_log=_log(), generation_checkpoint=_checkpoint()
     )
 
@@ -125,7 +125,7 @@ def test_report_states_when_a_failure_would_have_recovered():
 
 
 def test_report_marks_a_row_only_it_could_resolve():
-    report = stop_report.build_stop_report(
+    report = run_report.build_run_report(
         _payload(), generation_log=_log(), generation_checkpoint=_checkpoint()
     )
 
@@ -138,14 +138,14 @@ def test_report_marks_a_row_only_it_could_resolve():
 
 
 def test_report_flags_resumes_that_never_advanced():
-    report = stop_report.build_stop_report(
+    report = run_report.build_run_report(
         _payload(), generation_log=_log(resumes=5), generation_checkpoint=_checkpoint()
     )
 
     assert report["resumes"]["resume_count"] == 5
     assert report["resumes"]["stage_repeat_count"] == 5
     assert report["resumes"]["final_segment_cache_reuse"] == {"reused": 1}
-    assert "without advancing" in stop_report.render_stop_report(report)
+    assert "without advancing" in run_report.render_run_report(report)
 
 
 def test_report_refuses_to_guess_an_unclassified_exception():
@@ -157,7 +157,7 @@ def test_report_refuses_to_guess_an_unclassified_exception():
         "details": {"exception_type": "SomeUnknownError"},
     }])
 
-    disposition = stop_report.build_stop_report(
+    disposition = run_report.build_run_report(
         payload, generation_log=[], generation_checkpoint={}
     )["disposition"]
 
@@ -169,7 +169,7 @@ def test_report_refuses_to_guess_an_unclassified_exception():
 
 
 def test_report_carries_history_and_log_pointers():
-    report = stop_report.build_stop_report(
+    report = run_report.build_run_report(
         _payload(), generation_log=_log(), generation_checkpoint=_checkpoint()
     )
 
@@ -189,9 +189,162 @@ def test_report_carries_history_and_log_pointers():
 
 
 def test_a_clean_release_reports_no_stop():
-    report = stop_report.build_stop_report(
+    report = run_report.build_run_report(
         _payload(issues=[]), generation_log=_log(), generation_checkpoint=_checkpoint()
     )
 
     assert report["stopped"] is False
-    assert "No terminal failure" in stop_report.render_stop_report(report)
+    assert report["outcome"] == "completed"
+    assert "no terminal failure was recorded" in run_report.render_run_report(
+        report
+    )
+
+
+def _completed_payload(records: list[dict] | None = None) -> dict:
+    payload = _payload(issues=[])
+    payload["release_reason"] = (
+        "Generation completed and was staged for explicit publication."
+    )
+    payload["summary"] = {"row_count": 2, "database_uploaded": True}
+    payload["records"] = records or []
+    return payload
+
+
+def _grounded_row(**overrides) -> dict:
+    row = {
+        "concept_title": "A verified concept",
+        "topic": "Topic One",
+        "_source_grounding_contract": "api-verified-source-block-ids",
+        "_source_grounding_confidence": 0.99,
+        "_source_block_ids": ["BLK-0001"],
+    }
+    row.update(overrides)
+    return row
+
+
+def test_completed_run_is_not_silent_about_what_it_accepted():
+    report = run_report.build_run_report(
+        _completed_payload([_grounded_row()]),
+        generation_log=_log(resumes=1),
+        generation_checkpoint=_checkpoint(),
+    )
+    rendered = run_report.render_run_report(report)
+
+    assert report["outcome"] == "completed"
+    assert report["stopped"] is False
+    assert "ACCEPTED WITH RISK" in rendered
+    assert "Completing is not the same as being correct" in rendered
+
+
+def test_report_names_rows_that_were_not_independently_grounded():
+    payload = _completed_payload([
+        _grounded_row(),
+        _grounded_row(
+            concept_title="A deterministically grounded concept",
+            _source_grounding_contract="topic-bounded-deterministic",
+        ),
+        _grounded_row(
+            concept_title="A concept with no evidence",
+            _source_block_ids=[],
+        ),
+        _grounded_row(
+            concept_title="A concept in the review band",
+            _source_grounding_confidence=0.905,
+        ),
+    ])
+
+    grounding = run_report.build_run_report(
+        payload, generation_log=[], generation_checkpoint={}
+    )["accepted_with_risk"]["grounding"]
+
+    assert grounding["grounding_metadata_present"] is True
+    assert [
+        row["concept_title"]
+        for row in grounding["rows_without_independent_grounding"]
+    ] == ["A deterministically grounded concept"]
+    assert [
+        row["concept_title"] for row in grounding["rows_without_source_evidence"]
+    ] == ["A concept with no evidence"]
+    assert [
+        row["concept_title"] for row in grounding["rows_in_human_review_band"]
+    ] == ["A concept in the review band"]
+
+
+def test_report_says_when_there_was_no_grounding_metadata_to_inspect():
+    # A checkpoint-staged release carries public fields only.  Saying so beats
+    # implying every row passed an inspection that never ran.
+    grounding = run_report.build_run_report(
+        _completed_payload([{"concept_title": "Public only", "topic": "T"}]),
+        generation_log=[],
+        generation_checkpoint={},
+    )["accepted_with_risk"]["grounding"]
+
+    assert grounding["grounding_metadata_present"] is False
+    assert grounding["inspected_rows"] == 0
+    assert "could not be inspected" in grounding["note"]
+
+
+def test_report_surfaces_validation_errors_that_survived_repair():
+    log = _log(resumes=1) + [
+        {
+            "level": "warning",
+            "message": "final: keeping best output with 2 validation error(s).",
+        },
+        {
+            "level": "warning",
+            "message": (
+                "  unrepaired [rich_text_format] row 3 'A malformed concept': "
+                "'broken'"
+            ),
+        },
+    ]
+
+    accepted = run_report.build_run_report(
+        _completed_payload([_grounded_row()]),
+        generation_log=log,
+        generation_checkpoint={},
+    )["accepted_with_risk"]
+
+    assert [row["code"] for row in accepted["unrepaired_validation_errors"]] == [
+        "",
+        "rich_text_format",
+    ]
+    assert accepted["unrepaired_validation_errors"][0]["error_count"] == 2
+    assert accepted["unrepaired_validation_errors"][1]["concept_title"] == (
+        "A malformed concept"
+    )
+
+
+def test_report_counts_unattended_resolutions_and_content_rewrites():
+    log = _log(resumes=1) + [
+        {"level": "info", "message": "final: repaired 1 row(s) on attempt 1."},
+        {
+            "level": "warning",
+            "message": "Retrying specific learner analysis for 3 unresolved concept(s).",
+        },
+    ]
+
+    accepted = run_report.build_run_report(
+        _completed_payload([_grounded_row()]),
+        generation_log=log,
+        generation_checkpoint=_checkpoint(),
+    )["accepted_with_risk"]
+
+    assert accepted["autonomous_decision_count"] == 1
+    assert accepted["human_decision_count"] == 0
+    assert accepted["content_rewrites"] == {
+        "validation_repairs": 1,
+        "learner_analysis_retries": 3,
+    }
+
+
+def test_a_clean_completed_run_says_nothing_was_flagged():
+    rendered = run_report.render_run_report(
+        run_report.build_run_report(
+            _completed_payload([_grounded_row()]),
+            generation_log=[],
+            generation_checkpoint={},
+        )
+    )
+
+    assert "Nothing flagged" in rendered
