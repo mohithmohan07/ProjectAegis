@@ -17,6 +17,7 @@ from .api import (
     auth as auth_api,
     directory as directory_api,
     build_assessments as build_assessments_api,
+    concept_releases as concept_releases_api,
     build_concepts as build_concepts_api,
     data as data_api,
     source_artifacts as source_artifacts_api,
@@ -51,10 +52,11 @@ app = FastAPI(
     title="Aegis — Integrated Content Management Tool",
     description=(
         "Build Assessments and Build Concepts over a Bulk Import workbook "
-        "database. All output is written in the canonical Bulk Import format, "
-        "append-only."
+        "database. Build Concepts is release-first: generation creates a "
+        "review workbook and complete context package, and database publication "
+        "occurs only through a separate explicit upload action."
     ),
-    version="0.2.0",
+    version="0.3.0",
     lifespan=lifespan,
 )
 
@@ -77,6 +79,9 @@ app.include_router(source_assets_api.router)
 _authenticated = [Depends(auth_svc.require_user)]
 app.include_router(directory_api.router, dependencies=_authenticated)
 app.include_router(build_assessments_api.router, dependencies=_authenticated)
+# The release router deliberately precedes the legacy Build Concepts router so
+# uploaded-source generation is release-first on the historical URLs.
+app.include_router(concept_releases_api.router, dependencies=_authenticated)
 app.include_router(build_concepts_api.router, dependencies=_authenticated)
 app.include_router(source_artifacts_api.router, dependencies=_authenticated)
 app.include_router(data_api.router, dependencies=_authenticated)
