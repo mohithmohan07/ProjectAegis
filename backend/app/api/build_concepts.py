@@ -7,6 +7,9 @@ from ..db import SessionLocal, get_db
 from ..services import build_concepts as svc
 from ..services import (
     auth,
+    build_concepts_release as release_svc,
+    build_concepts_release_files as release_files,
+    build_concepts_release_publication as release_publication,
     checkpoints,
     drive_checkpoints,
     progress,
@@ -45,24 +48,18 @@ def record_human_semantic_decision(
     db: Session = Depends(get_db),
     user: auth.Principal = Depends(auth.require_user),
 ):
-    """Record one semantic answer; the user explicitly resumes afterward."""
-    try:
-        return svc.record_human_semantic_decision(
-            db,
-            job_id,
-            decision_id,
-            choice=req.choice,
-            instruction=req.instruction,
-            target_id=req.target_id,
-            target_concept_id=req.target_concept_id,
-            owner_sub=user.sub,
-        )
-    except uploads.UploadJobNotFound as e:
-        raise HTTPException(404, str(e))
-    except svc.HumanDecisionConflictError as e:
-        raise HTTPException(409, str(e))
-    except ValueError as e:
-        raise HTTPException(400, str(e))
+    """Legacy route retained only to give old clients an explicit answer.
+
+    Build Concepts no longer accepts a human semantic choice during generation.
+    The complete unresolved decision remains available in the diagnostic export,
+    and the newest durable rows are released with their errors attached.
+    """
+    del job_id, decision_id, req, db, user
+    raise HTTPException(
+        409,
+        "Build Concepts is unattended. Manual semantic selection is disabled; "
+        "download or release the staged output with its diagnostic context.",
+    )
 
 
 @router.put("/uploads/{job_id}/file", response_model=schemas.UploadJobOut)
@@ -200,6 +197,139 @@ def list_resumable_checkpoints(
     return {"items": items, "total": total}
 
 
+# --------------------------------------------------------------------------- #
+# Released output and diagnostic context
+# --------------------------------------------------------------------------- #
+
+@router.post(
+    "/uploads/{job_id}/release",
+    response_model=schemas.UploadJobOut,
+)
+def release_latest_output(
+    job_id: int,
+    db: Session = Depends(get_db),
+    user: auth.Principal = Depends(auth.require_user),
+):
+    """Release the newest durable output without publishing it to the DB."""
+    try:
+        job = uploads.get_job(
+            db, job_id, owner_sub=user.sub, module="build_concepts")
+        if release_svc.release_available(job):
+            return job
+        return release_svc.force_release(
+            db, job_id, owner_sub=user.sub
+        )
+    except uploads.UploadJobNotFound as e:
+        raise HTTPException(404, str(e))
+    except uploads.JobAlreadyRunningError as e:
+        raise HTTPException(409, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.get("/uploads/{job_id}/release.xlsx")
+def download_released_workbook(
+    job_id: int,
+    db: Session = Depends(get_db),
+    user: auth.Principal = Depends(auth.require_user),
+):
+    try:
+        job = uploads.get_job(
+            db, job_id, owner_sub=user.sub, module="build_concepts")
+        content = release_files.build_release_workbook(job)
+    except uploads.UploadJobNotFound as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return Response(
+        content=content,
+        media_type=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+        headers={
+            "Content-Disposition":
+                f'attachment; filename="concept_release_job_{job_id}.xlsx"',
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.get("/uploads/{job_id}/diagnostics.zip")
+def download_release_diagnostics(
+    job_id: int,
+    db: Session = Depends(get_db),
+    user: auth.Principal = Depends(auth.require_user),
+):
+    try:
+        job = uploads.get_job(
+            db, job_id, owner_sub=user.sub, module="build_concepts")
+        content = release_files.build_diagnostics_zip(job)
+    except uploads.UploadJobNotFound as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return Response(
+        content=content,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition":
+                f'attachment; filename="concept_diagnostics_job_{job_id}.zip"',
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.get("/uploads/{job_id}/release.json")
+def download_release_payload(
+    job_id: int,
+    db: Session = Depends(get_db),
+    user: auth.Principal = Depends(auth.require_user),
+):
+    try:
+        job = uploads.get_job(
+            db, job_id, owner_sub=user.sub, module="build_concepts")
+        content = release_files.release_payload_bytes(job)
+    except uploads.UploadJobNotFound as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return Response(
+        content=content,
+        media_type="application/json; charset=utf-8",
+        headers={
+            "Content-Disposition":
+                f'attachment; filename="concept_release_job_{job_id}.json"',
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.post("/uploads/{job_id}/upload-release")
+def upload_released_output_to_database(
+    job_id: int,
+    db: Session = Depends(get_db),
+    user: auth.Principal = Depends(auth.require_user),
+):
+    """Explicitly publish the staged rows; generation never calls this route."""
+    try:
+        return release_publication.upload_release_to_database(
+            db,
+            job_id,
+            owner_sub=user.sub,
+        )
+    except uploads.UploadJobNotFound as e:
+        raise HTTPException(404, str(e))
+    except release_svc.ReleaseUnavailableError as e:
+        raise HTTPException(404, str(e))
+    except uploads.JobAlreadyRunningError as e:
+        raise HTTPException(409, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 @router.post("/uploads/{job_id}/convert")
 def convert_upload(
     job_id: int,
@@ -212,10 +342,11 @@ def convert_upload(
             db, job_id, owner_sub=user.sub, module="build_concepts")
     except uploads.UploadJobNotFound as e:
         raise HTTPException(404, str(e))
-    if job.status == "generated":
+    if job.status in {"generated", release_svc.RELEASE_STATUS}:
         raise HTTPException(
             409,
-            "this upload has already been generated; start a new upload",
+            "this upload already has a released or published output; start a "
+            "new upload to change the source",
         )
     if uploads.is_job_running(job_id):
         raise HTTPException(
@@ -278,10 +409,11 @@ def post_learning_generate(
         )
     except uploads.UploadJobNotFound as e:
         raise HTTPException(404, str(e))
-    if job.status == "generated":
+    if job.status in {"generated", release_svc.RELEASE_STATUS}:
         raise HTTPException(
             409,
-            "this upload has already been generated; start a new upload",
+            "this upload already has a released or published output; start a "
+            "new upload",
         )
     if uploads.is_job_running(job_id):
         raise HTTPException(
@@ -306,8 +438,6 @@ def post_learning_generate(
             )
         finally:
             # Queue the post-accounting state as well as each stage checkpoint.
-            # Success overwrites the remote resumable snapshot with the final
-            # cleared checkpoint; failure includes final usage and diagnostics.
             drive_checkpoints.schedule_checkpoint_backup(job_id)
             worker_db.close()
     return progress.stream(work, title="Build Concepts — post-learning generation")
@@ -352,10 +482,11 @@ def pre_learning_generate_from_upload(
         )
     except uploads.UploadJobNotFound as e:
         raise HTTPException(404, str(e))
-    if job.status == "generated":
+    if job.status in {"generated", release_svc.RELEASE_STATUS}:
         raise HTTPException(
             409,
-            "this upload has already been generated; start a new upload",
+            "this upload already has a released or published output; start a "
+            "new upload",
         )
     if uploads.is_job_running(job_id):
         raise HTTPException(
