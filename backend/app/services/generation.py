@@ -3780,34 +3780,112 @@ def _inventory_item_owner_topic(item: dict) -> tuple[str, str]:
                 or ""
             ).strip(),
         )
-    if (
+    declared_v2 = (
         isinstance(raw, dict)
         and str(raw.get("version") or "")
         == str(_TYPE_CASE_PLACEMENT_CONTRACT_VERSION)
-    ):
-        raise RuntimeError(
-            "type_case_owner_uncertified: inventory item "
-            f"{str(item.get('qid') or '<empty>')} declares placement v2 "
-            "without a complete certified owner"
-        )
-    # An item with no v2 declaration is compatible only with an old saved
-    # artifact or an offline/direct helper call.  During a live canonical-
-    # source run Phase 3.3 must have certified every inventory QID before the
-    # post-freeze Hub cluster runs; silently reviving ``topic_hint`` here would
-    # turn physical source location back into semantic ownership.
+    )
+    # A live run must not revive ``topic_hint`` as a second semantic
+    # authority: that would turn physical source location back into
+    # ownership, which is the whole thing Phase 3.3 exists to stop. But an
+    # incomplete contract is also not a reason to end the run. Derive the
+    # owner from source text in teaching order instead, exactly as Phase 3.3
+    # does when its certification pair fails.
+    live_without_owner = False
     if config.use_live_generation():
         from . import canonical_source_phase3 as _phase3
 
-        if (
+        live_without_owner = bool(
             isinstance(_phase3.active_graph(), dict)
             and str(item.get("qid") or "").strip()
-        ):
+        )
+    if declared_v2 or live_without_owner:
+        derived = _deterministic_inventory_owner_topic(item)
+        if derived is not None:
+            return derived
+        # Derivation needs a graph with topics. Without one there is nothing
+        # to reason from, and quietly returning ``topic_hint`` would do the
+        # one thing this function exists to prevent. A live run always has
+        # that graph, so this is reachable only from corrupted or offline
+        # data -- an integrity fault, not the semantic uncertainty the
+        # deterministic fallback answers.
+        if declared_v2:
             raise RuntimeError(
-                "type_case_owner_uncertified: live inventory item "
-                f"{str(item.get('qid') or '<empty>')} has no "
-                "certified v2 owner"
+                "type_case_owner_uncertified: inventory item "
+                f"{str(item.get('qid') or '<empty>')} declares placement v2 "
+                "without a complete certified owner, and no semantic graph "
+                "was available to derive one"
             )
+        raise RuntimeError(
+            "type_case_owner_uncertified: live inventory item "
+            f"{str(item.get('qid') or '<empty>')} has no certified v2 owner "
+            "and its semantic graph yielded no topic to derive one from"
+        )
     return "", str(item.get("topic_hint") or "").strip()
+
+
+def _deterministic_inventory_owner_topic(item: dict) -> tuple[str, str] | None:
+    """Derive one inventory item's owner from source text. Never raises.
+
+    Returns ``None`` only when there is no active graph to derive from, in
+    which case the caller falls back to the item's recorded scope.
+    """
+
+    from . import canonical_source_phase3 as _phase3
+    from . import placement_policy as _placement_policy
+
+    graph = _phase3.active_graph()
+    if not isinstance(graph, dict):
+        return None
+    canonical = (_phase3.active_session() or {}).get("canonical") or {}
+    try:
+        from . import evidence_narrowing as _evidence_narrowing
+
+        order = _placement_policy.seal_teaching_order(
+            graph,
+            source_contract_hash=str(graph.get("source_contract_hash") or ""),
+        )
+        topic_blocks = {
+            topic_id: list(topic.blocks)
+            for topic_id, topic in _evidence_narrowing.build_evidence(
+                graph, canonical
+            ).items()
+        }
+        claim = _placement_policy.AtomicClaim(
+            claim_id=str(item.get("qid") or ""),
+            normalized_claim=str(
+                item.get("raw_task") or item.get("task") or ""
+            ),
+            source_location_topic_id=str(
+                item.get("source_location_topic_id") or ""
+            ),
+            protected_source_items=(str(item.get("qid") or ""),),
+        )
+        decision, _relationships = (
+            _placement_policy.compute_deterministic_placement(
+                claim, order, topic_blocks
+            )
+        )
+    except Exception as exc:  # pragma: no cover - derivation must not stop us
+        progress.log(
+            "Deterministic owner derivation failed for inventory item "
+            f"{str(item.get('qid') or '<empty>')} ({exc}); its recorded "
+            "scope was used.",
+            level="warning",
+        )
+        return None
+    if not decision.owner_topic_id:
+        return None
+    progress.log(
+        f"Inventory item {str(item.get('qid') or '<empty>')} had no certified "
+        f"owner; derived {decision.owner_topic_id} from source text in "
+        "teaching order rather than from where the task is printed.",
+        level="warning",
+    )
+    return (
+        decision.owner_topic_id,
+        str(order.title(decision.owner_topic_id) or ""),
+    )
 
 
 def _activity_record_matches_owner(record: dict, item: dict) -> bool:
@@ -8642,6 +8720,20 @@ def _certified_type_case_placement_contract(value: object) -> dict | None:
     ]
     from . import placement_policy as _placement_policy
 
+    # Two bases produce a usable contract, and they are checked differently.
+    # An independently certified one carries a critic verdict. A
+    # deterministic one carries none, because no critic saw it -- it is
+    # accepted on the strength of evidence block IDs that are checkable
+    # against the source instead. Neither basis may fall back to physical
+    # location for its owner; that is what this whole stage exists to stop.
+    basis = str(value.get("basis") or _placement_policy.CERTIFIED_BASIS)
+    if basis == _placement_policy.DETERMINISTIC_BASIS:
+        accepted_verdicts = {_placement_policy.DETERMINISTIC_VERDICT}
+    elif basis == _placement_policy.CERTIFIED_BASIS:
+        accepted_verdicts = {"accepted", "verified"}
+    else:
+        return None
+
     allowed_claim_ids = {
         str(claim_id).strip()
         for claim_id in (
@@ -8683,7 +8775,7 @@ def _certified_type_case_placement_contract(value: object) -> dict | None:
             or not block_ids
             or str(row.get("relationship_id") or "") != expected_id
             or str(row.get("critic_verdict") or "").strip().casefold()
-            not in {"accepted", "verified"}
+            not in accepted_verdicts
             or bool(row.get("necessity"))
             != (kind in _placement_policy.NECESSARY_TYPES)
         ):
@@ -8722,12 +8814,18 @@ def _certified_type_case_placement_contract(value: object) -> dict | None:
         and row.get("necessity") is True
         and bool(row.get("evidence_block_ids"))
         and str(row.get("critic_verdict") or "").strip().casefold()
-        in {"accepted", "verified"}
+        in accepted_verdicts
         for row in relationships
     )
     if (
         version != _TYPE_CASE_PLACEMENT_CONTRACT_VERSION
-        or value.get("certified") is not True
+        # A deterministic contract must say so in its own data. Stamping
+        # certified=True on something no critic reviewed would make the two
+        # bases indistinguishable in an audit, which is the one thing this
+        # field exists to prevent.
+        or value.get("certified") is not (
+            basis == _placement_policy.CERTIFIED_BASIS
+        )
         or not str(value.get("claim_id") or "").strip()
         or not owner_topic_id
         or not source_topic_ids

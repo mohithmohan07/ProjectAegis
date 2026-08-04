@@ -1955,6 +1955,130 @@ def _type_case_ledger_material(
     }
 
 
+def _topic_block_text(
+    graph: dict[str, Any],
+    canonical: dict[str, Any],
+) -> dict[str, list[tuple[str, str]]]:
+    """Index each topic's usable source text for deterministic placement."""
+
+    from . import evidence_narrowing
+
+    evidence = evidence_narrowing.build_evidence(graph, canonical)
+    return {
+        topic_id: list(topic.blocks)
+        for topic_id, topic in evidence.items()
+    }
+
+
+def _deterministic_type_case_contract(
+    generation: Any,
+    *,
+    claim_row: dict[str, Any],
+    graph: dict[str, Any],
+    order: placement_policy.TeachingOrder,
+    topic_blocks: dict[str, list[tuple[str, str]]],
+) -> dict[str, Any]:
+    """Build one placement contract without a provider or critic.
+
+    Used only when independent certification could not produce a contract
+    for this QID. It computes the owner from source text in teaching order,
+    labels itself ``deterministic_evidence_fallback``, and records
+    ``certified: False`` so no audit can mistake it for a reviewed result.
+    """
+
+    claim = placement_policy.AtomicClaim(
+        claim_id=str(claim_row.get("claim_id") or ""),
+        normalized_claim=str(claim_row.get("normalized_claim") or ""),
+        source_location_topic_id=str(
+            claim_row.get("source_location_topic_id") or ""
+        ),
+        protected_source_items=(str(claim_row.get("qid") or ""),),
+    )
+    decision, relationships = (
+        placement_policy.compute_deterministic_placement(
+            claim, order, topic_blocks
+        )
+    )
+    topic_title = {
+        str(row.get("topic_id") or ""): str(row.get("title") or "")
+        for row in graph.get("topics") or [] if isinstance(row, dict)
+    }
+    contract = {
+        "version": _TYPE_CASE_OWNERSHIP_VERSION,
+        "certified": False,
+        "basis": placement_policy.DETERMINISTIC_BASIS,
+        "policy_version": placement_policy.POLICY_VERSION,
+        "teaching_order_sha256": order.sha256,
+        "source_contract_hash": str(graph.get("source_contract_hash") or ""),
+        "claim_id": claim.claim_id,
+        "qid": str(claim_row.get("qid") or ""),
+        "normalized_claim": claim.normalized_claim,
+        "source_location_topic_id": claim.source_location_topic_id,
+        "source_location_topic_ids": [claim.source_location_topic_id],
+        "owner_topic_id": decision.owner_topic_id,
+        "owner_topic_title": topic_title.get(decision.owner_topic_id, ""),
+        "required_topic_ids": list(decision.required_topic_ids),
+        "prerequisite_topic_ids": list(decision.prerequisite_topic_ids),
+        "reference_edges": [],
+        "illustration_topic_ids": [],
+        "topic_relationships": [
+            placement_policy.relationship_audit_row(relation)
+            for relation in relationships
+        ],
+        "rationale": decision.rationale,
+    }
+    contract["placement_certificate_sha256"] = (
+        generation._type_case_placement_digest(contract)
+    )
+    return contract
+
+
+def _fill_uncertified_type_case_contracts(
+    generation: Any,
+    *,
+    claim_by_qid: dict[str, dict[str, Any]],
+    contracts: dict[str, dict[str, Any]],
+    graph: dict[str, Any],
+    canonical: dict[str, Any],
+    order: placement_policy.TeachingOrder,
+    reason: str,
+) -> list[str]:
+    """Give every uncertified QID a deterministic owner. Never raises.
+
+    Independent certification is a paid provider/critic pair, and a pair can
+    fail: it can omit a QID, reformat one, spend its contract-correction
+    budget, or have its relationship set rejected. Each of those used to end
+    the run -- which is the same defect as the chapter-wide placement crash,
+    one stage later. Rule 5 has a deterministic reading, so it is applied.
+    """
+
+    missing = sorted(set(claim_by_qid) - set(contracts))
+    if not missing:
+        return []
+    topic_blocks = _topic_block_text(graph, canonical)
+    filled: list[str] = []
+    for qid in missing:
+        contract = _deterministic_type_case_contract(
+            generation,
+            claim_row=claim_by_qid[qid],
+            graph=graph,
+            order=order,
+            topic_blocks=topic_blocks,
+        )
+        contracts[qid] = contract
+        filled.append(f"{qid}->{contract['owner_topic_id'] or '(location)'}")
+    progress.log(
+        f"Phase 3.3 derived semantic ownership deterministically for "
+        f"{len(filled)} QID/task(s) that independent certification did not "
+        f"cover ({reason}): {', '.join(filled[:8])}"
+        + (", ..." if len(filled) > 8 else "")
+        + ". Owners come from source text in teaching order, never from "
+        "physical location, and are recorded as uncertified.",
+        level="warning",
+    )
+    return filled
+
+
 def _project_type_case_contracts(
     generation: Any,
     *,
@@ -2019,10 +2143,6 @@ def _certify_type_case_ownership(
         source_contract_hash=str(graph.get("source_contract_hash") or ""),
     )
     block_directory = phase32._exact_block_directory(graph, canonical)
-    if not block_directory:
-        raise RuntimeError(
-            "type_case_owner_uncertified: semantic graph has no exact blocks"
-        )
 
     claim_by_qid = {
         str(row.get("qid") or ""): row for row in claims
@@ -2036,10 +2156,16 @@ def _certify_type_case_ownership(
         and phase3._sha256_json(inventory_ledger)
         != phase3._sha256_json(mined_ledger)
     ):
-        raise RuntimeError(
-            "type_case_owner_uncertified: inventory and mined-Type placement "
-            "ledgers disagree"
+        # Two saved ledgers that disagree cannot both be right, and picking
+        # one would be arbitrary. Distrust both and re-derive instead.
+        progress.log(
+            "Phase 3.3 found disagreeing inventory and mined-Type placement "
+            "ledgers; both were discarded and ownership is being "
+            "re-established rather than guessed.",
+            level="warning",
         )
+        inventory_ledger = None
+        mined_ledger = None
     ledger = (
         inventory_ledger
         if isinstance(inventory_ledger, dict)
@@ -2086,9 +2212,27 @@ def _certify_type_case_ownership(
     if provider is None and critic is None:
         return False
     if provider is None or critic is None:
-        raise RuntimeError(
-            "type_case_owner_uncertified: placement provider/critic pair is incomplete"
+        # Half a certification pair certifies nothing, and running the
+        # provider without its critic would be worse than running neither.
+        _fill_uncertified_type_case_contracts(
+            generation,
+            claim_by_qid=claim_by_qid,
+            contracts=contracts,
+            graph=graph,
+            canonical=canonical,
+            order=order,
+            reason="the placement provider/critic pair is incomplete",
         )
+        _project_type_case_contracts(
+            generation,
+            mined_types=mined_types,
+            inventory=inventory,
+            rows_by_qid=rows_by_qid,
+            contracts=contracts,
+            graph=graph,
+            order=order,
+        )
+        return True
 
     cache = _read_type_case_placement_cache(graph=graph, order=order)
     entries = cache.setdefault("entries", {})
@@ -2112,28 +2256,58 @@ def _certify_type_case_ownership(
             pending.append(claim)
 
     size = _type_case_placement_batch_size()
+    failures: list[str] = []
     for start in range(0, len(pending), size):
         batch = pending[start : start + size]
-        fresh = _certify_type_case_batch(
-            generation,
-            claims=batch,
-            graph=graph,
-            canonical=canonical,
-            order=order,
-            block_directory=block_directory,
-            provider=provider,
-            critic=critic,
-        )
+        try:
+            fresh = _certify_type_case_batch(
+                generation,
+                claims=batch,
+                graph=graph,
+                canonical=canonical,
+                order=order,
+                block_directory=block_directory,
+                provider=provider,
+                critic=critic,
+            )
+        except HumanDecisionRequired:
+            # A recoverable pause belongs to the recovery ladder above, which
+            # can still answer it properly. Only terminal failure falls back.
+            raise
+        except Exception as exc:
+            # The batch produced no certified contract. Its QIDs are filled
+            # deterministically after the loop rather than ending the run:
+            # the provider omitting or reformatting a qid is the same defect
+            # that lost QINV-0016.1-.4, and it is not a reason to stop.
+            failures.append(f"{type(exc).__name__}: {exc}")
+            continue
         contracts.update(fresh)
         for claim in batch:
             qid = str(claim.get("qid") or "")
+            certified = fresh.get(qid)
+            if certified is None:
+                # The pair answered, but not for this qid.
+                continue
             key = _type_case_placement_cache_key(
                 claim=claim, graph=graph, order=order
             )
-            entries[key] = copy.deepcopy(fresh[qid])
+            entries[key] = copy.deepcopy(certified)
         _write_type_case_placement_cache(
             cache, graph=graph, order=order
         )
+
+    _fill_uncertified_type_case_contracts(
+        generation,
+        claim_by_qid=claim_by_qid,
+        contracts=contracts,
+        graph=graph,
+        canonical=canonical,
+        order=order,
+        reason=(
+            "; ".join(failures[:4]) if failures
+            else "independent certification returned no contract for them"
+        ),
+    )
 
     _project_type_case_contracts(
         generation,

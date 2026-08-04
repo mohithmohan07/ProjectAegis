@@ -145,6 +145,30 @@ The retrospective-reference exception (Rule 4) applies here too: if the later
 topic only illustrates the earlier material rather than being needed to attempt
 the task, the task stays with the topic that teaches it.
 
+### When ownership cannot be certified
+
+Ownership is normally settled by a provider/critic pair. That pair can fail —
+omit a QID, reformat one, spend its correction budget, or have its answer
+rejected — and none of those failures may end the run.
+
+Rule 5 has a deterministic reading that needs no model. Walk the topics in
+teaching order and find which ones the task's own vocabulary requires:
+
+- a topic is needed if it is the first to supply **two or more** of the task's
+  words, or if it supplies a word found in **no other topic in the chapter**;
+- the **latest** needed topic owns the task, the earlier ones are
+  prerequisites.
+
+Words describing what the learner must *do* — "find", "calculate", "show",
+"given" — are ignored. Every task phrases itself that way, so they identify no
+topic.
+
+The derived contract records `certified: false` and
+`basis: deterministic_evidence_fallback`, so an audit can always separate a
+reviewed owner from a computed one. **It still never uses where the task is
+printed.** Physical location is provenance; the only case that falls back to it
+is a task whose words match no topic at all, and that is recorded as such.
+
 ---
 
 ## Rule 6 — Universality
@@ -333,5 +357,6 @@ elsewhere.
 | 1 (unattended, always an output) | `canonical_source_phase38_boundary_grounding_turnover_contract._terminal_disposition` |
 | 2, 4 (ownership, retrospective reference) | `placement_policy.compute_placement`, applied in `canonical_source_phase32_topology_adjudication_contract._enforce_placement_policy` |
 | 3 (splitting keeps both sides) | `placement_policy.audit_split` |
-| 5 (Type/Case ownership) | `owner_topic_hint` precedence in `generation.py` Case routing |
+| 5 (Type/Case ownership) | `_type_case_contract_for_qid` in `generation.py` Case routing |
+| 5 when certification fails | `placement_policy.compute_deterministic_placement` |
 | Terminal policy | `evidence_narrowing.narrow_records` |

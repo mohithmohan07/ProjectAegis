@@ -527,6 +527,225 @@ def compute_placements(
 
 
 # --------------------------------------------------------------------------- #
+# Deterministic fallback ownership
+# --------------------------------------------------------------------------- #
+#
+# Certification is a provider/critic pair, and a paid pair can fail: it can
+# omit a QID, reformat one, blow its contract-correction budget, or have its
+# relationship set rejected.  Every one of those used to end the run.
+#
+# None of them is a reason to stop, because Rule 5 -- "a task requiring
+# methods from more than one topic belongs to the latest of those topics" --
+# has a deterministic reading that needs no model at all.  Walk the topics in
+# teaching order and ask which ones the task's own words first become
+# answerable in.  The last such topic is the one a learner must have reached,
+# and therefore the owner.
+#
+# What this deliberately does *not* do is fall back to where the task is
+# printed.  Physical location is provenance, not ownership; reviving it here
+# would undo the whole point of the certification stage.  Location is used
+# only when the source yields no evidence for any topic at all, and the
+# result is labelled so nobody mistakes it for a certified owner.
+
+#: Verdict recorded on a deterministically derived relationship.  It is
+#: deliberately neither "accepted" nor "verified": no critic saw it, and
+#: ``TopicRelationship.certified`` must keep saying so.
+DETERMINISTIC_VERDICT = "deterministic"
+
+#: How a placement contract came to exist.
+CERTIFIED_BASIS = "independent_certification"
+DETERMINISTIC_BASIS = "deterministic_evidence_fallback"
+
+#: Claim tokens a topic must newly supply before it counts as required.  One
+#: shared word is a coincidence; two is the task depending on that topic.
+#: A single token exclusive to one topic in the whole chapter is decisive on
+#: its own -- see ``deterministic_relationships``.
+_MIN_NEW_TOKENS = 2
+
+#: Words describing what the learner must *do*, not what the task is *about*.
+#: They are stripped before matching because a task's imperative wording is
+#: identical across every topic and would otherwise let whichever section
+#: happens to phrase itself as an instruction claim the task.
+_INSTRUCTION_WORDS = frozenset({
+    "answer", "attempt", "calculate", "check", "choose", "compare",
+    "complete", "compute", "consider", "define", "derive", "describe",
+    "determine", "discuss", "draw", "evaluate", "explain", "express",
+    "find", "following", "give", "given", "gives", "identify", "illustrate",
+    "justify", "list", "mention", "name", "obtain", "prove", "question",
+    "reason", "show", "solve", "state", "substitute", "suppose", "use",
+    "used", "using", "verify", "whether", "which", "whose", "write",
+})
+
+
+def deterministic_relationships(
+    claim: AtomicClaim,
+    order: TeachingOrder,
+    topic_blocks: Mapping[str, Sequence[tuple[str, str]]],
+) -> list[TopicRelationship]:
+    """Derive relationships for ``claim`` from source text alone.
+
+    ``topic_blocks`` maps each topic to its ``(block_id, text)`` pairs.  A
+    topic becomes ``REQUIRED_LATER_METHOD`` when it is the last topic the
+    task demonstrably needs, and the earlier needed topics become
+    ``REQUIRED_PREREQUISITE``.  Evidence block IDs are the blocks that
+    actually carry the matched words, so the relationship is checkable
+    against the source rather than asserted.
+
+    A topic is needed when either test passes:
+
+    * it is the first topic in teaching order to supply **two or more** of
+      the task's words -- one shared word is a coincidence; or
+    * it supplies a word found in **no other topic in the chapter**, which
+      is decisive on its own.
+
+    The second test is what makes this work.  The naive version -- "count
+    the words each topic contributes that earlier topics did not" --
+    systematically under-weights the very topic the rule is about, because
+    the early topics absorb all the shared vocabulary first.  A task needing
+    both aâ‚™ and Sâ‚™ shares most of its wording with Â§5.2 and Â§5.3 and may
+    reach Â§5.4 with only "sum" left.  That one word is the whole point: it
+    appears nowhere else, so it proves the learner must have reached Â§5.4.
+    """
+
+    from . import evidence_narrowing
+
+    wanted = {
+        token
+        for token in evidence_narrowing.content_tokens(
+            claim.normalized_claim
+        )
+        if token not in _INSTRUCTION_WORDS
+    }
+    if not wanted:
+        return []
+
+    ranked = sorted(
+        (
+            (rank, topic_id)
+            for topic_id, rank in order.ranks.items()
+            if topic_id in topic_blocks
+        ),
+    )
+    matched: dict[str, set[str]] = {}
+    blocks_for: dict[str, dict[str, set[str]]] = {}
+    for _rank, topic_id in ranked:
+        per_block: dict[str, set[str]] = {}
+        for block_id, text in topic_blocks.get(topic_id) or []:
+            hit = evidence_narrowing.content_tokens(text) & wanted
+            if hit:
+                per_block[str(block_id)] = hit
+        blocks_for[topic_id] = per_block
+        matched[topic_id] = set().union(*per_block.values()) if per_block else set()
+
+    # A token that only one topic in the chapter uses identifies that topic
+    # unambiguously; a token several topics share identifies none of them.
+    exclusive = {
+        topic_id: {
+            token for token in tokens
+            if not any(
+                token in other_tokens
+                for other_id, other_tokens in matched.items()
+                if other_id != topic_id
+            )
+        }
+        for topic_id, tokens in matched.items()
+    }
+
+    covered: set[str] = set()
+    required: list[tuple[str, tuple[str, ...]]] = []
+    for _rank, topic_id in ranked:
+        tokens = matched[topic_id]
+        if not tokens:
+            continue
+        decisive = exclusive[topic_id] or (
+            tokens - covered
+            if len(tokens - covered) >= _MIN_NEW_TOKENS
+            else set()
+        )
+        if not decisive:
+            continue
+        covered |= tokens
+        contributing = sorted(
+            block_id
+            for block_id, hit in blocks_for[topic_id].items()
+            if hit & decisive
+        )
+        required.append((topic_id, tuple(contributing)))
+
+    if not required:
+        return []
+
+    owner_topic_id = required[-1][0]
+    out: list[TopicRelationship] = []
+    for topic_id, block_ids in required:
+        is_owner = topic_id == owner_topic_id
+        out.append(TopicRelationship(
+            claim_id=claim.claim_id,
+            topic_id=topic_id,
+            relationship_type=(
+                RelationshipType.REQUIRED_LATER_METHOD if is_owner
+                else RelationshipType.REQUIRED_PREREQUISITE
+            ),
+            necessity=True,
+            evidence_block_ids=block_ids,
+            provider_reason=(
+                "deterministic: this topic is where the task's remaining "
+                "vocabulary first becomes answerable in teaching order"
+            ),
+            critic_verdict=DETERMINISTIC_VERDICT,
+        ))
+    return out
+
+
+def compute_deterministic_placement(
+    claim: AtomicClaim,
+    order: TeachingOrder,
+    topic_blocks: Mapping[str, Sequence[tuple[str, str]]],
+) -> tuple[PlacementDecision, list[TopicRelationship]]:
+    """Return an owner for ``claim`` without any model call.
+
+    Never raises.  When the source supports no topic, the claim keeps its
+    printed location, because that is the only remaining answer and losing
+    the task entirely is not one.
+    """
+
+    relationships = deterministic_relationships(claim, order, topic_blocks)
+    owning = [
+        relation.topic_id for relation in relationships
+        if relation.relationship_type in OWNING_TYPES
+    ]
+    prerequisites = sorted(
+        relation.topic_id for relation in relationships
+        if relation.relationship_type is RelationshipType.REQUIRED_PREREQUISITE
+    )
+    if owning:
+        owner = order.latest(owning)
+        rationale = (
+            f"deterministic: owner={owner} is the latest teaching-ranked "
+            f"topic whose source text the task requires, among {sorted(owning)}"
+        )
+    else:
+        owner = claim.source_location_topic_id
+        rationale = (
+            "deterministic: no topic's source text evidenced this task, so "
+            "it keeps the topic it is printed under. This is a fallback of "
+            "last resort and is not a certified owner."
+        )
+    return (
+        PlacementDecision(
+            claim_id=claim.claim_id,
+            owner_topic_id=owner,
+            required_topic_ids=tuple(sorted(set(owning) | set(prerequisites))),
+            prerequisite_topic_ids=tuple(prerequisites),
+            split_lineage=tuple(claim.origin_claim_ids),
+            teaching_order_sha256=order.sha256,
+            rationale=rationale,
+        ),
+        relationships,
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Split survival
 # --------------------------------------------------------------------------- #
 
