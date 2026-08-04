@@ -142,13 +142,21 @@ and confidence is high enough for production acceptance."""
 
 
 def _model_output_tokens() -> int:
+    """Use the configured provider ceiling unless an operator lowers it."""
+
     try:
-        value = int(os.environ.get(
-            "AEGIS_EVIDENCE_NARROWING_MAX_OUTPUT_TOKENS", "16000"
-        ))
+        ceiling = int(getattr(phase22, "_MAX_OUTPUT_TOKENS", 128_000))
     except (TypeError, ValueError):
-        value = 16_000
-    return max(2_000, min(32_000, value))
+        ceiling = 128_000
+    ceiling = max(2_000, min(128_000, ceiling))
+    raw = os.environ.get("AEGIS_EVIDENCE_NARROWING_MAX_OUTPUT_TOKENS")
+    if raw is None or not raw.strip():
+        return ceiling
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return ceiling
+    return max(2_000, min(ceiling, value))
 
 
 def default_provider(payload: dict[str, Any]) -> dict[str, Any]:
