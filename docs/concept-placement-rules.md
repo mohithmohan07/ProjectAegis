@@ -17,8 +17,10 @@ mid-run. No pause, no review click, no confirmation.
 
 **Once a chapter has a concept map, an output has to be given.** Past that
 point the run may not stop, and it may not wait. Every semantic difficulty
-below it has a deterministic answer — see the terminal policy at the end of
-this document — so "we could not decide" is never a reason to produce nothing.
+below it has an autonomous disposition. That may be a model-certified repair,
+a durable replay of an earlier certified repair, or an explicit unchanged and
+unverified fallback when no semantic authority is safely available. "We could
+not decide" is never a reason to produce nothing.
 
 A run may still **fail** only *before* there is anything to produce, and only
 where a person must supply something no automation can invent:
@@ -304,43 +306,66 @@ For any material that touches more than one topic:
 
 ## Terminal policy — what happens to a concept that will not ground
 
-**Settled: modify it based on its evidence. Never retire it, never stop the
-run.**
+**Settled: modify it based on its evidence whenever a semantic repair can be
+certified. Never retire it and never stop the run.**
 
-A concept that cannot be grounded after every bounded repair is **not**
-deleted, **not** suppressed, **not** shipped with a warning label, and **not**
-turned into a failed run. It is **rewritten to say exactly what its evidence
-supports**. The ladder is:
+A concept that cannot be grounded after every earlier bounded repair is **not**
+deleted or suppressed. The terminal rung makes one narrow semantic decision
+against the concept's exact canonical source blocks:
 
     bounded refine / move / split
       -> one final evidence-supported atomisation or minimal-concept attempt
-      -> deterministic evidence narrowing  ← always produces output
-           * keep every clause the topic's canonical source blocks support
-           * drop every clause they do not, and name it in the run log
-           * if no written clause survives, restate the concept verbatim
-             from its own source block
+      -> terminal provider
+           * keep the Description when every proposition is supported
+           * narrow only the unsupported propositions when part survives
+           * restate the smallest coherent concept genuinely taught by the
+             cited blocks when none of the original claim survives
+      -> independent critic
+           * verify entailment, mathematics, conditions, scope and relevance
+           * reject arbitrary pasted source sentences and wrong block IDs
+      -> at most one critic-scoped correction
+      -> durably commit the accepted disposition before returning it
 
-The last rung makes no model call, invents no wording, and removes no row, so
-it is available even when the provider is unreachable, the budget is spent, or
-a downstream contract has failed outright. That is what makes "an output has to
-be given" a guarantee rather than an aspiration.
+**No lexical shortcut is permitted at this rung.** Token containment, word
+overlap, stemming and source-sentence selection are not semantic authorities.
+Deterministic code may validate exact IDs, response shape, row count and
+Description-only projection; it may not decide which claims survive.
 
-Three properties are what buy the guarantee, and all three are load-bearing:
+The terminal outcomes are deliberately exhaustive:
 
-- **Deterministic.** The rewrite is a pure function of the candidate and the
-  canonical source, so a Resume reproduces it instead of paying for it again.
-- **Conservative.** A clause survives only when every content word in it
-  appears in the cited evidence. The test drops a borderline clause rather
-  than keeping an unsupported one.
-- **Lossless in count.** Concepts are rewritten, never removed.
+1. **Critic-verified keep or rewrite.** The accepted provider and critic result
+   is stored under a hash of the exact candidate, source contract, model and
+   evidence blocks, then projected without changing title, topic, parent,
+   order or pedagogical sections.
+2. **Cached replay.** Resume and checkpoint import reproduce that exact accepted
+   disposition without another paid request.
+3. **Unchanged and explicitly unverified.** If the API is unavailable, a model
+   response is malformed, the critic rejects both bounded attempts, or a
+   durable `request_started` claim makes replay ambiguous, the original row is
+   returned unchanged. The terminal ledger and run audit name that status. Code
+   does not trim it, restate it, or pretend it was semantically verified.
 
-The cost is explicit and accepted: a disposed concept may **teach less** than
-its draft intended. What it may never do is teach something the source does
-not support, or vanish. The earlier 25% retirement cap is withdrawn along with
-retirement itself.
+Five properties are load-bearing:
+
+- **Semantic.** The provider decides support from meaning, not shared words.
+- **Independently verified.** No rewrite ships as grounded without the critic.
+- **Exactly once.** `provider_pending`, `provider_started`,
+  `provider_returned`, `critic_pending`, `critic_started`, `critic_returned`
+  and `accepted` are durably distinguished at the OpenAI transport boundary.
+- **Resume-safe.** Accepted results live in the portable Phase 3.8 checkpoint,
+  chunked and hash-verified, with a local disk cache as a second copy.
+- **Lossless in count.** Concepts are rewritten or returned unchanged, never
+  removed.
+
+The cost is explicit and accepted: this terminal rung can make paid provider
+and critic requests. They are new semantic work, not a repeat of an earlier
+request. Once a request crosses the transport boundary it is never purchased
+again on Resume. When no safe semantic authority is available, preserving the
+original flagged row is more honest than letting lexical code quietly rewrite
+teaching content.
 
 Placement is not part of this. Narrowing changes what a concept *claims*; only
-Rules 2–5 change which topic *owns* it. A clause dropped for lack of support in
+Rules 2–5 change which topic *owns* it. A claim rejected for lack of support in
 §5.2 is not silently relocated to §5.4.
 
 Deduplication remains permitted only when claim-level certification proves
@@ -356,4 +381,5 @@ elsewhere.
 | 3 (splitting keeps both sides) | `placement_policy.audit_split` |
 | 5 (Type/Case ownership) | `_type_case_contract_for_qid` in `generation.py` Case routing |
 | 5 when a batch fails | `_reask_type_case_batch` — split and ask the model again |
-| Terminal policy | `evidence_narrowing.narrow_records` |
+| Terminal semantic contract | `evidence_narrowing.narrow_records` |
+| Terminal durable replay | `evidence_narrowing_cache.persist_ledger` |
