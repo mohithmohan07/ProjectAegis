@@ -13941,10 +13941,23 @@ def _carry_source_grounding_attestation(
     enough lineage for the final boundary to distinguish a row-local rewrite
     (which may be re-grounded once) from deletion/reordering (which must fail
     closed).
+
+    The certified placement contract and its Phase 3.2 lineage are carried for
+    exactly the same reason.  A repair response cannot restate them, so
+    dropping them left the row with no placement authority at all, and the
+    grounding boundary correctly refused the payload with "placement contract
+    row N is missing" on every later resume.  Carrying the contract does not
+    re-certify the rewritten row either: a stage-``final`` repair normally
+    touches the generated pedagogy sections that the contract's source claim
+    deliberately excludes, and a repair that does rewrite the Description is
+    still rejected as changed placement material rather than as an escape.
     """
 
     for field, value in before.items():
-        if field.startswith("_source_grounding_") or field in {
+        if field.startswith("_source_grounding_") or field.startswith(
+            "_phase32_"
+        ) or field in {
+            "_placement_contract",
             "_source_block_ids",
             "_semantic_graph_contract",
             "_semantic_subtopic_id",

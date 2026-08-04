@@ -1719,3 +1719,57 @@ def test_final_reground_cannot_reseal_deleted_grounded_row(monkeypatch):
         generation._reground_drifted_final_source_claims(records)
 
     assert calls == []
+
+
+def _repair_response_row(before: dict, concept_details: str) -> dict:
+    """Return the public-fields-only row a validation repair response yields."""
+
+    return {
+        "topic": before["topic"],
+        "parent_concept": before["parent_concept"],
+        "concept_title": before["concept_title"],
+        "concept_details": concept_details,
+        "keywords": before["keywords"],
+    }
+
+
+def test_validation_repair_keeps_placement_authority_on_a_pedagogy_rewrite():
+    before = _sealed_placement_records()[0]
+    after = _repair_response_row(
+        before,
+        before["concept_details"].replace(
+            "Students may treat home work as secure.",
+            "Students may assume the contractor guaranteed a fixed payment.",
+        ),
+    )
+
+    generation._carry_source_grounding_attestation(before, after)
+
+    assert after[certificate.PLACEMENT_CONTRACT_FIELD] == (
+        before[certificate.PLACEMENT_CONTRACT_FIELD]
+    )
+    # The rewrite touched generated pedagogy, which the contract's source claim
+    # excludes, so the repaired row remains under placement authority instead
+    # of failing every later resume as an uncertified escape.
+    phase31._verify_preserved_placement_contracts([after], require_all=True)
+
+
+def test_validation_repair_reports_a_changed_claim_not_a_missing_contract():
+    before = _sealed_placement_records()[0]
+    after = _repair_response_row(
+        before,
+        before["concept_details"].replace(
+            "faced insecure work",
+            "endured more precarious home-based work",
+        ),
+    )
+
+    generation._carry_source_grounding_attestation(before, after)
+
+    with pytest.raises(
+        certificate.GroundingCertificateError,
+        match="placement contract row 0 source claim changed before grounding",
+    ):
+        phase31._verify_preserved_placement_contracts(
+            [after], require_all=True
+        )
