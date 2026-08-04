@@ -10,40 +10,38 @@ implementation is a defect.
 
 ---
 
-## Rule 1 — Unattended operation
+## Rule 1 — Unattended operation, and an output every time
 
 Generation must reach the output workbook without a human answering anything
 mid-run. No pause, no review click, no confirmation.
 
-A run may still **fail** and report why. It may never **wait**. A stalled job is
-worse than a failed one, because nothing is watching it.
+**Once a chapter has a concept map, an output has to be given.** Past that
+point the run may not stop, and it may not wait. Every semantic difficulty
+below it has a deterministic answer — see the terminal policy at the end of
+this document — so "we could not decide" is never a reason to produce nothing.
 
-The only decisions that remain outside automation are those that require
-something a person must supply and no automation can invent:
+A run may still **fail** only *before* there is anything to produce, and only
+where a person must supply something no automation can invent:
 
-- replacing the uploaded document
-- writing a free-text instruction
+- the uploaded document must be replaced (it is unreadable, or it is not the
+  chapter it claims to be)
+- a free-text instruction is genuinely required
 
-When only those remain, the run ends with the reason recorded. It does not park.
+Those are the two exits. Neither is a pause: the run ends with the reason
+recorded. A stalled job is worse than a failed one, because nothing is
+watching it — and a failed job past the concept map is worse than both,
+because the work was already done and paid for.
 
 ---
 
 ## Rule 2 — Advanced placement: the later topic owns shared material
 
-**An atomic claim or task belongs to the latest topic whose knowledge, method
-or interpretive framework is genuinely necessary to understand or perform it.**
+**If a concept contains context of a later topic, it belongs to that later
+topic.** Not to the earlier one.
 
 This holds *irrespective of how foundational the rest of the concept looks*. A
 concept is not pushed back to the earlier topic on the grounds that its main
 idea seems basic.
-
-Necessity is the whole test. None of the following moves material on its own:
-
-- mere mention of a later topic
-- where the evidence physically sits in the book
-- chronology, or section numbering
-- shared terminology
-- an *optional* later solution method
 
 The reason is teaching order. A teacher reaches such a concept only once the
 later topic has been taught, so that is where it belongs in the map. Needing an
@@ -54,21 +52,29 @@ The only structural requirement: the concept must genuinely involve the later
 topic. A concept that draws on nothing from the topic it sits in is misplaced
 and moves back.
 
+### How "contains context" is applied
+
+Stated operationally, so that two people — or two model calls — reach the same
+answer: **an atomic claim or task belongs to the latest topic whose knowledge,
+method or interpretive framework is genuinely necessary to understand or
+perform it.**
+
+That is the same rule, not a softer one. It exists because "contains context"
+has to be distinguished from "happens to say the words", which is exactly what
+Rule 4 already carves out. None of the following moves material on its own:
+
+- mere mention of a later topic
+- where the evidence physically sits in the book
+- chronology, or section numbering
+- shared terminology
+- an *optional* later solution method
+
 ---
 
 ## Rule 3 — Splitting keeps both sides
 
-Atomise a draft concept into independently verifiable claims *before*
-applying Rules 2 and 3.
-
-**An irreducible relationship is one claim and must not be split.**
-*"The zollverein contributed to German unification"* is a single relationship
-owned by the later unification topic. Breaking it into a standalone
-"zollverein" concept and a standalone "unification" concept destroys the very
-thing being taught.
-
-When a draft genuinely bundles two separable teachings, it is **split**, and
-**both parts survive**:
+When material genuinely teaches two topics, it is **split**, and **both parts
+survive**:
 
 - the **earlier topic keeps** a concept covering the foundational idea on its
   own terms;
@@ -84,6 +90,20 @@ Neither may be dropped:
 Concept count is expected to rise as a result. That is correct. The learner
 meets the basics where the basics are taught, and meets the advanced behaviour
 where it becomes reachable.
+
+### What a split may not do
+
+Splitting decides *placement*; it may not decide *what is taught*. Two
+operational limits keep it honest:
+
+- **Atomise first.** Break a draft into independently verifiable claims
+  *before* applying Rules 2 and 4, so each claim is placed on its own merits
+  rather than on the loudest phrase in a paragraph.
+- **An irreducible relationship is one claim and must not be split.**
+  *"The zollverein contributed to German unification"* is a single
+  relationship, owned by the later unification topic. Breaking it into a
+  standalone "zollverein" concept and a standalone "unification" concept
+  destroys the very thing being taught. Example H1 below depends on this.
 
 ---
 
@@ -261,20 +281,57 @@ For any material that touches more than one topic:
 
 ---
 
-## Terminal policy
+## Terminal policy — what happens to a concept that will not ground
 
-Recorded so they are not mistaken for settled policy.
+**Settled: modify it based on its evidence. Never retire it, never stop the
+run.**
 
-**Settled.** A concept that cannot be grounded after every bounded repair is
-**never retired, suppressed, or shipped flagged**. The ladder is:
+A concept that cannot be grounded after every bounded repair is **not**
+deleted, **not** suppressed, **not** shipped with a warning label, and **not**
+turned into a failed run. It is **rewritten to say exactly what its evidence
+supports**. The ladder is:
 
     bounded refine / move / split
       -> one final evidence-supported atomisation or minimal-concept attempt
-      -> structured autonomous failure
+      -> deterministic evidence narrowing  ← always produces output
+           * keep every clause the topic's canonical source blocks support
+           * drop every clause they do not, and name it in the run log
+           * if no written clause survives, restate the concept verbatim
+             from its own source block
 
-A workbook that looks authoritative while quietly losing teaching content is
-worse than no workbook. The earlier 25% retirement cap is withdrawn.
+The last rung makes no model call, invents no wording, and removes no row, so
+it is available even when the provider is unreachable, the budget is spent, or
+a downstream contract has failed outright. That is what makes "an output has to
+be given" a guarantee rather than an aspiration.
+
+Three properties are what buy the guarantee, and all three are load-bearing:
+
+- **Deterministic.** The rewrite is a pure function of the candidate and the
+  canonical source, so a Resume reproduces it instead of paying for it again.
+- **Conservative.** A clause survives only when every content word in it
+  appears in the cited evidence. The test drops a borderline clause rather
+  than keeping an unsupported one.
+- **Lossless in count.** Concepts are rewritten, never removed.
+
+The cost is explicit and accepted: a disposed concept may **teach less** than
+its draft intended. What it may never do is teach something the source does
+not support, or vanish. The earlier 25% retirement cap is withdrawn along with
+retirement itself.
+
+Placement is not part of this. Narrowing changes what a concept *claims*; only
+Rules 2–5 change which topic *owns* it. A clause dropped for lack of support in
+§5.2 is not silently relocated to §5.4.
 
 Deduplication remains permitted only when claim-level certification proves
 every protected claim, QID, figure, image, example and evidence edge survives
 elsewhere.
+
+### Implementation
+
+| Rule | Enforced by |
+|---|---|
+| 1 (unattended, always an output) | `canonical_source_phase38_boundary_grounding_turnover_contract._terminal_disposition` |
+| 2, 4 (ownership, retrospective reference) | `placement_policy.compute_placement`, applied in `canonical_source_phase32_topology_adjudication_contract._enforce_placement_policy` |
+| 3 (splitting keeps both sides) | `placement_policy.audit_split` |
+| 5 (Type/Case ownership) | `owner_topic_hint` precedence in `generation.py` Case routing |
+| Terminal policy | `evidence_narrowing.narrow_records` |

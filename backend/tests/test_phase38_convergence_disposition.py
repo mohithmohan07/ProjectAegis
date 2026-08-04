@@ -114,8 +114,10 @@ def test_human_decision_unwind_persists_json_safe_budget(monkeypatch):
 
     # Simulate a process crash after the decision-returned seal but before the
     # outer orchestration commit stores the pending decision. Resume must not
-    # call the provider again from this ambiguous boundary.
+    # call the provider again from this ambiguous boundary -- and must not
+    # leave the job stranded on a claim only an operator could clear.
     replay_calls = 0
+    resumed: list[dict | None] = []
 
     def must_not_replay(rows, *_args, **_kwargs):
         nonlocal replay_calls
@@ -125,16 +127,15 @@ def test_human_decision_unwind_persists_json_safe_budget(monkeypatch):
     with phase38.convergence_checkpoint_context(
         scope="upload-job:41",
         state=state,
-        persist=lambda *_args: pytest.fail(
-            "decision_returned must remain durable until the pause commit"
-        ),
+        persist=lambda _expected, value: resumed.append(copy.deepcopy(value)),
     ):
-        with pytest.raises(
-            phase38.Phase38ConvergenceExhausted,
-            match="decision_returned",
-        ):
-            _run(must_not_replay, records)
+        result = _run(must_not_replay, records)
+
     assert replay_calls == 0
+    assert len(result) == len(records)
+    terminal = next(value for value in reversed(resumed) if value is not None)
+    assert terminal["status"] == "disposed"
+    assert terminal["dispatch_status"] == "idle"
 
 
 def test_budget_exhaustion_gets_one_final_atomisation_pass(monkeypatch):
@@ -216,7 +217,8 @@ def test_ordinary_candidate_cannot_converge_by_retiring_a_concept(monkeypatch):
     assert persisted[-1] is None
 
 
-def test_failed_final_pass_is_terminal_and_preserves_original_rows(monkeypatch):
+def test_failed_final_pass_disposes_and_still_returns_every_row(monkeypatch):
+    """The whole point: a spent budget produces output, not a stopped run."""
     monkeypatch.setenv("AEGIS_PHASE38_TOPOLOGY_CONVERGENCE_PASSES", "2")
     records = _records()
     original = copy.deepcopy(records)
@@ -234,23 +236,26 @@ def test_failed_final_pass_is_terminal_and_preserves_original_rows(monkeypatch):
             copy.deepcopy(value)
         ),
     ):
-        with pytest.raises(
-            phase38.Phase38ConvergenceExhausted,
-            match="No concept was retired or deleted",
-        ):
-            _run(always_fails, records)
+        result = _run(always_fails, records)
 
     assert len(seen) == 3  # two ordinary candidates plus one final pass
     assert all(candidate == original for candidate in seen)
     assert records == original
+    # Nothing retired, nothing deleted, and a candidate to publish.
+    assert len(result) == len(records)
+    assert [row["concept_title"] for row in result] == [
+        row["concept_title"] for row in original
+    ]
     terminal = next(value for value in reversed(persisted) if value is not None)
-    assert terminal["status"] == "exhausted"
+    assert terminal["status"] == "disposed"
     assert terminal["final_verification_pending"] is False
+    assert terminal["disposition"]
     assert "retired" not in terminal
     json.dumps(terminal, ensure_ascii=False, sort_keys=True)
 
 
-def test_final_pass_cannot_report_success_after_dropping_a_concept(monkeypatch):
+def test_final_pass_cannot_converge_by_dropping_a_concept(monkeypatch):
+    """Deletion is still never success; it becomes a disposition instead."""
     monkeypatch.setenv("AEGIS_PHASE38_TOPOLOGY_CONVERGENCE_PASSES", "2")
     records = _records()
     original = copy.deepcopy(records)
@@ -272,23 +277,21 @@ def test_final_pass_cannot_report_success_after_dropping_a_concept(monkeypatch):
             copy.deepcopy(value)
         ),
     ):
-        with pytest.raises(
-            phase38.Phase38ConvergenceExhausted,
-            match="No concept was retired or deleted",
-        ):
-            _run(drops_one_on_final_pass, records)
+        result = _run(drops_one_on_final_pass, records)
 
     assert len(seen) == 3
     assert all(candidate == original for candidate in seen)
     assert records == original
+    # The reduced candidate was rejected, so the complete topology ships.
+    assert len(result) == len(records)
     terminal = next(value for value in reversed(persisted) if value is not None)
-    assert terminal["status"] == "exhausted"
+    assert terminal["status"] == "disposed"
     assert "omitted one or more original concept lineages" in (
         terminal["terminal_reason"]
     )
 
 
-def test_restart_does_not_replay_an_exhausted_final_pass(monkeypatch):
+def test_restart_does_not_replay_a_disposed_final_pass(monkeypatch):
     monkeypatch.setenv("AEGIS_PHASE38_TOPOLOGY_CONVERGENCE_PASSES", "2")
     records = _records()
     persisted: list[dict | None] = []
@@ -303,8 +306,7 @@ def test_restart_does_not_replay_an_exhausted_final_pass(monkeypatch):
             copy.deepcopy(value)
         ),
     ):
-        with pytest.raises(phase38.Phase38ConvergenceExhausted):
-            _run(always_fails, records)
+        first = _run(always_fails, records)
 
     terminal = next(value for value in reversed(persisted) if value is not None)
     restarted_calls = 0
@@ -319,9 +321,12 @@ def test_restart_does_not_replay_an_exhausted_final_pass(monkeypatch):
         state=terminal,
         persist=lambda _expected, _value: None,
     ):
-        with pytest.raises(phase38.Phase38ConvergenceExhausted):
-            _run(must_not_run, records)
+        second = _run(must_not_run, records)
+
+    # No paid pass replayed, and the disposition is deterministic: Resume
+    # reproduces the same output rather than re-earning it.
     assert restarted_calls == 0
+    assert second == first
 
 
 def test_materially_repaired_checkpoint_gets_a_fresh_verification_turn(
@@ -341,8 +346,7 @@ def test_materially_repaired_checkpoint_gets_a_fresh_verification_turn(
             copy.deepcopy(value)
         ),
     ):
-        with pytest.raises(phase38.Phase38ConvergenceExhausted):
-            _run(always_fails, records)
+        _run(always_fails, records)
     terminal = next(value for value in reversed(persisted) if value is not None)
 
     repaired_records = copy.deepcopy(records)
@@ -522,7 +526,12 @@ def test_old_ledger_defaults_dispatch_idle_and_migrates_budget_lazily():
     assert normalized["attempts"] == 2
 
 
-def test_restart_with_unknown_dispatch_fails_closed_before_provider_call():
+def test_restart_with_unknown_dispatch_disposes_without_a_provider_call():
+    """An unreconciled claim still bars a duplicate paid request.
+
+    What it no longer does is strand the job: the disposition makes no
+    request at all, so continuing is free and stopping bought nothing.
+    """
     records = _records()
     candidate = phase38._candidate_sha256(None, fallback=records)
     state = phase38._fresh_convergence_state(scope="upload-job:50")
@@ -532,6 +541,7 @@ def test_restart_with_unknown_dispatch_fails_closed_before_provider_call():
     state["dispatch_sequence"] = 1
     state["dispatch_candidate_sha256"] = candidate
     calls = 0
+    persisted: list[dict | None] = []
 
     def provider(_rows, *_args, **_kwargs):
         nonlocal calls
@@ -541,16 +551,16 @@ def test_restart_with_unknown_dispatch_fails_closed_before_provider_call():
     with phase38.convergence_checkpoint_context(
         scope="upload-job:50",
         state=state,
-        persist=lambda *_args: pytest.fail(
-            "an unknown dispatch must not be advanced automatically"
+        persist=lambda _expected, value: persisted.append(
+            copy.deepcopy(value)
         ),
     ):
-        with pytest.raises(
-            phase38.Phase38ConvergenceExhausted,
-            match="request_started",
-        ):
-            _run(provider, records)
+        result = _run(provider, records)
+
     assert calls == 0
+    assert len(result) == len(records)
+    terminal = next(value for value in reversed(persisted) if value is not None)
+    assert terminal["status"] == "disposed"
 
 
 def test_two_resumed_workers_cannot_both_cross_predispatch_claim():
@@ -612,7 +622,8 @@ def test_two_resumed_workers_cannot_both_cross_predispatch_claim():
     assert durable is None
 
 
-def test_unknown_non_grounding_error_retains_fail_closed_dispatch(monkeypatch):
+def test_unknown_non_grounding_error_disposes_without_retrying(monkeypatch):
+    """An unrecognized outcome is never retried, and never ends the job."""
     monkeypatch.setenv("AEGIS_PHASE38_TOPOLOGY_CONVERGENCE_PASSES", "3")
     records = _records()
     persisted: list[dict | None] = []
@@ -630,27 +641,20 @@ def test_unknown_non_grounding_error_retains_fail_closed_dispatch(monkeypatch):
             copy.deepcopy(value)
         ),
     ):
-        with pytest.raises(
-            phase38.Phase38ConvergenceExhausted,
-            match="unrecognized provider outcome",
-        ):
-            _run(original, records)
+        result = _run(original, records)
 
-    claim = next(value for value in reversed(persisted) if value is not None)
-    assert claim["dispatch_status"] == "request_started"
     assert calls == 1
+    assert len(result) == len(records)
+    terminal = next(value for value in reversed(persisted) if value is not None)
+    assert terminal["status"] == "disposed"
+
+    # A resumed worker reaches the same terminal rung and still pays nothing.
     with phase38.convergence_checkpoint_context(
         scope="upload-job:52",
-        state=claim,
-        persist=lambda *_args: pytest.fail(
-            "an unknown paid outcome must remain fail-closed"
-        ),
+        state=terminal,
+        persist=lambda _expected, _value: None,
     ):
-        with pytest.raises(
-            phase38.Phase38ConvergenceExhausted,
-            match="request_started",
-        ):
-            _run(original, records)
+        assert len(_run(original, records)) == len(records)
     assert calls == 1
 
 
@@ -693,3 +697,71 @@ def test_pretransport_validation_failure_does_not_poison_resume(monkeypatch):
             _run(invalid_before_transport, records, transport=False)
 
     assert calls == 2
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        pytest.param(ValueError(_GROUND_FAILURE), id="grounding-rejection"),
+        pytest.param(
+            ValueError("phase 3.2 adjudication contract is unavailable"),
+            id="unrecognized-value-error",
+        ),
+        pytest.param(KeyError("missing field"), id="unexpected-exception"),
+        pytest.param(RuntimeError("provider transport closed"), id="runtime"),
+        pytest.param(
+            semantic_recovery.HumanDecisionRequired({
+                "decision_id": "not a valid id!!",
+                "context_hash": "short",
+            }),
+            id="unbridgeable-decision",
+        ),
+    ],
+)
+def test_no_failure_mode_ends_the_run_without_a_candidate(
+    monkeypatch, failure
+):
+    """Rule 1, enforced at the stage that used to break it.
+
+    Whatever comes back once a provider request has been claimed -- a
+    grounding rejection, a contract defect, an unbridgeable pause -- the
+    caller receives a complete candidate. No paid outcome produces no
+    workbook.
+    """
+    monkeypatch.setenv("AEGIS_PHASE38_TOPOLOGY_CONVERGENCE_PASSES", "2")
+    records = _records()
+
+    def always_fails(_rows, *_args, **_kwargs):
+        raise failure
+
+    with phase38.convergence_checkpoint_context(
+        scope=f"upload-job:invariant-{id(failure)}",
+        state=None,
+        persist=lambda _expected, _value: None,
+    ):
+        result = _run(always_fails, records)
+
+    assert len(result) == len(records)
+    assert all(row.get("concept_title") for row in result)
+
+
+def test_a_crashing_provider_still_produces_a_candidate(monkeypatch):
+    """The catch-all: no exception type below Phase 3.8 ends the run."""
+    monkeypatch.setenv("AEGIS_PHASE38_TOPOLOGY_CONVERGENCE_PASSES", "3")
+    records = _records()
+    calls = 0
+
+    def blows_up(_rows, *_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise KeyError("an unexpected shape in a downstream contract")
+
+    with phase38.convergence_checkpoint_context(
+        scope="upload-job:53-crash",
+        state=None,
+        persist=lambda _expected, _value: None,
+    ):
+        result = _run(blows_up, records)
+
+    assert calls == 1
+    assert len(result) == len(records)
