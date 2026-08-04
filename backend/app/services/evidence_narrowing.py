@@ -44,7 +44,8 @@ from .evidence_narrowing_source import (
     build_evidence,
     concept_packets,
     context_material,
-    replace_description,
+    project_description,
+    restore_original_records,
 )
 from .evidence_narrowing_types import (
     CACHE_PREFIX,
@@ -125,13 +126,8 @@ def _apply_accepted(
             continue
 
         row = out[packet.row_index]
-        details = str(
-            row.get("concept_details")
-            or row.get("concept_description")
-            or ""
-        )
         description = str(decision.get("description") or "")
-        row["concept_details"] = replace_description(details, description)
+        project_description(row, description)
         row[NARROWED_FLAG_FIELD] = True
         row[NARROWED_KIND_FIELD] = kind
         row[NARROWED_DROPPED_FIELD] = list(decision.get("dropped_claims") or [])
@@ -188,7 +184,7 @@ def _unmodified_result(
             note=reason,
             verified=False,
         ))
-    return _copy_records(records), audit
+    return restore_original_records(records), audit
 
 
 def _fallback_and_persist(
