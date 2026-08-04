@@ -4767,6 +4767,60 @@ def _graph_task_for_qid(
     return task_by_qid.get(matched.group("parent")) if matched else None
 
 
+_BOUNDARY_ARTIFACT_GAP = 200
+
+
+def _subtopic_split_from_task_figure(
+    graph: dict[str, Any],
+    task: dict[str, Any],
+    subtopic_id: str,
+) -> str:
+    """Return a figure the subtopic boundary separated from its own task.
+
+    A two-column textbook page linearizes into one stream, so an Activity box
+    belonging to the figures above it can land just after the next subheading.
+    The offsets and the boundary are both faithful; the subtopic is simply not
+    evidence of what the task is about.
+
+    Only a figure that *abuts* the boundary counts.  A task legitimately
+    referring back to a figure from an earlier subtopic sits far from it, and
+    must keep its own subtopic.
+    """
+
+    figure_ids = {
+        str(value) for value in task.get("figure_ids") or [] if str(value)
+    }
+    if not figure_ids or not subtopic_id:
+        return ""
+    subtopic = next(
+        (
+            row for row in graph.get("subtopics") or []
+            if isinstance(row, dict)
+            and str(row.get("subtopic_id") or "") == subtopic_id
+        ),
+        None,
+    )
+    if not isinstance(subtopic, dict):
+        return ""
+    try:
+        boundary = int(subtopic.get("source_start") or 0)
+    except (TypeError, ValueError):
+        return ""
+    for figure in graph.get("figures") or []:
+        if not isinstance(figure, dict):
+            continue
+        figure_id = str(figure.get("figure_id") or "")
+        if figure_id not in figure_ids:
+            continue
+        try:
+            end = int(figure.get("source_end") or 0)
+        except (TypeError, ValueError):
+            continue
+        if 0 < boundary - end <= _BOUNDARY_ARTIFACT_GAP:
+            return figure_id
+    return ""
+
+
 def annotate_inventory(inventory: dict[str, Any], graph: dict[str, Any] | None = None) -> dict[str, Any]:
     graph = graph or active_graph()
     if not isinstance(graph, dict):
@@ -4813,6 +4867,26 @@ def annotate_inventory(inventory: dict[str, Any], graph: dict[str, Any] | None =
             # legitimately belonging to different source topics.
             semantic_topic_id = str(assigned_topic.get("topic_id") or "")
             semantic_subtopic_id = ""
+        else:
+            split_figure = _subtopic_split_from_task_figure(
+                graph, task, semantic_subtopic_id
+            )
+            if split_figure:
+                # Clear rather than reassign.  Which subtopic the task belongs
+                # to is a semantic judgement this deterministic layer may not
+                # make, but asserting one the task's own figure contradicts is
+                # worse than asserting none: the main topic still carries
+                # ownership, and evidence scoping falls back to topic level.
+                progress.log(
+                    f"Task {qid} sits just after the "
+                    f"{semantic_subtopic_id!r} boundary while its figure "
+                    f"{split_figure} sits just before it; the subtopic label "
+                    "is a page-layout artifact and was cleared. Its main "
+                    "topic and source provenance are unchanged.",
+                    level="warning",
+                )
+                item["_semantic_subtopic_boundary_artifact"] = split_figure
+                semantic_subtopic_id = ""
         source_location_topic_id = str(
             item.get("source_location_topic_id")
             or physical_task_topic_id
