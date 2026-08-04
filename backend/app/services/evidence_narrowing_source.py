@@ -239,15 +239,25 @@ def project_description(row: dict[str, Any], description: str) -> None:
 
 def restore_original_records(
     records: Sequence[Mapping[str, Any]],
+    *,
+    concept_titles: Iterable[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Undo an earlier terminal rewrite before an unverified fallback ships."""
+    """Undo prior terminal rewrites for the rows being reconsidered."""
 
+    wanted = (
+        {normal(title).casefold() for title in concept_titles}
+        if concept_titles is not None
+        else None
+    )
     out = [
         copy.deepcopy(dict(row)) if isinstance(row, Mapping) else copy.deepcopy(row)
         for row in records
     ]
     for row in out:
         if not isinstance(row, dict):
+            continue
+        title = normal(row.get("concept_title") or row.get("concept")).casefold()
+        if wanted is not None and title not in wanted:
             continue
         original = normal(row.get(NARROWED_ORIGINAL_FIELD))
         if original:
