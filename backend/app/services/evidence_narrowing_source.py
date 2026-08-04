@@ -1,6 +1,7 @@
 """Deterministic source indexing and Description-only projection."""
 from __future__ import annotations
 
+import copy
 import hashlib
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -9,6 +10,12 @@ from . import grounding_certificate
 from .evidence_narrowing_types import (
     ConceptPacket,
     DESCRIPTION_LABEL,
+    NARROWED_CONTRACT_FIELD,
+    NARROWED_DROPPED_FIELD,
+    NARROWED_EVIDENCE_FIELD,
+    NARROWED_FLAG_FIELD,
+    NARROWED_KIND_FIELD,
+    NARROWED_NOTE_FIELD,
     NARROWED_ORIGINAL_FIELD,
     NarrowedRow,
     TopicEvidence,
@@ -18,6 +25,15 @@ from .evidence_narrowing_types import (
 
 
 _EXCLUDED_BLOCK_KINDS = frozenset({"layout", "heading", "navigation"})
+_NARROWING_FIELDS = (
+    NARROWED_FLAG_FIELD,
+    NARROWED_KIND_FIELD,
+    NARROWED_DROPPED_FIELD,
+    NARROWED_EVIDENCE_FIELD,
+    NARROWED_NOTE_FIELD,
+    NARROWED_ORIGINAL_FIELD,
+    NARROWED_CONTRACT_FIELD,
+)
 
 
 def _block_text(
@@ -85,7 +101,7 @@ def build_evidence(
     }
 
 
-def _evidence_for_row(
+def _topic_evidence_for_row(
     row: Mapping[str, Any],
     evidence: Mapping[str, TopicEvidence],
 ) -> TopicEvidence | None:
@@ -99,6 +115,98 @@ def _evidence_for_row(
         if normal(candidate.topic_title).casefold() == wanted:
             return candidate
     return None
+
+
+def _append_ids(target: list[str], values: object) -> None:
+    if isinstance(values, (str, bytes)):
+        values = [values]
+    if not isinstance(values, Iterable):
+        return
+    for raw in values:
+        if isinstance(raw, Mapping):
+            raw = raw.get("block_id")
+        block_id = str(raw or "").strip()
+        if block_id and block_id not in target:
+            target.append(block_id)
+
+
+def _row_evidence_ids(row: Mapping[str, Any]) -> list[str]:
+    """Collect exact row-level and certified cross-topic block authority."""
+
+    ids: list[str] = []
+    fields = [
+        "_source_block_ids",
+        "_source_grounding_evidence_block_ids",
+        "_source_grounding_boundary_blocks",
+        NARROWED_EVIDENCE_FIELD,
+    ]
+    evidence_set_field = getattr(
+        grounding_certificate,
+        "EVIDENCE_SET_FIELD",
+        "_source_grounding_evidence_set",
+    )
+    if evidence_set_field not in fields:
+        fields.append(evidence_set_field)
+    for field in fields:
+        _append_ids(ids, row.get(field))
+
+    contract_fields = [
+        getattr(
+            grounding_certificate,
+            "PLACEMENT_CONTRACT_FIELD",
+            "_placement_contract",
+        ),
+        "_placement_contract",
+    ]
+    for field in dict.fromkeys(contract_fields):
+        contract = row.get(field)
+        if not isinstance(contract, Mapping):
+            continue
+        relationships = (
+            contract.get("topic_relationships")
+            or contract.get("relationships")
+            or []
+        )
+        if not isinstance(relationships, Iterable):
+            continue
+        for relation in relationships:
+            if isinstance(relation, Mapping):
+                _append_ids(ids, relation.get("evidence_block_ids"))
+    return ids
+
+
+def _evidence_for_row(
+    row: Mapping[str, Any],
+    evidence: Mapping[str, TopicEvidence],
+) -> TopicEvidence | None:
+    """Add exact certified prerequisite blocks to the row's native topic."""
+
+    topic_evidence = _topic_evidence_for_row(row, evidence)
+    directory: dict[str, tuple[str, str]] = {}
+    for candidate in evidence.values():
+        for block_id, text in candidate.blocks:
+            directory.setdefault(block_id, (block_id, text))
+
+    blocks = list(topic_evidence.blocks if topic_evidence is not None else ())
+    seen = {block_id for block_id, _text in blocks}
+    for block_id in _row_evidence_ids(row):
+        block = directory.get(block_id)
+        if block is not None and block_id not in seen:
+            blocks.append(block)
+            seen.add(block_id)
+    if not blocks:
+        return None
+
+    topic_id = str(row.get("_semantic_topic_id") or "")
+    topic_title = normal(row.get("topic"))
+    if topic_evidence is not None:
+        topic_id = topic_id or topic_evidence.topic_id
+        topic_title = topic_title or topic_evidence.topic_title
+    return TopicEvidence(
+        topic_id=topic_id or "row-evidence",
+        topic_title=topic_title or topic_id or "row evidence",
+        blocks=tuple(blocks),
+    )
 
 
 def replace_description(details: str, description: str) -> str:
@@ -117,6 +225,36 @@ def replace_description(details: str, description: str) -> str:
     if not replaced:
         out.insert(0, (DESCRIPTION_LABEL, description))
     return cr.join_sections(out)
+
+
+def project_description(row: dict[str, Any], description: str) -> None:
+    """Replace only the Description in the row's existing public text field."""
+
+    if row.get("concept_details") or "concept_description" not in row:
+        field = "concept_details"
+    else:
+        field = "concept_description"
+    row[field] = replace_description(str(row.get(field) or ""), description)
+
+
+def restore_original_records(
+    records: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Undo an earlier terminal rewrite before an unverified fallback ships."""
+
+    out = [
+        copy.deepcopy(dict(row)) if isinstance(row, Mapping) else copy.deepcopy(row)
+        for row in records
+    ]
+    for row in out:
+        if not isinstance(row, dict):
+            continue
+        original = normal(row.get(NARROWED_ORIGINAL_FIELD))
+        if original:
+            project_description(row, original)
+        for field in _NARROWING_FIELDS:
+            row.pop(field, None)
+    return out
 
 
 def _original_description(row: Mapping[str, Any]) -> str:
@@ -156,7 +294,8 @@ def concept_packets(
                 kind="unchanged",
                 note=(
                     "no usable canonical source blocks are indexed for this "
-                    "topic; no semantic rewrite was attempted"
+                    "topic or its certified row evidence; no semantic rewrite "
+                    "was attempted"
                 ),
             ))
             continue
@@ -200,7 +339,9 @@ def context_material(
     return {
         "version": version,
         "model": model,
-        "source_contract_hash": str((graph or {}).get("source_contract_hash") or ""),
+        "source_contract_hash": str(
+            (graph or {}).get("source_contract_hash") or ""
+        ),
         "concepts": [
             {
                 "concept_id": packet.concept_id,
