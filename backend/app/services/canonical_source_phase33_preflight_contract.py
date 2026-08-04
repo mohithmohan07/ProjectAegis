@@ -1955,6 +1955,218 @@ def _type_case_ledger_material(
     }
 
 
+def _reask_type_case_batch(
+    generation: Any,
+    *,
+    claims: list[dict[str, Any]],
+    graph: dict[str, Any],
+    canonical: dict[str, Any],
+    order: placement_policy.TeachingOrder,
+    block_directory: dict[str, dict[str, Any]],
+    provider: PlacementProvider,
+    critic: PlacementCritic,
+    contracts: dict[str, dict[str, Any]],
+    depth: int = 0,
+) -> list[str]:
+    """Certify ``claims``, re-asking the model for whatever it did not answer.
+
+    Ownership is a semantic judgement, so the provider/critic pair decides it
+    -- always.  What used to end the run was treating one unusable batch
+    response as final.  It is not: a batch fails as a *batch*, most often
+    because one claim in it was hard or one qid came back reformatted, and
+    the pair answers correctly when asked about that claim on its own.
+
+    So a failure splits the batch and asks again, down to single claims,
+    which is also what turns the original defect -- a provider collapsing
+    ``QINV-0016.2`` into its parent -- into a second, narrower question
+    rather than a lost task.
+
+    Returns the claim IDs still unanswered after the bounded retries.
+    """
+
+    if not claims:
+        return []
+    try:
+        fresh = _certify_type_case_batch(
+            generation,
+            claims=claims,
+            graph=graph,
+            canonical=canonical,
+            order=order,
+            block_directory=block_directory,
+            provider=provider,
+            critic=critic,
+        )
+    except HumanDecisionRequired:
+        # A recoverable pause belongs to the recovery ladder above, which can
+        # still answer it properly.
+        raise
+    except Exception as exc:
+        fresh = {}
+        failure = f"{type(exc).__name__}: {exc}"
+    else:
+        failure = ""
+
+    answered = {
+        str(claim.get("claim_id") or ""): claim
+        for claim in claims
+        if str(claim.get("qid") or "") in fresh
+    }
+    for claim in claims:
+        qid = str(claim.get("qid") or "")
+        if qid in fresh:
+            contracts[qid] = fresh[qid]
+    missing = [
+        claim for claim in claims
+        if str(claim.get("claim_id") or "") not in answered
+    ]
+    if not missing:
+        return []
+
+    if len(missing) == 1 and depth >= _max_type_case_reask_depth():
+        claim_id = str(missing[0].get("claim_id") or "")
+        progress.log(
+            f"Phase 3.3 asked the placement pair about {claim_id} on its own "
+            f"and it still returned no certifiable ownership ({failure or 'no contract'}).",
+            level="warning",
+        )
+        return [claim_id]
+
+    if len(missing) == 1:
+        # One claim, asked alone, with a fresh attempt budget of its own.
+        return _reask_type_case_batch(
+            generation,
+            claims=missing,
+            graph=graph,
+            canonical=canonical,
+            order=order,
+            block_directory=block_directory,
+            provider=provider,
+            critic=critic,
+            contracts=contracts,
+            depth=depth + 1,
+        )
+
+    progress.log(
+        f"Phase 3.3 splitting {len(missing)} unanswered placement claim(s) "
+        f"and asking the model again ({failure or 'partial response'}).",
+        level="warning",
+    )
+    half = len(missing) // 2
+    unanswered: list[str] = []
+    for part in (missing[:half], missing[half:]):
+        unanswered.extend(_reask_type_case_batch(
+            generation,
+            claims=part,
+            graph=graph,
+            canonical=canonical,
+            order=order,
+            block_directory=block_directory,
+            provider=provider,
+            critic=critic,
+            contracts=contracts,
+            depth=depth + 1,
+        ))
+    return unanswered
+
+
+def _max_type_case_reask_depth() -> int:
+    try:
+        return max(0, int(
+            os.getenv("AEGIS_TYPE_CASE_PLACEMENT_REASK_DEPTH", "2")
+        ))
+    except (TypeError, ValueError):
+        return 2
+
+
+def _unplaced_type_case_contract(
+    generation: Any,
+    *,
+    claim_row: dict[str, Any],
+    graph: dict[str, Any],
+    order: placement_policy.TeachingOrder,
+) -> dict[str, Any]:
+    """Record a task the model would not place, without inventing an owner.
+
+    Reached only when the provider/critic pair has been asked about this one
+    claim on its own and still produced nothing certifiable -- in practice,
+    when the API itself is unusable.  Deterministic code must not answer the
+    question in its place: guessing an owner from wording would be exactly
+    the lexical shortcut this stage exists to remove.
+
+    So the task keeps the topic it is *printed* under, and the contract says
+    plainly that this is provenance rather than ownership. The run continues
+    and the log names every task in this state.
+    """
+
+    located = str(claim_row.get("source_location_topic_id") or "")
+    topic_title = {
+        str(row.get("topic_id") or ""): str(row.get("title") or "")
+        for row in graph.get("topics") or [] if isinstance(row, dict)
+    }
+    contract = {
+        "version": _TYPE_CASE_OWNERSHIP_VERSION,
+        "certified": False,
+        "basis": placement_policy.UNPLACED_BASIS,
+        "policy_version": placement_policy.POLICY_VERSION,
+        "teaching_order_sha256": order.sha256,
+        "source_contract_hash": str(graph.get("source_contract_hash") or ""),
+        "claim_id": str(claim_row.get("claim_id") or ""),
+        "qid": str(claim_row.get("qid") or ""),
+        "normalized_claim": str(claim_row.get("normalized_claim") or ""),
+        "source_location_topic_id": located,
+        "source_location_topic_ids": [located],
+        "owner_topic_id": located,
+        "owner_topic_title": topic_title.get(located, ""),
+        "required_topic_ids": [located] if located else [],
+        "prerequisite_topic_ids": [],
+        "reference_edges": [],
+        "illustration_topic_ids": [],
+        "topic_relationships": [],
+        "rationale": (
+            "the placement provider/critic pair returned no certifiable "
+            "ownership for this task even when asked about it alone; it "
+            "keeps the topic it is printed under, which is provenance and "
+            "not a placement decision"
+        ),
+    }
+    contract["placement_certificate_sha256"] = (
+        generation._type_case_placement_digest(contract)
+    )
+    return contract
+
+
+def _record_unplaced_type_case_claims(
+    generation: Any,
+    *,
+    claim_by_qid: dict[str, dict[str, Any]],
+    contracts: dict[str, dict[str, Any]],
+    graph: dict[str, Any],
+    order: placement_policy.TeachingOrder,
+) -> list[str]:
+    """Keep every QID the model would not place. Never raises."""
+
+    missing = sorted(set(claim_by_qid) - set(contracts))
+    if not missing:
+        return []
+    for qid in missing:
+        contracts[qid] = _unplaced_type_case_contract(
+            generation,
+            claim_row=claim_by_qid[qid],
+            graph=graph,
+            order=order,
+        )
+    progress.log(
+        f"Phase 3.3 could not obtain certified ownership for {len(missing)} "
+        f"QID/task(s) after per-claim re-asks: {', '.join(missing[:8])}"
+        + (", ..." if len(missing) > 8 else "")
+        + ". They keep their printed topic, are recorded as unplaced, and no "
+        "owner was invented for them.",
+        level="error",
+    )
+    return missing
+
+
 def _project_type_case_contracts(
     generation: Any,
     *,
@@ -2019,10 +2231,6 @@ def _certify_type_case_ownership(
         source_contract_hash=str(graph.get("source_contract_hash") or ""),
     )
     block_directory = phase32._exact_block_directory(graph, canonical)
-    if not block_directory:
-        raise RuntimeError(
-            "type_case_owner_uncertified: semantic graph has no exact blocks"
-        )
 
     claim_by_qid = {
         str(row.get("qid") or ""): row for row in claims
@@ -2036,10 +2244,16 @@ def _certify_type_case_ownership(
         and phase3._sha256_json(inventory_ledger)
         != phase3._sha256_json(mined_ledger)
     ):
-        raise RuntimeError(
-            "type_case_owner_uncertified: inventory and mined-Type placement "
-            "ledgers disagree"
+        # Two saved ledgers that disagree cannot both be right, and picking
+        # one would be arbitrary. Distrust both and re-derive instead.
+        progress.log(
+            "Phase 3.3 found disagreeing inventory and mined-Type placement "
+            "ledgers; both were discarded and ownership is being "
+            "re-established rather than guessed.",
+            level="warning",
         )
+        inventory_ledger = None
+        mined_ledger = None
     ledger = (
         inventory_ledger
         if isinstance(inventory_ledger, dict)
@@ -2086,9 +2300,25 @@ def _certify_type_case_ownership(
     if provider is None and critic is None:
         return False
     if provider is None or critic is None:
-        raise RuntimeError(
-            "type_case_owner_uncertified: placement provider/critic pair is incomplete"
+        # Half a certification pair certifies nothing, and running the
+        # provider without its critic would be worse than running neither.
+        _record_unplaced_type_case_claims(
+            generation,
+            claim_by_qid=claim_by_qid,
+            contracts=contracts,
+            graph=graph,
+            order=order,
         )
+        _project_type_case_contracts(
+            generation,
+            mined_types=mined_types,
+            inventory=inventory,
+            rows_by_qid=rows_by_qid,
+            contracts=contracts,
+            graph=graph,
+            order=order,
+        )
+        return True
 
     cache = _read_type_case_placement_cache(graph=graph, order=order)
     entries = cache.setdefault("entries", {})
@@ -2112,9 +2342,10 @@ def _certify_type_case_ownership(
             pending.append(claim)
 
     size = _type_case_placement_batch_size()
+    unanswered: list[str] = []
     for start in range(0, len(pending), size):
         batch = pending[start : start + size]
-        fresh = _certify_type_case_batch(
+        unanswered.extend(_reask_type_case_batch(
             generation,
             claims=batch,
             graph=graph,
@@ -2123,17 +2354,28 @@ def _certify_type_case_ownership(
             block_directory=block_directory,
             provider=provider,
             critic=critic,
-        )
-        contracts.update(fresh)
+            contracts=contracts,
+        ))
         for claim in batch:
             qid = str(claim.get("qid") or "")
+            certified = contracts.get(qid)
+            if certified is None:
+                continue
             key = _type_case_placement_cache_key(
                 claim=claim, graph=graph, order=order
             )
-            entries[key] = copy.deepcopy(fresh[qid])
+            entries[key] = copy.deepcopy(certified)
         _write_type_case_placement_cache(
             cache, graph=graph, order=order
         )
+
+    _record_unplaced_type_case_claims(
+        generation,
+        claim_by_qid=claim_by_qid,
+        contracts=contracts,
+        graph=graph,
+        order=order,
+    )
 
     _project_type_case_contracts(
         generation,

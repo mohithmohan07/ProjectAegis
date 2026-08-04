@@ -3780,34 +3780,55 @@ def _inventory_item_owner_topic(item: dict) -> tuple[str, str]:
                 or ""
             ).strip(),
         )
-    if (
+    declared_v2 = (
         isinstance(raw, dict)
         and str(raw.get("version") or "")
         == str(_TYPE_CASE_PLACEMENT_CONTRACT_VERSION)
-    ):
-        raise RuntimeError(
-            "type_case_owner_uncertified: inventory item "
-            f"{str(item.get('qid') or '<empty>')} declares placement v2 "
-            "without a complete certified owner"
-        )
-    # An item with no v2 declaration is compatible only with an old saved
-    # artifact or an offline/direct helper call.  During a live canonical-
-    # source run Phase 3.3 must have certified every inventory QID before the
-    # post-freeze Hub cluster runs; silently reviving ``topic_hint`` here would
-    # turn physical source location back into semantic ownership.
+    )
+    # A live run must not revive ``topic_hint`` as a second semantic
+    # authority: that would turn physical source location back into
+    # ownership, which is the whole thing Phase 3.3 exists to stop. But an
+    # incomplete contract is also not a reason to end the run. Derive the
+    # owner from source text in teaching order instead, exactly as Phase 3.3
+    # does when its certification pair fails.
+    live_without_owner = False
     if config.use_live_generation():
         from . import canonical_source_phase3 as _phase3
 
-        if (
+        live_without_owner = bool(
             isinstance(_phase3.active_graph(), dict)
             and str(item.get("qid") or "").strip()
-        ):
-            raise RuntimeError(
-                "type_case_owner_uncertified: live inventory item "
-                f"{str(item.get('qid') or '<empty>')} has no "
-                "certified v2 owner"
-            )
+        )
+    if isinstance(raw, dict) and str(
+        raw.get("basis") or ""
+    ) == _unplaced_placement_basis():
+        # Phase 3.3 asked the placement pair about this task on its own and
+        # got nothing certifiable. It recorded the printed topic as
+        # provenance and said so. Routing honours that rather than ending
+        # the run, and nothing here invents the owner the model declined to
+        # give -- guessing one from wording is the lexical shortcut the
+        # whole certification stage exists to remove.
+        return (
+            str(raw.get("owner_topic_id") or "").strip(),
+            str(raw.get("owner_topic_title") or "").strip(),
+        )
+    if declared_v2 or live_without_owner:
+        # A v2 declaration that fails validation, or a live item that never
+        # reached Phase 3.3 at all, is an integrity fault rather than a
+        # placement question. Returning ``topic_hint`` here would revive
+        # physical location as a second semantic authority.
+        raise RuntimeError(
+            "type_case_owner_uncertified: inventory item "
+            f"{str(item.get('qid') or '<empty>')} has no usable v2 placement "
+            "contract and no recorded unplaced disposition"
+        )
     return "", str(item.get("topic_hint") or "").strip()
+
+
+def _unplaced_placement_basis() -> str:
+    from . import placement_policy as _placement_policy
+
+    return _placement_policy.UNPLACED_BASIS
 
 
 def _activity_record_matches_owner(record: dict, item: dict) -> bool:
@@ -7233,9 +7254,59 @@ def _assign_chapter_wide_inventory_topics_via_api(
             )
     missing = sorted(target_qids - set(assigned))
     if missing:
-        raise RuntimeError(
-            "chapter-wide task placement did not return exact valid assignments: "
-            f"missing={missing}"
+        # The provider echoes qids as free text here, and a sub-part qid such
+        # as QINV-0016.2 is routinely collapsed to its parent, so those rows
+        # are rejected deterministically on every attempt. Losing them used to
+        # end the whole run. Placement of a chapter-wide review task is a
+        # routing decision over topics that are already certified, so it is
+        # resolved deterministically rather than abandoned.
+        #
+        # Order of preference: the parent qid's topic, an assigned sibling
+        # sub-part, then - per the advanced-placement rule - the latest
+        # teaching-ranked topic already assigned in this set. A chapter-wide
+        # review task draws on the whole chapter, so the latest required topic
+        # is the defensible default, never the first or most populous.
+        topic_rank = {
+            topic: index
+            for index, topic in enumerate(
+                entry["topic"] for entry in topics
+            )
+        }
+        assigned_by_qid_order = sorted(
+            assigned.items(), key=lambda item: _inventory_qid_sort_key(item[0])
+        )
+        latest_assigned_topic = ""
+        if assigned:
+            latest_assigned_topic = max(
+                assigned.values(),
+                key=lambda topic: topic_rank.get(topic, -1),
+            )
+        resolved: list[str] = []
+        for qid in missing:
+            parent = qid.split(".")[0]
+            inherited = assigned.get(parent, "")
+            if not inherited:
+                inherited = next(
+                    (
+                        topic for sibling, topic in assigned_by_qid_order
+                        if sibling.split(".")[0] == parent
+                    ),
+                    "",
+                )
+            if not inherited:
+                inherited = latest_assigned_topic
+            if not inherited:
+                inherited = topics[-1]["topic"]
+            assigned[qid] = inherited
+            resolved.append(f"{qid}->{inherited}")
+        progress.log(
+            "Chapter-wide task placement resolved "
+            f"{len(resolved)} unrouted task(s) deterministically "
+            f"({', '.join(resolved[:8])}"
+            + (", ..." if len(resolved) > 8 else "")
+            + "). Sub-part qids are inherited from their parent or latest "
+            "assigned topic rather than dropped.",
+            level="warning",
         )
     for item in targets:
         item["topic_hint"] = assigned[(item.get("qid") or "").strip()]
@@ -8592,6 +8663,16 @@ def _certified_type_case_placement_contract(value: object) -> dict | None:
     ]
     from . import placement_policy as _placement_policy
 
+    # Only one basis yields a usable owner: the independently certified
+    # provider/critic pair. An "unplaced" contract deliberately fails this
+    # check -- it carries no relationships and asserts no ownership, and
+    # ``_inventory_item_owner_topic`` reads it separately as provenance.
+    if str(
+        value.get("basis") or _placement_policy.CERTIFIED_BASIS
+    ) != _placement_policy.CERTIFIED_BASIS:
+        return None
+    accepted_verdicts = {"accepted", "verified"}
+
     allowed_claim_ids = {
         str(claim_id).strip()
         for claim_id in (
@@ -8633,7 +8714,7 @@ def _certified_type_case_placement_contract(value: object) -> dict | None:
             or not block_ids
             or str(row.get("relationship_id") or "") != expected_id
             or str(row.get("critic_verdict") or "").strip().casefold()
-            not in {"accepted", "verified"}
+            not in accepted_verdicts
             or bool(row.get("necessity"))
             != (kind in _placement_policy.NECESSARY_TYPES)
         ):
@@ -8672,11 +8753,15 @@ def _certified_type_case_placement_contract(value: object) -> dict | None:
         and row.get("necessity") is True
         and bool(row.get("evidence_block_ids"))
         and str(row.get("critic_verdict") or "").strip().casefold()
-        in {"accepted", "verified"}
+        in accepted_verdicts
         for row in relationships
     )
     if (
         version != _TYPE_CASE_PLACEMENT_CONTRACT_VERSION
+        # A deterministic contract must say so in its own data. Stamping
+        # certified=True on something no critic reviewed would make the two
+        # bases indistinguishable in an audit, which is the one thing this
+        # field exists to prevent.
         or value.get("certified") is not True
         or not str(value.get("claim_id") or "").strip()
         or not owner_topic_id

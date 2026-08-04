@@ -257,6 +257,49 @@ def test_phase38_convergence_ledger_round_trips_with_checkpoint(client, db):
     assert normalized["candidate_history"] == ledger["candidate_history"]
 
 
+def test_disposed_phase38_ledger_survives_export_and_import(client, db):
+    """A terminally disposed budget must remain portable.
+
+    The disposition is what lets a run finish; a bundle that refused to carry
+    it would hand the restored job a fresh budget and re-spend the money the
+    original run already spent reaching the same answer.
+    """
+    original = _job(db)
+    ledger = _phase38_extended_ledger(original)
+    for bucket in ledger["issue_buckets"].values():
+        bucket["status"] = "disposed"
+        bucket["final_verification_pending"] = False
+        bucket["terminal_reason"] = "narrowed 2 concepts to their evidence"
+    phase38._mirror_active_issue(
+        ledger,
+        ledger["active_issue_key"],
+        ledger["issue_buckets"][ledger["active_issue_key"]],
+    )
+    ledger["disposition"] = "aegis-evidence-narrowing-1"
+    checkpoint = copy.deepcopy(original.generation_checkpoint)
+    checkpoint[build_concepts._PHASE38_CONVERGENCE_KEY] = copy.deepcopy(ledger)
+    original.generation_checkpoint = checkpoint
+    db.commit()
+
+    exported = client.get(f"/build-concepts/uploads/{original.id}/checkpoint")
+    assert exported.status_code == 200
+    restored = _post_bundle(client, exported.json())
+    assert restored.status_code == 200
+
+    imported = db.get(models.UploadJob, restored.json()["id"])
+    imported_ledger = imported.generation_checkpoint[
+        build_concepts._PHASE38_CONVERGENCE_KEY
+    ]
+    assert imported_ledger["status"] == "disposed"
+    assert imported_ledger["disposition"] == "aegis-evidence-narrowing-1"
+    normalized = phase38._normalized_convergence_state(
+        imported_ledger,
+        scope=imported_ledger["scope"],
+    )
+    assert normalized["status"] == "disposed"
+    assert normalized["disposition"] == "aegis-evidence-narrowing-1"
+
+
 def test_phase38_cas_rejects_a_stale_identical_worker(
     db,
     monkeypatch,

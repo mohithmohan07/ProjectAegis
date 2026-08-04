@@ -95,6 +95,17 @@ class PlacementPolicyError(RuntimeError):
     """A placement could not be computed from certified relationships."""
 
 
+#: How a placement contract came to exist.  Ownership is a semantic
+#: judgement, so there is exactly one way to earn it: the provider/critic
+#: pair.  The second value is not an alternative route to an owner -- it
+#: records that no owner was established and the task kept the topic it is
+#: printed under, which is provenance.  Deterministic code never decides
+#: placement from wording; lexical overlap is explicitly listed above as
+#: something that may not establish ownership.
+CERTIFIED_BASIS = "independent_certification"
+UNPLACED_BASIS = "unplaced_pending_certification"
+
+
 def relationship_type(value: object) -> RelationshipType | None:
     """Parse a provider-supplied relationship label, or None if unknown.
 
