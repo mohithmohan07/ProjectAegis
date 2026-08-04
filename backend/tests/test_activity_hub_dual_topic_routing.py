@@ -289,7 +289,7 @@ def test_live_activity_without_v2_owner_never_uses_physical_topic(
     with phase3.activate({"source_contract_hash": "SOURCE-LIVE"}):
         with pytest.raises(
             RuntimeError,
-            match="live inventory item",
+            match="no usable v2 placement contract",
         ):
             g._inventory_item_owner_topic(item)
 

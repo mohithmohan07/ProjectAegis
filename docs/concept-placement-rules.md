@@ -145,29 +145,26 @@ The retrospective-reference exception (Rule 4) applies here too: if the later
 topic only illustrates the earlier material rather than being needed to attempt
 the task, the task stays with the topic that teaches it.
 
-### When ownership cannot be certified
+### Who decides ownership
 
-Ownership is normally settled by a provider/critic pair. That pair can fail —
-omit a QID, reformat one, spend its correction budget, or have its answer
-rejected — and none of those failures may end the run.
+**The model decides. Always.** "Does understanding this task require that
+topic's method?" is a semantic judgement, and no amount of word counting can
+tell it apart from "happens to share a word". Deterministic code owns IDs,
+teaching order, transactions and the arithmetic of *which* certified topic is
+latest — it must never derive placement from wording.
 
-Rule 5 has a deterministic reading that needs no model. Walk the topics in
-teaching order and find which ones the task's own vocabulary requires:
+The provider/critic pair can fail: it can omit a QID, reformat one, spend its
+correction budget, or have its answer rejected. None of those may end the run,
+and none of them licenses code to answer in its place. **The model is asked
+again** — the batch is split, down to single claims, so an awkward task gets
+its own question. A provider collapsing `QINV-0016.2` into its parent becomes
+a second, narrower request instead of a lost task.
 
-- a topic is needed if it is the first to supply **two or more** of the task's
-  words, or if it supplies a word found in **no other topic in the chapter**;
-- the **latest** needed topic owns the task, the earlier ones are
-  prerequisites.
-
-Words describing what the learner must *do* — "find", "calculate", "show",
-"given" — are ignored. Every task phrases itself that way, so they identify no
-topic.
-
-The derived contract records `certified: false` and
-`basis: deterministic_evidence_fallback`, so an audit can always separate a
-reviewed owner from a computed one. **It still never uses where the task is
-printed.** Physical location is provenance; the only case that falls back to it
-is a task whose words match no topic at all, and that is recorded as such.
+If the pair still returns nothing certifiable for a task asked on its own — in
+practice, when the API is unusable — the task is recorded as **unplaced**. It
+keeps the topic it is printed under, the contract says plainly that this is
+provenance and not a placement decision, and the run log names every task in
+that state. No owner is invented for it.
 
 ---
 
@@ -358,5 +355,5 @@ elsewhere.
 | 2, 4 (ownership, retrospective reference) | `placement_policy.compute_placement`, applied in `canonical_source_phase32_topology_adjudication_contract._enforce_placement_policy` |
 | 3 (splitting keeps both sides) | `placement_policy.audit_split` |
 | 5 (Type/Case ownership) | `_type_case_contract_for_qid` in `generation.py` Case routing |
-| 5 when certification fails | `placement_policy.compute_deterministic_placement` |
+| 5 when a batch fails | `_reask_type_case_batch` — split and ask the model again |
 | Terminal policy | `evidence_narrowing.narrow_records` |

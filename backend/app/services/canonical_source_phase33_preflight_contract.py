@@ -1955,50 +1955,151 @@ def _type_case_ledger_material(
     }
 
 
-def _topic_block_text(
+def _reask_type_case_batch(
+    generation: Any,
+    *,
+    claims: list[dict[str, Any]],
     graph: dict[str, Any],
     canonical: dict[str, Any],
-) -> dict[str, list[tuple[str, str]]]:
-    """Index each topic's usable source text for deterministic placement."""
+    order: placement_policy.TeachingOrder,
+    block_directory: dict[str, dict[str, Any]],
+    provider: PlacementProvider,
+    critic: PlacementCritic,
+    contracts: dict[str, dict[str, Any]],
+    depth: int = 0,
+) -> list[str]:
+    """Certify ``claims``, re-asking the model for whatever it did not answer.
 
-    from . import evidence_narrowing
+    Ownership is a semantic judgement, so the provider/critic pair decides it
+    -- always.  What used to end the run was treating one unusable batch
+    response as final.  It is not: a batch fails as a *batch*, most often
+    because one claim in it was hard or one qid came back reformatted, and
+    the pair answers correctly when asked about that claim on its own.
 
-    evidence = evidence_narrowing.build_evidence(graph, canonical)
-    return {
-        topic_id: list(topic.blocks)
-        for topic_id, topic in evidence.items()
+    So a failure splits the batch and asks again, down to single claims,
+    which is also what turns the original defect -- a provider collapsing
+    ``QINV-0016.2`` into its parent -- into a second, narrower question
+    rather than a lost task.
+
+    Returns the claim IDs still unanswered after the bounded retries.
+    """
+
+    if not claims:
+        return []
+    try:
+        fresh = _certify_type_case_batch(
+            generation,
+            claims=claims,
+            graph=graph,
+            canonical=canonical,
+            order=order,
+            block_directory=block_directory,
+            provider=provider,
+            critic=critic,
+        )
+    except HumanDecisionRequired:
+        # A recoverable pause belongs to the recovery ladder above, which can
+        # still answer it properly.
+        raise
+    except Exception as exc:
+        fresh = {}
+        failure = f"{type(exc).__name__}: {exc}"
+    else:
+        failure = ""
+
+    answered = {
+        str(claim.get("claim_id") or ""): claim
+        for claim in claims
+        if str(claim.get("qid") or "") in fresh
     }
+    for claim in claims:
+        qid = str(claim.get("qid") or "")
+        if qid in fresh:
+            contracts[qid] = fresh[qid]
+    missing = [
+        claim for claim in claims
+        if str(claim.get("claim_id") or "") not in answered
+    ]
+    if not missing:
+        return []
+
+    if len(missing) == 1 and depth >= _max_type_case_reask_depth():
+        claim_id = str(missing[0].get("claim_id") or "")
+        progress.log(
+            f"Phase 3.3 asked the placement pair about {claim_id} on its own "
+            f"and it still returned no certifiable ownership ({failure or 'no contract'}).",
+            level="warning",
+        )
+        return [claim_id]
+
+    if len(missing) == 1:
+        # One claim, asked alone, with a fresh attempt budget of its own.
+        return _reask_type_case_batch(
+            generation,
+            claims=missing,
+            graph=graph,
+            canonical=canonical,
+            order=order,
+            block_directory=block_directory,
+            provider=provider,
+            critic=critic,
+            contracts=contracts,
+            depth=depth + 1,
+        )
+
+    progress.log(
+        f"Phase 3.3 splitting {len(missing)} unanswered placement claim(s) "
+        f"and asking the model again ({failure or 'partial response'}).",
+        level="warning",
+    )
+    half = len(missing) // 2
+    unanswered: list[str] = []
+    for part in (missing[:half], missing[half:]):
+        unanswered.extend(_reask_type_case_batch(
+            generation,
+            claims=part,
+            graph=graph,
+            canonical=canonical,
+            order=order,
+            block_directory=block_directory,
+            provider=provider,
+            critic=critic,
+            contracts=contracts,
+            depth=depth + 1,
+        ))
+    return unanswered
 
 
-def _deterministic_type_case_contract(
+def _max_type_case_reask_depth() -> int:
+    try:
+        return max(0, int(
+            os.getenv("AEGIS_TYPE_CASE_PLACEMENT_REASK_DEPTH", "2")
+        ))
+    except (TypeError, ValueError):
+        return 2
+
+
+def _unplaced_type_case_contract(
     generation: Any,
     *,
     claim_row: dict[str, Any],
     graph: dict[str, Any],
     order: placement_policy.TeachingOrder,
-    topic_blocks: dict[str, list[tuple[str, str]]],
 ) -> dict[str, Any]:
-    """Build one placement contract without a provider or critic.
+    """Record a task the model would not place, without inventing an owner.
 
-    Used only when independent certification could not produce a contract
-    for this QID. It computes the owner from source text in teaching order,
-    labels itself ``deterministic_evidence_fallback``, and records
-    ``certified: False`` so no audit can mistake it for a reviewed result.
+    Reached only when the provider/critic pair has been asked about this one
+    claim on its own and still produced nothing certifiable -- in practice,
+    when the API itself is unusable.  Deterministic code must not answer the
+    question in its place: guessing an owner from wording would be exactly
+    the lexical shortcut this stage exists to remove.
+
+    So the task keeps the topic it is *printed* under, and the contract says
+    plainly that this is provenance rather than ownership. The run continues
+    and the log names every task in this state.
     """
 
-    claim = placement_policy.AtomicClaim(
-        claim_id=str(claim_row.get("claim_id") or ""),
-        normalized_claim=str(claim_row.get("normalized_claim") or ""),
-        source_location_topic_id=str(
-            claim_row.get("source_location_topic_id") or ""
-        ),
-        protected_source_items=(str(claim_row.get("qid") or ""),),
-    )
-    decision, relationships = (
-        placement_policy.compute_deterministic_placement(
-            claim, order, topic_blocks
-        )
-    )
+    located = str(claim_row.get("source_location_topic_id") or "")
     topic_title = {
         str(row.get("topic_id") or ""): str(row.get("title") or "")
         for row in graph.get("topics") or [] if isinstance(row, dict)
@@ -2006,26 +2107,28 @@ def _deterministic_type_case_contract(
     contract = {
         "version": _TYPE_CASE_OWNERSHIP_VERSION,
         "certified": False,
-        "basis": placement_policy.DETERMINISTIC_BASIS,
+        "basis": placement_policy.UNPLACED_BASIS,
         "policy_version": placement_policy.POLICY_VERSION,
         "teaching_order_sha256": order.sha256,
         "source_contract_hash": str(graph.get("source_contract_hash") or ""),
-        "claim_id": claim.claim_id,
+        "claim_id": str(claim_row.get("claim_id") or ""),
         "qid": str(claim_row.get("qid") or ""),
-        "normalized_claim": claim.normalized_claim,
-        "source_location_topic_id": claim.source_location_topic_id,
-        "source_location_topic_ids": [claim.source_location_topic_id],
-        "owner_topic_id": decision.owner_topic_id,
-        "owner_topic_title": topic_title.get(decision.owner_topic_id, ""),
-        "required_topic_ids": list(decision.required_topic_ids),
-        "prerequisite_topic_ids": list(decision.prerequisite_topic_ids),
+        "normalized_claim": str(claim_row.get("normalized_claim") or ""),
+        "source_location_topic_id": located,
+        "source_location_topic_ids": [located],
+        "owner_topic_id": located,
+        "owner_topic_title": topic_title.get(located, ""),
+        "required_topic_ids": [located] if located else [],
+        "prerequisite_topic_ids": [],
         "reference_edges": [],
         "illustration_topic_ids": [],
-        "topic_relationships": [
-            placement_policy.relationship_audit_row(relation)
-            for relation in relationships
-        ],
-        "rationale": decision.rationale,
+        "topic_relationships": [],
+        "rationale": (
+            "the placement provider/critic pair returned no certifiable "
+            "ownership for this task even when asked about it alone; it "
+            "keeps the topic it is printed under, which is provenance and "
+            "not a placement decision"
+        ),
     }
     contract["placement_certificate_sha256"] = (
         generation._type_case_placement_digest(contract)
@@ -2033,50 +2136,35 @@ def _deterministic_type_case_contract(
     return contract
 
 
-def _fill_uncertified_type_case_contracts(
+def _record_unplaced_type_case_claims(
     generation: Any,
     *,
     claim_by_qid: dict[str, dict[str, Any]],
     contracts: dict[str, dict[str, Any]],
     graph: dict[str, Any],
-    canonical: dict[str, Any],
     order: placement_policy.TeachingOrder,
-    reason: str,
 ) -> list[str]:
-    """Give every uncertified QID a deterministic owner. Never raises.
-
-    Independent certification is a paid provider/critic pair, and a pair can
-    fail: it can omit a QID, reformat one, spend its contract-correction
-    budget, or have its relationship set rejected. Each of those used to end
-    the run -- which is the same defect as the chapter-wide placement crash,
-    one stage later. Rule 5 has a deterministic reading, so it is applied.
-    """
+    """Keep every QID the model would not place. Never raises."""
 
     missing = sorted(set(claim_by_qid) - set(contracts))
     if not missing:
         return []
-    topic_blocks = _topic_block_text(graph, canonical)
-    filled: list[str] = []
     for qid in missing:
-        contract = _deterministic_type_case_contract(
+        contracts[qid] = _unplaced_type_case_contract(
             generation,
             claim_row=claim_by_qid[qid],
             graph=graph,
             order=order,
-            topic_blocks=topic_blocks,
         )
-        contracts[qid] = contract
-        filled.append(f"{qid}->{contract['owner_topic_id'] or '(location)'}")
     progress.log(
-        f"Phase 3.3 derived semantic ownership deterministically for "
-        f"{len(filled)} QID/task(s) that independent certification did not "
-        f"cover ({reason}): {', '.join(filled[:8])}"
-        + (", ..." if len(filled) > 8 else "")
-        + ". Owners come from source text in teaching order, never from "
-        "physical location, and are recorded as uncertified.",
-        level="warning",
+        f"Phase 3.3 could not obtain certified ownership for {len(missing)} "
+        f"QID/task(s) after per-claim re-asks: {', '.join(missing[:8])}"
+        + (", ..." if len(missing) > 8 else "")
+        + ". They keep their printed topic, are recorded as unplaced, and no "
+        "owner was invented for them.",
+        level="error",
     )
-    return filled
+    return missing
 
 
 def _project_type_case_contracts(
@@ -2214,14 +2302,12 @@ def _certify_type_case_ownership(
     if provider is None or critic is None:
         # Half a certification pair certifies nothing, and running the
         # provider without its critic would be worse than running neither.
-        _fill_uncertified_type_case_contracts(
+        _record_unplaced_type_case_claims(
             generation,
             claim_by_qid=claim_by_qid,
             contracts=contracts,
             graph=graph,
-            canonical=canonical,
             order=order,
-            reason="the placement provider/critic pair is incomplete",
         )
         _project_type_case_contracts(
             generation,
@@ -2256,37 +2342,24 @@ def _certify_type_case_ownership(
             pending.append(claim)
 
     size = _type_case_placement_batch_size()
-    failures: list[str] = []
+    unanswered: list[str] = []
     for start in range(0, len(pending), size):
         batch = pending[start : start + size]
-        try:
-            fresh = _certify_type_case_batch(
-                generation,
-                claims=batch,
-                graph=graph,
-                canonical=canonical,
-                order=order,
-                block_directory=block_directory,
-                provider=provider,
-                critic=critic,
-            )
-        except HumanDecisionRequired:
-            # A recoverable pause belongs to the recovery ladder above, which
-            # can still answer it properly. Only terminal failure falls back.
-            raise
-        except Exception as exc:
-            # The batch produced no certified contract. Its QIDs are filled
-            # deterministically after the loop rather than ending the run:
-            # the provider omitting or reformatting a qid is the same defect
-            # that lost QINV-0016.1-.4, and it is not a reason to stop.
-            failures.append(f"{type(exc).__name__}: {exc}")
-            continue
-        contracts.update(fresh)
+        unanswered.extend(_reask_type_case_batch(
+            generation,
+            claims=batch,
+            graph=graph,
+            canonical=canonical,
+            order=order,
+            block_directory=block_directory,
+            provider=provider,
+            critic=critic,
+            contracts=contracts,
+        ))
         for claim in batch:
             qid = str(claim.get("qid") or "")
-            certified = fresh.get(qid)
+            certified = contracts.get(qid)
             if certified is None:
-                # The pair answered, but not for this qid.
                 continue
             key = _type_case_placement_cache_key(
                 claim=claim, graph=graph, order=order
@@ -2296,17 +2369,12 @@ def _certify_type_case_ownership(
             cache, graph=graph, order=order
         )
 
-    _fill_uncertified_type_case_contracts(
+    _record_unplaced_type_case_claims(
         generation,
         claim_by_qid=claim_by_qid,
         contracts=contracts,
         graph=graph,
-        canonical=canonical,
         order=order,
-        reason=(
-            "; ".join(failures[:4]) if failures
-            else "independent certification returned no contract for them"
-        ),
     )
 
     _project_type_case_contracts(
