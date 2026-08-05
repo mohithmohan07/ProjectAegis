@@ -3488,6 +3488,60 @@ def _equivalent_agent_resolution_count(
     return count
 
 
+def _issue_agent_resolution_count(
+    checkpoint: dict | None,
+    scope_key: str,
+) -> int:
+    """Count prior autonomous repairs for one semantic scope.
+
+    Unlike :func:`_equivalent_agent_resolution_count` this ignores candidate
+    identities entirely. Regenerating a concept_id produces a new *equivalence*
+    key but the same *issue* key, so this is the count that can retire a scope
+    the pipeline keeps re-raising under fresh identities.
+    """
+
+    if not scope_key:
+        return 0
+    count = 0
+    for row in _human_decision_ledger(checkpoint).get("resolutions") or []:
+        if (
+            not isinstance(row, dict)
+            or str(row.get("resolved_by") or "") != "agent"
+            or str(row.get("status") or "") not in {"ready", "consumed"}
+        ):
+            continue
+        stored = str(row.get("issue_key") or "")
+        if not stored:
+            original = row.get("pending_decision")
+            if isinstance(original, dict):
+                stored = autonomous_resolution.issue_key(original)
+        if stored == scope_key:
+            count += 1
+    return count
+
+
+def _raise_if_issue_pathways_exhausted(
+    pending: dict,
+    *,
+    attempts: int,
+    maximum: int,
+) -> None:
+    """Stop a scope that keeps returning under regenerated identities."""
+
+    if attempts < maximum:
+        return
+    message = (
+        f"Generation stopped after {attempts} autonomous repair attempt(s) for "
+        f"the same semantic scope [{_decision_identity_text(pending)}]. The "
+        "scope kept returning with regenerated candidate identities, so its "
+        "distinct repair pathways are exhausted and further attempts would "
+        "not converge. Raise AEGIS_AUTONOMOUS_RESOLUTION_MAX_PATHWAY_TURNS "
+        "only after correcting that decision pathway."
+    )
+    progress.log(message, level="error")
+    raise SemanticResolutionCyclesExhausted(message)
+
+
 def _decision_identity_text(pending: dict) -> str:
     """Name a decision in the run log so a loop is diagnosable."""
 
@@ -3821,11 +3875,28 @@ def _run_with_human_decision_pause(
     owner_sub: str | None,
     initial_agent_resolution_ids: set[str] | None = None,
 ) -> tuple[dict | None, object | None]:
-    """Run a pipeline with bounded agent-first, human-last decision handling."""
+    """Run a pipeline with bounded agent-first decision handling.
+
+    Two independent ceilings bound this loop, and both are required:
+
+    * per *equivalence key* — the identical workspace returning again means the
+      last repair was proven ineffective;
+    * per *issue key* — the same semantic scope, however its candidate
+      identities were regenerated.
+
+    Only the second guarantees termination. The equivalence key hashes
+    candidate ``target_id``/``concept_id``, so a stage that regenerates those
+    between passes mints a new key every iteration, resets its own budget, and
+    spins forever at the Type-assignment boundary. The issue key is deliberately
+    independent of regenerated identities, so it is the identity that can
+    actually retire a scope.
+    """
 
     active_ids = set(initial_agent_resolution_ids or set())
     local_attempts: dict[str, int] = {}
+    issue_attempts: dict[str, int] = {}
     maximum = _max_equivalent_resolution_attempts()
+    issue_maximum = autonomous_resolution.maximum_pathway_turns()
     while True:
         token = _ACTIVE_AGENT_RESOLUTION_IDS.set(frozenset(active_ids))
         try:
@@ -3857,6 +3928,26 @@ def _run_with_human_decision_pause(
                 attempts=attempts,
                 maximum=maximum,
             )
+            scope_key = autonomous_resolution.issue_key(pending)
+            scope_attempts = max(
+                issue_attempts.get(scope_key, 0),
+                _issue_agent_resolution_count(
+                    checkpoint_before_pause, scope_key
+                ),
+                _issue_agent_resolution_count(
+                    job.generation_checkpoint, scope_key
+                ),
+            )
+            _raise_if_issue_pathways_exhausted(
+                pending,
+                attempts=scope_attempts,
+                maximum=issue_maximum,
+            )
+
+            def _charge() -> None:
+                local_attempts[equivalence_key] = attempts + 1
+                issue_attempts[scope_key] = scope_attempts + 1
+
             resolved_id = _autonomously_resolve_pending_decision(
                 db,
                 job,
@@ -3864,7 +3955,7 @@ def _run_with_human_decision_pause(
                 owner_sub=owner_sub,
             )
             if resolved_id:
-                local_attempts[equivalence_key] = attempts + 1
+                _charge()
                 active_ids.add(resolved_id)
                 continue
             current = _pending_human_decision(job.generation_checkpoint)
@@ -3875,7 +3966,7 @@ def _run_with_human_decision_pause(
                 owner_sub=owner_sub,
             )
             if continued_id:
-                local_attempts[equivalence_key] = attempts + 1
+                _charge()
                 active_ids.add(continued_id)
                 continue
             _raise_if_unattended_cannot_pause(current or pending)

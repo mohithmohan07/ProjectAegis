@@ -818,3 +818,110 @@ def test_changed_critic_or_candidate_pathway_gets_fresh_budget(
     assert build_concepts._equivalent_agent_resolution_count(
         checkpoint, changed
     ) == 0
+
+
+def _regenerated_identity_pending(index: int) -> dict:
+    """One semantic scope, re-raised with freshly minted candidate identities."""
+
+    return {
+        "decision_id": f"phase33-host-{index:04d}",
+        "context_hash": f"{index:064d}",
+        "kind": "phase33_type_host_semantic_conflict",
+        "phase": "3.3",
+        "conflict": "Two Type hosts remain plausible.",
+        "diagnosis": "The source supports one bounded choice.",
+        "decision_question": "How should TYPE-0001 be hosted?",
+        "item": {
+            "unit_id": "UNIT-1",
+            "type_id": "TYPE-0001",
+            "qids": ["QID-1"],
+            "topic": "Nationalism",
+        },
+        "candidates": [{
+            "target_id": f"TARGET-REGENERATED-{index}",
+            "concept_id": f"HOST-REGENERATED-{index}",
+            "action": "keep",
+            "title": "host",
+            "topic": "Nationalism",
+            "coverage": "identical coverage",
+            "gap": "identical gap",
+        }],
+        "evidence": [{"evidence_id": "E1", "text": "identical evidence"}],
+        "options": [{
+            "choice": "select_candidate",
+            "target_id": f"TARGET-REGENERATED-{index}",
+            "target_concept_id": f"HOST-REGENERATED-{index}",
+        }],
+    }
+
+
+def test_regenerated_identities_do_not_reset_the_equivalence_budget():
+    """The 81% spin: a new concept_id must not buy an unlimited budget.
+
+    The equivalence key hashes candidate identities, so a stage that
+    regenerates them mints a fresh key every pass and charges nothing. Only the
+    issue key stays fixed across those passes, so only it can retire the scope.
+    """
+
+    ledger: dict = {"human_decisions": {"version": 1, "resolutions": []}}
+    scope_keys = set()
+    equivalence_keys = set()
+
+    for index in range(1, 8):
+        pending = _regenerated_identity_pending(index)
+        scope_key = build_concepts.autonomous_resolution.issue_key(pending)
+        equivalence_key = build_concepts._decision_equivalence_key(pending)
+        scope_keys.add(scope_key)
+        equivalence_keys.add(equivalence_key)
+
+        # The volatile budget is defeated by the regenerated identity ...
+        assert build_concepts._equivalent_agent_resolution_count(
+            ledger, pending
+        ) == 0
+        # ... while the stable one keeps counting every prior repair.
+        assert build_concepts._issue_agent_resolution_count(
+            ledger, scope_key
+        ) == index - 1
+
+        ledger["human_decisions"]["resolutions"].append({
+            "resolved_by": "agent",
+            "status": "consumed",
+            "equivalence_key": equivalence_key,
+            "issue_key": scope_key,
+        })
+
+    assert len(scope_keys) == 1, "the scope never actually changed"
+    assert len(equivalence_keys) == 7, "every pass minted a new equivalence key"
+
+
+def test_issue_pathway_ceiling_stops_the_scope():
+    pending = _regenerated_identity_pending(1)
+
+    build_concepts._raise_if_issue_pathways_exhausted(
+        pending, attempts=23, maximum=24
+    )
+    with pytest.raises(build_concepts.SemanticResolutionCyclesExhausted) as err:
+        build_concepts._raise_if_issue_pathways_exhausted(
+            pending, attempts=24, maximum=24
+        )
+    assert "same semantic scope" in str(err.value)
+    assert "TYPE-0001" in str(err.value)
+
+
+def test_issue_count_reads_legacy_rows_without_a_stored_issue_key():
+    """Rows written before the scope seal still charge their scope."""
+
+    pending = _regenerated_identity_pending(1)
+    scope_key = build_concepts.autonomous_resolution.issue_key(pending)
+    ledger = {
+        "human_decisions": {
+            "version": 1,
+            "resolutions": [{
+                "resolved_by": "agent",
+                "status": "consumed",
+                "pending_decision": _regenerated_identity_pending(2),
+            }],
+        },
+    }
+
+    assert build_concepts._issue_agent_resolution_count(ledger, scope_key) == 1
