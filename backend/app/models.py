@@ -349,3 +349,68 @@ class UploadJob(Base):
         from .services import uploads
 
         return uploads.is_job_running(self.id)
+
+
+class ConceptRevision(Base):
+    """One reviewer instruction and the edit Aegis made from it.
+
+    Review history is deliberately *not* written into the delivered workbook.
+    The output file stays exactly what generation produced, so a reviewer can
+    diff two rounds without the audit trail changing the artifact under them.
+    Everything about the review lives here instead, structured so the founder
+    can query across jobs later and turn recurring corrections into product
+    fixes.
+
+    Rounds are unbounded: a reviewer may keep correcting an output for as long
+    as it takes. ``round_number`` is per job and strictly increasing, so the
+    sequence of instructions is replayable in order.
+    """
+
+    __tablename__ = "concept_revisions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # Stable Google ``sub`` (or the offline principal) that authored the
+    # instruction. Never a mutable email address.
+    owner_sub: Mapped[str] = mapped_column(
+        String(255), default="local:default", index=True)
+    job_id: Mapped[int] = mapped_column(
+        ForeignKey("upload_jobs.id"), index=True)
+    # Per-job, 1-based, strictly increasing. No ceiling.
+    round_number: Mapped[int] = mapped_column(Integer, default=1)
+    # The reviewer's words, stored verbatim. This is the primary research
+    # artifact: it is what Aegis should have done without being told.
+    instruction: Mapped[str] = mapped_column(Text, default="")
+    # pending|applied|failed|no_change
+    status: Mapped[str] = mapped_column(String(16), default="pending")
+    # Model-authored account of what it changed, for the reviewer to read back.
+    change_summary: Mapped[str] = mapped_column(Text, default="")
+    # Structured per-concept edits: [{"concept_id", "field", "before",
+    # "after", "reason"}]. Queryable, so recurring placement corrections can be
+    # counted across jobs rather than re-read as prose.
+    changes: Mapped[list] = mapped_column(JSON, default=list)
+    # Concepts Aegis placed by best judgement rather than certification, as
+    # flagged at generation time. Kept per round so it is visible whether a
+    # reviewer's correction landed on a flagged placement or a confident one.
+    flagged_placements: Mapped[list] = mapped_column(JSON, default=list)
+    model: Mapped[str] = mapped_column(String(128), default="")
+    openai_usage: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Why an instruction could not be applied, when status is ``failed``.
+    error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime, default=None, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "job_id", "round_number", name="uq_concept_revision_round"
+        ),
+    )
+
+    @property
+    def applied(self) -> bool:
+        return self.status == "applied"
+
+    @property
+    def change_count(self) -> int:
+        return len(self.changes) if isinstance(self.changes, list) else 0

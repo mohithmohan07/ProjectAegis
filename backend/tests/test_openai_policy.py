@@ -22,6 +22,7 @@ EXPECTED_REASONING_POLICY = {
     "pre_learning": "max",
     "workbook_planning": "max",
     "workbook_authoring": "max",
+    "revision_editing": "max",
     "metadata": "max",
 }
 

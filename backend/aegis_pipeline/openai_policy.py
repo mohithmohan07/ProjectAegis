@@ -57,6 +57,7 @@ OpenAIPurpose = Literal[
     "pre_learning",
     "workbook_planning",
     "workbook_authoring",
+    "revision_editing",
     "metadata",
 ]
 ReasoningEffort = Literal["low", "medium", "high", "xhigh", "max"]
@@ -82,6 +83,7 @@ REASONING_EFFORT_BY_PURPOSE: Final[dict[OpenAIPurpose, ReasoningEffort]] = {
     "pre_learning": "max",
     "workbook_planning": "max",
     "workbook_authoring": "max",
+    "revision_editing": "max",
     "metadata": "max",
 }
 
