@@ -2448,18 +2448,6 @@ def inventory_csv(
 # Post Learning
 # --------------------------------------------------------------------------- #
 
-def _awaiting_human_decision_result(
-    job: models.UploadJob,
-    pending: dict,
-) -> dict:
-    return {
-        "job_id": job.id,
-        "status": "awaiting_decision",
-        "pending_decision": copy.deepcopy(pending),
-        "resume_required": False,
-    }
-
-
 def _retire_obsolete_machine_metadata_pause(
     db: Session,
     job: models.UploadJob,
@@ -2671,17 +2659,11 @@ def _existing_human_decision_pause(
             checkpoint.clear()
             checkpoint.update(refreshed_checkpoint)
         return None
+    # Always raises; there is no pause to fall through to.
     _raise_if_unattended_cannot_pause(pending)
-    progress.set_progress(
-        job.checkpoint_progress,
-        label="Paused for your decision",
+    raise AssertionError(  # pragma: no cover - defensive
+        "generation reached a pause that no longer exists"
     )
-    progress.log(
-        "This generation is waiting for the saved semantic decision; "
-        "no API request was started.",
-        level="warning",
-    )
-    return _awaiting_human_decision_result(job, pending)
 
 
 def _agent_review_timestamp() -> str:
@@ -3591,13 +3573,16 @@ def _raise_if_unattended_cannot_pause(pending: dict) -> None:
 
     Reached only when every automatic pathway declined and the decision's
     remaining routes all require a person: replacing the uploaded document or
-    writing an instruction. Neither can be synthesized, and an unattended
-    batch cannot answer a pause, so the run stops with the reason recorded
-    rather than waiting indefinitely for a click that will not come.
+    writing an instruction. Neither can be synthesized.
+
+    This is unconditional. Generation has no mid-run pause in any
+    configuration, and no setting restores one: a stalled job is worse than a
+    failed one because nothing is watching it and it holds its worker
+    indefinitely. The run stops with the reason recorded, and the reviewer
+    corrects the delivered output afterwards through the revision loop
+    (:mod:`app.services.concept_revisions`) instead of mid-run.
     """
 
-    if not autonomous_resolution.unattended_completion_enabled():
-        return
     choices = sorted({
         str(row.get("choice") or "")
         for row in pending.get("options") or []
@@ -3623,8 +3608,7 @@ def _raise_if_unattended_cannot_pause(pending: dict) -> None:
         + ", leaving only actions a person must take ("
         + (", ".join(user_only) or "none")
         + "). Aegis will not alter the uploaded document by itself. Upload a "
-        "corrected document and convert it again, or set "
-        "AEGIS_UNATTENDED_COMPLETION=0 to answer this decision manually."
+        "corrected document and convert it again."
     )
     progress.log(message, level="error")
     raise UnattendedDecisionUnavailable(message)
@@ -3969,10 +3953,11 @@ def _run_with_human_decision_pause(
                 _charge()
                 active_ids.add(continued_id)
                 continue
+            # Always raises; there is no pause to fall through to.
             _raise_if_unattended_cannot_pause(current or pending)
-            return _awaiting_human_decision_result(
-                job, current or pending
-            ), None
+            raise AssertionError(  # pragma: no cover - defensive
+                "generation reached a pause that no longer exists"
+            )
         finally:
             _ACTIVE_AGENT_RESOLUTION_IDS.reset(token)
 

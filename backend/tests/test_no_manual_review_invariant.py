@@ -388,18 +388,28 @@ def test_user_only_decision_ends_the_run_instead_of_parking_it(
 
     # The message names the blocked routes and how to proceed.
     assert "replace_source" in str(excinfo.value)
-    assert "AEGIS_UNATTENDED_COMPLETION=0" in str(excinfo.value)
+    # No setting is offered, because none can restore a pause.
+    assert "AEGIS_UNATTENDED_COMPLETION" not in str(excinfo.value)
     # Bounded semantic recovery must not retry a decision only a person can
     # answer, so it is classified non-semantic.
     assert semantic_recovery.classify_failure(
         excinfo.value).recoverable is False
 
 
-def test_user_only_decision_still_pauses_when_attended(
+def test_no_setting_can_restore_a_mid_run_pause(
     db,
     first_chapter,
     monkeypatch,
 ):
+    """Generation has no pause in any configuration.
+
+    ``AEGIS_UNATTENDED_COMPLETION=0`` used to hand a user-only decision back to
+    a person mid-run. It now only disables automatic continuation with the
+    safest offered action; the decision still ends the run rather than waiting.
+    A stalled job holds its worker with nobody watching, so it is strictly
+    worse than a failure that says why.
+    """
+
     chapter = db.get(models.Chapter, first_chapter["id"])
     raw = _phase33_pending(concepts=False)
     raw["decision_id"] = "phase33-host-useronly-0001"
@@ -422,32 +432,36 @@ def test_user_only_decision_still_pauses_when_attended(
         filename="user-only-pauses.mmd",
         raw=raw,
     )
-    monkeypatch.setenv("AEGIS_UNATTENDED_COMPLETION", "0")
     monkeypatch.setattr(
         build_concepts,
         "_autonomously_resolve_pending_decision",
         lambda *_args, **_kwargs: None,
     )
 
-    outcome = build_concepts._existing_human_decision_pause(
-        db,
-        job,
-        dict(job.generation_checkpoint or {}),
-        agent_resolution_ids=set(),
-        owner_sub=None,
-    )
-
-    assert outcome is not None
-    assert outcome["status"] == "awaiting_decision"
-    db.refresh(job)
-    assert job.generation_checkpoint["human_decisions"]["pending"] is not None
+    for setting in ("0", "1", "false", "off", "no"):
+        monkeypatch.setenv("AEGIS_UNATTENDED_COMPLETION", setting)
+        with pytest.raises(build_concepts.UnattendedDecisionUnavailable):
+            build_concepts._existing_human_decision_pause(
+                db,
+                job,
+                dict(job.generation_checkpoint or {}),
+                agent_resolution_ids=set(),
+                owner_sub=None,
+            )
 
 
-def test_opt_out_restores_the_manual_pause(
+def test_opt_out_disables_automatic_continuation_but_restores_no_pause(
     db,
     first_chapter,
     monkeypatch,
 ):
+    """The setting still means something, just not what its name suggested.
+
+    With continuation off, the safest-offered-action route declines and the
+    pending decision stays on the checkpoint. What no longer follows is a
+    pause: the caller ends the run instead of waiting for an answer.
+    """
+
     chapter = db.get(models.Chapter, first_chapter["id"])
     raw = _phase33_pending()
     raw["decision_id"] = "phase33-host-optout-0001"
