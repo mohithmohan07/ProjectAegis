@@ -16963,12 +16963,20 @@ def _skeleton_family_labels(records: list[dict]) -> list[str]:
 
 
 def _canonicalize_target_bounds(records: list[dict]) -> tuple[int, int]:
-    """Return compact-but-not-collapsed row-count bounds for a chapter map.
+    """Return the enforced floor and the advisory guide for a chapter map.
 
     Distinct parent families are structural evidence, especially for a
     headingless source whose selected chapter title is the only legal topic.
     Canonicalization may merge aliases and narrow fragments inside a family,
     but it must retain room for at least one coherent concept per family.
+
+    ``min_keep`` is **enforced**: falling below it means the map collapsed and
+    content was lost, which nothing downstream can undo.
+
+    ``max_keep`` is **advisory only** -- it is logged, never acted on. It used
+    to trigger a compaction retry, which merged concepts to satisfy
+    ``topics x _CANONICALIZE_MAX_PER_TOPIC`` rather than because the source
+    said they were the same idea.
     """
     if not records:
         return 0, 0
@@ -17064,28 +17072,21 @@ def _consolidate_concepts_via_api(
         retry_out = _concept_rows_to_records(retry_data)
         if len(retry_out) > len(out):
             out = retry_out
-    elif out and len(out) > max_keep:
-        progress.log(
-            f"Canonicalization kept {len(out)} rows for {len(records)} input "
-            f"rows (target {min_keep}-{max_keep}) — still too granular, "
-            "retrying with a compaction instruction.",
-            level="warning",
-        )
-        retry_user = (
-            user
-            + f"\n\nYOUR PREVIOUS ANSWER KEPT {len(out)} ROWS, WHICH IS TOO "
-            "GRANULAR FOR A TEACHER-FACING CHAPTER MAP. Merge repeated terms, "
-            "sub-types, examples, cases, and exercise-question headings into "
-            "their parent teaching concepts. Preserve all main objectives, "
-            "topic order, and every MUST-PRESERVE SOURCE-BACKED PARENT FAMILY. "
-            "Never combine disjoint subject domains into one row. Return at "
-            f"most {max_keep} rows and at least {min_keep} rows."
-        )
-        retry_data = _openai_json(
-            system, retry_user, purpose="concept_validation")
-        retry_out = _concept_rows_to_records(retry_data)
-        if retry_out and min_keep <= len(retry_out) < len(out):
-            out = retry_out
+    # There is deliberately no matching retry for "too many rows". The system
+    # prompt already asks for a compact teacher-facing map and carries no
+    # numeric target; a second pass demanding a row count merges on arithmetic
+    # rather than on meaning. It cost real content: a 44-row skeleton whose
+    # canonicalization kept 43 rows -- the model judging almost all of them
+    # distinct -- was compacted to 30 purely to satisfy topics x 6.
+    #
+    # The asymmetry with over-merging above is the point. A concept merged away
+    # here is gone: later stages split and add, but they cannot recover a
+    # distinction that was already collapsed. A concept kept that should have
+    # been merged survives to where it can still be fixed -- Rule 3 splitting,
+    # the granularity audit, and the reviewer, who can merge two rows but
+    # cannot restore one that was never written.
+    # See docs/concept-placement-rules.md Rule 3: concept count is expected to
+    # rise, so enforcing a ceiling here worked against the stated policy.
     if not out:
         raise RuntimeError("concept consolidation returned no rows")
     if len(out) < min_keep:
@@ -17097,9 +17098,11 @@ def _consolidate_concepts_via_api(
         out = [dict(r) for r in records]
     elif len(out) > max_keep:
         progress.log(
-            f"Canonicalization remained above target ({len(out)}/{max_keep} rows); "
-            "keeping the most compact API output for downstream refinement.",
-            level="warning",
+            f"Canonicalization kept {len(out)} rows, above the advisory "
+            f"guide of {max_keep}. Accepted: the model judged these "
+            "distinct, and merging on a row count rather than on meaning "
+            "loses teaching content that no later stage can recover.",
+            level="info",
         )
     out = _preserve_required_method_rows(records, out)
     out = _strip_types_from_records(_ensure_parent_concepts(out))

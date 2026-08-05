@@ -2087,3 +2087,82 @@ def test_concept_pipeline_reports_progress_after_skeleton(monkeypatch):
     assert "inventorying questions" in labels
     assert "assigning Types within source topics" in labels
     assert "validating and repairing final map" in labels
+
+
+def test_canonicalization_does_not_compact_to_hit_a_row_count(monkeypatch):
+    """The model's judgement stands; arithmetic does not override it.
+
+    Reproduces the live History run: a 44-row skeleton whose canonicalization
+    kept 43 rows was compacted to 30 to satisfy topics x 6. Merging on a row
+    count rather than on meaning loses teaching content, and no later stage can
+    recover a distinction that was already collapsed
+    (docs/concept-placement-rules.md, Rule 3).
+    """
+
+    topics = [
+        "The French Revolution and the Idea of the Nation",
+        "The Making of Nationalism in Europe",
+        "The Age of Revolutions: 1830-1848",
+        "The Making of Germany and Italy",
+        "Visualising the Nation",
+    ]
+    records = [
+        _row(topics[index % len(topics)], f"Concept {index:02d}")
+        for index in range(44)
+    ]
+    # The model judges 43 of the 44 distinct — one genuine duplicate merged.
+    response = records[:43]
+
+    calls: list[str] = []
+
+    def provider(*_args, **kwargs):
+        calls.append(str(kwargs.get("purpose") or ""))
+        return {"rows": [_api_row(row) for row in response]}
+
+    monkeypatch.setattr(g, "_openai_json", provider)
+    monkeypatch.setattr(
+        g, "_repair_records_via_api", lambda rows, **kwargs: rows)
+
+    out = g._consolidate_concepts_via_api(records, subject="History")
+
+    # One pass only: no second call demanding a smaller row count.
+    assert len(calls) == 1, f"a compaction retry ran: {calls}"
+    assert len(out) == 43, f"rows were compacted to {len(out)}"
+
+    min_keep, max_keep = g._canonicalize_target_bounds(records)
+    # The advisory guide is still exceeded — and deliberately not acted on.
+    assert len(out) > max_keep
+
+
+def test_canonicalization_still_refuses_to_over_merge(monkeypatch):
+    """The floor is enforced: collapsing the map is unrecoverable."""
+
+    topics = [
+        "The French Revolution and the Idea of the Nation",
+        "The Making of Nationalism in Europe",
+        "The Age of Revolutions: 1830-1848",
+        "The Making of Germany and Italy",
+        "Visualising the Nation",
+    ]
+    records = [
+        _row(topics[index % len(topics)], f"Concept {index:02d}")
+        for index in range(44)
+    ]
+    collapsed = records[:3]
+
+    calls: list[str] = []
+
+    def provider(*_args, **kwargs):
+        calls.append(str(kwargs.get("purpose") or ""))
+        return {"rows": [_api_row(row) for row in collapsed]}
+
+    monkeypatch.setattr(g, "_openai_json", provider)
+    monkeypatch.setattr(
+        g, "_repair_records_via_api", lambda rows, **kwargs: rows)
+
+    out = g._consolidate_concepts_via_api(records, subject="History")
+
+    # Over-merging still gets a retry, and still falls back to the full
+    # skeleton rather than shipping a collapsed map.
+    assert len(calls) == 2, f"the over-merge retry did not run: {calls}"
+    assert len(out) == len(records)
