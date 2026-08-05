@@ -1306,7 +1306,7 @@ def test_changed_same_scope_followup_is_replanned_and_completes(
     followup["context_hash"] = "f" * 64
     followup["decision_id"] = "phase33-host-followup-" + "f" * 16
     # The later critic exposes a materially changed candidate workspace for the
-    # same unit. Terra must see the prior ineffective pathway and choose again
+    # same unit. The resolver must see the prior ineffective pathway and choose again
     # instead of forcing a manual pause.
     followup["candidates"] = [
         {

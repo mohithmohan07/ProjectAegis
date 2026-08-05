@@ -86,7 +86,7 @@ def test_luna_pricing_matches_standard_text_token_rates():
     assert summary["estimated_cost_usd"] == pytest.approx(0.000378)
 
 
-def test_terra_resolution_pricing_is_accounted_separately():
+def test_non_default_model_pricing_is_accounted_separately():
     with openai_usage.track():
         openai_usage.record_response(
             _response(

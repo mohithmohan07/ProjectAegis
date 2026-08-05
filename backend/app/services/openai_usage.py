@@ -32,6 +32,9 @@ class Pricing:
 
 # Standard text-token prices, snapshotted on PRICING_AS_OF. Prefix matching
 # covers both aliases and dated snapshots (for example gpt-5.4-mini-2026-03-17).
+# Models Aegis does not select by default are still priced here: an operator
+# override, or usage persisted by an earlier release, must keep reporting an
+# exact cost rather than degrading the run to "pricing incomplete".
 _PRICING: tuple[tuple[str, Pricing], ...] = (
     (
         "gpt-5.6-terra",

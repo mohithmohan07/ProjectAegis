@@ -111,7 +111,7 @@ def test_resolves_one_high_confidence_offered_action_with_one_provider_call(
     assert call["purpose"] == "semantic_resolution"
     assert call["pages"] == []
     assert call["max_tokens"] == resolver.config.OPENAI_MAX_OUTPUT_TOKENS
-    assert call["model"] == "gpt-5.6-terra"
+    assert call["model"] == "gpt-5.6-luna" == resolver.config.OPENAI_MODEL
     assert call["response_schema"]["strict"] is True
     schema = call["response_schema"]["schema"]
     assert schema["additionalProperties"] is False
@@ -137,12 +137,36 @@ def test_resolves_one_high_confidence_offered_action_with_one_provider_call(
     ] is True
 
 
+def test_resolver_follows_the_configured_aegis_model(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """No second hardcoded slug: moving the pipeline moves the resolver."""
+
+    calls: list[dict] = []
+    monkeypatch.delenv("AEGIS_AUTONOMOUS_RESOLUTION_MODEL", raising=False)
+    monkeypatch.setattr(resolver.config, "OPENAI_MODEL", "gpt-5.6-relocated")
+    monkeypatch.setattr(
+        resolver.phase22,
+        "_openai_multimodal_json",
+        lambda **kwargs: calls.append(kwargs) or _response(),
+    )
+
+    result = resolver.resolve_pending(
+        _pending(),
+        source_text="TYPE-0001 is supported by the canonical source.",
+        checkpoint={},
+    )
+
+    assert result.resolved is True
+    assert [call["model"] for call in calls] == ["gpt-5.6-relocated"]
+
+
 def test_resolution_model_is_configurable_and_keeps_provider_max_output(
     monkeypatch: pytest.MonkeyPatch,
 ):
     calls: list[dict] = []
     monkeypatch.setenv(
-        "AEGIS_AUTONOMOUS_RESOLUTION_MODEL", "gpt-5.6-terra-snapshot"
+        "AEGIS_AUTONOMOUS_RESOLUTION_MODEL", "gpt-5.6-luna-snapshot"
     )
     monkeypatch.setattr(
         resolver.phase22,
@@ -158,12 +182,12 @@ def test_resolution_model_is_configurable_and_keeps_provider_max_output(
 
     assert result.resolved is True
     assert len(calls) == 1
-    assert calls[0]["model"] == "gpt-5.6-terra-snapshot"
+    assert calls[0]["model"] == "gpt-5.6-luna-snapshot"
     assert calls[0]["max_tokens"] == resolver.config.OPENAI_MAX_OUTPUT_TOKENS
     assert calls[0]["purpose"] == "semantic_resolution"
 
 
-def test_unavailable_terra_model_falls_back_once_to_primary(monkeypatch):
+def test_unavailable_override_model_falls_back_once_to_primary(monkeypatch):
     calls: list[dict] = []
 
     def provider(**kwargs):
@@ -174,6 +198,10 @@ def test_unavailable_terra_model_falls_back_once_to_primary(monkeypatch):
             )
         return _response()
 
+    # The fallback exists only for an explicit resolver-only override. With the
+    # default the requested and primary models are the same, so there is no
+    # second model to try (asserted below).
+    monkeypatch.setenv("AEGIS_AUTONOMOUS_RESOLUTION_MODEL", "gpt-5.6-retired")
     monkeypatch.setattr(resolver.config, "OPENAI_MODEL", "gpt-5.6-luna")
     monkeypatch.setattr(resolver.phase22, "_openai_multimodal_json", provider)
 
@@ -185,15 +213,38 @@ def test_unavailable_terra_model_falls_back_once_to_primary(monkeypatch):
 
     assert result.resolved is True
     assert [call["model"] for call in calls] == [
-        "gpt-5.6-terra",
+        "gpt-5.6-retired",
         "gpt-5.6-luna",
     ]
     fallback_packet = json.loads(calls[1]["prompt"])
     assert fallback_packet["provider_model_fallback"] == {
-        "requested": "gpt-5.6-terra",
+        "requested": "gpt-5.6-retired",
         "used": "gpt-5.6-luna",
         "reason": "requested resolution model unavailable",
     }
+
+
+def test_unavailable_default_model_is_not_retried_against_itself(monkeypatch):
+    calls: list[dict] = []
+
+    def provider(**kwargs):
+        calls.append(kwargs)
+        raise RuntimeError(
+            "model_not_found: requested resolution model does not exist"
+        )
+
+    monkeypatch.delenv("AEGIS_AUTONOMOUS_RESOLUTION_MODEL", raising=False)
+    monkeypatch.setattr(resolver.config, "OPENAI_MODEL", "gpt-5.6-luna")
+    monkeypatch.setattr(resolver.phase22, "_openai_multimodal_json", provider)
+
+    result = resolver.resolve_pending(
+        _pending(),
+        source_text="TYPE-0001 is supported by the canonical source.",
+        checkpoint={},
+    )
+
+    assert result.status == "unavailable"
+    assert [call["model"] for call in calls] == ["gpt-5.6-luna"]
 
 
 def test_planner_expands_exact_compound_evidence_once_then_applies():

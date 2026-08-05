@@ -16,6 +16,8 @@ import re
 from dataclasses import dataclass, replace
 from typing import Any, Callable, Mapping
 
+from aegis_pipeline.openai_policy import DEFAULT_OPENAI_MODEL
+
 from .. import config
 from . import canonical_source_phase22 as phase22
 from . import early_semantic_gate
@@ -29,7 +31,6 @@ _DEFAULT_MAX_DECISIONS = 100
 _DEFAULT_MAX_PATHWAY_TURNS = 24
 _DEFAULT_SOURCE_CHARS = 96_000
 _MAX_PACKET_CHARS = 320_000
-_DEFAULT_RESOLUTION_MODEL = "gpt-5.6-terra"
 _RESOLUTION_MODEL_ENV = "AEGIS_AUTONOMOUS_RESOLUTION_MODEL"
 _CANDIDATE_WORKSPACE_POLICY = (
     "complete-candidate-catalog-v5:all-opaque-identities;"
@@ -131,12 +132,25 @@ def maximum_pathway_turns() -> int:
 
 
 def resolution_model() -> str:
-    """Return the high-intelligence planner/solver model for discrepancies."""
+    """Return the planner/solver model used for semantic discrepancies.
 
-    return (
-        os.environ.get(_RESOLUTION_MODEL_ENV, _DEFAULT_RESOLUTION_MODEL).strip()
-        or _DEFAULT_RESOLUTION_MODEL
-    )
+    The deployment's configured Aegis model is the default, so the resolver
+    request and the token budget it sends (``config.OPENAI_MAX_OUTPUT_TOKENS``,
+    derived from that same model) always describe one model. A second hardcoded
+    slug silently decoupled the two: changing ``AEGIS_OPENAI_MODEL`` moved the
+    whole pipeline except this call, and the capacity clamp kept describing the
+    model that was no longer being asked.
+
+    An operator may still point only the resolver at a different model with
+    ``AEGIS_AUTONOMOUS_RESOLUTION_MODEL``. That stays an explicit opt-in rather
+    than the default, and the transport layer clamps such a request to the
+    documented capacity of the model actually requested.
+    """
+
+    override = os.environ.get(_RESOLUTION_MODEL_ENV, "").strip()
+    if override:
+        return override
+    return str(config.OPENAI_MODEL or "").strip() or DEFAULT_OPENAI_MODEL
 
 
 def issue_key(pending: Mapping[str, Any]) -> str:
@@ -603,8 +617,9 @@ def capability_key(
             "evidence": evidence,
         },
         # A repeated issue after one applied action is a pathway turnover, not
-        # the same request. Sealing the prior actions lets the next Terra pass
-        # choose a different repair without reopening identical-packet loops.
+        # the same request. Sealing the prior actions lets the next resolver
+        # pass choose a different repair without reopening identical-packet
+        # loops.
         "prior_pathways": _prior_pathway_history(checkpoint, pending),
     }
     return _sha256_json(material)
@@ -1946,6 +1961,10 @@ def _provider_call(
             or primary_model == requested_model
         ):
             raise
+        # Reached only when an operator points the resolver at a model other
+        # than the configured Aegis model; by default the two are identical and
+        # an unavailable model surfaces directly instead of being retried.
+        #
         # A provider rejection before inference is not a semantic retry. Use
         # the configured primary model once; quota/auth/timeout failures never
         # enter this fallback and remain visible to orchestration.
@@ -2577,8 +2596,8 @@ def resolve_pending(
                         "evidence_refs": [],
                     }
             # A premature abstention *or an invalid/low-confidence first
-            # proposal* is not sent to the user. Give Terra a deterministic
-            # expansion of the most relevant exact offered identities, then
+            # proposal* is not sent to the user. Give the resolver a
+            # deterministic expansion of the most relevant exact identities, then
             # require the final best-safe action.
             request = request or default_expansion_request(packet, evidence_refs)
             if request is None:

@@ -2969,7 +2969,7 @@ def _autonomously_resolve_pending_decision(
     ):
         # Identical evidence + critic state + prior-pathway history is a true
         # loop. A changed critic conclusion, evidence set, or prior action has
-        # a different capability key and is sent back to Terra below.
+        # a different capability key and is sent back to the resolver below.
         if safe_option is not None:
             forced_safe = _forced_safe_result(
                 "this exact semantic workspace was already inspected and "
