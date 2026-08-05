@@ -32,23 +32,11 @@ class Pricing:
 
 # Standard text-token prices, snapshotted on PRICING_AS_OF. Prefix matching
 # covers both aliases and dated snapshots (for example gpt-5.4-mini-2026-03-17).
-# Models Aegis does not select by default are still priced here: an operator
-# override, or usage persisted by an earlier release, must keep reporting an
-# exact cost rather than degrading the run to "pricing incomplete".
+# A model Aegis does not select has no row here. Unpriced usage is reported as
+# ``pricing_complete: False`` with a null cost rather than being priced at zero,
+# so an unrecognized model is visible in the run summary instead of silently
+# understating spend.
 _PRICING: tuple[tuple[str, Pricing], ...] = (
-    (
-        "gpt-5.6-terra",
-        Pricing(
-            Decimal("2.00"),
-            Decimal("0.20"),
-            Decimal("12.00"),
-            "https://developers.openai.com/api/docs/models/gpt-5.6-terra",
-            cache_write_multiplier=Decimal("1.25"),
-            long_context_threshold=272_000,
-            long_input_multiplier=Decimal("2"),
-            long_output_multiplier=Decimal("1.5"),
-        ),
-    ),
     (
         "gpt-5.4-mini",
         Pricing(

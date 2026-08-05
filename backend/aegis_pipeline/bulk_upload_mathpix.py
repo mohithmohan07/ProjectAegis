@@ -34,8 +34,22 @@ if not MATHPIX_APP_ID or not MATHPIX_APP_KEY:
 
 # ---- GPT MODELS ----
 # Adjust to whatever deployed names you actually have.
-MODEL_PARSE = "gpt-5.4-mini-2026-03-17"   # for parsing Q & A structure from OCR text
-MODEL_ENRICH = "gpt-5.4-mini-2026-03-17"  # for metadata + rubrics + wrong phrases
+# The Aegis default model is single-sourced from the policy module so these
+# offline tools cannot drift from the web app. Works both as a direct script
+# run (openai_policy sits alongside this file) and as -m aegis_pipeline.<name>.
+try:
+    from aegis_pipeline.openai_policy import (
+        call_with_effort_negotiation,
+        configured_openai_model,
+    )
+except ImportError:  # pragma: no cover - direct script execution
+    from openai_policy import (
+        call_with_effort_negotiation,
+        configured_openai_model,
+    )
+
+MODEL_PARSE = configured_openai_model()   # for parsing Q & A structure from OCR text
+MODEL_ENRICH = configured_openai_model()  # for metadata + rubrics + wrong phrases
 
 
 # ---- UpSchool Question Categories (DO NOT RENAME) ----
@@ -256,18 +270,23 @@ def call_gpt_json(model: str, system_prompt: str, user_prompt: str, max_tokens: 
     Call GPT, get a JSON-like string, repair any literal newlines inside string
     values, then parse with json.loads.
     """
-    resp = openai.ChatCompletion.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {
-                "role": "user",
-                "content": user_prompt
-                + "\n\nRespond with ONLY a single valid JSON object, no prose.",
-            },
-        ],
-        max_completion_tokens=limit,
-        temperature=0,
+    resp = call_with_effort_negotiation(
+        model,
+        "metadata",
+        lambda effort: openai.ChatCompletion.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user",
+                    "content": user_prompt
+                    + "\n\nRespond with ONLY a single valid JSON object, no prose.",
+                },
+            ],
+            max_completion_tokens=limit,
+            temperature=0,
+            **({"reasoning_effort": effort} if effort else {}),
+        ),
     )
 
     raw = resp.choices[0].message["content"]

@@ -84,8 +84,22 @@ QUESTION_CATEGORIES: List[str] = [
     "Extract based on Map Survey",
 ]
 
-MODEL_PARSE = "gpt-5.4-mini-2026-03-17"
-MODEL_ENRICH = "gpt-5.4-mini-2026-03-17"
+# The Aegis default model is single-sourced from the policy module so these
+# offline tools cannot drift from the web app. Works both as a direct script
+# run (openai_policy sits alongside this file) and as -m aegis_pipeline.<name>.
+try:
+    from aegis_pipeline.openai_policy import (
+        call_with_effort_negotiation,
+        configured_openai_model,
+    )
+except ImportError:  # pragma: no cover - direct script execution
+    from openai_policy import (
+        call_with_effort_negotiation,
+        configured_openai_model,
+    )
+
+MODEL_PARSE = configured_openai_model()
+MODEL_ENRICH = configured_openai_model()
 
 # --------------------------------------------------------------------------
 # Utility Helpers
@@ -144,15 +158,20 @@ def call_gpt_json(
     - Forces JSON output using response_format
     - Adds robust handling when content is empty or not JSON
     """
-    response = client.chat.completions.create(
-        model=model,
-        response_format={"type": "json_object"},
-        temperature=temperature,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        max_completion_tokens=max_output_tokens,
+    response = call_with_effort_negotiation(
+        model,
+        "metadata",
+        lambda effort: client.chat.completions.create(
+            model=model,
+            response_format={"type": "json_object"},
+            temperature=temperature,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            max_completion_tokens=max_output_tokens,
+            **({"reasoning_effort": effort} if effort else {}),
+        ),
     )
 
     # Get content safely

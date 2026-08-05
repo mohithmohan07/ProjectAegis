@@ -19,7 +19,12 @@ import unicodedata
 from collections import Counter
 from datetime import datetime, timezone
 
-from aegis_pipeline.openai_policy import OpenAIPurpose, chat_request_policy
+from aegis_pipeline.openai_policy import (
+    OpenAIPurpose,
+    chat_request_policy,
+    is_unsupported_reasoning_effort_error,
+    note_unsupported_reasoning_effort,
+)
 
 from .. import bulk_import as bi
 from .. import config, models
@@ -2626,6 +2631,35 @@ def _openai_json(
             )
             time.sleep(delay)
         except Exception as e:  # noqa: BLE001 — retry then surface
+            # A rejected reasoning_effort is a deterministic capability
+            # mismatch, not a flaky response: replaying the identical request
+            # can only produce the identical 400. Record the discovered ceiling
+            # for every call path in this process, then retry immediately at the
+            # lower effort without consuming a hard attempt.
+            current_effort = str(request_policy.get("reasoning_effort") or "")
+            if current_effort and is_unsupported_reasoning_effort_error(e):
+                lowered = note_unsupported_reasoning_effort(
+                    request_policy["model"], current_effort
+                )
+                # ``single_attempt`` promises exactly one physical request, so
+                # it records the ceiling for later callers but does not retry.
+                if (
+                    not single_attempt
+                    and lowered is not None
+                    and lowered != current_effort
+                ):
+                    if lowered:
+                        request_policy["reasoning_effort"] = lowered
+                    else:
+                        request_policy.pop("reasoning_effort", None)
+                    progress.log(
+                        f"OpenAI does not support reasoning effort "
+                        f"{current_effort!r} for model "
+                        f"{request_policy['model']}; retrying with "
+                        f"{lowered or 'omitted'!r} without consuming a retry.",
+                        level="warning",
+                    )
+                    continue
             last_err = e
             attempt += 1
             if attempt >= hard_attempt_limit:

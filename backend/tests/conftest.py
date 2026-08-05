@@ -44,6 +44,21 @@ def _prepare():
     config.BULK_IMPORT_OUTPUT.unlink(missing_ok=True)
 
 
+@pytest.fixture(autouse=True)
+def _forget_negotiated_reasoning_ceilings():
+    """Keep discovered effort ceilings from leaking between tests.
+
+    Capability negotiation caches a per-model ceiling process-wide so one probe
+    teaches every later request. That is exactly wrong for tests: a rejection
+    staged by one test would silently lower the effort every later test sees.
+    """
+    from aegis_pipeline import openai_policy
+
+    openai_policy.reset_reasoning_ceilings()
+    yield
+    openai_policy.reset_reasoning_ceilings()
+
+
 @pytest.fixture()
 def client():
     return TestClient(app)

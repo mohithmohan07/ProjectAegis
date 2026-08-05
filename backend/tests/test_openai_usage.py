@@ -86,7 +86,9 @@ def test_luna_pricing_matches_standard_text_token_rates():
     assert summary["estimated_cost_usd"] == pytest.approx(0.000378)
 
 
-def test_non_default_model_pricing_is_accounted_separately():
+def test_unpriced_model_reports_incomplete_pricing_not_zero_cost():
+    """An unrecognized model must be visible, never silently free."""
+
     with openai_usage.track():
         openai_usage.record_response(
             _response(
@@ -100,10 +102,11 @@ def test_non_default_model_pricing_is_accounted_separately():
         )
         summary = openai_usage.current_summary()
 
-    # 400*$2/M + 400*$0.20/M + 200*$2.50/M + 200*$12/M.
     assert summary["model"] == "gpt-5.6-terra"
-    assert summary["pricing_complete"] is True
-    assert summary["estimated_cost_usd"] == pytest.approx(0.00378)
+    assert summary["request_count"] == 1
+    assert summary["total_tokens"] == 1_200
+    assert summary["pricing_complete"] is False
+    assert summary["estimated_cost_usd"] is None
 
 
 def test_luna_long_context_multiplier_is_applied_per_request():

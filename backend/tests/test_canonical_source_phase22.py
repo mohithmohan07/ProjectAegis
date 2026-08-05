@@ -403,7 +403,7 @@ def test_multimodal_call_uses_source_adjudication_policy(monkeypatch):
     assert result["verdict"] == "not_visible"
     call = calls[-1]
     assert call["model"] == "gpt-5.6-luna"
-    assert call["reasoning_effort"] == "high"
+    assert call["reasoning_effort"] == "max"
     assert call["response_format"]["type"] == "json_schema"
     assert call["response_format"]["json_schema"]["strict"] is True
     assert call["max_completion_tokens"] == 1234

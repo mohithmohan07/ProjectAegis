@@ -95,6 +95,61 @@ def test_unsupported_reasoning_effort_downgrades_immediately(monkeypatch):
     generation._openai_gate = None
 
 
+def test_structured_call_reuses_a_ceiling_discovered_elsewhere(monkeypatch):
+    """A ceiling learned on another call path costs this one nothing.
+
+    Without this, asking every purpose for `max` would mean each structured
+    request paid its own rejected round-trip.
+    """
+
+    import openai
+    from aegis_pipeline import openai_policy
+
+    calls: list[dict] = []
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=self.create)
+            )
+
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            if kwargs.get("reasoning_effort") == "max":
+                raise AssertionError(
+                    "re-probed an effort already known to be rejected"
+                )
+            return SimpleNamespace(
+                choices=[SimpleNamespace(
+                    message=SimpleNamespace(
+                        content=json.dumps({"ok": True}), refusal=None
+                    ),
+                    finish_reason="stop",
+                )]
+            )
+
+    monkeypatch.setattr(openai, "OpenAI", Client)
+    monkeypatch.setattr(config, "OPENAI_MODEL", "gpt-5.6-luna")
+    generation._openai_gate = None
+
+    # Some earlier call, on any path, already learned the ceiling.
+    openai_policy.note_unsupported_reasoning_effort("gpt-5.6-luna", "max")
+
+    result = phase34._resilient_openai_multimodal_json(
+        system="Return strict JSON.",
+        prompt="payload",
+        pages=[],
+        response_schema=_simple_schema(),
+        purpose="semantic_resolution",
+        max_tokens=128_000,
+        model="gpt-5.6-luna",
+    )
+
+    assert result == {"ok": True}
+    assert [call["reasoning_effort"] for call in calls] == ["xhigh"]
+    generation._openai_gate = None
+
+
 def test_each_unsupported_reasoning_effort_is_tried_once(monkeypatch):
     import openai
     from aegis_pipeline import openai_policy
@@ -387,8 +442,9 @@ def test_completion_limit_escalates_budget_and_finishes(monkeypatch):
     assert len(calls) == 2
     assert calls[0]["max_completion_tokens"] == 1200
     assert calls[1]["max_completion_tokens"] == 5200
-    assert calls[0]["reasoning_effort"] == "high"
-    assert calls[1]["reasoning_effort"] == "medium"
+    # Truncation recovery steps the effort down one rung from the requested max.
+    assert calls[0]["reasoning_effort"] == "max"
+    assert calls[1]["reasoning_effort"] == "xhigh"
     assert "STRUCTURED OUTPUT RECOVERY" in calls[1]["messages"][0]["content"]
     generation._openai_gate = None
 

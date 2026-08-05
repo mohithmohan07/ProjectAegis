@@ -33,7 +33,21 @@ OUTPUT_DIR = Path(r"C:\Users\FCI\OneDrive\Documents\CM")
 BOARD = "ICSE"
 BOOK = "Selina"
 GRADE = 9
-MODEL = "gpt-5.4-mini-2026-03-17"
+# The Aegis default model is single-sourced from the policy module so these
+# offline tools cannot drift from the web app. Works both as a direct script
+# run (openai_policy sits alongside this file) and as -m aegis_pipeline.<name>.
+try:
+    from aegis_pipeline.openai_policy import (
+        call_with_effort_negotiation,
+        configured_openai_model,
+    )
+except ImportError:  # pragma: no cover - direct script execution
+    from openai_policy import (
+        call_with_effort_negotiation,
+        configured_openai_model,
+    )
+
+MODEL = configured_openai_model()
 MAX_OUTPUT_TOKENS = int(os.getenv("AEGIS_OPENAI_MAX_OUTPUT_TOKENS", "128000"))
 
 # Subject code for topic/concept display: MA=Math, PH=Physics
@@ -211,20 +225,25 @@ def gpt_enhance_concept(
     last_err = None
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            resp = client.responses.create(
-                model=MODEL,
-                max_output_tokens=MAX_OUTPUT_TOKENS,
-                input=[
-                    {"role": "system", "content": get_prelearning_system_prompt(subject)},
-                    {"role": "user", "content": user},
-                ],
-                text={
-                    "format": {
-                        "type": "json_schema",
-                        "name": CONCEPT_ENHANCE_SCHEMA["name"],
-                        "schema": CONCEPT_ENHANCE_SCHEMA["schema"]
-                    }
-                }
+            resp = call_with_effort_negotiation(
+                MODEL,
+                "pre_learning",
+                lambda effort: client.responses.create(
+                    model=MODEL,
+                    max_output_tokens=MAX_OUTPUT_TOKENS,
+                    input=[
+                        {"role": "system", "content": get_prelearning_system_prompt(subject)},
+                        {"role": "user", "content": user},
+                    ],
+                    text={
+                        "format": {
+                            "type": "json_schema",
+                            "name": CONCEPT_ENHANCE_SCHEMA["name"],
+                            "schema": CONCEPT_ENHANCE_SCHEMA["schema"]
+                        }
+                    },
+                    **({"reasoning": {"effort": effort}} if effort else {}),
+                ),
             )
             data = json.loads(resp.output_text)
             desc = data.get("concept_description", "")
