@@ -7,7 +7,10 @@ reviewer can correct a wrong placement, but cannot correct one that is missing.
 
 A reviewer then reads the delivered workbook and writes what needs changing in
 plain language. That instruction is applied here by one bounded model pass over
-the job's concepts.
+the job's concepts: existing concepts can be redirected or reworded, and a
+concept generation missed can be added. Deletion is deliberately absent — a
+reviewer who wants a concept gone says so, and the request is recorded in the
+round rather than performed invisibly.
 
 Two properties this module exists to guarantee:
 
@@ -34,9 +37,7 @@ from sqlalchemy.orm import Session
 from .. import models
 from . import openai_usage, progress
 
-# A reviewer may only redirect placement and wording of concepts that already
-# exist. Creating or deleting concepts is generation's job, driven by source
-# evidence; an instruction cannot conjure a claim the source does not support.
+# Fields of an existing concept a reviewer may redirect or reword.
 EDITABLE_FIELDS = (
     "topic",
     "parent_concept",
@@ -46,6 +47,20 @@ EDITABLE_FIELDS = (
     "keywords",
 )
 
+# A reviewer may also add a concept generation missed. Deletion stays out:
+# removing a claim the source supports is how a map silently loses content, and
+# a reviewer who wants it gone can say so in the next round's instruction where
+# it is recorded rather than performed invisibly.
+ADDABLE_FIELDS = (
+    "topic",
+    "parent_concept",
+    "concept_title",
+    "concept_display_name",
+    "concept_details",
+    "keywords",
+)
+
+MAX_ADDITIONS_PER_ROUND = 50
 MAX_INSTRUCTION_CHARS = 20_000
 
 
@@ -243,7 +258,7 @@ def _edit_schema(concept_ids: list[int]) -> dict[str, Any]:
         "schema": {
             "type": "object",
             "additionalProperties": False,
-            "required": ["change_summary", "changes"],
+            "required": ["change_summary", "changes", "additions"],
             "properties": {
                 "change_summary": {"type": "string", "minLength": 1},
                 "changes": {
@@ -264,6 +279,31 @@ def _edit_schema(concept_ids: list[int]) -> dict[str, Any]:
                                 "enum": list(EDITABLE_FIELDS),
                             },
                             "after": {"type": "string"},
+                            "reason": {"type": "string", "minLength": 1},
+                        },
+                    },
+                },
+                "additions": {
+                    "type": "array",
+                    "maxItems": MAX_ADDITIONS_PER_ROUND,
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": [
+                            "topic", "concept_title", "concept_details",
+                            "reason",
+                        ],
+                        "properties": {
+                            "topic": {"type": "string", "minLength": 1},
+                            "concept_title": {
+                                "type": "string", "minLength": 1
+                            },
+                            "concept_display_name": {"type": "string"},
+                            "parent_concept": {"type": "string"},
+                            "concept_details": {
+                                "type": "string", "minLength": 1
+                            },
+                            "keywords": {"type": "string"},
                             "reason": {"type": "string", "minLength": 1},
                         },
                     },
@@ -291,9 +331,9 @@ _SYSTEM = (
     "or Type spanning topics belongs to the latest topic it requires. Follow "
     "the reviewer over your own reading where they conflict — they are "
     "correcting you.\n\n"
-    "Return one entry per field you actually change, citing the reviewer's "
-    "words as the reason. Return an empty changes array if the instruction "
-    "requires no edit."
+    "Return one entry per field you actually change and one entry per concept "
+    "you add, citing the reviewer's words as the reason. Return empty arrays "
+    "if the instruction requires no edit."
 )
 
 
@@ -332,8 +372,12 @@ def apply_instruction(
         "concepts": view,
         "flagged_placements": revision.flagged_placements or [],
         "editable_fields": list(EDITABLE_FIELDS),
+        "addable_fields": list(ADDABLE_FIELDS),
+        "topics": sorted({row["topic"] for row in view}),
         "constraints": {
-            "may_not_create_or_delete_concepts": True,
+            "may_add_a_missing_concept": True,
+            "may_not_delete_a_concept": True,
+            "additions_must_use_an_existing_topic": True,
             "only_listed_concept_ids_may_change": True,
             "follow_the_reviewer_over_your_own_placement_reading": True,
         },
@@ -393,6 +437,10 @@ def apply_instruction(
             "reason": str(entry.get("reason") or ""),
         })
 
+    applied.extend(
+        _apply_additions(db, job, rows, raw.get("additions") or [])
+    )
+
     revision.changes = applied
     revision.change_summary = str(raw.get("change_summary") or "")[:8000]
     revision.model = str(raw.get("_model") or "")
@@ -404,6 +452,93 @@ def apply_instruction(
         status="applied" if applied else "no_change",
         error="",
     )
+
+
+
+
+def _chapter_topics(
+    db: Session,
+    job: models.UploadJob,
+) -> list[models.Topic]:
+    """Return every topic in this job's chapters, hosting concepts or not."""
+
+    chapter_ids = [
+        int(value)
+        for value in (job.deposit_scope_ids or [])
+        if str(value).strip().lstrip("-").isdigit()
+    ]
+    if not chapter_ids:
+        return []
+    return list(
+        db.execute(
+            select(models.Topic)
+            .where(models.Topic.chapter_id.in_(chapter_ids))
+            .order_by(models.Topic.source_order)
+        ).scalars()
+    )
+
+
+def _apply_additions(
+    db: Session,
+    job: models.UploadJob,
+    rows: list[tuple[models.Concept, models.Topic]],
+    additions: object,
+) -> list[dict[str, Any]]:
+    """Create concepts the reviewer says generation missed.
+
+    A new concept joins a topic the chapter already teaches; inventing a topic
+    would create structure the source never established. Each addition is
+    recorded as a ``created`` change so a later reader can tell reviewer-authored
+    content from generated content without opening the workbook.
+    """
+
+    # Every topic in the chapter, not only those that already host a concept.
+    # A topic generation left empty is precisely where a reviewer is most
+    # likely to add the concept it missed.
+    topics_by_title = {
+        str(topic.topic_title or "").strip().casefold(): topic
+        for topic in _chapter_topics(db, job)
+    }
+    # Append after everything the run produced, preserving generation's order.
+    next_order = max(
+        (int(concept.source_order or 0) for concept, _topic in rows),
+        default=0,
+    ) + 1
+
+    created: list[dict[str, Any]] = []
+    for entry in (additions if isinstance(additions, list) else [])[
+        :MAX_ADDITIONS_PER_ROUND
+    ]:
+        if not isinstance(entry, dict):
+            continue
+        topic = topics_by_title.get(
+            str(entry.get("topic") or "").strip().casefold()
+        )
+        title = str(entry.get("concept_title") or "").strip()
+        if topic is None or not title:
+            continue
+        concept = models.Concept(
+            topic_id=topic.id,
+            concept_title=title,
+            concept_display_name=str(
+                entry.get("concept_display_name") or ""
+            ),
+            parent_concept=str(entry.get("parent_concept") or ""),
+            concept_details=str(entry.get("concept_details") or ""),
+            keywords=str(entry.get("keywords") or ""),
+            source_order=next_order,
+        )
+        db.add(concept)
+        db.flush()
+        next_order += 1
+        created.append({
+            "concept_id": concept.id,
+            "field": "created",
+            "before": "",
+            "after": f"{topic.topic_title} / {title}",
+            "reason": str(entry.get("reason") or ""),
+        })
+    return created
 
 
 def _move_to_topic(

@@ -59,8 +59,9 @@ export function ConceptReviewPanel({ jobId }: { jobId: number }) {
       <div className="section-title">Review and correct the output</div>
       <p className="muted">
         Download the workbook, read it, then describe anything that needs
-        changing. Aegis applies your instruction and rebuilds the file. You can
-        do this as many times as you need.
+        changing — move a concept to another topic, reword it, or add one that
+        is missing. Aegis applies your instruction and rebuilds the file. You
+        can do this as many times as you need.
       </p>
 
       <p>
@@ -94,7 +95,9 @@ export function ConceptReviewPanel({ jobId }: { jobId: number }) {
         value={instruction}
         placeholder={
           "e.g. Move “How d governs Sn” under Sum of First n Terms — it needs " +
-          "the sum formula, so the earlier topic is only a prerequisite."
+          "the sum formula, so the earlier topic is only a prerequisite. And " +
+          "add a concept under §5.2 on recognising a real-world sequence as " +
+          "an AP; it is missing."
         }
         onChange={(event) => setInstruction(event.target.value)}
         disabled={busy}

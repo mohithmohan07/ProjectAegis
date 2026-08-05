@@ -431,3 +431,162 @@ def test_unknown_job_is_not_found(client):
         json={"instruction": "anything"},
     )
     assert response.status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# Reviewer-authored additions
+# --------------------------------------------------------------------------- #
+
+def _adding_provider(additions, changes=None, summary="Added what was missing."):
+    def call(**_kwargs):
+        return {
+            "change_summary": summary,
+            "changes": changes or [],
+            "additions": additions,
+        }
+
+    return call
+
+
+def test_reviewer_can_add_a_concept_generation_missed(db, job):
+    upload, _concept, topics = job
+    revision = concept_revisions.record_instruction(
+        db, upload, "You are missing the concept on recognising an AP."
+    )
+
+    applied = concept_revisions.apply_instruction(
+        db, upload, revision,
+        provider=_adding_provider([{
+            "topic": "Arithmetic Progressions",
+            "concept_title": "Recognising a real-world sequence as an AP",
+            "concept_details": "Description: ladder rungs and taxi fares.",
+            "keywords": "AP, recognise",
+            "parent_concept": "Arithmetic Progressions",
+            "reason": "Reviewer: you are missing the recognition concept.",
+        }]),
+    )
+
+    assert applied.status == "applied"
+    assert applied.change_count == 1
+    created = applied.changes[0]
+    assert created["field"] == "created"
+    assert "Recognising a real-world sequence" in created["after"]
+
+    stored = db.get(models.Concept, created["concept_id"])
+    assert stored is not None
+    assert stored.topic_id == topics["Arithmetic Progressions"].id
+    assert stored.concept_details == "Description: ladder rungs and taxi fares."
+
+
+def test_an_addition_under_an_unknown_topic_is_declined(db, job):
+    """Adding a concept must not invent chapter structure."""
+
+    upload, _concept, _topics = job
+    before = db.query(models.Concept).count()
+    revision = concept_revisions.record_instruction(db, upload, "Add it.")
+
+    applied = concept_revisions.apply_instruction(
+        db, upload, revision,
+        provider=_adding_provider([{
+            "topic": "A Topic This Chapter Never Teaches",
+            "concept_title": "Orphan",
+            "concept_details": "Description: nowhere to live.",
+            "reason": "Reviewer asked.",
+        }]),
+    )
+
+    assert applied.changes == []
+    assert db.query(models.Concept).count() == before
+
+
+def test_additions_and_edits_compose_in_one_round(db, job):
+    upload, concept, topics = job
+    revision = concept_revisions.record_instruction(
+        db, upload, "Move that one later and add the missing basic concept."
+    )
+
+    applied = concept_revisions.apply_instruction(
+        db, upload, revision,
+        provider=_adding_provider(
+            additions=[{
+                "topic": "Arithmetic Progressions",
+                "concept_title": "d determines whether an AP increases",
+                "concept_details": "Description: sign of the common difference.",
+                "reason": "Reviewer: keep the foundational idea here.",
+            }],
+            changes=[{
+                "concept_id": concept.id,
+                "field": "topic",
+                "after": "Sum of First n Terms",
+                "reason": "Reviewer: this needs the sum formula.",
+            }],
+        ),
+    )
+
+    db.refresh(concept)
+    assert applied.status == "applied"
+    assert applied.change_count == 2
+    # Rule 3 of the placement rules: the split keeps both sides.
+    assert concept.topic_id == topics["Sum of First n Terms"].id
+    fields = {row["field"] for row in applied.changes}
+    assert fields == {"topic", "created"}
+
+
+def test_an_added_concept_reaches_the_delivered_workbook(db, job, tmp_path):
+    from app.bulk_import import writer
+    from openpyxl import load_workbook
+
+    upload, _concept, _topics = job
+    revision = concept_revisions.record_instruction(db, upload, "Add it.")
+    concept_revisions.apply_instruction(
+        db, upload, revision,
+        provider=_adding_provider([{
+            "topic": "nth Term",
+            "concept_title": "Deriving the nth term formula",
+            "concept_details": "Description: a plus n minus one d.",
+            "reason": "Reviewer: the derivation is missing.",
+        }]),
+    )
+
+    destination = tmp_path / "delivered.xlsx"
+    writer.write_workbook(db, destination)
+    book = load_workbook(destination, read_only=True, data_only=True)
+    cells = {
+        str(value)
+        for sheet in book.worksheets
+        for row in sheet.iter_rows(values_only=True)
+        for value in row
+        if value is not None
+    }
+    book.close()
+
+    assert "Deriving the nth term formula" in cells
+    # The reason the reviewer gave still never reaches the file.
+    assert not any("the derivation is missing" in cell for cell in cells)
+
+
+def test_deletion_is_not_offered(db, job):
+    """A reviewer's removal request is recorded, never silently performed."""
+
+    upload, concept, _topics = job
+    before = db.query(models.Concept).count()
+    revision = concept_revisions.record_instruction(
+        db, upload, "Delete the Sn concept entirely."
+    )
+
+    applied = concept_revisions.apply_instruction(
+        db, upload, revision,
+        provider=_adding_provider(
+            additions=[],
+            changes=[],
+            summary="Deletion is not available; the concept was left in place.",
+        ),
+    )
+
+    assert db.query(models.Concept).count() == before
+    assert db.get(models.Concept, concept.id) is not None
+    assert applied.status == "no_change"
+    assert "Deletion is not available" in applied.change_summary
+    assert "delete" not in "".join(
+        concept_revisions.EDITABLE_FIELDS + concept_revisions.ADDABLE_FIELDS
+    )
