@@ -149,7 +149,16 @@ def _seed_paused_job(db, chapter, monkeypatch, *, filename: str, raw=None):
 # Deterministic safe-option selection
 # --------------------------------------------------------------------------- #
 
-def test_uncertified_recommended_mutation_is_not_selected():
+def test_uncertified_mutation_is_taken_by_best_judgement_and_flagged():
+    """An uncertified route is now applied rather than declined.
+
+    While a declined decision could still reach a person, refusing was right.
+    It cannot any more: generation does not pause, and a stopped run produces
+    no map at all. So Aegis takes the least-destructive offered route and the
+    placement is flagged for review, which a reviewer can correct — where a
+    missing concept could not be.
+    """
+
     selected = autonomous_resolution.safe_continuation_option({
         "options": [
             {"choice": "consolidate_types", "recommended": True},
@@ -157,7 +166,13 @@ def test_uncertified_recommended_mutation_is_not_selected():
         ],
         "candidates": [],
     })
-    assert selected is None
+    assert selected == {
+        "choice": "consolidate_types",
+        "target_id": "",
+        "target_concept_id": "",
+    }
+    # The user-only route is never what best judgement reaches for.
+    assert selected["choice"] not in autonomous_resolution.USER_ONLY_CHOICES
 
 
 def test_explicit_no_change_wins_over_recommended_consolidation():
@@ -212,7 +227,9 @@ def test_single_keep_candidate_route_is_the_fallback():
     }
 
 
-def test_recommended_candidate_choice_requires_a_known_target():
+def test_best_judgement_falls_back_to_the_only_offered_candidate():
+    """An unknown recommended target does not become the selected target."""
+
     selected = autonomous_resolution.safe_continuation_option({
         "options": [
             {
@@ -225,9 +242,12 @@ def test_recommended_candidate_choice_requires_a_known_target():
             {"target_id": "CAND-KEEP-0001", "action": "keep"},
         ],
     })
-    # The unknown recommended target is refused; the keep route is not
-    # offered as an option here, so nothing safe exists.
-    assert selected is None
+    # The uncertified recommendation is still not trusted as a target. With one
+    # offered candidate, "best judgement" and "the only judgement" coincide, so
+    # the route resolves against the candidate that actually exists.
+    assert selected is not None
+    assert selected["target_id"] == "CAND-KEEP-0001"
+    assert selected["target_id"] != "CAND-UNKNOWN"
 
 
 def test_multiple_keep_candidates_are_not_ranked_by_list_order():

@@ -299,19 +299,122 @@ def safe_continuation_option(
             "target_concept_id": certified.target_concept_id,
         }
 
-    # A Phase 3.3 conflict exists precisely because no existing host passed
+    # A conflict exists precisely because no existing host passed
     # certification.  Creating a separate source-grounded concept preserves
-    # the Type/QID without guessing between merely plausible hosts.
-    if (
-        _normal(pending.get("kind"))
-        == "phase33_type_host_semantic_conflict"
-        and "create_new" in options_by_choice
-    ):
+    # the Type/QID without guessing between merely plausible hosts, so it is
+    # preferred over any selection wherever it is offered -- not only for
+    # Phase 3.3.
+    if "create_new" in options_by_choice:
         return {
             "choice": "create_new",
             "target_id": "",
             "target_concept_id": "",
         }
+    return best_judgement_option(pending)
+
+
+def best_judgement_option(
+    pending: Mapping[str, Any],
+) -> dict[str, str] | None:
+    """Return the least-destructive offered action when nothing is certified.
+
+    Everything above this point declines rather than manufacture trust, and
+    that was right while a declined decision could still reach a person. It no
+    longer can: generation does not pause, and a run that stops produces no
+    map at all.
+
+    So when no route is certified, Aegis places the concept by its own best
+    reading and the placement is flagged for review
+    (``docs/concept-placement-rules.md``: a reviewer can correct a wrong
+    placement, but not a missing one). The order below is by how much damage a
+    wrong guess does, least first:
+
+    1. ``keep_distinct_types`` -- no mutation at all;
+    2. ``create_new`` -- source-preserving; handled by the caller above;
+    3. a selection when exactly one candidate is offered, where "best
+       judgement" and "the only judgement" coincide;
+    4. an expansion or selection among several, which is a genuine guess and
+       is why the result is flagged.
+
+    Source replacement and custom instructions are never returned: no
+    automation may alter the uploaded document or invent an instruction.
+    """
+
+    # A decision carrying a source patch proposes editing the working source.
+    # Only the hash-sealed certification above may apply one. Best judgement
+    # covers placement, never a source mutation: "Aegis will not alter the
+    # uploaded document by itself" is not a preference that reviewer
+    # correction can buy back.
+    if isinstance(pending.get("source_patch"), Mapping):
+        return None
+
+    options = [
+        row for row in pending.get("options") or []
+        if isinstance(row, Mapping)
+        and is_automatable_choice(row.get("choice"))
+    ]
+    if not options:
+        return None
+    by_choice = {str(row.get("choice") or ""): row for row in options}
+
+    # Best judgement may guess *which* offered route to take. It may never
+    # select a candidate whose integrity seal is missing or stale: that is a
+    # corrupt payload, not an ambiguous one, and no amount of reviewer
+    # correction afterwards makes acting on it right.
+    candidates = [
+        row for row in pending.get("candidates") or []
+        if isinstance(row, Mapping)
+        and str(row.get("target_id") or "")
+        and early_semantic_gate.candidate_binding_is_valid(row)
+    ]
+
+    candidate_target_ids = {
+        str(row.get("target_id") or "") for row in candidates
+    }
+    candidate_concept_ids = {
+        str(row.get("concept_id") or row.get("target_concept_id") or "")
+        for row in candidates
+    }
+
+    def offered(choice: str) -> dict[str, str] | None:
+        row = by_choice.get(choice)
+        if row is None:
+            return None
+        target_id = str(row.get("target_id") or "")
+        concept_id = str(row.get("target_concept_id") or "")
+        # An option may name a target that is not among the offered
+        # candidates. That is an uncertified recommendation, not a fact, so it
+        # is dropped rather than selected; the single-candidate rule below may
+        # still resolve the route against something that actually exists.
+        if target_id and target_id not in candidate_target_ids:
+            target_id = ""
+        if concept_id and concept_id not in candidate_concept_ids:
+            concept_id = ""
+        if not target_id and not concept_id and len(candidates) == 1:
+            # A targetless selector with exactly one candidate is unambiguous.
+            target_id = str(candidates[0].get("target_id") or "")
+            concept_id = str(candidates[0].get("concept_id") or "")
+        if choice in {"accept_recommended", "select_candidate"} and not target_id:
+            return None
+        if choice in {"expand_existing", "select_existing"} and not concept_id:
+            return None
+        return {
+            "choice": choice,
+            "target_id": target_id,
+            "target_concept_id": concept_id,
+        }
+
+    for choice in (
+        "keep_distinct_types",
+        "consolidate_types",
+        "select_candidate",
+        "accept_recommended",
+        "select_existing",
+        "expand_existing",
+    ):
+        chosen = offered(choice)
+        if chosen is not None:
+            return chosen
     return None
 
 

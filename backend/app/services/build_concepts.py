@@ -3312,12 +3312,22 @@ def _apply_last_resort_safe_continuation(
         )
         return None
     decision_id = str(recorded["resolved_decision"]["decision_id"])
+    # This wording is load-bearing: concept_revisions scans the run log for
+    # "placed by best judgement" to show a reviewer exactly which placements
+    # Aegis was least sure of. Changing it silently hides them.
     progress.log(
-        "Safe continuation: no autonomous review pathway remained"
+        "Placed by best judgement: no autonomous review pathway remained"
         + (f" ({declined_reason})" if declined_reason else "")
-        + ". Aegis applied the safest server-offered bounded action "
-        f"({safe_option['choice']}) and generation is continuing without "
-        "manual review.",
+        + f". Aegis applied the safest offered action ({safe_option['choice']}"
+        + (
+            f" -> {safe_option['target_id'] or safe_option['target_concept_id']}"
+            if safe_option["target_id"] or safe_option["target_concept_id"]
+            else ""
+        )
+        + ") for "
+        + _decision_identity_text(pending)
+        + " and generation continued. Review this placement in the delivered "
+        "output and correct it there if it is wrong.",
         level="warning",
     )
     return decision_id
