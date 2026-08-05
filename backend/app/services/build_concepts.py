@@ -2448,18 +2448,6 @@ def inventory_csv(
 # Post Learning
 # --------------------------------------------------------------------------- #
 
-def _awaiting_human_decision_result(
-    job: models.UploadJob,
-    pending: dict,
-) -> dict:
-    return {
-        "job_id": job.id,
-        "status": "awaiting_decision",
-        "pending_decision": copy.deepcopy(pending),
-        "resume_required": False,
-    }
-
-
 def _retire_obsolete_machine_metadata_pause(
     db: Session,
     job: models.UploadJob,
@@ -2671,17 +2659,11 @@ def _existing_human_decision_pause(
             checkpoint.clear()
             checkpoint.update(refreshed_checkpoint)
         return None
+    # Always raises; there is no pause to fall through to.
     _raise_if_unattended_cannot_pause(pending)
-    progress.set_progress(
-        job.checkpoint_progress,
-        label="Paused for your decision",
+    raise AssertionError(  # pragma: no cover - defensive
+        "generation reached a pause that no longer exists"
     )
-    progress.log(
-        "This generation is waiting for the saved semantic decision; "
-        "no API request was started.",
-        level="warning",
-    )
-    return _awaiting_human_decision_result(job, pending)
 
 
 def _agent_review_timestamp() -> str:
@@ -2969,7 +2951,7 @@ def _autonomously_resolve_pending_decision(
     ):
         # Identical evidence + critic state + prior-pathway history is a true
         # loop. A changed critic conclusion, evidence set, or prior action has
-        # a different capability key and is sent back to Terra below.
+        # a different capability key and is sent back to the resolver below.
         if safe_option is not None:
             forced_safe = _forced_safe_result(
                 "this exact semantic workspace was already inspected and "
@@ -3330,12 +3312,22 @@ def _apply_last_resort_safe_continuation(
         )
         return None
     decision_id = str(recorded["resolved_decision"]["decision_id"])
+    # This wording is load-bearing: concept_revisions scans the run log for
+    # "placed by best judgement" to show a reviewer exactly which placements
+    # Aegis was least sure of. Changing it silently hides them.
     progress.log(
-        "Safe continuation: no autonomous review pathway remained"
+        "Placed by best judgement: no autonomous review pathway remained"
         + (f" ({declined_reason})" if declined_reason else "")
-        + ". Aegis applied the safest server-offered bounded action "
-        f"({safe_option['choice']}) and generation is continuing without "
-        "manual review.",
+        + f". Aegis applied the safest offered action ({safe_option['choice']}"
+        + (
+            f" -> {safe_option['target_id'] or safe_option['target_concept_id']}"
+            if safe_option["target_id"] or safe_option["target_concept_id"]
+            else ""
+        )
+        + ") for "
+        + _decision_identity_text(pending)
+        + " and generation continued. Review this placement in the delivered "
+        "output and correct it there if it is wrong.",
         level="warning",
     )
     return decision_id
@@ -3488,6 +3480,60 @@ def _equivalent_agent_resolution_count(
     return count
 
 
+def _issue_agent_resolution_count(
+    checkpoint: dict | None,
+    scope_key: str,
+) -> int:
+    """Count prior autonomous repairs for one semantic scope.
+
+    Unlike :func:`_equivalent_agent_resolution_count` this ignores candidate
+    identities entirely. Regenerating a concept_id produces a new *equivalence*
+    key but the same *issue* key, so this is the count that can retire a scope
+    the pipeline keeps re-raising under fresh identities.
+    """
+
+    if not scope_key:
+        return 0
+    count = 0
+    for row in _human_decision_ledger(checkpoint).get("resolutions") or []:
+        if (
+            not isinstance(row, dict)
+            or str(row.get("resolved_by") or "") != "agent"
+            or str(row.get("status") or "") not in {"ready", "consumed"}
+        ):
+            continue
+        stored = str(row.get("issue_key") or "")
+        if not stored:
+            original = row.get("pending_decision")
+            if isinstance(original, dict):
+                stored = autonomous_resolution.issue_key(original)
+        if stored == scope_key:
+            count += 1
+    return count
+
+
+def _raise_if_issue_pathways_exhausted(
+    pending: dict,
+    *,
+    attempts: int,
+    maximum: int,
+) -> None:
+    """Stop a scope that keeps returning under regenerated identities."""
+
+    if attempts < maximum:
+        return
+    message = (
+        f"Generation stopped after {attempts} autonomous repair attempt(s) for "
+        f"the same semantic scope [{_decision_identity_text(pending)}]. The "
+        "scope kept returning with regenerated candidate identities, so its "
+        "distinct repair pathways are exhausted and further attempts would "
+        "not converge. Raise AEGIS_AUTONOMOUS_RESOLUTION_MAX_PATHWAY_TURNS "
+        "only after correcting that decision pathway."
+    )
+    progress.log(message, level="error")
+    raise SemanticResolutionCyclesExhausted(message)
+
+
 def _decision_identity_text(pending: dict) -> str:
     """Name a decision in the run log so a loop is diagnosable."""
 
@@ -3537,13 +3583,16 @@ def _raise_if_unattended_cannot_pause(pending: dict) -> None:
 
     Reached only when every automatic pathway declined and the decision's
     remaining routes all require a person: replacing the uploaded document or
-    writing an instruction. Neither can be synthesized, and an unattended
-    batch cannot answer a pause, so the run stops with the reason recorded
-    rather than waiting indefinitely for a click that will not come.
+    writing an instruction. Neither can be synthesized.
+
+    This is unconditional. Generation has no mid-run pause in any
+    configuration, and no setting restores one: a stalled job is worse than a
+    failed one because nothing is watching it and it holds its worker
+    indefinitely. The run stops with the reason recorded, and the reviewer
+    corrects the delivered output afterwards through the revision loop
+    (:mod:`app.services.concept_revisions`) instead of mid-run.
     """
 
-    if not autonomous_resolution.unattended_completion_enabled():
-        return
     choices = sorted({
         str(row.get("choice") or "")
         for row in pending.get("options") or []
@@ -3569,8 +3618,7 @@ def _raise_if_unattended_cannot_pause(pending: dict) -> None:
         + ", leaving only actions a person must take ("
         + (", ".join(user_only) or "none")
         + "). Aegis will not alter the uploaded document by itself. Upload a "
-        "corrected document and convert it again, or set "
-        "AEGIS_UNATTENDED_COMPLETION=0 to answer this decision manually."
+        "corrected document and convert it again."
     )
     progress.log(message, level="error")
     raise UnattendedDecisionUnavailable(message)
@@ -3821,11 +3869,28 @@ def _run_with_human_decision_pause(
     owner_sub: str | None,
     initial_agent_resolution_ids: set[str] | None = None,
 ) -> tuple[dict | None, object | None]:
-    """Run a pipeline with bounded agent-first, human-last decision handling."""
+    """Run a pipeline with bounded agent-first decision handling.
+
+    Two independent ceilings bound this loop, and both are required:
+
+    * per *equivalence key* — the identical workspace returning again means the
+      last repair was proven ineffective;
+    * per *issue key* — the same semantic scope, however its candidate
+      identities were regenerated.
+
+    Only the second guarantees termination. The equivalence key hashes
+    candidate ``target_id``/``concept_id``, so a stage that regenerates those
+    between passes mints a new key every iteration, resets its own budget, and
+    spins forever at the Type-assignment boundary. The issue key is deliberately
+    independent of regenerated identities, so it is the identity that can
+    actually retire a scope.
+    """
 
     active_ids = set(initial_agent_resolution_ids or set())
     local_attempts: dict[str, int] = {}
+    issue_attempts: dict[str, int] = {}
     maximum = _max_equivalent_resolution_attempts()
+    issue_maximum = autonomous_resolution.maximum_pathway_turns()
     while True:
         token = _ACTIVE_AGENT_RESOLUTION_IDS.set(frozenset(active_ids))
         try:
@@ -3857,6 +3922,26 @@ def _run_with_human_decision_pause(
                 attempts=attempts,
                 maximum=maximum,
             )
+            scope_key = autonomous_resolution.issue_key(pending)
+            scope_attempts = max(
+                issue_attempts.get(scope_key, 0),
+                _issue_agent_resolution_count(
+                    checkpoint_before_pause, scope_key
+                ),
+                _issue_agent_resolution_count(
+                    job.generation_checkpoint, scope_key
+                ),
+            )
+            _raise_if_issue_pathways_exhausted(
+                pending,
+                attempts=scope_attempts,
+                maximum=issue_maximum,
+            )
+
+            def _charge() -> None:
+                local_attempts[equivalence_key] = attempts + 1
+                issue_attempts[scope_key] = scope_attempts + 1
+
             resolved_id = _autonomously_resolve_pending_decision(
                 db,
                 job,
@@ -3864,7 +3949,7 @@ def _run_with_human_decision_pause(
                 owner_sub=owner_sub,
             )
             if resolved_id:
-                local_attempts[equivalence_key] = attempts + 1
+                _charge()
                 active_ids.add(resolved_id)
                 continue
             current = _pending_human_decision(job.generation_checkpoint)
@@ -3875,13 +3960,14 @@ def _run_with_human_decision_pause(
                 owner_sub=owner_sub,
             )
             if continued_id:
-                local_attempts[equivalence_key] = attempts + 1
+                _charge()
                 active_ids.add(continued_id)
                 continue
+            # Always raises; there is no pause to fall through to.
             _raise_if_unattended_cannot_pause(current or pending)
-            return _awaiting_human_decision_result(
-                job, current or pending
-            ), None
+            raise AssertionError(  # pragma: no cover - defensive
+                "generation reached a pause that no longer exists"
+            )
         finally:
             _ACTIVE_AGENT_RESOLUTION_IDS.reset(token)
 

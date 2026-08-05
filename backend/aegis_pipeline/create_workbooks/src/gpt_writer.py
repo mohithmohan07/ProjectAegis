@@ -19,6 +19,8 @@ from aegis_pipeline.openai_policy import (
     DEFAULT_OPENAI_MODEL,
     OpenAIPurpose,
     chat_request_policy,
+    is_unsupported_reasoning_effort_error,
+    note_unsupported_reasoning_effort,
 )
 from schema import (
     Activity,
@@ -406,10 +408,27 @@ class GPTWriter:
             kwargs_try["max_completion_tokens"] = max_tokens
             response = self._client.chat.completions.create(**kwargs_try)
         except Exception as exc:
-            if not _is_unsupported_completion_parameter(exc):
+            # An effort the model does not accept is a deterministic capability
+            # mismatch. Record the ceiling for the whole process, lower this
+            # request one rung, and try again; a replay at the same effort
+            # could only reproduce the same rejection.
+            effort = str(kwargs.get("reasoning_effort") or "")
+            if effort and is_unsupported_reasoning_effort_error(exc):
+                lowered = note_unsupported_reasoning_effort(self.model, effort)
+                if lowered is None or lowered == effort:
+                    raise
+                if lowered:
+                    kwargs["reasoning_effort"] = lowered
+                else:
+                    kwargs.pop("reasoning_effort", None)
+                kwargs_retry = dict(kwargs)
+                kwargs_retry["max_completion_tokens"] = max_tokens
+                response = self._client.chat.completions.create(**kwargs_retry)
+            elif not _is_unsupported_completion_parameter(exc):
                 raise
-            kwargs["max_tokens"] = max_tokens
-            response = self._client.chat.completions.create(**kwargs)
+            else:
+                kwargs["max_tokens"] = max_tokens
+                response = self._client.chat.completions.create(**kwargs)
         # When embedded in the Aegis web app, include both planner and builder
         # responses in the per-file usage total. Standalone vendor use remains
         # independent of the app package.

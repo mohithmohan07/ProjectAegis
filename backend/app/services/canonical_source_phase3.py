@@ -4318,6 +4318,18 @@ def _source_review_graph_or_raise(
             )
         return updated
 
+    if choice == "carry_forward":
+        # Nothing is applied. The source stays exactly as uploaded and the
+        # review travels into the release flagged, so the run still produces a
+        # map the reviewer can read and correct.
+        state["status"] = "carried"
+        state["carried_reason"] = (
+            "No automatic route remained for this source review; the source "
+            "was left unchanged and the run continued."
+        )
+        graph[_SOURCE_REVIEW_KEY] = state
+        return graph
+
     if choice == "replace_source":
         raise ValueError(
             "Source replacement is required before generation can continue. "

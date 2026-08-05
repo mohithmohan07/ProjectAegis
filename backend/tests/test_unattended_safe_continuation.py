@@ -7,9 +7,10 @@ canonical MMD evidence."). These tests pin the quality-first posture: an
 explicit keep/no-change route may be applied, but a UI recommendation or list
 position is never treated as semantic proof. Phase 3.3 preserves an unhosted
 Type by creating a separate source-grounded concept. Decisions whose only
-meaningful action is user-only (source replacement, custom instruction) still
-pause, and the operator can restore the old behavior with
-AEGIS_UNATTENDED_COMPLETION=0.
+meaningful action is user-only (source replacement, custom instruction) are
+carried: nothing is applied, the uploaded document is untouched, and the run
+still produces a map the reviewer can read and correct. No setting restores a
+pause.
 """
 from __future__ import annotations
 
@@ -149,7 +150,16 @@ def _seed_paused_job(db, chapter, monkeypatch, *, filename: str, raw=None):
 # Deterministic safe-option selection
 # --------------------------------------------------------------------------- #
 
-def test_uncertified_recommended_mutation_is_not_selected():
+def test_uncertified_mutation_is_taken_by_best_judgement_and_flagged():
+    """An uncertified route is now applied rather than declined.
+
+    While a declined decision could still reach a person, refusing was right.
+    It cannot any more: generation does not pause, and a stopped run produces
+    no map at all. So Aegis takes the least-destructive offered route and the
+    placement is flagged for review, which a reviewer can correct — where a
+    missing concept could not be.
+    """
+
     selected = autonomous_resolution.safe_continuation_option({
         "options": [
             {"choice": "consolidate_types", "recommended": True},
@@ -157,7 +167,13 @@ def test_uncertified_recommended_mutation_is_not_selected():
         ],
         "candidates": [],
     })
-    assert selected is None
+    assert selected == {
+        "choice": "consolidate_types",
+        "target_id": "",
+        "target_concept_id": "",
+    }
+    # The user-only route is never what best judgement reaches for.
+    assert selected["choice"] not in autonomous_resolution.USER_ONLY_CHOICES
 
 
 def test_explicit_no_change_wins_over_recommended_consolidation():
@@ -176,6 +192,12 @@ def test_explicit_no_change_wins_over_recommended_consolidation():
 
 
 def test_user_only_recommendation_is_never_taken():
+    """A recommended replace_source is still never selected.
+
+    What changed is the alternative: the decision now carries instead of
+    stopping the run. The route a person would have to take is not taken.
+    """
+
     selected = autonomous_resolution.safe_continuation_option({
         "options": [
             {"choice": "replace_source", "recommended": True},
@@ -183,7 +205,8 @@ def test_user_only_recommendation_is_never_taken():
         ],
         "candidates": [],
     })
-    assert selected is None
+    assert selected["choice"] == "carry_forward"
+    assert selected["choice"] not in autonomous_resolution.USER_ONLY_CHOICES
 
 
 def test_single_keep_candidate_route_is_the_fallback():
@@ -212,7 +235,9 @@ def test_single_keep_candidate_route_is_the_fallback():
     }
 
 
-def test_recommended_candidate_choice_requires_a_known_target():
+def test_best_judgement_falls_back_to_the_only_offered_candidate():
+    """An unknown recommended target does not become the selected target."""
+
     selected = autonomous_resolution.safe_continuation_option({
         "options": [
             {
@@ -225,9 +250,12 @@ def test_recommended_candidate_choice_requires_a_known_target():
             {"target_id": "CAND-KEEP-0001", "action": "keep"},
         ],
     })
-    # The unknown recommended target is refused; the keep route is not
-    # offered as an option here, so nothing safe exists.
-    assert selected is None
+    # The uncertified recommendation is still not trusted as a target. With one
+    # offered candidate, "best judgement" and "the only judgement" coincide, so
+    # the route resolves against the candidate that actually exists.
+    assert selected is not None
+    assert selected["target_id"] == "CAND-KEEP-0001"
+    assert selected["target_id"] != "CAND-UNKNOWN"
 
 
 def test_multiple_keep_candidates_are_not_ranked_by_list_order():
@@ -240,7 +268,14 @@ def test_multiple_keep_candidates_are_not_ranked_by_list_order():
             {"target_id": "CAND-KEEP-0002", "action": "keep"},
         ],
     })
-    assert selected is None
+    # List order still ranks nothing: neither candidate is chosen.
+    # Nothing is selected: the decision carries, leaving the source and the
+    # generated map untouched, flagged for the reviewer.
+    assert selected == {
+        "choice": "carry_forward",
+        "target_id": "",
+        "target_concept_id": "",
+    }
 
 
 def test_keep_candidate_with_stale_binding_is_not_selected():
@@ -254,7 +289,15 @@ def test_keep_candidate_with_stale_binding_is_not_selected():
             "binding_hash": "0" * 64,
         }],
     })
-    assert selected is None
+    # A stale seal is a corrupt payload, not an ambiguous one, so the
+    # candidate is still never selected.
+    # Nothing is selected: the decision carries, leaving the source and the
+    # generated map untouched, flagged for the reviewer.
+    assert selected == {
+        "choice": "carry_forward",
+        "target_id": "",
+        "target_concept_id": "",
+    }
 
 
 def test_hash_sealed_source_patch_is_the_only_certified_recommendation():
@@ -301,7 +344,13 @@ def test_hash_sealed_source_patch_is_the_only_certified_recommendation():
     }
 
     pending["source_patch"]["after_sha256"] = "5" * 64
-    assert autonomous_resolution.safe_continuation_option(pending) is None
+    # The tampered patch is never applied. The decision carries instead, so
+    # the working source is left exactly as uploaded.
+    assert autonomous_resolution.safe_continuation_option(pending) == {
+        "choice": "carry_forward",
+        "target_id": "",
+        "target_concept_id": "",
+    }
 
 
 def test_unattended_completion_is_env_gated(monkeypatch):
@@ -478,3 +527,68 @@ def test_pathway_cap_uses_safe_continuation_without_model_request(
     review = recorded["pending_decision"]["agent_review"]
     assert review["status"] == "resolved"
     assert review["reason"].startswith("Safe continuation:")
+
+
+# --------------------------------------------------------------------------- #
+# Carry forward: the run ships even when only user-only routes are offered
+# --------------------------------------------------------------------------- #
+
+def test_user_only_options_carry_instead_of_stopping_the_run():
+    """A source-review decision no longer ends the run.
+
+    Replacing the uploaded document and writing an instruction are the two
+    things no automation may do. Rather than stopping, Aegis leaves the source
+    exactly as uploaded, keeps what generation produced, and flags the
+    decision so the reviewer sees it in the delivered output.
+    """
+
+    selected = autonomous_resolution.safe_continuation_option({
+        "kind": "phase3_source_graph_review",
+        "options": [
+            {"choice": "replace_source", "recommended": True},
+            {"choice": "custom_instruction", "recommended": False},
+        ],
+        "candidates": [],
+    })
+
+    assert selected == {
+        "choice": "carry_forward",
+        "target_id": "",
+        "target_concept_id": "",
+    }
+    # Carrying is emphatically not choosing to replace the source.
+    assert selected["choice"] not in autonomous_resolution.USER_ONLY_CHOICES
+
+
+def test_carry_forward_changes_nothing():
+    """It settles a decision; it never carries a target to act on."""
+
+    carried = autonomous_resolution.carry_forward_option()
+
+    assert carried["target_id"] == ""
+    assert carried["target_concept_id"] == ""
+    assert autonomous_resolution.is_automatable_choice(carried["choice"])
+    assert carried["choice"] not in autonomous_resolution.USER_ONLY_CHOICES
+
+
+def test_every_decision_shape_now_ships():
+    """No offered option set leaves a run without an output."""
+
+    shapes = [
+        {"options": [{"choice": "replace_source"}], "candidates": []},
+        {"options": [{"choice": "custom_instruction"}], "candidates": []},
+        {"options": [], "candidates": []},
+        {"options": [{"choice": "create_new"}], "candidates": []},
+        {"options": [{"choice": "keep_distinct_types"}], "candidates": []},
+        {
+            "options": [{"choice": "select_candidate"}],
+            "candidates": [
+                {"target_id": "A", "action": "keep"},
+                {"target_id": "B", "action": "keep"},
+            ],
+        },
+    ]
+    for pending in shapes:
+        selected = autonomous_resolution.safe_continuation_option(pending)
+        assert selected is not None, pending
+        assert selected["choice"] not in autonomous_resolution.USER_ONLY_CHOICES

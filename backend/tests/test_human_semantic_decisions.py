@@ -23,18 +23,33 @@ from app.services import (
 
 @pytest.fixture(autouse=True)
 def _attended_decision_mode(monkeypatch):
-    """Pin this module to attended-pause semantics.
+    """Drive every decision in this module to its terminal stop.
 
-    Unattended completion (the production default) deliberately continues
-    these pauses with the safest server-offered action. This module is the
-    contract suite for the attended pause machinery itself — checkpoint
-    preservation, claim guards, crash recovery, and API-free replay — which
-    remains the behavior whenever AEGIS_UNATTENDED_COMPLETION is off or no
-    bounded automatable action exists. The no-pause invariant is covered by
-    tests/test_no_manual_review_invariant.py.
+    Generation has no pause: a semantic decision is resolved autonomously,
+    continued with the safest offered action, or the run ends with the reason
+    recorded. Turning automatic continuation off removes the middle route, so a
+    decision reaches the terminal stop and this module can assert what survives
+    it — checkpoint preservation, claim guards, crash recovery, and API-free
+    replay. Those guarantees are the point; the stop is only how they are
+    reached.
     """
 
     monkeypatch.setenv("AEGIS_UNATTENDED_COMPLETION", "0")
+
+
+def _stopped_run(call):
+    """Run something that must end at a decision, returning the reason.
+
+    Every caller here used to receive an ``awaiting_decision`` result. There is
+    no such result any more, so the run raises instead; the checkpoint state
+    each test inspects afterwards is unchanged.
+    """
+
+    with pytest.raises(
+        build_concepts.UnattendedDecisionUnavailable
+    ) as excinfo:
+        call()
+    return excinfo.value
 
 
 def _seal_live_generation_result(
@@ -412,23 +427,24 @@ def test_generation_pause_preserves_81_percent_checkpoint_and_skips_reentry(
         lambda *_args, **_kwargs: None,
     )
 
-    result = build_concepts.generate_post_learning(
-        db, job.id, chapter.id, owner_sub=auth.LOCAL_OWNER_SUB)
+    stop = _stopped_run(lambda: build_concepts.generate_post_learning(
+        db, job.id, chapter.id, owner_sub=auth.LOCAL_OWNER_SUB))
 
-    assert result["status"] == "awaiting_decision"
-    assert result["pending_decision"]["decision_id"].startswith("phase33-host-")
-    assert result["pending_decision"]["options"][-1]["choice"] == (
-        "custom_instruction")
+    # The run ends rather than parking, and names what only a person can supply.
+    assert "a person must take" in str(stop)
     assert calls == 1
     db.refresh(job)
+    # The expensive 81% checkpoint survives the stop, so a corrected upload
+    # resumes there instead of replaying skeleton and Type mining.
     assert job.status == "converted"
     assert job.generation_checkpoint["stage"] == "pre_type_assignment"
     assert job.checkpoint_progress == pytest.approx(0.81)
-    assert job.awaiting_decision is True
+    assert job.pending_decision is not None
+    assert job.pending_decision["decision_id"].startswith("phase33-host-")
 
-    repeated = build_concepts.generate_post_learning(
-        db, job.id, chapter.id, owner_sub=auth.LOCAL_OWNER_SUB)
-    assert repeated["status"] == "awaiting_decision"
+    # Repeating the request must not re-enter the generation stage.
+    _stopped_run(lambda: build_concepts.generate_post_learning(
+        db, job.id, chapter.id, owner_sub=auth.LOCAL_OWNER_SUB))
     assert calls == 1
 
 
@@ -716,19 +732,19 @@ def test_agent_abstention_persists_pause_and_is_not_called_on_replay(
         lambda *_args, **_kwargs: None,
     )
 
-    first = build_concepts.generate_post_learning(
+    _stopped_run(lambda: build_concepts.generate_post_learning(
         db, job.id, chapter.id, owner_sub=auth.LOCAL_OWNER_SUB
-    )
-    assert first["status"] == "awaiting_decision"
-    assert first["pending_decision"]["agent_review"]["status"] == "escalated"
-    assert "equally defensible" in (
-        first["pending_decision"]["agent_review"]["reason"]
-    )
+    ))
+    db.refresh(job)
+    review = job.pending_decision["agent_review"]
+    assert review["status"] == "escalated"
+    assert "equally defensible" in review["reason"]
 
-    repeated = build_concepts.generate_post_learning(
+    # The abstention is durable: replaying calls neither the resolver nor the
+    # generation stage again.
+    _stopped_run(lambda: build_concepts.generate_post_learning(
         db, job.id, chapter.id, owner_sub=auth.LOCAL_OWNER_SUB
-    )
-    assert repeated["status"] == "awaiting_decision"
+    ))
     assert resolver_calls == 1
     assert generation_calls == 1
 
@@ -813,15 +829,14 @@ def test_saved_pause_gets_one_output_contract_upgrade_on_resume(
         lambda *_args, **_kwargs: None,
     )
 
-    first = build_concepts._existing_human_decision_pause(
+    _stopped_run(lambda: build_concepts._existing_human_decision_pause(
         db,
         job,
         copy.deepcopy(job.generation_checkpoint),
         agent_resolution_ids=set(),
         owner_sub=auth.LOCAL_OWNER_SUB,
-    )
+    ))
 
-    assert first["status"] == "awaiting_decision"
     assert resolver_calls == 1
     db.refresh(job)
     ledger = job.generation_checkpoint["human_decisions"]
@@ -837,14 +852,14 @@ def test_saved_pause_gets_one_output_contract_upgrade_on_resume(
         ledger["pending"]["candidates"]
     )
 
-    repeated = build_concepts._existing_human_decision_pause(
+    # The upgrade happens once: a second pass does not re-dispatch the agent.
+    _stopped_run(lambda: build_concepts._existing_human_decision_pause(
         db,
         job,
         copy.deepcopy(job.generation_checkpoint),
         agent_resolution_ids=set(),
         owner_sub=auth.LOCAL_OWNER_SUB,
-    )
-    assert repeated["status"] == "awaiting_decision"
+    ))
     assert resolver_calls == 1
 
 
@@ -1182,22 +1197,18 @@ def test_request_started_agent_state_blocks_unknown_outcome_replay(
         ),
     )
 
-    result = build_concepts.generate_post_learning(
+    _stopped_run(lambda: build_concepts.generate_post_learning(
         db, job.id, chapter.id, owner_sub=auth.LOCAL_OWNER_SUB
-    )
-    assert result["status"] == "awaiting_decision"
-    assert result["pending_decision"]["agent_review"]["status"] == (
-        "request_started"
-    )
+    ))
     db.refresh(job)
+    assert job.pending_decision["agent_review"]["status"] == "request_started"
     assert job.status == "converted"
     assert job.generation_checkpoint["stage"] == "pre_type_assignment"
     assert job.checkpoint_progress == pytest.approx(0.81)
-    assert job.awaiting_decision is True
 
-    repeated = build_concepts.generate_post_learning(
-        db, job.id, chapter.id, owner_sub=auth.LOCAL_OWNER_SUB)
-    assert repeated["status"] == "awaiting_decision"
+    # A request whose outcome is unknown is never replayed automatically.
+    _stopped_run(lambda: build_concepts.generate_post_learning(
+        db, job.id, chapter.id, owner_sub=auth.LOCAL_OWNER_SUB))
 
 
 def test_saved_agent_directive_replays_without_second_agent_call(
@@ -1306,7 +1317,7 @@ def test_changed_same_scope_followup_is_replanned_and_completes(
     followup["context_hash"] = "f" * 64
     followup["decision_id"] = "phase33-host-followup-" + "f" * 16
     # The later critic exposes a materially changed candidate workspace for the
-    # same unit. Terra must see the prior ineffective pathway and choose again
+    # same unit. The resolver must see the prior ineffective pathway and choose again
     # instead of forcing a manual pause.
     followup["candidates"] = [
         {
@@ -1613,19 +1624,18 @@ def test_consumed_agent_resolution_reappearing_after_crash_escalates_to_user(
         must_not_resolve,
     )
 
-    paused, operation_result = build_concepts._run_with_human_decision_pause(
+    _stopped_run(lambda: build_concepts._run_with_human_decision_pause(
         repeat_pending,
         db=db,
         job=job,
         fingerprint=job.generation_checkpoint["fingerprint"],
         target_chapter_id=chapter.id,
         owner_sub=auth.LOCAL_OWNER_SUB,
-    )
+    ))
 
-    assert operation_result is None
-    assert paused["status"] == "awaiting_decision"
-    assert paused["pending_decision"]["decision_id"] == pending["decision_id"]
-    review = paused["pending_decision"]["agent_review"]
+    db.refresh(job)
+    assert job.pending_decision["decision_id"] == pending["decision_id"]
+    review = job.pending_decision["agent_review"]
     assert review["status"] == "escalated"
     assert "previous worker ended" in review["reason"]
     assert review["choice"] is None
@@ -2049,10 +2059,10 @@ def test_early_blueprint_pending_replay_and_save_are_api_free(
         ),
     )
 
-    replay = build_concepts.generate_post_learning(
-        db, job.id, chapter.id, owner_sub=auth.LOCAL_OWNER_SUB)
-    assert replay["status"] == "awaiting_decision"
-    assert replay["pending_decision"]["decision_id"] == pending["decision_id"]
+    _stopped_run(lambda: build_concepts.generate_post_learning(
+        db, job.id, chapter.id, owner_sub=auth.LOCAL_OWNER_SUB))
+    db.refresh(job)
+    assert job.pending_decision["decision_id"] == pending["decision_id"]
     assert generation_calls == 0
 
     response = client.post(
@@ -2300,19 +2310,19 @@ def test_pre_learning_pause_records_decision_then_resumes_explicitly(
         lambda *_args, **_kwargs: None,
     )
 
-    paused = build_concepts.generate_pre_learning_from_upload(
-        db, job.id, chapter.id, owner_sub=auth.LOCAL_OWNER_SUB)
-    assert paused["status"] == "awaiting_decision"
+    _stopped_run(lambda: build_concepts.generate_pre_learning_from_upload(
+        db, job.id, chapter.id, owner_sub=auth.LOCAL_OWNER_SUB))
     assert generation_calls == 1
     db.refresh(job)
     assert job.learning_kind == "pre"
     assert job.status == "converted"
     assert job.generation_checkpoint["stage"] == "pre_type_assignment"
+    stopped_decision_id = job.pending_decision["decision_id"]
 
     recorded = build_concepts.record_human_semantic_decision(
         db,
         job.id,
-        paused["pending_decision"]["decision_id"],
+        stopped_decision_id,
         choice="expand_existing",
         owner_sub=auth.LOCAL_OWNER_SUB,
     )

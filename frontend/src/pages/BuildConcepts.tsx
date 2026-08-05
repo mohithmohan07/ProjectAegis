@@ -6,6 +6,7 @@ import { useRunConsole } from "../RunConsole";
 import DirectoryPicker from "../components/DirectoryPicker";
 import DocumentUpload from "../components/DocumentUpload";
 import SyllabusUploader from "../components/SyllabusUploader";
+import { ConceptReviewPanel } from "../components/ConceptReviewPanel";
 import ApiUsageSummary from "../components/ApiUsageSummary";
 import type {
   OpenAIUsage,
@@ -371,6 +372,7 @@ function PostLearningFlow({
       {carriedIssue && (
         <CarriedSemanticIssue issue={carriedIssue} />
       )}
+      {result && job && <ConceptReviewPanel jobId={job.id} />}
       {error && (
         <div className="error-box" style={{ marginTop: 16 }}>{error}</div>
       )}
@@ -556,6 +558,7 @@ function PreLearningUpload({
       {carriedIssue && (
         <CarriedSemanticIssue issue={carriedIssue} />
       )}
+      {result && job && <ConceptReviewPanel jobId={job.id} />}
       {error && (
         <div className="error-box" style={{ marginTop: 16 }}>{error}</div>
       )}

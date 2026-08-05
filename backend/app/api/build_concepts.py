@@ -8,6 +8,7 @@ from ..services import build_concepts as svc
 from ..services import (
     auth,
     build_concepts_release as release_svc,
+    concept_revisions as revisions_svc,
     build_concepts_release_files as release_files,
     build_concepts_release_publication as release_publication,
     checkpoints,
@@ -328,6 +329,73 @@ def upload_released_output_to_database(
         raise HTTPException(409, str(e))
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+# --------------------------------------------------------------------------- #
+# Post-run reviewer revisions
+#
+# The reviewer downloads the released workbook (``release.xlsx`` above), reads
+# it, and describes what needs correcting. Aegis applies the instruction to the
+# job's concepts; the workbook is rebuilt from those concepts, so the delivered
+# file only ever carries corrected content and never the review history itself.
+# --------------------------------------------------------------------------- #
+
+@router.post(
+    "/uploads/{job_id}/revisions",
+    response_model=schemas.ConceptRevisionOut,
+)
+def submit_concept_revision(
+    job_id: int,
+    payload: schemas.ConceptRevisionIn,
+    db: Session = Depends(get_db),
+    user: auth.Principal = Depends(auth.require_user),
+):
+    """Record one reviewer instruction and apply it. Rounds are unlimited."""
+
+    try:
+        job = uploads.get_job(
+            db, job_id, owner_sub=user.sub, module="build_concepts")
+    except uploads.UploadJobNotFound as e:
+        raise HTTPException(404, str(e))
+
+    try:
+        revision = revisions_svc.record_instruction(
+            db, job, payload.instruction, owner_sub=user.sub
+        )
+    except revisions_svc.RevisionError as e:
+        raise HTTPException(400, str(e))
+
+    # A provider failure is recorded on the round, not raised: the reviewer's
+    # words are already committed and must not be lost with the attempt.
+    applied = revisions_svc.apply_instruction(db, job, revision)
+    return revisions_svc.revision_summary(applied)
+
+
+@router.get(
+    "/uploads/{job_id}/revisions",
+    response_model=schemas.ConceptRevisionListOut,
+)
+def list_concept_revisions(
+    job_id: int,
+    db: Session = Depends(get_db),
+    user: auth.Principal = Depends(auth.require_user),
+):
+    """Return every round for this job, oldest first."""
+
+    try:
+        job = uploads.get_job(
+            db, job_id, owner_sub=user.sub, module="build_concepts")
+    except uploads.UploadJobNotFound as e:
+        raise HTTPException(404, str(e))
+    return {
+        "job_id": job.id,
+        "revisions": [
+            revisions_svc.revision_summary(row)
+            for row in revisions_svc.list_revisions(
+                db, job.id, owner_sub=user.sub
+            )
+        ],
+    }
 
 
 @router.post("/uploads/{job_id}/convert")

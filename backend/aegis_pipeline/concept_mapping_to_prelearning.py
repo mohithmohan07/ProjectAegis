@@ -113,7 +113,21 @@ SUBJECT_FILES = SUBJECT_FILES_BY_GRADE_AND_BOARD[10]["ICSE"]
 
 # Alias for board-only lookups at default grade (CLI uses grade + board)
 SUBJECT_FILES_BY_BOARD = SUBJECT_FILES_BY_GRADE_AND_BOARD[10]
-MODEL = "gpt-5.4-mini-2026-03-17"
+# The Aegis default model is single-sourced from the policy module so these
+# offline tools cannot drift from the web app. Works both as a direct script
+# run (openai_policy sits alongside this file) and as -m aegis_pipeline.<name>.
+try:
+    from aegis_pipeline.openai_policy import (
+        call_with_effort_negotiation,
+        configured_openai_model,
+    )
+except ImportError:  # pragma: no cover - direct script execution
+    from openai_policy import (
+        call_with_effort_negotiation,
+        configured_openai_model,
+    )
+
+MODEL = configured_openai_model()
 MAX_OUTPUT_TOKENS = int(os.getenv("AEGIS_OPENAI_MAX_OUTPUT_TOKENS", "128000"))
 
 
@@ -652,17 +666,22 @@ Chapter name: {chapter_title}
 ## DRAFT pre-learning JSON (return cleaned "topics" only)
 {draft}
 """
-    resp = client.chat.completions.create(
-        model=MODEL,
-        messages=[
-            {
-                "role": "system",
-                "content": SYLLABUS_BOUNDARY_FILTER_SYSTEM + "\n\n" + board_sequencing_guidance(board),
-            },
-            {"role": "user", "content": user_msg},
-        ],
-        response_format={"type": "json_object"},
-        max_completion_tokens=MAX_OUTPUT_TOKENS,
+    resp = call_with_effort_negotiation(
+        MODEL,
+        "pre_learning",
+        lambda effort: client.chat.completions.create(
+            model=MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": SYLLABUS_BOUNDARY_FILTER_SYSTEM + "\n\n" + board_sequencing_guidance(board),
+                },
+                {"role": "user", "content": user_msg},
+            ],
+            response_format={"type": "json_object"},
+            max_completion_tokens=MAX_OUTPUT_TOKENS,
+            **({"reasoning_effort": effort} if effort else {}),
+        ),
     )
     text = resp.choices[0].message.content or "{}"
     data = json.loads(text)
@@ -883,11 +902,16 @@ Allowed tags: {", ".join(tags)}."""
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            resp = client.chat.completions.create(
-                model=MODEL,
-                messages=messages,
-                response_format={"type": "json_object"},
-                max_completion_tokens=MAX_OUTPUT_TOKENS,
+            resp = call_with_effort_negotiation(
+                MODEL,
+                "pre_learning",
+                lambda effort: client.chat.completions.create(
+                    model=MODEL,
+                    messages=messages,
+                    response_format={"type": "json_object"},
+                    max_completion_tokens=MAX_OUTPUT_TOKENS,
+                    **({"reasoning_effort": effort} if effort else {}),
+                ),
             )
             content = resp.choices[0].message.content
             data = json.loads(content) if isinstance(content, str) else json.loads(content or "{}")

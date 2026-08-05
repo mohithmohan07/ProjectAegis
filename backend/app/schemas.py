@@ -177,6 +177,10 @@ SemanticDecisionChoice = Literal[
     "consolidate_types",
     "keep_distinct_types",
     "custom_instruction",
+    # Aegis could not settle this decision and no automation may perform what
+    # remains. The source is left exactly as uploaded, generation continues
+    # with what it already has, and the decision is flagged for the reviewer.
+    "carry_forward",
 ]
 
 
@@ -413,3 +417,42 @@ class Stats(BaseModel):
     upload_jobs: int
     openai_live: bool
     mathpix_live: bool
+
+
+# --------------------------------------------------------------------------- #
+# Post-run reviewer revisions
+# --------------------------------------------------------------------------- #
+
+class ConceptRevisionIn(BaseModel):
+    """One reviewer instruction. Rounds are deliberately uncapped."""
+
+    instruction: str = Field(min_length=1, max_length=20_000)
+
+
+class ConceptRevisionChange(BaseModel):
+    concept_id: int
+    field: str
+    before: str = ""
+    after: str = ""
+    reason: str = ""
+
+
+class ConceptRevisionOut(BaseModel):
+    id: int
+    job_id: int
+    round_number: int
+    instruction: str
+    status: str
+    change_summary: str = ""
+    changes: list[ConceptRevisionChange] = Field(default_factory=list)
+    change_count: int = 0
+    flagged_placements: list[dict] = Field(default_factory=list)
+    model: str = ""
+    error: str = ""
+    created_at: str = ""
+    completed_at: str = ""
+
+
+class ConceptRevisionListOut(BaseModel):
+    job_id: int
+    revisions: list[ConceptRevisionOut] = Field(default_factory=list)

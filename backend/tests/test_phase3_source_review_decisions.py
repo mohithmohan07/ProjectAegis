@@ -1321,9 +1321,10 @@ def test_pending_source_review_preserves_usage_and_repeat_generate_is_free(
     first_chapter,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    # Billing preservation across a saved pause is an attended-mode contract.
-    # Unattended runs cannot answer a source-replacement decision, so they end
-    # the run instead of parking it (see test_no_manual_review_invariant.py).
+    # Billing must survive the run ending at a decision. A source-replacement
+    # decision cannot be answered automatically, so the run stops there; what
+    # was already billed stays on the job, and repeating the request bills
+    # nothing further.
     monkeypatch.setenv("AEGIS_UNATTENDED_COMPLETION", "0")
     chapter = db.get(models.Chapter, first_chapter["id"])
     job = models.UploadJob(
@@ -1405,17 +1406,18 @@ def test_pending_source_review_preserves_usage_and_repeat_generate_is_free(
     )
     with openai_usage.track() as first_usage:
         active_usage = first_usage
-        first = uploads.run_with_openai_usage(
-            db,
-            job.id,
-            lambda: build_concepts.generate_post_learning(
+        with pytest.raises(build_concepts.UnattendedDecisionUnavailable):
+            uploads.run_with_openai_usage(
                 db,
                 job.id,
-                chapter.id,
+                lambda: build_concepts.generate_post_learning(
+                    db,
+                    job.id,
+                    chapter.id,
+                    owner_sub=auth.LOCAL_OWNER_SUB,
+                ),
                 owner_sub=auth.LOCAL_OWNER_SUB,
-            ),
-            owner_sub=auth.LOCAL_OWNER_SUB,
-        )
+            )
     expected = {
         "request_count": 1,
         "input_tokens": 100,
@@ -1426,41 +1428,38 @@ def test_pending_source_review_preserves_usage_and_repeat_generate_is_free(
         "total_tokens": 140,
         "estimated_cost_usd": 0.25,
     }
-    assert first["status"] == "awaiting_decision"
+    # What was billed before the stop is durable on the job.
+    db.refresh(job)
+    assert {key: job.openai_usage[key] for key in expected} == expected
     assert {
-        key: first["pending_decision"]["cumulative_usage"][key]
+        key: job.pending_decision["cumulative_usage"][key]
         for key in expected
     } == expected
-    assert {
-        key: first["openai_usage"][key] for key in expected
-    } == expected
-    db.refresh(job)
     durable_before = copy.deepcopy(job.openai_usage)
 
     with openai_usage.track() as repeated_usage:
         active_usage = repeated_usage
-        repeated = uploads.run_with_openai_usage(
-            db,
-            job.id,
-            lambda: build_concepts.generate_post_learning(
+        with pytest.raises(build_concepts.UnattendedDecisionUnavailable):
+            uploads.run_with_openai_usage(
                 db,
                 job.id,
-                chapter.id,
+                lambda: build_concepts.generate_post_learning(
+                    db,
+                    job.id,
+                    chapter.id,
+                    owner_sub=auth.LOCAL_OWNER_SUB,
+                ),
                 owner_sub=auth.LOCAL_OWNER_SUB,
-            ),
-            owner_sub=auth.LOCAL_OWNER_SUB,
-        )
-    assert repeated["status"] == "awaiting_decision"
+            )
+    # Repeating the request re-enters neither generation nor the provider, and
+    # bills nothing further.
     assert generation_calls == 1
     assert repeated_usage.summary()["request_count"] == 0
+    db.refresh(job)
     assert {
-        key: repeated["pending_decision"]["cumulative_usage"][key]
+        key: job.pending_decision["cumulative_usage"][key]
         for key in expected
     } == expected
-    assert {
-        key: repeated["openai_usage"][key] for key in expected
-    } == expected
-    db.refresh(job)
     assert job.openai_usage == durable_before
 
 

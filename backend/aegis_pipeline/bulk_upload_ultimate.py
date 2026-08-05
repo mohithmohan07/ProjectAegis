@@ -12,7 +12,7 @@ Command-line usage:
 
 - If PDF: uses Mathpix → text
 - If TXT: reads text directly
-- Uses gpt-5.1-2025-11-13 to:
+- Uses the configured Aegis model (AEGIS_OPENAI_MODEL) to:
     - Parse & pair questions and solutions
     - Extract marks
     - Classify type (MCQ / FIB / DESCRIPTIVE)
@@ -84,8 +84,22 @@ QUESTION_CATEGORIES: List[str] = [
     "Extract based on Map Survey",
 ]
 
-MODEL_PARSE = "gpt-5.4-mini-2026-03-17"
-MODEL_ENRICH = "gpt-5.4-mini-2026-03-17"
+# The Aegis default model is single-sourced from the policy module so these
+# offline tools cannot drift from the web app. Works both as a direct script
+# run (openai_policy sits alongside this file) and as -m aegis_pipeline.<name>.
+try:
+    from aegis_pipeline.openai_policy import (
+        call_with_effort_negotiation,
+        configured_openai_model,
+    )
+except ImportError:  # pragma: no cover - direct script execution
+    from openai_policy import (
+        call_with_effort_negotiation,
+        configured_openai_model,
+    )
+
+MODEL_PARSE = configured_openai_model()
+MODEL_ENRICH = configured_openai_model()
 
 # --------------------------------------------------------------------------
 # Utility Helpers
@@ -136,23 +150,29 @@ def call_gpt_json(
     model: str,
     system_prompt: str,
     user_prompt: str,
-    temperature: float = 0.0,
     max_output_tokens: int = int(os.getenv("AEGIS_OPENAI_MAX_OUTPUT_TOKENS", "128000")),
 ) -> Dict[str, Any]:
     """
-    Generic JSON-mode call using gpt-5.1 (or compatible).
+    Generic JSON-mode call using the configured Aegis model.
     - Forces JSON output using response_format
     - Adds robust handling when content is empty or not JSON
+
+    No ``temperature`` is sent: reasoning models accept only their default, and
+    passing a value is rejected outright.
     """
-    response = client.chat.completions.create(
-        model=model,
-        response_format={"type": "json_object"},
-        temperature=temperature,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        max_completion_tokens=max_output_tokens,
+    response = call_with_effort_negotiation(
+        model,
+        "metadata",
+        lambda effort: client.chat.completions.create(
+            model=model,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            max_completion_tokens=max_output_tokens,
+            **({"reasoning_effort": effort} if effort else {}),
+        ),
     )
 
     # Get content safely
@@ -744,59 +764,59 @@ def build_excel_from_parsed(parsed: Dict[str, Any],
         clean_question = q.get("clean_question", q.get("raw_question", ""))
         solution_text = q.get("solution_text", "")
 
-# ---------- MCQ → Objective Sheet ----------
-if q_type == "MCQ":
-    options: List[str] = q.get("options", []) or []
-    correct_letter: str = (q.get("correct_option_letter") or "").upper()
+        # ---------- MCQ → Objective Sheet ----------
+        if q_type == "MCQ":
+            options: List[str] = q.get("options", []) or []
+            correct_letter: str = (q.get("correct_option_letter") or "").upper()
 
-    question_row = {
-        "Question Label": label,
-        "Question Category": question_category,
-        "Cognitive Skills": cognitive_skills,
-        "Question Source": "UpSchool DB",
-        "Question Appears in": "Pre/Post-Worksheet/Test",
-        "Level of Difficulty": "",
-        "Question": clean_question,
-        "Marks": marks,
+            question_row = {
+                "Question Label": label,
+                "Question Category": question_category,
+                "Cognitive Skills": cognitive_skills,
+                "Question Source": "UpSchool DB",
+                "Question Appears in": "Pre/Post-Worksheet/Test",
+                "Level of Difficulty": "",
+                "Question": clean_question,
+                "Marks": marks,
 
-        "Answer Type1": "Words",
-        "Answer Type2": "Words",
-        "Answer Type3": "Words",
-        "Answer Type4": "Words",
+                "Answer Type1": "Words",
+                "Answer Type2": "Words",
+                "Answer Type3": "Words",
+                "Answer Type4": "Words",
 
-        "Answer Content1": options[0] if len(options) > 0 else "",
-        "Answer Content2": options[1] if len(options) > 1 else "",
-        "Answer Content3": options[2] if len(options) > 2 else "",
-        "Answer Content4": options[3] if len(options) > 3 else "",
+                "Answer Content1": options[0] if len(options) > 0 else "",
+                "Answer Content2": options[1] if len(options) > 1 else "",
+                "Answer Content3": options[2] if len(options) > 2 else "",
+                "Answer Content4": options[3] if len(options) > 3 else "",
 
-        "Correct Answer1": "No",
-        "Correct Answer2": "No",
-        "Correct Answer3": "No",
-        "Correct Answer4": "No",
+                "Correct Answer1": "No",
+                "Correct Answer2": "No",
+                "Correct Answer3": "No",
+                "Correct Answer4": "No",
 
-        "Answer Weightage1": 0,
-        "Answer Weightage2": 0,
-        "Answer Weightage3": 0,
-        "Answer Weightage4": 0,
+                "Answer Weightage1": 0,
+                "Answer Weightage2": 0,
+                "Answer Weightage3": 0,
+                "Answer Weightage4": 0,
 
-        "Answer Explanation": solution_text,
-    }
+                "Answer Explanation": solution_text,
+            }
 
-    # mark correct option
-    if correct_letter in ["A", "B", "C", "D"]:
-        idx = ord(correct_letter) - ord("A") + 1
-        question_row[f"Correct Answer{idx}"] = "Yes"
-        question_row[f"Answer Weightage{idx}"] = marks
+            # mark correct option
+            if correct_letter in ["A", "B", "C", "D"]:
+                idx = ord(correct_letter) - ord("A") + 1
+                question_row[f"Correct Answer{idx}"] = "Yes"
+                question_row[f"Answer Weightage{idx}"] = marks
 
-    # strip KaTeX formatting from ALL MCQ fields
-    question_row["Question"] = strip_katex_delimiters(question_row["Question"])
-    question_row["Answer Explanation"] = strip_katex_delimiters(question_row["Answer Explanation"])
+            # strip KaTeX formatting from ALL MCQ fields
+            question_row["Question"] = strip_katex_delimiters(question_row["Question"])
+            question_row["Answer Explanation"] = strip_katex_delimiters(question_row["Answer Explanation"])
 
-    for i in range(1, 5):
-        key = f"Answer Content{i}"
-        question_row[key] = strip_katex_delimiters(question_row.get(key, ""))
+            for i in range(1, 5):
+                key = f"Answer Content{i}"
+                question_row[key] = strip_katex_delimiters(question_row.get(key, ""))
 
-    objective_rows.append(question_row)
+            objective_rows.append(question_row)
 
         # ---------- FILL_BLANK → Subjective Sheet ----------
         elif q_type == "FILL_BLANK":
@@ -829,12 +849,13 @@ if q_type == "MCQ":
                     base_row[f"Answer Display{i}"] = ""
                     base_row[f"Weightage{i}"] = ""
                     base_row[f"Placeholder{i}"] = ""
-                    base_row["Question"] = strip_katex_delimiters(base_row["Question"])
-                    base_row["answer_explanation"] = strip_katex_delimiters(base_row["answer_explanation"])
-for i in range(1, 11):
-                        ans_key = f"Answer{i}"
-                        base_row[ans_key] = strip_katex_delimiters(base_row.get(ans_key, ""))
+            # strip KaTeX formatting from ALL fill-in-the-blank fields
+            base_row["Question"] = strip_katex_delimiters(base_row["Question"])
+            base_row["answer_explanation"] = strip_katex_delimiters(base_row["answer_explanation"])
 
+            for i in range(1, 11):
+                ans_key = f"Answer{i}"
+                base_row[ans_key] = strip_katex_delimiters(base_row.get(ans_key, ""))
 
             subjective_rows.append(base_row)
 

@@ -16,6 +16,8 @@ import re
 from dataclasses import dataclass, replace
 from typing import Any, Callable, Mapping
 
+from aegis_pipeline.openai_policy import DEFAULT_OPENAI_MODEL
+
 from .. import config
 from . import canonical_source_phase22 as phase22
 from . import early_semantic_gate
@@ -29,7 +31,6 @@ _DEFAULT_MAX_DECISIONS = 100
 _DEFAULT_MAX_PATHWAY_TURNS = 24
 _DEFAULT_SOURCE_CHARS = 96_000
 _MAX_PACKET_CHARS = 320_000
-_DEFAULT_RESOLUTION_MODEL = "gpt-5.6-terra"
 _RESOLUTION_MODEL_ENV = "AEGIS_AUTONOMOUS_RESOLUTION_MODEL"
 _CANDIDATE_WORKSPACE_POLICY = (
     "complete-candidate-catalog-v5:all-opaque-identities;"
@@ -42,7 +43,11 @@ _CANDIDATE_WORKSPACE_POLICY = (
     "reasoning-capability-negotiation-v1"
 )
 USER_ONLY_CHOICES = frozenset({"replace_source", "custom_instruction"})
+# Settles a decision without changing anything: the uploaded document is
+# untouched and generation proceeds with what it already produced.
+CARRY_FORWARD_CHOICE = "carry_forward"
 AUTOMATABLE_CHOICES = frozenset({
+    CARRY_FORWARD_CHOICE,
     "expand_existing",
     "create_new",
     "select_existing",
@@ -131,12 +136,25 @@ def maximum_pathway_turns() -> int:
 
 
 def resolution_model() -> str:
-    """Return the high-intelligence planner/solver model for discrepancies."""
+    """Return the planner/solver model used for semantic discrepancies.
 
-    return (
-        os.environ.get(_RESOLUTION_MODEL_ENV, _DEFAULT_RESOLUTION_MODEL).strip()
-        or _DEFAULT_RESOLUTION_MODEL
-    )
+    The deployment's configured Aegis model is the default, so the resolver
+    request and the token budget it sends (``config.OPENAI_MAX_OUTPUT_TOKENS``,
+    derived from that same model) always describe one model. A second hardcoded
+    slug silently decoupled the two: changing ``AEGIS_OPENAI_MODEL`` moved the
+    whole pipeline except this call, and the capacity clamp kept describing the
+    model that was no longer being asked.
+
+    An operator may still point only the resolver at a different model with
+    ``AEGIS_AUTONOMOUS_RESOLUTION_MODEL``. That stays an explicit opt-in rather
+    than the default, and the transport layer clamps such a request to the
+    documented capacity of the model actually requested.
+    """
+
+    override = os.environ.get(_RESOLUTION_MODEL_ENV, "").strip()
+    if override:
+        return override
+    return str(config.OPENAI_MODEL or "").strip() or DEFAULT_OPENAI_MODEL
 
 
 def issue_key(pending: Mapping[str, Any]) -> str:
@@ -285,20 +303,145 @@ def safe_continuation_option(
             "target_concept_id": certified.target_concept_id,
         }
 
-    # A Phase 3.3 conflict exists precisely because no existing host passed
+    # A conflict exists precisely because no existing host passed
     # certification.  Creating a separate source-grounded concept preserves
-    # the Type/QID without guessing between merely plausible hosts.
-    if (
-        _normal(pending.get("kind"))
-        == "phase33_type_host_semantic_conflict"
-        and "create_new" in options_by_choice
-    ):
+    # the Type/QID without guessing between merely plausible hosts, so it is
+    # preferred over any selection wherever it is offered -- not only for
+    # Phase 3.3.
+    if "create_new" in options_by_choice:
         return {
             "choice": "create_new",
             "target_id": "",
             "target_concept_id": "",
         }
-    return None
+    return best_judgement_option(pending)
+
+
+def best_judgement_option(
+    pending: Mapping[str, Any],
+) -> dict[str, str] | None:
+    """Return the least-destructive offered action when nothing is certified.
+
+    Everything above this point declines rather than manufacture trust, and
+    that was right while a declined decision could still reach a person. It no
+    longer can: generation does not pause, and a run that stops produces no
+    map at all.
+
+    So when no route is certified, Aegis places the concept by its own best
+    reading and the placement is flagged for review
+    (``docs/concept-placement-rules.md``: a reviewer can correct a wrong
+    placement, but not a missing one). The order below is by how much damage a
+    wrong guess does, least first:
+
+    1. ``keep_distinct_types`` -- no mutation at all;
+    2. ``create_new`` -- source-preserving; handled by the caller above;
+    3. a selection when exactly one candidate is offered, where "best
+       judgement" and "the only judgement" coincide;
+    4. an expansion or selection among several, which is a genuine guess and
+       is why the result is flagged.
+
+    Source replacement and custom instructions are never returned: no
+    automation may alter the uploaded document or invent an instruction.
+    """
+
+    # A decision carrying a source patch proposes editing the working source.
+    # Only the hash-sealed certification above may apply one. Best judgement
+    # covers placement, never a source mutation: "Aegis will not alter the
+    # uploaded document by itself" is not a preference that reviewer
+    # correction can buy back.
+    if isinstance(pending.get("source_patch"), Mapping):
+        return carry_forward_option()
+
+    options = [
+        row for row in pending.get("options") or []
+        if isinstance(row, Mapping)
+        and is_automatable_choice(row.get("choice"))
+    ]
+    if not options:
+        # Only user-only routes were offered, or none at all. Nothing can be
+        # applied, so the decision carries: source untouched, run continues.
+        return carry_forward_option()
+    by_choice = {str(row.get("choice") or ""): row for row in options}
+
+    # Best judgement may guess *which* offered route to take. It may never
+    # select a candidate whose integrity seal is missing or stale: that is a
+    # corrupt payload, not an ambiguous one, and no amount of reviewer
+    # correction afterwards makes acting on it right.
+    candidates = [
+        row for row in pending.get("candidates") or []
+        if isinstance(row, Mapping)
+        and str(row.get("target_id") or "")
+        and early_semantic_gate.candidate_binding_is_valid(row)
+    ]
+
+    candidate_target_ids = {
+        str(row.get("target_id") or "") for row in candidates
+    }
+    candidate_concept_ids = {
+        str(row.get("concept_id") or row.get("target_concept_id") or "")
+        for row in candidates
+    }
+
+    def offered(choice: str) -> dict[str, str] | None:
+        row = by_choice.get(choice)
+        if row is None:
+            return None
+        target_id = str(row.get("target_id") or "")
+        concept_id = str(row.get("target_concept_id") or "")
+        # An option may name a target that is not among the offered
+        # candidates. That is an uncertified recommendation, not a fact, so it
+        # is dropped rather than selected; the single-candidate rule below may
+        # still resolve the route against something that actually exists.
+        if target_id and target_id not in candidate_target_ids:
+            target_id = ""
+        if concept_id and concept_id not in candidate_concept_ids:
+            concept_id = ""
+        if not target_id and not concept_id and len(candidates) == 1:
+            # A targetless selector with exactly one candidate is unambiguous.
+            target_id = str(candidates[0].get("target_id") or "")
+            concept_id = str(candidates[0].get("concept_id") or "")
+        if choice in {"accept_recommended", "select_candidate"} and not target_id:
+            return None
+        if choice in {"expand_existing", "select_existing"} and not concept_id:
+            return None
+        return {
+            "choice": choice,
+            "target_id": target_id,
+            "target_concept_id": concept_id,
+        }
+
+    for choice in (
+        "keep_distinct_types",
+        "consolidate_types",
+        "select_candidate",
+        "accept_recommended",
+        "select_existing",
+        "expand_existing",
+    ):
+        chosen = offered(choice)
+        if chosen is not None:
+            return chosen
+    return carry_forward_option()
+
+
+def carry_forward_option() -> dict[str, str]:
+    """Settle a decision by changing nothing at all.
+
+    The last resort, reached when the only routes offered are ones no
+    automation may take: replacing the uploaded document or writing an
+    instruction. Rather than stopping, Aegis leaves the source exactly as
+    uploaded, keeps what generation already produced, and flags the decision.
+
+    This deliberately ships a map from a source Aegis flagged as questionable.
+    A reviewer reading the delivered output can see the flag and correct it;
+    a run that stopped would have given them nothing to read.
+    """
+
+    return {
+        "choice": CARRY_FORWARD_CHOICE,
+        "target_id": "",
+        "target_concept_id": "",
+    }
 
 
 def _automatable_options(pending: Mapping[str, Any]) -> list[Mapping[str, Any]]:
@@ -603,8 +746,9 @@ def capability_key(
             "evidence": evidence,
         },
         # A repeated issue after one applied action is a pathway turnover, not
-        # the same request. Sealing the prior actions lets the next Terra pass
-        # choose a different repair without reopening identical-packet loops.
+        # the same request. Sealing the prior actions lets the next resolver
+        # pass choose a different repair without reopening identical-packet
+        # loops.
         "prior_pathways": _prior_pathway_history(checkpoint, pending),
     }
     return _sha256_json(material)
@@ -1946,6 +2090,10 @@ def _provider_call(
             or primary_model == requested_model
         ):
             raise
+        # Reached only when an operator points the resolver at a model other
+        # than the configured Aegis model; by default the two are identical and
+        # an unavailable model surfaces directly instead of being retried.
+        #
         # A provider rejection before inference is not a semantic retry. Use
         # the configured primary model once; quota/auth/timeout failures never
         # enter this fallback and remain visible to orchestration.
@@ -2577,8 +2725,8 @@ def resolve_pending(
                         "evidence_refs": [],
                     }
             # A premature abstention *or an invalid/low-confidence first
-            # proposal* is not sent to the user. Give Terra a deterministic
-            # expansion of the most relevant exact offered identities, then
+            # proposal* is not sent to the user. Give the resolver a
+            # deterministic expansion of the most relevant exact identities, then
             # require the final best-safe action.
             request = request or default_expansion_request(packet, evidence_refs)
             if request is None:

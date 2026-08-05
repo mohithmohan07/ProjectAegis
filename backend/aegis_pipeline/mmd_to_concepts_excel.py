@@ -136,7 +136,21 @@ MMDS_SYMBIOSIS_CONFIG = {
     "OUTPUT": Path(r"C:\Users\FCI\OneDrive\Documents\CM\MSBSHSE_M-State_G11_Symbiosis_Concepts.xlsx"),
 }
 
-MODEL = "gpt-5.4-mini-2026-03-17"  # change if you want
+# The Aegis default model is single-sourced from the policy module so these
+# offline tools cannot drift from the web app. Works both as a direct script
+# run (openai_policy sits alongside this file) and as -m aegis_pipeline.<name>.
+try:
+    from aegis_pipeline.openai_policy import (
+        call_with_effort_negotiation,
+        configured_openai_model,
+    )
+except ImportError:  # pragma: no cover - direct script execution
+    from openai_policy import (
+        call_with_effort_negotiation,
+        configured_openai_model,
+    )
+
+MODEL = configured_openai_model()
 MAX_OUTPUT_TOKENS = int(os.getenv("AEGIS_OPENAI_MAX_OUTPUT_TOKENS", "128000"))
 CONCEPTS_PER_CHAPTER_MIN = 40
 
@@ -763,20 +777,25 @@ def gpt_extract_concepts(chapter_label: str, mmd_text: str, subject: str, model:
     last_err = None
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            resp = client.responses.create(
-                model=use_model,
-                max_output_tokens=MAX_OUTPUT_TOKENS,
-                input=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                text={
-                    "format": {
-                        "type": "json_schema",
-                        "name": CONCEPT_SCHEMA["name"],
-                        "schema": CONCEPT_SCHEMA["schema"]
-                    }
-                }
+            resp = call_with_effort_negotiation(
+                use_model,
+                "concept_mapping",
+                lambda effort: client.responses.create(
+                    model=use_model,
+                    max_output_tokens=MAX_OUTPUT_TOKENS,
+                    input=[
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                    ],
+                    text={
+                        "format": {
+                            "type": "json_schema",
+                            "name": CONCEPT_SCHEMA["name"],
+                            "schema": CONCEPT_SCHEMA["schema"]
+                        }
+                    },
+                    **({"reasoning": {"effort": effort}} if effort else {}),
+                ),
             )
 
             # Official SDK convenience: aggregated text output

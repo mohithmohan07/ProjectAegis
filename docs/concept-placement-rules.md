@@ -10,29 +10,27 @@ implementation is a defect.
 
 ---
 
-## Rule 1 — Unattended operation, and an output every time
+## Rule 1 — Unattended operation
 
 Generation must reach the output workbook without a human answering anything
 mid-run. No pause, no review click, no confirmation.
 
-**Once a chapter has a concept map, an output has to be given.** Past that
-point the run may not stop, and it may not wait. Every semantic difficulty
-below it has an autonomous disposition. That may be a model-certified repair,
-a durable replay of an earlier certified repair, or an explicit unchanged and
-unverified fallback when no semantic authority is safely available. "We could
-not decide" is never a reason to produce nothing.
+A run may still **fail** and report why. It may never **wait**. A stalled job is
+worse than a failed one, because nothing is watching it.
 
-A run may still **fail** only *before* there is anything to produce, and only
-where a person must supply something no automation can invent:
+The only decisions that remain outside automation are those that require
+something a person must supply and no automation can invent:
 
-- the uploaded document must be replaced (it is unreadable, or it is not the
-  chapter it claims to be)
-- a free-text instruction is genuinely required
+* replacing the uploaded document
+* writing a free-text instruction
 
-Those are the two exits. Neither is a pause: the run ends with the reason
-recorded. A stalled job is worse than a failed one, because nothing is
-watching it — and a failed job past the concept map is worse than both,
-because the work was already done and paid for.
+> **Amended.** This rule originally ended the run when only those remained. It
+> now **ships anyway**: the uploaded document is left exactly as it is, the run
+> keeps what generation produced, and the decision is flagged in the delivered
+> output for the reviewer to sort out. This deliberately publishes a map from a
+> source Aegis flagged as questionable — a reviewer reading it can correct that,
+> where a run which stopped would have given them nothing to read. Replacing the
+> source and writing an instruction are still never performed automatically.
 
 ---
 
@@ -54,23 +52,6 @@ The only structural requirement: the concept must genuinely involve the later
 topic. A concept that draws on nothing from the topic it sits in is misplaced
 and moves back.
 
-### How "contains context" is applied
-
-Stated operationally, so that two people — or two model calls — reach the same
-answer: **an atomic claim or task belongs to the latest topic whose knowledge,
-method or interpretive framework is genuinely necessary to understand or
-perform it.**
-
-That is the same rule, not a softer one. It exists because "contains context"
-has to be distinguished from "happens to say the words", which is exactly what
-Rule 4 already carves out. None of the following moves material on its own:
-
-- mere mention of a later topic
-- where the evidence physically sits in the book
-- chronology, or section numbering
-- shared terminology
-- an *optional* later solution method
-
 ---
 
 ## Rule 3 — Splitting keeps both sides
@@ -78,34 +59,20 @@ Rule 4 already carves out. None of the following moves material on its own:
 When material genuinely teaches two topics, it is **split**, and **both parts
 survive**:
 
-- the **earlier topic keeps** a concept covering the foundational idea on its
-  own terms;
-- the **later topic gains** a concept covering how that idea behaves under the
-  later topic's method.
+* the **earlier topic keeps** a concept covering the foundational idea on its
+own terms;
+* the **later topic gains** a concept covering how that idea behaves under the
+later topic's method.
 
 Neither may be dropped:
 
-- promoting the advanced behaviour **must not delete** the foundational concept;
-- keeping the foundational concept **must not leave** the advanced behaviour
-  untaught.
+* promoting the advanced behaviour **must not delete** the foundational concept;
+* keeping the foundational concept **must not leave** the advanced behaviour
+untaught.
 
 Concept count is expected to rise as a result. That is correct. The learner
 meets the basics where the basics are taught, and meets the advanced behaviour
 where it becomes reachable.
-
-### What a split may not do
-
-Splitting decides *placement*; it may not decide *what is taught*. Two
-operational limits keep it honest:
-
-- **Atomise first.** Break a draft into independently verifiable claims
-  *before* applying Rules 2 and 4, so each claim is placed on its own merits
-  rather than on the loudest phrase in a paragraph.
-- **An irreducible relationship is one claim and must not be split.**
-  *"The zollverein contributed to German unification"* is a single
-  relationship, owned by the later unification topic. Breaking it into a
-  standalone "zollverein" concept and a standalone "unification" concept
-  destroys the very thing being taught. Example H1 below depends on this.
 
 ---
 
@@ -117,18 +84,13 @@ illustrates** something taught earlier.
 
 **Test the direction of dependence:**
 
-| Direction | Placement |
-|---|---|
-| Understanding the concept **requires** the later topic's method or framework | Later topic (Rule 2) |
-| The later topic **merely refers back** to it | Stays in the topic that teaches it |
+|Direction|Placement|
+|-|-|
+|Understanding the concept **requires** the later topic's method or framework|Later topic (Rule 2)|
+|The later topic **merely refers back** to it|Stays in the topic that teaches it|
 
-In the second case, what the later topic gains depends on how much it does:
-
-- a **bare back-reference** ("as discussed earlier") creates only a typed
-  **reference edge** — it must not manufacture a duplicate concept;
-- a **substantive** illustration, consequence, application or relationship
-  that the later topic independently teaches earns its **own later-owned
-  concept**.
+In the second case the later topic still gains its own concept — about the
+illustration itself.
 
 Appearing later in the book does not by itself mean later in teaching.
 Chronological and thematic chapters refer backwards constantly.
@@ -147,27 +109,6 @@ The retrospective-reference exception (Rule 4) applies here too: if the later
 topic only illustrates the earlier material rather than being needed to attempt
 the task, the task stays with the topic that teaches it.
 
-### Who decides ownership
-
-**The model decides. Always.** "Does understanding this task require that
-topic's method?" is a semantic judgement, and no amount of word counting can
-tell it apart from "happens to share a word". Deterministic code owns IDs,
-teaching order, transactions and the arithmetic of *which* certified topic is
-latest — it must never derive placement from wording.
-
-The provider/critic pair can fail: it can omit a QID, reformat one, spend its
-correction budget, or have its answer rejected. None of those may end the run,
-and none of them licenses code to answer in its place. **The model is asked
-again** — the batch is split, down to single claims, so an awkward task gets
-its own question. A provider collapsing `QINV-0016.2` into its parent becomes
-a second, narrower request instead of a lost task.
-
-If the pair still returns nothing certifiable for a task asked on its own — in
-practice, when the API is unusable — the task is recorded as **unplaced**. It
-keeps the topic it is printed under, the contract says plainly that this is
-provenance and not a placement decision, and the run log names every task in
-that state. No owner is invented for it.
-
 ---
 
 ## Rule 6 — Universality
@@ -182,33 +123,31 @@ governed by the same test: *what does understanding this require?*
 ## Worked examples — Mathematics
 
 Chapter: **Arithmetic Progressions**
-- §5.2 Arithmetic Progressions — definition, first term `a`, common difference
-  `d`, real-world situations (taxi fare, ladder rungs)
-- §5.3 nth Term — `aₙ = a + (n−1)d`
-- §5.4 Sum of First n Terms — `Sₙ`
+
+* §5.2 Arithmetic Progressions — definition, first term `a`, common difference
+`d`, real-world situations (taxi fare, ladder rungs)
+* §5.3 nth Term — `aₙ = a + (n−1)d`
+* §5.4 Sum of First n Terms — `Sₙ`
 
 Note §5.2 and §5.4 are **not adjacent**; §5.3 sits between them.
 
 ### Example M1 — the `d` / `Sₙ` case (Rule 3)
 
 Draft material: *"The common difference `d` determines whether an AP increases
-or decreases, and how the sum behaves."*
+or decreases, and therefore whether its sum grows without bound."*
 
 **Correct outcome — split, both survive:**
 
-| Topic | Concept |
-|---|---|
-| §5.2 | The **sign of `d`** determines whether terms increase, decrease or stay constant |
-| §5.4 | In `Sₙ = n/2[2a + (n−1)d]`, `d` affects the **finite sum** for fixed `a` and `n` |
-
-> Do not phrase the §5.4 side as "`d` determines whether the sum grows without
-> bound". That is mathematically false — `Sₙ` of an AP is unbounded for
-> essentially any `d` — and Class 10 works with finite sums only.
+|Topic|Concept|
+|-|-|
+|§5.2|`d` determines whether an AP increases or decreases|
+|§5.4|How `d` governs the behaviour of `Sₙ`|
 
 **Wrong outcomes:**
-- Keeping the whole thing in §5.2 — the `Sₙ` behaviour is then untaught, and
-  ungrounded where it sits.
-- Moving the whole thing to §5.4 — §5.2 loses its concept on `d`.
+
+* Keeping the whole thing in §5.2 — the `Sₙ` behaviour is then untaught, and
+ungrounded where it sits.
+* Moving the whole thing to §5.4 — §5.2 loses its concept on `d`.
 
 ### Example M2 — advanced placement (Rule 2)
 
@@ -232,9 +171,10 @@ be attempted before §5.4 is taught.
 ## Worked examples — History
 
 Chapter: **The Rise of Nationalism in Europe**
+
 1. The French Revolution and the Idea of the Nation
 2. The Making of Nationalism in Europe (§2.2 liberal nationalism / zollverein;
-   §2.3 conservatism after 1815 / Treaty of Vienna)
+§2.3 conservatism after 1815 / Treaty of Vienna)
 3. The Age of Revolutions 1830–1848 (§3.3 the Frankfurt Parliament)
 4. The Making of Germany and Italy
 5. Visualising the Nation (Marianne, Germania)
@@ -259,10 +199,10 @@ Frankfurt Parliament is taught in **§3.3**.
 
 **Correct outcome:**
 
-| Topic | Concept |
-|---|---|
-| §3.3 | The Frankfurt Parliament — stays where it is taught |
-| §5 | Germania as a national allegory — its own concept |
+|Topic|Concept|
+|-|-|
+|§3.3|The Frankfurt Parliament — stays where it is taught|
+|§5|Germania as a national allegory — its own concept|
 
 **Wrong outcome:** dragging the Frankfurt Parliament concept into §5 because §5
 names it. §5 only *illustrates* §3.3; it is not needed to understand it.
@@ -273,17 +213,7 @@ The Treaty of Vienna (1815) is taught in **§2.3**. Its settlement eventually
 unravelled in the Balkans, which is **§6**.
 
 The Vienna concept **stays in §2.3**. §6 refers back to it; understanding Vienna
-does not require §6.
-
-**But if the source explicitly teaches how the settlement was later challenged
-or unravelled in the Balkans, that relationship is itself a claim, and it is
-owned by §6.** It must not disappear because its subject was introduced
-earlier. Two claims, two owners:
-
-| Claim | Owner |
-|---|---|
-| The Treaty of Vienna restored conservative monarchies | §2.3 |
-| The Vienna settlement was progressively challenged as Balkan nationalities broke away | §6 |
+does not require §6. §6 keeps its own concept on Balkan nationalist tension.
 
 ---
 
@@ -292,94 +222,35 @@ earlier. Two claims, two owners:
 For any material that touches more than one topic:
 
 1. **Does understanding it require the later topic's method or framework?**
-   - Yes → it belongs to the **later topic** (Rule 2).
-   - No, the later topic merely refers back → it **stays where it is taught**
-     (Rule 4).
+
+   * Yes → it belongs to the **later topic** (Rule 2).
+   * No, the later topic merely refers back → it **stays where it is taught**
+(Rule 4).
 2. **Does it genuinely teach both topics?**
-   - Yes → **split**, and both topics keep a concept (Rule 3).
+
+   * Yes → **split**, and both topics keep a concept (Rule 3).
 3. **Is it a task or Type spanning topics?**
-   - It belongs to the **latest topic** it requires (Rule 5), subject to the
-     same Rule 4 test.
+
+   * It belongs to the **latest topic** it requires (Rule 5), subject to the
+same Rule 4 test.
 4. Apply identically in every subject and chapter (Rule 6).
 
 ---
 
-## Terminal policy — what happens to a concept that will not ground
+## Decisions still open
 
-**Settled: modify it based on its evidence whenever a semantic repair can be
-certified. Never retire it and never stop the run.**
+Recorded so they are not mistaken for settled policy.
 
-A concept that cannot be grounded after every earlier bounded repair is **not**
-deleted or suppressed. The terminal rung makes one narrow semantic decision
-against the concept's exact canonical source blocks:
+**What happens to a concept that cannot be grounded after every bounded
+repair.** Currently it is retired — dropped from the map, named in the run log,
+capped at 25% of concepts before the run stops instead. This was chosen in the
+absence of a stated preference, on the grounds that shipping an unsupported
+claim contradicts the product's purpose.
 
-    bounded refine / move / split
-      -> one final evidence-supported atomisation or minimal-concept attempt
-      -> terminal provider
-           * keep the Description when every proposition is supported
-           * narrow only the unsupported propositions when part survives
-           * restate the smallest coherent concept genuinely taught by the
-             cited blocks when none of the original claim survives
-      -> independent critic
-           * verify entailment, mathematics, conditions, scope and relevance
-           * reject arbitrary pasted source sentences and wrong block IDs
-      -> at most one critic-scoped correction
-      -> durably commit the accepted disposition before returning it
+Two alternatives have been raised and not yet ruled on:
 
-**No lexical shortcut is permitted at this rung.** Token containment, word
-overlap, stemming and source-sentence selection are not semantic authorities.
-Deterministic code may validate exact IDs, response shape, row count and
-Description-only projection; it may not decide which claims survive.
+* **Atomise instead of retire** — narrow the concept to exactly what its
+evidence supports rather than deleting it, retiring only if that also fails.
+Preserves teaching content; preferred by external review.
+* Or Modify based on Evidence/ Type.
 
-The terminal outcomes are deliberately exhaustive:
-
-1. **Critic-verified keep or rewrite.** The accepted provider and critic result
-   is stored under a hash of the exact candidate, source contract, model and
-   evidence blocks, then projected without changing title, topic, parent,
-   order or pedagogical sections.
-2. **Cached replay.** Resume and checkpoint import reproduce that exact accepted
-   disposition without another paid request.
-3. **Unchanged and explicitly unverified.** If the API is unavailable, a model
-   response is malformed, the critic rejects both bounded attempts, or a
-   durable `request_started` claim makes replay ambiguous, the original row is
-   returned unchanged. The terminal ledger and run audit name that status. Code
-   does not trim it, restate it, or pretend it was semantically verified.
-
-Five properties are load-bearing:
-
-- **Semantic.** The provider decides support from meaning, not shared words.
-- **Independently verified.** No rewrite ships as grounded without the critic.
-- **Exactly once.** `provider_pending`, `provider_started`,
-  `provider_returned`, `critic_pending`, `critic_started`, `critic_returned`
-  and `accepted` are durably distinguished at the OpenAI transport boundary.
-- **Resume-safe.** Accepted results live in the portable Phase 3.8 checkpoint,
-  chunked and hash-verified, with a local disk cache as a second copy.
-- **Lossless in count.** Concepts are rewritten or returned unchanged, never
-  removed.
-
-The cost is explicit and accepted: this terminal rung can make paid provider
-and critic requests. They are new semantic work, not a repeat of an earlier
-request. Once a request crosses the transport boundary it is never purchased
-again on Resume. When no safe semantic authority is available, preserving the
-original flagged row is more honest than letting lexical code quietly rewrite
-teaching content.
-
-Placement is not part of this. Narrowing changes what a concept *claims*; only
-Rules 2–5 change which topic *owns* it. A claim rejected for lack of support in
-§5.2 is not silently relocated to §5.4.
-
-Deduplication remains permitted only when claim-level certification proves
-every protected claim, QID, figure, image, example and evidence edge survives
-elsewhere.
-
-### Implementation
-
-| Rule | Enforced by |
-|---|---|
-| 1 (unattended, always an output) | `canonical_source_phase38_boundary_grounding_turnover_contract._terminal_disposition` |
-| 2, 4 (ownership, retrospective reference) | `placement_policy.compute_placement`, applied in `canonical_source_phase32_topology_adjudication_contract._enforce_placement_policy` |
-| 3 (splitting keeps both sides) | `placement_policy.audit_split` |
-| 5 (Type/Case ownership) | `_type_case_contract_for_qid` in `generation.py` Case routing |
-| 5 when a batch fails | `_reask_type_case_batch` — split and ask the model again |
-| Terminal semantic contract | `evidence_narrowing.narrow_records` |
-| Terminal durable replay | `evidence_narrowing_cache.persist_ledger` |

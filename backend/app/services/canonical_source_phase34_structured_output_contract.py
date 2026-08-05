@@ -39,7 +39,15 @@ import time
 from pathlib import Path
 from typing import Any
 
-from aegis_pipeline.openai_policy import provider_token_capacity
+from aegis_pipeline.openai_policy import (
+    REASONING_CAPABILITY_DOWNGRADE as _CAPABILITY_REASONING_DOWNGRADE,
+    REASONING_ORDER as _REASONING_ORDER,
+    capped_reasoning_effort as _reasoning_with_cap,
+    is_unsupported_reasoning_effort_error as _unsupported_reasoning_effort,
+    note_unsupported_reasoning_effort,
+    provider_token_capacity,
+    reasoning_ceiling,
+)
 
 from .. import config
 from . import canonical_source_phase22 as phase22
@@ -61,28 +69,15 @@ _ALLOWED_HIERARCHY_ROLES = (
     "content_heading",
     "other",
 )
+# Truncation recovery, unlike capability negotiation, bottoms out at "low"
+# rather than omitting the parameter: a response that ran out of room still
+# needs *some* reasoning, just less of it.
 _REASONING_DOWNGRADE = {
     "max": "xhigh",
     "xhigh": "high",
     "high": "medium",
     "medium": "low",
     "low": "low",
-}
-_CAPABILITY_REASONING_DOWNGRADE = {
-    "max": "xhigh",
-    "xhigh": "high",
-    "high": "medium",
-    "medium": "low",
-    "low": "none",
-    "none": "",
-}
-_REASONING_ORDER = {
-    "none": 0,
-    "low": 1,
-    "medium": 2,
-    "high": 3,
-    "xhigh": 4,
-    "max": 5,
 }
 
 
@@ -368,8 +363,11 @@ def _resilient_openai_multimodal_json(
     truncations = 0
     transient = 0
     hard = 0
-    reasoning_cap: str | None = None
-    omit_reasoning_effort = False
+    # Seed from any ceiling this process already discovered for the model, so
+    # the first request here is built at the known-accepted effort instead of
+    # re-probing a value the provider has already rejected.
+    reasoning_cap: str | None = reasoning_ceiling(selected_model)
+    omit_reasoning_effort = reasoning_cap == ""
     last_error: Exception | None = None
     schema = _schema_name(response_schema)
     strict_schema = response_schema.get("schema") or {}
@@ -563,6 +561,12 @@ def _resilient_openai_multimodal_json(
                 and _unsupported_reasoning_effort(exc)
                 and lower_effort != current_effort
             ):
+                # Publish the discovered ceiling process-wide before retrying:
+                # every other call path then starts here instead of paying for
+                # the same rejection again.
+                note_unsupported_reasoning_effort(
+                    selected_model, current_effort
+                )
                 if lower_effort:
                     reasoning_cap = lower_effort
                 else:

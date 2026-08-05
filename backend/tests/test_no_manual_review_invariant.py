@@ -8,10 +8,12 @@ manual review appearing after 90%, during Phase 3.3 Type-host assignment,
 where the offered options can carry no ``recommended`` flag at all.
 
 These tests pin the invariant at the two choke points: whatever declined, the
-run continues only with an explicit no-change route, a verifiably certified
-recommendation, or a source-preserving new concept. Candidate and option order
-never authorize an existing host. A genuinely user-only decision (source
-replacement / custom instruction) or an explicit opt-out still pauses.
+run continues. It prefers an explicit no-change route, a verifiably certified
+recommendation, or a source-preserving new concept; failing those it takes the
+least-destructive offered action and flags it; failing even that -- a genuinely
+user-only decision -- it carries the decision, leaving the uploaded document
+untouched. Candidate and option order never authorize an existing host, a stale
+binding seal is never selected, and no setting restores a pause.
 """
 from __future__ import annotations
 
@@ -231,14 +233,28 @@ def test_uncertified_recommended_host_does_not_override_create_new():
     }
 
 
-def test_only_user_authority_actions_yield_no_safe_option():
-    assert autonomous_resolution.safe_continuation_option({
+def test_only_user_authority_actions_carry_the_decision():
+    """Neither user-only route is taken, and the run still ships.
+
+    Replacing the uploaded document and writing an instruction remain outside
+    automation. What no longer follows is a stopped run: the decision carries,
+    the source stays exactly as uploaded, and the reviewer sees the flag in the
+    delivered output.
+    """
+
+    selected = autonomous_resolution.safe_continuation_option({
         "options": [
             {"choice": "replace_source", "recommended": True},
             {"choice": "custom_instruction", "recommended": False},
         ],
         "candidates": [{"concept_id": "CONCEPT-0021"}],
-    }) is None
+    })
+    assert selected == {
+        "choice": "carry_forward",
+        "target_id": "",
+        "target_concept_id": "",
+    }
+    assert selected["choice"] not in autonomous_resolution.USER_ONLY_CHOICES
 
 
 # --------------------------------------------------------------------------- #
@@ -388,18 +404,28 @@ def test_user_only_decision_ends_the_run_instead_of_parking_it(
 
     # The message names the blocked routes and how to proceed.
     assert "replace_source" in str(excinfo.value)
-    assert "AEGIS_UNATTENDED_COMPLETION=0" in str(excinfo.value)
+    # No setting is offered, because none can restore a pause.
+    assert "AEGIS_UNATTENDED_COMPLETION" not in str(excinfo.value)
     # Bounded semantic recovery must not retry a decision only a person can
     # answer, so it is classified non-semantic.
     assert semantic_recovery.classify_failure(
         excinfo.value).recoverable is False
 
 
-def test_user_only_decision_still_pauses_when_attended(
+def test_no_setting_can_restore_a_mid_run_pause(
     db,
     first_chapter,
     monkeypatch,
 ):
+    """Generation has no pause in any configuration.
+
+    ``AEGIS_UNATTENDED_COMPLETION=0`` used to hand a user-only decision back to
+    a person mid-run. It now only disables automatic continuation with the
+    safest offered action; the decision still ends the run rather than waiting.
+    A stalled job holds its worker with nobody watching, so it is strictly
+    worse than a failure that says why.
+    """
+
     chapter = db.get(models.Chapter, first_chapter["id"])
     raw = _phase33_pending(concepts=False)
     raw["decision_id"] = "phase33-host-useronly-0001"
@@ -422,32 +448,36 @@ def test_user_only_decision_still_pauses_when_attended(
         filename="user-only-pauses.mmd",
         raw=raw,
     )
-    monkeypatch.setenv("AEGIS_UNATTENDED_COMPLETION", "0")
     monkeypatch.setattr(
         build_concepts,
         "_autonomously_resolve_pending_decision",
         lambda *_args, **_kwargs: None,
     )
 
-    outcome = build_concepts._existing_human_decision_pause(
-        db,
-        job,
-        dict(job.generation_checkpoint or {}),
-        agent_resolution_ids=set(),
-        owner_sub=None,
-    )
-
-    assert outcome is not None
-    assert outcome["status"] == "awaiting_decision"
-    db.refresh(job)
-    assert job.generation_checkpoint["human_decisions"]["pending"] is not None
+    for setting in ("0", "1", "false", "off", "no"):
+        monkeypatch.setenv("AEGIS_UNATTENDED_COMPLETION", setting)
+        with pytest.raises(build_concepts.UnattendedDecisionUnavailable):
+            build_concepts._existing_human_decision_pause(
+                db,
+                job,
+                dict(job.generation_checkpoint or {}),
+                agent_resolution_ids=set(),
+                owner_sub=None,
+            )
 
 
-def test_opt_out_restores_the_manual_pause(
+def test_opt_out_disables_automatic_continuation_but_restores_no_pause(
     db,
     first_chapter,
     monkeypatch,
 ):
+    """The setting still means something, just not what its name suggested.
+
+    With continuation off, the safest-offered-action route declines and the
+    pending decision stays on the checkpoint. What no longer follows is a
+    pause: the caller ends the run instead of waiting for an answer.
+    """
+
     chapter = db.get(models.Chapter, first_chapter["id"])
     raw = _phase33_pending()
     raw["decision_id"] = "phase33-host-optout-0001"
@@ -818,3 +848,110 @@ def test_changed_critic_or_candidate_pathway_gets_fresh_budget(
     assert build_concepts._equivalent_agent_resolution_count(
         checkpoint, changed
     ) == 0
+
+
+def _regenerated_identity_pending(index: int) -> dict:
+    """One semantic scope, re-raised with freshly minted candidate identities."""
+
+    return {
+        "decision_id": f"phase33-host-{index:04d}",
+        "context_hash": f"{index:064d}",
+        "kind": "phase33_type_host_semantic_conflict",
+        "phase": "3.3",
+        "conflict": "Two Type hosts remain plausible.",
+        "diagnosis": "The source supports one bounded choice.",
+        "decision_question": "How should TYPE-0001 be hosted?",
+        "item": {
+            "unit_id": "UNIT-1",
+            "type_id": "TYPE-0001",
+            "qids": ["QID-1"],
+            "topic": "Nationalism",
+        },
+        "candidates": [{
+            "target_id": f"TARGET-REGENERATED-{index}",
+            "concept_id": f"HOST-REGENERATED-{index}",
+            "action": "keep",
+            "title": "host",
+            "topic": "Nationalism",
+            "coverage": "identical coverage",
+            "gap": "identical gap",
+        }],
+        "evidence": [{"evidence_id": "E1", "text": "identical evidence"}],
+        "options": [{
+            "choice": "select_candidate",
+            "target_id": f"TARGET-REGENERATED-{index}",
+            "target_concept_id": f"HOST-REGENERATED-{index}",
+        }],
+    }
+
+
+def test_regenerated_identities_do_not_reset_the_equivalence_budget():
+    """The 81% spin: a new concept_id must not buy an unlimited budget.
+
+    The equivalence key hashes candidate identities, so a stage that
+    regenerates them mints a fresh key every pass and charges nothing. Only the
+    issue key stays fixed across those passes, so only it can retire the scope.
+    """
+
+    ledger: dict = {"human_decisions": {"version": 1, "resolutions": []}}
+    scope_keys = set()
+    equivalence_keys = set()
+
+    for index in range(1, 8):
+        pending = _regenerated_identity_pending(index)
+        scope_key = build_concepts.autonomous_resolution.issue_key(pending)
+        equivalence_key = build_concepts._decision_equivalence_key(pending)
+        scope_keys.add(scope_key)
+        equivalence_keys.add(equivalence_key)
+
+        # The volatile budget is defeated by the regenerated identity ...
+        assert build_concepts._equivalent_agent_resolution_count(
+            ledger, pending
+        ) == 0
+        # ... while the stable one keeps counting every prior repair.
+        assert build_concepts._issue_agent_resolution_count(
+            ledger, scope_key
+        ) == index - 1
+
+        ledger["human_decisions"]["resolutions"].append({
+            "resolved_by": "agent",
+            "status": "consumed",
+            "equivalence_key": equivalence_key,
+            "issue_key": scope_key,
+        })
+
+    assert len(scope_keys) == 1, "the scope never actually changed"
+    assert len(equivalence_keys) == 7, "every pass minted a new equivalence key"
+
+
+def test_issue_pathway_ceiling_stops_the_scope():
+    pending = _regenerated_identity_pending(1)
+
+    build_concepts._raise_if_issue_pathways_exhausted(
+        pending, attempts=23, maximum=24
+    )
+    with pytest.raises(build_concepts.SemanticResolutionCyclesExhausted) as err:
+        build_concepts._raise_if_issue_pathways_exhausted(
+            pending, attempts=24, maximum=24
+        )
+    assert "same semantic scope" in str(err.value)
+    assert "TYPE-0001" in str(err.value)
+
+
+def test_issue_count_reads_legacy_rows_without_a_stored_issue_key():
+    """Rows written before the scope seal still charge their scope."""
+
+    pending = _regenerated_identity_pending(1)
+    scope_key = build_concepts.autonomous_resolution.issue_key(pending)
+    ledger = {
+        "human_decisions": {
+            "version": 1,
+            "resolutions": [{
+                "resolved_by": "agent",
+                "status": "consumed",
+                "pending_decision": _regenerated_identity_pending(2),
+            }],
+        },
+    }
+
+    assert build_concepts._issue_agent_resolution_count(ledger, scope_key) == 1
