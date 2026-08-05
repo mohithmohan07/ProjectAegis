@@ -22,6 +22,9 @@ const apiMock = vi.hoisted(() => ({
   clearConceptCheckpoint: vi.fn(),
   getUploadJob: vi.fn(),
   submitConceptDecision: vi.fn(),
+  conceptReleaseUrl: vi.fn((id: number) => `/release/${id}.xlsx`),
+  listConceptRevisions: vi.fn(),
+  submitConceptRevision: vi.fn(),
   paths: {
     postLearningGenerate: vi.fn((id: number) => `/post/${id}`),
     preLearningGenerate: vi.fn((id: number) => `/pre/${id}`),
@@ -284,6 +287,7 @@ beforeEach(() => {
     resume_required: true,
     resolved_decision: {},
   });
+  apiMock.listConceptRevisions.mockResolvedValue({ job_id: 1, revisions: [] });
 });
 
 afterEach(() => {

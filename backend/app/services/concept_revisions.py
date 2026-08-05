@@ -115,6 +115,44 @@ def revision_summary(revision: models.ConceptRevision) -> dict[str, Any]:
     }
 
 
+# Phase 3.8 narrows an unprovable claim to what its evidence supports and
+# places it by best judgement; it never retires or deletes a concept. It says so
+# in the run log, and that line is the only signal a reviewer gets that a
+# placement was Aegis's reading rather than a certified one.
+_FLAG_MARKERS = (
+    "phase 3.8 terminal disposition",
+    "placed by best judgement",
+)
+
+
+def _collect_flagged_placements(
+    job: models.UploadJob,
+) -> list[dict[str, Any]]:
+    """Return the placements Aegis made by best judgement, for review.
+
+    A reviewer can correct a wrong placement but not a missing one, so nothing
+    is dropped — these are shipped and flagged. Surfacing them alongside the
+    instruction box points the reviewer at what Aegis itself was least sure of.
+    """
+
+    out: list[dict[str, Any]] = []
+    for row in job.generation_log or []:
+        if not isinstance(row, dict) or row.get("type") != "log":
+            continue
+        message = str(row.get("message") or "")
+        lowered = message.casefold()
+        if any(marker in lowered for marker in _FLAG_MARKERS):
+            out.append({
+                "level": str(row.get("level") or "warning"),
+                "message": message[:2000],
+            })
+    return out
+
+
+# Public name; the parameter of ``record_instruction`` shadows it otherwise.
+flagged_placements = _collect_flagged_placements
+
+
 def record_instruction(
     db: Session,
     job: models.UploadJob,
@@ -139,13 +177,18 @@ def record_instruction(
             f"characters; received {len(text)}."
         )
 
+    flags = (
+        copy.deepcopy(flagged_placements)
+        if flagged_placements is not None
+        else _collect_flagged_placements(job)
+    )
     revision = models.ConceptRevision(
         owner_sub=str(owner_sub or job.owner_sub or "local:default"),
         job_id=job.id,
         round_number=next_round_number(db, job.id),
         instruction=text,
         status="pending",
-        flagged_placements=copy.deepcopy(flagged_placements or []),
+        flagged_placements=flags,
     )
     db.add(revision)
     db.commit()

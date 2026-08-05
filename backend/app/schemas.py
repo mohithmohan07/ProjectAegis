@@ -413,3 +413,42 @@ class Stats(BaseModel):
     upload_jobs: int
     openai_live: bool
     mathpix_live: bool
+
+
+# --------------------------------------------------------------------------- #
+# Post-run reviewer revisions
+# --------------------------------------------------------------------------- #
+
+class ConceptRevisionIn(BaseModel):
+    """One reviewer instruction. Rounds are deliberately uncapped."""
+
+    instruction: str = Field(min_length=1, max_length=20_000)
+
+
+class ConceptRevisionChange(BaseModel):
+    concept_id: int
+    field: str
+    before: str = ""
+    after: str = ""
+    reason: str = ""
+
+
+class ConceptRevisionOut(BaseModel):
+    id: int
+    job_id: int
+    round_number: int
+    instruction: str
+    status: str
+    change_summary: str = ""
+    changes: list[ConceptRevisionChange] = Field(default_factory=list)
+    change_count: int = 0
+    flagged_placements: list[dict] = Field(default_factory=list)
+    model: str = ""
+    error: str = ""
+    created_at: str = ""
+    completed_at: str = ""
+
+
+class ConceptRevisionListOut(BaseModel):
+    job_id: int
+    revisions: list[ConceptRevisionOut] = Field(default_factory=list)

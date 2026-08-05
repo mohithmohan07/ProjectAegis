@@ -513,3 +513,33 @@ export interface WorkbookEntry {
   has_log: boolean;
   openai_usage?: OpenAIUsage;
 }
+
+/** One post-run reviewer instruction and the edit Aegis made from it. */
+export interface ConceptRevisionChange {
+  concept_id: number;
+  field: string;
+  before: string;
+  after: string;
+  reason: string;
+}
+
+export interface ConceptRevision {
+  id: number;
+  job_id: number;
+  round_number: number;
+  instruction: string;
+  status: "pending" | "applied" | "no_change" | "failed" | string;
+  change_summary: string;
+  changes: ConceptRevisionChange[];
+  change_count: number;
+  flagged_placements: { level: string; message: string }[];
+  model: string;
+  error: string;
+  created_at: string;
+  completed_at: string;
+}
+
+export interface ConceptRevisionList {
+  job_id: number;
+  revisions: ConceptRevision[];
+}

@@ -10,6 +10,8 @@ import type {
   Question,
   Session,
   Stats,
+  ConceptRevision,
+  ConceptRevisionList,
   ResumableCheckpoints,
   SemanticDecisionSubmission,
   SemanticDecisionSubmissionResult,
@@ -236,6 +238,17 @@ export const api = {
     http<UploadJob>(`/build-concepts/uploads/${jobId}/release`, {
       method: "POST",
     }),
+  /** Submit one reviewer instruction. Rounds are unlimited. */
+  submitConceptRevision: (jobId: number, instruction: string) =>
+    http<ConceptRevision>(`/build-concepts/uploads/${jobId}/revisions`, {
+      method: "POST",
+      body: JSON.stringify({ instruction }),
+    }),
+  listConceptRevisions: (jobId: number) =>
+    http<ConceptRevisionList>(`/build-concepts/uploads/${jobId}/revisions`),
+  /** Absolute URL of the released workbook, for a plain browser download. */
+  conceptReleaseUrl: (jobId: number) =>
+    `${BASE}/build-concepts/uploads/${jobId}/release.xlsx`,
   uploadConceptRelease: (jobId: number) =>
     http<Record<string, unknown>>(
       `/build-concepts/uploads/${jobId}/upload-release`,

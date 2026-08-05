@@ -308,3 +308,126 @@ def test_revision_summary_exposes_the_round_for_review(db, job):
     assert summary["status"] == "applied"
     assert summary["change_count"] == 1
     assert summary["created_at"]
+
+
+# --------------------------------------------------------------------------- #
+# API surface
+# --------------------------------------------------------------------------- #
+
+def test_flagged_placements_are_collected_from_the_run_log():
+    """A best-judgement placement is shipped and flagged, never retired."""
+
+    upload = models.UploadJob(generation_log=[
+        {
+            "type": "log",
+            "level": "warning",
+            "message": (
+                "Phase 3.8 terminal disposition narrow 'How d governs Sn' "
+                "under 'Arithmetic Progressions': kept the supported clause"
+            ),
+        },
+        {"type": "log", "level": "info", "message": "an ordinary line"},
+        {"type": "progress", "value": 0.81},
+    ])
+
+    flags = concept_revisions.flagged_placements(upload)
+    assert len(flags) == 1
+    assert "How d governs Sn" in flags[0]["message"]
+
+
+def test_a_round_captures_the_flags_that_were_open_when_it_was_written(db, job):
+    upload, _concept, _topics = job
+    upload.generation_log = [{
+        "type": "log",
+        "level": "warning",
+        "message": "Phase 3.8 terminal disposition narrow 'Sn' under 'AP'",
+    }]
+    db.commit()
+
+    revision = concept_revisions.record_instruction(db, upload, "Move it later.")
+
+    assert len(revision.flagged_placements) == 1
+    assert "Sn" in revision.flagged_placements[0]["message"]
+
+
+def test_revision_routes_round_trip(client, db, job, monkeypatch):
+    upload, concept, topics = job
+
+    monkeypatch.setattr(
+        concept_revisions,
+        "_default_provider",
+        lambda **_kwargs: {
+            "change_summary": "Moved to the later topic.",
+            "changes": [{
+                "concept_id": concept.id,
+                "field": "topic",
+                "after": "Sum of First n Terms",
+                "reason": "Reviewer: this needs Sn.",
+            }],
+        },
+    )
+
+    posted = client.post(
+        f"/build-concepts/uploads/{upload.id}/revisions",
+        json={"instruction": "This belongs under Sum of First n Terms."},
+    )
+    assert posted.status_code == 200, posted.text
+    body = posted.json()
+    assert body["round_number"] == 1
+    assert body["status"] == "applied"
+    assert body["change_count"] == 1
+
+    listed = client.get(f"/build-concepts/uploads/{upload.id}/revisions")
+    assert listed.status_code == 200, listed.text
+    history = listed.json()["revisions"]
+    assert [row["round_number"] for row in history] == [1]
+    assert history[0]["instruction"] == (
+        "This belongs under Sum of First n Terms."
+    )
+
+    db.expire_all()
+    assert db.get(models.Concept, concept.id).topic_id == (
+        topics["Sum of First n Terms"].id
+    )
+
+
+def test_empty_instruction_is_rejected_by_the_route(client, job):
+    upload, _concept, _topics = job
+
+    response = client.post(
+        f"/build-concepts/uploads/{upload.id}/revisions",
+        json={"instruction": "   "},
+    )
+    assert response.status_code in {400, 422}
+
+
+def test_a_provider_failure_returns_the_failed_round_not_an_error(
+    client, job, monkeypatch
+):
+    """The reviewer's words are already committed; the round reports the failure."""
+
+    upload, _concept, _topics = job
+
+    def exploding(**_kwargs):
+        raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(concept_revisions, "_default_provider", exploding)
+
+    response = client.post(
+        f"/build-concepts/uploads/{upload.id}/revisions",
+        json={"instruction": "Move the Sn concept."},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "failed"
+    assert "provider unavailable" in body["error"]
+    assert body["instruction"] == "Move the Sn concept."
+
+
+def test_unknown_job_is_not_found(client):
+    response = client.post(
+        "/build-concepts/uploads/99999999/revisions",
+        json={"instruction": "anything"},
+    )
+    assert response.status_code == 404
