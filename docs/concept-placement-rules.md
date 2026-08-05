@@ -24,7 +24,13 @@ something a person must supply and no automation can invent:
 * replacing the uploaded document
 * writing a free-text instruction
 
-When only those remain, the run ends with the reason recorded. It does not park.
+> **Amended.** This rule originally ended the run when only those remained. It
+> now **ships anyway**: the uploaded document is left exactly as it is, the run
+> keeps what generation produced, and the decision is flagged in the delivered
+> output for the reviewer to sort out. This deliberately publishes a map from a
+> source Aegis flagged as questionable — a reviewer reading it can correct that,
+> where a run which stopped would have given them nothing to read. Replacing the
+> source and writing an instruction are still never performed automatically.
 
 ---
 

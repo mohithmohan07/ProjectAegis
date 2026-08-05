@@ -8,10 +8,12 @@ manual review appearing after 90%, during Phase 3.3 Type-host assignment,
 where the offered options can carry no ``recommended`` flag at all.
 
 These tests pin the invariant at the two choke points: whatever declined, the
-run continues only with an explicit no-change route, a verifiably certified
-recommendation, or a source-preserving new concept. Candidate and option order
-never authorize an existing host. A genuinely user-only decision (source
-replacement / custom instruction) or an explicit opt-out still pauses.
+run continues. It prefers an explicit no-change route, a verifiably certified
+recommendation, or a source-preserving new concept; failing those it takes the
+least-destructive offered action and flags it; failing even that -- a genuinely
+user-only decision -- it carries the decision, leaving the uploaded document
+untouched. Candidate and option order never authorize an existing host, a stale
+binding seal is never selected, and no setting restores a pause.
 """
 from __future__ import annotations
 
@@ -231,14 +233,28 @@ def test_uncertified_recommended_host_does_not_override_create_new():
     }
 
 
-def test_only_user_authority_actions_yield_no_safe_option():
-    assert autonomous_resolution.safe_continuation_option({
+def test_only_user_authority_actions_carry_the_decision():
+    """Neither user-only route is taken, and the run still ships.
+
+    Replacing the uploaded document and writing an instruction remain outside
+    automation. What no longer follows is a stopped run: the decision carries,
+    the source stays exactly as uploaded, and the reviewer sees the flag in the
+    delivered output.
+    """
+
+    selected = autonomous_resolution.safe_continuation_option({
         "options": [
             {"choice": "replace_source", "recommended": True},
             {"choice": "custom_instruction", "recommended": False},
         ],
         "candidates": [{"concept_id": "CONCEPT-0021"}],
-    }) is None
+    })
+    assert selected == {
+        "choice": "carry_forward",
+        "target_id": "",
+        "target_concept_id": "",
+    }
+    assert selected["choice"] not in autonomous_resolution.USER_ONLY_CHOICES
 
 
 # --------------------------------------------------------------------------- #

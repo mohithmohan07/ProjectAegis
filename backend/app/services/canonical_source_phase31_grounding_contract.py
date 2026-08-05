@@ -2016,6 +2016,14 @@ def ground_concepts(
                     "convert it again; no model request was started."
                 )
 
+            # A carried resolution settles the decision without directing an
+            # action, so it must not be read as one.
+            resolutions = {
+                concept_id: resolution
+                for concept_id, resolution in resolutions.items()
+                if str(resolution.get("choice") or "") != "carry_forward"
+            }
+
             for concept_id, resolution in resolutions.items():
                 selected = resolution.get("selected_candidate")
                 action = (

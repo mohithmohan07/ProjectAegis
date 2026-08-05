@@ -43,7 +43,11 @@ _CANDIDATE_WORKSPACE_POLICY = (
     "reasoning-capability-negotiation-v1"
 )
 USER_ONLY_CHOICES = frozenset({"replace_source", "custom_instruction"})
+# Settles a decision without changing anything: the uploaded document is
+# untouched and generation proceeds with what it already produced.
+CARRY_FORWARD_CHOICE = "carry_forward"
 AUTOMATABLE_CHOICES = frozenset({
+    CARRY_FORWARD_CHOICE,
     "expand_existing",
     "create_new",
     "select_existing",
@@ -346,7 +350,7 @@ def best_judgement_option(
     # uploaded document by itself" is not a preference that reviewer
     # correction can buy back.
     if isinstance(pending.get("source_patch"), Mapping):
-        return None
+        return carry_forward_option()
 
     options = [
         row for row in pending.get("options") or []
@@ -354,7 +358,9 @@ def best_judgement_option(
         and is_automatable_choice(row.get("choice"))
     ]
     if not options:
-        return None
+        # Only user-only routes were offered, or none at all. Nothing can be
+        # applied, so the decision carries: source untouched, run continues.
+        return carry_forward_option()
     by_choice = {str(row.get("choice") or ""): row for row in options}
 
     # Best judgement may guess *which* offered route to take. It may never
@@ -415,7 +421,27 @@ def best_judgement_option(
         chosen = offered(choice)
         if chosen is not None:
             return chosen
-    return None
+    return carry_forward_option()
+
+
+def carry_forward_option() -> dict[str, str]:
+    """Settle a decision by changing nothing at all.
+
+    The last resort, reached when the only routes offered are ones no
+    automation may take: replacing the uploaded document or writing an
+    instruction. Rather than stopping, Aegis leaves the source exactly as
+    uploaded, keeps what generation already produced, and flags the decision.
+
+    This deliberately ships a map from a source Aegis flagged as questionable.
+    A reviewer reading the delivered output can see the flag and correct it;
+    a run that stopped would have given them nothing to read.
+    """
+
+    return {
+        "choice": CARRY_FORWARD_CHOICE,
+        "target_id": "",
+        "target_concept_id": "",
+    }
 
 
 def _automatable_options(pending: Mapping[str, Any]) -> list[Mapping[str, Any]]:

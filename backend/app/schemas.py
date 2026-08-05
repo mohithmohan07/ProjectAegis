@@ -177,6 +177,10 @@ SemanticDecisionChoice = Literal[
     "consolidate_types",
     "keep_distinct_types",
     "custom_instruction",
+    # Aegis could not settle this decision and no automation may perform what
+    # remains. The source is left exactly as uploaded, generation continues
+    # with what it already has, and the decision is flagged for the reviewer.
+    "carry_forward",
 ]
 
 
