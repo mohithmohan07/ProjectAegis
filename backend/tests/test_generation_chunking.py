@@ -177,21 +177,29 @@ def test_canonicalize_rejects_compaction_below_parent_family_floor(
     assert len(out) == 18
 
 
-def test_canonicalize_retries_when_model_stays_too_granular(monkeypatch):
+def test_canonicalize_accepts_a_granular_map_without_compacting(monkeypatch):
+    """A high row count is no longer retried down to a target.
+
+    This asserted the opposite until a live run showed the cost: a 44-row
+    skeleton whose canonicalization kept 43 rows was compacted to 30 purely to
+    satisfy topics x _CANONICALIZE_MAX_PER_TOPIC. The system prompt already
+    asks for a compact teacher-facing map and carries no numeric target, so the
+    retry merged on arithmetic rather than on meaning -- and a distinction
+    collapsed here cannot be recovered by any later stage.
+    """
+
     calls = {"n": 0}
 
     def fake_openai(system, user, **kw):
         calls["n"] += 1
-        if calls["n"] == 1:
-            return {"rows": _to_api_rows(_rows(80))}
-        assert "TOO GRANULAR" in user
-        return {"rows": _to_api_rows(_rows(12))}
+        assert "TOO GRANULAR" not in user
+        return {"rows": _to_api_rows(_rows(80))}
 
     monkeypatch.setattr(g, "_openai_json", fake_openai)
     monkeypatch.setattr(g, "_repair_records_via_api", lambda records, **kw: records)
     out = g._consolidate_concepts_via_api(_rows(80), subject="Math")
-    assert calls["n"] == 2
-    assert len(out) == 12
+    assert calls["n"] == 1
+    assert len(out) == 80
 
 
 def test_skeleton_retries_sparse_chunks(monkeypatch):
