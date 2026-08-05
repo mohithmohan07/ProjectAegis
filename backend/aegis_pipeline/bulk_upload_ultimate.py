@@ -12,7 +12,7 @@ Command-line usage:
 
 - If PDF: uses Mathpix → text
 - If TXT: reads text directly
-- Uses gpt-5.1-2025-11-13 to:
+- Uses the configured Aegis model (AEGIS_OPENAI_MODEL) to:
     - Parse & pair questions and solutions
     - Extract marks
     - Classify type (MCQ / FIB / DESCRIPTIVE)
@@ -150,13 +150,15 @@ def call_gpt_json(
     model: str,
     system_prompt: str,
     user_prompt: str,
-    temperature: float = 0.0,
     max_output_tokens: int = int(os.getenv("AEGIS_OPENAI_MAX_OUTPUT_TOKENS", "128000")),
 ) -> Dict[str, Any]:
     """
-    Generic JSON-mode call using gpt-5.1 (or compatible).
+    Generic JSON-mode call using the configured Aegis model.
     - Forces JSON output using response_format
     - Adds robust handling when content is empty or not JSON
+
+    No ``temperature`` is sent: reasoning models accept only their default, and
+    passing a value is rejected outright.
     """
     response = call_with_effort_negotiation(
         model,
@@ -164,7 +166,6 @@ def call_gpt_json(
         lambda effort: client.chat.completions.create(
             model=model,
             response_format={"type": "json_object"},
-            temperature=temperature,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},

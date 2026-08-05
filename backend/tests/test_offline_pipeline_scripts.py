@@ -1,14 +1,22 @@
-"""Syntax and model-policy guards for the offline aegis_pipeline CLI tools.
+"""Guards for the offline aegis_pipeline CLI tools.
 
 These scripts are operator tools, not part of the FastAPI app, so nothing else
 in the suite imports them — which is exactly how ``bulk_upload_ultimate.py``
-shipped with an IndentationError that made it unimportable. They also depend on
-packages the backend does not install (pandas, requests), so these tests parse
-the source instead of importing it.
+shipped with an IndentationError that made it unimportable, and how
+``bulk_upload_mathpix.py`` kept calling an SDK surface removed in openai 1.x.
+
+They also depend on packages the backend does not install (pandas, requests).
+The structural checks therefore parse the source rather than importing it; the
+call-path checks stub those two packages and the OpenAI client so the real
+request-building code still runs.
 """
 from __future__ import annotations
 
 import ast
+import importlib
+import json
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -164,3 +172,121 @@ def test_fill_blank_strips_katex_once_per_row_not_per_unused_column():
                     "strip_katex_delimiters runs inside the per-column "
                     "branch; it must apply once to the finished row"
                 )
+
+
+# --------------------------------------------------------------------------- #
+# Runtime behaviour of the migrated OpenAI call path.
+#
+# These tools depend on packages the backend does not install, so the stubs
+# below stand in for them. That is enough to execute call_gpt_json for real
+# against a fake client and prove the request it builds is one a current
+# reasoning model accepts.
+# --------------------------------------------------------------------------- #
+
+class _FakeMessage:
+    def __init__(self, content: str) -> None:
+        self.content = content
+
+
+class _FakeCompletions:
+    def __init__(self, recorder: list[dict]) -> None:
+        self._recorder = recorder
+
+    def create(self, **kwargs):
+        self._recorder.append(kwargs)
+        return types.SimpleNamespace(
+            choices=[
+                types.SimpleNamespace(
+                    message=_FakeMessage(json.dumps({"questions": []}))
+                )
+            ]
+        )
+
+
+def _load_script(monkeypatch, module_name: str, recorder: list[dict]):
+    """Import an offline tool with its non-backend deps and client stubbed."""
+
+    for name in ("pandas", "requests"):
+        if name not in sys.modules:
+            stub = types.ModuleType(name)
+            stub.DataFrame = object
+            stub.ExcelWriter = object
+            monkeypatch.setitem(sys.modules, name, stub)
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("MATHPIX_APP_ID", "test-id")
+    monkeypatch.setenv("MATHPIX_APP_KEY", "test-key")
+
+    import openai
+
+    monkeypatch.setattr(
+        openai,
+        "OpenAI",
+        lambda *args, **kwargs: types.SimpleNamespace(
+            chat=types.SimpleNamespace(completions=_FakeCompletions(recorder))
+        ),
+    )
+    monkeypatch.delitem(sys.modules, module_name, raising=False)
+    return importlib.import_module(module_name)
+
+
+@pytest.mark.parametrize(
+    "module_name",
+    [
+        "aegis_pipeline.bulk_upload_mathpix",
+        "aegis_pipeline.bulk_upload_ultimate",
+    ],
+)
+def test_call_gpt_json_builds_a_request_a_reasoning_model_accepts(
+    monkeypatch, module_name: str
+):
+    calls: list[dict] = []
+    module = _load_script(monkeypatch, module_name, calls)
+
+    data = module.call_gpt_json("gpt-5.6-luna", "system", "user")
+
+    assert data == {"questions": []}
+    assert len(calls) == 1
+    request = calls[0]
+
+    # temperature is rejected outright by reasoning models.
+    assert "temperature" not in request
+    assert request["model"] == "gpt-5.6-luna"
+    assert request["response_format"] == {"type": "json_object"}
+    # The modern parameter name, not the removed max_tokens.
+    assert "max_completion_tokens" in request
+    assert "max_tokens" not in request
+    assert request["reasoning_effort"] == "max"
+    assert [message["role"] for message in request["messages"]] == [
+        "system",
+        "user",
+    ]
+
+
+def test_call_gpt_json_negotiates_effort_like_the_web_app(monkeypatch):
+    """The offline tools get the same recovery as the FastAPI paths."""
+
+    calls: list[dict] = []
+
+    class _RejectingCompletions(_FakeCompletions):
+        def create(self, **kwargs):
+            if kwargs.get("reasoning_effort") == "max":
+                error = Exception(
+                    "Unsupported value: 'reasoning_effort' does not support 'max'"
+                )
+                error.status_code = 400
+                error.param = "reasoning_effort"
+                error.code = "unsupported_value"
+                calls.append(kwargs)
+                raise error
+            return super().create(**kwargs)
+
+    module = _load_script(
+        monkeypatch, "aegis_pipeline.bulk_upload_mathpix", calls
+    )
+    module.client.chat.completions = _RejectingCompletions(calls)
+
+    data = module.call_gpt_json("gpt-5.6-luna", "system", "user")
+
+    assert data == {"questions": []}
+    assert [call["reasoning_effort"] for call in calls] == ["max", "xhigh"]

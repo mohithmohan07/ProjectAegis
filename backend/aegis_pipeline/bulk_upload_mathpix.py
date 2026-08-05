@@ -5,8 +5,9 @@ from typing import List, Dict, Any
 
 import requests
 import pandas as pd
-import openai
 import re
+
+from openai import OpenAI
 
 # ====================================================
 # CONFIG
@@ -25,12 +26,12 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 MATHPIX_APP_ID = os.getenv("MATHPIX_APP_ID", "")
 MATHPIX_APP_KEY = os.getenv("MATHPIX_APP_KEY", "")
 
-openai.api_key = OPENAI_API_KEY
-
 if not OPENAI_API_KEY:
     raise RuntimeError("OPENAI_API_KEY not set")
 if not MATHPIX_APP_ID or not MATHPIX_APP_KEY:
     raise RuntimeError("MATHPIX_APP_ID / MATHPIX_APP_KEY not set")
+
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 # ---- GPT MODELS ----
 # Adjust to whatever deployed names you actually have.
@@ -273,8 +274,9 @@ def call_gpt_json(model: str, system_prompt: str, user_prompt: str, max_tokens: 
     resp = call_with_effort_negotiation(
         model,
         "metadata",
-        lambda effort: openai.ChatCompletion.create(
+        lambda effort: client.chat.completions.create(
             model=model,
+            response_format={"type": "json_object"},
             messages=[
                 {"role": "system", "content": system_prompt},
                 {
@@ -284,12 +286,11 @@ def call_gpt_json(model: str, system_prompt: str, user_prompt: str, max_tokens: 
                 },
             ],
             max_completion_tokens=limit,
-            temperature=0,
             **({"reasoning_effort": effort} if effort else {}),
         ),
     )
 
-    raw = resp.choices[0].message["content"]
+    raw = resp.choices[0].message.content
     if raw is None:
         raise ValueError("Model returned no content.")
 

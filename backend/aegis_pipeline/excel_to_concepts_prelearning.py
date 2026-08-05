@@ -2,7 +2,7 @@
 Excel to Concepts - Pre-Learning (Grade IX ICSE)
 
 Reads an Excel file with Math and Physics sheets. Columns: Chapter, Pre Topic, Concept,
-Concept Description, Types. Uses gpt-5-mini to enhance each concept into the standard
+Concept Description, Types. Uses the configured Aegis model to enhance each concept into the standard
 output format (Description // Types // Misconception). Outputs subject-wise Excel files
 matching mmd_to_concepts_excel.py format.
 
@@ -209,7 +209,7 @@ def gpt_enhance_concept(
     subject: str,
 ) -> Tuple[str, str]:
     """
-    Use gpt-5-mini to enhance a single concept into the standard format.
+    Use the configured Aegis model to enhance a single concept into the standard format.
     Returns (parent_concept, concept_description).
     """
     user = (
