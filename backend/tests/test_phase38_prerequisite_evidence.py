@@ -432,10 +432,24 @@ def test_live_grounding_wrapper_scopes_and_clears_placement_rows(monkeypatch):
     assert phase38._ACTIVE_GROUNDING_RECORDS.get() is None
 
 
-def test_proposal_cannot_borrow_another_rows_prerequisite_block(
+def test_earlier_topic_block_is_a_reference_not_a_placement_veto(
     wired,
     monkeypatch,
 ):
+    """Citing an earlier topic does not move or reject the concept.
+
+    Textbooks are cumulative: a later section compares against and alludes to
+    earlier material constantly. This used to raise whenever a proposal cited a
+    cross-topic block its placement contract had not enumerated, which ended a
+    live run -- a Greek War of Independence concept in "The Age of Revolutions"
+    cited a paragraph from "The Making of Nationalism in Europe" and semantic
+    recovery exhausted trying to repair something that was never wrong.
+
+    Placement is still enforced by the native-block rule: the concept must cite
+    at least one block from its own topic, so it stays where the source teaches
+    it. Everything past that is supporting reference.
+    """
+
     row = _certified_row(prerequisite_block_id="BLK-0002")
     applied: list[bool] = []
     monkeypatch.setattr(
@@ -444,20 +458,16 @@ def test_proposal_cannot_borrow_another_rows_prerequisite_block(
         lambda *_args, **_kwargs: applied.append(True),
     )
 
-    with pytest.raises(
-        ValueError,
-        match="outside its certified placement contract: BLK-0001",
-    ):
-        phase38._apply_proposals(
-            [row],
-            proposals={"CONCEPT-GROUND-0001": {
-                "source_block_ids": ["BLK-0001", "BLK-0004"],
-            }},
-            index_by_id={"CONCEPT-GROUND-0001": 0},
-            candidates=wired["blocks"],
-        )
+    phase38._apply_proposals(
+        [row],
+        proposals={"CONCEPT-GROUND-0001": {
+            "source_block_ids": ["BLK-0001", "BLK-0004"],
+        }},
+        index_by_id={"CONCEPT-GROUND-0001": 0},
+        candidates=wired["blocks"],
+    )
 
-    assert applied == []
+    assert applied == [True]
 
 
 def test_proposal_accepts_certified_earlier_core_with_later_native_method(
@@ -740,3 +750,36 @@ def test_type_prompts_carry_the_exception():
         assert "Retrospective reference is the exception" in rule, key
         assert "stays with the topic that teaches it" in rule, key
         assert "Ask which direction the" in rule, key
+
+
+def test_a_concept_must_still_ground_in_its_own_topic(wired, monkeypatch):
+    """The textbook decides placement, and that rule is unchanged.
+
+    Accepting earlier-topic references does not let a concept live somewhere
+    its own topic does not support: it must still cite a native block from the
+    topic it sits in.
+    """
+
+    row = _certified_row(prerequisite_block_id="BLK-0002")
+    applied: list[bool] = []
+    monkeypatch.setattr(
+        phase38.phase31,
+        "_PHASE38_ORIGINAL_APPLY_PROPOSALS",
+        lambda *_args, **_kwargs: applied.append(True),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="selected no native block from its certified owner topic",
+    ):
+        phase38._apply_proposals(
+            [row],
+            proposals={"CONCEPT-GROUND-0001": {
+                # Only earlier-topic blocks: nothing from its own topic.
+                "source_block_ids": ["BLK-0001"],
+            }},
+            index_by_id={"CONCEPT-GROUND-0001": 0},
+            candidates=wired["blocks"],
+        )
+
+    assert applied == []
