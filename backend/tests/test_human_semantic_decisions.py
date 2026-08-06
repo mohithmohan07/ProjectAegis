@@ -633,6 +633,147 @@ def test_agent_selected_phase31_topology_action_is_consumed_and_continues(
     assert job.pending_decision is None
 
 
+def test_carried_phase31_decision_is_visible_and_the_run_ships(
+    db,
+    first_chapter,
+    monkeypatch,
+):
+    """A carried decision is an answer, and the phase that asked must see it.
+
+    Run 4 died here twice over. Best judgement cannot rank a bare
+    ``select_candidate`` across several candidates, so it carries the decision
+    -- and carrying was rejected first by the recording gate, then by every
+    gate lookup, each of which listed the choices it accepted and left this one
+    out. An invisible answer is the same as no answer: the phase raises the
+    identical decision on the next pass and carries it again, forever.
+
+    So: the decision is recorded, the next pass finds it, nothing is applied,
+    and generation ships a map with the decision flagged for the reviewer.
+    """
+
+    job, chapter = _job_at_81_percent(db, first_chapter)
+    packet = _phase31_topology_pending_packet()
+    # Two equally-ranked candidates. List position ranks nothing, so no route
+    # is certified and none can be guessed -- the shape that stopped run 4.
+    second = early_semantic_gate.bind_candidate({
+        "target_id": "3.1:topology:refine:" + ("f" * 32),
+        "concept_id": "TOPOLOGY-CONCEPT-0003",
+        "action": "refine",
+        "title": "Refine a different unsupported source claim",
+        "topic": "The Making of Nationalism in Europe",
+        "coverage": "Cavour secured a diplomatic alliance with France.",
+        "gap": "Remove the broader unsupported wording.",
+        "source_topic_id": "TOPIC-0002",
+        "target_topic_id": "TOPIC-0002",
+        "boundary_relation": "same_topic",
+        "source_kind": "topology_repair",
+    })
+    packet["candidates"] = [packet["candidates"][0], second]
+    identity = {
+        "decision_id": packet["decision_id"],
+        "context_hash": packet["context_hash"],
+    }
+    generation_calls = 0
+    seen: list[dict] = []
+    durable: list[dict] = []
+
+    def generate(*_args, **_kwargs):
+        nonlocal generation_calls
+        generation_calls += 1
+        resolution = early_semantic_gate.resolution_for(
+            identity=identity,
+            kind=packet["kind"],
+            phase=packet["phase"],
+            unit_id=packet["item"]["unit_id"],
+            candidates=packet["candidates"],
+        )
+        if resolution is None:
+            raise semantic_recovery.HumanDecisionRequired(packet)
+        seen.append(copy.deepcopy(resolution))
+        db.expire_all()
+        saved = db.get(models.UploadJob, job.id)
+        durable.append(copy.deepcopy(
+            saved.generation_checkpoint["human_decisions"]["resolutions"][0]
+        ))
+        return _seal_live_generation_result([{
+            "topic": "The Making of Nationalism in Europe",
+            "parent_concept": "Unification of Italy",
+            "concept_title": "Cavour's Diplomacy",
+            "concept_details": (
+                "Description: Cavour secured a diplomatic alliance with "
+                "France."
+            ),
+            "keywords": "Cavour, diplomacy, France",
+        }], _kwargs["artifacts"])
+
+    # This module's autouse fixture forces every decision to its terminal stop
+    # so the guarantees around a stop can be asserted. This test is about the
+    # opposite outcome, so it opts back in to ordinary unattended completion.
+    monkeypatch.delenv("AEGIS_UNATTENDED_COMPLETION", raising=False)
+    monkeypatch.setattr(
+        build_concepts.config, "use_live_generation", lambda: True)
+    # The resolver is unavailable -- run 4's rate-limit exhaustion -- so the
+    # last-resort continuation is what has to carry this.
+    monkeypatch.setattr(
+        build_concepts.autonomous_resolution, "enabled", lambda: False)
+    monkeypatch.setattr(
+        build_concepts.autonomous_resolution,
+        "resolve_pending",
+        lambda *_args, **_kwargs: pytest.fail(
+            "an unavailable resolver must not be called"),
+    )
+    monkeypatch.setattr(
+        build_concepts.generation, "concepts_from_mmd", generate)
+    monkeypatch.setattr(
+        build_concepts,
+        "_deposit_and_publish_concepts",
+        _mock_live_deposit(906),
+    )
+    monkeypatch.setattr(
+        build_concepts.drive_checkpoints,
+        "schedule_checkpoint_backup",
+        lambda *_args, **_kwargs: None,
+    )
+    logged: list[str] = []
+    real_log = build_concepts.progress.log
+    monkeypatch.setattr(
+        build_concepts.progress,
+        "log",
+        lambda message, *args, **kwargs: (
+            logged.append(str(message)), real_log(message, *args, **kwargs)
+        )[1],
+    )
+
+    result = build_concepts.generate_post_learning(
+        db, job.id, chapter.id, owner_sub=auth.LOCAL_OWNER_SUB
+    )
+
+    # The run shipped rather than stopping or looping.
+    assert result["concept_ids"] == [906]
+    assert generation_calls == 2
+    db.refresh(job)
+    assert job.status == "generated"
+    assert job.pending_decision is None
+
+    # The second pass saw the carried answer and applied nothing for it.
+    assert len(seen) == 1
+    assert seen[0]["choice"] == "carry_forward"
+    assert seen[0]["target_id"] == ""
+    assert seen[0]["instruction"] == ""
+    assert seen[0]["selected_candidate"] is None
+
+    assert durable[0]["choice"] == "carry_forward"
+    assert durable[0]["resolved_by"] == "agent"
+    assert durable[0]["status"] == "consumed"
+
+    # And the reviewer can find it: concept_revisions scans the run log for
+    # this exact wording to show which placements Aegis was least sure of.
+    assert any(
+        "placed by best judgement" in message.casefold()
+        for message in logged
+    ), logged
+
+
 def test_verified_working_source_patch_bypasses_model_and_agent_cap(
     db,
     first_chapter,

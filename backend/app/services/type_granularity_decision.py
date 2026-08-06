@@ -364,6 +364,9 @@ def _resolution_for(identity: Mapping[str, str]) -> dict[str, Any] | None:
             "consolidate_types",
             "keep_distinct_types",
             "custom_instruction",
+            # A carried decision is an answer. Without it here the same
+            # decision is raised again on every pass and carried again.
+            "carry_forward",
         }:
             continue
         matched = {
@@ -679,7 +682,12 @@ def resolve_or_pause(
             failure=failure_text,
         ))
     choice = str(resolution.get("choice") or "")
-    if choice == "keep_distinct_types":
+    # ``carry_forward`` means Aegis settled this decision by changing nothing,
+    # so it must land on "keep". Falling through to "consolidate" would merge
+    # the mined Types on the strength of a decision that explicitly declined to
+    # decide, and a reviewer reading the delivered workbook cannot unmerge
+    # them.
+    if choice in {"keep_distinct_types", "carry_forward"}:
         action = "keep"
     else:
         action = "consolidate"

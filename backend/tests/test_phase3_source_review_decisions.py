@@ -644,6 +644,54 @@ def test_source_resolution_requires_exact_decision_and_context(
     assert calls == 1
 
 
+def test_carried_source_review_settles_and_leaves_the_source_alone(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A carried source review is an answer, and Phase 3 must see it as one.
+
+    Nothing here can be automated: substituting a guessed OCR block into the
+    working source is not a placement a reviewer of the delivered workbook
+    could ever spot and correct. So Aegis carries the decision -- the source
+    stays exactly as uploaded and the run continues.
+
+    The lookup used to drop ``carry_forward`` while listing the choices it
+    accepted, which made the answer invisible: this review would be raised
+    again on the next pass and carried again, forever.
+    """
+
+    _source, canonical, graph, pages = _verified_graph_and_pages()
+    monkeypatch.setattr(phase3, "semantic_api_enabled", lambda: True)
+    monkeypatch.setattr(
+        phase3, "_diagnose_source_review_via_openai", _diagnostic)
+    with pytest.raises(semantic_recovery.HumanDecisionRequired) as first:
+        phase3._source_review_graph_or_raise(
+            graph,
+            canonical=canonical,
+            page_bundle=pages,
+            source_path=None,
+        )
+    pending = first.value.pending_decision
+    carried = {
+        **copy.deepcopy(pending),
+        "choice": "carry_forward",
+        "target_id": "",
+        "target_concept_id": "",
+        "instruction": "",
+    }
+
+    with phase3.human_source_resolution_context([carried]):
+        settled = phase3._source_review_graph_or_raise(
+            copy.deepcopy(graph),
+            canonical=canonical,
+            page_bundle=pages,
+            source_path=None,
+        )
+
+    state = settled[phase3._SOURCE_REVIEW_KEY]
+    assert state["status"] == "carried"
+    assert state["carried_reason"]
+
+
 def test_prepare_turns_exact_generic_rich_text_failure_into_one_decision(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -21,6 +21,7 @@ import os
 import re
 import shutil
 import tempfile
+from collections.abc import Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
@@ -4008,6 +4009,31 @@ def record_human_semantic_decision(
         raise HumanDecisionConflictError(str(exc)) from exc
 
 
+def _decision_choice_is_recordable(pending: Mapping, choice: str) -> bool:
+    """Is ``choice`` a route the server sanctioned for this decision?
+
+    Recording is gated on the options the decision actually offered, so a
+    caller cannot apply a mutation the server never put on the table.
+
+    ``carry_forward`` is the one exemption, and deliberately so. It is never a
+    server-offered option because it is not a route through the decision at
+    all: it is Aegis settling the decision by changing nothing, reached when
+    every offered route is one no automation may take. There is no mutation for
+    the server to sanction, so there is nothing for the gate to protect. Until
+    this exemption existed the last-resort continuation was rejected here and
+    the run stopped -- the exact outcome carrying forward was built to prevent.
+    """
+
+    offered = {
+        str(option.get("choice") or "")
+        for option in pending.get("options") or []
+        if isinstance(option, Mapping)
+    }
+    if choice == autonomous_resolution.CARRY_FORWARD_CHOICE:
+        return True
+    return not offered or choice in offered
+
+
 def _record_human_semantic_decision_locked(
     db: Session,
     job: models.UploadJob,
@@ -4089,7 +4115,7 @@ def _record_human_semantic_decision_locked(
         for option in pending.get("options") or []
         if isinstance(option, dict)
     }
-    if offered and choice not in offered:
+    if not _decision_choice_is_recordable(pending, choice):
         raise ValueError(
             f"choice {choice!r} is not available for this decision")
     candidate_ids = [

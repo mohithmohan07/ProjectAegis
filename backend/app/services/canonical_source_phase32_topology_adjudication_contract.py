@@ -2883,9 +2883,22 @@ def adjudicate_topology(
                 "it again; no model request was started."
             )
 
+        # A carried resolution settles its decision without directing an
+        # action, so the two roles split here. ``resolutions`` stays the settled
+        # set -- dropping a carried answer from it would leave the concept
+        # looking undecided above, and the identical decision would be raised
+        # and carried again on every pass. ``directives`` is the subset that
+        # actually asks for something, and it is the only one the model sees:
+        # "Aegis changed nothing here" is not a direction to adjudicate.
+        directives = {
+            concept_id: resolution
+            for concept_id, resolution in resolutions.items()
+            if str(resolution.get("choice") or "") != "carry_forward"
+        }
+
         # A directed resume is exactly one provider/critic pair. Only a fresh
         # mechanical schema or opaque-ID defect may receive one correction.
-        max_provider_attempts = 1 if resolutions else 2
+        max_provider_attempts = 1 if directives else 2
         accepted: dict[str, dict[str, Any]] = {}
         response: dict[str, Any] | None = None
         parse_errors: list[str] = []
@@ -2910,10 +2923,10 @@ def adjudicate_topology(
                     else {}
                 ),
             }
-            if resolutions:
+            if directives:
                 payload["human_resolutions"] = [
-                    copy.deepcopy(resolutions[concept_id])
-                    for concept_id in sorted(resolutions)
+                    copy.deepcopy(directives[concept_id])
+                    for concept_id in sorted(directives)
                 ]
             response = provider(copy.deepcopy(payload))
             legacy_relationship_mode = bool(
@@ -2975,7 +2988,7 @@ def adjudicate_topology(
                 ]
             if parse_errors:
                 if (
-                    resolutions
+                    directives
                     or not _topology_parse_errors_are_mechanical(parse_errors)
                 ):
                     concept_id = next(
@@ -3024,7 +3037,7 @@ def adjudicate_topology(
                 "after its bounded provider contract correction"
             )
 
-        directed_issues = _topology_directed_issues(resolutions, accepted)
+        directed_issues = _topology_directed_issues(directives, accepted)
         if directed_issues:
             concept_id = next(
                 (
@@ -3073,10 +3086,10 @@ def adjudicate_topology(
                 and attestation.get("split_review_id")
             }.values()),
         }
-        if resolutions:
+        if directives:
             review_payload["human_resolutions"] = [
-                copy.deepcopy(resolutions[concept_id])
-                for concept_id in sorted(resolutions)
+                copy.deepcopy(directives[concept_id])
+                for concept_id in sorted(directives)
             ]
         review = critic(copy.deepcopy(review_payload))
         review_gate = confidence_policy.ConfidenceGate.SEMANTIC
