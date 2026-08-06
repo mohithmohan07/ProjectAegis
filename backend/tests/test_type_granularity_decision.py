@@ -176,6 +176,42 @@ def test_fragmentation_gate_applies_only_the_exact_saved_resolution():
     }
 
 
+def test_carry_forward_keeps_the_types_it_declined_to_judge():
+    """A decision settled by changing nothing must not merge the Types.
+
+    ``carry_forward`` says Aegis could not judge this decision and applied
+    nothing. Every other choice here means "consolidate", so falling through
+    the branch would merge the mined Types on the strength of a decision that
+    explicitly declined to decide -- and a reviewer reading the delivered
+    workbook cannot unmerge them.
+    """
+
+    with pytest.raises(semantic_recovery.HumanDecisionRequired) as caught:
+        gate.resolve_or_pause(
+            review=_review(),
+            inventory=_inventory(),
+            mined_types=_types(),
+            meta={"subject": "History"},
+        )
+    pending = caught.value.pending_decision
+    resolution = {
+        **copy.deepcopy(pending),
+        "status": "ready",
+        "choice": "carry_forward",
+        "instruction": "",
+    }
+    with gate.human_resolution_context([resolution]):
+        directive = gate.resolve_or_pause(
+            review=_review(),
+            inventory=_inventory(),
+            mined_types=_types(),
+            meta={"subject": "History"},
+        )
+
+    assert directive["choice"] == "carry_forward"
+    assert directive["action"] == "keep"
+
+
 def test_consumed_type_resolution_requires_fresh_decision_through_orchestrator():
     with pytest.raises(semantic_recovery.HumanDecisionRequired) as caught:
         gate.resolve_or_pause(

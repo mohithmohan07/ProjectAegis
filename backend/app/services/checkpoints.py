@@ -15,7 +15,12 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from .. import models, schemas
-from . import generation, grounding_certificate, uploads
+from . import (
+    autonomous_resolution,
+    generation,
+    grounding_certificate,
+    uploads,
+)
 
 
 BUNDLE_FORMAT = "aegis-concept-checkpoint"
@@ -57,15 +62,11 @@ _PHASE38_TERMINAL_STATUSES = frozenset({"exhausted", "disposed"})
 _PHASE38_STATUSES = _PHASE38_TERMINAL_STATUSES | {
     "active", "final_verification_pending",
 }
-_AGENT_AUTOMATABLE_CHOICES = {
-    "expand_existing",
-    "create_new",
-    "select_existing",
-    "accept_recommended",
-    "select_candidate",
-    "consolidate_types",
-    "keep_distinct_types",
-}
+# Kept as one list, not two. This used to restate the resolver's automatable
+# choices, and the copies drifted: ``carry_forward`` was added to the resolver
+# and not here, so a run that carried any decision failed its own bundle
+# validation and Aegis could not reimport a checkpoint it had just written.
+_AGENT_AUTOMATABLE_CHOICES = autonomous_resolution.AUTOMATABLE_CHOICES
 _BUNDLE_KEYS = {
     "format", "bundle_schema_version", "exported_at",
     "payload_sha256", "payload",

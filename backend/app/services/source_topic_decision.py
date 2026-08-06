@@ -166,6 +166,9 @@ def _resolution_for(identity: Mapping[str, str]) -> dict[str, str] | None:
         choice = _normal(candidate.get("choice")).replace(" ", "_")
         if choice not in {
             "accept_recommended", "custom_instruction", "replace_source",
+            # A carried decision is an answer. Without it here the same
+            # decision is raised again on every pass and carried again.
+            "carry_forward",
         }:
             continue
         matched = {

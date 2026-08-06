@@ -436,11 +436,19 @@ def test_escalation_still_pauses_when_unattended_mode_is_off(
     assert saved["agent_review"]["status"] == "escalated"
 
 
-def test_user_only_decision_still_pauses_even_in_unattended_mode(
+def test_user_only_decision_carries_forward_instead_of_pausing(
     db,
     first_chapter,
     monkeypatch,
 ):
+    """A decision offering only user-authority routes is recorded, not parked.
+
+    This test previously asserted the opposite -- that the run stopped here --
+    which is the behaviour ``carry_forward`` exists to replace. Neither route
+    on offer may be automated, so nothing is applied: the uploaded source is
+    untouched and generation continues with what it already produced.
+    """
+
     chapter = db.get(models.Chapter, first_chapter["id"])
     raw = _pending_raw(
         options=[
@@ -479,10 +487,21 @@ def test_user_only_decision_still_pauses_even_in_unattended_mode(
     outcome = build_concepts._autonomously_resolve_pending_decision(
         db, job, pending, owner_sub=None)
 
-    assert outcome is None
+    assert outcome == pending["decision_id"]
     db.refresh(job)
     ledger = job.generation_checkpoint["human_decisions"]
-    assert ledger["pending"]["decision_id"] == pending["decision_id"]
+    assert ledger.get("pending") is None
+    recorded = next(
+        row for row in ledger["resolutions"]
+        if row["decision_id"] == pending["decision_id"]
+    )
+    assert recorded["choice"] == "carry_forward"
+    assert recorded["resolved_by"] == "agent"
+    assert recorded["status"] == "consumed"
+    # Carrying settles the decision; it never smuggles in a target to act on.
+    assert recorded["target_id"] == ""
+    assert recorded["target_concept_id"] == ""
+    assert recorded["instruction"] == ""
 
 
 def test_pathway_cap_uses_safe_continuation_without_model_request(
@@ -592,3 +611,116 @@ def test_every_decision_shape_now_ships():
         selected = autonomous_resolution.safe_continuation_option(pending)
         assert selected is not None, pending
         assert selected["choice"] not in autonomous_resolution.USER_ONLY_CHOICES
+        # Selecting a route is only half the guarantee. Run 4 selected
+        # carry_forward and then stopped anyway, because recording it was
+        # rejected for not being one of the server-offered options. A shape
+        # only ships if the chosen route survives that gate too.
+        assert build_concepts._decision_choice_is_recordable(
+            pending, selected["choice"]), pending
+
+
+def test_bare_candidate_selector_over_several_candidates_is_recorded(
+    db,
+    first_chapter,
+    monkeypatch,
+):
+    """The exact shape that stopped run 4.
+
+    Phase 3 offered a bare ``select_candidate`` over several ranked evidence
+    blocks alongside the two user-only routes. List position ranks nothing, so
+    best judgement declines the selection and carries the decision instead.
+    Recording that must succeed: ``carry_forward`` is deliberately never one of
+    the server-offered options, so a membership check that did not exempt it
+    stopped the run at the one point carrying was built to rescue.
+    """
+
+    chapter = db.get(models.Chapter, first_chapter["id"])
+    raw = _pending_raw(
+        options=[
+            {
+                "choice": "select_candidate",
+                "label": "Choose another verified PDF evidence block",
+                "recommended": False,
+            },
+            {
+                "choice": "custom_instruction",
+                "label": "Tell Aegis what to do",
+                "recommended": False,
+            },
+            {
+                "choice": "replace_source",
+                "label": "Replace or correct the source file",
+                "recommended": True,
+            },
+        ],
+        candidates=[
+            {
+                "target_id": "CAND-KEEP-0001",
+                "concept_id": "CONCEPT-GROUND-0007",
+                "title": "First ranked evidence block",
+                "topic": "Source Topic",
+                "action": "keep",
+                "source_block_ids": ["BLK-0001"],
+            },
+            {
+                "target_id": "CAND-KEEP-0002",
+                "concept_id": "CONCEPT-GROUND-0008",
+                "title": "Second ranked evidence block",
+                "topic": "Source Topic",
+                "action": "keep",
+                "source_block_ids": ["BLK-0002"],
+            },
+        ],
+    )
+    raw["decision_id"] = "phase31-ground-test-decision-04"
+    job, pending = _seed_paused_job(
+        db,
+        chapter,
+        monkeypatch,
+        filename="safe-continuation-bare-selector.mmd",
+        raw=raw,
+    )
+    monkeypatch.delenv("AEGIS_UNATTENDED_COMPLETION", raising=False)
+
+    decision_id = build_concepts._apply_last_resort_safe_continuation(
+        db, job, pending, owner_sub=None)
+
+    assert decision_id == pending["decision_id"]
+    db.refresh(job)
+    ledger = job.generation_checkpoint["human_decisions"]
+    assert ledger.get("pending") is None
+    recorded = next(
+        row for row in ledger["resolutions"]
+        if row["decision_id"] == pending["decision_id"]
+    )
+    assert recorded["choice"] == "carry_forward"
+    # Neither ranked block was substituted into the source on a guess.
+    assert recorded["target_id"] == ""
+
+
+def test_carry_forward_is_the_only_choice_exempt_from_the_offered_gate():
+    """The exemption is narrow: it covers the one route that mutates nothing.
+
+    A caller must not be able to apply a route the server never offered. That
+    stays true for every mutating choice; only the do-nothing route is let
+    through, because there is nothing for the gate to sanction.
+    """
+
+    pending = {"options": [{"choice": "select_candidate", "label": "Pick"}]}
+
+    assert build_concepts._decision_choice_is_recordable(
+        pending, "carry_forward")
+    assert build_concepts._decision_choice_is_recordable(
+        pending, "select_candidate")
+    for choice in (
+        "expand_existing",
+        "create_new",
+        "select_existing",
+        "accept_recommended",
+        "consolidate_types",
+        "keep_distinct_types",
+        "replace_source",
+        "custom_instruction",
+    ):
+        assert not build_concepts._decision_choice_is_recordable(
+            pending, choice), choice

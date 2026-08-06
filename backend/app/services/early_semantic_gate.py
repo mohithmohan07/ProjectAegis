@@ -427,6 +427,12 @@ def resolution_for(
             "select_candidate",
             "replace_source",
             "custom_instruction",
+            # A carried decision is an answer -- "Aegis settled this by
+            # changing nothing" -- and callers must see it, or they raise the
+            # identical decision again on the next pass and carry it again.
+            # It directs no action, so it names no target and needs no
+            # candidate binding; the checks below skip it for that reason.
+            "carry_forward",
         }:
             continue
         target_id = str(raw.get("target_id") or "")

@@ -2016,15 +2016,20 @@ def ground_concepts(
                     "convert it again; no model request was started."
                 )
 
-            # A carried resolution settles the decision without directing an
-            # action, so it must not be read as one.
-            resolutions = {
+            # A carried resolution settles its decision without directing an
+            # action, so the two roles split here. ``resolutions`` stays the
+            # settled set: dropping a carried answer from it would leave the
+            # concept looking undecided, and the identical decision would be
+            # raised again on the next pass and carried again, forever.
+            # ``directives`` is the subset that actually asks for something,
+            # and it is the only one the model or the action loop below sees.
+            directives = {
                 concept_id: resolution
                 for concept_id, resolution in resolutions.items()
                 if str(resolution.get("choice") or "") != "carry_forward"
             }
 
-            for concept_id, resolution in resolutions.items():
+            for concept_id, resolution in directives.items():
                 selected = resolution.get("selected_candidate")
                 action = (
                     str(selected.get("action") or "")
@@ -2096,7 +2101,7 @@ def ground_concepts(
                 # A saved semantic direction receives one provider request and
                 # one independent critic request. Fresh mechanical schema/ID
                 # defects may receive one correction; semantic defects never do.
-                max_provider_attempts = 1 if resolutions else 2
+                max_provider_attempts = 1 if directives else 2
                 response: dict[str, Any] | None = None
                 parsed: dict[str, dict[str, Any]] = {}
                 parse_errors: list[str] = []
@@ -2118,10 +2123,10 @@ def ground_concepts(
                             else {}
                         ),
                     }
-                    if resolutions:
+                    if directives:
                         attempt_payload["human_resolutions"] = [
-                            copy.deepcopy(resolutions[concept_id])
-                            for concept_id in sorted(resolutions)
+                            copy.deepcopy(directives[concept_id])
+                            for concept_id in sorted(directives)
                         ]
                     response = provider(copy.deepcopy(attempt_payload))
                     parsed, parse_errors = _parse_proposals(
@@ -2146,7 +2151,7 @@ def ground_concepts(
                     if not parse_errors:
                         break
                     if (
-                        resolutions
+                        directives
                         or not _grounding_parse_errors_are_mechanical(parse_errors)
                     ):
                         concept_id = next(
@@ -2189,7 +2194,7 @@ def ground_concepts(
                 # A human-selected evidence block is a direction to the mapper,
                 # never an approval. Enforce the direction before the critic.
                 directed_issues: list[str] = []
-                for concept_id, resolution in resolutions.items():
+                for concept_id, resolution in directives.items():
                     selected = resolution.get("selected_candidate")
                     if not isinstance(selected, dict):
                         continue
@@ -2239,10 +2244,10 @@ def ground_concepts(
                         for concept_id in sorted(unresolved)
                     ],
                 }
-                if resolutions:
+                if directives:
                     review_payload["human_resolutions"] = [
-                        copy.deepcopy(resolutions[concept_id])
-                        for concept_id in sorted(resolutions)
+                        copy.deepcopy(directives[concept_id])
+                        for concept_id in sorted(directives)
                     ]
                 review = critic(copy.deepcopy(review_payload))
                 state = _review_state(review, concept_ids=set(unresolved))

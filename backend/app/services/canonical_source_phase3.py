@@ -291,6 +291,11 @@ def _human_source_resolution(
             "select_candidate",
             "replace_source",
             "custom_instruction",
+            # A carried decision is an answer -- "Aegis settled this by
+            # changing nothing". Dropping it here would make the answer
+            # invisible, so this review would be raised again on the next pass
+            # and carried again, forever. The caller applies nothing for it.
+            "carry_forward",
         }:
             continue
         return copy.deepcopy(candidate)

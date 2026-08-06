@@ -348,17 +348,18 @@ def test_resume_path_continues_instead_of_returning_a_pause(
     assert checkpoint["human_decisions"]["pending"] is None
 
 
-def test_user_only_decision_ends_the_run_instead_of_parking_it(
+def test_user_only_decision_carries_forward_instead_of_parking_it(
     db,
     first_chapter,
     monkeypatch,
 ):
-    """Unattended runs never park in ``awaiting_decision``.
+    """Unattended runs never park in ``awaiting_decision``, and now never stop.
 
     A decision whose only routes are replacing the uploaded document or
-    writing an instruction cannot be synthesized. An unattended batch cannot
-    answer a pause either, so a stalled job is strictly worse than a terminal
-    failure: the run ends with the reason recorded.
+    writing an instruction cannot be synthesized, and this test used to pin
+    the run ending there. It no longer does: the decision is carried, nothing
+    is applied, and generation ships a map the reviewer can read and correct.
+    A stalled job remains strictly worse than either outcome.
     """
 
     chapter = db.get(models.Chapter, first_chapter["id"])
@@ -390,26 +391,27 @@ def test_user_only_decision_ends_the_run_instead_of_parking_it(
         lambda *_args, **_kwargs: None,
     )
 
-    with pytest.raises(
-        build_concepts.UnattendedDecisionUnavailable,
-        match="a person must take",
-    ) as excinfo:
-        build_concepts._existing_human_decision_pause(
-            db,
-            job,
-            dict(job.generation_checkpoint or {}),
-            agent_resolution_ids=set(),
-            owner_sub=None,
-        )
+    outcome = build_concepts._existing_human_decision_pause(
+        db,
+        job,
+        dict(job.generation_checkpoint or {}),
+        agent_resolution_ids=set(),
+        owner_sub=None,
+    )
 
-    # The message names the blocked routes and how to proceed.
-    assert "replace_source" in str(excinfo.value)
-    # No setting is offered, because none can restore a pause.
-    assert "AEGIS_UNATTENDED_COMPLETION" not in str(excinfo.value)
-    # Bounded semantic recovery must not retry a decision only a person can
-    # answer, so it is classified non-semantic.
-    assert semantic_recovery.classify_failure(
-        excinfo.value).recoverable is False
+    # None means "no pause -- keep generating".
+    assert outcome is None
+    db.refresh(job)
+    ledger = job.generation_checkpoint["human_decisions"]
+    assert ledger["pending"] is None
+    recorded = next(
+        row for row in ledger["resolutions"]
+        if row["decision_id"] == "phase33-host-useronly-unattended"
+    )
+    # Neither user-only route was taken; the decision was simply settled.
+    assert recorded["choice"] == "carry_forward"
+    assert recorded["target_id"] == ""
+    assert recorded["instruction"] == ""
 
 
 def test_no_setting_can_restore_a_mid_run_pause(
@@ -420,10 +422,11 @@ def test_no_setting_can_restore_a_mid_run_pause(
     """Generation has no pause in any configuration.
 
     ``AEGIS_UNATTENDED_COMPLETION=0`` used to hand a user-only decision back to
-    a person mid-run. It now only disables automatic continuation with the
-    safest offered action; the decision still ends the run rather than waiting.
-    A stalled job holds its worker with nobody watching, so it is strictly
-    worse than a failure that says why.
+    a person mid-run. It now only chooses between two unattended outcomes: with
+    continuation on the decision is carried and the run ships, with it off the
+    run ends with the reason recorded. Neither waits for an answer, and no
+    setting brings the waiting back. A stalled job holds its worker with nobody
+    watching, so it is strictly worse than either.
     """
 
     chapter = db.get(models.Chapter, first_chapter["id"])
@@ -454,9 +457,9 @@ def test_no_setting_can_restore_a_mid_run_pause(
         lambda *_args, **_kwargs: None,
     )
 
-    for setting in ("0", "1", "false", "off", "no"):
+    for setting in ("0", "false", "off", "no"):
         monkeypatch.setenv("AEGIS_UNATTENDED_COMPLETION", setting)
-        with pytest.raises(build_concepts.UnattendedDecisionUnavailable):
+        with pytest.raises(build_concepts.UnattendedDecisionUnavailable) as caught:
             build_concepts._existing_human_decision_pause(
                 db,
                 job,
@@ -464,6 +467,24 @@ def test_no_setting_can_restore_a_mid_run_pause(
                 agent_resolution_ids=set(),
                 owner_sub=None,
             )
+        # The run ends. It is never handed back to a person to answer, so
+        # bounded semantic recovery must not retry it either.
+        assert semantic_recovery.classify_failure(
+            caught.value).recoverable is False
+        db.refresh(job)
+        assert job.status != "awaiting_decision"
+
+    monkeypatch.setenv("AEGIS_UNATTENDED_COMPLETION", "1")
+    assert build_concepts._existing_human_decision_pause(
+        db,
+        job,
+        dict(job.generation_checkpoint or {}),
+        agent_resolution_ids=set(),
+        owner_sub=None,
+    ) is None
+    db.refresh(job)
+    assert job.status != "awaiting_decision"
+    assert job.generation_checkpoint["human_decisions"]["pending"] is None
 
 
 def test_opt_out_disables_automatic_continuation_but_restores_no_pause(
