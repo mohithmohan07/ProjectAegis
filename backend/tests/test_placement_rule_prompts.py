@@ -252,3 +252,58 @@ def test_provider_is_told_which_topic_evidence_must_come_from():
     assert "do not cite the block where the claim or task physically sits" in provider
     # Rule 4a, restated where the model actually needed it.
     assert "physical location is provenance, not evidence" in provider
+
+
+# --------------------------------------------------------------------------- #
+# One canonical rules block, appended everywhere placement is decided
+# --------------------------------------------------------------------------- #
+
+def test_placement_rules_state_every_product_rule():
+    """The shared block carries Rules 2-5 from the authority document."""
+
+    rules = _squash(placement_policy.PLACEMENT_RULES)
+
+    # Rule 2 -- advanced placement.
+    assert "belongs to that later topic" in rules
+    assert "prerequisite, not the owner" in rules
+    # Rule 3 -- split keeps both sides, and only over shared evidence.
+    assert "from the same blocks" in rules
+    assert "neither may be dropped" in rules
+    # Rule 4 -- retrospective reference makes a new claim, not a split.
+    assert "stays in the topic that teaches it" in rules
+    assert "never a split of the original" in rules
+    assert "same blocks means split, different blocks means" in rules
+    # Rule 4a -- print position, for figures and for question order alike.
+    assert "print position is never evidence" in rules
+    assert "question order is not teaching order" in rules
+    assert "physical location is provenance, not evidence" in rules
+    # Rule 5 -- tasks follow the latest topic in teaching order.
+    assert "latest of them in teaching order" in rules
+
+
+def test_every_placement_prompt_carries_the_shared_rules():
+    """The drift guard.
+
+    Three runs died on one idea -- a cross-topic citation treated as a defect
+    -- at three sites, each holding its own partial copy of the rule. Every
+    prompt that decides or audits placement now appends the same block, so a
+    rule can only be changed in one place.
+    """
+
+    carriers = {
+        "3.3 provider (placement_policy)": placement_policy.PROVIDER_SYSTEM,
+        "3.3 critic (placement_policy)": placement_policy.CRITIC_SYSTEM,
+        "3.2/3.7 provider": phase32.PLACEMENT_PROVIDER_INSTRUCTIONS,
+        "3.2/3.7 critic": phase32.PLACEMENT_CRITIC_INSTRUCTIONS,
+    }
+    for label, text in carriers.items():
+        assert placement_policy.PLACEMENT_RULES in text, label
+
+
+def test_phase38_grounding_prompts_carry_the_shared_rules():
+    """3.8 builds its prompts inside functions, so check the module source."""
+
+    source = Path(phase38.__file__).read_text(encoding="utf-8")
+
+    # Both the mapper and the independent critic append the block.
+    assert source.count("+ placement_policy.PLACEMENT_RULES") == 2

@@ -1211,6 +1211,7 @@ def _ground_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         "supplied, include its selected verified evidence or follow its custom "
         "instruction exactly, then return the ordinary proposal for independent "
         "criticism; the human direction is not verification."
+        + placement_policy.PLACEMENT_RULES
     )
     return phase22._openai_multimodal_json(
         system=system,
@@ -1266,6 +1267,7 @@ def _critic_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         "accepted, none rejected, confidence at least "
         f"{confidence_policy.threshold_text()}, and no issues. Do not rewrite "
         "proposals."
+        + placement_policy.PLACEMENT_RULES
     )
     return phase22._openai_multimodal_json(
         system=system,

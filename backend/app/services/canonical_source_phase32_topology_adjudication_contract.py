@@ -90,6 +90,7 @@ PLACEMENT_PROVIDER_INSTRUCTIONS = (
     "source item. For a split, partition protected_source_items across children "
     "without loss or duplication. Do not split an irreducible relationship into "
     "disconnected facts."
+    + placement_policy.PLACEMENT_RULES
 )
 
 PLACEMENT_CRITIC_INSTRUCTIONS = (
@@ -119,6 +120,7 @@ PLACEMENT_CRITIC_INSTRUCTIONS = (
     "and direction_supported are all true. For split concepts also reject the "
     "concept unless the children collectively preserve the complete parent claim, "
     "every irreducible relationship and every protected source item."
+    + placement_policy.PLACEMENT_RULES
 )
 
 TopologyProvider = Callable[[dict[str, Any]], dict[str, Any]]
