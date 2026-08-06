@@ -141,3 +141,48 @@ def test_rules_document_carries_the_rules_the_prompts_encode(rule):
     text = RULES_DOC.read_text(encoding="utf-8")
 
     assert rule in text, f"{rule} must be stated in the authority document"
+
+
+def test_split_is_never_the_answer_to_a_back_reference():
+    """Rule 4, Reading B: the later topic gets its own concept, not a child.
+
+    Job 8's single split minted TOPOLOGY-CONCEPT-0020#1, whose claim text no
+    longer matched the certificate issued against the parent. Three semantic
+    recovery attempts later the run was dead at 81%. Splitting to satisfy a
+    back-reference is therefore not a quality preference — it is the failure.
+    """
+
+    provider = _squash(phase32.PLACEMENT_PROVIDER_INSTRUCTIONS)
+    critic = _squash(phase32.PLACEMENT_CRITIC_INSTRUCTIONS)
+
+    # Split is scoped to dividing one claim, over shared evidence.
+    assert "grounded in the same blocks" in provider  # noqa: E501
+    assert "split is for dividing one claim" in provider
+    # And the back-reference case is spelled out as the alternative.
+    assert "keep this concept exactly as it is" in provider
+    assert "its own separate concept grounded in its own blocks" in provider
+
+    # The critic enforces the same boundary from the other side.
+    assert "a back-reference is never grounds for a split" in critic
+    assert "different source blocks" in critic
+
+
+def test_rules_document_states_the_split_versus_new_concept_test():
+    text = _squash(RULES_DOC.read_text(encoding="utf-8"))
+
+    # The evidence test, not a wording test.
+    assert "do the two concepts ground in the same source blocks?" in text
+    assert "the original is untouched" in text
+    # And the reason it matters at all.
+    assert "it can stop the run outright" in text
+
+
+def test_rules_document_keeps_one_type_across_topics():
+    """Q2: a Type is a chapter-level identity; Cases place individually."""
+
+    text = _squash(RULES_DOC.read_text(encoding="utf-8"))
+
+    assert "a type is a **chapter-level identity**" in text
+    assert "is never split to make its parts fit one" in text
+    # The worked example lands two Cases in one topic and one in another.
+    assert "one type, three cases, landing across two topics" in text
