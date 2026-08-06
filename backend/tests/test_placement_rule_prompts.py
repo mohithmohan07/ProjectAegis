@@ -25,6 +25,7 @@ import pytest
 
 from app.services import (
     canonical_source_phase32_topology_adjudication_contract as phase32,
+    canonical_source_phase38_boundary_grounding_turnover_contract as phase38,
     placement_policy,
     prompts,
 )
@@ -186,3 +187,41 @@ def test_rules_document_keeps_one_type_across_topics():
     assert "is never split to make its parts fit one" in text
     # The worked example lands two Cases in one topic and one in another.
     assert "one type, three cases, landing across two topics" in text
+
+
+def test_shared_placement_critic_exempts_every_non_necessary_edge():
+    """Phase 3.3 Type-host placement had the same bug as Phase 3.2.
+
+    ``PROVIDER_SYSTEM`` defines three relationship types as necessity=false,
+    but ``CRITIC_SYSTEM`` named only two of them in its "edges only" carve-out.
+    SUBSTANTIVE_LATER_ILLUSTRATION was left able to move -- or sink -- a claim,
+    which is the same shape of contradiction that cost job 8 its run, sitting
+    in the prompt that places Types onto concepts.
+    """
+
+    critic = _squash(placement_policy.CRITIC_SYSTEM)
+
+    for kind in NON_NECESSARY_TYPES:
+        assert kind.casefold() in critic, kind
+    assert "never be used to move the claim, and never to reject it" in critic
+    # Rule 4, Reading B: the later topic earns a claim of its own instead.
+    assert "earns its own separate claim" in critic
+
+
+def test_phase38_splits_only_within_one_claim():
+    """Rule 3 vs Rule 4 at the boundary-grounding turnover.
+
+    Phase 3.8 is told to *prefer* split, which is right for a claim that
+    genuinely teaches two topics from shared evidence and wrong for a
+    back-reference. The preference is now scoped to the same-blocks case.
+    """
+
+    # Read the module source: the instruction is assembled inside a function.
+    # Assertions stay inside single string literals, because adjacent literals
+    # keep their quotes when the source is squashed.
+    text = _squash(Path(phase38.__file__).read_text(encoding="utf-8"))
+
+    assert "teaches both from the same blocks" in text
+    assert "there is one claim in each" in text
+    assert "leave the row alone" in text
+    assert "splitting there rewrites a claim" in text
