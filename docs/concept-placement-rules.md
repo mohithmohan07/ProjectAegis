@@ -92,18 +92,104 @@ illustrates** something taught earlier.
 In the second case the later topic still gains its own concept — about the
 illustration itself.
 
+### That second concept is a new concept, not a split
+
+This is the operative distinction, and getting it wrong has cost whole runs.
+
+**The original concept is not touched.** Its text, its evidence and its
+certified placement all stay exactly as they were. The later topic gains a
+**separate, independent concept**, grounded in *its own* source blocks, making
+*its own* claim. The two were never one concept, so there is nothing to divide,
+no split lineage, and no partitioning of protected source items.
+
+**The test is the evidence, not the wording:**
+
+|Do the two concepts ground in the same source blocks?|Operation|
+|-|-|
+|Same blocks — one claim carrying two teachable ideas|**Split** (Rule 3); both children inherit lineage|
+|Different blocks — two claims that merely mention each other|**Independent concept** (this rule); the original is untouched|
+
+A split rewrites the parent's claim text. Anything already certified against
+that text — a placement contract, a grounding certificate — is invalidated the
+moment it happens. Splitting where Rule 4 applies therefore does not merely
+produce a worse map; it can stop the run outright. Never reach for a split to
+satisfy a back-reference.
+
 Appearing later in the book does not by itself mean later in teaching.
 Chronological and thematic chapters refer backwards constantly.
 
 ---
 
+## Rule 4a — Print position is never placement evidence
+
+An image, illustration, figure or Activity sits where the **layout** put it.
+Page-fill, plate sections, two-column flow and figure packing all move printed
+material away from what it is about. None of that carries meaning.
+
+**Place it with the topic whose content it depicts, not the topic it was
+printed under.** An illustration appearing three sections later does not become
+part of that section, and a later section does not acquire a concept merely
+because a picture landed in it.
+
+This is the same test as Rule 4, stated for non-prose material: ask what the
+item is *about*, never where it physically came to rest. Position in the file,
+page number, reading order and proximity to a heading are all typesetting
+artifacts.
+
+The same applies to **question order**. A question printed early may require a
+later topic's method; one printed late may be pure recall of the first topic.
+Source order is not teaching order, and must never stand in for it.
+
+---
+
 ## Rule 5 — Type and Case placement
+
+### The order is fixed
+
+1. Take the **question inventory**.
+2. Classify every question into a **Type**, and a **Case** where one applies.
+   Each Type and Case carries a proper written definition — what the task asks
+   the learner to do, in its own terms.
+3. **Only then** allot the Type/Case to the topic and concept it belongs to.
+
+Classification comes first and is independent of placement. A Type is defined
+by what it asks, not by where its questions happened to appear. Placement is a
+separate decision taken afterwards, against a Type that is already defined.
+
+### One Type spans topics; its Cases and Examples place individually
+
+A Type is a **chapter-level identity**. It is not owned by a topic and is never
+split to make its parts fit one. Placement happens *below* it: each Case, and
+each Example under that Case, is allotted to whatever concept and topic it
+belongs to, independently of its siblings.
+
+Worked example — a Type covering short notes on historical figures:
+
+|Type|Case|Example|Placed in|
+|-|-|-|-|
+|Short note on a historical figure|Napoleon|Write a short note on Napoleon|Topic 4|
+|Short note on a historical figure|Mussolini|Write a short note on Mussolini|Topic 5|
+|Short note on a historical figure|Hitler|Write a short note on Hitler|Topic 4|
+
+One Type, three Cases, landing across two topics — and two of them landing in
+the *same* topic. All three keep the same reusable Type identity. Splitting
+this into a "Topic 4 Type" and a "Topic 5 Type" would destroy the reusability
+that made it a Type in the first place.
+
+(The Type and Case wording above is deliberately rough; the structure is what
+this example fixes, not the phrasing.)
+
+### Where it lands
 
 **A task requiring methods from more than one topic belongs to the latest of
 those topics** — even when it tests both.
 
 A learner can only attempt it after reaching that topic. Needing an earlier
 topic's formula makes that topic a prerequisite, not the owner.
+
+"Latest" means latest in **teaching order**: the topic whose method the learner
+must have been taught in order to attempt the task. It is never inferred from
+which of the Type's questions is printed last (Rule 4a).
 
 The retrospective-reference exception (Rule 4) applies here too: if the later
 topic only illustrates the earlier material rather than being needed to attempt
