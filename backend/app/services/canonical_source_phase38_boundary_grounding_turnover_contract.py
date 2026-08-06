@@ -1120,6 +1120,17 @@ def _augment_grounding_payload(
             "from the certified owner topic."
         ),
         "advanced_placement_rule": (
+            "START FROM THE BOOK. A concept belongs to the topic whose section "
+            "actually teaches it. That is the default and it is usually the "
+            "answer: if the source teaches the Greek War of Independence in "
+            "section 3, the concept is a section 3 concept. Move it only when "
+            "understanding the claim genuinely REQUIRES a later topic's method "
+            "or framework - not because it cites, compares with, alludes to, or "
+            "sits near earlier material. Citing an earlier topic is a "
+            "reference, and references never relocate a concept. "
+            "When a claim falls dominantly under two concepts in the same "
+            "topic, it belongs to that topic's culmination concept rather than "
+            "being pushed into another topic. "
             "Placement follows teaching order among genuinely required topics. "
             "An atomic claim belongs to the latest topic whose knowledge, "
             "method, or interpretive framework is necessary to understand or "
@@ -1319,30 +1330,36 @@ def _apply_proposals(
                 f"{concept_id} selected no native block from its certified "
                 f"owner topic {owner_topic_id}"
             )
-        necessary_types = {
-            relationship_type.value
-            for relationship_type in placement_policy.NECESSARY_TYPES
-        }
-        exact_ids = {
-            str(block_id)
-            for relation in contract.get("topic_relationships") or []
-            if isinstance(relation, dict)
-            and str(relation.get("relationship_type") or "").upper()
-            in necessary_types
-            for block_id in relation.get("evidence_block_ids") or []
-            if str(block_id)
-        }
-        selected_cross_topic_ids = {
+        # A block from an earlier topic is a *reference*, not a placement claim.
+        # Textbooks are cumulative: a later section compares against, alludes
+        # to, or builds on earlier material constantly, and citing it as
+        # evidence says nothing about where the concept belongs.
+        #
+        # This used to reject any cross-topic block the placement contract had
+        # not declared under a NECESSARY relationship, which stopped whole runs
+        # for legitimate references -- a Greek War of Independence concept in
+        # "The Age of Revolutions" citing a paragraph from "The Making of
+        # Nationalism in Europe" ended a live run after three repair attempts.
+        # Phase 3.2 decides placement, and it does not enumerate every earlier
+        # paragraph a concept might reasonably point at; requiring it to was a
+        # contract mismatch between the two phases, not a grounding defect.
+        #
+        # Placement is still enforced, by the check above: the concept must
+        # cite at least one native block from its own topic, so its principal
+        # claim is grounded where the textbook teaches it. Anything beyond that
+        # is supporting reference and is recorded, not refused.
+        selected_cross_topic_ids = sorted(
             str(block_id)
             for block_id in proposal.get("source_block_ids") or []
             if topic_by_block.get(str(block_id), "") != owner_topic_id
-        }
-        unexpected = sorted(selected_cross_topic_ids - exact_ids)
-        if unexpected:
-            raise ValueError(
-                "failed exact source-block grounding before freeze: "
-                f"{concept_id} selected cross-topic block(s) outside its "
-                "certified placement contract: " + ",".join(unexpected)
+        )
+        if selected_cross_topic_ids:
+            progress.log(
+                f"{concept_id} cites {len(selected_cross_topic_ids)} block(s) "
+                f"from earlier topics as supporting reference "
+                f"({', '.join(selected_cross_topic_ids)}); it stays in its "
+                f"own topic {owner_topic_id}, where the source teaches it.",
+                level="info",
             )
 
     phase31._PHASE38_ORIGINAL_APPLY_PROPOSALS(
