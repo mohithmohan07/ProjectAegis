@@ -97,13 +97,53 @@ Chronological and thematic chapters refer backwards constantly.
 
 ---
 
+## Rule 4a — Print position is never placement evidence
+
+An image, illustration, figure or Activity sits where the **layout** put it.
+Page-fill, plate sections, two-column flow and figure packing all move printed
+material away from what it is about. None of that carries meaning.
+
+**Place it with the topic whose content it depicts, not the topic it was
+printed under.** An illustration appearing three sections later does not become
+part of that section, and a later section does not acquire a concept merely
+because a picture landed in it.
+
+This is the same test as Rule 4, stated for non-prose material: ask what the
+item is *about*, never where it physically came to rest. Position in the file,
+page number, reading order and proximity to a heading are all typesetting
+artifacts.
+
+The same applies to **question order**. A question printed early may require a
+later topic's method; one printed late may be pure recall of the first topic.
+Source order is not teaching order, and must never stand in for it.
+
+---
+
 ## Rule 5 — Type and Case placement
+
+### The order is fixed
+
+1. Take the **question inventory**.
+2. Classify every question into a **Type**, and a **Case** where one applies.
+   Each Type and Case carries a proper written definition — what the task asks
+   the learner to do, in its own terms.
+3. **Only then** allot the Type/Case to the topic and concept it belongs to.
+
+Classification comes first and is independent of placement. A Type is defined
+by what it asks, not by where its questions happened to appear. Placement is a
+separate decision taken afterwards, against a Type that is already defined.
+
+### Where it lands
 
 **A task requiring methods from more than one topic belongs to the latest of
 those topics** — even when it tests both.
 
 A learner can only attempt it after reaching that topic. Needing an earlier
 topic's formula makes that topic a prerequisite, not the owner.
+
+"Latest" means latest in **teaching order**: the topic whose method the learner
+must have been taught in order to attempt the task. It is never inferred from
+which of the Type's questions is printed last (Rule 4a).
 
 The retrospective-reference exception (Rule 4) applies here too: if the later
 topic only illustrates the earlier material rather than being needed to attempt
