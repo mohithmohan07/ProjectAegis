@@ -966,8 +966,17 @@ PROVIDER_SYSTEM = (
     "Appearing on the same page, in the same section number, or at a "
     "particular point in a chronology is NOT necessity.\n"
     "Cite exact supplied block IDs as evidence for every relationship, "
-    "including references and incidental mentions. Use only supplied claim "
-    "IDs and topic IDs."
+    "including references and incidental mentions. EVERY cited block must "
+    "belong to that relationship's own topic: a relationship to topic T is "
+    "evidenced by blocks in T, because T is where that teaching, "
+    "prerequisite, later method, back-reference, illustration or mention "
+    "actually appears. Do NOT cite the block where the claim or task "
+    "physically sits unless that block is itself in T. An end-of-chapter "
+    "exercise printed under the last topic is still evidenced, for a "
+    "prerequisite relationship, by the earlier topic's own block that "
+    "establishes the required knowledge -- never by the exercise's own "
+    "block. Physical location is provenance, not evidence. "
+    "Use only supplied claim IDs and topic IDs."
 )
 
 CRITIC_SYSTEM = (

@@ -225,3 +225,30 @@ def test_phase38_splits_only_within_one_claim():
     assert "there is one claim in each" in text
     assert "leave the row alone" in text
     assert "splitting there rewrites a claim" in text
+
+
+def test_provider_is_told_which_topic_evidence_must_come_from():
+    """Job 9's stop, and it was a prompt gap rather than a bad check.
+
+    Phase 3.3 failed closed with::
+
+        REL-CAF3CCF722DCA85931BB0AAA cites BLK-00293 from TOPIC-0005
+        as evidence for TOPIC-0001
+
+    Three deterministic sites require a relationship's evidence to live in
+    that relationship's own topic, and by the enum's semantics they are right:
+    a prerequisite, back-reference, illustration or mention is evidenced where
+    it actually appears. The provider prompt asked for "exact supplied block
+    IDs" without ever saying which topic they had to come from, so the model
+    cited the block the task was printed in -- an end-of-chapter exercise under
+    the last topic -- as evidence for an early-topic prerequisite.
+
+    The check stays strict. The instruction now says what it requires.
+    """
+
+    provider = _squash(placement_policy.PROVIDER_SYSTEM)
+
+    assert "every cited block must belong to that relationship's own topic" in provider
+    assert "do not cite the block where the claim or task physically sits" in provider
+    # Rule 4a, restated where the model actually needed it.
+    assert "physical location is provenance, not evidence" in provider
