@@ -941,6 +941,47 @@ def relationship_schema(claim_ids: Sequence[str], topic_ids: Sequence[str]) -> d
     }
 
 
+# The product placement rules, stated once for every prompt that decides or
+# audits placement. They are appended rather than restated per phase because
+# restating them is how they drifted: three separate runs died on the same
+# idea -- a cross-topic citation treated as a defect -- at three sites that
+# each carried their own partial copy of the rule.
+#
+# Source of truth: docs/concept-placement-rules.md. Where this text and that
+# document disagree, the document is correct and this is a defect.
+PLACEMENT_RULES = (
+    "\nPLACEMENT RULES (product policy; apply to every subject, board, grade "
+    "and chapter):\n"
+    "1. ADVANCED PLACEMENT. If a claim contains context of a later topic it "
+    "belongs to that later topic, however foundational the rest of it looks. "
+    "Needing an earlier topic makes that topic a prerequisite, not the owner. "
+    "A learner reaches the claim only once the later topic is taught.\n"
+    "2. SPLIT KEEPS BOTH SIDES. When one claim genuinely teaches two topics "
+    "FROM THE SAME BLOCKS, split it and keep both: the earlier topic keeps the "
+    "foundational idea on its own terms, the later topic gains how that idea "
+    "behaves under its method. Neither may be dropped. Concept count rising is "
+    "correct.\n"
+    "3. RETROSPECTIVE REFERENCE. When a later topic merely mentions, refers "
+    "back to, or illustrates earlier material rather than being needed to "
+    "understand it, the claim STAYS in the topic that teaches it, and the "
+    "later topic instead earns its own separate claim about the illustration. "
+    "That separate claim is a NEW claim grounded in its own blocks -- never a "
+    "split of the original, which must be left exactly as it is. Test the "
+    "direction of dependence: same blocks means split, different blocks means "
+    "a new independent claim.\n"
+    "4. PRINT POSITION IS NEVER EVIDENCE. An image, figure, illustration, "
+    "Activity or exercise sits where page-fill, plate sections and two-column "
+    "flow left it. Classify it by what it depicts or asks, never by the topic "
+    "it was printed under. Question order is not teaching order: a question "
+    "printed early may need a late topic, and one printed last may be pure "
+    "recall of the first. Physical location is provenance, not evidence.\n"
+    "5. TASKS FOLLOW THE LATEST TOPIC. A task requiring methods from more "
+    "than one topic belongs to the latest of them in TEACHING order, because "
+    "it cannot be attempted sooner. Rule 3 applies here too: if the later "
+    "topic only illustrates, the task stays where it is taught.\n"
+)
+
+
 PROVIDER_SYSTEM = (
     "You classify how each atomic academic claim relates to each candidate "
     "topic of one chapter. You do NOT decide placement; deterministic code "
@@ -966,8 +1007,18 @@ PROVIDER_SYSTEM = (
     "Appearing on the same page, in the same section number, or at a "
     "particular point in a chronology is NOT necessity.\n"
     "Cite exact supplied block IDs as evidence for every relationship, "
-    "including references and incidental mentions. Use only supplied claim "
-    "IDs and topic IDs."
+    "including references and incidental mentions. EVERY cited block must "
+    "belong to that relationship's own topic: a relationship to topic T is "
+    "evidenced by blocks in T, because T is where that teaching, "
+    "prerequisite, later method, back-reference, illustration or mention "
+    "actually appears. Do NOT cite the block where the claim or task "
+    "physically sits unless that block is itself in T. An end-of-chapter "
+    "exercise printed under the last topic is still evidenced, for a "
+    "prerequisite relationship, by the earlier topic's own block that "
+    "establishes the required knowledge -- never by the exercise's own "
+    "block. Physical location is provenance, not evidence. "
+    "Use only supplied claim IDs and topic IDs."
+    + PLACEMENT_RULES
 )
 
 CRITIC_SYSTEM = (
@@ -979,10 +1030,17 @@ CRITIC_SYSTEM = (
     "necessity; the dependency direction is reversed (the later topic merely "
     "refers back, rather than being required); or an irreducible relationship "
     "has been broken into unrelated parts that no longer teach it.\n"
-    "Accept RETROSPECTIVE_REFERENCE and INCIDENTAL_MENTION only as edges: "
-    "they must never be used to move the claim.\n"
+    "Accept RETROSPECTIVE_REFERENCE, SUBSTANTIVE_LATER_ILLUSTRATION and "
+    "INCIDENTAL_MENTION only as edges: they must never be used to move the "
+    "claim, and never to reject it. All three are defined to carry "
+    "necessity=false, so a correctly-labelled one is right, not defective -- "
+    "reject such an edge only when it is genuinely necessary and was "
+    "mislabelled. A later topic that merely illustrates or refers back does "
+    "not own the claim; it earns its own separate claim about the "
+    "illustration.\n"
     "Judge each relationship on evidence, not on the order it was presented "
     "in. Do not rewrite claims."
+    + PLACEMENT_RULES
 )
 
 

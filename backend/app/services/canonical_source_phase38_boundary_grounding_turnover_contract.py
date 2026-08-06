@@ -1211,6 +1211,7 @@ def _ground_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         "supplied, include its selected verified evidence or follow its custom "
         "instruction exactly, then return the ordinary proposal for independent "
         "criticism; the human direction is not verification."
+        + placement_policy.PLACEMENT_RULES
     )
     return phase22._openai_multimodal_json(
         system=system,
@@ -1254,7 +1255,11 @@ def _critic_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         "Figure is the wrong visual. In that case state whether topology should "
         "move, refine, or split the row, preferring split - advanced part "
         "here, foundational part in the earlier topic - when the claim genuinely "
-        "teaches both. Figure captions and supplied original PDF pages "
+        "teaches both from the SAME blocks. When the two ideas ground in "
+        "different topics' blocks there is one claim in each and nothing to "
+        "divide: leave the row alone and let the other topic carry its own "
+        "separate concept. Splitting there rewrites a claim other stages have "
+        "already certified. Figure captions and supplied original PDF pages "
         "are authoritative. Do not demand source support for mastery, learner "
         "analysis, Types, hubs, keywords, or parent labels. Never recommend "
         "retirement merely to make convergence finish. Put every concept ID "
@@ -1262,6 +1267,7 @@ def _critic_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         "accepted, none rejected, confidence at least "
         f"{confidence_policy.threshold_text()}, and no issues. Do not rewrite "
         "proposals."
+        + placement_policy.PLACEMENT_RULES
     )
     return phase22._openai_multimodal_json(
         system=system,

@@ -25,6 +25,7 @@ import pytest
 
 from app.services import (
     canonical_source_phase32_topology_adjudication_contract as phase32,
+    canonical_source_phase38_boundary_grounding_turnover_contract as phase38,
     placement_policy,
     prompts,
 )
@@ -186,3 +187,123 @@ def test_rules_document_keeps_one_type_across_topics():
     assert "is never split to make its parts fit one" in text
     # The worked example lands two Cases in one topic and one in another.
     assert "one type, three cases, landing across two topics" in text
+
+
+def test_shared_placement_critic_exempts_every_non_necessary_edge():
+    """Phase 3.3 Type-host placement had the same bug as Phase 3.2.
+
+    ``PROVIDER_SYSTEM`` defines three relationship types as necessity=false,
+    but ``CRITIC_SYSTEM`` named only two of them in its "edges only" carve-out.
+    SUBSTANTIVE_LATER_ILLUSTRATION was left able to move -- or sink -- a claim,
+    which is the same shape of contradiction that cost job 8 its run, sitting
+    in the prompt that places Types onto concepts.
+    """
+
+    critic = _squash(placement_policy.CRITIC_SYSTEM)
+
+    for kind in NON_NECESSARY_TYPES:
+        assert kind.casefold() in critic, kind
+    assert "never be used to move the claim, and never to reject it" in critic
+    # Rule 4, Reading B: the later topic earns a claim of its own instead.
+    assert "earns its own separate claim" in critic
+
+
+def test_phase38_splits_only_within_one_claim():
+    """Rule 3 vs Rule 4 at the boundary-grounding turnover.
+
+    Phase 3.8 is told to *prefer* split, which is right for a claim that
+    genuinely teaches two topics from shared evidence and wrong for a
+    back-reference. The preference is now scoped to the same-blocks case.
+    """
+
+    # Read the module source: the instruction is assembled inside a function.
+    # Assertions stay inside single string literals, because adjacent literals
+    # keep their quotes when the source is squashed.
+    text = _squash(Path(phase38.__file__).read_text(encoding="utf-8"))
+
+    assert "teaches both from the same blocks" in text
+    assert "there is one claim in each" in text
+    assert "leave the row alone" in text
+    assert "splitting there rewrites a claim" in text
+
+
+def test_provider_is_told_which_topic_evidence_must_come_from():
+    """Job 9's stop, and it was a prompt gap rather than a bad check.
+
+    Phase 3.3 failed closed with::
+
+        REL-CAF3CCF722DCA85931BB0AAA cites BLK-00293 from TOPIC-0005
+        as evidence for TOPIC-0001
+
+    Three deterministic sites require a relationship's evidence to live in
+    that relationship's own topic, and by the enum's semantics they are right:
+    a prerequisite, back-reference, illustration or mention is evidenced where
+    it actually appears. The provider prompt asked for "exact supplied block
+    IDs" without ever saying which topic they had to come from, so the model
+    cited the block the task was printed in -- an end-of-chapter exercise under
+    the last topic -- as evidence for an early-topic prerequisite.
+
+    The check stays strict. The instruction now says what it requires.
+    """
+
+    provider = _squash(placement_policy.PROVIDER_SYSTEM)
+
+    assert "every cited block must belong to that relationship's own topic" in provider
+    assert "do not cite the block where the claim or task physically sits" in provider
+    # Rule 4a, restated where the model actually needed it.
+    assert "physical location is provenance, not evidence" in provider
+
+
+# --------------------------------------------------------------------------- #
+# One canonical rules block, appended everywhere placement is decided
+# --------------------------------------------------------------------------- #
+
+def test_placement_rules_state_every_product_rule():
+    """The shared block carries Rules 2-5 from the authority document."""
+
+    rules = _squash(placement_policy.PLACEMENT_RULES)
+
+    # Rule 2 -- advanced placement.
+    assert "belongs to that later topic" in rules
+    assert "prerequisite, not the owner" in rules
+    # Rule 3 -- split keeps both sides, and only over shared evidence.
+    assert "from the same blocks" in rules
+    assert "neither may be dropped" in rules
+    # Rule 4 -- retrospective reference makes a new claim, not a split.
+    assert "stays in the topic that teaches it" in rules
+    assert "never a split of the original" in rules
+    assert "same blocks means split, different blocks means" in rules
+    # Rule 4a -- print position, for figures and for question order alike.
+    assert "print position is never evidence" in rules
+    assert "question order is not teaching order" in rules
+    assert "physical location is provenance, not evidence" in rules
+    # Rule 5 -- tasks follow the latest topic in teaching order.
+    assert "latest of them in teaching order" in rules
+
+
+def test_every_placement_prompt_carries_the_shared_rules():
+    """The drift guard.
+
+    Three runs died on one idea -- a cross-topic citation treated as a defect
+    -- at three sites, each holding its own partial copy of the rule. Every
+    prompt that decides or audits placement now appends the same block, so a
+    rule can only be changed in one place.
+    """
+
+    carriers = {
+        "3.3 provider (placement_policy)": placement_policy.PROVIDER_SYSTEM,
+        "3.3 critic (placement_policy)": placement_policy.CRITIC_SYSTEM,
+        "3.2/3.7 provider": phase32.PLACEMENT_PROVIDER_INSTRUCTIONS,
+        "3.2/3.7 critic": phase32.PLACEMENT_CRITIC_INSTRUCTIONS,
+    }
+    for label, text in carriers.items():
+        assert placement_policy.PLACEMENT_RULES in text, label
+
+
+def test_phase38_grounding_prompts_carry_the_shared_rules():
+    """3.8 builds its prompts inside functions, so check the module source."""
+
+    source = Path(phase38.__file__).read_text(encoding="utf-8")
+
+    # Both the mapper and the independent critic append the block.
+    assert source.count("+ placement_policy.PLACEMENT_RULES") == 2
