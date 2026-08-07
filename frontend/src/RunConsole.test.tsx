@@ -7,14 +7,24 @@ import type { OpenAIUsage } from "./types";
 const pending = vi.hoisted(() => [] as Array<{
   onEvent: (event: StreamEvent) => void;
   resolve: (value: unknown) => void;
+  reject: (reason: unknown) => void;
 }>);
+
+const getUploadJobMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./api/client", () => ({
   streamNdjson: vi.fn(
     (_path: string, _init: RequestInit, onEvent: (event: StreamEvent) => void) =>
-      new Promise((resolve) => pending.push({ onEvent, resolve })),
+      new Promise((resolve, reject) => pending.push({ onEvent, resolve, reject })),
   ),
+  api: { getUploadJob: getUploadJobMock },
 }));
+
+function transportError(message: string): Error {
+  const failure = new Error(message);
+  failure.name = "StreamTransportError";
+  return failure;
+}
 
 function usage(totalTokens: number): OpenAIUsage {
   return {
@@ -157,4 +167,86 @@ test("an awaiting-decision result stays paused at its checkpoint", async () => {
   expect(screen.getByTestId("progress-label").textContent).toBe(
     "Paused for your decision",
   );
+});
+
+
+test("a network drop re-attaches and resumes instead of failing the run", async () => {
+  vi.useFakeTimers();
+  try {
+    // Job is still running on the first poll, then stopped with a durable
+    // checkpoint (status "converted") -- the designed resume-by-re-POST case.
+    getUploadJobMock
+      .mockResolvedValueOnce({ generation_running: true, status: "converted" })
+      .mockResolvedValueOnce({ generation_running: false, status: "converted" });
+
+    function ReattachProbe() {
+      const { run, state } = useRunConsole();
+      return (
+        <>
+          <button
+            onClick={() => void run(
+              "Generate",
+              "/generate",
+              {},
+              undefined,
+              { module: "concepts", jobId: 7 },
+            ).catch(() => undefined)}
+          >
+            Generate
+          </button>
+          <output data-testid="status">{state.status}</output>
+          <output data-testid="lines">
+            {state.lines.map((line) => line.message).join(" | ")}
+          </output>
+        </>
+      );
+    }
+    render(
+      <RunConsoleProvider>
+        <ReattachProbe />
+      </RunConsoleProvider>,
+    );
+
+    const first = pending.length;
+    fireEvent.click(screen.getByRole("button", { name: "Generate" }));
+    expect(pending).toHaveLength(first + 1);
+
+    // The connection dies mid-stream.
+    await act(async () => {
+      pending[first].reject(transportError("network connection lost"));
+      await Promise.resolve();
+    });
+    // Not an error: the console announces the wait instead.
+    expect(screen.getByTestId("status").textContent).toBe("running");
+    expect(screen.getByTestId("lines").textContent).toContain(
+      "Network connection lost",
+    );
+
+    // First poll: still running. Second poll: stopped at a checkpoint.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(getUploadJobMock).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId("lines").textContent).toContain(
+      "Resuming the run from its saved checkpoint",
+    );
+
+    // The request was re-issued and this time it completes.
+    expect(pending).toHaveLength(first + 2);
+    await act(async () => {
+      pending[first + 1].onEvent(
+        { type: "result", data: { status: "generated" } },
+      );
+      pending[first + 1].resolve({ status: "generated" });
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("status").textContent).toBe("done");
+  } finally {
+    vi.useRealTimers();
+    pending.length = 0;
+    getUploadJobMock.mockReset();
+  }
 });

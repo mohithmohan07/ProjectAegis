@@ -291,6 +291,22 @@ function PostLearningFlow({
           fileLabel: "Source file",
           initialUsage: job.openai_usage,
         },
+        {
+          module: "concepts",
+          jobId: job.id,
+          // The run finished while the connection was down: rebuild the
+          // fields the result panel reads from the completed job itself.
+          recoverResult: async () => {
+            const finished = await api.getUploadJob("concepts", job.id);
+            return {
+              status: "generated",
+              reattached: true,
+              job_id: finished.id,
+              openai_usage: finished.openai_usage,
+              pending_decision: finished.pending_decision,
+            } as Record<string, unknown>;
+          },
+        },
       );
       let refreshedJob: UploadJob | null = null;
       try {
@@ -478,6 +494,22 @@ function PreLearningUpload({
           filename: job.filename,
           fileLabel: "Source file",
           initialUsage: job.openai_usage,
+        },
+        {
+          module: "concepts",
+          jobId: job.id,
+          // The run finished while the connection was down: rebuild the
+          // fields the result panel reads from the completed job itself.
+          recoverResult: async () => {
+            const finished = await api.getUploadJob("concepts", job.id);
+            return {
+              status: "generated",
+              reattached: true,
+              job_id: finished.id,
+              openai_usage: finished.openai_usage,
+              pending_decision: finished.pending_decision,
+            } as Record<string, unknown>;
+          },
         },
       );
       let refreshedJob: UploadJob | null = null;
