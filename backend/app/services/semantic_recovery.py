@@ -155,7 +155,8 @@ class HumanDecisionRequired(RuntimeError):
     same semantic context without replaying exploratory model calls.
     """
 
-    def __init__(self, pending_decision: Mapping[str, Any]):
+    @staticmethod
+    def _validated(pending_decision: Mapping[str, Any]) -> dict[str, Any]:
         try:
             value = json.loads(
                 json.dumps(
@@ -169,18 +170,38 @@ class HumanDecisionRequired(RuntimeError):
             raise TypeError(
                 "pending_decision must be JSON-serializable"
             ) from exc
-        decision_id = str(value.get("decision_id") or "").strip()
-        context_hash = str(value.get("context_hash") or "").strip()
-        if not decision_id or not context_hash:
+        if (
+            not str(value.get("decision_id") or "").strip()
+            or not str(value.get("context_hash") or "").strip()
+        ):
             raise ValueError(
                 "pending_decision requires decision_id and context_hash"
             )
+        return value
+
+    def __init__(
+        self,
+        pending_decision: Mapping[str, Any],
+        *,
+        companions: Sequence[Mapping[str, Any]] = (),
+    ):
+        value = self._validated(pending_decision)
+        # ``companions`` are further decisions from the same rejection batch.
+        # A critic that rejects several concepts at once used to surface only
+        # the first; the rest each cost one full pipeline replay to even come
+        # into view, so N independent conflicts were settled in N serial
+        # cycles. Carrying the whole batch lets orchestration settle every one
+        # before replaying once. Each companion is a complete, independently
+        # resolvable packet — never a partial reference into this one.
+        self.companion_pending_decisions: list[dict[str, Any]] = [
+            self._validated(row) for row in companions
+        ]
         self.pending_decision: dict[str, Any] = value
-        self.decision_id = decision_id
-        self.context_hash = context_hash
+        self.decision_id = str(value["decision_id"]).strip()
+        self.context_hash = str(value["context_hash"]).strip()
         super().__init__(
             "Generation paused for a human semantic decision "
-            f"({decision_id}). No semantic retry was attempted."
+            f"({self.decision_id}). No semantic retry was attempted."
         )
 
     def to_dict(self) -> dict[str, Any]:

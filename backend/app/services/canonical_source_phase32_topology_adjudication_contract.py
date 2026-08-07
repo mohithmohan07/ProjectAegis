@@ -2886,8 +2886,7 @@ def adjudicate_topology(
             if concept_id not in resolutions
         ]
         if undecided_deferred:
-            concept_id = undecided_deferred[0]
-            raise HumanDecisionRequired(
+            packets = [
                 _topology_pending_decision(
                     identity=gate_identities[concept_id],
                     graph=graph,
@@ -2901,7 +2900,9 @@ def adjudicate_topology(
                     ],
                     rejected_ids=undecided_deferred,
                 )
-            )
+                for concept_id in undecided_deferred
+            ]
+            raise HumanDecisionRequired(packets[0], companions=packets[1:])
 
         if any(
             resolution.get("choice") == "replace_source"
@@ -3146,14 +3147,18 @@ def adjudicate_topology(
                     f"independent critic confidence {confidence:.3f} is in "
                     "the 0.900–0.919 human-review band",
                 )
-            concept_id = sorted(rejected)[0]
+            rejected_order = sorted(rejected)
             progress.log(
                 "Phase 3.2 stopped after the first genuine semantic topology "
                 "disagreement; independently accepted IDs remain cached and "
                 "no semantic retry or convergence pass was started.",
                 level="warning",
             )
-            raise HumanDecisionRequired(
+            # Every rejected concept in this batch is an independent conflict
+            # with its own candidates and evidence. Raising them together lets
+            # orchestration settle the whole batch on one replay instead of
+            # paying a full pipeline replay per concept.
+            packets = [
                 _topology_pending_decision(
                     identity=gate_identities[concept_id],
                     graph=graph,
@@ -3161,11 +3166,13 @@ def adjudicate_topology(
                     topics=topics,
                     candidates=gate_candidates[concept_id],
                     issues=issues,
-                    rejected_ids=sorted(rejected),
+                    rejected_ids=rejected_order,
                     proposed_decision=accepted.get(concept_id),
                     resolution=resolutions.get(concept_id),
                 )
-            )
+                for concept_id in rejected_order
+            ]
+            raise HumanDecisionRequired(packets[0], companions=packets[1:])
         if not legacy_relationship_mode:
             accepted, placement_review_errors = _finalize_certified_placements(
                 accepted,

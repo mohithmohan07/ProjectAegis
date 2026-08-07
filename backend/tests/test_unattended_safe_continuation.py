@@ -820,3 +820,104 @@ def test_exhausted_scope_is_carried_and_the_run_continues(
     ), logged
     # The old behaviour would have logged a stop instead.
     assert not any("Generation stopped after" in row for row in logged)
+
+
+# --------------------------------------------------------------------------- #
+# A rejection batch settles every decision on one replay
+# --------------------------------------------------------------------------- #
+
+def test_rejection_batch_settles_every_decision_on_one_replay(
+    db,
+    first_chapter,
+    monkeypatch,
+):
+    """N independent conflicts must not cost N full pipeline replays.
+
+    A critic that rejects several concepts at once used to surface only
+    ``sorted(rejected)[0]``; every further rejection needed its own complete
+    replay just to come into view. In the audited 05:32-06:25 window that
+    turned 37 decisions into 37 serial cycles at roughly a hundred seconds
+    each. The batch now travels with the exception, orchestration settles
+    each decision in turn, and the pipeline replays once.
+    """
+
+    chapter = db.get(models.Chapter, first_chapter["id"])
+    primary = _pending_raw()
+    primary["decision_id"] = "phase31-ground-batch-0001"
+    job, pending = _seed_paused_job(
+        db, chapter, monkeypatch, filename="batch-settle.mmd", raw=primary)
+
+    companions = []
+    for index, hash_char in ((2, "b"), (3, "c")):
+        row = _pending_raw()
+        row["decision_id"] = f"phase31-ground-batch-000{index}"
+        # Phase packets always carry their identity's context hash; the
+        # exception requires it of companions exactly as it does of the
+        # primary decision.
+        row["context_hash"] = hash_char * 64
+        row["item"] = dict(row["item"], unit_id=f"CONCEPT-GROUND-000{index}")
+        companions.append(row)
+
+    monkeypatch.delenv("AEGIS_UNATTENDED_COMPLETION", raising=False)
+    logged: list[str] = []
+    monkeypatch.setattr(
+        build_concepts.progress, "log",
+        lambda message, **_kw: logged.append(str(message)),
+    )
+
+    settled: list[str] = []
+
+    def resolve(db_, job_, pending_, *, owner_sub):
+        # Record durably, as the real resolver does, so the single pending
+        # slot is free for the next companion in the batch.
+        recorded = build_concepts._record_human_semantic_decision_locked(
+            db_, job_, str(pending_["decision_id"]),
+            choice="carry_forward", instruction="", target_id="",
+            target_concept_id="", resolved_by="agent",
+            resolution_status="consumed",
+        )
+        settled.append(str(pending_["decision_id"]))
+        return str(recorded["resolved_decision"]["decision_id"])
+
+    monkeypatch.setattr(
+        build_concepts, "_autonomously_resolve_pending_decision", resolve)
+
+    calls = 0
+
+    def operation():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise semantic_recovery.HumanDecisionRequired(
+                pending, companions=companions)
+        return "generation-finished"
+
+    paused, result = build_concepts._run_with_human_decision_pause(
+        operation,
+        db=db,
+        job=job,
+        fingerprint=job.generation_checkpoint["fingerprint"],
+        target_chapter_id=chapter.id,
+        owner_sub=None,
+    )
+
+    assert paused is None
+    assert result == "generation-finished"
+    # One replay for three decisions -- the entire point.
+    assert calls == 2
+    assert settled == [
+        "phase31-ground-batch-0001",
+        "phase31-ground-batch-0002",
+        "phase31-ground-batch-0003",
+    ]
+    assert any(
+        "Settling 3 independent semantic decision(s)" in row for row in logged
+    ), logged
+
+    db.refresh(job)
+    ledger = job.generation_checkpoint["human_decisions"]
+    assert ledger["pending"] is None
+    recorded_ids = {
+        row["decision_id"] for row in ledger["resolutions"]
+    }
+    assert recorded_ids >= set(settled)

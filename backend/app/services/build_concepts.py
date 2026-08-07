@@ -3967,101 +3967,125 @@ def _run_with_human_decision_pause(
             checkpoint_before_pause = copy.deepcopy(
                 job.generation_checkpoint or {}
             )
-            pending = _persist_pending_human_decision(
-                db,
-                job,
-                exc.pending_decision,
-                fingerprint=fingerprint,
-                target_chapter_id=target_chapter_id,
-                owner_sub=owner_sub,
-            )
-            equivalence_key = _decision_equivalence_key(pending)
-            attempts = max(
-                local_attempts.get(equivalence_key, 0),
-                _equivalent_agent_resolution_count(
-                    checkpoint_before_pause, pending
-                ),
-                _equivalent_agent_resolution_count(
-                    job.generation_checkpoint, pending
-                ),
-            )
-            scope_key = autonomous_resolution.issue_key(pending)
-            scope_attempts = max(
-                issue_attempts.get(scope_key, 0),
-                _issue_agent_resolution_count(
-                    checkpoint_before_pause, scope_key
-                ),
-                _issue_agent_resolution_count(
-                    job.generation_checkpoint, scope_key
-                ),
-            )
 
-            def _charge() -> None:
-                local_attempts[equivalence_key] = attempts + 1
-                issue_attempts[scope_key] = scope_attempts + 1
+            def _settle_pending(raw_pending: dict) -> None:
+                """Persist and settle one decision without replaying.
 
-            # A spent budget means stop paying for this scope -- not throw
-            # away the other forty concepts. Carry the decision, flag it, and
-            # move on; the ceilings end the run only when carrying is
-            # impossible too.
-            exhausted_reason = ""
-            if _issue_pathways_exhausted(attempts=attempts, maximum=maximum):
-                exhausted_reason = (
-                    f"{attempts} verified repair attempt(s) for the same "
-                    "material decision were spent without converging."
-                )
-            elif _issue_pathways_exhausted(
-                attempts=scope_attempts, maximum=issue_maximum
-            ):
-                exhausted_reason = (
-                    f"{scope_attempts} repair attempt(s) for the same semantic "
-                    "scope were spent and it kept returning."
-                )
-            if exhausted_reason and scope_key not in carried_scopes:
-                carried = _carry_forward_exhausted_scope(
-                    db, job, pending,
+                Success returns; every failure path raises. Extracted so a
+                rejection batch settles each of its decisions in turn and the
+                pipeline replays once, instead of paying one full replay per
+                decision to even see the next one.
+                """
+
+                pending = _persist_pending_human_decision(
+                    db,
+                    job,
+                    raw_pending,
+                    fingerprint=fingerprint,
+                    target_chapter_id=target_chapter_id,
                     owner_sub=owner_sub,
-                    reason=exhausted_reason,
                 )
-                if carried:
-                    carried_scopes.add(scope_key)
-                    _charge()
-                    active_ids.add(carried)
-                    continue
-            if exhausted_reason:
-                _raise_if_equivalent_resolution_attempts_exhausted(
-                    pending, attempts=attempts, maximum=maximum,
+                equivalence_key = _decision_equivalence_key(pending)
+                attempts = max(
+                    local_attempts.get(equivalence_key, 0),
+                    _equivalent_agent_resolution_count(
+                        checkpoint_before_pause, pending
+                    ),
+                    _equivalent_agent_resolution_count(
+                        job.generation_checkpoint, pending
+                    ),
                 )
-                _raise_if_issue_pathways_exhausted(
-                    pending, attempts=scope_attempts, maximum=issue_maximum,
+                scope_key = autonomous_resolution.issue_key(pending)
+                scope_attempts = max(
+                    issue_attempts.get(scope_key, 0),
+                    _issue_agent_resolution_count(
+                        checkpoint_before_pause, scope_key
+                    ),
+                    _issue_agent_resolution_count(
+                        job.generation_checkpoint, scope_key
+                    ),
                 )
 
-            resolved_id = _autonomously_resolve_pending_decision(
-                db,
-                job,
-                pending,
-                owner_sub=owner_sub,
-            )
-            if resolved_id:
-                _charge()
-                active_ids.add(resolved_id)
-                continue
-            current = _pending_human_decision(job.generation_checkpoint)
-            continued_id = _apply_last_resort_safe_continuation(
-                db,
-                job,
-                current or pending,
-                owner_sub=owner_sub,
-            )
-            if continued_id:
-                _charge()
-                active_ids.add(continued_id)
-                continue
-            # Always raises; there is no pause to fall through to.
-            _raise_if_unattended_cannot_pause(current or pending)
-            raise AssertionError(  # pragma: no cover - defensive
-                "generation reached a pause that no longer exists"
-            )
+                def _charge() -> None:
+                    local_attempts[equivalence_key] = attempts + 1
+                    issue_attempts[scope_key] = scope_attempts + 1
+
+                # A spent budget means stop paying for this scope -- not throw
+                # away the other forty concepts. Carry the decision, flag it,
+                # and move on; the ceilings end the run only when carrying is
+                # impossible too.
+                exhausted_reason = ""
+                if _issue_pathways_exhausted(
+                    attempts=attempts, maximum=maximum
+                ):
+                    exhausted_reason = (
+                        f"{attempts} verified repair attempt(s) for the same "
+                        "material decision were spent without converging."
+                    )
+                elif _issue_pathways_exhausted(
+                    attempts=scope_attempts, maximum=issue_maximum
+                ):
+                    exhausted_reason = (
+                        f"{scope_attempts} repair attempt(s) for the same "
+                        "semantic scope were spent and it kept returning."
+                    )
+                if exhausted_reason and scope_key not in carried_scopes:
+                    carried = _carry_forward_exhausted_scope(
+                        db, job, pending,
+                        owner_sub=owner_sub,
+                        reason=exhausted_reason,
+                    )
+                    if carried:
+                        carried_scopes.add(scope_key)
+                        _charge()
+                        active_ids.add(carried)
+                        return
+                if exhausted_reason:
+                    _raise_if_equivalent_resolution_attempts_exhausted(
+                        pending, attempts=attempts, maximum=maximum,
+                    )
+                    _raise_if_issue_pathways_exhausted(
+                        pending,
+                        attempts=scope_attempts,
+                        maximum=issue_maximum,
+                    )
+
+                resolved_id = _autonomously_resolve_pending_decision(
+                    db,
+                    job,
+                    pending,
+                    owner_sub=owner_sub,
+                )
+                if resolved_id:
+                    _charge()
+                    active_ids.add(resolved_id)
+                    return
+                current = _pending_human_decision(job.generation_checkpoint)
+                continued_id = _apply_last_resort_safe_continuation(
+                    db,
+                    job,
+                    current or pending,
+                    owner_sub=owner_sub,
+                )
+                if continued_id:
+                    _charge()
+                    active_ids.add(continued_id)
+                    return
+                # Always raises; there is no pause to fall through to.
+                _raise_if_unattended_cannot_pause(current or pending)
+                raise AssertionError(  # pragma: no cover - defensive
+                    "generation reached a pause that no longer exists"
+                )
+
+            batch = [exc.pending_decision, *exc.companion_pending_decisions]
+            if len(batch) > 1:
+                progress.log(
+                    f"Settling {len(batch)} independent semantic decision(s) "
+                    "from one rejection batch before replaying, instead of "
+                    "one replay per decision.",
+                )
+            for raw_pending in batch:
+                _settle_pending(raw_pending)
         finally:
             _ACTIVE_AGENT_RESOLUTION_IDS.reset(token)
 
