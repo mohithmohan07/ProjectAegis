@@ -77,7 +77,9 @@ Polishing rules:
   **split semantically**: `QID009` becomes `QID009#a`, `QID009#b`, … — each
   fragment a self-contained question placed independently, every fragment
   carrying the parent QID. The fragments together must cover everything the
-  original asked.
+  original asked. (Wire format: fragments mint a dotted numeric suffix on
+  the parent QID — `QINV-0009.1`, `QINV-0009.2` — the id shape the
+  pipeline's tooling already parses for sub-questions.)
 * Polished wording ships **flagged for review**, the same way as every other
   best-judgement output (Rule 1, amended). The reviewer corrects wording in
   the delivered workbook; the run never waits on it.
