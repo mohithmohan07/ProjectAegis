@@ -208,6 +208,13 @@ def _human_resolutions_for(
             "create_new",
             "select_existing",
             "custom",
+            # A carried decision is an answer -- "Aegis settled this by
+            # changing nothing". Dropping it here made the answer invisible,
+            # so the identical decision was raised again on the next pass,
+            # refused a second carry, and the ceiling ended the run. This was
+            # the sixth private copy of this filter; every other one already
+            # accepts carry_forward.
+            "carry_forward",
         }:
             continue
         item = candidate.get("item")
@@ -4010,6 +4017,9 @@ def _directed_resolution_issues(
     concepts: list[dict[str, Any]],
 ) -> list[str]:
     choice = str(resolution.get("choice") or "")
+    if choice == "carry_forward":
+        # Settled by changing nothing; there is no direction to enforce.
+        return []
     if choice == "custom":
         if not str(
             resolution.get("instruction")
@@ -4123,7 +4133,16 @@ def _resolve_host_plan(
         source_blocks=source_blocks,
     )
     resolutions = _human_resolutions_for(identity)
-    resolution = resolutions[-1] if resolutions else None
+    # A carried resolution settles its unit without directing an action: the
+    # provider's fresh plan for that unit stands, flagged for review. Only
+    # rows that actually ask for something are handed to the model or held
+    # against the plan; the full set still counts as settled so a carried
+    # unit is not raised again.
+    directives = [
+        row for row in resolutions
+        if str(row.get("choice") or "") != "carry_forward"
+    ]
+    resolution = directives[-1] if directives else None
     resolved_unit_ids = {
         unit_id
         for row in resolutions
@@ -4202,7 +4221,7 @@ def _resolve_host_plan(
         }
         if resolution is not None:
             payload["human_resolution"] = copy.deepcopy(resolution)
-            payload["human_resolutions"] = copy.deepcopy(resolutions)
+            payload["human_resolutions"] = copy.deepcopy(directives)
         response = provider(copy.deepcopy(payload))
         review_issues, review_unit_ids = _provider_review_required_issues(
             response if isinstance(response, dict) else {}
@@ -4262,10 +4281,10 @@ def _resolve_host_plan(
             )
             contract_feedback = list(parse_errors)
             continue
-        if resolutions:
+        if directives:
             directed_issues = [
                 issue
-                for saved_resolution in resolutions
+                for saved_resolution in directives
                 for issue in _directed_resolution_issues(
                     saved_resolution,
                     plan=plan,
