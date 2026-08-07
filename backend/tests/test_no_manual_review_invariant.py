@@ -532,6 +532,12 @@ def test_resolution_cycles_are_bounded_and_name_the_returning_decision(
     composition was not: an action that resolves one decision can regenerate
     an equivalent decision under a fresh context hash, which the per-issue
     caps never match.
+
+    Termination is the invariant, not the stop. A spent budget now carries the
+    scope forward and continues, because a ceiling firing is a reason to stop
+    paying for one concept, never a reason to discard the other forty. The run
+    ends here only because this operation is rigged to re-demand a decision it
+    has already been given an answer to.
     """
 
     chapter = db.get(models.Chapter, first_chapter["id"])
@@ -584,17 +590,29 @@ def test_resolution_cycles_are_bounded_and_name_the_returning_decision(
             owner_sub=None,
         )
 
-    message = str(excinfo.value)
-    assert "3 verified autonomous repair attempt(s)" in message
-    # Repair three is rerun before the fourth equivalent pending decision
-    # proves it ineffective.
-    assert operation_calls == 4
+    # The budget still bounds the paid repairs: three, then no more.
     assert resolution_calls == 3
-    # The returning decision is named so the loop is diagnosable.
+    # Spending the budget no longer ends the run on its own. The scope is
+    # carried -- nothing applied, flagged for the reviewer -- and generation
+    # continues, which is what lets the other concepts reach the output.
+    assert sum(
+        "Placed by best judgement" in row
+        and "were spent without converging" in row
+        for row in logs
+    ) == 1
+
+    # A scope is carried once. This operation is rigged to demand the identical
+    # decision forever, even after it has been settled, so the scope returns
+    # having already been carried -- the phase is ignoring the answer, and
+    # continuing would spin. The ceiling ends the run then, naming the
+    # decision so the loop is diagnosable.
+    message = str(excinfo.value)
+    assert "4 verified autonomous repair attempt(s)" in message
     assert "phase33_type_host_semantic_conflict" in message
     assert "TYPE-0003" in message
     assert "AEGIS_MAX_EQUIVALENT_RESOLUTION_ATTEMPTS" in message
     assert sum("Generation stopped after" in row for row in logs) == 1
+    assert operation_calls == 5
     # Bounded semantic recovery must not retry a non-converging loop.
     assert semantic_recovery.classify_failure(
         excinfo.value).recoverable is False
@@ -736,7 +754,10 @@ def test_recommendation_flip_cannot_reset_durable_budget_after_restart(
     def recurring_after_restart():
         raise semantic_recovery.HumanDecisionRequired(followup)
 
-    with pytest.raises(build_concepts.SemanticResolutionCyclesExhausted):
+    # The durable budget is spent, so no paid turn is granted -- the monkeypatch
+    # above fails the test if one is. The scope is carried forward once, and
+    # the run terminates when the same decision returns anyway.
+    with pytest.raises(RuntimeError) as excinfo:
         build_concepts._run_with_human_decision_pause(
             recurring_after_restart,
             db=db,
@@ -745,6 +766,14 @@ def test_recommendation_flip_cannot_reset_durable_budget_after_restart(
             target_chapter_id=chapter.id,
             owner_sub=None,
         )
+
+    assert semantic_recovery.classify_failure(
+        excinfo.value).recoverable is False
+    db.refresh(job)
+    # Exactly one further resolution: the carry. A flipped recommendation
+    # bought no new repair attempt.
+    resolutions = job.generation_checkpoint["human_decisions"]["resolutions"]
+    assert [row["choice"] for row in resolutions[1:]] == ["carry_forward"]
 
 
 def test_legacy_resolution_without_material_seal_gets_upgrade_budget():

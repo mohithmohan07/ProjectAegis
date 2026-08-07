@@ -21,7 +21,11 @@ import json
 import pytest
 
 from app import models
-from app.services import autonomous_resolution, build_concepts
+from app.services import (
+    autonomous_resolution,
+    build_concepts,
+    semantic_recovery,
+)
 
 
 def _pending_raw(
@@ -724,3 +728,95 @@ def test_carry_forward_is_the_only_choice_exempt_from_the_offered_gate():
     ):
         assert not build_concepts._decision_choice_is_recordable(
             pending, choice), choice
+
+
+# --------------------------------------------------------------------------- #
+# A spent budget settles one scope; it does not discard the whole run
+# --------------------------------------------------------------------------- #
+
+def test_exhausted_scope_is_carried_and_the_run_continues(
+    db,
+    first_chapter,
+    monkeypatch,
+):
+    """The 06:25 loop: one concept burning the budget must not kill the map.
+
+    A live run raised the same issue key eighteen times in ninety minutes --
+    one concept, ~90s of resolver time per attempt -- heading for a ceiling
+    that raised ``SemanticResolutionCyclesExhausted`` and produced nothing.
+
+    A spent budget means stop paying for that scope. It has never meant throw
+    away the other forty concepts, which by then are finished and cached. The
+    decision is carried, flagged, and generation continues.
+    """
+
+    chapter = db.get(models.Chapter, first_chapter["id"])
+    raw = _pending_raw()
+    raw["decision_id"] = "phase31-ground-exhausted-0001"
+    job, pending = _seed_paused_job(
+        db, chapter, monkeypatch, filename="exhausted-scope.mmd", raw=raw)
+    monkeypatch.delenv("AEGIS_UNATTENDED_COMPLETION", raising=False)
+    monkeypatch.setenv("AEGIS_MAX_EQUIVALENT_RESOLUTION_ATTEMPTS", "1")
+    monkeypatch.setattr(
+        autonomous_resolution, "maximum_pathway_turns", lambda: 1)
+    monkeypatch.setattr(
+        build_concepts,
+        "_persist_pending_human_decision",
+        lambda *_a, **_kw: pending,
+    )
+    resolver_calls = 0
+
+    def resolve(*_a, **_kw):
+        nonlocal resolver_calls
+        resolver_calls += 1
+        if resolver_calls > 1:
+            pytest.fail("an exhausted scope must not buy another paid repair")
+        return pending["decision_id"]
+
+    monkeypatch.setattr(
+        build_concepts, "_autonomously_resolve_pending_decision", resolve)
+    logged: list[str] = []
+    monkeypatch.setattr(
+        build_concepts.progress, "log",
+        lambda message, **_kw: logged.append(str(message)),
+    )
+
+    calls = 0
+
+    def operation():
+        nonlocal calls
+        calls += 1
+        # The same scope returns after its one paid repair, which is exactly
+        # the shape that burned ninety minutes on one concept in production.
+        if calls <= 2:
+            raise semantic_recovery.HumanDecisionRequired(pending)
+        return "generation-finished"
+
+    paused, result = build_concepts._run_with_human_decision_pause(
+        operation,
+        db=db,
+        job=job,
+        fingerprint=job.generation_checkpoint["fingerprint"],
+        target_chapter_id=chapter.id,
+        owner_sub=None,
+    )
+
+    # The run finished rather than stopping at the ceiling.
+    assert paused is None
+    assert result == "generation-finished"
+
+    assert resolver_calls == 1
+    db.refresh(job)
+    recorded = job.generation_checkpoint["human_decisions"]["resolutions"][-1]
+    assert recorded["choice"] == "carry_forward"
+    assert recorded["resolved_by"] == "agent"
+    # Nothing was applied on the way past.
+    assert recorded["target_id"] == ""
+    assert recorded["instruction"] == ""
+
+    # And the reviewer can find it: concept_revisions scans for this wording.
+    assert any(
+        "placed by best judgement" in row.casefold() for row in logged
+    ), logged
+    # The old behaviour would have logged a stop instead.
+    assert not any("Generation stopped after" in row for row in logged)
