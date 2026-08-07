@@ -2075,8 +2075,7 @@ def ground_concepts(
                 if concept_id not in resolutions
             ]
             if undecided_deferred:
-                concept_id = undecided_deferred[0]
-                raise HumanDecisionRequired(
+                packets = [
                     _grounding_pending_decision(
                         identity=gate_identities[concept_id],
                         graph=graph,
@@ -2091,6 +2090,10 @@ def ground_concepts(
                         ],
                         rejected_ids=undecided_deferred,
                     )
+                    for concept_id in undecided_deferred
+                ]
+                raise HumanDecisionRequired(
+                    packets[0], companions=packets[1:]
                 )
 
             if unresolved:
@@ -2288,14 +2291,16 @@ def ground_concepts(
                             f"independent critic confidence {confidence:.3f} "
                             "is in the 0.900–0.919 human-review band",
                         )
-                    concept_id = sorted(rejected)[0]
+                    rejected_order = sorted(rejected)
                     progress.log(
                         "Phase 3.1 stopped after the first genuine semantic "
                         "grounding disagreement; accepted concept IDs were "
                         "cached and no semantic retry was started.",
                         level="warning",
                     )
-                    raise HumanDecisionRequired(
+                    # Independent conflicts settle together on one replay
+                    # rather than one replay each.
+                    packets = [
                         _grounding_pending_decision(
                             identity=gate_identities[concept_id],
                             graph=graph,
@@ -2304,10 +2309,14 @@ def ground_concepts(
                             candidates=gate_candidates[concept_id],
                             source_blocks=source_blocks,
                             issues=issues,
-                            rejected_ids=sorted(rejected),
+                            rejected_ids=rejected_order,
                             resolution=resolutions.get(concept_id),
                             proposal=parsed,
                         )
+                        for concept_id in rejected_order
+                    ]
+                    raise HumanDecisionRequired(
+                        packets[0], companions=packets[1:]
                     )
                 progress.log(
                     "Phase 3 source grounding independently verified "
