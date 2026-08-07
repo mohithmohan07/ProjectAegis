@@ -56,9 +56,28 @@ export type StreamEvent =
   | { type: "heartbeat"; ts?: number };
 
 /**
+ * The connection died mid-stream — the network dropped, the tab lost
+ * connectivity, or the response body was cut off before a terminal event.
+ * Distinct from a server-reported error so callers can re-attach to a run
+ * that is still executing on the server instead of declaring it failed.
+ */
+export class StreamTransportError extends Error {
+  cause?: unknown;
+
+  constructor(message: string, cause?: unknown) {
+    super(message);
+    this.name = "StreamTransportError";
+    this.cause = cause;
+  }
+}
+
+/**
  * POST to an NDJSON progress endpoint, dispatching each event to `onEvent` as
  * it streams in. Resolves with the final `result` payload, or throws on an
- * `error` event / non-2xx response (e.g. a 400 precheck).
+ * `error` event / non-2xx response (e.g. a 400 precheck). A network-level
+ * failure — before, during, or by truncation of the stream — throws
+ * `StreamTransportError` instead, because the server-side run continues
+ * without the connection.
  */
 export async function streamNdjson<T = unknown>(
   path: string,
@@ -67,11 +86,19 @@ export async function streamNdjson<T = unknown>(
 ): Promise<T> {
   const baseHeaders: Record<string, string> =
     init.body instanceof FormData ? {} : { "Content-Type": "application/json" };
-  const res = await fetch(`${BASE}${path}`, {
-    ...init,
-    credentials: "include",
-    headers: { ...baseHeaders, ...(init.headers as Record<string, string> | undefined) },
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}${path}`, {
+      ...init,
+      credentials: "include",
+      headers: { ...baseHeaders, ...(init.headers as Record<string, string> | undefined) },
+    });
+  } catch (transportFailure) {
+    throw new StreamTransportError(
+      "network connection failed before the stream started",
+      transportFailure,
+    );
+  }
   if (!res.ok || !res.body) {
     let detail = `${res.status} ${res.statusText}`;
     try {
@@ -103,19 +130,33 @@ export async function streamNdjson<T = unknown>(
     else if (evt.type === "error") errored = { message: evt.message };
   };
 
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    let idx;
-    while ((idx = buffer.indexOf("\n")) >= 0) {
-      handle(buffer.slice(0, idx));
-      buffer = buffer.slice(idx + 1);
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buffer.indexOf("\n")) >= 0) {
+        handle(buffer.slice(0, idx));
+        buffer = buffer.slice(idx + 1);
+      }
     }
+  } catch (transportFailure) {
+    throw new StreamTransportError(
+      "network connection lost while the run was streaming",
+      transportFailure,
+    );
   }
   handle(buffer);
 
   if (errored) throw new Error((errored as { message: string }).message || "stream error");
+  if (result === undefined) {
+    // The stream ended without a terminal `result` or `error` event: the
+    // connection was cut, not the run.
+    throw new StreamTransportError(
+      "the stream ended before the run reported a result",
+    );
+  }
   return result as T;
 }
 

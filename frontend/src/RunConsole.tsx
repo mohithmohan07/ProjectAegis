@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
-import { streamNdjson, type StreamEvent } from "./api/client";
+import { api as httpApi, streamNdjson, type StreamEvent } from "./api/client";
 import type { OpenAIUsage } from "./types";
 
 export interface RunLine {
@@ -20,6 +20,22 @@ export interface RunState {
   usagePresentation: RunUsagePresentation | null;
 }
 
+/**
+ * How to re-attach when the network drops mid-run. Generation executes in a
+ * server-side worker and keeps going without the connection, so a transport
+ * failure is never treated as the run failing: the console waits for the
+ * network, watches the job, and either resumes the stream from the saved
+ * checkpoint (a designed, replay-from-cache re-POST) or recovers the result
+ * of a run that finished while the connection was down. The re-attach
+ * request also wakes a stopped machine, which then resumes from checkpoint.
+ */
+export interface RunReattach<T = unknown> {
+  module: "assessments" | "concepts";
+  jobId: number;
+  /** Build the resolved value when the run finished while disconnected. */
+  recoverResult?: () => Promise<T>;
+}
+
 export interface RunUsagePresentation {
   cumulative?: boolean;
   resumed?: boolean;
@@ -38,6 +54,7 @@ interface RunConsoleApi {
     path: string,
     init?: RequestInit,
     usagePresentation?: RunUsagePresentation,
+    reattach?: RunReattach<T>,
   ) => Promise<T>;
 }
 
@@ -93,6 +110,7 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
     path: string,
     init: RequestInit = {},
     usagePresentation?: RunUsagePresentation,
+    reattach?: RunReattach<T>,
   ): Promise<T> => {
     const runId = ++runIdRef.current;
     const {
@@ -110,9 +128,90 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
       progressLabel: "Starting…", status: "running",
     });
     openRef.current = true;
-    return streamNdjson<T>(path, { method: "POST", ...init }, (event) => {
-      if (runIdRef.current === runId) apply(event);
-    })
+
+    const attempt = () =>
+      streamNdjson<T>(path, { method: "POST", ...init }, (event) => {
+        if (runIdRef.current === runId) apply(event);
+      });
+
+    const note = (message: string, level = "warning") => {
+      if (runIdRef.current !== runId) return;
+      setState((s) => ({
+        ...s,
+        lines: [...s.lines, { level, message, ts: Date.now() / 1000 }],
+        progressLabel: message,
+      }));
+    };
+    const sleep = (ms: number) =>
+      new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+
+    const withReattach = async (): Promise<T> => {
+      // Bounded: a run that keeps dying for non-network reasons must surface,
+      // not be silently restarted forever.
+      for (let reattachesLeft = 5; ; ) {
+        try {
+          return await attempt();
+        } catch (err) {
+          // Matched by name, not class identity: the client module can be
+          // mocked or re-instantiated, and a transport error must still be
+          // recognised as one.
+          const isTransport =
+            err instanceof Error && err.name === "StreamTransportError";
+          if (
+            !reattach
+            || !isTransport
+            || runIdRef.current !== runId
+            || reattachesLeft <= 0
+          ) {
+            throw err;
+          }
+          reattachesLeft -= 1;
+          note(
+            "Network connection lost — the run continues on the server. "
+            + "Waiting for the network and re-attaching…",
+          );
+          // Wait out the outage, then watch the job until the worker is done.
+          // Every successful poll is also traffic that keeps (or wakes) the
+          // server machine.
+          let delay = 3000;
+          let lastHeartbeat = Date.now();
+          for (;;) {
+            if (runIdRef.current !== runId) throw err;
+            await sleep(delay);
+            let job;
+            try {
+              job = await httpApi.getUploadJob(reattach.module, reattach.jobId);
+            } catch {
+              delay = Math.min(delay * 2, 15000);
+              continue;
+            }
+            delay = 5000;
+            if (job.generation_running) {
+              if (Date.now() - lastHeartbeat > 30000) {
+                lastHeartbeat = Date.now();
+                note("Re-attached to the server: the run is still active.", "info");
+              }
+              continue;
+            }
+            if (job.status === "generated") {
+              note("The run finished while the connection was down.", "info");
+              if (reattach.recoverResult) return await reattach.recoverResult();
+              throw new Error(
+                "Generation completed while the connection was down; "
+                + "reload the page to see the result.",
+              );
+            }
+            // The worker stopped mid-run with a durable checkpoint. Re-POST
+            // the same request: the server resumes from that checkpoint and
+            // replays finished work from cache, then streams the real result.
+            note("Resuming the run from its saved checkpoint…", "info");
+            break;
+          }
+        }
+      }
+    };
+
+    return withReattach()
       .then((data) => {
         if (runIdRef.current === runId) {
           setState((s) => {
