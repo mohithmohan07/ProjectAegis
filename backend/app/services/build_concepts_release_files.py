@@ -14,6 +14,7 @@ from openpyxl.utils import get_column_letter
 
 from .. import models
 from . import concept_run_report
+from . import coverage_ledger
 from . import uploads
 from .build_concepts_release import (
     RELEASE_ROW_BLOCKS_FIELD,
@@ -347,6 +348,14 @@ def build_diagnostics_zip(job: models.UploadJob) -> bytes:
         generation_log=job.generation_log or [],
         generation_checkpoint=job.generation_checkpoint or {},
     )
+    coverage = coverage_ledger.build_coverage_ledger(
+        question_inventory=job.question_inventory or {},
+        records=[
+            row for row in payload.get("records") or []
+            if isinstance(row, Mapping)
+        ],
+        chapter_reading=(job.question_inventory or {}).get("chapter_reading"),
+    )
 
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
@@ -359,6 +368,12 @@ def build_diagnostics_zip(job: models.UploadJob) -> bytes:
                 "it, which rows the failure implicates, and whether the same "
                 "failure repeated across resumes. context/run_report.json "
                 "carries the same facts with exact log indexes.\n\n"
+                "Its COVERAGE section accounts for every question, hub, "
+                "figure and question fragment (placed or unaccounted, with "
+                "review flags) and names every released row missing its "
+                "Achieving Mastery line or Misconception/ Error Analysis "
+                "section. context/coverage_ledger.json carries the full "
+                "per-item accounting.\n\n"
                 "The rest of the archive keeps the released workbook beside "
                 "the complete saved generation log, checkpoint, source "
                 "evidence, BLK index, Question/Task Inventory, Type/Case "
@@ -369,9 +384,13 @@ def build_diagnostics_zip(job: models.UploadJob) -> bytes:
         )
         archive.writestr(
             "RUN_REPORT.txt",
-            concept_run_report.render_run_report(run_report).encode("utf-8"),
+            (
+                concept_run_report.render_run_report(run_report)
+                + coverage_ledger.render_coverage(coverage)
+            ).encode("utf-8"),
         )
         archive.writestr("context/run_report.json", _json_bytes(run_report))
+        archive.writestr("context/coverage_ledger.json", _json_bytes(coverage))
         archive.writestr("release/released_concepts.xlsx", release_workbook)
         archive.writestr("release/release_payload.json", _json_bytes(payload))
         archive.writestr(

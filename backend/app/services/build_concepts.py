@@ -1410,6 +1410,17 @@ def _store_inventory(job: models.UploadJob, artifacts: dict) -> None:
         "stats": inventory.get("stats", {}),
         "mined_types": mined.get("types", []),
     }
+    reading = artifacts.get("chapter_reading")
+    if isinstance(reading, dict):
+        # Pass 1 provenance rides the durable job state so the coverage
+        # ledger in the diagnostics export can account for the reading.
+        stored["chapter_reading"] = {
+            "provenance": copy.deepcopy(reading.get("provenance") or {}),
+            "dropped_furniture": list(
+                reading.get("dropped_furniture") or []
+            )[:400],
+            "census_rows": len(reading.get("census") or []),
+        }
     certification_key = generation._PLACEMENT_CERTIFICATIONS_KEY
     certification_ledger = mined.get(certification_key)
     if isinstance(certification_ledger, dict):
