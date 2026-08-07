@@ -3513,13 +3513,76 @@ def _issue_agent_resolution_count(
     return count
 
 
+def _carry_forward_exhausted_scope(
+    db: Session,
+    job: models.UploadJob,
+    pending: dict,
+    *,
+    owner_sub: str | None,
+    reason: str,
+) -> str | None:
+    """Settle a scope that has spent its budget, instead of ending the run.
+
+    A ceiling exists because a scope that keeps returning will not converge.
+    That is a reason to stop *spending on it*, not a reason to throw away the
+    other forty concepts: the run has usually done the expensive work by the
+    time a ceiling fires, and a stop hands the reviewer nothing to read.
+
+    So the decision is carried -- nothing is applied, the source is untouched
+    -- and flagged in the delivered output. This is the same judgement as
+    ``carry_forward`` for a decision with no automatable route, applied to a
+    decision that had routes and exhausted them.
+    """
+
+    if not autonomous_resolution.unattended_completion_enabled():
+        return None
+    try:
+        recorded = _record_human_semantic_decision_locked(
+            db,
+            job,
+            str(pending.get("decision_id") or ""),
+            choice=autonomous_resolution.CARRY_FORWARD_CHOICE,
+            instruction="",
+            target_id="",
+            target_concept_id="",
+            resolved_by="agent",
+            resolution_status="consumed",
+        )
+    except (HumanDecisionConflictError, ValueError) as exc:
+        progress.log(
+            "Aegis could not carry forward the exhausted semantic scope "
+            f"({type(exc).__name__}: {exc}).",
+            level="warning",
+        )
+        return None
+    # Load-bearing wording: concept_revisions scans for "placed by best
+    # judgement" to show the reviewer which placements Aegis was least sure of.
+    progress.log(
+        "Placed by best judgement: " + reason + " Aegis carried this decision "
+        "without applying anything for "
+        + _decision_identity_text(pending)
+        + ", and generation continued. Review this placement in the delivered "
+        "output and correct it there if it is wrong.",
+        level="warning",
+    )
+    return str(recorded["resolved_decision"]["decision_id"])
+
+
+def _issue_pathways_exhausted(*, attempts: int, maximum: int) -> bool:
+    return attempts >= maximum
+
+
 def _raise_if_issue_pathways_exhausted(
     pending: dict,
     *,
     attempts: int,
     maximum: int,
 ) -> None:
-    """Stop a scope that keeps returning under regenerated identities."""
+    """Stop a scope that keeps returning under regenerated identities.
+
+    Reached only when the scope could not be carried forward either, so there
+    is genuinely nothing left to do but end the run with the reason recorded.
+    """
 
     if attempts < maximum:
         return
@@ -3890,6 +3953,10 @@ def _run_with_human_decision_pause(
     active_ids = set(initial_agent_resolution_ids or set())
     local_attempts: dict[str, int] = {}
     issue_attempts: dict[str, int] = {}
+    # A scope may be carried forward once. If it returns even after being
+    # settled, the phase is not honouring the carried answer and continuing
+    # would spin, so the ceiling ends the run as it always did.
+    carried_scopes: set[str] = set()
     maximum = _max_equivalent_resolution_attempts()
     issue_maximum = autonomous_resolution.maximum_pathway_turns()
     while True:
@@ -3918,11 +3985,6 @@ def _run_with_human_decision_pause(
                     job.generation_checkpoint, pending
                 ),
             )
-            _raise_if_equivalent_resolution_attempts_exhausted(
-                pending,
-                attempts=attempts,
-                maximum=maximum,
-            )
             scope_key = autonomous_resolution.issue_key(pending)
             scope_attempts = max(
                 issue_attempts.get(scope_key, 0),
@@ -3933,15 +3995,46 @@ def _run_with_human_decision_pause(
                     job.generation_checkpoint, scope_key
                 ),
             )
-            _raise_if_issue_pathways_exhausted(
-                pending,
-                attempts=scope_attempts,
-                maximum=issue_maximum,
-            )
 
             def _charge() -> None:
                 local_attempts[equivalence_key] = attempts + 1
                 issue_attempts[scope_key] = scope_attempts + 1
+
+            # A spent budget means stop paying for this scope -- not throw
+            # away the other forty concepts. Carry the decision, flag it, and
+            # move on; the ceilings end the run only when carrying is
+            # impossible too.
+            exhausted_reason = ""
+            if _issue_pathways_exhausted(attempts=attempts, maximum=maximum):
+                exhausted_reason = (
+                    f"{attempts} verified repair attempt(s) for the same "
+                    "material decision were spent without converging."
+                )
+            elif _issue_pathways_exhausted(
+                attempts=scope_attempts, maximum=issue_maximum
+            ):
+                exhausted_reason = (
+                    f"{scope_attempts} repair attempt(s) for the same semantic "
+                    "scope were spent and it kept returning."
+                )
+            if exhausted_reason and scope_key not in carried_scopes:
+                carried = _carry_forward_exhausted_scope(
+                    db, job, pending,
+                    owner_sub=owner_sub,
+                    reason=exhausted_reason,
+                )
+                if carried:
+                    carried_scopes.add(scope_key)
+                    _charge()
+                    active_ids.add(carried)
+                    continue
+            if exhausted_reason:
+                _raise_if_equivalent_resolution_attempts_exhausted(
+                    pending, attempts=attempts, maximum=maximum,
+                )
+                _raise_if_issue_pathways_exhausted(
+                    pending, attempts=scope_attempts, maximum=issue_maximum,
+                )
 
             resolved_id = _autonomously_resolve_pending_decision(
                 db,
