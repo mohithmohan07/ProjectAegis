@@ -49,6 +49,21 @@ _MAX_FRAGMENTS = 6
 _memory_lock = threading.Lock()
 _memory_cache: dict[str, dict[str, Any]] = {}
 
+# Appended to the Type-mining prompts so classification understands the two
+# artifacts this pass adds to inventory items.
+FRAGMENT_MINING_NOTE = (
+    "\n\nPolished inventory wording:\n"
+    "- When an item carries polished_task, that is the question's shipping "
+    "wording; raw_task is the source audit copy. Classify by what the "
+    "polished wording asks.\n"
+    "- An item whose qid has a dotted suffix (QINV-0009.1) is an "
+    "independent question split from its parent because it spans concepts. "
+    "Classify and place each such item entirely on its own merits — never "
+    "re-merge fragments into one Example, and never place a fragment "
+    "because of where its sibling or parent belongs. Its polished_task is "
+    "its entire ask.\n"
+)
+
 POLISH_SYSTEM = prompts.register(
     "concepts.question_polishing.system",
     label="Question polishing — standalone test wording",
@@ -306,6 +321,100 @@ def _decision_for(item: dict[str, Any], row: dict[str, Any]) -> dict[str, Any]:
     return decision
 
 
+def _fragment_items(parent: dict[str, Any]) -> list[dict[str, Any]]:
+    """First-class inventory items for one split parent.
+
+    A fragment keeps the parent's source audit identity — ``raw_task``,
+    ``normalized_task``, ``source_label`` — so deterministic anchors still
+    recognize where it came from, while its ``polished_task`` is its own
+    self-contained ask and its dotted qid names the parent. Fragment qids are
+    re-minted from the parent's current qid so a re-expansion after an
+    inventory refresh can never drift from it.
+    """
+    parent_qid = str(parent.get("qid") or "").strip()
+    items: list[dict[str, Any]] = []
+    for offset, fragment in enumerate(
+        parent.get("polish_fragments") or [], start=1
+    ):
+        if not isinstance(fragment, dict):
+            continue
+        item = {
+            key: copy.deepcopy(value)
+            for key, value in parent.items()
+            if key != "polish_fragments"
+        }
+        item["qid"] = f"{parent_qid}.{offset}"
+        item["parent_qid"] = parent_qid
+        item["polished_task"] = str(fragment.get("polished_task") or "")
+        item["polish_flag"] = FLAG_SPLIT
+        item["polish_note"] = str(fragment.get("reason") or "")
+        items.append(item)
+    return items
+
+
+def expand_split_items(inventory: dict[str, Any]) -> dict[str, Any]:
+    """Replace each split parent with its fragment items, in place.
+
+    The parent is preserved verbatim under ``split_parents`` so the split is
+    auditable and reversible (:func:`collapse_split_items`). Idempotent: an
+    already-expanded inventory has no item carrying ``polish_fragments``.
+    """
+    items = inventory.get("items") or []
+    expanded: list[Any] = []
+    parents = [
+        parent for parent in inventory.get("split_parents") or []
+        if isinstance(parent, dict)
+    ]
+    for item in items:
+        if isinstance(item, dict) and item.get("polish_fragments"):
+            fragments = _fragment_items(item)
+            if fragments:
+                expanded.extend(fragments)
+                parents.append(copy.deepcopy(item))
+                continue
+        expanded.append(item)
+    inventory["items"] = expanded
+    if parents:
+        inventory["split_parents"] = parents
+    return inventory
+
+
+def collapse_split_items(inventory: dict[str, Any]) -> dict[str, Any]:
+    """Restore split parents in place of their fragments, in place.
+
+    Used around the resumed-inventory anchor refresh: the parent — with its
+    original source wording and label — is what the deterministic anchors
+    know, and a fragment group standing where it stood could be mistaken for
+    a redundant umbrella row and pruned. Parents whose fragments are no
+    longer present stay in ``split_parents`` untouched.
+    """
+    parents = {
+        str(parent.get("qid") or "").strip(): parent
+        for parent in inventory.get("split_parents") or []
+        if isinstance(parent, dict) and str(parent.get("qid") or "").strip()
+    }
+    if not parents:
+        return inventory
+    collapsed: list[Any] = []
+    restored: set[str] = set()
+    for item in inventory.get("items") or []:
+        parent_qid = (
+            str(item.get("parent_qid") or "").strip()
+            if isinstance(item, dict) else ""
+        )
+        if parent_qid and parent_qid in parents:
+            if parent_qid not in restored:
+                collapsed.append(copy.deepcopy(parents[parent_qid]))
+                restored.add(parent_qid)
+            continue
+        collapsed.append(item)
+    inventory["items"] = collapsed
+    inventory["split_parents"] = [
+        parent for qid, parent in parents.items() if qid not in restored
+    ]
+    return inventory
+
+
 def polish_inventory(
     inventory: dict[str, Any],
     *,
@@ -314,10 +423,12 @@ def polish_inventory(
 ) -> dict[str, Any]:
     """Polish every eligible inventory question in place (on a copy).
 
-    Adds ``polished_task`` / ``polish_flag`` / ``polish_note`` and, where the
-    model split, ``polish_fragments`` — the source fields stay untouched.
-    Placement of fragments is Pass 5's job; this pass records them with
-    stable minted fragment qids so the split survives the checkpoint.
+    Adds ``polished_task`` / ``polish_flag`` / ``polish_note`` — the source
+    fields stay untouched. Where the model split a question, the parent is
+    replaced by first-class fragment items (dotted qids, parent preserved
+    under ``split_parents``), so mining, Phase 3.3 certification and the
+    closed-inventory coverage all treat each fragment as an ordinary
+    question with its own exact-once placement.
     """
     result = copy.deepcopy(inventory or {})
     items = [
@@ -372,4 +483,4 @@ def polish_inventory(
         f"{len(eligible) - polished_count - split_count - kept_count} "
         "already standalone."
     )
-    return result
+    return expand_split_items(result)

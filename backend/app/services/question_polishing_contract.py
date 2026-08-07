@@ -40,13 +40,53 @@ def install(generation: ModuleType | None = None) -> None:
 
         def _extract_question_task_inventory_via_api(*args, **kwargs):
             inventory = original_extract(*args, **kwargs)
-            return question_polishing.polish_inventory(
+            polished = question_polishing.polish_inventory(
                 inventory, meta=kwargs.get("meta") or {}
             )
+            # Splitting changes the item count, so the extraction's stats
+            # snapshot is recomputed over the expanded items.
+            polished["stats"] = generation._inventory_stats([
+                item for item in polished.get("items") or []
+                if isinstance(item, dict)
+            ])
+            return polished
 
         _extract_question_task_inventory_via_api._question_polishing_installed = True
         generation._extract_question_task_inventory_via_api = (
             _extract_question_task_inventory_via_api
+        )
+
+    if not getattr(
+        generation._refresh_inventory_from_source_anchors,
+        "_question_polishing_installed",
+        False,
+    ):
+        original_refresh = generation._refresh_inventory_from_source_anchors
+
+        def _refresh_inventory_from_source_anchors(inventory, sections):
+            # The anchor refresh reasons about source wording. Fragments
+            # standing where their parent stood — several rows sharing one
+            # source task — could be pruned as a redundant umbrella, so the
+            # parent is restored for the refresh and the split re-applied
+            # (deterministically, no model call) afterwards.
+            import copy as _copy
+
+            collapsed = question_polishing.collapse_split_items(
+                _copy.deepcopy(inventory or {})
+            )
+            refreshed = original_refresh(collapsed, sections)
+            refreshed = question_polishing.expand_split_items(refreshed)
+            refreshed["stats"] = generation._inventory_stats([
+                item for item in refreshed.get("items") or []
+                if isinstance(item, dict)
+            ])
+            return refreshed
+
+        _refresh_inventory_from_source_anchors._question_polishing_installed = (
+            True
+        )
+        generation._refresh_inventory_from_source_anchors = (
+            _refresh_inventory_from_source_anchors
         )
 
     if not getattr(

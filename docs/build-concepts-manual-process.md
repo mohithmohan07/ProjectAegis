@@ -45,6 +45,12 @@ Then break the chapter into **topics**, and topics into **concepts** —
 quantified units of learning. Page numbers, print position and reading order
 are recorded as provenance and are never evidence (Rule 4a).
 
+Every concept carries its **learner analysis**: an *Achieving Mastery* line
+closing its Description (what the learner can do once the concept is
+mastered) and a *Misconception/ Error Analysis* section holding a genuine
+incorrect belief and a genuine process error — two distinct meanings, never
+filler. These are part of what a concept *is*, not decoration added later.
+
 ### Step 2 — Accumulate all images, then place each one
 
 Collect **every** figure in the chapter into one pool, no matter where it was
@@ -115,6 +121,12 @@ in one of two states:
 The accounting covers: every non-furniture block, every figure, every
 activity and info hub, every QID and every QID fragment. Furniture is listed
 as dropped, with what it said.
+
+It also covers the per-concept learner analysis: **every shipped concept has
+its Achieving Mastery line and a Misconception/ Error Analysis section with
+distinct, non-filler meanings.** A concept missing either is flagged in the
+output for the reviewer — never silently shipped bare, and never dropped
+for it.
 
 What the completion test is **not**: a mid-run adversarial gate. A placement
 another pass disagrees with is a *flag*, not a *rejection*. Nothing argues an
