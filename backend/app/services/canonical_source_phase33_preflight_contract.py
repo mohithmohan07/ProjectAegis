@@ -492,16 +492,42 @@ def _host_pending_decision(
     )
     for concept in ordered_concepts[:100]:
         concept_id = str(concept.get("concept_id") or "")
+        coverage = str(concept.get("source_claim") or "")[:8000]
+        # Bind every candidate exactly as Phase 3.1/3.2 do. Without the seal
+        # the resolver classifies every row as resolver_legacy, its integrity
+        # rule makes legacy rows unselectable when no exact canonical-MMD
+        # match exists (a normalized Description never matches verbatim), and
+        # the resolver is structurally forbidden from ever choosing an
+        # existing host -- one audited unit burned 25 repair rounds guessing
+        # around a correct host it was never allowed to select.
         candidates.append(
-            {
-                "concept_id": concept_id,
-                "title": str(concept.get("concept_title") or "")[:8000],
-                "topic": str(
-                    concept.get("topic") or topic_value["title"]
-                )[:8000],
-                "coverage": str(concept.get("source_claim") or "")[:8000],
-                "gap": gap if concept_id in selected_ids or concept_id == target_id else "",
-            }
+            early_gate.bind_candidate(
+                {
+                    "target_id": concept_id,
+                    "concept_id": concept_id,
+                    "title": str(concept.get("concept_title") or "")[:8000],
+                    "topic": str(
+                        concept.get("topic") or topic_value["title"]
+                    )[:8000],
+                    "coverage": coverage,
+                    "gap": (
+                        gap
+                        if concept_id in selected_ids
+                        or concept_id == target_id
+                        else ""
+                    ),
+                    "action": "host_existing_concept",
+                    "source_topic_id": str(topic_value.get("topic_id") or ""),
+                    "source_block_ids": [
+                        str(value)
+                        for value in concept.get("_source_block_ids") or []
+                        if str(value)
+                    ][:100],
+                    "text_sha256": (
+                        phase3._sha256_text(coverage) if coverage else ""
+                    ),
+                }
+            )
         )
     referenced_block_ids = _plan_source_block_ids_for_unit(
         plan,
