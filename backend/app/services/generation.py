@@ -4345,8 +4345,18 @@ def _populate_activity_hubs_via_api(
             level="success",
         )
 
-    provider_system = prompts.get_text("concepts.activity_hub.system")
-    critic_system = prompts.get_text("concepts.activity_hub_critic.system")
+    # Step 3 of the manual process: hubs place by what they exercise, under
+    # the same shared placement rules every other placement prompt carries.
+    from . import placement_policy
+
+    provider_system = (
+        prompts.get_text("concepts.activity_hub.system")
+        + placement_policy.PLACEMENT_RULES
+    )
+    critic_system = (
+        prompts.get_text("concepts.activity_hub_critic.system")
+        + placement_policy.PLACEMENT_RULES
+    )
     rejection_reason_by_qid: dict[str, str] = {}
     api_certified = 0
     for attempt in range(1, max(1, max_attempts) + 1):
@@ -9903,8 +9913,13 @@ def _recover_missed_type_deltas_via_api(
     import copy
     import json as _json
 
+    from . import question_polishing
+
     current = copy.deepcopy(types)
-    system = prompts.get_text("concepts.type_mining_delta.system")
+    system = (
+        prompts.get_text("concepts.type_mining_delta.system")
+        + question_polishing.FRAGMENT_MINING_NOTE
+    )
     for attempt in range(1, max(0, max_attempts) + 1):
         missed = _uncovered_inventory_items(inventory, current)
         if not missed:
@@ -10445,7 +10460,12 @@ def _mine_types_from_inventory_via_api(
     if not inventory.get("items"):
         progress.log("Type Mining skipped — no Question / Task Inventory items.", level="warning")
         return {"types": []}
-    system = prompts.get_text("concepts.type_mining.system")
+    from . import question_polishing
+
+    system = (
+        prompts.get_text("concepts.type_mining.system")
+        + question_polishing.FRAGMENT_MINING_NOTE
+    )
     user = (
         _metadata_block(meta)
         + "\nQuestion / Task Inventory:\n"

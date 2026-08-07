@@ -307,3 +307,29 @@ def test_phase38_grounding_prompts_carry_the_shared_rules():
 
     # Both the mapper and the independent critic append the block.
     assert source.count("+ placement_policy.PLACEMENT_RULES") == 2
+
+
+def test_activity_hub_prompts_carry_the_shared_rules():
+    """Step 3 of the manual process: hubs place by what they exercise.
+
+    The hub provider/critic prompts are registered defaults fetched at the
+    call site, so the shared block is appended there — an admin prompt
+    override can rewrite the hub instructions but never strip the rules.
+    """
+    from app.services import generation
+
+    source = Path(generation.__file__).read_text(encoding="utf-8")
+
+    assert source.count("+ placement_policy.PLACEMENT_RULES") == 2
+
+
+def test_type_mining_prompts_carry_the_fragment_note():
+    """Pass 4 splits mint dotted qids; mining must place each on its own."""
+    from app.services import generation, question_polishing
+
+    note = question_polishing.FRAGMENT_MINING_NOTE
+    assert "never re-merge fragments into one Example" in note
+    assert "polished_task" in note
+
+    source = Path(generation.__file__).read_text(encoding="utf-8")
+    assert source.count("+ question_polishing.FRAGMENT_MINING_NOTE") == 2

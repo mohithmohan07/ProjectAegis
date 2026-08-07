@@ -106,37 +106,133 @@ def _inventory() -> dict:
 # The pass
 # --------------------------------------------------------------------------- #
 
+def _by_qid(result: dict, qid: str) -> dict:
+    return next(i for i in result["items"] if i["qid"] == qid)
+
+
 def test_polishing_adds_fields_and_never_touches_source_wording():
     result = question_polishing.polish_inventory(
         _inventory(), meta=META, api_call=_api_polish)
 
-    polished = result["items"][0]
+    polished = _by_qid(result, "QINV-0001")
     assert polished["raw_task"] == LOOK_AT_FIGURE
     assert polished["normalized_task"] == LOOK_AT_FIGURE
     assert "Look at the figure once again" not in polished["polished_task"]
     assert polished["polish_flag"] == question_polishing.FLAG_POLISHED
 
-    untouched = result["items"][2]
+    untouched = _by_qid(result, "QINV-0003")
     assert "polished_task" not in untouched
     assert "polish_flag" not in untouched
 
 
-def test_a_spanning_question_records_fragments_with_parent_carrying_qids():
+def test_a_spanning_question_becomes_first_class_fragment_items():
+    """Fragments are ordinary inventory items; the parent is preserved."""
     result = question_polishing.polish_inventory(
         _inventory(), meta=META, api_call=_api_polish)
 
-    split = result["items"][1]
-    assert split["polish_flag"] == question_polishing.FLAG_SPLIT
-    fragment_qids = [
-        fragment["fragment_qid"] for fragment in split["polish_fragments"]
-    ]
-    assert fragment_qids == ["QINV-0002.1", "QINV-0002.2"]
-    assert all(f["polished_task"] for f in split["polish_fragments"])
+    qids = [item["qid"] for item in result["items"]]
+    assert "QINV-0002" not in qids
+    assert qids[1:3] == ["QINV-0002.1", "QINV-0002.2"]
+    fragments = result["items"][1:3]
+    for fragment in fragments:
+        assert fragment["parent_qid"] == "QINV-0002"
+        assert fragment["polish_flag"] == question_polishing.FLAG_SPLIT
+        assert fragment["polished_task"]
+        # Source audit identity is the parent's, so anchors still match.
+        assert fragment["raw_task"] == (
+            "Describe the zollverein and the Frankfurt Parliament."
+        )
+    parents = result["split_parents"]
+    assert [p["qid"] for p in parents] == ["QINV-0002"]
     # The dotted shape is the one existing qid tooling already parses.
     from app.services import semantic_recovery
 
-    for fragment_qid in fragment_qids:
-        assert semantic_recovery._QID_RE.fullmatch(fragment_qid), fragment_qid
+    for item in fragments:
+        assert semantic_recovery._QID_RE.fullmatch(item["qid"]), item["qid"]
+
+
+def test_fragments_resolve_to_their_parents_sealed_task():
+    """Phase 3.3 certifies a fragment against the parent's graph task."""
+    from app.services import canonical_source_phase3 as phase3
+
+    sealed = {"QINV-0002": {"qid": "QINV-0002", "topic_id": "TOPIC-0002"}}
+
+    task = phase3._graph_task_for_qid(
+        sealed, "QINV-0002.1", parent_qid="QINV-0002")
+
+    assert task is sealed["QINV-0002"]
+    # Even without the explicit parent pointer, the dotted shape resolves.
+    assert phase3._graph_task_for_qid(sealed, "QINV-0002.2") is (
+        sealed["QINV-0002"]
+    )
+
+
+def test_fragments_carry_exact_once_coverage_individually():
+    """Each fragment must be placed once; covering both covers the split."""
+    result = question_polishing.polish_inventory(
+        _inventory(), meta=META, api_call=_api_polish)
+    types = [{
+        "type_id": "TYPE-0001",
+        "source_question_ids": [
+            "QINV-0001", "QINV-0002.1", "QINV-0003",
+        ],
+        "case_prompts": [{
+            "case_id": "CASE-0001",
+            "examples": [
+                {"source_question_id": qid, "example_prompt": "x"}
+                for qid in ("QINV-0001", "QINV-0002.1", "QINV-0003")
+            ],
+        }],
+    }]
+
+    missed = generation._uncovered_inventory_items(result, types)
+
+    # The unplaced fragment is missed on its own; its placed sibling is not.
+    # (The activity row is legitimately uncovered by this Type too.)
+    assert [item["qid"] for item in missed] == ["QINV-0002.2", "QINV-0004"]
+
+
+def test_collapse_and_expand_round_trip():
+    result = question_polishing.polish_inventory(
+        _inventory(), meta=META, api_call=_api_polish)
+    expanded_qids = [item["qid"] for item in result["items"]]
+
+    collapsed = question_polishing.collapse_split_items(result)
+    assert [i["qid"] for i in collapsed["items"]][1] == "QINV-0002"
+    assert collapsed["items"][1]["polish_fragments"]
+    assert collapsed["split_parents"] == []
+
+    re_expanded = question_polishing.expand_split_items(collapsed)
+    assert [item["qid"] for item in re_expanded["items"]] == expanded_qids
+    assert [p["qid"] for p in re_expanded["split_parents"]] == ["QINV-0002"]
+
+
+def test_anchor_refresh_sees_the_parent_and_returns_the_fragments(monkeypatch):
+    """The refresh wrapper collapses for the anchors and re-expands after."""
+    result = question_polishing.polish_inventory(
+        _inventory(), meta=META, api_call=_api_polish)
+    seen: dict = {}
+
+    stub = ModuleType("stub_generation")
+
+    def refresh(inventory, sections):
+        seen["qids"] = [i["qid"] for i in inventory["items"]]
+        return inventory
+
+    stub._refresh_inventory_from_source_anchors = refresh
+    stub._inventory_stats = lambda items: {"total_inventory_items": len(items)}
+    stub._extract_question_task_inventory_via_api = lambda **kwargs: {"items": []}
+    stub._inventory_task_text = lambda item: str(item.get("raw_task") or "")
+    question_polishing_contract.install(stub)
+
+    refreshed = stub._refresh_inventory_from_source_anchors(result, [])
+
+    assert "QINV-0002" in seen["qids"]
+    assert "QINV-0002.1" not in seen["qids"]
+    refreshed_qids = [i["qid"] for i in refreshed["items"]]
+    assert "QINV-0002.1" in refreshed_qids and "QINV-0002" not in refreshed_qids
+    assert refreshed["stats"]["total_inventory_items"] == len(
+        refreshed["items"])
 
 
 def test_hub_rows_are_never_polished():
@@ -144,7 +240,7 @@ def test_hub_rows_are_never_polished():
     result = question_polishing.polish_inventory(
         _inventory(), meta=META, api_call=_api_polish)
 
-    hub = result["items"][3]
+    hub = _by_qid(result, "QINV-0004")
     assert "polished_task" not in hub and "polish_flag" not in hub
 
 
@@ -202,7 +298,7 @@ def test_unchanged_wording_records_nothing():
     result = question_polishing.polish_inventory(
         _inventory(), meta=META, api_call=_api_polish)
 
-    already_clean = result["items"][2]
+    already_clean = _by_qid(result, "QINV-0003")
     assert "polish_flag" not in already_clean
 
 
@@ -272,6 +368,8 @@ def test_install_is_idempotent():
 
     stub._extract_question_task_inventory_via_api = extract
     stub._inventory_task_text = lambda item: str(item.get("raw_task") or "")
+    stub._refresh_inventory_from_source_anchors = lambda inventory, s: inventory
+    stub._inventory_stats = lambda items: {}
 
     question_polishing_contract.install(stub)
     wrapped_once = stub._extract_question_task_inventory_via_api
