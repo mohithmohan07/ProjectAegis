@@ -88,6 +88,9 @@ from .canonical_source_phase310_terminal_figure_inventory_convergence_contract i
 from .canonical_source_phase311_acsd_visual_display_projection_contract import (
     install as _install_canonical_source_phase311_acsd_visual_display_projection_contract,
 )
+from .chapter_reading_contract import (
+    install as _install_chapter_reading_contract,
+)
 
 # Production order is intentional and fail-closed: preserve source identity first,
 # defer Type allocation to the topology freeze, restore integration boundaries,
@@ -174,6 +177,10 @@ _install_canonical_source_phase38_boundary_grounding_turnover_contract()
 _install_canonical_source_phase39_post_freeze_hub_convergence_contract(generation)
 _install_canonical_source_phase310_terminal_figure_inventory_convergence_contract(generation)
 _install_canonical_source_phase311_acsd_visual_display_projection_contract(generation)
+# Pass 1 (docs/build-concepts-manual-process.md) installs outermost: a live
+# run reads and normalizes its source before any wrapper below compiles it,
+# and the deposit/recovery semantic source resolves through the same reading.
+_install_chapter_reading_contract(generation)
 
 del _install_closed_inventory_contract
 del _install_concept_topology_contract
@@ -208,3 +215,4 @@ del _install_canonical_source_phase38_boundary_grounding_turnover_contract
 del _install_canonical_source_phase39_post_freeze_hub_convergence_contract
 del _install_canonical_source_phase310_terminal_figure_inventory_convergence_contract
 del _install_canonical_source_phase311_acsd_visual_display_projection_contract
+del _install_chapter_reading_contract
