@@ -3149,9 +3149,41 @@ def _parse_host_plan(
         if title_key in existing_title_keys or title_key in new_title_keys:
             errors.append(f"{key} duplicates an existing or proposed concept title")
             continue
-        if any(block_topic.get(block_id) != topic_id for block_id in block_ids):
-            errors.append(f"{key} used unknown or wrong-topic source block IDs")
+        unknown_ids = [b for b in block_ids if b not in block_topic]
+        if unknown_ids:
+            errors.append(
+                f"{key} used unknown source block IDs: "
+                + ", ".join(unknown_ids[:4])
+            )
             continue
+        # Rule 4a (docs/concept-placement-rules.md): a block printed under
+        # another topic is provenance, not grounding. Job 20 died here three
+        # times because 'Visualising the Nation' material — Marianne and
+        # Germania figures — is physically printed under earlier topics, so
+        # every honest citation failed a print-position check. Same-topic
+        # blocks ground the new concept; cross-topic ones are preserved as
+        # references. Only a concept with no same-topic grounding at all is
+        # still an error, with the fix stated for the bounded re-ask.
+        same_topic_ids = [
+            b for b in block_ids if block_topic.get(b) == topic_id
+        ]
+        reference_ids = [
+            b for b in block_ids if block_topic.get(b) != topic_id
+        ]
+        if not same_topic_ids:
+            errors.append(
+                f"{key} grounded only in blocks printed under other topics; "
+                f"cite at least one block from topic {topic_id} — "
+                "cross-topic blocks are kept as references, not grounding"
+            )
+            continue
+        if reference_ids:
+            progress.log(
+                f"Phase 3.3 kept {len(reference_ids)} cross-topic block(s) "
+                f"({', '.join(reference_ids[:3])}) as Rule 4a references for "
+                f"new concept {key}; grounding uses its "
+                f"{len(same_topic_ids)} same-topic block(s).",
+            )
         new_title_keys.add(title_key)
         definitions[key] = {
             "new_concept_key": key,
@@ -3165,7 +3197,8 @@ def _parse_host_plan(
                 for value in raw.get("keywords") or []
                 if phase3._clean_public_text(value)
             ],
-            "source_block_ids": list(dict.fromkeys(block_ids)),
+            "source_block_ids": list(dict.fromkeys(same_topic_ids)),
+            "reference_block_ids": list(dict.fromkeys(reference_ids)),
             "topic_relationships": copy.deepcopy(
                 raw.get("topic_relationships") or []
             ),
