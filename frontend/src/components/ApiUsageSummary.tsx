@@ -49,7 +49,7 @@ export default function ApiUsageSummary({
   const costAvailable = usage.estimated_cost_usd != null;
   const model = usage.model || "Unknown model";
   const heading = compact
-    ? cumulative ? "Cumulative OpenAI usage" : "OpenAI usage"
+    ? cumulative ? "Cumulative model usage" : "Model usage"
     : cumulative
       ? "Cumulative API usage & estimated cost"
       : "API usage & estimated cost";
@@ -93,7 +93,7 @@ export default function ApiUsageSummary({
         />
         <UsageMetric label="Total tokens" value={formatTokenCount(usage.total_tokens)} />
         <UsageMetric
-          label="Estimated OpenAI cost"
+          label="Estimated cost"
           value={formatEstimatedCost(usage.estimated_cost_usd)}
           emphasized={costAvailable}
         />
