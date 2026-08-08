@@ -32,6 +32,11 @@ from .api import (
 def bootstrap() -> None:
     """Initialize the database schema and preload syllabus structure if empty."""
     auth_svc.validate_configuration()
+    # Re-apply the persisted model-provider selection (OpenAI/Gemini) so a
+    # restart keeps pointing every model call at the chosen provider.
+    from .services import model_provider
+
+    model_provider.restore()
     build_concepts_release_manifest.install()
     build_concepts_release_contract.install()
     init_db()

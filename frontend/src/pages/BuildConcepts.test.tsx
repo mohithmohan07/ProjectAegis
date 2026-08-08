@@ -18,6 +18,16 @@ import BuildConcepts from "./BuildConcepts";
 
 const apiMock = vi.hoisted(() => ({
   vocab: vi.fn(),
+  getModelProvider: vi.fn(() => Promise.resolve({
+    provider: "openai",
+    model: "gpt-5.6-luna",
+    openai_available: true,
+    gemini_available: false,
+    gemini_model: "gemini-3.6-flash",
+    openai_model: "gpt-5.6-luna",
+    note: "",
+  })),
+  setModelProvider: vi.fn(),
   resumableConceptCheckpoints: vi.fn(),
   clearConceptCheckpoint: vi.fn(),
   getUploadJob: vi.fn(),

@@ -99,7 +99,15 @@ def syllabus_workbook_dirs() -> list[Path]:
 
 
 def has_openai() -> bool:
-    return bool(os.environ.get("OPENAI_API_KEY"))
+    """A usable model-provider credential is present (OpenAI or Gemini).
+
+    Gemini rides the OpenAI-compatible endpoint through the same client, so
+    for every "can we generate live?" question the two credentials are
+    interchangeable. The name is kept for its long-standing call sites.
+    """
+    return bool(
+        os.environ.get("OPENAI_API_KEY") or os.environ.get("GEMINI_API_KEY")
+    )
 
 
 def has_mathpix() -> bool:
