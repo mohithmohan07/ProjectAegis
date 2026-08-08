@@ -32,6 +32,7 @@ const apiMock = vi.hoisted(() => ({
 vi.mock("../api/client", () => ({
   api: apiMock,
   streamNdjson: streamNdjsonMock,
+  SESSION_EXPIRED_EVENT: "aegis:session-expired",
 }));
 
 function restoredJob(): UploadJob {

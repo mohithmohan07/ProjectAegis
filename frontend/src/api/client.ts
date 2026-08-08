@@ -24,6 +24,15 @@ import type {
 
 const BASE = import.meta.env.VITE_API_BASE ?? "";
 
+/**
+ * Fired on `window` when the server rejects the user session cookie.
+ * AuthProvider listens and flips the app back to the sign-in gate, so an
+ * expired session (12h TTL — shorter than a long overnight run) surfaces as
+ * "sign in again" instead of raw 401 banners on every panel. Admin-token
+ * failures are deliberately excluded: they don't mean the user signed out.
+ */
+export const SESSION_EXPIRED_EVENT = "aegis:session-expired";
+
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
   const baseHeaders: Record<string, string> =
     init?.body instanceof FormData ? {} : { "Content-Type": "application/json" };
@@ -39,6 +48,9 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
       if (body.detail) detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
     } catch {
       /* keep status text */
+    }
+    if (res.status === 401 && detail === "authentication required") {
+      window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
     }
     throw new Error(detail);
   }

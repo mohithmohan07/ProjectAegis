@@ -11,6 +11,7 @@ const apiMock = vi.hoisted(() => ({
 
 vi.mock("./api/client", () => ({
   api: apiMock,
+  SESSION_EXPIRED_EVENT: "aegis:session-expired",
 }));
 
 beforeEach(() => {
@@ -55,6 +56,72 @@ test("fails closed when auth configuration cannot be loaded and retries", async 
   fireEvent.click(screen.getByRole("button", { name: "Try again" }));
 
   expect(await screen.findByText("Protected app")).toBeDefined();
+});
+
+test("an expired session returns the app to the sign-in gate", async () => {
+  // A 12h session dies under a long overnight run. The first 401 must flip
+  // the app back to the sign-in card with a truthful message — not leave
+  // every panel showing raw "authentication required" banners with no way
+  // back in short of a manual page reload.
+  window.google = {
+    accounts: {
+      id: {
+        initialize: vi.fn(),
+        renderButton: vi.fn((parent: HTMLElement) => {
+          const button = document.createElement("button");
+          button.textContent = "Google button";
+          parent.appendChild(button);
+        }),
+        disableAutoSelect: vi.fn(),
+      },
+    },
+  };
+  apiMock.authConfig
+    .mockResolvedValueOnce({
+      mode: "google",
+      google_client_id: "client-id",
+      allowed_google_domain: "up.school",
+      csrf_token: "csrf-before-expiry",
+    })
+    .mockResolvedValueOnce({
+      mode: "google",
+      google_client_id: "client-id",
+      allowed_google_domain: "up.school",
+      csrf_token: "csrf-after-expiry",
+    });
+  apiMock.authMe
+    .mockResolvedValueOnce({
+      authenticated: true,
+      user: {
+        sub: "user-1",
+        email: "teacher@up.school",
+        name: "Teacher",
+        hd: "up.school",
+      },
+    })
+    .mockResolvedValueOnce({ authenticated: false, user: null });
+
+  render(
+    <AuthProvider>
+      <AuthGate>
+        <div>Protected app</div>
+      </AuthGate>
+    </AuthProvider>,
+  );
+
+  expect(await screen.findByText("Protected app")).toBeDefined();
+
+  await act(async () => {
+    window.dispatchEvent(new Event("aegis:session-expired"));
+  });
+
+  expect(await screen.findByText("Sign in to continue")).toBeDefined();
+  expect(screen.queryByText("Protected app")).toBeNull();
+  expect(
+    await screen.findByText(/Your session expired while you were away/),
+  ).toBeDefined();
+  // The config reload fetched a fresh CSRF pair for the next sign-in.
+  await waitFor(() => expect(apiMock.authConfig).toHaveBeenCalledTimes(2));
 });
 
 test("refreshes CSRF configuration after logout before another Google sign-in", async () => {

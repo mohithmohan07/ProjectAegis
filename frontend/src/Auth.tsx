@@ -7,7 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { api } from "./api/client";
+import { api, SESSION_EXPIRED_EVENT } from "./api/client";
 import type { AuthConfig, AuthSession, AuthUser } from "./types";
 
 type GoogleCredentialResponse = {
@@ -119,6 +119,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (initialLoadStartedRef.current) return;
     initialLoadStartedRef.current = true;
     void load();
+  }, [load]);
+
+  useEffect(() => {
+    // A 401 from any API call means the session cookie died under us —
+    // sessions last 12h and a long run outlives them. Return the whole app
+    // to the sign-in gate with a truthful message, and reload the config so
+    // the next Google sign-in submits a fresh CSRF pair (the CSRF cookie
+    // expires even sooner than the session).
+    let handling = false;
+    const onSessionExpired = () => {
+      if (handling) return;
+      handling = true;
+      setUser((current) => {
+        if (current === null) {
+          handling = false;
+          return current;
+        }
+        void load().then(() => {
+          setError(
+            "Your session expired while you were away. Sign in again to "
+            + "continue — running jobs and saved outputs are unaffected.",
+          );
+          handling = false;
+        });
+        return null;
+      });
+    };
+    window.addEventListener(SESSION_EXPIRED_EVENT, onSessionExpired);
+    return () => {
+      window.removeEventListener(SESSION_EXPIRED_EVENT, onSessionExpired);
+    };
   }, [load]);
 
   const signInWithGoogle = useCallback(async (credential: string) => {
