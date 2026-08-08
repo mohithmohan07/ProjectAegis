@@ -87,6 +87,23 @@ def test_missing_learner_analysis_is_named_per_row():
     assert ledger["complete"] is False
 
 
+def test_an_unplaced_ledger_row_never_counts_as_placed():
+    """unplaced_pending_certification is a flagged gap, not a placement."""
+    inventory = _inventory()
+    inventory["_type_case_qid_placement_ledger"]["placements"][
+        "QINV-0002.2"] = {"basis": "unplaced_pending_certification",
+                          "certified": False, "qid": "QINV-0002.2"}
+
+    ledger = coverage_ledger.build_coverage_ledger(
+        question_inventory=inventory, records=_records())
+
+    assert ledger["complete"] is False
+    unaccounted = [
+        row["qid"] for row in ledger["items"] if row["status"] != "placed"
+    ]
+    assert unaccounted == ["QINV-0002.2"]
+
+
 def test_complete_when_everything_is_accounted():
     inventory = _inventory()
     inventory["_type_case_qid_placement_ledger"]["placements"][

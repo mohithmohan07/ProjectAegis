@@ -133,10 +133,17 @@ def build_coverage_ledger(
     placements = (
         ledger.get("placements") if isinstance(ledger, Mapping) else None
     )
+    # An unplaced_pending_certification row is a flagged gap the ownership
+    # stage recorded on purpose — it must never count as placed.
     placed_qids = {
         str(qid).strip()
-        for qid in (placements or {})
+        for qid, contract in (placements or {}).items()
         if str(qid or "").strip()
+        and not (
+            isinstance(contract, Mapping)
+            and str(contract.get("basis") or "")
+            == "unplaced_pending_certification"
+        )
     }
 
     item_rows = _item_rows(items, placed_qids, records_text)

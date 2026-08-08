@@ -1410,6 +1410,10 @@ def _store_inventory(job: models.UploadJob, artifacts: dict) -> None:
         "stats": inventory.get("stats", {}),
         "mined_types": mined.get("types", []),
     }
+    if inventory.get("split_parents"):
+        # A split question's parent must survive every persistence surface,
+        # or a later refresh re-mints it beside its fragments (job 15).
+        stored["split_parents"] = copy.deepcopy(inventory["split_parents"])
     reading = artifacts.get("chapter_reading")
     if isinstance(reading, dict):
         # Pass 1 provenance rides the durable job state so the coverage

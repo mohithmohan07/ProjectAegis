@@ -8670,12 +8670,60 @@ def _valid_type_case_qid_placement_ledger(value: object) -> dict | None:
         or not placements
         or supplied != calculated
         or any(
-            _certified_type_case_placement_contract(contract) is None
+            not _usable_type_case_ledger_placement(contract)
             for contract in placements.values()
         )
     ):
         return None
     return value
+
+
+def _declared_unplaced_type_case_contract(
+    inventory_item: dict, case: dict, mtype: dict, qid: str,
+) -> dict | None:
+    """The explicitly recorded no-owner state for this exact qid, if any.
+
+    Phase 3.3 records a task the provider/critic pair would not place as an
+    ``unplaced_pending_certification`` contract — provenance, not ownership.
+    Rendering must recognize that record and ship the qid flagged by its
+    printed topic instead of treating "declared v2 but not certified" as a
+    fatal contradiction.
+    """
+    from . import placement_policy as _placement_policy
+
+    for holder in (inventory_item, case, mtype):
+        value = (holder or {}).get("_type_case_placement_contract")
+        if not isinstance(value, dict):
+            continue
+        if str(value.get("basis") or "") != _placement_policy.UNPLACED_BASIS:
+            continue
+        claim_map = value.get("qid_claim_ids")
+        if (
+            str(value.get("qid") or "").strip() == str(qid or "").strip()
+            or (isinstance(claim_map, dict) and qid in claim_map)
+        ):
+            return value
+    return None
+
+
+def _usable_type_case_ledger_placement(value: object) -> bool:
+    """A ledger row is usable when certified — or explicitly unplaced.
+
+    An unplaced contract is a deliberate, flagged outcome of the ownership
+    stage. Refusing to persist it would turn a single unplaceable question
+    into a whole-ledger integrity failure, which is exactly the class of
+    stop the amended Rule 1 forbids.
+    """
+    if _certified_type_case_placement_contract(value) is not None:
+        return True
+    from . import placement_policy as _placement_policy
+
+    return (
+        isinstance(value, dict)
+        and str(value.get("basis") or "") == _placement_policy.UNPLACED_BASIS
+        and value.get("certified") is False
+        and bool(str(value.get("qid") or "").strip())
+    )
 
 
 def _certified_type_case_placement_contract(value: object) -> dict | None:
@@ -9016,6 +9064,7 @@ def _annotate_mined_type_case_routes(
             qids = _assignment_case_qids(case)
             groups: dict[tuple[str, bool, str], list[str]] = {}
             contracts_by_qid: dict[str, dict] = {}
+            unplaced_qids: set[str] = set()
             for qid in qids:
                 inventory_item = by_qid.get(qid, {})
                 contract = _type_case_contract_for_qid(
@@ -9028,7 +9077,10 @@ def _annotate_mined_type_case_routes(
                     contracts_by_qid[qid] = contract
                     route = str(contract.get("owner_topic_id") or "").strip()
                 else:
-                    declared = any(
+                    unplaced = _declared_unplaced_type_case_contract(
+                        inventory_item, case, mtype, qid,
+                    )
+                    declared = unplaced is None and any(
                         isinstance(value, dict)
                         and str(value.get("version") or "") == str(
                             _TYPE_CASE_PLACEMENT_CONTRACT_VERSION)
@@ -9045,8 +9097,23 @@ def _annotate_mined_type_case_routes(
                             f"{qid or '<empty>'} declares placement v2 without "
                             "a complete certified owner"
                         )
+                    if unplaced is not None:
+                        # The ownership stage explicitly recorded "no
+                        # certifiable owner" for this exact qid. That is a
+                        # legal, flagged terminal state (Rule 1, amended):
+                        # the task keeps its printed topic as provenance and
+                        # ships for the reviewer, never stopping the run.
+                        unplaced_qids.add(qid)
+                        progress.log(
+                            f"Type/Case rendering shipped QID {qid} by its "
+                            "printed topic: the ownership stage recorded it "
+                            "as unplaced, so this route is provenance and "
+                            "the row is flagged for review.",
+                            level="warning",
+                        )
                     route = str(
-                        inventory_item.get("source_location_topic_id")
+                        (unplaced or {}).get("source_location_topic_id")
+                        or inventory_item.get("source_location_topic_id")
                         or inventory_item.get("topic_hint")
                         or ""
                     ).strip()
@@ -9061,8 +9128,12 @@ def _annotate_mined_type_case_routes(
                 groups.setdefault(
                     (route, qid in hub_qids, independent_leaf), []
                 ).append(qid)
-            if contracts_by_qid and set(contracts_by_qid) != set(qids):
-                missing = sorted(set(qids) - set(contracts_by_qid))
+            if contracts_by_qid and (
+                set(contracts_by_qid) | unplaced_qids
+            ) != set(qids):
+                missing = sorted(
+                    set(qids) - set(contracts_by_qid) - unplaced_qids
+                )
                 raise RuntimeError(
                     "type_case_owner_uncertified: a partially certified Case "
                     "cannot use source-location fallback for QID(s) "

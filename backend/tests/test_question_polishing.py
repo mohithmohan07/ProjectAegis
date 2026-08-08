@@ -207,6 +207,25 @@ def test_collapse_and_expand_round_trip():
     assert [p["qid"] for p in re_expanded["split_parents"]] == ["QINV-0002"]
 
 
+def test_a_restored_parent_is_superseded_by_its_fragments():
+    """Job 15: persistence dropped split_parents, and the ACSD-ledger
+    refresh re-minted the split parents beside their fragments — putting
+    the uncertifiable compound question back into exact-once coverage on
+    every replay. Fragments supersede a resurrected parent, always."""
+    result = question_polishing.polish_inventory(
+        _inventory(), meta=META, api_call=_api_polish)
+    result["split_parents"] = []  # simulate the persistence gap
+    result["items"].append(_item(
+        "QINV-0002", "Describe the zollverein and the Frankfurt Parliament."))
+
+    healed = question_polishing.supersede_restored_parents(result)
+
+    qids = [item["qid"] for item in healed["items"]]
+    assert "QINV-0002" not in qids
+    assert "QINV-0002.1" in qids and "QINV-0002.2" in qids
+    assert [p["qid"] for p in healed["split_parents"]] == ["QINV-0002"]
+
+
 def test_anchor_refresh_sees_the_parent_and_returns_the_fragments(monkeypatch):
     """The refresh wrapper collapses for the anchors and re-expands after."""
     result = question_polishing.polish_inventory(

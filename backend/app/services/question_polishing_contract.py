@@ -75,7 +75,9 @@ def install(generation: ModuleType | None = None) -> None:
                 _copy.deepcopy(inventory or {})
             )
             refreshed = original_refresh(collapsed, sections)
-            refreshed = question_polishing.expand_split_items(refreshed)
+            refreshed = question_polishing.supersede_restored_parents(
+                question_polishing.expand_split_items(refreshed)
+            )
             refreshed["stats"] = generation._inventory_stats([
                 item for item in refreshed.get("items") or []
                 if isinstance(item, dict)
