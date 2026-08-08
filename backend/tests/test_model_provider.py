@@ -94,6 +94,16 @@ def test_gemini_model_is_overridable(monkeypatch):
     assert info["model"] == "gemini-3.6-pro"
 
 
+def test_log_messages_name_the_active_provider(monkeypatch):
+    """"Gemini quota is exhausted" on a Gemini run — never "OpenAI"."""
+    from app.services import generation
+
+    assert generation._provider_label() == "OpenAI"
+    monkeypatch.setenv("GEMINI_API_KEY", "g-test")
+    model_provider.set_active_provider("gemini")
+    assert generation._provider_label() == "Gemini"
+
+
 def test_every_live_client_site_carries_the_provider_kwargs():
     from pathlib import Path
 

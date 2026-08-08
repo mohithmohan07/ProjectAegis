@@ -110,12 +110,12 @@ export default function ApiUsageSummary({
                 Totals are cumulative for this file across the original
                 attempt and every retry; retrying does not reset them.{" "}
                 {costAvailable
-                  ? "The estimate includes standard text-token rates, cache-write charges, and GPT-5.6 long-context multipliers; cached input and cache writes are already included in input tokens."
+                  ? "The estimate uses the active model's published rates, including cache-write charges and long-context multipliers where they apply; cached input and cache writes are already included in input tokens."
                   : "A cost estimate is unavailable because pricing is not configured for every model used."}
               </>
             )
             : costAvailable
-              ? "Estimate includes standard text-token rates, cache-write charges, and GPT-5.6 long-context multipliers. Cached input and cache writes are already included in input tokens; non-OpenAI services and custom or regional pricing are excluded."
+              ? "Estimate uses the active model's published rates, including cache-write charges and long-context multipliers where they apply. Cached input and cache writes are already included in input tokens; custom or regional pricing is excluded."
               : "Token counts are available, but a cost estimate is unavailable because pricing is not configured for every model used."}
         </div>
       )}

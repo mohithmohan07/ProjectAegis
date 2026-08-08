@@ -83,6 +83,12 @@ def openai_transport_claim(callback: Callable[[], None]):
         _BEFORE_OPENAI_TRANSPORT.reset(token)
 
 
+def _provider_label() -> str:
+    from . import generation
+
+    return generation._provider_label()
+
+
 def _notify_openai_transport_started() -> None:
     callback = _BEFORE_OPENAI_TRANSPORT.get()
     if callable(callback):
@@ -689,22 +695,22 @@ def _openai_multimodal_json(
         except transient_errors as exc:
             code = generation._openai_error_code(exc)
             if code == "insufficient_quota":
-                raise RuntimeError("OpenAI quota exhausted during source adjudication") from exc
+                raise RuntimeError(f"{_provider_label()} quota exhausted during source adjudication") from exc
             if single_attempt:
                 raise RuntimeError(
-                    "OpenAI source adjudication single attempt failed: "
+                    f"{_provider_label()} source adjudication single attempt failed: "
                     f"{exc!r}"
                 ) from exc
             transient += 1
             last_error = exc
             if transient > config.OPENAI_TRANSIENT_RETRIES:
                 raise RuntimeError(
-                    "OpenAI unavailable during source adjudication after "
+                    f"{_provider_label()} unavailable during source adjudication after "
                     f"{transient - 1} transient retries: {exc!r}"
                 ) from exc
             delay = generation._transient_backoff(exc, transient)
             progress.log(
-                "OpenAI source adjudication busy "
+                f"{_provider_label()} source adjudication busy "
                 f"({type(exc).__name__}); retrying in {delay:.0f}s.",
                 level="warning",
             )
@@ -712,14 +718,14 @@ def _openai_multimodal_json(
         except Exception as exc:
             if single_attempt:
                 raise RuntimeError(
-                    "OpenAI source adjudication single attempt failed: "
+                    f"{_provider_label()} source adjudication single attempt failed: "
                     f"{exc!r}"
                 ) from exc
             hard += 1
             last_error = exc
             if hard >= 3:
                 raise RuntimeError(
-                    f"OpenAI source adjudication failed: {last_error!r}"
+                    f"{_provider_label()} source adjudication failed: {last_error!r}"
                 ) from exc
             time.sleep(2)
 

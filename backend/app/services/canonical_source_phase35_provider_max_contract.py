@@ -77,7 +77,7 @@ def _log_policy_once() -> None:
     else:
         generation._PHASE35_PROVIDER_CEILING_LOGGED = True
     progress.log(
-        "Provider-capacity allowance active: GPT completion headroom is set to "
+        "Provider-capacity allowance active: model completion headroom is set to "
         f"the configured {config.OPENAI_MAX_OUTPUT_TOKENS:,}-token maximum; bounded "
         "evidence packets remain active, while durable canonical source and "
         "lossless batching preserve recoverability.",

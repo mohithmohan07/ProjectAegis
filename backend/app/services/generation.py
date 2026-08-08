@@ -2439,6 +2439,23 @@ def _retry_after_seconds(exc: Exception) -> float | None:
         return None
 
 
+def _provider_label() -> str:
+    """The human name of the provider serving the current model calls.
+
+    Log lines and error messages must name the provider actually running —
+    "Gemini quota is exhausted" on a Gemini run, not "OpenAI".
+    """
+    try:
+        from . import model_provider
+
+        return (
+            "Gemini" if model_provider.active_provider() == "gemini"
+            else "OpenAI"
+        )
+    except Exception:  # noqa: BLE001 — labels must never break a message
+        return "OpenAI"
+
+
 def _openai_error_code(exc: Exception) -> str:
     """Return the provider error code without exposing response contents."""
     direct = getattr(exc, "code", None)
@@ -2481,13 +2498,13 @@ def _acquire_openai_slot(
     timeout = config.OPENAI_SLOT_WAIT_TIMEOUT_SECONDS
     purpose_label = str(purpose).replace("_", " ")
     progress.log(
-        "OpenAI capacity is busy; waiting for a free "
+        f"{_provider_label()} capacity is busy; waiting for a free "
         f"{purpose_label} slot.",
         level="warning",
     )
     if timeout <= 0:
         raise OpenAIQueueTimeoutError(
-            "OpenAI capacity is busy and no queue wait is configured. "
+            f"{_provider_label()} capacity is busy and no queue wait is configured. "
             "Try again after another generation finishes."
         )
 
@@ -2507,7 +2524,7 @@ def _acquire_openai_slot(
         if gate.acquire(timeout=wait_for):
             waited = time.monotonic() - started
             progress.log(
-                f"OpenAI slot acquired after {waited:.0f}s; continuing.",
+                f"{_provider_label()} slot acquired after {waited:.0f}s; continuing.",
                 level="success",
             )
             return
@@ -2596,7 +2613,7 @@ def _openai_json(
             choice = resp.choices[0]
             if getattr(choice, "finish_reason", None) == "length":
                 raise RuntimeError(
-                    f"OpenAI response truncated at max_completion_tokens={limit}. "
+                    f"{_provider_label()} response truncated at max_completion_tokens={limit}. "
                     "Set AEGIS_OPENAI_MAX_OUTPUT_TOKENS higher or reduce input size."
                 )
             return json.loads(choice.message.content or "{}")
@@ -2606,12 +2623,12 @@ def _openai_json(
             error_code = _openai_error_code(e)
             if error_code == "insufficient_quota":
                 progress.log(
-                    "OpenAI quota is exhausted (insufficient_quota); not "
+                    f"{_provider_label()} quota is exhausted (insufficient_quota); not "
                     "retrying a definitive billing/quota denial.",
                     level="error",
                 )
                 raise RuntimeError(
-                    "OpenAI quota exhausted (insufficient_quota); the request "
+                    f"{_provider_label()} quota exhausted (insufficient_quota); the request "
                     "was not retried because quota errors are non-transient."
                 ) from e
             transient += 1
@@ -2619,16 +2636,16 @@ def _openai_json(
             if transient > transient_retry_limit:
                 if single_attempt:
                     raise RuntimeError(
-                        "OpenAI unavailable after 1 physical request "
+                        f"{_provider_label()} unavailable after 1 physical request "
                         f"({type(e).__name__}): {e!r}"
                     ) from e
                 raise RuntimeError(
-                    f"OpenAI unavailable after {transient - 1} transient retries "
+                    f"{_provider_label()} unavailable after {transient - 1} transient retries "
                     f"(rate limit/timeout): {e!r}"
                 ) from e
             delay = _transient_backoff(e, transient)
             progress.log(
-                f"OpenAI busy ({type(e).__name__}) — waiting {delay:.0f}s before "
+                f"{_provider_label()} busy ({type(e).__name__}) — waiting {delay:.0f}s before "
                 f"retry {transient}/{transient_retry_limit}.",
                 level="warning",
             )
@@ -2656,7 +2673,7 @@ def _openai_json(
                     else:
                         request_policy.pop("reasoning_effort", None)
                     progress.log(
-                        f"OpenAI does not support reasoning effort "
+                        f"{_provider_label()} does not support reasoning effort "
                         f"{current_effort!r} for model "
                         f"{request_policy['model']}; retrying with "
                         f"{lowered or 'omitted'!r} without consuming a retry.",
@@ -2670,11 +2687,11 @@ def _openai_json(
             time.sleep(2)
     if single_attempt:
         raise RuntimeError(
-            "OpenAI extraction failed after 1 physical request: "
+            f"{_provider_label()} extraction failed after 1 physical request: "
             f"{last_err!r}"
         )
     raise RuntimeError(
-        f"OpenAI extraction failed after {hard_attempt_limit} retries: "
+        f"{_provider_label()} extraction failed after {hard_attempt_limit} retries: "
         f"{last_err!r}"
     )
 
