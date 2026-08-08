@@ -703,6 +703,20 @@ def _human_decision_resolution_context(checkpoint: dict | None):
         and str(row.get("context_hash") or "")
     }
     active_agent_ids = _ACTIVE_AGENT_RESOLUTION_IDS.get()
+    # A settled decision stays settled — across replays AND across resumes.
+    # Reactivation used to cover only the current request's decision ids
+    # plus phase-3.3 context hashes, so a client-driven resume (a network
+    # drop re-POSTing the run) forgot every consumed 3.1/3.2 agent
+    # resolution and re-litigated it, one full replay per decision, with
+    # the identical issue id each time. Every agent-settled semantic
+    # resolution is now re-exposed to every attempt; application remains
+    # identity-guarded (context hash / unit ids), so a stale row that no
+    # longer matches the workspace simply directs nothing.
+    _REACTIVATED_AGENT_KINDS = {
+        "phase31_source_grounding_semantic_conflict",
+        "phase32_concept_blueprint_semantic_conflict",
+        "phase33_type_host_semantic_conflict",
+    }
     resolutions: list[dict] = []
     effective_durable: list[dict] = []
     for raw in durable_resolutions:
@@ -712,6 +726,7 @@ def _human_decision_resolution_context(checkpoint: dict | None):
             and row.get("resolved_by") == "agent"
             and (
                 str(row.get("decision_id") or "") in active_agent_ids
+                or str(row.get("kind") or "") in _REACTIVATED_AGENT_KINDS
                 or (
                     row.get("kind")
                     == "phase33_type_host_semantic_conflict"
