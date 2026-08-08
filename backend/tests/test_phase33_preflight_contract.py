@@ -668,7 +668,10 @@ def test_lowered_env_cannot_send_rejected_host_plan_to_critic(monkeypatch):
         raise AssertionError("critic must not rescue a rejected host plan")
 
     monkeypatch.setenv("AEGIS_SEMANTIC_ACCEPTANCE_MIN_CONFIDENCE", "0.85")
-    with pytest.raises(phase33.HumanDecisionRequired) as paused:
+    # The fixed 0.920 floor still holds against a tampered environment; a
+    # provider that never clears it exhausts the bounded re-asks and FAILS
+    # (allowed) instead of pausing for a human (never).
+    with pytest.raises(phase33.ProviderResponseContractError) as failed:
         phase33._resolve_host_plan(
             graph=graph,
             topic_id="TOPIC-0001",
@@ -680,11 +683,9 @@ def test_lowered_env_cannot_send_rejected_host_plan_to_critic(monkeypatch):
             critic=critic,
         )
 
-    assert provider_calls == 1
+    assert provider_calls >= 3
     assert critic_calls == 0
-    assert "host confidence 0.880 is below 0.920" in (
-        paused.value.pending_decision["conflict"]
-    )
+    assert "host confidence 0.880 is below 0.920" in str(failed.value)
 
 
 def test_lowered_env_cannot_auto_accept_review_band_host_critic(monkeypatch):
@@ -735,19 +736,21 @@ def test_lowered_env_cannot_auto_accept_review_band_host_critic(monkeypatch):
         }
 
     monkeypatch.setenv("AEGIS_SEMANTIC_ACCEPTANCE_MIN_CONFIDENCE", "0.90")
-    with pytest.raises(phase33.HumanDecisionRequired) as paused:
-        phase33._resolve_host_plan(
-            graph=graph,
-            topic_id="TOPIC-0001",
-            topic=topic,
-            units=units,
-            concepts=concepts,
-            source_blocks=[],
-            provider=provider,
-            critic=critic,
-        )
+    # The tampered environment still cannot turn review-band confidence into
+    # a CLEAN acceptance: decide-once ships the plan, but the band dissent
+    # rides it as a review flag.
+    plan = phase33._resolve_host_plan(
+        graph=graph,
+        topic_id="TOPIC-0001",
+        topic=topic,
+        units=units,
+        concepts=concepts,
+        source_blocks=[],
+        provider=provider,
+        critic=critic,
+    )
 
     assert calls == {"provider": 1, "critic": 1}
-    assert "0.900–0.919 human-review band" in (
-        paused.value.pending_decision["conflict"]
+    assert any(
+        "0.910" in flag and "review" in flag for flag in plan["review_flags"]
     )

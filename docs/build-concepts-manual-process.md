@@ -128,6 +128,19 @@ distinct, non-filler meanings.** A concept missing either is flagged in the
 output for the reviewer — never silently shipped bare, and never dropped
 for it.
 
+### Decide once
+
+A placement or host decision is made **exactly once**, by one judgment
+applying the written rules. A second opinion — an independent critic's
+rejection, a "needs review" request, a directive from an earlier round —
+is **recorded on the row as a review flag and never blocks, escalates, or
+replays**. Ownership questions are only ever asked about single-claim
+units: a compound question is split into fragments first, so "who solely
+owns a thing that is two things?" cannot be asked. No human resolves
+anything mid-run; uniformity comes from one decision procedure, fixed
+tie-breaks, and cached decisions — not from repeated adjudication, whose
+outcome depends on loop accidents.
+
 What the completion test is **not**: a mid-run adversarial gate. A placement
 another pass disagrees with is a *flag*, not a *rejection*. Nothing argues an
 item out of the output; nothing loops until two models agree; nothing stops
