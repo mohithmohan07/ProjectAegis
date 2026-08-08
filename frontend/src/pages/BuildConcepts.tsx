@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api } from "../api/client";
+import { api, type ModelProviderInfo } from "../api/client";
 import { useOptionalAuth } from "../Auth";
 import { useAsync } from "../hooks";
 import { useRunConsole } from "../RunConsole";
@@ -246,6 +246,33 @@ function PostLearningFlow({
   const [job, setJob] = useState<UploadJob | null>(initialJob);
   const [scope, setScope] = useState<Scope | null>(null);
   const [busy, setBusy] = useState(false);
+  const [modelProvider, setModelProviderInfo] =
+    useState<ModelProviderInfo | null>(null);
+  const [modelProviderError, setModelProviderError] =
+    useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    api.getModelProvider()
+      .then((info) => {
+        if (active) setModelProviderInfo(info);
+      })
+      .catch(() => {
+        /* the selector simply stays hidden when the endpoint is unavailable */
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const chooseModelProvider = useCallback(async (provider: string) => {
+    setModelProviderError(null);
+    try {
+      setModelProviderInfo(await api.setModelProvider(provider));
+    } catch (choiceError) {
+      setModelProviderError(String(choiceError));
+    }
+  }, []);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
   const [resultResumed, setResultResumed] = useState(false);
@@ -368,6 +395,34 @@ function PostLearningFlow({
               initialChapterIdentity={checkpointTargetIdentity(job)}
             />
             <SyllabusUploader disabled={busy} onLoaded={() => setTreeReload((n) => n + 1)} />
+            {modelProvider && (
+              <div className="row" style={{ marginTop: 12 }}>
+                <label className="muted" htmlFor="model-provider-select">
+                  Model provider
+                </label>
+                <select
+                  id="model-provider-select"
+                  value={modelProvider.provider}
+                  disabled={busy}
+                  onChange={(event) =>
+                    void chooseModelProvider(event.target.value)}
+                >
+                  <option value="openai" disabled={!modelProvider.openai_available}>
+                    OpenAI ({modelProvider.openai_model})
+                  </option>
+                  <option value="gemini" disabled={!modelProvider.gemini_available}>
+                    Gemini ({modelProvider.gemini_model})
+                  </option>
+                </select>
+                <span className="muted">
+                  {modelProvider.note
+                    || `Next run uses ${modelProvider.model}.`}
+                </span>
+              </div>
+            )}
+            {modelProviderError && (
+              <div className="error-box">{modelProviderError}</div>
+            )}
             <div className="row" style={{ marginTop: 12 }}>
               <span className="muted">{scope ? `Chapter: ${scope.label}` : "Pick a chapter"}</span>
               <div className="spacer" />

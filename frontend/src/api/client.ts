@@ -58,6 +58,16 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+export type ModelProviderInfo = {
+  provider: string;
+  model: string;
+  openai_available: boolean;
+  gemini_available: boolean;
+  gemini_model: string;
+  openai_model: string;
+  note: string;
+};
+
 export type StreamEvent =
   | { type: "log"; level?: string; message: string; ts?: number }
   | { type: "step"; label: string; ts?: number }
@@ -270,6 +280,13 @@ export const api = {
   clearConceptCheckpoint: (jobId: number) =>
     http<UploadJob>(`/build-concepts/uploads/${jobId}/checkpoint`, {
       method: "DELETE",
+    }),
+  getModelProvider: () =>
+    http<ModelProviderInfo>("/build-concepts/model-provider"),
+  setModelProvider: (provider: string) =>
+    http<ModelProviderInfo>("/build-concepts/model-provider", {
+      method: "PUT",
+      body: JSON.stringify({ provider }),
     }),
   resumableConceptCheckpoints: (learningKind: "post" | "pre") =>
     http<ResumableCheckpoints>(

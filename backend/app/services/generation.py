@@ -2555,9 +2555,12 @@ def _openai_json(
     request_policy = chat_request_policy(purpose, model=config.OPENAI_MODEL)
     # Disable SDK-level retries: this layer already supplies the retry policy
     # and can surface each wait to the active progress stream.
+    from . import model_provider
+
     client = OpenAI(
         timeout=config.OPENAI_REQUEST_TIMEOUT_SECONDS,
         max_retries=0,
+        **model_provider.client_kwargs(),
     )
     gate = _get_openai_gate()
     last_err: Exception | None = None

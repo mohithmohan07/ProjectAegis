@@ -42,6 +42,9 @@ MODEL_TOKEN_CAPACITIES: Final[tuple[tuple[str, ModelTokenCapacity], ...]] = (
     ("gpt-5.6", ModelTokenCapacity(1_050_000, 128_000)),
     ("gpt-5.5", ModelTokenCapacity(1_050_000, 128_000)),
     ("gpt-5", ModelTokenCapacity(400_000, 128_000)),
+    # Gemini rides the OpenAI-compatible endpoint; documented capacities.
+    ("gemini-3.6", ModelTokenCapacity(1_000_000, 65_536)),
+    ("gemini", ModelTokenCapacity(1_000_000, 65_536)),
 )
 DEFAULT_TOKEN_CAPACITY: Final = ModelTokenCapacity(1_050_000, 128_000)
 

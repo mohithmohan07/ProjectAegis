@@ -639,9 +639,15 @@ def _openai_multimodal_json(
         APITimeoutError,
         InternalServerError,
     )
+    from . import model_provider
+
     selected_model = str(model or config.OPENAI_MODEL)
     request_policy = chat_request_policy(purpose, model=selected_model)
-    client = OpenAI(timeout=config.OPENAI_REQUEST_TIMEOUT_SECONDS, max_retries=0)
+    client = OpenAI(
+        timeout=config.OPENAI_REQUEST_TIMEOUT_SECONDS,
+        max_retries=0,
+        **model_provider.client_kwargs(),
+    )
     gate = generation._get_openai_gate()
     transient = 0
     hard = 0

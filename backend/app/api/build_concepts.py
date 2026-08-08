@@ -22,6 +22,34 @@ router = APIRouter(prefix="/build-concepts", tags=["build-concepts"])
 
 
 # --------------------------------------------------------------------------- #
+# Model provider selection (OpenAI / Gemini) — applies to the next run
+# --------------------------------------------------------------------------- #
+
+@router.get("/model-provider")
+def get_model_provider(
+    user: auth.Principal = Depends(auth.require_user),
+):
+    from ..services import model_provider
+
+    return model_provider.describe()
+
+
+@router.put("/model-provider")
+def set_model_provider(
+    payload: dict,
+    user: auth.Principal = Depends(auth.require_user),
+):
+    from ..services import model_provider
+
+    try:
+        return model_provider.set_active_provider(
+            str((payload or {}).get("provider") or "")
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+# --------------------------------------------------------------------------- #
 # Shared upload helpers (stage → replace → convert)
 # --------------------------------------------------------------------------- #
 
