@@ -84,6 +84,50 @@ PlacementProvider = Callable[[dict[str, Any]], dict[str, Any]]
 PlacementCritic = Callable[[dict[str, Any]], dict[str, Any]]
 
 
+# One conflict used to cost one full pipeline replay: the raise unwound the
+# whole Phase 3 stack, the orchestrator settled the decision, and generation
+# re-ran from the top just to apply it — and the *next* conflict was only
+# discoverable after that replay (job 15: 17 replays, ~2.5 hours). When the
+# orchestrator installs a settler here, a conflict is settled in place and
+# only the affected topic's host plan is re-asked. The pipeline runs forward,
+# once, the way the manual process does.
+_INLINE_DECISION_SETTLER: ContextVar[Any] = ContextVar(
+    "phase33_inline_decision_settler", default=None,
+)
+
+
+@contextmanager
+def inline_decision_settler(settler: Any) -> Iterator[None]:
+    """Install a callable that settles one pending decision without replay.
+
+    The settler receives one raw pending-decision packet, applies the same
+    persistence, budgets and carry rules as the replay path, and returns the
+    ready resolution rows for the settled decision (or raises when the run
+    genuinely cannot continue).
+    """
+
+    token = _INLINE_DECISION_SETTLER.set(settler)
+    try:
+        yield
+    finally:
+        _INLINE_DECISION_SETTLER.reset(token)
+
+
+def _append_active_resolutions(rows: list[dict[str, Any]]) -> None:
+    """Make freshly settled resolutions visible to this same attempt."""
+
+    if not rows:
+        return
+    current = _HUMAN_DECISION_RESOLUTIONS.get()
+    if not current:
+        base: list[Any] = []
+    elif isinstance(current, list):
+        base = list(current)
+    else:
+        base = [current]
+    _HUMAN_DECISION_RESOLUTIONS.set([*base, *copy.deepcopy(rows)])
+
+
 @contextmanager
 def human_resolution_context(resolutions: Any) -> Iterator[None]:
     """Expose persisted human choices to one generation attempt.
@@ -4126,6 +4170,43 @@ def _directed_resolution_issues(
     return issues
 
 
+def _resolve_host_plan_settling_in_place(**kwargs: Any) -> dict[str, Any]:
+    """Resolve one topic's host plan, settling conflicts without a replay.
+
+    Without an installed settler this is exactly ``_resolve_host_plan`` —
+    the conflict raises and the orchestrator replays, as before. With one,
+    each rejection batch is settled on the spot (same persistence, budgets
+    and carry rules as the replay path), the fresh resolutions are appended
+    to the active context, and only this topic's plan is re-asked. The
+    bounded loop cannot spin: every settlement charges the same equivalence
+    and issue budgets that end or carry a scope on the replay path.
+    """
+
+    topic_label = str(
+        (kwargs.get("topic") or {}).get("title") or kwargs.get("topic_id") or ""
+    )
+    for _round in range(12):
+        try:
+            return _resolve_host_plan(**kwargs)
+        except HumanDecisionRequired as exc:
+            settler = _INLINE_DECISION_SETTLER.get()
+            if settler is None:
+                raise
+            batch = [exc.pending_decision, *exc.companion_pending_decisions]
+            settled_rows: list[dict[str, Any]] = []
+            for packet in batch:
+                settled_rows.extend(settler(packet) or [])
+            _append_active_resolutions(settled_rows)
+            progress.log(
+                f"Settled {len(batch)} Type-host decision(s) in place for "
+                f"topic '{topic_label}' and re-asked only this topic's host "
+                "plan — no pipeline replay.",
+            )
+    # Twelve settle rounds without convergence means the budgets should have
+    # carried or ended this scope; surface the replay path rather than spin.
+    return _resolve_host_plan(**kwargs)
+
+
 def _resolve_host_plan(
     *,
     graph: dict[str, Any],
@@ -5296,7 +5377,7 @@ def _reconcile_type_hosts(
             if cid in concept_by_id
         ]
         plans.append(
-            _resolve_host_plan(
+            _resolve_host_plan_settling_in_place(
                 graph=graph,
                 topic_id=topic_id,
                 topic=topic,

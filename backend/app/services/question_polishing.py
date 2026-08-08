@@ -379,6 +379,56 @@ def expand_split_items(inventory: dict[str, Any]) -> dict[str, Any]:
     return inventory
 
 
+def supersede_restored_parents(inventory: dict[str, Any]) -> dict[str, Any]:
+    """Drop any item whose fragments are also present, in place.
+
+    Self-healing against persistence gaps: several store paths rebuild the
+    inventory from the ACSD task ledger or deterministic anchors, which know
+    nothing of polishing and re-mint a split question's parent as a fresh
+    item. Job 15 showed what that costs — the re-minted compound parent
+    re-entered exact-once coverage on every replay ("2 missed items"), could
+    never be certified, and ultimately stopped the run. The fragments are
+    the authoritative form of a split question; a parent standing beside
+    them is a resurrection artifact, moved back to ``split_parents``.
+    """
+    items = [
+        item for item in inventory.get("items") or []
+        if isinstance(item, dict)
+    ]
+    fragment_parent_qids = {
+        str(item.get("parent_qid") or "").strip()
+        for item in items
+        if str(item.get("parent_qid") or "").strip()
+        and item.get("polish_flag") == FLAG_SPLIT
+    }
+    if not fragment_parent_qids:
+        return inventory
+    kept: list[Any] = []
+    superseded: list[dict[str, Any]] = []
+    for item in inventory.get("items") or []:
+        qid = (
+            str(item.get("qid") or "").strip()
+            if isinstance(item, dict) else ""
+        )
+        if qid and qid in fragment_parent_qids:
+            superseded.append(copy.deepcopy(item))
+            continue
+        kept.append(item)
+    if not superseded:
+        return inventory
+    inventory["items"] = kept
+    inventory["split_parents"] = [
+        *(inventory.get("split_parents") or []), *superseded,
+    ]
+    progress.log(
+        "Question polishing superseded "
+        f"{len(superseded)} restored split parent(s) "
+        f"({', '.join(str(p.get('qid') or '') for p in superseded[:6])}); "
+        "their fragments are the authoritative questions."
+    )
+    return inventory
+
+
 def collapse_split_items(inventory: dict[str, Any]) -> dict[str, Any]:
     """Restore split parents in place of their fragments, in place.
 
@@ -483,4 +533,4 @@ def polish_inventory(
         f"{len(eligible) - polished_count - split_count - kept_count} "
         "already standalone."
     )
-    return expand_split_items(result)
+    return supersede_restored_parents(expand_split_items(result))
