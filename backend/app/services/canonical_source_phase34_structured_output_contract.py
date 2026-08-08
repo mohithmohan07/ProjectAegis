@@ -85,6 +85,12 @@ class _TerminalStructuredOutputError(RuntimeError):
     """A structured response could not be completed within the bounded turnover."""
 
 
+def _provider_label() -> str:
+    from . import generation
+
+    return generation._provider_label()
+
+
 def _purpose_label(purpose: object) -> str:
     return str(purpose or "structured output").replace("_", " ")
 
@@ -249,7 +255,7 @@ def _log_effort_negotiation_once(
         return
     _LOGGED_EFFORT_NEGOTIATIONS.add(key)
     progress.log(
-        f"OpenAI {label} reasoning effort negotiated for model {model}: "
+        f"{_provider_label()} {label} reasoning effort negotiated for model {model}: "
         f"requested {requested or 'default'!r}, used {used or 'omitted'!r} "
         "(capability or truncation fallback).",
         level="info",
@@ -444,7 +450,7 @@ def _resilient_openai_multimodal_json(
 
             if refusal:
                 raise ValueError(
-                    f"OpenAI {label} refused schema {schema}: {refusal[:500]}"
+                    f"{_provider_label()} {label} refused schema {schema}: {refusal[:500]}"
                 )
 
             # Some providers mark the response as length-limited after emitting a
@@ -481,7 +487,7 @@ def _resilient_openai_multimodal_json(
                         else "a completion-limit response"
                     )
                     raise _TerminalStructuredOutputError(
-                        f"OpenAI {label} schema {schema} remained {condition} "
+                        f"{_provider_label()} {label} schema {schema} remained {condition} "
                         f"after {truncations + 1} bounded response(s) at "
                         f"the {current_budget}-token allowance"
                     )
@@ -502,7 +508,7 @@ def _resilient_openai_multimodal_json(
                     else f"at the {current_budget}-token provider maximum"
                 )
                 progress.log(
-                    f"OpenAI {label} schema {schema} {issue} at "
+                    f"{_provider_label()} {label} schema {schema} {issue} at "
                     f"{previous_budget} tokens; retrying {allowance} and compact "
                     "structured reasoning "
                     f"({truncations}/{max_turnovers}).",
@@ -512,16 +518,16 @@ def _resilient_openai_multimodal_json(
 
             if parsed is not None:
                 raise ValueError(
-                    f"OpenAI {label} schema {schema} returned "
+                    f"{_provider_label()} {label} schema {schema} returned "
                     f"{type(parsed).__name__}, expected an object"
                 )
             if finish_reason and finish_reason != "stop":
                 raise ValueError(
-                    f"OpenAI {label} schema {schema} ended with "
+                    f"{_provider_label()} {label} schema {schema} ended with "
                     f"finish_reason={finish_reason!r}"
                 )
             raise ValueError(
-                f"OpenAI {label} schema {schema} returned invalid JSON: "
+                f"{_provider_label()} {label} schema {schema} returned invalid JSON: "
                 f"{parse_error!r}"
             )
         except _TerminalStructuredOutputError:
@@ -532,22 +538,22 @@ def _resilient_openai_multimodal_json(
             code = generation._openai_error_code(exc)
             if code == "insufficient_quota":
                 raise RuntimeError(
-                    f"OpenAI quota exhausted during {label}"
+                    f"{_provider_label()} quota exhausted during {label}"
                 ) from exc
             if single_attempt:
                 raise RuntimeError(
-                    f"OpenAI {label} single attempt failed: {exc!r}"
+                    f"{_provider_label()} {label} single attempt failed: {exc!r}"
                 ) from exc
             transient += 1
             last_error = exc
             if transient > config.OPENAI_TRANSIENT_RETRIES:
                 raise RuntimeError(
-                    f"OpenAI unavailable during {label} after "
+                    f"{_provider_label()} unavailable during {label} after "
                     f"{transient - 1} transient retries: {exc!r}"
                 ) from exc
             delay = generation._transient_backoff(exc, transient)
             progress.log(
-                f"OpenAI {label} busy ({type(exc).__name__}); retrying in "
+                f"{_provider_label()} {label} busy ({type(exc).__name__}); retrying in "
                 f"{delay:.0f}s.",
                 level="warning",
             )
@@ -555,7 +561,7 @@ def _resilient_openai_multimodal_json(
         except Exception as exc:
             if single_attempt:
                 raise RuntimeError(
-                    f"OpenAI {label} schema {schema} single attempt failed: "
+                    f"{_provider_label()} {label} schema {schema} single attempt failed: "
                     f"{exc!r}"
                 ) from exc
             current_effort = str(
@@ -579,7 +585,7 @@ def _resilient_openai_multimodal_json(
                     omit_reasoning_effort = True
                 next_label = repr(lower_effort) if lower_effort else "omitted"
                 progress.log(
-                    f"OpenAI {label} does not support reasoning effort "
+                    f"{_provider_label()} {label} does not support reasoning effort "
                     f"{current_effort!r} for model {selected_model}; retrying "
                     f"immediately with reasoning_effort {next_label} without "
                     "consuming a "
@@ -593,17 +599,17 @@ def _resilient_openai_multimodal_json(
                 # identical payload.  Surface them immediately so the caller's
                 # explicit model fallback or infrastructure handling can act.
                 raise RuntimeError(
-                    f"OpenAI {label} request was definitively rejected: {exc}"
+                    f"{_provider_label()} {label} request was definitively rejected: {exc}"
                 ) from exc
             hard += 1
             last_error = exc
             if hard >= 3:
                 raise RuntimeError(
-                    f"OpenAI {label} schema {schema} failed after "
+                    f"{_provider_label()} {label} schema {schema} failed after "
                     f"{hard} bounded protocol attempt(s): {last_error!r}"
                 ) from exc
             progress.log(
-                f"OpenAI {label} schema {schema} returned an unusable structured "
+                f"{_provider_label()} {label} schema {schema} returned an unusable structured "
                 f"response ({exc}); retrying bounded protocol attempt "
                 f"{hard + 1}/3.",
                 level="warning",
