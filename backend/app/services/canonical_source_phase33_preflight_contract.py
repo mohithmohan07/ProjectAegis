@@ -4170,6 +4170,37 @@ def _directed_resolution_issues(
     return issues
 
 
+def _accepting_relationship_review(
+    specs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """A relationship review that accepts the provider's proposal as-is.
+
+    Used by decide-once when the independent critic dissents: the dissent is
+    recorded on the plan, and the deterministic teaching-order placement
+    math still needs per-relationship verdicts to run — so the provider's
+    own relationship set is passed through accepted. The critic's actual
+    review is preserved verbatim in the plan's review flags.
+    """
+
+    return {
+        "relationship_reviews": [
+            {
+                "relationship_id": relation.relationship_id,
+                "verdict": "accepted",
+                "evidence_supported": True,
+                "necessity_supported": True,
+                "direction_supported": True,
+                "reason": (
+                    "decide-once: provider decision stands; independent "
+                    "critic dissent is recorded as a review flag"
+                ),
+            }
+            for spec in specs
+            for relation in spec["relationships"]
+        ],
+    }
+
+
 def _resolve_host_plan_settling_in_place(**kwargs: Any) -> dict[str, Any]:
     """Resolve one topic's host plan, settling conflicts without a replay.
 
@@ -4263,25 +4294,21 @@ def _resolve_host_plan(
             if str(unit_id) and str(unit_id) not in resolved_unit_ids
         )
     )
+    # Decide-once (docs/build-concepts-manual-process.md): a host decision is
+    # made exactly once, by the provider under the written placement rules.
+    # Dissent — the critic's, a stale directive's, an earlier rejection's —
+    # is recorded on the plan as a review flag, never escalated, never
+    # replayed. Flags accumulate here and ship with the plan.
+    advisory_flags: list[str] = []
     if deferred_unit_ids:
-        next_unit_id = str(deferred_unit_ids[0])
-        raise HumanDecisionRequired(
-            _host_pending_decision(
-                identity=identity,
-                topic=topic,
-                units=units,
-                concepts=concepts,
-                source_blocks=source_blocks,
-                issues=[
-                    f"{next_unit_id} was also rejected in the previous "
-                    "independent review and needs your decision."
-                ],
-                proposed_plan={
-                    "rejected_assignment_unit_ids": deferred_unit_ids,
-                },
-                resolved_choices=resolutions,
-            )
+        note = (
+            f"{len(deferred_unit_ids)} unit(s) rejected in an earlier "
+            "independent review "
+            f"({', '.join(str(v) for v in deferred_unit_ids[:4])}) proceed "
+            "with the fresh provider plan, flagged for review."
         )
+        advisory_flags.append(note)
+        progress.log("Phase 3.3 decide-once: " + note, level="warning")
     key = _host_plan_cache_key(
         graph=graph,
         topic_id=topic_id,
@@ -4303,9 +4330,10 @@ def _resolve_host_plan(
         )
         return cached
 
-    # One correction is enough for a strict-schema response-shape defect. This
-    # budget is separate from semantic adjudication, which never retries.
-    attempts = 1 if resolution is not None else min(2, _max_host_attempts())
+    # Bounded corrections cover response-shape defects and a provider that
+    # tries to defer ("review_required" is not an available decision in
+    # unattended mode). Semantic adjudication itself never retries.
+    attempts = 1 if resolution is not None else max(3, _max_host_attempts())
     last_errors: list[str] = []
     contract_feedback: list[str] = []
     for attempt in range(1, attempts + 1):
@@ -4334,23 +4362,26 @@ def _resolve_host_plan(
             response if isinstance(response, dict) else {}
         )
         if review_issues:
-            proposed = (
-                copy.deepcopy(response) if isinstance(response, dict) else {}
+            # The provider tried to defer. Deciding is its job: re-ask with
+            # the rules, recording what it wanted reviewed.
+            advisory_flags.extend(review_issues)
+            progress.log(
+                "Phase 3.3 decide-once: the provider requested review for "
+                f"{len(review_unit_ids)} unit(s); re-asking for a decision "
+                "under the placement rules (the request is recorded as a "
+                "review flag).",
+                level="warning",
             )
-            proposed["rejected_assignment_unit_ids"] = review_unit_ids
-            raise HumanDecisionRequired(
-                _host_pending_decision(
-                    identity=identity,
-                    topic=topic,
-                    units=units,
-                    concepts=concepts,
-                    source_blocks=source_blocks,
-                    issues=review_issues,
-                    proposed_plan=proposed,
-                    resolved_choice=resolution,
-                    resolved_choices=resolutions,
-                )
-            )
+            contract_feedback = [
+                "The decision 'review_required' is not available: this run "
+                "is unattended. Decide EVERY assignment unit using the "
+                "placement rules. For an uncertain unit choose the "
+                "least-distorting decision and state the uncertainty in "
+                "its reason field.",
+                *review_issues[:4],
+            ]
+            last_errors = review_issues
+            continue
         plan, parse_errors = _parse_host_plan(
             response if isinstance(response, dict) else {},
             unit_payloads=units,
@@ -4359,27 +4390,6 @@ def _resolve_host_plan(
         )
         if parse_errors or plan is None:
             last_errors = parse_errors
-            if (
-                resolution is not None
-                or not _host_parse_errors_are_mechanical(parse_errors)
-            ):
-                raise HumanDecisionRequired(
-                    _host_pending_decision(
-                        identity=identity,
-                        topic=topic,
-                        units=units,
-                        concepts=concepts,
-                        source_blocks=source_blocks,
-                        issues=parse_errors,
-                        proposed_plan=(
-                            copy.deepcopy(response)
-                            if isinstance(response, dict)
-                            else {}
-                        ),
-                        resolved_choice=resolution,
-                        resolved_choices=resolutions,
-                    )
-                )
             progress.log(
                 "Phase 3.3 Type-host response-contract correction "
                 f"{attempt}/{attempts} for {str(topic.get('title') or topic_id)!r} "
@@ -4400,18 +4410,16 @@ def _resolve_host_plan(
                 )
             ]
             if directed_issues:
-                raise HumanDecisionRequired(
-                    _host_pending_decision(
-                        identity=identity,
-                        topic=topic,
-                        units=units,
-                        concepts=concepts,
-                        source_blocks=source_blocks,
-                        issues=directed_issues,
-                        proposed_plan=plan,
-                        resolved_choice=resolution,
-                        resolved_choices=resolutions,
-                    )
+                # A saved directive from an earlier escalation round was not
+                # applied by this fresh plan. Decide-once: the fresh plan is
+                # the decision; the mismatch ships as a flag.
+                advisory_flags.extend(directed_issues)
+                progress.log(
+                    "Phase 3.3 decide-once: "
+                    f"{len(directed_issues)} saved directive(s) were not "
+                    "reflected by the fresh plan; the plan stands and the "
+                    "mismatch is recorded as a review flag.",
+                    level="warning",
                 )
         specs: list[dict[str, Any]] = []
         proposed_relationships: list[dict[str, Any]] = []
@@ -4454,26 +4462,56 @@ def _resolve_host_plan(
             concept_ids={str(row.get("assignment_unit_id") or "") for row in units},
         )
         critic_band = confidence_policy.semantic_band(state["confidence"])
-        if state["verified"] and critic_band == "accepted":
-            if strict_placement:
-                assert placement_order is not None
-                assert placement_authority is not None
-                plan = _finalize_host_mutation_placement(
-                    plan,
-                    specs=specs,
-                    review=review if isinstance(review, dict) else {},
-                    authority=placement_authority,
-                    plan_topic_id=topic_id,
-                    order=placement_order,
-                )
-            _write_host_plan_cache(
-                key,
-                graph=graph,
-                topic_id=topic_id,
-                plan=plan,
-                confidence=float(state["confidence"]),
-                placement_authority=placement_authority,
+        accepted = bool(state["verified"] and critic_band == "accepted")
+        flagged_units = sorted(
+            str(value) for value in state["rejected"] if str(value)
+        )
+        if not accepted:
+            # Decide-once: the provider's rule-based plan is the decision.
+            # The critic still ran and its dissent ships with the plan as
+            # review flags — same information, zero escalations, zero
+            # replays. The teaching-order placement math below remains the
+            # deterministic authority for where each unit lands.
+            dissent = list(state["issues"]) or [
+                "critic verdict was " + str(state.get("verdict") or "missing")
+            ]
+            dissent.insert(
+                0,
+                "independent critic confidence "
+                f"{float(state['confidence']):.3f} "
+                f"(band: {critic_band}); provider decision stands under "
+                "decide-once and this dissent is recorded for review",
             )
+            advisory_flags.extend(dissent)
+        if strict_placement:
+            assert placement_order is not None
+            assert placement_authority is not None
+            plan = _finalize_host_mutation_placement(
+                plan,
+                specs=specs,
+                review=(
+                    review
+                    if accepted and isinstance(review, dict)
+                    else _accepting_relationship_review(specs)
+                ),
+                authority=placement_authority,
+                plan_topic_id=topic_id,
+                order=placement_order,
+            )
+        if advisory_flags:
+            plan = copy.deepcopy(plan)
+            plan["review_flags"] = list(advisory_flags)
+            if flagged_units:
+                plan["flagged_assignment_unit_ids"] = flagged_units
+        _write_host_plan_cache(
+            key,
+            graph=graph,
+            topic_id=topic_id,
+            plan=plan,
+            confidence=float(state["confidence"]),
+            placement_authority=placement_authority,
+        )
+        if accepted:
             progress.log(
                 "Phase 3.3 independently verified "
                 f"{len(units)} Type/Case host decision(s) for "
@@ -4481,41 +4519,15 @@ def _resolve_host_plan(
                 + (f" after {attempt} attempt(s)." if attempt > 1 else "."),
                 level="success",
             )
-            return plan
-        last_errors = list(state["issues"]) or [
-            "critic verdict was " + str(state.get("verdict") or "missing")
-        ]
-        if critic_band == "human_review":
-            last_errors.insert(
-                0,
-                "independent critic confidence "
-                f"{float(state['confidence']):.3f} is in the "
-                "0.900–0.919 human-review band",
+        else:
+            progress.log(
+                f"Phase 3.3 decided {len(units)} Type/Case host unit(s) for "
+                f"{str(topic.get('title') or topic_id)!r} with "
+                f"{len(advisory_flags)} critic dissent(s) recorded as review "
+                "flags — no escalation, no replay.",
+                level="warning",
             )
-        elif critic_band == "rejected":
-            last_errors.insert(
-                0,
-                "independent critic confidence "
-                f"{float(state['confidence']):.3f} is below the "
-                f"{confidence_policy.threshold_text()} semantic threshold",
-            )
-        pending_plan = copy.deepcopy(plan)
-        pending_plan["rejected_assignment_unit_ids"] = sorted(
-            str(value) for value in state["rejected"] if str(value)
-        )
-        raise HumanDecisionRequired(
-            _host_pending_decision(
-                identity=identity,
-                topic=topic,
-                units=units,
-                concepts=concepts,
-                source_blocks=source_blocks,
-                issues=last_errors,
-                proposed_plan=pending_plan,
-                resolved_choice=resolution,
-                resolved_choices=resolutions,
-            )
-        )
+        return plan
     details = "; ".join(last_errors[:8])
     raise ProviderResponseContractError(
         "Phase 3.3 provider could not return a valid Type-host response contract "

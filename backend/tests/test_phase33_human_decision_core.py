@@ -1,4 +1,10 @@
-"""Focused coverage for Phase 3.3 human semantic-decision pauses."""
+"""Focused coverage for Phase 3.3 decide-once host resolution.
+
+The host decision is made exactly once, by the provider under the written
+placement rules. Dissent — the critic's rejection, a provider "review
+required" request, an unapplied directive — ships with the plan as review
+flags instead of pausing, escalating, or replaying. These tests pin that
+contract from every side that used to raise."""
 from __future__ import annotations
 
 import json
@@ -7,6 +13,15 @@ import pytest
 
 from app.services import canonical_source_phase33_preflight_contract as phase33
 from app.services import semantic_recovery
+
+
+@pytest.fixture(autouse=True)
+def _no_host_plan_cache(monkeypatch):
+    """Decide-once returns plans, which would otherwise cache across tests."""
+    monkeypatch.setattr(
+        phase33, "_read_host_plan_cache", lambda *a, **k: None)
+    monkeypatch.setattr(
+        phase33, "_write_host_plan_cache", lambda *a, **k: None)
 
 
 def _context() -> tuple[dict, dict, list[dict], list[dict], list[dict]]:
@@ -92,49 +107,56 @@ def _resolve(provider, critic):
     )
 
 
-def test_provider_review_required_pauses_without_critic_or_retry(monkeypatch):
+def test_provider_review_required_is_reasked_for_a_decision(monkeypatch):
+    """"review_required" is not an available decision in unattended mode."""
     monkeypatch.setenv("AEGIS_PHASE33_HOST_MAX_ATTEMPTS", "5")
     calls = {"provider": 0, "critic": 0}
 
-    def provider(_payload):
+    def provider(payload):
         calls["provider"] += 1
-        return {
-            "assignments": [
-                {
-                    "assignment_unit_id": "TYPE-0002",
-                    "decision": "review_required",
-                    "existing_concept_id": "NONE",
-                    "new_concept_key": "NONE",
-                    "confidence": 0.99,
-                    "reason": "Existing is incomplete; a new row would duplicate it.",
-                }
-            ],
-            "new_concepts": [],
-            "existing_concept_updates": [],
-        }
+        if calls["provider"] == 1:
+            return {
+                "assignments": [
+                    {
+                        "assignment_unit_id": "TYPE-0002",
+                        "decision": "review_required",
+                        "existing_concept_id": "NONE",
+                        "new_concept_key": "NONE",
+                        "confidence": 0.99,
+                        "reason": "Existing is incomplete; new would duplicate.",
+                    }
+                ],
+                "new_concepts": [],
+                "existing_concept_updates": [],
+            }
+        # The re-ask names the rule: decide every unit.
+        assert any(
+            "unattended" in str(row)
+            for row in payload["response_contract_feedback"]
+        )
+        return _existing_response()
 
     def critic(_payload):
         calls["critic"] += 1
-        raise AssertionError("critic must not run after review_required")
+        return {
+            "verdict": "verified",
+            "confidence": 0.99,
+            "accepted_concept_ids": ["TYPE-0002"],
+            "rejected_concept_ids": [],
+            "issues": [],
+        }
 
-    with pytest.raises(semantic_recovery.HumanDecisionRequired) as caught:
-        _resolve(provider, critic)
+    plan = _resolve(provider, critic)
 
-    assert calls == {"provider": 1, "critic": 0}
-    pending = caught.value.pending_decision
-    json.dumps(pending)
-    assert pending["decision_id"].startswith("phase33-host-")
-    assert pending["kind"] == "phase33_type_host_semantic_conflict"
-    assert pending["item"]["unit_id"] == "TYPE-0002"
-    assert pending["candidates"][0]["concept_id"] == "HOST-CONCEPT-0001"
-    assert pending["evidence"][1]["label"] == "BLK-0002"
-    assert pending["options"][0]["choice"] == "expand_existing"
-    assert pending["options"][0]["recommended"] is False
-    assert "target_concept_id" not in pending["options"][0]
-    assert pending["options"][-1]["choice"] == "custom_instruction"
+    assert calls == {"provider": 2, "critic": 1}
+    assert plan["assignments"][0]["decision"] == "existing"
+    # The deferral attempt is preserved for the reviewer.
+    assert any("requires review" in flag for flag in plan["review_flags"])
+    json.dumps(plan)
 
 
-def test_first_critic_rejection_pauses_instead_of_replanning(monkeypatch):
+def test_critic_rejection_ships_the_plan_with_dissent_flags(monkeypatch):
+    """The exact case that used to pause: dissent is now a flag, not a stop."""
     monkeypatch.setenv("AEGIS_PHASE33_HOST_MAX_ATTEMPTS", "5")
     calls = {"provider": 0, "critic": 0}
 
@@ -155,15 +177,14 @@ def test_first_critic_rejection_pauses_instead_of_replanning(monkeypatch):
             ],
         }
 
-    with pytest.raises(semantic_recovery.HumanDecisionRequired) as caught:
-        _resolve(provider, critic)
+    plan = _resolve(provider, critic)
 
+    # One judgment each; the decision stands; the dissent ships verbatim.
     assert calls == {"provider": 1, "critic": 1}
-    assert "guarantee liberty" in caught.value.pending_decision["conflict"]
-    assert (
-        caught.value.pending_decision["options"][0]["target_concept_id"]
-        == "HOST-CONCEPT-0001"
-    )
+    assert plan["assignments"][0]["existing_concept_id"] == "HOST-CONCEPT-0001"
+    assert any("guarantee liberty" in flag for flag in plan["review_flags"])
+    assert plan["flagged_assignment_unit_ids"] == ["TYPE-0002"]
+    json.dumps(plan)
 
 
 def test_resolved_expand_existing_is_grounded_critic_checked_and_normalized():
@@ -297,7 +318,7 @@ def test_semantic_recovery_never_consumes_human_pause():
     )
 
 
-def test_pause_evidence_is_bounded_for_large_topics():
+def test_persistent_review_refusal_fails_closed_without_pausing():
     graph, topic, units, concepts, _blocks = _context()
     blocks = [
         {
@@ -310,7 +331,10 @@ def test_pause_evidence_is_bounded_for_large_topics():
         for index in range(1, 106)
     ]
 
+    calls = {"provider": 0}
+
     def provider(_payload):
+        calls["provider"] += 1
         return {
             "assignments": [{
                 "assignment_unit_id": "TYPE-0002",
@@ -324,7 +348,9 @@ def test_pause_evidence_is_bounded_for_large_topics():
             "existing_concept_updates": [],
         }
 
-    with pytest.raises(semantic_recovery.HumanDecisionRequired) as caught:
+    # A provider that refuses to decide on every bounded attempt is a
+    # provider failure — the run FAILS (allowed) instead of WAITING (never).
+    with pytest.raises(phase33.ProviderResponseContractError):
         phase33._resolve_host_plan(
             graph=graph,
             topic_id="TOPIC-0001",
@@ -336,11 +362,7 @@ def test_pause_evidence_is_bounded_for_large_topics():
             critic=lambda _payload: pytest.fail("critic must not run"),
         )
 
-    evidence = caught.value.pending_decision["evidence"]
-    assert len(evidence) == 24
-    assert evidence[0]["label"] == "BLK-0001"
-    assert evidence[-1]["label"] == "BLK-0024"
-    json.dumps(caught.value.pending_decision)
+    assert calls["provider"] >= 3  # every bounded re-ask was spent
 
 
 def test_rejected_unit_never_inherits_another_units_concept_target():
@@ -360,7 +382,33 @@ def test_rejected_unit_never_inherits_another_units_concept_target():
         },
     ]
 
+    calls = {"provider": 0}
+
     def provider(_payload):
+        calls["provider"] += 1
+        if calls["provider"] == 1:
+            return {
+                "assignments": [
+                    {
+                        "assignment_unit_id": "TYPE-0001",
+                        "decision": "existing",
+                        "existing_concept_id": "HOST-CONCEPT-0001",
+                        "new_concept_key": "NONE",
+                        "confidence": 0.99,
+                        "reason": "Covered.",
+                    },
+                    {
+                        "assignment_unit_id": "TYPE-0002",
+                        "decision": "review_required",
+                        "existing_concept_id": "NONE",
+                        "new_concept_key": "NONE",
+                        "confidence": 0.99,
+                        "reason": "No safe host is clear.",
+                    },
+                ],
+                "new_concepts": [],
+                "existing_concept_updates": [],
+            }
         return {
             "assignments": [
                 {
@@ -373,42 +421,68 @@ def test_rejected_unit_never_inherits_another_units_concept_target():
                 },
                 {
                     "assignment_unit_id": "TYPE-0002",
-                    "decision": "review_required",
+                    "decision": "create_new",
                     "existing_concept_id": "NONE",
-                    "new_concept_key": "NONE",
-                    "confidence": 0.99,
-                    "reason": "No safe host is clear.",
+                    "new_concept_key": "NEW-HOST-0001",
+                    "confidence": 0.95,
+                    "reason": "Uncertain: no existing host covers this; a "
+                              "separate concept distorts the source least.",
                 },
             ],
-            "new_concepts": [],
+            "new_concepts": [
+                {
+                    "new_concept_key": "NEW-HOST-0001",
+                    "topic_id": "TOPIC-0001",
+                    "concept_title": "Nations as guarantees of liberty",
+                    "parent_concept": "Ideas of the Nation",
+                    "description": "Nations are necessary guarantees of liberty.",
+                    "achieving_mastery": "Explain why nations guarantee liberty.",
+                    "keywords": ["nation", "liberty"],
+                    "assignment_unit_ids": ["TYPE-0002"],
+                    "source_block_ids": ["BLK-0002"],
+                    "confidence": 0.95,
+                    "reason": "Grounded in BLK-0002.",
+                }
+            ],
             "existing_concept_updates": [],
         }
 
-    with pytest.raises(semantic_recovery.HumanDecisionRequired) as caught:
-        phase33._resolve_host_plan(
-            graph=graph,
-            topic_id="TOPIC-0001",
-            topic=topic,
-            units=units,
-            concepts=concepts,
-            source_blocks=blocks,
-            provider=provider,
-            critic=lambda _payload: pytest.fail("critic must not run"),
-        )
+    def critic(_payload):
+        return {
+            "verdict": "verified",
+            "confidence": 0.99,
+            "accepted_concept_ids": ["TYPE-0001", "TYPE-0002"],
+            "rejected_concept_ids": [],
+            "issues": [],
+        }
 
-    pending = caught.value.pending_decision
-    assert pending["item"]["unit_id"] == "TYPE-0002"
-    expand = next(
-        option
-        for option in pending["options"]
-        if option["choice"] == "expand_existing"
+    plan = phase33._resolve_host_plan(
+        graph=graph,
+        topic_id="TOPIC-0001",
+        topic=topic,
+        units=units,
+        concepts=concepts,
+        source_blocks=blocks,
+        provider=provider,
+        critic=critic,
     )
-    assert expand["recommended"] is False
-    assert "target_concept_id" not in expand
-    assert pending["candidates"][0]["gap"] == ""
+
+    # Each unit keeps its OWN decision; the once-uncertain unit never
+    # inherits its sibling's concept target.
+    by_unit = {
+        row["assignment_unit_id"]: row for row in plan["assignments"]
+    }
+    assert by_unit["TYPE-0001"]["existing_concept_id"] == "HOST-CONCEPT-0001"
+    assert by_unit["TYPE-0002"]["decision"] == "create_new"
+    assert by_unit["TYPE-0002"].get("existing_concept_id") in ("", "NONE", None)
+    assert any("TYPE-0002" in flag for flag in plan["review_flags"])
 
 
-def test_multiple_rejected_units_are_queued_without_an_api_call():
+def test_a_saved_deferred_queue_ships_flagged_without_reescalating():
+    """Deferred unit ids from an old escalation round never re-raise.
+
+    Decide-once: the fresh provider plan covers every unit; the old
+    deferral is preserved as a review flag on the plan."""
     graph, topic, base_units, concepts, blocks = _context()
     units = [
         {
@@ -431,81 +505,18 @@ def test_multiple_rejected_units_are_queued_without_an_api_call():
         concepts=concepts,
         source_blocks=blocks,
     )
-
-    def initial_provider(_payload):
-        return {
-            "assignments": [
-                {
-                    "assignment_unit_id": unit["assignment_unit_id"],
-                    "decision": "review_required",
-                    "existing_concept_id": "NONE",
-                    "new_concept_key": "NONE",
-                    "confidence": 0.99,
-                    "reason": f"{unit['assignment_unit_id']} needs a choice.",
-                }
-                for unit in units
-            ],
-            "new_concepts": [],
-            "existing_concept_updates": [],
-        }
-
-    with pytest.raises(semantic_recovery.HumanDecisionRequired) as first:
-        phase33._resolve_host_plan(
-            graph=graph,
-            topic_id="TOPIC-0001",
-            topic=topic,
-            units=units,
-            concepts=concepts,
-            source_blocks=blocks,
-            provider=initial_provider,
-            critic=lambda _payload: pytest.fail("critic must not run"),
-        )
-    first_pending = first.value.pending_decision
-    assert first_pending["item"]["unit_id"] == "TYPE-0001"
-    assert first_pending["deferred_assignment_unit_ids"] == ["TYPE-0002"]
-
-    first_resolution = {
+    saved_resolution = {
         **identity,
-        "decision_id": first_pending["decision_id"],
         "choice": "select_existing",
         "target_concept_id": "HOST-CONCEPT-0001",
         "assignment_unit_id": "TYPE-0001",
         "deferred_assignment_unit_ids": ["TYPE-0002"],
     }
-    provider_calls = 0
+    calls = {"provider": 0}
 
-    def no_provider(_payload):
-        nonlocal provider_calls
-        provider_calls += 1
-        raise AssertionError("the queued decision must appear before an API call")
-
-    with phase33.human_resolution_context([first_resolution]):
-        with pytest.raises(semantic_recovery.HumanDecisionRequired) as second:
-            phase33._resolve_host_plan(
-                graph=graph,
-                topic_id="TOPIC-0001",
-                topic=topic,
-                units=units,
-                concepts=concepts,
-                source_blocks=blocks,
-                provider=no_provider,
-                critic=lambda _payload: pytest.fail("critic must not run"),
-            )
-    assert provider_calls == 0
-    second_pending = second.value.pending_decision
-    assert second_pending["item"]["unit_id"] == "TYPE-0002"
-    assert second_pending["decision_id"] != first_pending["decision_id"]
-
-    second_resolution = {
-        **identity,
-        "decision_id": second_pending["decision_id"],
-        "choice": "select_existing",
-        "target_concept_id": "HOST-CONCEPT-0001",
-        "assignment_unit_id": "TYPE-0002",
-    }
-
-    def resolved_provider(payload):
-        assert len(payload["human_resolutions"]) == 2
+    def provider(payload):
+        calls["provider"] += 1
+        assert payload["human_resolution"]["choice"] == "select_existing"
         return {
             "assignments": [
                 {
@@ -514,7 +525,7 @@ def test_multiple_rejected_units_are_queued_without_an_api_call():
                     "existing_concept_id": "HOST-CONCEPT-0001",
                     "new_concept_key": "NONE",
                     "confidence": 0.99,
-                    "reason": "Directed by the saved human choices.",
+                    "reason": "Directed by the saved choice; sibling decided fresh.",
                 }
                 for unit in units
             ],
@@ -522,8 +533,7 @@ def test_multiple_rejected_units_are_queued_without_an_api_call():
             "existing_concept_updates": [],
         }
 
-    def verified_critic(payload):
-        assert len(payload["human_resolutions"]) == 2
+    def critic(_payload):
         return {
             "verdict": "verified",
             "confidence": 0.99,
@@ -532,9 +542,7 @@ def test_multiple_rejected_units_are_queued_without_an_api_call():
             "issues": [],
         }
 
-    with phase33.human_resolution_context(
-        [first_resolution, second_resolution]
-    ):
+    with phase33.human_resolution_context([saved_resolution]):
         plan = phase33._resolve_host_plan(
             graph=graph,
             topic_id="TOPIC-0001",
@@ -542,13 +550,16 @@ def test_multiple_rejected_units_are_queued_without_an_api_call():
             units=units,
             concepts=concepts,
             source_blocks=blocks,
-            provider=resolved_provider,
-            critic=verified_critic,
+            provider=provider,
+            critic=critic,
         )
+
+    assert calls["provider"] == 1  # one fresh plan, no queue, no re-raise
     assert [row["assignment_unit_id"] for row in plan["assignments"]] == [
         "TYPE-0001",
         "TYPE-0002",
     ]
+    assert any("TYPE-0002" in flag for flag in plan["review_flags"])
 
 
 def test_topic_source_blocks_preserve_available_pdf_page_metadata():
