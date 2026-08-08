@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import copy
 import contextvars
+import os
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any, Iterator
 
 
@@ -60,6 +61,35 @@ _PRICING: tuple[tuple[str, Pricing], ...] = (
         ),
     ),
 )
+
+
+def _decimal_env(name: str, default: str) -> Decimal:
+    try:
+        return Decimal(os.environ.get(name, "").strip() or default)
+    except (InvalidOperation, ValueError):
+        return Decimal(default)
+
+
+def _gemini_pricing() -> Pricing:
+    """Gemini rates, configurable to match the actual billing plan.
+
+    Gemini models ride the provider-selection seam, and their prices change
+    per model and tier, so the defaults here are flash-class ballpark rates.
+    Set the AEGIS_GEMINI_*_PRICE_PER_M variables to your billed rates so the
+    run estimate matches your invoice; either way the token counts are exact.
+    """
+    return Pricing(
+        _decimal_env("AEGIS_GEMINI_INPUT_PRICE_PER_M", "0.30"),
+        _decimal_env("AEGIS_GEMINI_CACHED_INPUT_PRICE_PER_M", "0.03"),
+        _decimal_env("AEGIS_GEMINI_OUTPUT_PRICE_PER_M", "2.50"),
+        "https://ai.google.dev/pricing — flash-class defaults; override "
+        "with AEGIS_GEMINI_INPUT_PRICE_PER_M / "
+        "AEGIS_GEMINI_CACHED_INPUT_PRICE_PER_M / "
+        "AEGIS_GEMINI_OUTPUT_PRICE_PER_M",
+    )
+
+
+_PRICING = (*_PRICING, ("gemini", _gemini_pricing()))
 
 _COST_UNSET = object()
 
