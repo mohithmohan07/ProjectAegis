@@ -1371,6 +1371,60 @@ def _split_review_verdicts(
     return accepted, errors
 
 
+def _accepting_topology_relationship_review(
+    decisions: dict[str, dict[str, Any]],
+    split_attestations: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """A relationship review accepting the provider's proposal as-is.
+
+    Used by decide-once when the independent critic dissents: the dissent is
+    recorded on the affected concepts as review flags, and the deterministic
+    teaching-order placement still needs per-relationship verdicts — so the
+    provider's own relationship set passes through accepted.
+    """
+
+    return {
+        "relationship_reviews": [
+            {
+                "relationship_id": str(relation.get("relationship_id") or ""),
+                "verdict": "accepted",
+                "evidence_supported": True,
+                "necessity_supported": True,
+                "direction_supported": True,
+                "reason": (
+                    "decide-once: provider decision stands; independent "
+                    "critic dissent is recorded as a review flag"
+                ),
+            }
+            for decision in decisions.values()
+            for segment in decision.get("segments") or []
+            if isinstance(segment, dict)
+            for relation in segment.get("topic_relationships") or []
+            if isinstance(relation, dict)
+            and str(relation.get("relationship_id") or "")
+        ],
+        # The deterministic lossy-split guard (dropped protected items,
+        # rewritten parent claims) runs at parse time and still fails
+        # closed; the semantic survival verdict passes through accepted
+        # with the critic's dissent on the concept's review flags.
+        "split_reviews": [
+            {
+                "split_review_id": str(row.get("split_review_id") or ""),
+                "verdict": "accepted",
+                "complete_parent_claim_preserved": True,
+                "protected_items_preserved": True,
+                "irreducible_relationships_preserved": True,
+                "reason": (
+                    "decide-once: provider split stands; independent critic "
+                    "dissent is recorded as a review flag"
+                ),
+            }
+            for row in split_attestations or []
+            if isinstance(row, dict) and str(row.get("split_review_id") or "")
+        ],
+    }
+
+
 def _finalize_certified_placements(
     decisions: dict[str, dict[str, Any]],
     *,
@@ -2885,24 +2939,23 @@ def adjudicate_topology(
             for concept_id in sorted(batch_ids & deferred)
             if concept_id not in resolutions
         ]
+        # Decide-once: an earlier round's deferral is not a question to
+        # re-ask. The fresh provider pass below decides these concepts like
+        # any other; the old deferral ships as a review flag.
+        batch_flags: dict[str, list[str]] = {}
         if undecided_deferred:
-            packets = [
-                _topology_pending_decision(
-                    identity=gate_identities[concept_id],
-                    graph=graph,
-                    concept=concept_by_id[concept_id],
-                    topics=topics,
-                    candidates=gate_candidates[concept_id],
-                    issues=[
-                        "This concept was also rejected by the first "
-                        "independent topology review and needs your bounded "
-                        "semantic direction."
-                    ],
-                    rejected_ids=undecided_deferred,
+            for concept_id in undecided_deferred:
+                batch_flags.setdefault(concept_id, []).append(
+                    "rejected by an earlier independent topology review; "
+                    "decided fresh by this pass and flagged for review"
                 )
-                for concept_id in undecided_deferred
-            ]
-            raise HumanDecisionRequired(packets[0], companions=packets[1:])
+            progress.log(
+                "Phase 3.2 decide-once: "
+                f"{len(undecided_deferred)} previously deferred concept(s) "
+                "proceed with the fresh provider decision, flagged for "
+                "review instead of re-escalated.",
+                level="warning",
+            )
 
         if any(
             resolution.get("choice") == "replace_source"
@@ -2927,9 +2980,9 @@ def adjudicate_topology(
             if str(resolution.get("choice") or "") != "carry_forward"
         }
 
-        # A directed resume is exactly one provider/critic pair. Only a fresh
-        # mechanical schema or opaque-ID defect may receive one correction.
-        max_provider_attempts = 1 if directives else 2
+        # Bounded mechanical corrections only; semantic adjudication itself
+        # never retries under decide-once.
+        max_provider_attempts = 2 if directives else 3
         accepted: dict[str, dict[str, Any]] = {}
         response: dict[str, Any] | None = None
         parse_errors: list[str] = []
@@ -3012,39 +3065,14 @@ def adjudicate_topology(
                 )
             ]
             if not parse_errors and review_band_ids:
-                parse_errors = [
-                    f"{concept_id} topology confidence is in the "
-                    "0.900–0.919 human-review band"
-                    for concept_id in review_band_ids
-                ]
+                # Decide-once: review-band confidence is dissent, not a
+                # defect. The decision stands and the band ships as a flag.
+                for concept_id in review_band_ids:
+                    batch_flags.setdefault(concept_id, []).append(
+                        "topology confidence is in the 0.900–0.919 "
+                        "human-review band; decision stands, flagged"
+                    )
             if parse_errors:
-                if (
-                    directives
-                    or not _topology_parse_errors_are_mechanical(parse_errors)
-                ):
-                    concept_id = next(
-                        (
-                            value for value in sorted(batch_ids)
-                            if any(value in error for error in parse_errors)
-                        ),
-                        sorted(batch_ids)[0],
-                    )
-                    raise HumanDecisionRequired(
-                        _topology_pending_decision(
-                            identity=gate_identities[concept_id],
-                            graph=graph,
-                            concept=concept_by_id[concept_id],
-                            topics=topics,
-                            candidates=gate_candidates[concept_id],
-                            issues=parse_errors,
-                            rejected_ids=sorted(batch_ids),
-                            proposed_decision=_proposed_decision_for(
-                                response, concept_id
-                            ),
-                            resolution=resolutions.get(concept_id),
-                            diagnostic_source="provider",
-                        )
-                    )
                 if attempt < max_provider_attempts:
                     progress.log(
                         "Phase 3.2 topology response had a mechanical "
@@ -3070,26 +3098,26 @@ def adjudicate_topology(
 
         directed_issues = _topology_directed_issues(directives, accepted)
         if directed_issues:
-            concept_id = next(
-                (
-                    value for value in sorted(batch_ids)
-                    if any(value in issue for issue in directed_issues)
-                ),
-                sorted(batch_ids)[0],
-            )
-            raise HumanDecisionRequired(
-                _topology_pending_decision(
-                    identity=gate_identities[concept_id],
-                    graph=graph,
-                    concept=concept_by_id[concept_id],
-                    topics=topics,
-                    candidates=gate_candidates[concept_id],
-                    issues=directed_issues,
-                    rejected_ids=sorted(batch_ids),
-                    proposed_decision=accepted.get(concept_id),
-                    resolution=resolutions.get(concept_id),
-                    diagnostic_source="provider",
+            # Decide-once: a saved directive the fresh plan did not mirror —
+            # most often because its target id came from a regenerated
+            # candidate catalog — is recorded, never re-litigated. This was
+            # the exact loop that re-asked TOPOLOGY-CONCEPT-0027 eight
+            # times: "the selected target is not a supplied candidate."
+            for issue in directed_issues:
+                owner = next(
+                    (v for v in sorted(batch_ids) if v in issue),
+                    sorted(batch_ids)[0],
                 )
+                batch_flags.setdefault(owner, []).append(
+                    f"saved directive not reflected by the fresh decision: "
+                    f"{issue}"
+                )
+            progress.log(
+                "Phase 3.2 decide-once: "
+                f"{len(directed_issues)} saved directive(s) were not "
+                "reflected by the fresh decisions; the decisions stand and "
+                "the mismatches ship as review flags.",
+                level="warning",
             )
 
         review_payload = {
@@ -3134,49 +3162,44 @@ def adjudicate_topology(
             and early_gate.confidence_band(state["confidence"])
             == "human_review"
         )
+        review_for_finalize = review
         if not state["verified"] or critic_review_band:
+            # Decide-once: the provider's adjudicated decision (keep, move,
+            # refine, split) is taken. The critic ran once and its dissent
+            # ships on every rejected concept as review flags — the same
+            # information the escalation used to carry, at the cost of zero
+            # replays. Deterministic teaching-order placement below runs
+            # against the provider's own relationship set.
             rejected = set(state["rejected"]) or set(batch_ids)
             issues = list(state["issues"]) or [
                 "critic verdict was "
                 + str(state.get("verdict") or "missing")
             ]
             confidence = float(state["confidence"])
-            if early_gate.confidence_band(confidence) == "human_review":
-                issues.insert(
-                    0,
-                    f"independent critic confidence {confidence:.3f} is in "
-                    "the 0.900–0.919 human-review band",
-                )
-            rejected_order = sorted(rejected)
+            issues.insert(
+                0,
+                f"independent critic confidence {confidence:.3f} "
+                f"(band: {early_gate.confidence_band(confidence)}); "
+                "provider decision stands under decide-once and this "
+                "dissent is recorded for review",
+            )
+            for concept_id in sorted(rejected):
+                batch_flags.setdefault(concept_id, []).extend(issues)
             progress.log(
-                "Phase 3.2 stopped after the first genuine semantic topology "
-                "disagreement; independently accepted IDs remain cached and "
-                "no semantic retry or convergence pass was started.",
+                f"Phase 3.2 decided {len(batch_ids)} concept(s) in batch "
+                f"{batch_index} with critic dissent on {len(rejected)} "
+                "concept(s) recorded as review flags — no escalation, no "
+                "replay.",
                 level="warning",
             )
-            # Every rejected concept in this batch is an independent conflict
-            # with its own candidates and evidence. Raising them together lets
-            # orchestration settle the whole batch on one replay instead of
-            # paying a full pipeline replay per concept.
-            packets = [
-                _topology_pending_decision(
-                    identity=gate_identities[concept_id],
-                    graph=graph,
-                    concept=concept_by_id[concept_id],
-                    topics=topics,
-                    candidates=gate_candidates[concept_id],
-                    issues=issues,
-                    rejected_ids=rejected_order,
-                    proposed_decision=accepted.get(concept_id),
-                    resolution=resolutions.get(concept_id),
-                )
-                for concept_id in rejected_order
-            ]
-            raise HumanDecisionRequired(packets[0], companions=packets[1:])
+            review_for_finalize = _accepting_topology_relationship_review(
+                accepted,
+                review_payload.get("split_review_attestations") or [],
+            )
         if not legacy_relationship_mode:
             accepted, placement_review_errors = _finalize_certified_placements(
                 accepted,
-                review=review,
+                review=review_for_finalize,
                 payload=review_payload,
                 concepts={
                     concept_id: concept_by_id[concept_id]
@@ -3185,38 +3208,31 @@ def adjudicate_topology(
                 graph=graph,
             )
             if placement_review_errors:
-                concept_id = next(
-                    (
-                        value for value in sorted(batch_ids)
-                        if any(
-                            value in issue for issue in placement_review_errors
-                        )
-                    ),
-                    sorted(batch_ids)[0],
-                )
-                raise HumanDecisionRequired(
-                    _topology_pending_decision(
-                        identity=gate_identities[concept_id],
-                        graph=graph,
-                        concept=concept_by_id[concept_id],
-                        topics=topics,
-                        candidates=gate_candidates[concept_id],
-                        issues=placement_review_errors,
-                        rejected_ids=sorted(batch_ids),
-                        proposed_decision=accepted.get(concept_id),
-                        resolution=resolutions.get(concept_id),
-                    )
+                # Placement math is deterministic; if it cannot certify even
+                # the provider's own relationship set, the run FAILS with the
+                # reasons (allowed) instead of pausing (never).
+                raise ProviderResponseContractError(
+                    "Phase 3.2 could not certify deterministic placement for "
+                    f"batch {batch_index}: "
+                    + "; ".join(placement_review_errors[:8])
                 )
         else:
             # Compatibility is limited to an explicitly injected provider.
             # These rows are sealed only after exact grounding below; an
             # effective production provider can never enter this branch.
             legacy_concept_ids.update(batch_ids)
-        progress.log(
-            "Phase 3.2 independently verified topology decisions for "
-            f"{len(batch_ids)} concept(s) in batch {batch_index}.",
-            level="success",
-        )
+        for concept_id, notes in batch_flags.items():
+            decision = accepted.get(concept_id)
+            if isinstance(decision, dict) and notes:
+                decision["review_flags"] = [
+                    *(decision.get("review_flags") or []), *notes,
+                ]
+        if not batch_flags:
+            progress.log(
+                "Phase 3.2 independently verified topology decisions for "
+                f"{len(batch_ids)} concept(s) in batch {batch_index}.",
+                level="success",
+            )
         decisions.update(accepted)
 
     repaired = _apply_decisions(

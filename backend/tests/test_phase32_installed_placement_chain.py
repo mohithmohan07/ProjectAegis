@@ -242,7 +242,7 @@ def test_installed_phase37_missing_relationship_review_fails_closed(monkeypatch)
         critic=incomplete_review,
     )
 
-    with pytest.raises(semantic_recovery.HumanDecisionRequired, match=""):
+    with pytest.raises(semantic_recovery.ProviderResponseContractError):
         phase32.adjudicate_topology(
             [_record()],
             graph=graph,
@@ -330,7 +330,7 @@ def test_installed_phase37_split_cannot_drop_protected_source_inventory(
         }
 
     calls = _install_fake_phase37_transport(monkeypatch, provider=lossy_split)
-    with pytest.raises(semantic_recovery.HumanDecisionRequired):
+    with pytest.raises(semantic_recovery.ProviderResponseContractError):
         phase32.adjudicate_topology(
             [_record(protected=True)],
             graph=graph,
@@ -341,9 +341,9 @@ def test_installed_phase37_split_cannot_drop_protected_source_inventory(
             grounding_critic=_grounding_critic,
         )
 
-    # Source-survival loss is a semantic rejection, so it receives no
-    # mechanical provider-contract retry and never reaches the critic.
-    assert calls == ["provider"]
+    # Source-survival loss fails closed after its bounded provider
+    # corrections and never reaches the critic.
+    assert calls == ["provider", "provider", "provider"]
 
 
 def test_installed_split_partitions_qid_figure_image_and_katex_exactly_once(

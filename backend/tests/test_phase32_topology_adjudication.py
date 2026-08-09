@@ -486,12 +486,13 @@ def test_explicit_provider_cannot_omit_relationships_in_live_mode(monkeypatch):
             grounding_critic=_verified_grounding_review,
         )
 
-    assert calls == 2
+    assert calls == 3
 
 
-def test_critic_disagreement_pauses_then_resume_uses_one_directed_pair(
+def test_critic_disagreement_ships_the_split_with_dissent_flags(
     monkeypatch,
 ):
+    """Decide-once: the critic's rejection is a review flag, not a pause."""
     graph, canonical = _graph_and_canonical()
     monkeypatch.setenv("AEGIS_SEMANTIC_ACCEPTANCE_MIN_CONFIDENCE", "0.90")
     provider_calls = 0
@@ -500,68 +501,35 @@ def test_critic_disagreement_pauses_then_resume_uses_one_directed_pair(
     def provider(payload: dict) -> dict:
         nonlocal provider_calls
         provider_calls += 1
-        if provider_calls == 2:
-            assert payload["human_resolutions"][0]["choice"] == (
-                "accept_recommended"
-            )
-            assert "durable boundary" in (
-                payload["human_resolutions"][0]["critic_feedback"]["conflict"]
-            )
         return _split_response(payload)
 
     def critic(payload: dict) -> dict:
         nonlocal critic_calls
         critic_calls += 1
-        if critic_calls == 1:
-            concept_id = payload["concepts"][0]["concept_id"]
-            return {
-                "verdict": "rejected",
-                "confidence": 0.91,
-                "accepted_concept_ids": [],
-                "rejected_concept_ids": [concept_id],
-                "issues": [
-                    "The split needs a human decision on the durable boundary."
-                ],
-            }
-        return _verified_topology_review(payload)
+        concept_id = payload["concepts"][0]["concept_id"]
+        return {
+            "verdict": "rejected",
+            "confidence": 0.91,
+            "accepted_concept_ids": [],
+            "rejected_concept_ids": [concept_id],
+            "issues": [
+                "The split needs a human decision on the durable boundary."
+            ],
+        }
 
-    with pytest.raises(semantic_recovery.HumanDecisionRequired) as paused:
-        phase32.adjudicate_topology(
-            [_combined_record()],
-            graph=graph,
-            canonical=canonical,
-            provider=provider,
-            critic=critic,
-            grounding_provider=_grounding_provider,
-            grounding_critic=_verified_grounding_review,
-        )
+    repaired = phase32.adjudicate_topology(
+        [_combined_record()],
+        graph=graph,
+        canonical=canonical,
+        provider=provider,
+        critic=critic,
+        grounding_provider=_grounding_provider,
+        grounding_critic=_verified_grounding_review,
+    )
 
+    # One judgment each; the split stands; no escalation, no second pair.
     assert provider_calls == 1
     assert critic_calls == 1
-    pending = paused.value.pending_decision
-    recommended = next(
-        option for option in pending["options"]
-        if option["choice"] == "accept_recommended"
-    )
-    resolution = {
-        **copy.deepcopy(pending),
-        "choice": "accept_recommended",
-        "target_id": recommended["target_id"],
-        "instruction": "",
-    }
-    with phase33.human_resolution_context([resolution]):
-        repaired = phase32.adjudicate_topology(
-            [_combined_record()],
-            graph=graph,
-            canonical=canonical,
-            provider=provider,
-            critic=critic,
-            grounding_provider=_grounding_provider,
-            grounding_critic=_verified_grounding_review,
-        )
-
-    assert provider_calls == 2
-    assert critic_calls == 2
     assert [row["_phase32_topology_decision"] for row in repaired] == [
         "split",
         "split",
@@ -580,7 +548,7 @@ def test_low_confidence_does_not_authorize_creation_of_a_new_concept(monkeypatch
         return response
 
     monkeypatch.setenv("AEGIS_PHASE32_TOPOLOGY_MAX_ATTEMPTS", "2")
-    with pytest.raises(semantic_recovery.HumanDecisionRequired) as paused:
+    with pytest.raises(semantic_recovery.ProviderResponseContractError) as failed:
         phase32.adjudicate_topology(
             [_combined_record()],
             graph=graph,
@@ -593,17 +561,9 @@ def test_low_confidence_does_not_authorize_creation_of_a_new_concept(monkeypatch
             grounding_critic=_verified_grounding_review,
         )
 
-    assert calls == 1
-    pending = paused.value.pending_decision
-    assert pending["kind"] == "phase32_concept_blueprint_semantic_conflict"
-    assert "topology confidence 0.720" in pending["conflict"]
-    assert "provider" in pending["diagnosis"].casefold()
-    assert "before independent review" in pending["diagnosis"].casefold()
-    assert {row["choice"] for row in pending["options"]} >= {
-        "select_candidate",
-        "replace_source",
-        "custom_instruction",
-    }
+    # The fixed floor holds; retries are bounded; the run FAILS, never pauses.
+    assert calls == 3
+    assert "topology confidence 0.720 is below 0.920" in str(failed.value)
 
 
 def test_lowered_env_cannot_send_rejected_topology_to_critic(monkeypatch):
@@ -624,7 +584,7 @@ def test_lowered_env_cannot_send_rejected_topology_to_critic(monkeypatch):
         raise AssertionError("critic must not rescue a rejected topology")
 
     monkeypatch.setenv("AEGIS_SEMANTIC_ACCEPTANCE_MIN_CONFIDENCE", "0.85")
-    with pytest.raises(semantic_recovery.HumanDecisionRequired) as paused:
+    with pytest.raises(semantic_recovery.ProviderResponseContractError) as failed:
         phase32.adjudicate_topology(
             [_combined_record()],
             graph=graph,
@@ -635,11 +595,9 @@ def test_lowered_env_cannot_send_rejected_topology_to_critic(monkeypatch):
             grounding_critic=_verified_grounding_review,
         )
 
-    assert provider_calls == 1
+    assert provider_calls == 3
     assert critic_calls == 0
-    assert "topology confidence 0.880 is below 0.920" in (
-        paused.value.pending_decision["conflict"]
-    )
+    assert "topology confidence 0.880 is below 0.920" in str(failed.value)
 
 
 def test_low_segment_confidence_pauses_without_a_retry_or_critic(monkeypatch):
@@ -660,7 +618,7 @@ def test_low_segment_confidence_pauses_without_a_retry_or_critic(monkeypatch):
         raise AssertionError("critic must not review a low-confidence segment")
 
     monkeypatch.setenv("AEGIS_PHASE32_TOPOLOGY_MAX_ATTEMPTS", "5")
-    with pytest.raises(semantic_recovery.HumanDecisionRequired) as paused:
+    with pytest.raises(semantic_recovery.ProviderResponseContractError) as failed:
         phase32.adjudicate_topology(
             [_combined_record()],
             graph=graph,
@@ -671,10 +629,9 @@ def test_low_segment_confidence_pauses_without_a_retry_or_critic(monkeypatch):
             grounding_critic=_verified_grounding_review,
         )
 
-    assert provider_calls == 1
+    assert provider_calls == 3
     assert critic_calls == 0
-    assert "segment 1 confidence 0.720" in paused.value.pending_decision["conflict"]
-    assert "provider" in paused.value.pending_decision["diagnosis"].casefold()
+    assert "segment 1 confidence 0.720" in str(failed.value)
     assert phase32._topology_parse_errors_are_mechanical([
         "TOPOLOGY-CONCEPT-0001 retirement confidence 0.950 is below 0.960"
     ]) is False
@@ -724,7 +681,7 @@ def test_keep_decision_cannot_silently_rewrite_the_existing_claim(monkeypatch):
         }
 
     monkeypatch.setenv("AEGIS_PHASE32_TOPOLOGY_MAX_ATTEMPTS", "1")
-    with pytest.raises(semantic_recovery.HumanDecisionRequired) as paused:
+    with pytest.raises(semantic_recovery.ProviderResponseContractError) as failed:
         phase32.adjudicate_topology(
             [record],
             graph=graph,
@@ -734,7 +691,7 @@ def test_keep_decision_cannot_silently_rewrite_the_existing_claim(monkeypatch):
             grounding_provider=_grounding_provider,
             grounding_critic=_verified_grounding_review,
         )
-    assert "keep decision rewrote" in paused.value.pending_decision["conflict"]
+    assert "keep decision rewrote" in str(failed.value)
 
 
 def test_verified_topology_and_grounding_are_reused_from_cache(tmp_path):
@@ -801,7 +758,7 @@ def test_verified_topology_and_grounding_are_reused_from_cache(tmp_path):
     assert (tmp_path / phase32._CACHE_FILENAME).exists()
 
 
-def test_exact_grounding_must_pass_before_repaired_topology_can_freeze():
+def test_grounding_dissent_ships_flagged_when_repaired_topology_freezes():
     graph, canonical = _graph_and_canonical()
 
     def rejected_grounding(payload: dict) -> dict:
@@ -814,17 +771,26 @@ def test_exact_grounding_must_pass_before_repaired_topology_can_freeze():
             "issues": ["The repaired claim still lacks exact block support."],
         }
 
-    with pytest.raises(semantic_recovery.HumanDecisionRequired) as paused:
-        phase32.adjudicate_topology(
-            [_combined_record()],
-            graph=graph,
-            canonical=canonical,
-            provider=_split_response,
-            critic=_verified_topology_review,
-            grounding_provider=_grounding_provider,
-            grounding_critic=rejected_grounding,
-        )
-    assert paused.value.pending_decision["kind"] == (
-        "phase31_source_grounding_semantic_conflict"
+    repaired = phase32.adjudicate_topology(
+        [_combined_record()],
+        graph=graph,
+        canonical=canonical,
+        provider=_split_response,
+        critic=_verified_topology_review,
+        grounding_provider=_grounding_provider,
+        grounding_critic=rejected_grounding,
     )
-    assert "lacks exact block support" in paused.value.pending_decision["conflict"]
+
+    # Decide once: the exact-grounding critic's dissent no longer blocks the
+    # repaired topology from freezing — every segment ships with its verified
+    # block bindings and the dissent recorded as review flags.
+    assert [row["_phase32_topology_decision"] for row in repaired] == [
+        "split",
+        "split",
+    ]
+    for row in repaired:
+        assert row["_source_block_ids"]
+        assert any(
+            "lacks exact block support" in flag
+            for flag in row["_grounding_review_flags"]
+        )
