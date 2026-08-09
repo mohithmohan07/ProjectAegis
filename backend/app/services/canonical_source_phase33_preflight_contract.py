@@ -4472,11 +4472,31 @@ def _resolve_host_plan(
                 qid_contracts=qid_contracts,
             )
             if placement_errors:
-                raise ProviderResponseContractError(
+                # A wrong-topic evidence citation or malformed relationship is
+                # a mechanical contract defect like any other: it gets the
+                # same bounded corrections before the contract fails closed.
+                last_errors = [
                     "type_host_placement_uncertified: provider host mutation "
-                    "contract failed closed: "
-                    + "; ".join(placement_errors[:8])
+                    "contract: " + error
+                    for error in placement_errors
+                ]
+                progress.log(
+                    "Phase 3.3 host-mutation contract correction "
+                    f"{attempt}/{attempts} for "
+                    f"{str(topic.get('title') or topic_id)!r} requires "
+                    "correction: " + "; ".join(placement_errors[:5]),
+                    level="warning",
                 )
+                contract_feedback = [
+                    "Your host mutation output failed its mechanical "
+                    "placement contract. Fix EXACTLY the defects below and "
+                    "return the corrected full response. Evidence for a "
+                    "relationship to topic T must cite blocks that belong "
+                    "to T itself — never the block where the claim or task "
+                    "is printed.",
+                    *placement_errors[:6],
+                ]
+                continue
             proposed_relationships, relationship_evidence = (
                 _host_mutation_critic_packet(
                     specs,
