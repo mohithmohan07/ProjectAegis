@@ -46,6 +46,19 @@ ANALYSIS_SYSTEM = _SHARED + (
     "reasoning step, not another belief."
 )
 
+HOST_SYSTEM = _SHARED + (
+    " Task: certify one host concept per assignment unit. Response "
+    "schema: {\"assignments\": [{\"unit_id\", \"decision\": "
+    "\"existing|create_new\", \"host_concept_title\", \"confidence\", "
+    "\"reason\", \"new_concept\": {\"concept_title\", \"parent_concept\", "
+    "\"concept_details\", \"keywords\", \"source_block_ids\", "
+    "\"_semantic_topic_id\"}}]}. For decision existing, "
+    "host_concept_title must be the EXACT title of a settled concept "
+    "from the request. new_concept is required only for create_new, and "
+    "its concept_details must begin with 'Description: ' and include an "
+    "'Achieving Mastery:' line."
+)
+
 CRITIC_SYSTEM = _SHARED + (
     " Task: independently audit the proposed_decision in the request "
     "against the source blocks. Response schema: {\"verdict\": "
