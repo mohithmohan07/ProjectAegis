@@ -175,10 +175,24 @@ ported.** Any assembly inconsistency is a bug in our code and raises
 immediately — there is no provider to correct.
 
 ### Pass 4 — Release
-Projects store + envelope into the workbook: Released Concepts (with a
-Review Flags column), Type/Case Routing, Issues, Manifest. Identical shape
-whether the run completed or failed; the only difference is the attached
-failure record.
+Projects store + envelope into the review workbook: Released Concepts (with
+a Review Flags column), Type/Case Routing, Issues, Manifest. Identical
+shape whether the run completed or failed; the only difference is the
+attached failure record.
+
+**Terminal output format is the house bulk-import format.** Explicit
+publication ("Upload to Database") continues to write concepts into the
+platform database and to append them to
+`backend/data/bulk_import_database.xlsx` via `app/bulk_import/writer
+.append_concepts` — the Objective-sheet Chapter/Topic/Concept bands, one
+row per concept placement, idempotent refresh, merged `concept_source`.
+Pass 4's released rows MUST remain consumable by that exact chain
+(`clean_concept_record` → `_find_or_create_topic`/`_add_concept` →
+`writer.append_concepts`) unchanged: `topic`, `concept_title`,
+`parent_concept`, `concept_details` (Description / Achieving Mastery //
+Misconception–Error Analysis), `keywords`. Group/Question columns of the
+bulk format stay owned by the question-generation pipeline, which consumes
+the released QID→concept routing.
 
 ## 7. What the new tree looks like
 
