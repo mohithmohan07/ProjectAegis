@@ -45,10 +45,16 @@ def run(
     use their live API adapters (failing closed if no API is live).
     """
 
+    from .. import progress
+
     env = envelope_mod.validate(env)
     store = kernel.DecisionStore(store_dir)
     injected = dict(providers or {})
 
+    progress.step(
+        "Phase 3 — Settle: topology, grounding, and learner analysis",
+        value=0.82,
+    )
     settled = settle_mod.settle(
         env,
         topology_provider=injected.get("topology"),
@@ -57,12 +63,20 @@ def run(
         critic=injected.get("critic"),
         store=store,
     )
+    progress.step(
+        "Phase 3 — Host: certifying Type/Case and QID hosts", value=0.91
+    )
     hosts = host_mod.host(
         env,
         settled,
         provider=injected.get("host"),
         critic=injected.get("critic"),
         store=store,
+    )
+    progress.step(
+        "Phase 3 — Assemble: embedding Types and routing QIDs "
+        "(deterministic)",
+        value=0.96,
     )
     assembled = assemble_mod.assemble(env, settled, hosts)
 

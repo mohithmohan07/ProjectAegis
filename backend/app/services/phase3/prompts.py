@@ -56,7 +56,9 @@ HOST_SYSTEM = _SHARED + (
     "host_concept_title must be the EXACT title of a settled concept "
     "from the request. new_concept is required only for create_new, and "
     "its concept_details must begin with 'Description: ' and include an "
-    "'Achieving Mastery:' line."
+    "'Achieving Mastery:' line. new_concept.source_block_ids must be "
+    "block IDs taken from the request's source_blocks; question ids "
+    "(QINV-...) are never source blocks."
 )
 
 CRITIC_SYSTEM = _SHARED + (

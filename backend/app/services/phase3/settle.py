@@ -14,6 +14,7 @@ from typing import Any, Callable, Mapping
 from . import envelope as envelope_mod
 from . import kernel
 from .. import concept_refiner as cr
+from .. import progress
 from .. import semantic_confidence_policy as confidence_policy
 
 _BATCH_SIZE = 12
@@ -404,6 +405,11 @@ def settle(
     for index, row in enumerate(normal_rows, start=1):
         row["concept_id"] = f"TOPOLOGY-CONCEPT-{index:04d}"
 
+    progress.log(
+        f"Settle: deciding {len(normal_rows)} concept(s) across "
+        f"{len(topics)} topic(s); {len(culmination_rows)} culmination "
+        "recap(s) will be derived without model calls.",
+    )
     settled: list[dict[str, Any]] = []
     flags_by_row: dict[int, list[str]] = {}
 
@@ -635,6 +641,21 @@ def settle(
                     + body
                 )
 
+        topic_flag_count = sum(
+            1
+            for index in flags_by_row
+            if len(settled) <= index < len(settled) + len(topic_settled)
+        )
+        progress.log(
+            f"Settle: {topic_title!r} settled — {len(topic_settled)} "
+            "concept(s) decided, grounded, and analysed"
+            + (
+                f"; {topic_flag_count} carrying review flags."
+                if topic_flag_count
+                else "."
+            ),
+            level="success",
+        )
         settled.extend(topic_settled)
 
         # -- culminations: derived, never decided ------------------------

@@ -194,6 +194,65 @@ def test_a_fabricated_host_title_fails_closed_after_bounded_corrections(
     assert "not a settled concept title" in str(failed.value)
 
 
+def test_host_requests_carry_the_citable_source_blocks(
+    golden_envelope, settled_rows, golden_hosts,
+):
+    """Job 24 failed closed because create_new had no blocks to cite."""
+    inner = _replay_provider(golden_hosts, settled_rows)
+    seen: list[dict] = []
+
+    def provider(request: dict) -> dict:
+        seen.append(request)
+        return inner(request)
+
+    host_mod.host(
+        golden_envelope, settled_rows,
+        provider=provider, critic=_verified_critic,
+        store=kernel.DecisionStore(),
+    )
+
+    assert seen
+    for request in seen:
+        blocks = request["source_blocks"]
+        assert blocks and all(row["block_id"] for row in blocks)
+        assert any(row["text"] for row in blocks)
+
+
+def test_a_qid_cited_as_a_source_block_gets_the_question_id_hint(
+    golden_envelope, settled_rows,
+):
+    def qid_citing(request: dict) -> dict:
+        return {"assignments": [
+            {
+                "unit_id": unit["unit_id"],
+                "decision": "create_new",
+                "confidence": 0.99,
+                "reason": "fabricated grounding",
+                "new_concept": {
+                    "concept_title": "A Brand New Concept",
+                    "parent_concept": "Methods",
+                    "concept_details": (
+                        "Description: A new idea.\nAchieving Mastery: Do it."
+                    ),
+                    "keywords": "new",
+                    "source_block_ids": ["QINV-0014"],
+                },
+            }
+            for unit in request["units"]
+        ]}
+
+    with pytest.raises(kernel.ContractError) as failed:
+        host_mod.host(
+            golden_envelope, settled_rows,
+            provider=qid_citing, critic=_verified_critic,
+            store=kernel.DecisionStore(),
+        )
+
+    message = str(failed.value)
+    assert "QINV-0014" in message
+    assert "question ids" in message
+
+
 def test_critic_dissent_flags_the_host_entries(
     golden_envelope, settled_rows, golden_hosts,
 ):
