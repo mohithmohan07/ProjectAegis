@@ -37,6 +37,51 @@ def _normalize_literal_linebreaks(value: str) -> str:
     return _LITERAL_LINEBREAK_RE.sub("\n", str(value or ""))
 
 
+def _run_rewritten_phase3(
+    generation: ModuleType,
+    out: list[dict],
+    kwargs: dict[str, Any],
+) -> list[dict]:
+    """Route everything after the 81% boundary through the rewritten Phase 3.
+
+    Seals the boundary envelope from exactly the material this seam holds
+    (docs/phase3-rewrite-spec.md §3), runs Settle → Host → Assemble with
+    the decision store in the job's artifact directory, and returns the
+    assembled rows — Types embedded in the house format, QIDs routed —
+    for the unchanged deposit and release chain downstream.
+    """
+    from pathlib import Path
+
+    from . import canonical_source_phase3 as phase3_core
+    from .phase3 import envelope as p3_envelope
+    from .phase3 import runner as p3_runner
+
+    session = phase3_core.active_session() or {}
+    env = p3_envelope.build(
+        graph=phase3_core.active_graph() or {},
+        canonical=session.get("canonical") or {},
+        skeleton_rows=list(out),
+        inventory=kwargs.get("question_task_inventory") or {},
+        mined_types=kwargs.get("mined_types") or {},
+        metadata=kwargs.get("meta") or {},
+    )
+    store_dir = None
+    artifact_dir = session.get("artifact_dir")
+    if artifact_dir:
+        store_dir = Path(artifact_dir) / "phase3-decisions"
+    result = p3_runner.run(env, store_dir=store_dir)
+    summary = result["summary"]
+    generation.progress.log(
+        "Rewritten Phase 3 complete: "
+        f"{summary['row_count']} row(s) settled and assembled, "
+        f"{summary['routed_qids']} QID(s) routed, "
+        f"{summary['unrouted_items']} inventory item(s) unrouted, "
+        f"{summary['flagged_row_count']} row(s) carrying review flags.",
+        level="success",
+    )
+    return result["records"]
+
+
 def _topology_signature(generation: ModuleType, records: list[dict]) -> tuple:
     """Semantic row topology, excluding every renderable Type/Hub field."""
     return tuple(
@@ -489,6 +534,10 @@ def install(generation: ModuleType) -> None:
 
     @wraps(generation._TOPOLOGY_CONTRACT_ORIGINAL_PREPARE)
     def prepare_final(out: list[dict], **kwargs):
+        from .phase3 import runner as p3_runner
+
+        if p3_runner.rewrite_enabled():
+            return _run_rewritten_phase3(generation, out, kwargs)
         real_inventory = kwargs["question_task_inventory"]
         real_mined_types = kwargs["mined_types"]
         generation._reset_placement_certifications(real_mined_types)
