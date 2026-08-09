@@ -174,6 +174,24 @@ re-verification tail (3.4–3.11) has nothing to verify and is deleted, not
 ported.** Any assembly inconsistency is a bug in our code and raises
 immediately — there is no provider to correct.
 
+**Types are embedded in the concept detailing.** Assemble renders each
+hosted Type/Case into the concept's `concept_details` as the house
+`// Types:` section, exactly as today's output format:
+
+```
+Description: … 
+Achieving Mastery: … // Types: Type 01: <type_title> — <type_definition>
+Case 01: <case_definition> Example: <example prompt> Type 02: … //
+Misconception/ Error Analysis: …
+```
+
+Every field in that section — Type titles, definitions, Case definitions,
+example prompts — already exists in the envelope's `mined_types` and
+`inventory`, and which concept carries which Type comes from the Pass 2
+host map. Rendering it is therefore pure string assembly with no model
+call, and the golden gate compares the rendered section against the
+reference output.
+
 ### Pass 4 — Release
 Projects store + envelope into the review workbook: Released Concepts (with
 a Review Flags column), Type/Case Routing, Issues, Manifest. Identical
