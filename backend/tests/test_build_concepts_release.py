@@ -384,6 +384,47 @@ def test_failure_release_prefers_validated_topology_cache(
     )
 
 
+def test_failure_release_reads_the_rewritten_settled_rows_snapshot(
+    db, tmp_path, monkeypatch,
+):
+    """Job 26: the new path's settled rows must reach a failure release."""
+    from app.services import canonical_source_phase3 as phase3_core
+
+    job, chapter = _job(db)
+    monkeypatch.setattr(
+        release.generation,
+        "_newest_compatible_concept_checkpoint",
+        lambda _envelope: {"records": []},
+    )
+    rows = _validated_cache_rows()
+    (tmp_path / release._SETTLED_ROWS_ARTIFACT).write_text(
+        json.dumps({
+            "records": rows,
+            "records_sha256": phase3_core._sha256_json(rows),
+            "source_contract_hash": "CONTRACT-1",
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        release.uploads,
+        "source_artifact_directory",
+        lambda _job_id: str(tmp_path),
+        raising=False,
+    )
+
+    release.stage_release(
+        db,
+        job,
+        target_chapter_id=chapter.id,
+        error=RuntimeError("host.units decision failed closed"),
+        reason="Generation failed after creating a durable checkpoint.",
+    )
+
+    payload = release.release_payload(job)
+    titles = [row["concept_title"] for row in payload["records"]]
+    assert "Validated Cached Concept" in titles
+
+
 def test_captured_final_rows_are_never_overridden_by_cache(
     db, tmp_path, monkeypatch,
 ):
