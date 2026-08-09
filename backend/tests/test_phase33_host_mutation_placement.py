@@ -545,8 +545,11 @@ def test_fabricated_or_wrong_topic_provider_evidence_fails_before_critic(mode):
         ["QINV-0001"]
     )
     critic_calls = 0
+    provider_calls = 0
 
     def provider(_payload: dict) -> dict:
+        nonlocal provider_calls
+        provider_calls += 1
         block_id = "BLK-NOT-REAL" if mode == "fabricated_block" else "BLK-A"
         return {
             "assignments": [{
@@ -587,7 +590,7 @@ def test_fabricated_or_wrong_topic_provider_evidence_fails_before_critic(mode):
 
     with pytest.raises(
         phase33.ProviderResponseContractError,
-        match="failed closed",
+        match="type_host_placement_uncertified",
     ):
         phase33._resolve_host_plan(
             graph=graph,
@@ -603,7 +606,86 @@ def test_fabricated_or_wrong_topic_provider_evidence_fails_before_critic(mode):
             block_directory=directory,
             qid_contracts=qid_contracts,
         )
+    # Bad evidence gets the same bounded mechanical corrections as any other
+    # contract defect (job 23 died on attempt 1 of this exact case), and only
+    # then fails closed — without the critic ever seeing the bad citation.
+    assert provider_calls == 3
     assert critic_calls == 0
+
+
+def test_wrong_topic_evidence_is_recovered_by_one_bounded_correction():
+    """Job 23 died on one cross-topic citation with zero re-asks.
+
+    The same defect now costs one corrected provider round: the model is told
+    exactly which relationship cited a block from the wrong topic, returns the
+    fixed response, and the plan certifies normally.
+    """
+    authority, qid_contracts, graph, order, directory = _placement_authority(
+        ["QINV-0001", "QINV-0002"]
+    )
+    units = [_unit(["QINV-0002", "QINV-0001"])]
+    provider_calls = 0
+
+    def provider(payload: dict) -> dict:
+        nonlocal provider_calls
+        provider_calls += 1
+        relationships = _relationships()
+        if provider_calls == 1:
+            # TOPIC-B's core-teaching relationship cites TOPIC-A's block —
+            # the exact defect that killed job 23.
+            relationships[1]["evidence_block_ids"] = ["BLK-A", "BLK-B2"]
+        else:
+            feedback = payload.get("response_contract_feedback") or []
+            assert any("BLK-A" in str(row) for row in feedback)
+        return {
+            "assignments": [{
+                "assignment_unit_id": "UNIT-1",
+                "decision": "create_new",
+                "existing_concept_id": "NONE",
+                "new_concept_key": "NEW-HOST-0001",
+                "confidence": 0.999,
+                "reason": "No current host teaches the complete method.",
+            }],
+            "new_concepts": [{
+                "new_concept_key": "NEW-HOST-0001",
+                "topic_id": "TOPIC-B",
+                "concept_title": "Applying the Cumulative Method",
+                "parent_concept": "Methods",
+                "description": (
+                    "The cumulative method uses the foundational quantity "
+                    "to determine the result."
+                ),
+                "achieving_mastery": (
+                    "Apply the cumulative method to determine a result."
+                ),
+                "keywords": ["cumulative", "result"],
+                "source_block_ids": ["BLK-B1", "BLK-B2"],
+                "topic_relationships": relationships,
+                "assignment_unit_ids": ["UNIT-1"],
+                "confidence": 0.999,
+                "reason": "The source supports a distinct durable method.",
+            }],
+            "existing_concept_updates": [],
+        }
+
+    plan = phase33._resolve_host_plan(
+        graph=graph,
+        topic_id="TOPIC-B",
+        topic=graph["topics"][1],
+        units=units,
+        concepts=[],
+        source_blocks=_source_blocks(directory),
+        provider=provider,
+        critic=_accepted_review,
+        placement_authority=authority,
+        placement_order=order,
+        block_directory=directory,
+        qid_contracts=qid_contracts,
+    )
+
+    assert provider_calls == 2
+    contract = plan["new_concepts"][0]["_placement_contract"]
+    assert contract["owner_topic_id"] == "TOPIC-B"
 
 
 def test_conflicting_qid_owners_fail_before_host_critic():

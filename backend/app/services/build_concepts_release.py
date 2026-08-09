@@ -18,6 +18,7 @@ import copy
 import json
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 from sqlalchemy.orm import Session
@@ -612,6 +613,69 @@ def _release_summary(
     }
 
 
+_FINAL_TOPOLOGY_ARTIFACT = "source.phase31-final-topology-cache.json"
+
+
+def _learner_analysis_count(rows: Iterable[Mapping[str, Any]]) -> int:
+    return sum(
+        1
+        for row in rows
+        if isinstance(row, Mapping)
+        and "misconception" in _normal(row.get("concept_details")).casefold()
+    )
+
+
+def _validated_artifact_topology(
+    job: models.UploadJob,
+    current_rows: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]] | None:
+    """Return the validated final-topology rows when they beat the checkpoint.
+
+    Job 23 failed after caching a fully validated topology (every normal
+    concept carrying complete learner analysis) and then released the older
+    81% checkpoint rows without any learner analysis. A failure release must
+    ship the most complete rows the run actually produced and verified.
+    """
+    helper = getattr(uploads, "source_artifact_directory", None)
+    if not callable(helper) or not getattr(job, "id", None):
+        return None
+    try:
+        path = (
+            Path(helper(int(job.id))).resolve() / _FINAL_TOPOLOGY_ARTIFACT
+        )
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(raw, Mapping):
+        return None
+    rows = raw.get("records")
+    if not isinstance(rows, list) or not rows:
+        return None
+    from . import canonical_source_phase3 as phase3
+
+    if raw.get("records_sha256") != phase3._sha256_json(rows):
+        return None
+    cache_contract = str(raw.get("source_contract_hash") or "")
+    current_contracts = {
+        str(row.get("_semantic_graph_contract") or "")
+        for row in current_rows
+        if isinstance(row, Mapping)
+        and row.get("_semantic_graph_contract")
+    }
+    if cache_contract and current_contracts and (
+        cache_contract not in current_contracts
+    ):
+        return None
+    candidate = [
+        copy.deepcopy(dict(row)) for row in rows if isinstance(row, Mapping)
+    ]
+    if _learner_analysis_count(candidate) <= _learner_analysis_count(
+        current_rows
+    ):
+        return None
+    return candidate
+
+
 def stage_release(
     db: Session,
     job: models.UploadJob,
@@ -641,6 +705,12 @@ def stage_release(
         for row in (records if records is not None else checkpoint_records)
         if isinstance(row, Mapping)
     ]
+    upgraded_from_cache = False
+    if records is None:
+        validated = _validated_artifact_topology(job, record_rows)
+        if validated is not None:
+            record_rows = validated
+            upgraded_from_cache = True
     inventory_value = copy.deepcopy(
         dict(inventory)
         if isinstance(inventory, Mapping)
@@ -679,6 +749,18 @@ def stage_release(
                 "diagnostic context."
             ),
             phase="release",
+        ))
+    if upgraded_from_cache:
+        issues.append(_issue(
+            code="release_rows_upgraded_from_validated_cache",
+            message=(
+                "The released rows come from the validated final concept "
+                "topology this run cached (complete learner analysis "
+                "included), which is more complete than the newest durable "
+                "checkpoint rows."
+            ),
+            phase="release",
+            severity="info",
         ))
 
     annotated = _annotate_records(record_rows, issues, routes)
