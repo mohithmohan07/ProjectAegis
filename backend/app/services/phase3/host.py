@@ -171,9 +171,17 @@ def _host_checker(
                     )
                 unknown = [b for b in blocks if b not in known_block_ids]
                 if unknown:
+                    hint = ""
+                    if any(b.upper().startswith("QINV") for b in unknown):
+                        hint = (
+                            " (QINV ids are question ids, never source "
+                            "blocks; cite BLK ids from the request's "
+                            "source_blocks)"
+                        )
                     defects.append(
                         f"{unit_id} new_concept cites unknown block(s): "
                         + ", ".join(unknown[:4])
+                        + hint
                     )
             else:
                 defects.append(
@@ -253,6 +261,24 @@ def host(
         }
         for row in settled_rows
     ]
+    # A create_new decision must cite exact source blocks, so the model
+    # sees every block it may cite (job 24 failed closed here because the
+    # payload carried none and the model could only fabricate).
+    text_by_id = {
+        str(row.get("block_id") or ""): str(row.get("display_text") or "")
+        for row in env["canonical"]["blocks"]
+        if isinstance(row, Mapping)
+    }
+    blocks_payload = [
+        {
+            "block_id": str(row.get("block_id") or ""),
+            "topic_id": str(row.get("topic_id") or ""),
+            "kind": str(row.get("kind") or ""),
+            "text": text_by_id.get(str(row.get("block_id") or ""), "")[:400],
+        }
+        for row in env["graph"]["blocks"]
+        if isinstance(row, Mapping) and str(row.get("block_id") or "")
+    ]
 
     for start in range(0, len(units), _BATCH_SIZE):
         batch = units[start:start + _BATCH_SIZE]
@@ -278,6 +304,7 @@ def host(
                 for row in batch
             ],
             "settled_concepts": concepts_payload,
+            "source_blocks": blocks_payload,
         }
         decision = kernel.decide(
             kind="host.units",
