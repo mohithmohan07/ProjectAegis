@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import copy
 import json
-import os
 import re
 import time
 from functools import wraps
@@ -129,16 +128,6 @@ _GROUNDING_STOPWORDS = {
     "these", "they", "this", "through", "under", "very", "were", "what",
     "when", "where", "which", "while", "with", "would",
 }
-
-
-def _max_grounding_attempts() -> int:
-    return max(
-        1,
-        min(
-            5,
-            int(os.environ.get("AEGIS_PHASE3_GROUNDING_MAX_ATTEMPTS", "3")),
-        ),
-    )
 
 
 def _normal(value: object) -> str:
@@ -1740,6 +1729,9 @@ def _apply_proposals(
         records[index]["_source_grounding_confidence"] = float(
             proposal["confidence"]
         )
+        flags = [str(flag) for flag in proposal.get("review_flags") or []]
+        if flags:
+            records[index]["_grounding_review_flags"] = flags
 
 
 def _apply_deterministic_topic_grounding(
@@ -2074,26 +2066,21 @@ def ground_concepts(
                 for concept_id in sorted(unresolved & deferred)
                 if concept_id not in resolutions
             ]
+            # Decide-once: an earlier round's deferral is decided fresh by
+            # this pass like any other concept, flagged for review.
+            grounding_flags: dict[str, list[str]] = {}
             if undecided_deferred:
-                packets = [
-                    _grounding_pending_decision(
-                        identity=gate_identities[concept_id],
-                        graph=graph,
-                        topic=topic,
-                        concept=concept_by_id[concept_id],
-                        candidates=gate_candidates[concept_id],
-                        source_blocks=source_blocks,
-                        issues=[
-                            "This concept was also rejected by the first "
-                            "independent grounding review and needs your "
-                            "bounded evidence decision."
-                        ],
-                        rejected_ids=undecided_deferred,
+                for concept_id in undecided_deferred:
+                    grounding_flags.setdefault(concept_id, []).append(
+                        "rejected by an earlier independent grounding "
+                        "review; decided fresh by this pass and flagged"
                     )
-                    for concept_id in undecided_deferred
-                ]
-                raise HumanDecisionRequired(
-                    packets[0], companions=packets[1:]
+                progress.log(
+                    "Phase 3.1 decide-once: "
+                    f"{len(undecided_deferred)} previously deferred "
+                    "concept(s) proceed with the fresh grounding, flagged "
+                    "for review instead of re-escalated.",
+                    level="warning",
                 )
 
             if unresolved:
@@ -2101,10 +2088,9 @@ def ground_concepts(
                     row for row in concepts
                     if str(row.get("concept_id") or "") in unresolved
                 ]
-                # A saved semantic direction receives one provider request and
-                # one independent critic request. Fresh mechanical schema/ID
-                # defects may receive one correction; semantic defects never do.
-                max_provider_attempts = 1 if directives else 2
+                # Bounded mechanical corrections only; semantic grounding
+                # itself never retries under decide-once.
+                max_provider_attempts = 2 if directives else 3
                 response: dict[str, Any] | None = None
                 parsed: dict[str, dict[str, Any]] = {}
                 parse_errors: list[str] = []
@@ -2145,40 +2131,17 @@ def ground_concepts(
                         ) == "human_review"
                     ]
                     if not parse_errors and review_band_ids:
-                        parse_errors = [
-                            f"{concept_id} confidence "
-                            f"{float(parsed[concept_id]['confidence']):.3f} is "
-                            "in the 0.900–0.919 human-review band"
-                            for concept_id in review_band_ids
-                        ]
+                        # Decide-once: review-band confidence is dissent,
+                        # not a defect. The grounding stands, flagged.
+                        for concept_id in review_band_ids:
+                            grounding_flags.setdefault(concept_id, []).append(
+                                "grounding confidence "
+                                f"{float(parsed[concept_id]['confidence']):.3f}"
+                                " is in the 0.900–0.919 human-review band; "
+                                "grounding stands, flagged"
+                            )
                     if not parse_errors:
                         break
-                    if (
-                        directives
-                        or not _grounding_parse_errors_are_mechanical(parse_errors)
-                    ):
-                        concept_id = next(
-                            (
-                                value for value in sorted(unresolved)
-                                if any(value in error for error in parse_errors)
-                            ),
-                            sorted(unresolved)[0],
-                        )
-                        raise HumanDecisionRequired(
-                            _grounding_pending_decision(
-                                identity=gate_identities[concept_id],
-                                graph=graph,
-                                topic=topic,
-                                concept=concept_by_id[concept_id],
-                                candidates=gate_candidates[concept_id],
-                                source_blocks=source_blocks,
-                                issues=parse_errors,
-                                rejected_ids=sorted(unresolved),
-                                resolution=resolutions.get(concept_id),
-                                proposal=response,
-                                diagnostic_source="provider",
-                            )
-                        )
                     if attempt < max_provider_attempts:
                         progress.log(
                             "Phase 3.1 grounding response had a mechanical "
@@ -2215,27 +2178,23 @@ def ground_concepts(
                             "evidence block(s): " + ", ".join(sorted(required_blocks))
                         )
                 if directed_issues:
-                    concept_id = next(
-                        (
-                            value for value in sorted(unresolved)
-                            if any(value in issue for issue in directed_issues)
-                        ),
-                        sorted(unresolved)[0],
-                    )
-                    raise HumanDecisionRequired(
-                        _grounding_pending_decision(
-                            identity=gate_identities[concept_id],
-                            graph=graph,
-                            topic=topic,
-                            concept=concept_by_id[concept_id],
-                            candidates=gate_candidates[concept_id],
-                            source_blocks=source_blocks,
-                            issues=directed_issues,
-                            rejected_ids=sorted(unresolved),
-                            resolution=resolutions.get(concept_id),
-                            proposal=response,
-                            diagnostic_source="provider",
+                    # Decide-once: an unhonoured directive is recorded on
+                    # the concept, never re-litigated.
+                    for issue in directed_issues:
+                        owner = next(
+                            (v for v in sorted(unresolved) if v in issue),
+                            sorted(unresolved)[0],
                         )
+                        grounding_flags.setdefault(owner, []).append(
+                            "saved directive not reflected by the fresh "
+                            f"grounding: {issue}"
+                        )
+                    progress.log(
+                        "Phase 3.1 decide-once: "
+                        f"{len(directed_issues)} saved directive(s) were not "
+                        "reflected by the fresh grounding; the grounding "
+                        "stands and the mismatches ship as review flags.",
+                        level="warning",
                     )
 
                 review_payload = {
@@ -2279,50 +2238,51 @@ def ground_concepts(
                     == "human_review"
                 )
                 if not state["verified"] or critic_review_band:
+                    # Decide-once: the provider's grounding stands; the
+                    # critic's dissent ships on each rejected concept as
+                    # review flags. Exact block IDs are already validated
+                    # deterministically at parse time, so what the critic
+                    # disputes here is semantic sufficiency — a judgement
+                    # the reviewer can weigh in the delivered output.
                     rejected = set(state["rejected"]) or set(unresolved)
                     issues = list(state["issues"]) or [
                         "critic verdict was "
                         + str(state.get("verdict") or "missing")
                     ]
                     confidence = float(state["confidence"])
-                    if early_gate.confidence_band(confidence) == "human_review":
-                        issues.insert(
-                            0,
-                            f"independent critic confidence {confidence:.3f} "
-                            "is in the 0.900–0.919 human-review band",
+                    issues.insert(
+                        0,
+                        f"independent critic confidence {confidence:.3f} "
+                        f"(band: {early_gate.confidence_band(confidence)}); "
+                        "grounding stands under decide-once and this "
+                        "dissent is recorded for review",
+                    )
+                    for concept_id in sorted(rejected):
+                        grounding_flags.setdefault(concept_id, []).extend(
+                            issues
                         )
-                    rejected_order = sorted(rejected)
+                        proposal = parsed.get(concept_id)
+                        if isinstance(proposal, dict):
+                            proposals[concept_id] = proposal
                     progress.log(
-                        "Phase 3.1 stopped after the first genuine semantic "
-                        "grounding disagreement; accepted concept IDs were "
-                        "cached and no semantic retry was started.",
+                        f"Phase 3.1 decided grounding for {len(unresolved)} "
+                        f"concept(s) for {topic_title!r} with critic dissent "
+                        f"on {len(rejected)} concept(s) recorded as review "
+                        "flags — no escalation, no replay.",
                         level="warning",
                     )
-                    # Independent conflicts settle together on one replay
-                    # rather than one replay each.
-                    packets = [
-                        _grounding_pending_decision(
-                            identity=gate_identities[concept_id],
-                            graph=graph,
-                            topic=topic,
-                            concept=concept_by_id[concept_id],
-                            candidates=gate_candidates[concept_id],
-                            source_blocks=source_blocks,
-                            issues=issues,
-                            rejected_ids=rejected_order,
-                            resolution=resolutions.get(concept_id),
-                            proposal=parsed,
-                        )
-                        for concept_id in rejected_order
-                    ]
-                    raise HumanDecisionRequired(
-                        packets[0], companions=packets[1:]
+                else:
+                    progress.log(
+                        "Phase 3 source grounding independently verified "
+                        f"{len(unresolved)} concept(s) for {topic_title!r}.",
+                        level="success",
                     )
-                progress.log(
-                    "Phase 3 source grounding independently verified "
-                    f"{len(unresolved)} concept(s) for {topic_title!r}.",
-                    level="success",
-                )
+                for concept_id, notes in grounding_flags.items():
+                    proposal = proposals.get(concept_id)
+                    if isinstance(proposal, dict) and notes:
+                        proposal["review_flags"] = [
+                            *(proposal.get("review_flags") or []), *notes,
+                        ]
 
             if set(proposals) != concept_ids:
                 raise ProviderResponseContractError(

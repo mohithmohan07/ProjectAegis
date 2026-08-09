@@ -205,7 +205,7 @@ def test_culmination_grounding_is_derived_from_verified_normal_concepts():
     )
 
 
-def test_critic_rejection_pauses_then_one_directed_pair_resumes(monkeypatch):
+def test_critic_rejection_ships_the_grounding_with_dissent_flags():
     graph, canonical = _source_graph()
     records = [_record(
         title="Economic Integration through the Zollverein",
@@ -220,24 +220,9 @@ def test_critic_rejection_pauses_then_one_directed_pair_resumes(monkeypatch):
     def provider(payload: dict) -> dict:
         nonlocal provider_calls
         provider_calls += 1
-        concept_id = payload["concepts"][0]["concept_id"]
-        block = "BLK-0001" if provider_calls == 1 else "BLK-0002"
-        if provider_calls == 2:
-            assert payload["human_resolutions"][0]["choice"] == (
-                "select_candidate"
-            )
-            selected_candidate = payload["human_resolutions"][0][
-                "selected_candidate"
-            ]
-            assert selected_candidate["action"] == "use_verified_evidence"
-            assert selected_candidate["source_block_ids"] == ["BLK-0002"]
-            assert selected_candidate["source_topic_id"] == "TOPIC-0001"
-            assert phase31.early_gate.candidate_binding_is_valid(
-                selected_candidate
-            )
         return {"concepts": [{
-            "concept_id": concept_id,
-            "source_block_ids": [block],
+            "concept_id": payload["concepts"][0]["concept_id"],
+            "source_block_ids": ["BLK-0001"],
             "confidence": 0.999,
             "reason": "Bounded source selection.",
         }]}
@@ -246,84 +231,42 @@ def test_critic_rejection_pauses_then_one_directed_pair_resumes(monkeypatch):
         nonlocal critic_calls
         critic_calls += 1
         concept_id = payload["concepts"][0]["concept_id"]
-        selected = payload["proposed_grounding"][0]["source_block_ids"]
-        if critic_calls == 1:
-            assert selected == ["BLK-0001"]
-            return {
-                "verdict": "rejected",
-                "confidence": 0.92,
-                "accepted_concept_ids": [],
-                "rejected_concept_ids": [concept_id],
-                "issues": [
-                    "The selected block discusses class structure, not the Zollverein."
-                ],
-            }
-        assert selected == ["BLK-0002"]
-        assert payload["human_resolutions"][0]["selected_candidate"][
-            "source_block_ids"
-        ] == ["BLK-0002"]
+        assert payload["proposed_grounding"][0]["source_block_ids"] == [
+            "BLK-0001"
+        ]
         return {
-            "verdict": "verified",
-            "confidence": 0.999,
-            "accepted_concept_ids": [concept_id],
-            "rejected_concept_ids": [],
-            "issues": [],
+            "verdict": "rejected",
+            "confidence": 0.92,
+            "accepted_concept_ids": [],
+            "rejected_concept_ids": [concept_id],
+            "issues": [
+                "The selected block discusses class structure, not the Zollverein."
+            ],
         }
 
-    monkeypatch.setenv("AEGIS_PHASE3_GROUNDING_MAX_ATTEMPTS", "3")
-    with pytest.raises(semantic_recovery.HumanDecisionRequired) as paused:
-        phase31.ground_concepts(
-            records,
-            graph=graph,
-            canonical=canonical,
-            provider=provider,
-            critic=critic,
-        )
+    grounded = phase31.ground_concepts(
+        records,
+        graph=graph,
+        canonical=canonical,
+        provider=provider,
+        critic=critic,
+    )
 
-    pending = paused.value.pending_decision
+    # Decide once: the provider's grounding stands and the critic's dissent
+    # ships on the row as review flags — no pause, no directed retry pair.
     assert provider_calls == 1
     assert critic_calls == 1
-    assert pending["kind"] == "phase31_source_grounding_semantic_conflict"
-    assert {row["choice"] for row in pending["options"]} >= {
-        "select_candidate",
-        "replace_source",
-        "custom_instruction",
-    }
-    selected = next(
-        row for row in pending["candidates"]
-        if "Zollverein" in row["coverage"]
+    assert grounded[0]["_source_block_ids"] == ["BLK-0001"]
+    flags = grounded[0]["_grounding_review_flags"]
+    assert any("class structure" in flag for flag in flags)
+    assert any(
+        "grounding stands under decide-once" in flag for flag in flags
     )
-    resolution = {
-        **copy.deepcopy(pending),
-        "choice": "select_candidate",
-        "target_id": selected["target_id"],
-        "instruction": "",
-    }
-    with phase33.human_resolution_context([resolution]):
-        grounded = phase31.ground_concepts(
-            records,
-            graph=graph,
-            canonical=canonical,
-            provider=provider,
-            critic=critic,
-        )
-
-    assert provider_calls == 2
-    assert critic_calls == 2
-    assert grounded[0]["_source_block_ids"] == ["BLK-0002"]
 
 
-def test_review_band_grounding_pauses_after_one_pair(monkeypatch):
+def test_review_band_critic_confidence_ships_flagged_not_paused():
     graph, canonical = _source_graph()
     records = [_record()]
-
-    def provider(payload: dict) -> dict:
-        return {"concepts": [{
-            "concept_id": payload["concepts"][0]["concept_id"],
-            "source_block_ids": ["BLK-0001"],
-            "confidence": 0.999,
-            "reason": "Candidate grounding.",
-        }]}
 
     provider_calls = 0
     critic_calls = 0
@@ -331,7 +274,12 @@ def test_review_band_grounding_pauses_after_one_pair(monkeypatch):
     def counted_provider(payload: dict) -> dict:
         nonlocal provider_calls
         provider_calls += 1
-        return provider(payload)
+        return {"concepts": [{
+            "concept_id": payload["concepts"][0]["concept_id"],
+            "source_block_ids": ["BLK-0001"],
+            "confidence": 0.999,
+            "reason": "Candidate grounding.",
+        }]}
 
     def review_band_critic(_payload: dict) -> dict:
         nonlocal critic_calls
@@ -342,20 +290,22 @@ def test_review_band_grounding_pauses_after_one_pair(monkeypatch):
             "issues": ["block does not support the causal claim"],
         }
 
-    monkeypatch.setenv("AEGIS_PHASE3_GROUNDING_MAX_ATTEMPTS", "5")
-    monkeypatch.setenv("AEGIS_SEMANTIC_ACCEPTANCE_MIN_CONFIDENCE", "0.90")
-    with pytest.raises(semantic_recovery.HumanDecisionRequired) as paused:
-        phase31.ground_concepts(
-            records,
-            graph=graph,
-            canonical=canonical,
-            provider=counted_provider,
-            critic=review_band_critic,
-        )
+    grounded = phase31.ground_concepts(
+        records,
+        graph=graph,
+        canonical=canonical,
+        provider=counted_provider,
+        critic=review_band_critic,
+    )
+
+    # A critic verdict in the 0.900–0.919 review band is dissent, not a
+    # defect: the grounding ships once with the band recorded as flags.
     assert provider_calls == 1
     assert critic_calls == 1
-    assert "0.900–0.919" in paused.value.pending_decision["diagnosis"]
-    assert "causal claim" in paused.value.pending_decision["conflict"]
+    assert grounded[0]["_source_block_ids"] == ["BLK-0001"]
+    flags = grounded[0]["_grounding_review_flags"]
+    assert any("0.910" in flag and "human_review" in flag for flag in flags)
+    assert any("causal claim" in flag for flag in flags)
 
 
 def test_lowered_env_cannot_send_rejected_grounding_to_critic(monkeypatch):
@@ -379,7 +329,9 @@ def test_lowered_env_cannot_send_rejected_grounding_to_critic(monkeypatch):
         raise AssertionError("critic must not rescue a rejected proposal")
 
     monkeypatch.setenv("AEGIS_SEMANTIC_ACCEPTANCE_MIN_CONFIDENCE", "0.85")
-    with pytest.raises(semantic_recovery.HumanDecisionRequired) as paused:
+    with pytest.raises(
+        semantic_recovery.ProviderResponseContractError
+    ) as failed:
         phase31.ground_concepts(
             [_record()],
             graph=graph,
@@ -388,11 +340,11 @@ def test_lowered_env_cannot_send_rejected_grounding_to_critic(monkeypatch):
             critic=critic_must_not_run,
         )
 
-    assert provider_calls == 1
+    # The 0.920 floor is fixed: a sub-floor proposal is a contract defect
+    # that fails closed after the bounded corrections, never a critic case.
+    assert provider_calls == 3
     assert critic_calls == 0
-    assert "confidence 0.880 is below 0.920" in (
-        paused.value.pending_decision["conflict"]
-    )
+    assert "confidence 0.880 is below 0.920" in str(failed.value)
 
 
 def test_critic_partition_contradiction_is_never_cached_as_accepted():
@@ -663,7 +615,7 @@ def test_rejected_compound_claim_exposes_late_blocks_and_exact_offsets():
     schemas.PendingSemanticDecision.model_validate(pending)
 
 
-def test_verified_multi_block_candidate_can_direct_one_safe_resume():
+def test_multi_block_candidates_stay_sealed_and_dissent_ships_flagged():
     graph, canonical = _source_graph()
     records = [_record(details=(
         "Description: A landed aristocracy dominated social and political "
@@ -704,16 +656,9 @@ def test_verified_multi_block_candidate_can_direct_one_safe_resume():
     def provider(payload: dict) -> dict:
         nonlocal provider_calls
         provider_calls += 1
-        concept_id = payload["concepts"][0]["concept_id"]
-        selected_ids = ["BLK-0001"]
-        if provider_calls == 2:
-            selected = payload["human_resolutions"][0]["selected_candidate"]
-            assert selected["source_block_ids"] == ["BLK-0001", "BLK-0002"]
-            assert phase31.early_gate.candidate_binding_is_valid(selected)
-            selected_ids = list(selected["source_block_ids"])
         return {"concepts": [{
-            "concept_id": concept_id,
-            "source_block_ids": selected_ids,
+            "concept_id": payload["concepts"][0]["concept_id"],
+            "source_block_ids": ["BLK-0001"],
             "confidence": 0.999,
             "reason": "Use the complete independently checked source set.",
         }]}
@@ -722,55 +667,34 @@ def test_verified_multi_block_candidate_can_direct_one_safe_resume():
         nonlocal critic_calls
         critic_calls += 1
         concept_id = payload["concepts"][0]["concept_id"]
-        if critic_calls == 1:
-            return {
-                "verdict": "rejected",
-                "confidence": 0.999,
-                "accepted_concept_ids": [],
-                "rejected_concept_ids": [concept_id],
-                "issues": [
-                    "BLK-0001 supports only the first clause; BLK-0002 is "
-                    "also required for the Zollverein clause."
-                ],
-            }
-        assert payload["proposed_grounding"][0]["source_block_ids"] == [
-            "BLK-0001",
-            "BLK-0002",
-        ]
-        return _verified_review(payload)
+        return {
+            "verdict": "rejected",
+            "confidence": 0.999,
+            "accepted_concept_ids": [],
+            "rejected_concept_ids": [concept_id],
+            "issues": [
+                "BLK-0001 supports only the first clause; BLK-0002 is "
+                "also required for the Zollverein clause."
+            ],
+        }
 
-    with pytest.raises(semantic_recovery.HumanDecisionRequired) as paused:
-        phase31.ground_concepts(
-            records,
-            graph=graph,
-            canonical=canonical,
-            provider=provider,
-            critic=critic,
-        )
-    pending = paused.value.pending_decision
-    selected_set = next(
-        row
-        for row in pending["candidates"]
-        if row["source_block_ids"] == ["BLK-0001", "BLK-0002"]
+    grounded = phase31.ground_concepts(
+        records,
+        graph=graph,
+        canonical=canonical,
+        provider=provider,
+        critic=critic,
     )
-    resolution = {
-        **copy.deepcopy(pending),
-        "choice": "select_candidate",
-        "target_id": selected_set["target_id"],
-        "instruction": "",
-    }
-    with phase33.human_resolution_context([resolution]):
-        grounded = phase31.ground_concepts(
-            records,
-            graph=graph,
-            canonical=canonical,
-            provider=provider,
-            critic=critic,
-        )
 
-    assert provider_calls == 2
-    assert critic_calls == 2
-    assert grounded[0]["_source_block_ids"] == ["BLK-0001", "BLK-0002"]
+    # Decide once: the missing-evidence dissent ships on the row as review
+    # flags instead of pausing for a candidate selection.
+    assert provider_calls == 1
+    assert critic_calls == 1
+    assert grounded[0]["_source_block_ids"] == ["BLK-0001"]
+    assert any(
+        "BLK-0002" in flag
+        for flag in grounded[0]["_grounding_review_flags"]
+    )
 
 
 def test_wrong_block_prose_cannot_rebind_a_sealed_evidence_candidate():
@@ -962,12 +886,44 @@ def test_complete_workspace_agent_maps_legacy_blk_to_current_binding(
         ) is None
 
 
-def test_unsupported_claim_can_be_sent_back_to_topology_without_grounding_retry():
+def test_saved_refine_directive_hands_off_to_topology_without_grounding_retry():
     graph, canonical = _source_graph()
     records = [_record(details=(
         "Description: The landed aristocracy controlled society and invented "
         "the Zollverein as a peasant parliament."
     ))]
+    _usable, source_blocks = phase31._candidate_blocks(
+        graph, canonical, "TOPIC-0001"
+    )
+    source_blocks = phase31._complete_source_block_payload(
+        graph, canonical, source_blocks
+    )
+    concepts, _ = phase31._concept_payload(records, [0])
+    concept = concepts[0]
+    candidates = phase31._grounding_candidates(
+        graph=graph,
+        concept=concept,
+        source_blocks=source_blocks,
+    )
+    identity = phase31._grounding_identity(
+        graph=graph,
+        topic=graph["topics"][0],
+        concept=concept,
+        candidates=candidates,
+        source_blocks=source_blocks,
+    )
+    refine = next(
+        row for row in candidates if row["action"] == "refine"
+    )
+    resolution = {
+        **identity,
+        "kind": "phase31_source_grounding_semantic_conflict",
+        "phase": "3.1",
+        "item": {"unit_id": concept["concept_id"]},
+        "choice": "select_candidate",
+        "target_id": refine["target_id"],
+        "instruction": "",
+    }
     provider_calls = 0
 
     def provider(payload: dict) -> dict:
@@ -980,37 +936,6 @@ def test_unsupported_claim_can_be_sent_back_to_topology_without_grounding_retry(
             "reason": "Candidate evidence.",
         }]}
 
-    def critic(payload: dict) -> dict:
-        concept_id = payload["concepts"][0]["concept_id"]
-        return {
-            "verdict": "rejected",
-            "confidence": 0.999,
-            "accepted_concept_ids": [],
-            "rejected_concept_ids": [concept_id],
-            "issues": [
-                f"{concept_id}: no source block supports the invented clause."
-            ],
-        }
-
-    with pytest.raises(semantic_recovery.HumanDecisionRequired) as paused:
-        phase31.ground_concepts(
-            records,
-            graph=graph,
-            canonical=canonical,
-            provider=provider,
-            critic=critic,
-        )
-    pending = paused.value.pending_decision
-    refine = next(
-        row for row in pending["candidates"] if row["title"].startswith("Refine")
-    )
-    resolution = {
-        **copy.deepcopy(pending),
-        "choice": "select_candidate",
-        "target_id": refine["target_id"],
-        "instruction": "",
-    }
-
     with phase33.human_resolution_context([resolution]):
         with pytest.raises(phase31.early_gate.TopologyRepairRequired) as handoff:
             phase31.ground_concepts(
@@ -1018,15 +943,16 @@ def test_unsupported_claim_can_be_sent_back_to_topology_without_grounding_retry(
                 graph=graph,
                 canonical=canonical,
                 provider=provider,
-                critic=critic,
+                critic=_verified_review,
             )
 
-    assert provider_calls == 1
+    # A saved topology direction outranks grounding entirely: the handoff
+    # happens before any grounding provider call is spent.
+    assert provider_calls == 0
     assert "HUMAN DIRECTION requires topology action refine" in str(handoff.value)
-    assert "no source block supports" in str(handoff.value)
 
 
-def test_partial_accepts_are_cached_and_resume_sends_only_rejected_id(tmp_path):
+def test_partial_dissent_ships_flagged_and_only_flagged_ids_redecide(tmp_path):
     graph, canonical = _source_graph()
     records = [
         _record(),
@@ -1083,43 +1009,44 @@ def test_partial_accepts_are_cached_and_resume_sends_only_rejected_id(tmp_path):
 
     session = {"artifact_dir": tmp_path, "canonical": canonical}
     with phase3.activate_session(session), phase3.activate(graph):
-        with pytest.raises(semantic_recovery.HumanDecisionRequired) as paused:
-            phase31.ground_concepts(
-                copy.deepcopy(records),
-                graph=graph,
-                canonical=canonical,
-                provider=provider,
-                critic=critic,
-            )
-        pending = paused.value.pending_decision
-        selected = next(
-            row for row in pending["candidates"]
-            if "BLK-0002" in row["title"]
+        first = phase31.ground_concepts(
+            copy.deepcopy(records),
+            graph=graph,
+            canonical=canonical,
+            provider=provider,
+            critic=critic,
         )
-        resolution = {
-            **copy.deepcopy(pending),
-            "choice": "select_candidate",
-            "target_id": selected["target_id"],
-            "instruction": "",
-        }
-        with phase33.human_resolution_context([resolution]):
-            grounded = phase31.ground_concepts(
-                copy.deepcopy(records),
-                graph=graph,
-                canonical=canonical,
-                provider=provider,
-                critic=critic,
-            )
+        second = phase31.ground_concepts(
+            copy.deepcopy(records),
+            graph=graph,
+            canonical=canonical,
+            provider=provider,
+            critic=critic,
+        )
 
+    # The first pass decides everything: the accepted concept ships clean
+    # and the rejected one ships with the critic's dissent as review flags.
+    assert [row["_source_block_ids"] for row in first] == [
+        ["BLK-0001"],
+        ["BLK-0001"],
+    ]
+    assert "_grounding_review_flags" not in first[0]
+    assert any(
+        "BLK-0002" in flag
+        for flag in first[1]["_grounding_review_flags"]
+    )
+    # Dissent is never cached as verified: the next pass re-decides only the
+    # flagged concept, and its clean verdict then ships unflagged.
     assert provider_calls == [
         ["CONCEPT-GROUND-0001", "CONCEPT-GROUND-0002"],
         ["CONCEPT-GROUND-0002"],
     ]
     assert critic_calls == provider_calls
-    assert [row["_source_block_ids"] for row in grounded] == [
+    assert [row["_source_block_ids"] for row in second] == [
         ["BLK-0001"],
         ["BLK-0002"],
     ]
+    assert "_grounding_review_flags" not in second[1]
 
 
 def test_verified_topic_grounding_is_reused_from_artifact_cache(tmp_path):
@@ -1173,9 +1100,8 @@ def test_verified_topic_grounding_is_reused_from_artifact_cache(tmp_path):
     assert (tmp_path / phase31._GROUNDING_CACHE_FILENAME).exists()
 
 
-def test_partial_acceptance_survives_failure_and_only_rejected_ids_resume(
+def test_partial_dissent_batches_ship_and_only_flagged_ids_redecide(
     tmp_path,
-    monkeypatch,
 ):
     graph, canonical = _source_graph()
     records = [
@@ -1220,23 +1146,18 @@ def test_partial_acceptance_survives_failure_and_only_rejected_ids_resume(
         assert ids == provider_batches[0][5:]
         return _verified_review(payload)
 
-    monkeypatch.setenv("AEGIS_PHASE3_GROUNDING_MAX_ATTEMPTS", "1")
     session = {
         "artifact_dir": tmp_path,
         "canonical": canonical,
     }
     with phase3.activate_session(session), phase3.activate(graph):
-        with pytest.raises(
-            semantic_recovery.HumanDecisionRequired,
-            match="paused for a human semantic decision",
-        ):
-            phase31.ground_concepts(
-                copy.deepcopy(records),
-                graph=graph,
-                canonical=canonical,
-                provider=provider,
-                critic=critic,
-            )
+        first = phase31.ground_concepts(
+            copy.deepcopy(records),
+            graph=graph,
+            canonical=canonical,
+            provider=provider,
+            critic=critic,
+        )
         resumed = phase31.ground_concepts(
             copy.deepcopy(records),
             graph=graph,
@@ -1245,6 +1166,11 @@ def test_partial_acceptance_survives_failure_and_only_rejected_ids_resume(
             critic=critic,
         )
 
+    # First pass ships all seven; the two rejected ones carry dissent flags.
+    assert all("_grounding_review_flags" in row for row in first[5:])
+    assert not any("_grounding_review_flags" in row for row in first[:5])
+    # Only the flagged pair is re-decided on the next pass; the five
+    # verified concepts replay from the artifact cache.
     assert len(provider_batches) == 2
     assert len(provider_batches[0]) == 7
     assert provider_batches[1] == provider_batches[0][5:]

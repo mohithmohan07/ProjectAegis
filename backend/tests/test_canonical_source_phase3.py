@@ -1503,22 +1503,30 @@ def test_concept_source_grounding_requires_high_confidence_and_critic():
         "api-verified-source-block-ids"
     )
 
+    uncertain_calls = 0
+
+    def uncertain_provider(payload: dict) -> dict:
+        nonlocal uncertain_calls
+        uncertain_calls += 1
+        return {"concepts": [{
+            "concept_id": payload["concepts"][0]["concept_id"],
+            "source_block_ids": [target_block["block_id"]],
+            "confidence": 0.5,
+            "reason": "uncertain",
+        }]}
+
     with pytest.raises(
-        phase3.semantic_recovery.HumanDecisionRequired
-    ) as paused:
+        phase3.semantic_recovery.ProviderResponseContractError
+    ) as failed:
         phase3.ground_concepts(
             records,
             graph=graph,
             canonical=canonical,
-            provider=lambda payload: {"concepts": [{
-                "concept_id": payload["concepts"][0]["concept_id"],
-                "source_block_ids": [target_block["block_id"]],
-                "confidence": 0.5,
-                "reason": "uncertain",
-            }]},
+            provider=uncertain_provider,
             critic=critic,
         )
-    assert "confidence 0.500" in paused.value.pending_decision["conflict"]
+    assert uncertain_calls == 3
+    assert "confidence 0.500 is below 0.920" in str(failed.value)
 
 
 def test_missing_type_host_preflight_adds_only_source_grounded_topic_two_host():
