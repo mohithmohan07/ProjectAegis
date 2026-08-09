@@ -1,0 +1,355 @@
+{
+ "_comment": "Job 23's certified host maps, split against its repaired final topology: 'stale_after_repair' entries were certified against first-freeze rows that the mid-run semantic repair superseded (their hosts no longer exist as settled titles). The rewrite makes this staleness impossible - hosting runs after Settle and the checker refuses any host that is not a settled title.",
+ "host_map": {
+  "TYPE-0001::CASE-0002::0002": {
+   "concept_title": "Autocracy, Censorship, and the Demand for Freedom of the Press",
+   "confidence": 0.99,
+   "decision": "existing",
+   "parent_concept": "Conservative Repression and Liberal Resistance",
+   "placement_certificate_sha256": "c31a79ef73bd8aa9ec1c771dba2a140053f4dedb9462e506b8690ddf6cb2b038",
+   "topic": "The Making of Nationalism in Europe",
+   "topic_id": "TOPIC-0002"
+  },
+  "TYPE-0002::CASE-0008::0002": {
+   "concept_title": "Economic Liberalism and the Zollverein",
+   "confidence": 0.97,
+   "decision": "existing",
+   "parent_concept": "What Did Liberal Nationalism Stand For?",
+   "placement_certificate_sha256": "097e0f56a52897d6121d7f4a2384fc2ea52112b27d8917a07b4142a201d87596",
+   "topic": "The Making of Nationalism in Europe",
+   "topic_id": "TOPIC-0002"
+  },
+  "TYPE-0002::CASE-0009::0003": {
+   "concept_title": "Folk Culture, Language, and the German National Spirit",
+   "confidence": 0.96,
+   "decision": "existing",
+   "parent_concept": "Folk Culture and National Identity",
+   "placement_certificate_sha256": "0cf9c3268c3c8d231f98e6ad374f30075c22c5d51789d9ee0273f63c9761190a",
+   "topic": "The Age of Revolutions: 1830-1848",
+   "topic_id": "TOPIC-0003"
+  },
+  "TYPE-0002::CASE-0010::0004": {
+   "concept_title": "The French Revolution’s Transfer of Sovereignty to Citizens",
+   "confidence": 0.98,
+   "decision": "existing",
+   "parent_concept": "Revolutionary Citizenship and Popular Sovereignty",
+   "placement_certificate_sha256": "011913c7feb270061b2639423303ef1b5cee11141f9b9be68e5b38e5dc3e042c",
+   "topic": "The French Revolution and the Idea of the Nation",
+   "topic_id": "TOPIC-0001"
+  },
+  "TYPE-0002::CASE-0011::0005": {
+   "concept_title": "Personifying the Nation Through Female Allegories",
+   "confidence": 0.99,
+   "decision": "existing",
+   "parent_concept": "National Allegory and Personification",
+   "placement_certificate_sha256": "c424b5659b803a29081755fc0810284a7fb770e5a3d35e8b459abaca7684a696",
+   "topic": "Visualising the Nation",
+   "topic_id": "TOPIC-0005"
+  },
+  "TYPE-0002::CASE-0012::0006": {
+   "concept_title": "Bismarck’s Military Unification of Germany",
+   "confidence": 0.98,
+   "decision": "existing",
+   "parent_concept": "Germany: Prussian-led Unification",
+   "placement_certificate_sha256": "491e72736496f998166a5ae730f129b000b453e3c3afb64136beb1863cfc7aa8",
+   "topic": "The Making of Germany and Italy",
+   "topic_id": "TOPIC-0004"
+  },
+  "TYPE-0002::CASE-0015::0009": {
+   "concept_title": "Romantic Nationalism and the Breakup of Ottoman Control in the Balkans",
+   "confidence": 0.98,
+   "decision": "existing",
+   "parent_concept": "Balkan Nationalism and Ottoman Decline",
+   "placement_certificate_sha256": "62c63b1e791bb894ffb9e4b782bb19b4be902a00a27da9ee6820917b92fc3110",
+   "topic": "Nationalism and Imperialism",
+   "topic_id": "TOPIC-0006"
+  },
+  "TYPE-0003": {
+   "concept_title": "Interpreting Wilhelm Wolff’s Account of the Silesian Weavers’ Revolt",
+   "confidence": 0.99,
+   "decision": "existing",
+   "parent_concept": "Economic Crisis and Popular Revolt",
+   "placement_certificate_sha256": "f85c19ebd9ffed09fad13faa5828a1eb3631e1c9df07a027def1abbbe88a73ee",
+   "topic": "The Age of Revolutions: 1830-1848",
+   "topic_id": "TOPIC-0003"
+  },
+  "TYPE-0007::CASE-0022::0001": {
+   "concept_title": "Gendered Limits of Liberal Political Rights",
+   "confidence": 0.99,
+   "decision": "existing",
+   "parent_concept": "Gender and Liberalism",
+   "placement_certificate_sha256": "7d1c9db134c1d9a3fa2241ea5c4a59a5a1e0836244b0b2f9d016d7fe0e6433b6",
+   "topic": "The Age of Revolutions: 1830-1848",
+   "topic_id": "TOPIC-0003"
+  },
+  "TYPE-0007::CASE-0023::0002": {
+   "concept_title": "The Gradual Formation of the British Nation-state",
+   "confidence": 0.97,
+   "decision": "existing",
+   "parent_concept": "Britain: English-led Nation-state Formation",
+   "placement_certificate_sha256": "0de489a1c38ffd8c23e29283cbde486afb16c50bbf507a63dcb2ede6aeb78f3d",
+   "topic": "The Making of Germany and Italy",
+   "topic_id": "TOPIC-0004"
+  },
+  "TYPE-0008::CASE-0024::0001": {
+   "concept_title": "Secret Societies and Mazzini’s Republican Nationalism",
+   "confidence": 0.99,
+   "decision": "existing",
+   "parent_concept": "Revolutionary Nationalism",
+   "placement_certificate_sha256": "b34761d84ad26c9cd3b124fe05fe2b67525c1da1c70db59b8d6f9a2c550f4e47",
+   "topic": "The Making of Nationalism in Europe",
+   "topic_id": "TOPIC-0002"
+  },
+  "TYPE-0008::CASE-0025::0002": {
+   "concept_title": "Cavour’s Diplomacy and Sardinia-Piedmont’s Leadership",
+   "confidence": 0.99,
+   "decision": "existing",
+   "parent_concept": "Italy: Diplomatic and Military Unification",
+   "placement_certificate_sha256": "51ea2c229cbd2a89847abd269b7a9a2ba4e4a5d278c7c37c2d97987efe7685e0",
+   "topic": "The Making of Germany and Italy",
+   "topic_id": "TOPIC-0004"
+  },
+  "TYPE-0008::CASE-0026::0003": {
+   "concept_title": "The Greek War of Independence and European Nationalist Support",
+   "confidence": 0.99,
+   "decision": "existing",
+   "parent_concept": "National Independence Movements",
+   "placement_certificate_sha256": "e66b6e99d517aabd7f572398a9714e573cf4d3d7735109eb9ca93b6af1f61647",
+   "topic": "The Age of Revolutions: 1830-1848",
+   "topic_id": "TOPIC-0003"
+  },
+  "TYPE-0008::CASE-0027::0004": {
+   "concept_title": "The Frankfurt Parliament and Its Failure",
+   "confidence": 0.99,
+   "decision": "existing",
+   "parent_concept": "Liberal Revolutions of 1848",
+   "placement_certificate_sha256": "fdf2e00275712ddaa40c7b65d69136c3be03670cdae45a8cd46d5608cc65b48f",
+   "topic": "The Age of Revolutions: 1830-1848",
+   "topic_id": "TOPIC-0003"
+  },
+  "TYPE-0008::CASE-0028::0005": {
+   "concept_title": "Gendered Limits of Liberal Political Rights",
+   "confidence": 0.96,
+   "decision": "existing",
+   "parent_concept": "Gender and Liberalism",
+   "placement_certificate_sha256": "7d1c9db134c1d9a3fa2241ea5c4a59a5a1e0836244b0b2f9d016d7fe0e6433b6",
+   "topic": "The Age of Revolutions: 1830-1848",
+   "topic_id": "TOPIC-0003"
+  },
+  "TYPE-0009::CASE-0029::0001": {
+   "concept_title": "Romanticism and the Cultural Construction of the Nation",
+   "confidence": 0.95,
+   "decision": "existing",
+   "parent_concept": "Cultural Nationalism",
+   "placement_certificate_sha256": "c53f6d71de4fedc897606a2103fe7da2ec346f50acf43ff7b63168b08184de58",
+   "topic": "The Age of Revolutions: 1830-1848",
+   "topic_id": "TOPIC-0003"
+  },
+  "TYPE-0009::CASE-0030::0002": {
+   "concept_title": "Nationalism as Conservative State Power After 1848",
+   "confidence": 0.94,
+   "decision": "existing",
+   "parent_concept": "Germany: the Conservative Turn in Nationalism",
+   "placement_certificate_sha256": "14ebfc3286232803aab82f332534909c55a7e43227b7eb3266e43d45df1a214e",
+   "topic": "The Making of Germany and Italy",
+   "topic_id": "TOPIC-0004"
+  }
+ },
+ "qid_map": {
+  "QINV-0003": {
+   "concept_title": "Economic Liberalism and the Zollverein",
+   "confidence": 0.97,
+   "decision": "existing",
+   "parent_concept": "What Did Liberal Nationalism Stand For?",
+   "placement_certificate_sha256": "097e0f56a52897d6121d7f4a2384fc2ea52112b27d8917a07b4142a201d87596",
+   "topic": "The Making of Nationalism in Europe",
+   "topic_id": "TOPIC-0002"
+  },
+  "QINV-0005": {
+   "concept_title": "Autocracy, Censorship, and the Demand for Freedom of the Press",
+   "confidence": 0.99,
+   "decision": "existing",
+   "parent_concept": "Conservative Repression and Liberal Resistance",
+   "placement_certificate_sha256": "c31a79ef73bd8aa9ec1c771dba2a140053f4dedb9462e506b8690ddf6cb2b038",
+   "topic": "The Making of Nationalism in Europe",
+   "topic_id": "TOPIC-0002"
+  },
+  "QINV-0006": {
+   "concept_title": "Folk Culture, Language, and the German National Spirit",
+   "confidence": 0.96,
+   "decision": "existing",
+   "parent_concept": "Folk Culture and National Identity",
+   "placement_certificate_sha256": "0cf9c3268c3c8d231f98e6ad374f30075c22c5d51789d9ee0273f63c9761190a",
+   "topic": "The Age of Revolutions: 1830-1848",
+   "topic_id": "TOPIC-0003"
+  },
+  "QINV-0007": {
+   "concept_title": "Interpreting Wilhelm Wolff’s Account of the Silesian Weavers’ Revolt",
+   "confidence": 0.99,
+   "decision": "existing",
+   "parent_concept": "Economic Crisis and Popular Revolt",
+   "placement_certificate_sha256": "f85c19ebd9ffed09fad13faa5828a1eb3631e1c9df07a027def1abbbe88a73ee",
+   "topic": "The Age of Revolutions: 1830-1848",
+   "topic_id": "TOPIC-0003"
+  },
+  "QINV-0009": {
+   "concept_title": "Gendered Limits of Liberal Political Rights",
+   "confidence": 0.99,
+   "decision": "existing",
+   "parent_concept": "Gender and Liberalism",
+   "placement_certificate_sha256": "7d1c9db134c1d9a3fa2241ea5c4a59a5a1e0836244b0b2f9d016d7fe0e6433b6",
+   "topic": "The Age of Revolutions: 1830-1848",
+   "topic_id": "TOPIC-0003"
+  },
+  "QINV-0016.1": {
+   "concept_title": "Secret Societies and Mazzini’s Republican Nationalism",
+   "confidence": 0.99,
+   "decision": "existing",
+   "parent_concept": "Revolutionary Nationalism",
+   "placement_certificate_sha256": "b34761d84ad26c9cd3b124fe05fe2b67525c1da1c70db59b8d6f9a2c550f4e47",
+   "topic": "The Making of Nationalism in Europe",
+   "topic_id": "TOPIC-0002"
+  },
+  "QINV-0016.2": {
+   "concept_title": "Cavour’s Diplomacy and Sardinia-Piedmont’s Leadership",
+   "confidence": 0.99,
+   "decision": "existing",
+   "parent_concept": "Italy: Diplomatic and Military Unification",
+   "placement_certificate_sha256": "51ea2c229cbd2a89847abd269b7a9a2ba4e4a5d278c7c37c2d97987efe7685e0",
+   "topic": "The Making of Germany and Italy",
+   "topic_id": "TOPIC-0004"
+  },
+  "QINV-0016.3": {
+   "concept_title": "The Greek War of Independence and European Nationalist Support",
+   "confidence": 0.99,
+   "decision": "existing",
+   "parent_concept": "National Independence Movements",
+   "placement_certificate_sha256": "e66b6e99d517aabd7f572398a9714e573cf4d3d7735109eb9ca93b6af1f61647",
+   "topic": "The Age of Revolutions: 1830-1848",
+   "topic_id": "TOPIC-0003"
+  },
+  "QINV-0016.4": {
+   "concept_title": "The Frankfurt Parliament and Its Failure",
+   "confidence": 0.99,
+   "decision": "existing",
+   "parent_concept": "Liberal Revolutions of 1848",
+   "placement_certificate_sha256": "fdf2e00275712ddaa40c7b65d69136c3be03670cdae45a8cd46d5608cc65b48f",
+   "topic": "The Age of Revolutions: 1830-1848",
+   "topic_id": "TOPIC-0003"
+  },
+  "QINV-0016.5": {
+   "concept_title": "Gendered Limits of Liberal Political Rights",
+   "confidence": 0.96,
+   "decision": "existing",
+   "parent_concept": "Gender and Liberalism",
+   "placement_certificate_sha256": "7d1c9db134c1d9a3fa2241ea5c4a59a5a1e0836244b0b2f9d016d7fe0e6433b6",
+   "topic": "The Age of Revolutions: 1830-1848",
+   "topic_id": "TOPIC-0003"
+  },
+  "QINV-0017": {
+   "concept_title": "The French Revolution’s Transfer of Sovereignty to Citizens",
+   "confidence": 0.98,
+   "decision": "existing",
+   "parent_concept": "Revolutionary Citizenship and Popular Sovereignty",
+   "placement_certificate_sha256": "011913c7feb270061b2639423303ef1b5cee11141f9b9be68e5b38e5dc3e042c",
+   "topic": "The French Revolution and the Idea of the Nation",
+   "topic_id": "TOPIC-0001"
+  },
+  "QINV-0018": {
+   "concept_title": "Personifying the Nation Through Female Allegories",
+   "confidence": 0.99,
+   "decision": "existing",
+   "parent_concept": "National Allegory and Personification",
+   "placement_certificate_sha256": "c424b5659b803a29081755fc0810284a7fb770e5a3d35e8b459abaca7684a696",
+   "topic": "Visualising the Nation",
+   "topic_id": "TOPIC-0005"
+  },
+  "QINV-0019": {
+   "concept_title": "Bismarck’s Military Unification of Germany",
+   "confidence": 0.98,
+   "decision": "existing",
+   "parent_concept": "Germany: Prussian-led Unification",
+   "placement_certificate_sha256": "491e72736496f998166a5ae730f129b000b453e3c3afb64136beb1863cfc7aa8",
+   "topic": "The Making of Germany and Italy",
+   "topic_id": "TOPIC-0004"
+  },
+  "QINV-0022": {
+   "concept_title": "Romanticism and the Cultural Construction of the Nation",
+   "confidence": 0.95,
+   "decision": "existing",
+   "parent_concept": "Cultural Nationalism",
+   "placement_certificate_sha256": "c53f6d71de4fedc897606a2103fe7da2ec346f50acf43ff7b63168b08184de58",
+   "topic": "The Age of Revolutions: 1830-1848",
+   "topic_id": "TOPIC-0003"
+  },
+  "QINV-0023": {
+   "concept_title": "Nationalism as Conservative State Power After 1848",
+   "confidence": 0.94,
+   "decision": "existing",
+   "parent_concept": "Germany: the Conservative Turn in Nationalism",
+   "placement_certificate_sha256": "14ebfc3286232803aab82f332534909c55a7e43227b7eb3266e43d45df1a214e",
+   "topic": "The Making of Germany and Italy",
+   "topic_id": "TOPIC-0004"
+  },
+  "QINV-0024": {
+   "concept_title": "The Gradual Formation of the British Nation-state",
+   "confidence": 0.97,
+   "decision": "existing",
+   "parent_concept": "Britain: English-led Nation-state Formation",
+   "placement_certificate_sha256": "0de489a1c38ffd8c23e29283cbde486afb16c50bbf507a63dcb2ede6aeb78f3d",
+   "topic": "The Making of Germany and Italy",
+   "topic_id": "TOPIC-0004"
+  },
+  "QINV-0025": {
+   "concept_title": "Romantic Nationalism and the Breakup of Ottoman Control in the Balkans",
+   "confidence": 0.98,
+   "decision": "existing",
+   "parent_concept": "Balkan Nationalism and Ottoman Decline",
+   "placement_certificate_sha256": "62c63b1e791bb894ffb9e4b782bb19b4be902a00a27da9ee6820917b92fc3110",
+   "topic": "Nationalism and Imperialism",
+   "topic_id": "TOPIC-0006"
+  }
+ },
+ "stale_after_repair": {
+  "host_map": {
+   "TYPE-0002::CASE-0007::0001": {
+    "concept_title": "The Nation-state as a Forged Collective Identity",
+    "confidence": 0.99,
+    "decision": "existing",
+    "parent_concept": "National Identity and the Nation-state",
+    "placement_certificate_sha256": "9914217a27393384fe318f7fe17075029eb9cb001c5267de43ad6b3e927d38a4",
+    "topic": "The French Revolution and the Idea of the Nation",
+    "topic_id": "TOPIC-0001"
+   },
+   "TYPE-0002::CASE-0013::0007": {
+    "concept_title": "Napoleonic Reforms and the Spread of Legal Equality",
+    "confidence": 0.99,
+    "decision": "existing",
+    "parent_concept": "Napoleonic Rule and European Reactions",
+    "placement_certificate_sha256": "02fbfec54a34d380050c90212cce7f52ce8e945da68bfb18b2b763de4cc23466",
+    "topic": "The French Revolution and the Idea of the Nation",
+    "topic_id": "TOPIC-0001"
+   }
+  },
+  "qid_map": {
+   "QINV-0002": {
+    "concept_title": "The Nation-state as a Forged Collective Identity",
+    "confidence": 0.99,
+    "decision": "existing",
+    "parent_concept": "National Identity and the Nation-state",
+    "placement_certificate_sha256": "9914217a27393384fe318f7fe17075029eb9cb001c5267de43ad6b3e927d38a4",
+    "topic": "The French Revolution and the Idea of the Nation",
+    "topic_id": "TOPIC-0001"
+   },
+   "QINV-0020": {
+    "concept_title": "Napoleonic Reforms and the Spread of Legal Equality",
+    "confidence": 0.99,
+    "decision": "existing",
+    "parent_concept": "Napoleonic Rule and European Reactions",
+    "placement_certificate_sha256": "02fbfec54a34d380050c90212cce7f52ce8e945da68bfb18b2b763de4cc23466",
+    "topic": "The French Revolution and the Idea of the Nation",
+    "topic_id": "TOPIC-0001"
+   }
+  }
+ }
+}
