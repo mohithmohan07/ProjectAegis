@@ -14,6 +14,7 @@ from typing import Any, Callable, Mapping
 
 from . import envelope as envelope_mod
 from . import kernel
+from .. import progress
 from .. import semantic_confidence_policy as confidence_policy
 
 _BATCH_SIZE = 8
@@ -247,6 +248,10 @@ def host(
     }
 
     units = derive_units(env)
+    progress.log(
+        f"Host: certifying one concept host for each of {len(units)} "
+        "Type/Case assignment unit(s)."
+    )
     host_map: dict[str, dict[str, Any]] = {}
     qid_map: dict[str, dict[str, Any]] = {}
     new_concepts: list[dict[str, Any]] = []
@@ -378,6 +383,15 @@ def host(
             for qid in unit["qids"]:
                 qid_map[qid] = copy.deepcopy(entry)
 
+    flagged = sum(
+        1 for entry in host_map.values() if entry.get("review_flags")
+    )
+    progress.log(
+        f"Host: {len(host_map)} unit(s) certified, {len(qid_map)} QID(s) "
+        f"mapped, {len(new_concepts)} new concept(s) created"
+        + (f"; {flagged} unit(s) carrying review flags." if flagged else "."),
+        level="success",
+    )
     return {
         "host_map": host_map,
         "qid_map": qid_map,
