@@ -263,7 +263,37 @@ Old per-phase caches are not migrated: the first run after PR 4 re-decides
 from the envelope (one full-price chapter run), and the decision store owns
 everything thereafter.
 
-## 10. Out of scope
+## 10. Boundary audit: pre-81% influence and API-only guarantee
+
+Audited 2026-08-09 against the current code.
+
+**What legitimately crosses the boundary** is exactly the envelope's
+contents (§3) — data, independently verified before 81%. Upstream quality
+propagates as content, never as behavior.
+
+**Everything after 81% is decided by the model over the API** — topology,
+grounding, learner analysis, hosting, Type embedding, and every critic
+pass — gated by `semantic_api_enabled()` (true whenever an OpenAI or
+Gemini credential is present and live mode is not disabled). The only
+non-API steps are derivations of already-API-verified material:
+culmination recaps today, and the whole of Assemble in the rewrite.
+
+**Seam closures the rewrite MUST implement** (silent-degrade paths found
+in the current code):
+
+1. Today, if `semantic_api_enabled()` is false (missing/misconfigured
+   credential), Phase 3.1 silently falls back to
+   `topic-bounded-deterministic` grounding and the run "succeeds" with
+   weaker output. The rewrite fails closed at the envelope gate instead:
+   no live API, no run, before any spend.
+2. Today, a missing active-graph contextvar makes `ground_concepts`
+   return rows unchanged (grounding silently skipped). The rewrite has no
+   ambient state to miss — passes take the envelope explicitly, and a
+   malformed envelope is a hard error.
+3. The dry/stub mode (`AEGIS_ALLOW_DRY`) stays test-only and is refused
+   by the new runner when a job id is present.
+
+## 11. Out of scope
 
 Phases 1–2 and the semantic graph, the pre-81% pause sites, the autonomous
 resolution agent for pre-81% decisions, provider selection (GPT/Gemini) and
