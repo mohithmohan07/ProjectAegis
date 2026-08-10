@@ -117,10 +117,27 @@ def _checker(
             ref = candidates[position][0]
             title = _normal(candidates[position][1].get("concept_title"))
             for code in codes:
-                defects.append(
+                message = (
                     f"row_ref {ref} ({title[:50]}) still fails "
                     f"{code['code']}: {code['message']}"
                 )
+                if code["code"] == "generic_error_analysis":
+                    # The house normalizer silently REPLACES any Error
+                    # Analysis its shape filter rejects with a fallback the
+                    # terminal gate forbids; without this hint the model
+                    # cannot see why its rewrite keeps "failing".
+                    message += (
+                        "; your Error Analysis text was rejected by the "
+                        "shape filter and replaced with a forbidden "
+                        "fallback — write ONE sentence naming the learner "
+                        "('Students'/'The learner') doing a concrete "
+                        "faulty ACTION on this concept (misapplies, "
+                        "confuses, reverses, swaps, omits, 'fails to "
+                        "...', or an 'instead of'/'incorrectly' "
+                        "contrast), not a belief or an 'assumes/thinks' "
+                        "statement"
+                    )
+                defects.append(message)
         return defects
 
     return check
@@ -188,10 +205,15 @@ def polish(
                 "Repair ONLY what each row's validation_errors name. "
                 "Rewrite copied source prose as original teaching "
                 "language, make Misconceptions name a concept-specific "
-                "incorrect belief, make Error Analysis name the learner "
-                "and a concrete faulty action, and complete truncated "
-                "sentences. Keep every other section and its meaning "
-                "exactly as it is; never rename the concept."
+                "incorrect belief, and complete truncated sentences. "
+                "Error Analysis has a REQUIRED SHAPE: one sentence "
+                "naming the learner ('Students'/'The learner') doing a "
+                "concrete faulty ACTION on this concept — misapplies, "
+                "confuses, reverses, swaps, omits, 'fails to ...', or "
+                "an 'instead of'/'incorrectly' contrast. A belief or an "
+                "'assumes/thinks' statement is NOT an Error Analysis "
+                "and will be rejected. Keep every other section and its "
+                "meaning exactly as it is; never rename the concept."
             ),
             "rows": [
                 {
