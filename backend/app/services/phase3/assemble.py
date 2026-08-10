@@ -309,12 +309,32 @@ def assemble(
             for index, (before, after) in enumerate(zip(rows, replayed))
             if before != after
         ]
+        detail = ""
+        if changed:
+            first = changed[0]
+            before, after = rows[first], replayed[first]
+            fields = sorted(
+                set(before) | set(after),
+                key=str,
+            )
+            for field in fields:
+                if before.get(field) != after.get(field):
+                    detail = (
+                        f"; row {first} "
+                        f"({_normal(before.get('concept_title'))[:40]!r}) "
+                        f"field {field!r}: "
+                        f"{str(before.get(field))[:160]!r} -> "
+                        f"{str(after.get(field))[:160]!r}"
+                    )
+                    break
         raise AssemblyError(
             "assembled rows are not stable under the deterministic "
             "deposit pipeline (changed row indexes: "
             + ",".join(str(index) for index in changed[:8])
-            + f"; row count {len(rows)} -> {len(replayed)}); sealing "
-            "them would break the certificate at the deposit boundary"
+            + f"; row count {len(rows)} -> {len(replayed)})"
+            + detail
+            + "; sealing them would break the certificate at the "
+            "deposit boundary"
         )
 
     # Host may have created new concepts; the deposit chain verifies the
