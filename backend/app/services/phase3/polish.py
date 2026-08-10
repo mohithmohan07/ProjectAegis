@@ -234,6 +234,22 @@ def _checker(
                             "mistake/treat as the verb and never write "
                             "'did not'/'does not' corrections"
                         )
+                elif code["code"] in (
+                    "misconception_framing", "generic_misconception",
+                ):
+                    # The framing filter accepts only sentences EXPLICITLY
+                    # phrased as the learner's belief; a bare wrong
+                    # proposition with identical content is rejected
+                    # (production job 27 looped to fail-closed on this).
+                    message += (
+                        "; the Misconceptions sentence must be phrased "
+                        "as the learner's belief — begin it 'The learner "
+                        "may believe that ...' (or 'Students may think "
+                        "that ...') and keep your same wrong claim as "
+                        "the belief's content; a bare proposition, a "
+                        "correction, or an action statement is rejected "
+                        "by the framing filter"
+                    )
                 defects.append(message)
         return defects
 
@@ -301,8 +317,13 @@ def polish(
             "rules": (
                 "Repair ONLY what each row's validation_errors name. "
                 "Rewrite copied source prose as original teaching "
-                "language, make Misconceptions name a concept-specific "
-                "incorrect belief, and complete truncated sentences. "
+                "language and complete truncated sentences. "
+                "Misconceptions have a REQUIRED SHAPE: a sentence "
+                "explicitly phrased as the learner's belief — begin it "
+                "'The learner may believe that ...' or 'Students may "
+                "think that ...' with the concept-specific wrong claim "
+                "as the belief's content; a bare wrong proposition, a "
+                "correction, or an action statement is rejected. "
                 "Error Analysis has a REQUIRED SHAPE: one sentence in "
                 "which 'Students' or 'The learner' performs a concrete "
                 "faulty ACTION (misapplies, misplaces, reverses, swaps, "
