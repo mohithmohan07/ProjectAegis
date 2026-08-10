@@ -14563,6 +14563,12 @@ def _inventory_coverage_key(text: str) -> str:
     # ``. . .``. That must not make an otherwise identical source Example look
     # missing at the deposit boundary.
     value = re.sub(r"\s+([,;:.!?])", r"\1", value)
+    # The deposit cleaner deterministically neutralizes dangling source
+    # pointers ("Table 11.2" -> "the given table", "Exercise 1.2" -> "the
+    # exercises") because the validator rejects them. The authoritative
+    # inventory prompt still carries the source pointer, so both sides of the
+    # coverage comparison must see the same neutralized wording.
+    value = concept_cleanup.scrub_validator_artifacts(value)
     return value.replace("…", "...")
 
 

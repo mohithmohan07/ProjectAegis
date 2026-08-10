@@ -59,6 +59,42 @@ def test_repaired_source_examples_with_type_and_case_tokens_remain_owned():
     assert g._unexpected_rendered_type_examples(repaired, inventory) == []
 
 
+def test_neutralized_table_reference_keeps_source_example_covered():
+    """Deposit cleaning rewrites "Table 11.2" into "the given table".
+
+    The inventory prompt keeps the source pointer, so the coverage key must
+    neutralize both sides identically or the only table-citing questions in a
+    chapter become permanently "missing + unexpected" at the deposit gate.
+    """
+    source_prompt = (
+        "Use the data in Table 11.2 to answer the following - (a) Which "
+        "among iron and mercury is a better conductor? (b) Which material "
+        "is the best conductor?"
+    )
+    rendered_prompt = (
+        "Use the data in the given table to answer the following - (a) Which "
+        "among iron and mercury is a better conductor? (b) Which material "
+        "is the best conductor?"
+    )
+    inventory = _inventory(source_prompt)
+    records = [_row(
+        "Description: Interpret and verify exponent procedures. // Types: "
+        "Type 01: Comparing conductors Case 01: A resistivity table is "
+        f"supplied Example 01: {rendered_prompt}"
+    )]
+
+    assert g._rendered_inventory_coverage_defects(
+        records, inventory
+    ) == {"missing": [], "duplicate": []}
+    assert g._unexpected_rendered_type_examples(records, inventory) == []
+    out = g._enforce_rendered_inventory_coverage(
+        records, inventory, {"types": []}
+    )
+    assert g._rendered_inventory_coverage_defects(
+        out, inventory
+    ) == {"missing": [], "duplicate": []}
+
+
 def test_closed_inventory_still_rejects_a_genuinely_unowned_example():
     source_prompt = (
         "Use the laws of exponents to simplify 2^3 multiplied by 2^4 and "
