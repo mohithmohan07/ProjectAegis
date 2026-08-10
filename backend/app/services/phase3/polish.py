@@ -38,12 +38,14 @@ def _failures(
 ) -> dict[int, list[dict[str, str]]]:
     from .. import concept_validator as cv
 
-    # Measure with the terminal gate's exact yardstick: the strict
-    # analysis-section option adds the generic-filler judgment that the
-    # deposit boundary applies (the lax default passed rows the gate
-    # then rejected — 4 found vs 30 failing, dress rehearsal 5).
+    # Measure the shape the gate actually judges: the terminal boundary
+    # normalizes learner analysis BEFORE validating, and normalization
+    # changes the verdict (4 failing rows raw vs 34 normalized, dress
+    # rehearsals 5-6). Normalize first, then apply the gate's strict
+    # analysis yardstick.
     report = cv.validate_concept_rows(
-        list(rows), allow_culmination=True,
+        cv.ensure_valid_learner_analysis([dict(row) for row in rows]),
+        allow_culmination=True,
         strict_analysis_section=True,
         source_text=source_text,
     )
@@ -153,7 +155,12 @@ def polish(
         if isinstance(block, Mapping)
     }
     source_text = "\n".join(text for text in text_by_id.values() if text)
-    out = [dict(row) for row in rows]
+    # Work on the normalized form throughout: the model repairs the text
+    # the gate will actually judge, and Assemble's own normalization pass
+    # then finds nothing left to change.
+    from .. import concept_validator as cv
+
+    out = cv.ensure_valid_learner_analysis([dict(row) for row in rows])
     failures = _failures(out, source_text=source_text)
     if not failures:
         return out

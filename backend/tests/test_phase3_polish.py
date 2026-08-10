@@ -44,7 +44,7 @@ def _clean_row() -> dict:
             "Achieving Mastery: Explaining who constitutes a nation in "
             "revolutionary thought. // Misconception/ Error Analysis: "
             "Misconceptions: Learners believe monarchs granted "
-            "nationhood as a favour. Error Analysis: The learner "
+            "nationhood as a favour.; Error Analysis: The learner "
             "attributes the 1789 constitution to royal initiative "
             "instead of popular sovereignty."
         ),
@@ -60,7 +60,7 @@ def _verbatim_row() -> dict:
     row["concept_details"] = (
         "Description: " + _SOURCE + " // Misconception/ Error Analysis: "
         "Misconceptions: Learners believe monarchs granted nationhood "
-        "as a favour. Error Analysis: The learner attributes the 1789 "
+        "as a favour.; Error Analysis: The learner attributes the 1789 "
         "constitution to royal initiative instead of popular "
         "sovereignty."
     )
@@ -73,7 +73,7 @@ _REPAIRED_DETAILS = (
     "Achieving Mastery: Explaining who constitutes a nation in "
     "revolutionary thought. // Misconception/ Error Analysis: "
     "Misconceptions: Learners believe monarchs granted nationhood as a "
-    "favour. Error Analysis: The learner attributes the 1789 "
+    "favour.; Error Analysis: The learner attributes the 1789 "
     "constitution to royal initiative instead of popular sovereignty."
 )
 
