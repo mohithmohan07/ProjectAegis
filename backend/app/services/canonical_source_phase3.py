@@ -3022,17 +3022,36 @@ def reconcile_source_anomalies(
         })
     out["source_fusion_repairs"] = repairs
     if unresolved:
-        out["status"] = "review_required"
+        def _unresolved_markup_ships_for_review() -> bool:
+            # Under the rewritten pipeline a block whose adjudication fell
+            # below the source-critical floor keeps its VERBATIM canonical
+            # text (already produced and dual-verified by the page
+            # extraction) and ships flagged for review; only the legacy
+            # path turns the heuristic into a chapter-blocking decision.
+            try:
+                from .phase3 import runner as _phase3_runner
+            except ImportError:  # pragma: no cover - defensive ordering
+                return False
+            return _phase3_runner.rewrite_enabled()
+
+        review_only = _unresolved_markup_ships_for_review()
+        out["status"] = "ready" if review_only else "review_required"
         out["issues"] = [
             issue for issue in out.get("issues") or []
             if issue.get("code") != "converter_semantic_markup_requires_pdf_reconciliation"
         ] + [{
             "code": "converter_semantic_markup_requires_pdf_reconciliation",
-            "severity": "error",
+            "severity": "warning" if review_only else "error",
             "block_ids": unresolved,
             "message": (
                 "Original-PDF source fusion could not safely resolve every "
                 "converter semantic-markup anomaly."
+                + (
+                    " The affected block(s) keep their verbatim extracted "
+                    "text and are flagged for review."
+                    if review_only
+                    else ""
+                )
             ),
         }]
     else:
