@@ -874,6 +874,23 @@ def _learner_analysis_statements(text: str) -> list[str]:
     ]
 
 
+def _preserve_authored_analysis() -> bool:
+    """Whether analysis content is API-authored and must not be rewritten.
+
+    Under the rewritten Phase 3, learner analysis is authored by Settle and
+    repaired by Polish — both model passes judged by the terminal gate. The
+    deterministic shape/overlap filters below must then only FORMAT that
+    content, never drop a statement or substitute the fallback filler: the
+    filler is forbidden at the gate, so a silent substitution turns valid
+    API content into a guaranteed failure.
+    """
+    try:
+        from .phase3 import runner as _phase3_runner
+    except ImportError:  # pragma: no cover - defensive import ordering
+        return False
+    return _phase3_runner.rewrite_enabled()
+
+
 def ensure_valid_learner_analysis(records: list[dict]) -> list[dict]:
     """Keep valid learner-analysis sections and apply the deterministic fallback.
 
@@ -883,7 +900,13 @@ def ensure_valid_learner_analysis(records: list[dict]) -> list[dict]:
     order, and then lets the refiner add its Error Analysis fallback when a
     normal concept has neither. Culminations remain optional and receive no
     fallback.
+
+    With the rewritten Phase 3 active, both categories are kept exactly as
+    the model authored them (formatting canonicalized, exact duplicates
+    removed): quality is judged by the terminal gate and repaired by the
+    Polish pass, not by these deterministic filters.
     """
+    preserve = _preserve_authored_analysis()
     for rec in records:
         details = rec.get("concept_details") or ""
         if not details.strip():
@@ -893,6 +916,32 @@ def ensure_valid_learner_analysis(records: list[dict]) -> list[dict]:
         misconception_body, error_analysis_body = (
             concept_refiner.analysis_components(normalized)
         )
+        if preserve:
+            misconceptions = list(dict.fromkeys(
+                _learner_analysis_statements(misconception_body)
+            ))
+            errors = list(dict.fromkeys(
+                _learner_analysis_statements(error_analysis_body)
+            ))
+            misconception = " ".join(misconceptions)
+            error_analysis = " ".join(errors)
+            kept = [
+                (label, content)
+                for label, content in sections
+                if not concept_refiner.is_learner_analysis_label(label)
+            ]
+            if misconception or error_analysis:
+                combined: list[str] = []
+                if misconception:
+                    combined.append(f"Misconceptions: {misconception}")
+                if error_analysis:
+                    combined.append(f"Error Analysis: {error_analysis}")
+                kept.append((
+                    "Misconception/ Error Analysis",
+                    "; ".join(combined),
+                ))
+            rec["concept_details"] = concept_refiner.join_sections(kept)
+            continue
         misconceptions: list[str] = []
         errors: list[str] = []
         seen_misconceptions: set[str] = set()
@@ -964,6 +1013,11 @@ def ensure_valid_learner_analysis(records: list[dict]) -> list[dict]:
             ))
         rec["concept_details"] = concept_refiner.join_sections(kept)
 
+    if _preserve_authored_analysis():
+        # No deterministic fallback: the filler it would insert is exactly
+        # what the terminal gate forbids, and missing analysis is the
+        # Polish pass's to repair with a real model call.
+        return records
     return concept_refiner.ensure_analysis_sections(records)
 
 

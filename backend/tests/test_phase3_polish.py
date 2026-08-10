@@ -168,3 +168,32 @@ def test_polish_decisions_replay_free_from_the_store(tmp_path):
     )
     assert calls == 1
     assert second == first
+
+
+def test_api_authored_analysis_is_preserved_under_the_rewrite(monkeypatch):
+    """Under the rewrite flag the deterministic filters only format: a
+    belief-shaped Error Analysis the old shape filter would drop (and
+    replace with the gate-forbidden filler) stays exactly as authored."""
+    from app.services import concept_validator as cv
+
+    monkeypatch.setenv("AEGIS_PHASE3_REWRITE", "1")
+    authored = (
+        "Description: X.\nAchieving Mastery: Y. "
+        "// Misconception/ Error Analysis: "
+        "Misconceptions: The learner may believe the treaty preceded "
+        "the war.; Error Analysis: Students confuse the treaty's date "
+        "with the war's outbreak."
+    )
+    out = cv.ensure_valid_learner_analysis([
+        {"concept_title": "T", "concept_details": authored}
+    ])[0]
+    assert "Students confuse the treaty's date" in out["concept_details"]
+    assert "memorized rule without checking" not in out["concept_details"]
+
+    monkeypatch.delenv("AEGIS_PHASE3_REWRITE")
+    out_legacy = cv.ensure_valid_learner_analysis([
+        {"concept_title": "T", "concept_details": authored}
+    ])[0]
+    # The legacy path still applies its filters (belief-shaped EA dropped,
+    # fallback inserted) — old-path behavior is unchanged.
+    assert "memorized rule without checking" in out_legacy["concept_details"]
