@@ -256,6 +256,52 @@ def test_verified_page_batches_are_cached(tmp_path: Path, monkeypatch):
     assert fallback._batch_cache_path(sealed_key).exists()
 
 
+def test_page_batches_extract_in_parallel_and_assemble_in_order(
+    tmp_path: Path, monkeypatch,
+):
+    """Independent page batches overlap; the bundle stays deterministic."""
+    import threading
+
+    pdf = tmp_path / "source.pdf"
+    doc = fitz.open()
+    for number in range(1, 7):
+        page = doc.new_page(width=600, height=800)
+        page.insert_text((50, 70), f"Page {number} heading", fontsize=18)
+    doc.save(pdf)
+    doc.close()
+
+    monkeypatch.setattr(fallback, "_CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setenv("AEGIS_GPT_PDF_ACSD_BATCH_PAGES", "2")
+    monkeypatch.setenv("AEGIS_GPT_PDF_ACSD_PARALLEL_BATCHES", "3")
+    import time as time_mod
+
+    lock = threading.Lock()
+    in_flight = {"now": 0, "max": 0}
+
+    def provider(pages):
+        with lock:
+            in_flight["now"] += 1
+            in_flight["max"] = max(in_flight["max"], in_flight["now"])
+        time_mod.sleep(0.3)
+        with lock:
+            in_flight["now"] -= 1
+        return {
+            "status": "verified",
+            "pages": [
+                {"page_number": page.page_number, "blocks": []}
+                for page in pages
+            ],
+        }
+
+    bundle = fallback.extract_pdf_to_page_acsd(pdf, provider=provider)
+
+    # At least two of the three batches were in flight together.
+    assert in_flight["max"] >= 2
+    assert [row["page_number"] for row in bundle["pages"]] == [1, 2, 3, 4, 5, 6]
+    assert [entry["batch"] for entry in bundle["batches"]] == [1, 2, 3]
+    assert all(entry["status"] == "verified" for entry in bundle["batches"])
+
+
 def test_build_concepts_conversion_uses_fallback_after_mathpix_hard_failure(
     client,
     tmp_path: Path,

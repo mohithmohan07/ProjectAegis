@@ -107,6 +107,15 @@ def _batch_size() -> int:
     ))))
 
 
+def _parallel_batches() -> int:
+    """Concurrent page-batch extractions. Batches are independent (own page
+    range, own cache key), so they overlap safely up to the shared OpenAI
+    concurrency gate; the default matches AEGIS_OPENAI_MAX_CONCURRENCY."""
+    return max(1, min(8, int(os.environ.get(
+        "AEGIS_GPT_PDF_ACSD_PARALLEL_BATCHES", "3"
+    ))))
+
+
 def _max_pages() -> int:
     return max(1, int(os.environ.get(
         "AEGIS_GPT_PDF_ACSD_MAX_PAGES", "120"
@@ -837,7 +846,7 @@ def extract_batch_via_openai(pages: list[PdfPage]) -> dict[str, Any]:
         prompt=_page_prompt(pages),
         pages=evidence_pages,
         response_schema=extraction_schema(pages),
-        purpose="source_adjudication",
+        purpose="page_transcription",
         max_tokens=_max_output_tokens(),
     )
     correction_history: list[dict[str, Any]] = []
@@ -871,7 +880,7 @@ def extract_batch_via_openai(pages: list[PdfPage]) -> dict[str, Any]:
                 ),
                 pages=evidence_pages,
                 response_schema=extraction_schema(pages),
-                purpose="source_adjudication",
+                purpose="page_transcription",
                 max_tokens=_max_output_tokens(),
             )
             continue
@@ -881,7 +890,7 @@ def extract_batch_via_openai(pages: list[PdfPage]) -> dict[str, Any]:
             prompt=_page_prompt(pages, candidate=normalized),
             pages=evidence_pages,
             response_schema=verification_schema(pages),
-            purpose="source_adjudication",
+            purpose="page_transcription",
             max_tokens=6000,
         )
         reason = _verification_rejection_reason(pages, verification)
@@ -918,7 +927,7 @@ def extract_batch_via_openai(pages: list[PdfPage]) -> dict[str, Any]:
             ),
             pages=evidence_pages,
             response_schema=extraction_schema(pages),
-            purpose="source_adjudication",
+            purpose="page_transcription",
             max_tokens=_max_output_tokens(),
         )
 
@@ -973,9 +982,7 @@ def extract_pdf_to_page_acsd(
         f"in {batch_count} verified batch(es).",
         level="warning",
     )
-    for batch_index, start_page in enumerate(
-        range(1, page_count + 1, size), start=1
-    ):
+    def _one_batch(batch_index: int, start_page: int) -> dict[str, Any]:
         batch = collect_pdf_pages(
             path,
             start_page=start_page,
@@ -999,6 +1006,46 @@ def extract_pdf_to_page_acsd(
                     "page_ids": [page.page_id for page in batch],
                     "result": result,
                 })
+        page_ids = [page.page_id for page in batch]
+        # Drop page image data before returning to the orchestrator.
+        del batch
+        if result.get("status") == "verified":
+            progress.log(
+                f"Verified GPT PDF-to-ACSD batch {batch_index}/{batch_count} "
+                f"({', '.join(page_ids)}; cache {cache_state}).",
+                level="success",
+            )
+        return {
+            "batch_index": batch_index,
+            "page_ids": page_ids,
+            "result": result,
+            "cache": cache_state,
+        }
+
+    starts = list(enumerate(range(1, page_count + 1, size), start=1))
+    outcomes: dict[int, dict[str, Any]] = {}
+    workers = min(_parallel_batches(), batch_count)
+    if workers <= 1:
+        for batch_index, start_page in starts:
+            outcomes[batch_index] = _one_batch(batch_index, start_page)
+    else:
+        # Batches are independent by construction (disjoint page ranges,
+        # per-batch cache keys, per-thread PDF handles), so they overlap up
+        # to the shared OpenAI concurrency gate. Assembly below stays in
+        # deterministic batch order regardless of completion order.
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {
+                pool.submit(_one_batch, batch_index, start_page): batch_index
+                for batch_index, start_page in starts
+            }
+            for future in as_completed(futures):
+                outcome = future.result()
+                outcomes[outcome["batch_index"]] = outcome
+    for batch_index, _start_page in starts:
+        outcome = outcomes[batch_index]
+        result = outcome["result"]
         if result.get("status") != "verified":
             raise ValueError(
                 f"GPT PDF-to-ACSD batch {batch_index}/{batch_count} requires review: "
@@ -1008,17 +1055,10 @@ def extract_pdf_to_page_acsd(
         accepted.extend(copy.deepcopy(rows))
         decisions.append({
             "batch": batch_index,
-            "page_ids": [page.page_id for page in batch],
-            "cache": cache_state,
+            "page_ids": outcome["page_ids"],
+            "cache": outcome["cache"],
             "status": "verified",
         })
-        progress.log(
-            f"Verified GPT PDF-to-ACSD batch {batch_index}/{batch_count} "
-            f"({', '.join(page.page_id for page in batch)}; cache {cache_state}).",
-            level="success",
-        )
-        # Drop page image data before advancing to the next batch.
-        del batch
     accepted.sort(key=lambda row: int(row.get("page_number") or 0))
     expected_pages = list(range(1, page_count + 1))
     received_pages = [int(row.get("page_number") or 0) for row in accepted]

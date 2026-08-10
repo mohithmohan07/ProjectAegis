@@ -256,7 +256,9 @@ def test_call_gpt_json_builds_a_request_a_reasoning_model_accepts(
     # The modern parameter name, not the removed max_tokens.
     assert "max_completion_tokens" in request
     assert "max_tokens" not in request
-    assert request["reasoning_effort"] == "max"
+    # Question parsing/enrichment is source-extraction work; the policy
+    # right-sizes it to "high" rather than requesting maximum deliberation.
+    assert request["reasoning_effort"] == "high"
     assert [message["role"] for message in request["messages"]] == [
         "system",
         "user",
@@ -270,9 +272,9 @@ def test_call_gpt_json_negotiates_effort_like_the_web_app(monkeypatch):
 
     class _RejectingCompletions(_FakeCompletions):
         def create(self, **kwargs):
-            if kwargs.get("reasoning_effort") == "max":
+            if kwargs.get("reasoning_effort") == "high":
                 error = Exception(
-                    "Unsupported value: 'reasoning_effort' does not support 'max'"
+                    "Unsupported value: 'reasoning_effort' does not support 'high'"
                 )
                 error.status_code = 400
                 error.param = "reasoning_effort"
@@ -289,4 +291,4 @@ def test_call_gpt_json_negotiates_effort_like_the_web_app(monkeypatch):
     data = module.call_gpt_json("gpt-5.6-luna", "system", "user")
 
     assert data == {"questions": []}
-    assert [call["reasoning_effort"] for call in calls] == ["max", "xhigh"]
+    assert [call["reasoning_effort"] for call in calls] == ["high", "medium"]

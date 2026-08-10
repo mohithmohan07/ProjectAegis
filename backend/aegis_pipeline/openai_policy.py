@@ -53,6 +53,7 @@ OpenAIPurpose = Literal[
     "assessment_generation",
     "source_extraction",
     "source_adjudication",
+    "page_transcription",
     "concept_mapping",
     "concept_detailing",
     "concept_validation",
@@ -66,9 +67,13 @@ OpenAIPurpose = Literal[
 ReasoningEffort = Literal["low", "medium", "high", "xhigh", "max"]
 
 
-# Aegis asks for the deepest deliberation the configured model will give, on
-# every purpose. Output quality is the product; token cost and latency are not
-# traded against it here.
+# Reasoning effort is matched to what each purpose actually exercises.
+# Judgment-heavy purposes (semantic adjudication, concept mapping/detailing,
+# placement) ask for the deepest deliberation the configured model will give.
+# Fidelity-heavy purposes (page transcription, mechanical extraction,
+# rewording) are copy-and-structure work verified by independent passes:
+# deep reasoning adds minutes per call there without adding accuracy, which
+# is what made GPT-to-ACSD conversion the slowest stage of a fresh run.
 #
 # ``max`` is a *request*, not an assumption. Some deployments expose a lower
 # ceiling and reject the value outright (this is what produced the historical
@@ -77,17 +82,22 @@ ReasoningEffort = Literal["low", "medium", "high", "xhigh", "max"]
 # that ceiling — so an unsupported value costs one probe, not one 400 per call.
 REASONING_EFFORT_BY_PURPOSE: Final[dict[OpenAIPurpose, ReasoningEffort]] = {
     "assessment_generation": "max",
-    "source_extraction": "max",
+    # Skeletons/inventory/polishing: structure recognition against supplied
+    # text; the terminal gates re-verify the products downstream.
+    "source_extraction": "high",
     "source_adjudication": "max",
+    # Faithful page transcription with an independent verification pass;
+    # accuracy comes from the verify/correct loop, not from deliberation.
+    "page_transcription": "medium",
     "concept_mapping": "max",
     "concept_detailing": "max",
-    "concept_validation": "max",
+    "concept_validation": "high",
     "semantic_resolution": "max",
     "pre_learning": "max",
     "workbook_planning": "max",
     "workbook_authoring": "max",
-    "revision_editing": "max",
-    "metadata": "max",
+    "revision_editing": "medium",
+    "metadata": "low",
 }
 
 # Ranked weakest to strongest. ``none`` is a real provider value; ``""`` means

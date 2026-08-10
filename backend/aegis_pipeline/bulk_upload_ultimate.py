@@ -162,7 +162,7 @@ def call_gpt_json(
     """
     response = call_with_effort_negotiation(
         model,
-        "metadata",
+        "source_extraction",
         lambda effort: client.chat.completions.create(
             model=model,
             response_format={"type": "json_object"},
