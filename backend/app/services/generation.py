@@ -14233,6 +14233,10 @@ def _fatal_errors(report: dict) -> list[dict]:
     return [
         e for e in report.get("errors", [])
         if e.get("code") in _FATAL_CODES
+        # A fatal-family code deliberately emitted as a warning (e.g. a
+        # missing Example illustration under the rewrite) ships flagged
+        # for review instead of blocking the terminal gate.
+        and str(e.get("severity") or "error") == "error"
     ]
 
 
