@@ -16781,6 +16781,13 @@ def _validate_final_or_raise(
             f"{len(coverage_defects['duplicate'])} duplicate source "
             "question(s)"
         )
+    # The semantic ownership family verifies Phase 3.3's certified
+    # placement artifacts (owner topics, hub contracts, certified hosts).
+    # Under the rewritten Phase 3 those artifacts do not exist: question
+    # ownership is the Host pass's API placement (checker-complete, with
+    # the deterministic rule reading as an advisory flag), and the exact
+    # rendered-coverage check above still guarantees every inventory
+    # question appears exactly once.
     semantic_defects = (
         {
             "unexpected_examples": _unexpected_rendered_type_examples(
@@ -16807,6 +16814,7 @@ def _validate_final_or_raise(
                 _hub_inventory_examples_in_types(records, inventory)),
         }
         if inventory is not None
+        and not _rewrite_placement_authority_active()
         else {}
     )
     nonempty_semantic = {
