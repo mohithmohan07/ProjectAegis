@@ -33,9 +33,13 @@ GROUNDING_SYSTEM = _SHARED + (
     " Task: ground each claim on exact source blocks from the concept's "
     "own topic. Response schema: {\"concepts\": [{\"concept_id\", "
     "\"source_block_ids\": [..], \"reference_block_ids\": [..], "
-    "\"confidence\", \"reason\"}]}. source_block_ids must all belong to "
+    "\"confidence\", \"reason\"}]}. source_block_ids should belong to "
     "the topic in the request and be minimally sufficient; blocks from "
-    "other topics that merely support context go in reference_block_ids."
+    "other topics that merely support context go in reference_block_ids. "
+    "One exception: when the concept's own topic does not teach the "
+    "claim at all, ground on the chapter blocks that DO teach it (from "
+    "other_topic_blocks) and say so in reason — that ships flagged for "
+    "review. Never return an empty source_block_ids."
 )
 
 ANALYSIS_SYSTEM = _SHARED + (

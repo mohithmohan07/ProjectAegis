@@ -246,16 +246,38 @@ def _grounding_checker(
                 if str(value)
             ]
             if not block_ids:
-                defects.append(f"{concept_id} has no source block")
-            wrong_topic = [b for b in block_ids if b not in topic_block_ids]
-            if wrong_topic:
-                # Rule 4a: print position is provenance. Cross-topic blocks
-                # may support a claim only as references, never as grounding.
                 defects.append(
-                    f"{concept_id} grounded on block(s) outside its topic: "
+                    f"{concept_id} has no source block — ground on the "
+                    "blocks that teach the claim: the concept's own topic "
+                    "when it teaches it, otherwise the other_topic_blocks "
+                    "that do; never return an empty grounding"
+                )
+            unknown_blocks = [
+                b for b in block_ids if b not in known_block_ids
+            ]
+            if unknown_blocks:
+                defects.append(
+                    f"{concept_id} grounded on unknown block(s): "
+                    + ", ".join(unknown_blocks[:4])
+                )
+            wrong_topic = [
+                b for b in block_ids
+                if b in known_block_ids and b not in topic_block_ids
+            ]
+            if wrong_topic:
+                # Rule 4a: print position is provenance, so grounding
+                # prefers the concept's own topic — the bounded corrections
+                # push the model back there. But a concept whose material
+                # is genuinely taught elsewhere (recovered chapter-opening
+                # rows) must ship flagged with its honest grounding, never
+                # fail the chapter.
+                defects.append(
+                    f"[confidence] {concept_id} grounded on block(s) "
+                    "outside its topic: "
                     + ", ".join(wrong_topic[:4])
-                    + " (cite them in reference_block_ids instead and ground "
-                    "on at least one block from the concept's own topic)"
+                    + " (if the concept's own topic teaches this claim, "
+                    "ground there instead; if it does not, keep this "
+                    "grounding and say so in reason)"
                 )
             references = [
                 str(value)
@@ -542,7 +564,14 @@ def settle(
                     "Ground every claim on the minimal exact source blocks "
                     "from the concept's own topic. Print position is "
                     "provenance, never grounding: a block from another "
-                    "topic may only appear in reference_block_ids. The "
+                    "topic may only appear in reference_block_ids. ONE "
+                    "exception: when the concept's own topic does not "
+                    "teach the claim at all (for example a chapter-opening "
+                    "concept whose material is actually taught inside a "
+                    "later section), ground on the chapter blocks that DO "
+                    "teach it — from other_topic_blocks — and explain that "
+                    "in reason; such a decision ships flagged for review. "
+                    "Never return an empty source_block_ids. The "
                     f"acceptance floor is {policy}."
                 ),
                 "topic": {"topic_id": topic_id, "title": topic_title},
@@ -556,6 +585,17 @@ def settle(
                     for concept_id, row in zip(concept_ids, batch_rows)
                 ],
                 "source_blocks": topic_blocks,
+                "other_topic_blocks": [
+                    {
+                        "block_id": row["block_id"],
+                        "topic_id": other_topic_id,
+                        "kind": row["kind"],
+                        "text": row["text"][:400],
+                    }
+                    for other_topic_id, rows in blocks_by_topic.items()
+                    if other_topic_id != topic_id
+                    for row in rows
+                ],
             }
             decision = kernel.decide(
                 kind="settle.grounding",

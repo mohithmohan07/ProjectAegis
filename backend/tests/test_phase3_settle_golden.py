@@ -256,6 +256,82 @@ def test_settle_resume_is_free_and_identical(golden_envelope, golden_rows):
     assert second == first
 
 
+def test_cross_topic_grounding_ships_flagged_instead_of_failing(
+    golden_envelope, golden_rows,
+):
+    """A concept whose material is taught in another topic (recovered
+    chapter-opening rows) grounds on the teaching blocks and ships flagged
+    — bounded corrections push back toward the own topic, but an honest
+    cross-topic grounding never kills the chapter."""
+    mapping = _replay_map(golden_envelope, golden_rows)
+    topology, base_grounding, analysis, critic = _providers(mapping)
+
+    # A real block from a different topic than the first grounded concept.
+    blocks = golden_envelope["graph"]["blocks"]
+    victim: dict = {}
+
+    def grounding(request: dict) -> dict:
+        response = base_grounding(request)
+        if not victim:
+            topic_id = request["topic"]["topic_id"]
+            foreign = next(
+                str(row["block_id"]) for row in blocks
+                if str(row.get("topic_id") or "") not in ("", topic_id)
+            )
+            row = response["concepts"][0]
+            row["source_block_ids"] = [foreign]
+            row["reason"] = "the claim is taught inside a later section"
+            victim["concept_id"] = row["concept_id"]
+            victim["block_id"] = foreign
+        else:
+            for row in response["concepts"]:
+                if row["concept_id"] == victim["concept_id"]:
+                    row["source_block_ids"] = [victim["block_id"]]
+        return response
+
+    settled = settle.settle(
+        golden_envelope,
+        topology_provider=topology,
+        grounding_provider=grounding,
+        analysis_provider=analysis,
+        critic=critic,
+        store=kernel.DecisionStore(),
+    )
+
+    assert len(settled) == 53
+    flagged = [
+        row for row in settled
+        if any(
+            "outside its topic" in flag
+            for flag in row.get("review_flags") or []
+        )
+    ]
+    assert len(flagged) == 1
+    assert flagged[0]["_source_block_ids"] == [victim["block_id"]]
+
+
+def test_grounding_on_an_unknown_block_still_fails_closed(
+    golden_envelope, golden_rows,
+):
+    mapping = _replay_map(golden_envelope, golden_rows)
+    topology, base_grounding, analysis, critic = _providers(mapping)
+
+    def grounding(request: dict) -> dict:
+        response = base_grounding(request)
+        response["concepts"][0]["source_block_ids"] = ["BLOCK-FABRICATED"]
+        return response
+
+    with pytest.raises(kernel.ContractError, match="unknown block"):
+        settle.settle(
+            golden_envelope,
+            topology_provider=topology,
+            grounding_provider=grounding,
+            analysis_provider=analysis,
+            critic=critic,
+            store=kernel.DecisionStore(),
+        )
+
+
 def test_critic_dissent_ships_flags_on_the_settled_rows(
     golden_envelope, golden_rows,
 ):

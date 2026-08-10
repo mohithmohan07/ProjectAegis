@@ -1288,6 +1288,12 @@ otherwise valid concept map. Return ONLY strict JSON:
 
 Rules:
 - Every supplied missing source topic MUST receive at least one normal concept.
+- Every recovered concept must be TAUGHT by the supplied excerpt itself. Do
+  not write concepts for material the excerpt only previews, mentions, or
+  asks about — detailed definitions belong to the sections that teach them.
+  When the missing topic is thin framing material (a chapter opening), ONE
+  modest framing concept grounded in its own text is the correct recovery,
+  not a set of definition concepts imported from later sections.
 - Infer concept grain from that topic's own excerpt and hierarchy, not from the
   subject label or from a conventional textbook template.
 - Preserve the supplied topic string exactly. Never create another topic.
