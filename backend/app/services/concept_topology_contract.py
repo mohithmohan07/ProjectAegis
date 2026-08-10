@@ -50,6 +50,8 @@ def _run_rewritten_phase3(
     assembled rows — Types embedded in the house format, QIDs routed —
     for the unchanged deposit and release chain downstream.
     """
+    import json
+
     from pathlib import Path
 
     from . import canonical_source_phase3 as phase3_core
@@ -57,18 +59,65 @@ def _run_rewritten_phase3(
     from .phase3 import runner as p3_runner
 
     session = phase3_core.active_session() or {}
-    env = p3_envelope.build(
-        graph=phase3_core.active_graph() or {},
-        canonical=session.get("canonical") or {},
-        skeleton_rows=list(out),
-        inventory=kwargs.get("question_task_inventory") or {},
-        mined_types=kwargs.get("mined_types") or {},
-        metadata=kwargs.get("meta") or {},
-    )
+    graph = phase3_core.active_graph() or {}
     store_dir = None
+    envelope_path = None
     artifact_dir = session.get("artifact_dir")
     if artifact_dir:
         store_dir = Path(artifact_dir) / "phase3-decisions"
+        envelope_path = Path(artifact_dir) / "source.phase3-envelope.json"
+
+    # Decide-once extends to the envelope itself: resume-time inventory
+    # refreshes and re-mined Type coverage produce a semantically
+    # equivalent but byte-different envelope, which changes every
+    # decision key and re-bills the entire run (~40 minutes instead of a
+    # free replay). Reuse the sealed envelope while the source contract
+    # and the boundary skeleton are unchanged.
+    skeleton_sha = phase3_core._sha256_json(list(out))
+    env = None
+    if envelope_path is not None and envelope_path.exists():
+        try:
+            wrapper = json.loads(envelope_path.read_text(encoding="utf-8"))
+            stored = p3_envelope.validate(wrapper.get("envelope") or {})
+            if (
+                str(wrapper.get("boundary_skeleton_sha256") or "")
+                == skeleton_sha
+                and str(stored.get("source_contract_hash") or "")
+                == str(graph.get("source_contract_hash") or "")
+            ):
+                env = stored
+                generation.progress.log(
+                    "Reusing the sealed Phase 3 envelope "
+                    f"{str(env.get('envelope_sha256'))[:12]}; every stored "
+                    "decision replays without a model call.",
+                    level="success",
+                )
+        except Exception:  # noqa: BLE001 - a stale artifact never blocks
+            env = None
+    if env is None:
+        env = p3_envelope.build(
+            graph=graph,
+            canonical=session.get("canonical") or {},
+            skeleton_rows=list(out),
+            inventory=kwargs.get("question_task_inventory") or {},
+            mined_types=kwargs.get("mined_types") or {},
+            metadata=kwargs.get("meta") or {},
+        )
+        if envelope_path is not None:
+            try:
+                envelope_path.write_text(
+                    json.dumps(
+                        {
+                            "boundary_skeleton_sha256": skeleton_sha,
+                            "envelope": env,
+                        },
+                        ensure_ascii=False,
+                        indent=1,
+                    ),
+                    encoding="utf-8",
+                )
+            except OSError:
+                pass  # persistence is best-effort; the run proceeds
     result = p3_runner.run(env, store_dir=store_dir)
     summary = result["summary"]
     generation.progress.log(
