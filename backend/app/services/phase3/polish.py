@@ -159,24 +159,53 @@ def _checker(
                     f"{analysis_tail.strip()[:300]!r}"
                 )
                 if code["code"] == "generic_error_analysis":
-                    # The house normalizer silently REPLACES any Error
-                    # Analysis its shape filter rejects with a fallback the
-                    # terminal gate forbids; without this hint the model
-                    # cannot see why its rewrite keeps "failing".
-                    message += (
-                        "; your Error Analysis text was rejected by the "
-                        "shape filter and replaced with a forbidden "
-                        "fallback — write ONE sentence where 'Students' "
-                        "or 'The learner' performs a faulty ACTION "
-                        "(misapplies, misplaces, reverses, swaps, omits, "
-                        "skips, mislabels, misreads, 'fails to ...') "
-                        "with an 'instead of'/'rather than' contrast, "
-                        "e.g. 'Students misplace X at ... instead of "
-                        "...'; NEVER use believe/think/assume/expect/"
-                        "interpret/misunderstand/regard/consider/"
-                        "confuse/mistake/treat as the verb and never "
-                        "write 'did not'/'does not' corrections"
+                    # Distinguish the normalizer's two silent kill paths:
+                    # a shape rejection, and the overlap filter dropping
+                    # an EA that restates the Misconception's content.
+                    # Without naming the right one the model cannot
+                    # converge (dress rehearsal 11: every truthful EA for
+                    # one row overlapped its misconception and vanished).
+                    from .. import concept_refiner as cr
+
+                    raw_details = str(
+                        seen[ref].get("concept_details") or ""
                     )
+                    _misc, raw_ea = cr.analysis_components(
+                        cr.normalize_analysis_sections(raw_details)
+                    )
+                    wrote_valid_ea = any(
+                        cv.is_valid_error_analysis(stmt)
+                        for stmt in cv._learner_analysis_statements(
+                            raw_ea
+                        )
+                    )
+                    if wrote_valid_ea:
+                        message += (
+                            "; your Error Analysis sentence was VALID "
+                            "but was dropped by the overlap filter "
+                            "because it restates the Misconceptions "
+                            "sentence — write an Error Analysis about a "
+                            "DIFFERENT concrete faulty action, sharing "
+                            "as few words as possible with the "
+                            "Misconceptions sentence (you may also "
+                            "rephrase the Misconceptions sentence to "
+                            "free up vocabulary)"
+                        )
+                    else:
+                        message += (
+                            "; your Error Analysis text was rejected by "
+                            "the shape filter and replaced with a "
+                            "forbidden fallback — write ONE sentence "
+                            "where 'Students' or 'The learner' performs "
+                            "a faulty ACTION (misapplies, misplaces, "
+                            "reverses, swaps, omits, skips, mislabels, "
+                            "misreads, 'fails to ...') with an 'instead "
+                            "of'/'rather than' contrast; NEVER use "
+                            "believe/think/assume/expect/interpret/"
+                            "misunderstand/regard/consider/confuse/"
+                            "mistake/treat as the verb and never write "
+                            "'did not'/'does not' corrections"
+                        )
                 defects.append(message)
         return defects
 
@@ -256,7 +285,11 @@ def polish(
                 "assume, expect, interpret, misunderstand, regard, "
                 "consider, confuse, mistake, or treat as the verb, and "
                 "never write 'did not'/'does not' corrections — those "
-                "shapes are rejected. Keep every other section and its "
+                "shapes are rejected. The Error Analysis must also NOT "
+                "restate the Misconceptions sentence: describe a "
+                "different concrete faulty action sharing as few words "
+                "as possible with it, or the overlap filter deletes "
+                "your sentence. Keep every other section and its "
                 "meaning exactly as it is; never rename the concept."
             ),
             "rows": [
