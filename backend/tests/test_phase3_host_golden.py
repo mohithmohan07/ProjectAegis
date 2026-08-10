@@ -85,6 +85,17 @@ def _replay_provider(
                 "host_concept_title": title,
                 "confidence": 0.99,
                 "reason": "replayed from the golden host maps",
+                # Golden-era decisions predate the routing rule: each
+                # question fell under its host concept alone, which the
+                # router sends straight back to that concept.
+                "qid_concepts": {
+                    qid: [
+                        golden_qids[qid]["concept_title"]
+                        if qid in golden_qids
+                        else title
+                    ]
+                    for qid in unit.get("qids") or []
+                },
             })
         return {"assignments": assignments}
 
@@ -251,6 +262,120 @@ def test_a_qid_cited_as_a_source_block_gets_the_question_id_hint(
     message = str(failed.value)
     assert "QINV-0014" in message
     assert "question ids" in message
+
+
+def _routing_fixture():
+    topic_order = {"TOPIC-0001": 0, "TOPIC-0002": 1}
+    a1 = {"concept_title": "Alpha", "_semantic_topic_id": "TOPIC-0001"}
+    a2 = {"concept_title": "Beta", "_semantic_topic_id": "TOPIC-0001"}
+    b1 = {"concept_title": "Gamma", "_semantic_topic_id": "TOPIC-0002"}
+    culms = {
+        "TOPIC-0001": {
+            "concept_title": "Culmination - One",
+            "_semantic_topic_id": "TOPIC-0001",
+        },
+        "TOPIC-0002": {
+            "concept_title": "Culmination - Two",
+            "_semantic_topic_id": "TOPIC-0002",
+        },
+    }
+    return topic_order, a1, a2, b1, culms
+
+
+def test_question_routing_single_concept_keeps_the_question():
+    topic_order, a1, _a2, _b1, culms = _routing_fixture()
+    row, rule = host_mod._route_question(
+        [a1], topic_order=topic_order, culmination_by_topic=culms
+    )
+    assert row is a1 and rule == "single_concept"
+
+
+def test_question_routing_same_topic_multi_concept_goes_to_culmination():
+    topic_order, a1, a2, _b1, culms = _routing_fixture()
+    row, rule = host_mod._route_question(
+        [a1, a2], topic_order=topic_order, culmination_by_topic=culms
+    )
+    assert row["concept_title"] == "Culmination - One"
+    assert rule == "same_topic_culmination"
+
+
+def test_question_routing_two_concepts_across_topics_goes_to_later_concept():
+    topic_order, a1, _a2, b1, culms = _routing_fixture()
+    row, rule = host_mod._route_question(
+        [a1, b1], topic_order=topic_order, culmination_by_topic=culms
+    )
+    assert row is b1 and rule == "later_topic_concept"
+
+
+def test_question_routing_many_concepts_across_topics_goes_to_later_culmination():
+    topic_order, a1, a2, b1, culms = _routing_fixture()
+    row, rule = host_mod._route_question(
+        [a1, a2, b1], topic_order=topic_order, culmination_by_topic=culms
+    )
+    assert row["concept_title"] == "Culmination - Two"
+    assert rule == "later_topic_culmination"
+
+
+def test_question_routing_duplicate_titles_do_not_inflate_membership():
+    topic_order, a1, _a2, _b1, culms = _routing_fixture()
+    row, rule = host_mod._route_question(
+        [a1, dict(a1)], topic_order=topic_order, culmination_by_topic=culms
+    )
+    assert rule == "single_concept"
+    assert row["concept_title"] == "Alpha"
+
+
+def test_multi_concept_membership_routes_through_host(
+    golden_envelope, settled_rows,
+):
+    """A provider reporting two same-topic concepts for a QID must see the
+    question land on that topic's culmination row."""
+    units = host_mod.derive_units(golden_envelope)
+    unit = next(u for u in units if u["qids"])
+    by_topic: dict[str, list[dict]] = {}
+    culm_by_topic: dict[str, dict] = {}
+    for row in settled_rows:
+        topic_id = str(row.get("_semantic_topic_id"))
+        title = str(row.get("concept_title") or "")
+        if title.lower().startswith("culmination"):
+            culm_by_topic.setdefault(topic_id, row)
+        else:
+            by_topic.setdefault(topic_id, []).append(row)
+    topic_id, pair = next(
+        (tid, rows) for tid, rows in by_topic.items()
+        if len(rows) >= 2 and tid in culm_by_topic
+    )
+
+    def provider(request: dict) -> dict:
+        return {"assignments": [
+            {
+                "unit_id": u["unit_id"],
+                "decision": "existing",
+                "host_concept_title": pair[0]["concept_title"],
+                "confidence": 0.99,
+                "reason": "test",
+                "qid_concepts": {
+                    qid: [
+                        pair[0]["concept_title"],
+                        pair[1]["concept_title"],
+                    ]
+                    for qid in u.get("qids") or []
+                },
+            }
+            for u in request["units"]
+        ]}
+
+    result = host_mod.host(
+        golden_envelope, settled_rows,
+        provider=provider, critic=_verified_critic,
+        store=kernel.DecisionStore(),
+    )
+    routed = result["qid_map"][unit["qids"][0]]
+    assert routed["decision"] == "routed"
+    assert routed["routing_rule"] == "same_topic_culmination"
+    assert _normal(routed["concept_title"]) == _normal(
+        culm_by_topic[topic_id]["concept_title"]
+    )
 
 
 def test_critic_dissent_flags_the_host_entries(

@@ -123,6 +123,52 @@ def _resolve_host_title(
     return candidates[0] if len(candidates) == 1 else None
 
 
+def _route_question(
+    rows: list[Mapping[str, Any]],
+    *,
+    topic_order: Mapping[str, int],
+    culmination_by_topic: Mapping[str, Mapping[str, Any]],
+) -> tuple[Mapping[str, Any], str]:
+    """Deterministic question destination under the house routing rule.
+
+    One concept -> that concept. Several concepts, one topic -> that
+    topic's culmination. Two concepts across two topics -> the involved
+    concept in the LATER topic (teaching order). Three or more concepts
+    across topics -> the later topic's culmination. The question itself
+    is never split; sub-questions travel with it.
+    """
+
+    unique: dict[tuple[str, str], Mapping[str, Any]] = {}
+    for row in rows:
+        key = (
+            str(row.get("_semantic_topic_id") or ""),
+            _normal(row.get("concept_title")).casefold(),
+        )
+        unique.setdefault(key, row)
+    concepts = list(unique.values())
+    if len(concepts) == 1:
+        return concepts[0], "single_concept"
+    topics = {
+        str(row.get("_semantic_topic_id") or "") for row in concepts
+    }
+    later = max(topics, key=lambda tid: (topic_order.get(tid, -1), tid))
+    in_later = [
+        row for row in concepts
+        if str(row.get("_semantic_topic_id") or "") == later
+    ]
+    if len(topics) == 1:
+        culmination = culmination_by_topic.get(later)
+        if culmination is not None:
+            return culmination, "same_topic_culmination"
+        return in_later[-1], "same_topic_culmination_missing"
+    if len(concepts) == 2:
+        return in_later[0], "later_topic_concept"
+    culmination = culmination_by_topic.get(later)
+    if culmination is not None:
+        return culmination, "later_topic_culmination"
+    return in_later[-1], "later_topic_culmination_missing"
+
+
 def _host_checker(
     units: list[dict[str, Any]],
     *,
@@ -130,6 +176,7 @@ def _host_checker(
     known_block_ids: set[str],
 ) -> Callable[[Mapping[str, Any]], list[str]]:
     expected = {row["unit_id"] for row in units}
+    qids_by_unit = {row["unit_id"]: list(row.get("qids") or []) for row in units}
 
     def check(response: Mapping[str, Any]) -> list[str]:
         defects: list[str] = []
@@ -217,6 +264,58 @@ def _host_checker(
                     f"{unit_id} decision {decision!r} is not one of "
                     "existing/create_new"
                 )
+            expected_qids = qids_by_unit.get(unit_id) or []
+            membership = row.get("qid_concepts")
+            if expected_qids:
+                if not isinstance(membership, Mapping):
+                    defects.append(
+                        f"{unit_id} has no qid_concepts object naming the "
+                        "concepts each question falls under"
+                    )
+                else:
+                    new_title = ""
+                    if decision == "create_new" and isinstance(
+                        row.get("new_concept"), Mapping
+                    ):
+                        new_title = _normal(
+                            row["new_concept"].get("concept_title")
+                        ).casefold()
+                    for qid in expected_qids:
+                        titles = membership.get(qid)
+                        if not isinstance(titles, list) or not titles:
+                            defects.append(
+                                f"{unit_id} qid_concepts must list at least "
+                                f"one concept for {qid}"
+                            )
+                            continue
+                        from .. import concept_refiner as cr
+
+                        for title in titles:
+                            key = _resolve_host_title(title, settled_titles)
+                            if key is None and (
+                                not new_title
+                                or _normal(title).casefold() != new_title
+                            ):
+                                defects.append(
+                                    f"{unit_id} qid_concepts names "
+                                    f"{str(title)[:60]!r} for {qid} which is "
+                                    "not a settled concept title"
+                                )
+                            elif cr.is_culmination(_normal(title)):
+                                defects.append(
+                                    f"{unit_id} qid_concepts lists a "
+                                    f"culmination row for {qid}; name the "
+                                    "teaching concepts it falls under — the "
+                                    "pipeline routes to culminations itself"
+                                )
+                    unknown_qids = sorted(
+                        set(membership) - set(expected_qids)
+                    )
+                    if unknown_qids:
+                        defects.append(
+                            f"{unit_id} qid_concepts names unknown qid(s): "
+                            + ", ".join(unknown_qids[:4])
+                        )
         missing = sorted(expected - seen)
         if missing:
             defects.append("undecided unit(s): " + ", ".join(missing))
@@ -274,6 +373,19 @@ def host(
         for row in env["graph"]["topics"]
         if isinstance(row, Mapping)
     }
+    topic_order = {
+        str(row.get("topic_id") or ""): index
+        for index, row in enumerate(env["graph"]["topics"])
+        if isinstance(row, Mapping)
+    }
+    from .. import concept_refiner as cr
+
+    culmination_by_topic: dict[str, dict[str, Any]] = {}
+    for row in settled_rows:
+        if cr.is_culmination(_normal(row.get("concept_title"))):
+            culmination_by_topic.setdefault(
+                str(row.get("_semantic_topic_id") or ""), dict(row)
+            )
 
     units = derive_units(env)
     progress.log(
@@ -323,7 +435,17 @@ def host(
                 "durable source idea; create_new only when no existing row "
                 "can host a distinct durable idea, and then define the "
                 "complete source-grounded concept. Confidence floor is "
-                f"{policy}."
+                f"{policy}. Separately, for EVERY qid list in qid_concepts "
+                "every settled concept the whole question falls under (a "
+                "question with sub-questions is one unbroken question). "
+                "The pipeline routes each question deterministically from "
+                "that membership: one concept keeps the question; several "
+                "concepts in one topic send it to that topic's "
+                "culmination; concepts across topics send it to the "
+                "involved concept in the later topic, or to the later "
+                "topic's culmination when more than two concepts are "
+                "involved. Never omit a concept the question genuinely "
+                "requires, and never pad the list."
             ),
             "units": [
                 {
@@ -410,8 +532,59 @@ def host(
             if flags:
                 entry["review_flags"] = list(flags)
             host_map[unit["unit_id"]] = entry
+            # House routing rule: a question goes where its full concept
+            # membership says, not automatically to its Type's host.
+            membership = verdict.get("qid_concepts")
             for qid in unit["qids"]:
-                qid_map[qid] = copy.deepcopy(entry)
+                named = (
+                    membership.get(qid)
+                    if isinstance(membership, Mapping)
+                    else None
+                )
+                rows_for_qid: list[Mapping[str, Any]] = []
+                for title in named or []:
+                    key = _resolve_host_title(title, settled_titles)
+                    if key is not None:
+                        rows_for_qid.append(settled_titles[key])
+                    elif (
+                        str(verdict.get("decision")) == "create_new"
+                        and _normal(title).casefold()
+                        == _normal(entry_source.get("concept_title")).casefold()
+                    ):
+                        rows_for_qid.append(entry_source)
+                if not rows_for_qid:
+                    # Replayed decisions from before the routing rule carry
+                    # no membership; the unit host is their single concept.
+                    rows_for_qid = [entry_source]
+                destination, rule = _route_question(
+                    rows_for_qid,
+                    topic_order=topic_order,
+                    culmination_by_topic=culmination_by_topic,
+                )
+                qid_entry = {
+                    "decision": "routed",
+                    "routing_rule": rule,
+                    "concept_title": _normal(
+                        destination.get("concept_title")
+                    ),
+                    "parent_concept": _normal(
+                        destination.get("parent_concept")
+                    ),
+                    "topic": _normal(destination.get("topic")),
+                    "topic_id": str(
+                        destination.get("_semantic_topic_id") or ""
+                    ),
+                    "confidence": confidence,
+                }
+                qid_flags = list(flags)
+                if rule.endswith("_missing"):
+                    qid_flags.append(
+                        f"{qid}: its topic has no culmination row; routed "
+                        "to a topic concept instead"
+                    )
+                if qid_flags:
+                    qid_entry["review_flags"] = qid_flags
+                qid_map[qid] = qid_entry
 
     flagged = sum(
         1 for entry in host_map.values() if entry.get("review_flags")

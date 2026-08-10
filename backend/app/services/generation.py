@@ -15276,6 +15276,21 @@ def _resolved_type_case_qid_placement_ledger(
     return copy.deepcopy(reference)
 
 
+def _rewrite_placement_authority_active() -> bool:
+    """Whether the rewritten Phase 3 is the placement authority.
+
+    The old 3.2/3.3 machinery minted per-row placement contracts and a
+    certified QID placement ledger; the terminal gates verify those
+    artifacts. The rewritten pipeline replaces that machinery with its own
+    sealed chain (envelope seal, decide-once store, row certificates,
+    ordered lineage, closed-world QID coverage), so under the rewrite flag
+    the old-artifact gates must not demand what no longer exists.
+    """
+    from .phase3 import runner as _phase3_runner
+
+    return _phase3_runner.rewrite_enabled()
+
+
 def _final_type_case_qid_host_manifests(
     records: list[dict],
     inventory: dict | None,
@@ -15301,6 +15316,7 @@ def _final_type_case_qid_host_manifests(
             config.use_live_generation()
             and isinstance(_phase3.active_graph(), dict)
             and (inventory or {}).get("items")
+            and not _rewrite_placement_authority_active()
         ):
             raise RuntimeError(
                 "type_case_owner_uncertified: live finalization has no "
@@ -22848,6 +22864,7 @@ def concepts_from_mmd(
                     ),
                     require_placement_contracts=(
                         production_grounding_required
+                        and not _rewrite_placement_authority_active()
                     ),
                 )
                 if grounding_certificate_required

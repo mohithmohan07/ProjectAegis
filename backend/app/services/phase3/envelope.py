@@ -75,7 +75,17 @@ def build(
         "metadata": copy.deepcopy(
             dict(metadata or (graph or {}).get("metadata") or {})
         ),
+        # The graph is carried VERBATIM: the deposit chain recomputes
+        # semantic_topology_sha256 from the ACTIVE graph, whose identity
+        # fields (schema/compiler versions, classification mode, source
+        # contract) live at the top level. Dropping them here made the
+        # sealed topology hash unmatchable (staged run 2).
         "graph": {
+            **{
+                key: copy.deepcopy(value)
+                for key, value in dict(graph or {}).items()
+                if key not in ("topics", "subtopics", "blocks")
+            },
             "topics": copy.deepcopy(list(graph.get("topics") or [])),
             "subtopics": copy.deepcopy(list(graph.get("subtopics") or [])),
             "blocks": copy.deepcopy(list(graph.get("blocks") or [])),

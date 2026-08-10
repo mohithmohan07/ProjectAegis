@@ -950,7 +950,10 @@ def _deposit_concepts(
                     else None
                 ),
                 require_semantic_graph=config.use_live_generation(),
-                require_placement_contracts=config.use_live_generation(),
+                require_placement_contracts=(
+                    config.use_live_generation()
+                    and not generation._rewrite_placement_authority_active()
+                ),
                 type_case_qid_placement_ledger=(
                     type_case_qid_placement_ledger
                 ),
@@ -1130,7 +1133,10 @@ def _deposit_concepts(
                     else None
                 ),
                 require_semantic_graph=config.use_live_generation(),
-                require_placement_contracts=config.use_live_generation(),
+                require_placement_contracts=(
+                    config.use_live_generation()
+                    and not generation._rewrite_placement_authority_active()
+                ),
                 type_case_qid_placement_ledger=(
                     type_case_qid_placement_ledger
                 ),
