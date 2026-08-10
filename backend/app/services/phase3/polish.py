@@ -38,8 +38,14 @@ def _failures(
 ) -> dict[int, list[dict[str, str]]]:
     from .. import concept_validator as cv
 
+    # Measure with the terminal gate's exact yardstick: the strict
+    # analysis-section option adds the generic-filler judgment that the
+    # deposit boundary applies (the lax default passed rows the gate
+    # then rejected — 4 found vs 30 failing, dress rehearsal 5).
     report = cv.validate_concept_rows(
-        list(rows), allow_culmination=True, source_text=source_text,
+        list(rows), allow_culmination=True,
+        strict_analysis_section=True,
+        source_text=source_text,
     )
     failures: dict[int, list[dict[str, str]]] = {}
     for error in report.get("errors") or []:
