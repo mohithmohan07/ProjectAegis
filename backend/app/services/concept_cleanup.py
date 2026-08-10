@@ -323,11 +323,34 @@ def strip_control_chars(text: str) -> str:
     return _CONTROL_CHARS_RE.sub("", text) if text else text
 
 
+def _ellipsis_spacing_is_source_exact() -> bool:
+    """Whether a spaced ellipsis (``"12, ..."``) must survive tidying.
+
+    The rendered-inventory repair deliberately restores exact source
+    wording, which in mathematics sequences includes a space before the
+    ellipsis. Tightening it here made the two normalizers oscillate
+    (restore re-spaces, tidy re-collapses), which the sealed-row
+    fixpoint correctly refuses. Under the rewritten pipeline the
+    source-exact form wins; the legacy path keeps the tightened style.
+    """
+    try:
+        from .phase3 import runner as _phase3_runner
+    except ImportError:  # pragma: no cover - defensive import ordering
+        return False
+    return _phase3_runner.rewrite_enabled()
+
+
 def _tidy(text: str) -> str:
     """Repair whitespace/punctuation artifacts left after deletions."""
     text = re.sub(r"\(\s*\)", "", text)            # empty parens
     text = re.sub(r"[ \t]{2,}", " ", text)          # collapsed spaces
-    text = re.sub(r"\s+([.;,:])", r"\1", text)      # space before punctuation
+    if _ellipsis_spacing_is_source_exact():
+        # Tighten punctuation but keep a source-exact spaced ellipsis:
+        # a dot only tightens when it is not the start of "..".
+        text = re.sub(r"\s+([;,:])", r"\1", text)
+        text = re.sub(r"\s+(\.(?!\.))", r"\1", text)
+    else:
+        text = re.sub(r"\s+([.;,:])", r"\1", text)  # space before punctuation
     text = re.sub(r"([(])\s+", r"\1", text)         # space after "("
     text = re.sub(r"\s+\)", ")", text)              # space before ")"
     text = re.sub(r"(?:\s*,){2,}", ",", text)       # doubled commas

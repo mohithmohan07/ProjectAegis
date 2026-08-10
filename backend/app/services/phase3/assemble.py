@@ -10,6 +10,7 @@ provider to correct.
 from __future__ import annotations
 
 import copy
+import os
 import re
 from typing import Any, Mapping
 
@@ -309,6 +310,24 @@ def assemble(
             for index, (before, after) in enumerate(zip(rows, replayed))
             if before != after
         ]
+        dump_path = ""
+        try:
+            import json as _json
+            import tempfile
+
+            handle, dump_path = tempfile.mkstemp(
+                prefix="aegis-assemble-fixpoint-", suffix=".json"
+            )
+            with os.fdopen(handle, "w", encoding="utf-8") as dump:
+                _json.dump(
+                    {"rows": rows, "replayed": replayed},
+                    dump,
+                    ensure_ascii=False,
+                    indent=1,
+                    default=str,
+                )
+        except OSError:  # pragma: no cover - diagnostics never block
+            dump_path = ""
         detail = ""
         if changed:
             first = changed[0]
@@ -333,6 +352,7 @@ def assemble(
             + ",".join(str(index) for index in changed[:8])
             + f"; row count {len(rows)} -> {len(replayed)})"
             + detail
+            + (f"; full row dump: {dump_path}" if dump_path else "")
             + "; sealing them would break the certificate at the "
             "deposit boundary"
         )

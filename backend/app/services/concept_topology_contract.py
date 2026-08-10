@@ -79,11 +79,22 @@ def _run_rewritten_phase3(
         try:
             wrapper = json.loads(envelope_path.read_text(encoding="utf-8"))
             stored = p3_envelope.validate(wrapper.get("envelope") or {})
+            from . import grounding_certificate as _gc
+
             if (
                 str(wrapper.get("boundary_skeleton_sha256") or "")
                 == skeleton_sha
                 and str(stored.get("source_contract_hash") or "")
                 == str(graph.get("source_contract_hash") or "")
+                # The topology itself must match too: a re-derived
+                # semantic graph with the same source contract would
+                # otherwise replay decisions sealed against a graph
+                # that no longer exists, and the deposit-time drift
+                # check would refuse the payload much later.
+                and _gc.semantic_topology_sha256(
+                    stored.get("graph") or {}
+                )
+                == _gc.semantic_topology_sha256(graph)
             ):
                 env = stored
                 generation.progress.log(
