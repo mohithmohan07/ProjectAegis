@@ -350,6 +350,13 @@ def polish(
             provider=provider,
             checker=_checker(batch, source_text=source_text),
             store=store,
+            # The gate codes ARE the contract: tightening them must mint
+            # new decision keys, or a stored repair that predates a code
+            # replays past the stricter checker (rehearsal 15: a
+            # section-dropping repair replayed from the store).
+            policy_version="content-codes:" + ",".join(
+                sorted(CONTENT_CODES)
+            ),
         )
         for row in decision["response"].get("rows") or []:
             if not isinstance(row, Mapping):
