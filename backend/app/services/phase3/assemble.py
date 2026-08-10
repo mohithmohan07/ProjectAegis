@@ -158,6 +158,52 @@ def assemble(
         for flag in entry.get("review_flags") or []:
             flags_by_key.setdefault(key, []).append(str(flag))
 
+    # House contract: a Type lives on exactly ONE concept host. If cases
+    # of the same Type were hosted on different concepts, consolidate the
+    # whole Type onto its majority host.
+    host_by_type: dict[str, tuple[str, str]] = {}
+    for key, unit_ids in units_by_key.items():
+        for unit_id in unit_ids:
+            type_id = unit_id.split("::")[0]
+            host_by_type.setdefault(type_id, key)
+    counts: dict[tuple[str, tuple[str, str]], int] = {}
+    for key, unit_ids in units_by_key.items():
+        for unit_id in unit_ids:
+            type_id = unit_id.split("::")[0]
+            counts[(type_id, key)] = counts.get((type_id, key), 0) + 1
+    for type_id in list(host_by_type):
+        best = max(
+            (k for (t, k) in counts if t == type_id),
+            key=lambda k: counts[(type_id, k)],
+        )
+        host_by_type[type_id] = best
+    consolidated: dict[tuple[str, str], list[str]] = {}
+    for key, unit_ids in units_by_key.items():
+        for unit_id in unit_ids:
+            type_id = unit_id.split("::")[0]
+            consolidated.setdefault(host_by_type[type_id], []).append(unit_id)
+    units_by_key = consolidated
+
+    # House contract: a culmination recap names every concept of its topic.
+    from .. import concept_refiner as cr
+
+    titles_by_topic: dict[str, list[str]] = {}
+    for row in rows:
+        title = _normal(row.get("concept_title"))
+        if not cr.is_culmination(title):
+            titles_by_topic.setdefault(
+                str(row.get("_semantic_topic_id") or ""), []
+            ).append(title)
+    for row in rows:
+        if cr.is_culmination(_normal(row.get("concept_title"))):
+            titles = titles_by_topic.get(
+                str(row.get("_semantic_topic_id") or ""), []
+            )
+            if titles:
+                row["concept_details"] = (
+                    "Description: Recap of " + "; ".join(titles) + "."
+                )
+
     for key, unit_ids in units_by_key.items():
         row = row_by_key[key]
         section = render_types_section(

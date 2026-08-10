@@ -72,11 +72,14 @@ def test_types_are_embedded_in_the_house_format(assembled, golden_envelope):
     result, golden_hosts, _settled = assembled
     types, cases = assemble_mod._type_catalog(golden_envelope)
 
-    # QINV-0005's certified host carries TYPE-0001::CASE-0002.
-    golden = golden_hosts["qid_map"]["QINV-0005"]
+    # House contract: the whole Type lives on ONE host (its majority
+    # host), while QIDs keep their per-case certified routing.
     row = next(
         row for row in result["rows"]
-        if _normal(row["concept_title"]) == _normal(golden["concept_title"])
+        if any(
+            unit.startswith("TYPE-0001::")
+            for unit in row.get("_aegis_release_type_case_routes") or []
+        )
     )
     details = row["concept_details"]
     assert " // Types: " in details
@@ -89,6 +92,13 @@ def test_types_are_embedded_in_the_house_format(assembled, golden_envelope):
     assert "TYPE-0001::CASE-0002::0002" in row[
         "_aegis_release_type_case_routes"
     ]
+    # No Type spans two hosts anywhere in the assembled output.
+    seen: dict[str, str] = {}
+    for out_row in result["rows"]:
+        for unit in out_row.get("_aegis_release_type_case_routes") or []:
+            type_id = unit.split("::")[0]
+            owner = _normal(out_row["concept_title"])
+            assert seen.setdefault(type_id, owner) == owner, type_id
 
 
 def test_every_certified_qid_routes_to_its_host_row(assembled):
