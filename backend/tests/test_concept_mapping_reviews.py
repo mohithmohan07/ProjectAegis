@@ -1850,6 +1850,50 @@ def test_terminal_validation_rejects_both_title_substitution_fallbacks():
     })
 
 
+def test_authored_one_sided_analysis_gets_no_deterministic_filler(monkeypatch):
+    """Under the rewrite, either authored section alone is complete: the
+    refine pass must never pad the other side with templated filler (the
+    exact text the terminal gate rejects)."""
+    monkeypatch.setenv("AEGIS_PHASE3_REWRITE", "1")
+    ea_only = {
+        "topic": "Electric Current",
+        "parent_concept": "Circuits",
+        "concept_title": "Using an Ammeter to Measure Current",
+        "concept_details": (
+            "Description: An ammeter measures the current through a circuit "
+            "component and must be inserted in series. // "
+            "Misconception/ Error Analysis: Error Analysis: The learner "
+            "connects the ammeter in parallel across the bulb instead of "
+            "placing it in series with the component."
+        ),
+        "keywords": "",
+    }
+    missing = {
+        "topic": "Electric Current",
+        "parent_concept": "Circuits",
+        "concept_title": "Electric Circuits Carry Energy",
+        "concept_details": (
+            "Description: A circuit is a closed conducting path that carries "
+            "electrical energy to components."
+        ),
+        "keywords": "",
+    }
+
+    refined = cr.refine_chapter([dict(ea_only), dict(missing)])
+
+    assert "Students may apply" not in refined[0]["concept_details"]
+    assert "Students may assume" not in refined[0]["concept_details"]
+    assert "connects the ammeter in parallel" in refined[0]["concept_details"]
+    report = concept_validator.validate_concept_rows(
+        [refined[0]], strict_analysis_section=True)
+    assert not {
+        "generic_misconception", "generic_error_analysis",
+        "analysis_section_format", "missing_learner_analysis",
+    } & {error["code"] for error in report["errors"]}
+    # A wholly missing analysis stays missing — authoring it is model work.
+    assert "Misconception" not in refined[1]["concept_details"]
+
+
 def test_validator_flags_merged_description_blocks():
     rows = [{
         "topic": "T", "parent_concept": "P", "concept_title": "C",
