@@ -165,7 +165,8 @@ def _topology_checker(
                 confidence = 0.0
             if not confidence_policy.accepts(confidence):
                 defects.append(
-                    f"{concept_id} confidence {confidence:.3f} is below "
+                    f"[confidence] {concept_id} confidence "
+                    f"{confidence:.3f} is below "
                     f"{confidence_policy.threshold_text()}"
                 )
             segments = row.get("segments")
@@ -273,7 +274,8 @@ def _grounding_checker(
                 confidence = 0.0
             if not confidence_policy.accepts(confidence):
                 defects.append(
-                    f"{concept_id} confidence {confidence:.3f} is below "
+                    f"[confidence] {concept_id} confidence "
+                    f"{confidence:.3f} is below "
                     f"{confidence_policy.threshold_text()}"
                 )
         missing = sorted(expected - seen)

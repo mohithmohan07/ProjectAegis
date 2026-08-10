@@ -189,7 +189,16 @@ def decide(
             break
     else:  # pragma: no cover - loop always breaks or raises below
         pass
-    if defects:
+    confidence_only = defects and all(
+        defect.startswith("[confidence] ") for defect in defects
+    )
+    if confidence_only:
+        # An honest sub-floor confidence after every bounded re-ask is a
+        # judgment signal, not a structural defect: the decision ships
+        # with the shortfall recorded for review (a run must produce
+        # output; one weak grounding must not kill a chapter).
+        pass
+    elif defects:
         raise ContractError(
             f"{kind} decision for {unit_id} failed its mechanical response "
             f"contract after {attempts} bounded correction attempt(s): "
@@ -198,6 +207,12 @@ def decide(
         )
 
     flags: list[str] = []
+    if confidence_only:
+        flags.extend(
+            defect[len("[confidence] "):] + "; shipped for review after "
+            f"{attempts} bounded attempt(s)"
+            for defect in defects
+        )
     if critic is not None:
         review_payload = copy.deepcopy(dict(payload))
         review_payload["proposed_decision"] = copy.deepcopy(dict(response or {}))
