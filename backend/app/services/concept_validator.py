@@ -917,14 +917,13 @@ def ensure_valid_learner_analysis(records: list[dict]) -> list[dict]:
             concept_refiner.analysis_components(normalized)
         )
         if preserve:
-            misconceptions = list(dict.fromkeys(
-                _learner_analysis_statements(misconception_body)
-            ))
-            errors = list(dict.fromkeys(
-                _learner_analysis_statements(error_analysis_body)
-            ))
-            misconception = " ".join(misconceptions)
-            error_analysis = " ".join(errors)
+            # Keep the authored component text VERBATIM: splitting into
+            # statements and re-joining subtly re-spaces punctuation
+            # (e.g. "12,..." -> "12, ..."), which the rich-text
+            # canonicalizer then collapses on the next pass — an
+            # oscillation the sealed-row fixpoint correctly refuses.
+            misconception = misconception_body.strip()
+            error_analysis = error_analysis_body.strip()
             kept = [
                 (label, content)
                 for label, content in sections
@@ -1641,6 +1640,15 @@ def validate_concept_rows(
                         ]
                         if not missing_figure_ids:
                             continue
+                        # Under the rewritten pipeline a missing Example
+                        # illustration ships flagged for review instead of
+                        # blocking the chapter, matching the explicit
+                        # figure-citation policy at the source gate.
+                        figure_severity = (
+                            "warning"
+                            if _preserve_authored_analysis()
+                            else "error"
+                        )
                         if not image_figure_ids:
                             _add(
                                 errors, i, "concept_details",
@@ -1649,6 +1657,7 @@ def validate_concept_rows(
                                 "a canonical [img] tag with that figure's caption "
                                 f"in the same Example (Case Example {example_index}; "
                                 f"missing Fig. {', Fig. '.join(missing_figure_ids)})",
+                                figure_severity,
                             )
                         else:
                             _add(
@@ -1658,6 +1667,7 @@ def validate_concept_rows(
                                 "tag caption in the same Example "
                                 f"(Case Example {example_index}; missing Fig. "
                                 f"{', Fig. '.join(missing_figure_ids)})",
+                                figure_severity,
                             )
                     title_key = _norm(case_title)
                     if case_title and (

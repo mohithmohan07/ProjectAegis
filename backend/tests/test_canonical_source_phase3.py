@@ -1054,6 +1054,76 @@ def test_electricity_blocks_converter_markup_until_verified_pdf_repair():
     assert rejected.get("source_fusion_repairs") == []
 
 
+def test_stale_markup_review_checkpoint_re_reconciles_on_resume(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    """A pre-reconciliation pause checkpoint must not replay its frozen pause.
+
+    A resumed graph saved with the converter-markup error still pending is
+    adjudicated against the verified page bundle exactly as a fresh compile
+    would be, instead of re-raising the stale human-decision pause.
+    """
+    source, canonical, graph, _report, _semantic = _compile_fixture(
+        "Class 10 Chapter 5 Electricity.mmd",
+        subject="Physics",
+        chapter_title="Electricity",
+    )
+    assert graph["status"] == "review_required"
+    graph["classification_mode"] = "api_classified_and_verified"
+
+    monkeypatch.setenv("AEGIS_PHASE3_REWRITE", "1")
+    monkeypatch.setattr(phase3, "semantic_api_enabled", lambda: True)
+    pages = _electricity_page_bundle()
+    monkeypatch.setattr(
+        phase3, "load_page_evidence", lambda *_args, **_kwargs: pages)
+
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("resume must not rebuild the verified hierarchy")
+
+    monkeypatch.setattr(phase3, "_classify_hierarchy_via_openai", unexpected)
+    monkeypatch.setattr(phase3, "_critic_hierarchy_via_openai", unexpected)
+
+    def select(packet: dict, **_kwargs) -> dict:
+        table = next(
+            row for row in packet["candidate_blocks"]
+            if row["kind"] == "table"
+        )
+        return {
+            "decision": "use_verified_page_block",
+            "selected_block_key": table["block_key"],
+            "confidence": 0.999,
+            "reason": "The verified PDF table matches the converter block.",
+        }
+
+    def critic(_packet: dict, selection: dict, **_kwargs) -> dict:
+        return {
+            "verdict": "verified",
+            "selected_block_key": selection["selected_block_key"],
+            "confidence": 0.999,
+            "issues": [],
+        }
+
+    monkeypatch.setattr(phase3, "_select_source_anomaly_via_openai", select)
+    monkeypatch.setattr(phase3, "_critic_source_anomaly_via_openai", critic)
+
+    source_path = tmp_path / "jesc111.pdf"
+    source_path.write_bytes(b"%PDF-electricity")
+    resumed = phase3.prepare_generation_graph(
+        canonical=canonical,
+        source_text=source,
+        metadata={
+            "subject": "Physics",
+            "chapter_title": "Electricity",
+            "board": "CBSE",
+        },
+        source_path=source_path,
+        artifact_dir=tmp_path,
+        verify_semantics=True,
+        resume_review_graph=copy.deepcopy(graph),
+    )
+    assert resumed["status"] == "ready"
+
+
 @pytest.mark.parametrize(
     ("subject", "adapter"),
     [
