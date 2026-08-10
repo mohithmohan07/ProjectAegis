@@ -6803,6 +6803,19 @@ def prepare_generation_graph(
             artifact_dir,
             job_id=(active_session() or {}).get("job_id"),
         )
+
+    def _automatic_reconciliation_allowed() -> bool:
+        # Under the rewritten pipeline the converter-markup anomaly is
+        # adjudicated automatically: the provider decides against the
+        # verified original-PDF page evidence (the same material a human
+        # reviewer would be shown) and its verdict ships in the audit.
+        # The legacy path keeps the explicit human decision.
+        try:
+            from .phase3 import runner as _phase3_runner
+        except ImportError:  # pragma: no cover - defensive ordering
+            return False
+        return _phase3_runner.rewrite_enabled()
+
     if verify_semantics:
         artifact_graph = load_graph(artifact_dir, canonical)
         cached = load_verified_generation_graph(
@@ -6872,6 +6885,25 @@ def prepare_generation_graph(
             if not isinstance(candidate, dict):
                 continue
             graph = candidate
+            if (
+                graph.get("status") != "ready"
+                and _automatic_reconciliation_allowed()
+                and any(
+                    row.get("code")
+                    == "converter_semantic_markup_requires_pdf_reconciliation"
+                    for row in graph.get("issues") or []
+                )
+            ):
+                # A checkpoint or artifact saved before reconciliation ran
+                # must not replay its frozen pause: adjudicate the anomaly
+                # now, the same way a fresh compile would.
+                graph = reconcile_source_anomalies(
+                    graph,
+                    canonical=canonical,
+                    page_bundle=page_bundle,
+                    source_path=source_path,
+                    allow_automatic_reconciliation=True,
+                )
             session = active_session()
             if isinstance(session, dict):
                 session["graph"] = graph
@@ -6939,18 +6971,6 @@ def prepare_generation_graph(
         hierarchy_provider=hierarchy_provider,
         critic_provider=critic_provider,
     )
-    def _automatic_reconciliation_allowed() -> bool:
-        # Under the rewritten pipeline the converter-markup anomaly is
-        # adjudicated automatically: the provider decides against the
-        # verified original-PDF page evidence (the same material a human
-        # reviewer would be shown) and its verdict ships in the audit.
-        # The legacy path keeps the explicit human decision.
-        try:
-            from .phase3 import runner as _phase3_runner
-        except ImportError:  # pragma: no cover - defensive ordering
-            return False
-        return _phase3_runner.rewrite_enabled()
-
     graph = reconcile_source_anomalies(
         graph,
         canonical=canonical,
