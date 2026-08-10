@@ -127,12 +127,25 @@ def assemble(
 ) -> dict[str, Any]:
     """Project settled rows + host maps into release-ready rows."""
 
+    from .. import concept_refiner as cr
+
     types, cases = _type_catalog(env)
     rows = [copy.deepcopy(dict(row)) for row in settled_rows]
-    rows.extend(
-        copy.deepcopy(dict(row))
-        for row in host_result.get("new_concepts") or []
-    )
+    # A new concept joins its topic BEFORE the topic's culmination row: the
+    # culmination must stay last in its topic, and the certificate seals the
+    # row order, so a downstream reorder would break the lineage.
+    for new_row in host_result.get("new_concepts") or []:
+        new_row = copy.deepcopy(dict(new_row))
+        topic = _normal(new_row.get("topic")).casefold()
+        insert_at = len(rows)
+        for index, row in enumerate(rows):
+            if (
+                _normal(row.get("topic")).casefold() == topic
+                and cr.is_culmination(_normal(row.get("concept_title")))
+            ):
+                insert_at = index
+                break
+        rows.insert(insert_at, new_row)
 
     row_by_key: dict[tuple[str, str], dict[str, Any]] = {}
     for row in rows:
@@ -183,26 +196,6 @@ def assemble(
             consolidated.setdefault(host_by_type[type_id], []).append(unit_id)
     units_by_key = consolidated
 
-    # House contract: a culmination recap names every concept of its topic.
-    from .. import concept_refiner as cr
-
-    titles_by_topic: dict[str, list[str]] = {}
-    for row in rows:
-        title = _normal(row.get("concept_title"))
-        if not cr.is_culmination(title):
-            titles_by_topic.setdefault(
-                str(row.get("_semantic_topic_id") or ""), []
-            ).append(title)
-    for row in rows:
-        if cr.is_culmination(_normal(row.get("concept_title"))):
-            titles = titles_by_topic.get(
-                str(row.get("_semantic_topic_id") or ""), []
-            )
-            if titles:
-                row["concept_details"] = (
-                    "Description: Recap of " + "; ".join(titles) + "."
-                )
-
     for key, unit_ids in units_by_key.items():
         row = row_by_key[key]
         section = render_types_section(
@@ -252,6 +245,41 @@ def assemble(
                     or ""
                 ),
             })
+
+    # The certificate seals row ORDER and row CONTENT, and the caller runs
+    # deterministic content passes (learner analysis, mastery lines, the
+    # canonical culmination recap, rich-text canonicalization) after this
+    # boundary. Run those exact passes here, pre-seal, and require them to
+    # be a fixpoint — otherwise the caller would mutate a sealed row and
+    # the lineage check would correctly refuse the payload (attempt 10:
+    # 'ordered grounded concept set changed after verification').
+    from .. import concept_validator as cv
+    from .. import generation
+
+    rows = cv.ensure_valid_learner_analysis(rows)
+    rows = generation._ensure_mastery_lines_via_api(
+        rows, meta={}, use_api=False
+    )
+    rows = cr.set_culmination_recap(rows)
+    rows = generation._canonicalize_concept_rich_text(rows)
+    replayed = cv.ensure_valid_learner_analysis(copy.deepcopy(rows))
+    replayed = generation._ensure_mastery_lines_via_api(
+        replayed, meta={}, use_api=False
+    )
+    replayed = generation._ensure_terminal_culmination_contract(replayed)
+    replayed = generation._canonicalize_concept_rich_text(replayed)
+    if replayed != rows:
+        changed = [
+            index
+            for index, (before, after) in enumerate(zip(rows, replayed))
+            if before != after
+        ]
+        raise AssemblyError(
+            "assembled rows are not stable under the deterministic "
+            "post-assembly content passes (changed row indexes: "
+            + ",".join(str(index) for index in changed[:8])
+            + "); sealing them would break the certificate lineage"
+        )
 
     # Host may have created new concepts; the deposit chain verifies the
     # certificate lineage against the FINAL payload, so re-stamp and
