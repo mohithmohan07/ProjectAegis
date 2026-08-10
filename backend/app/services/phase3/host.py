@@ -97,6 +97,32 @@ def _settled_index(
     return index
 
 
+
+def _resolve_host_title(
+    title: object,
+    settled_titles: Mapping[str, Mapping[str, Any]],
+) -> str | None:
+    """Resolve a named host to a settled title key, tolerating close matches.
+
+    The model sometimes paraphrases capitalisation or trims a word; a
+    UNIQUE near-match (prefix either way, or >=0.90 similarity) resolves
+    to the settled title. Ambiguous or distant names stay unresolved.
+    """
+    import difflib
+
+    wanted = _normal(title).casefold()
+    if not wanted:
+        return None
+    if wanted in settled_titles:
+        return wanted
+    candidates = [
+        key for key in settled_titles
+        if key.startswith(wanted) or wanted.startswith(key)
+        or difflib.SequenceMatcher(None, wanted, key).ratio() >= 0.90
+    ]
+    return candidates[0] if len(candidates) == 1 else None
+
+
 def _host_checker(
     units: list[dict[str, Any]],
     *,
@@ -134,8 +160,9 @@ def _host_checker(
                     f"{confidence_policy.threshold_text()}"
                 )
             if decision == "existing":
-                title = _normal(row.get("host_concept_title")).casefold()
-                if title not in settled_titles:
+                if _resolve_host_title(
+                    row.get("host_concept_title"), settled_titles
+                ) is None:
                     defects.append(
                         f"{unit_id} names host {str(row.get('host_concept_title'))[:60]!r} "
                         "which is not a settled concept title; name an "
@@ -362,7 +389,9 @@ def host(
                 entry_source: Mapping[str, Any] = created
             else:
                 entry_source = settled_titles[
-                    _normal(verdict.get("host_concept_title")).casefold()
+                    _resolve_host_title(
+                        verdict.get("host_concept_title"), settled_titles
+                    )
                 ]
             try:
                 confidence = float(verdict.get("confidence") or 0.0)
