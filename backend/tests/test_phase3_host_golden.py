@@ -86,14 +86,22 @@ def _replay_provider(
                 "confidence": 0.99,
                 "reason": "replayed from the golden host maps",
                 # Golden-era decisions predate the routing rule: each
-                # question fell under its host concept alone, which the
-                # router sends straight back to that concept.
-                "qid_concepts": {
-                    qid: [
-                        golden_qids[qid]["concept_title"]
-                        if qid in golden_qids
-                        else title
-                    ]
+                # question fell under its host concept alone, so the API
+                # placement keeps it on that exact concept.
+                "qid_placements": {
+                    qid: {
+                        "falls_under": [
+                            golden_qids[qid]["concept_title"]
+                            if qid in golden_qids
+                            else title
+                        ],
+                        "destination_concept_title": (
+                            golden_qids[qid]["concept_title"]
+                            if qid in golden_qids
+                            else title
+                        ),
+                        "reason": "single-concept question",
+                    }
                     for qid in unit.get("qids") or []
                 },
             })
@@ -325,13 +333,7 @@ def test_question_routing_duplicate_titles_do_not_inflate_membership():
     assert row["concept_title"] == "Alpha"
 
 
-def test_multi_concept_membership_routes_through_host(
-    golden_envelope, settled_rows,
-):
-    """A provider reporting two same-topic concepts for a QID must see the
-    question land on that topic's culmination row."""
-    units = host_mod.derive_units(golden_envelope)
-    unit = next(u for u in units if u["qids"])
+def _topic_layout(settled_rows):
     by_topic: dict[str, list[dict]] = {}
     culm_by_topic: dict[str, dict] = {}
     for row in settled_rows:
@@ -341,11 +343,10 @@ def test_multi_concept_membership_routes_through_host(
             culm_by_topic.setdefault(topic_id, row)
         else:
             by_topic.setdefault(topic_id, []).append(row)
-    topic_id, pair = next(
-        (tid, rows) for tid, rows in by_topic.items()
-        if len(rows) >= 2 and tid in culm_by_topic
-    )
+    return by_topic, culm_by_topic
 
+
+def _placement_provider(pair, destination_title):
     def provider(request: dict) -> dict:
         return {"assignments": [
             {
@@ -354,28 +355,109 @@ def test_multi_concept_membership_routes_through_host(
                 "host_concept_title": pair[0]["concept_title"],
                 "confidence": 0.99,
                 "reason": "test",
-                "qid_concepts": {
-                    qid: [
-                        pair[0]["concept_title"],
-                        pair[1]["concept_title"],
-                    ]
+                "qid_placements": {
+                    qid: {
+                        "falls_under": [
+                            pair[0]["concept_title"],
+                            pair[1]["concept_title"],
+                        ],
+                        "destination_concept_title": destination_title,
+                        "reason": "test placement",
+                    }
                     for qid in u.get("qids") or []
                 },
             }
             for u in request["units"]
         ]}
 
+    return provider
+
+
+def test_the_api_places_questions_and_culminations_are_valid_destinations(
+    golden_envelope, settled_rows,
+):
+    """The model applies the house rules itself: a two-concept same-topic
+    question it places on the topic's culmination row is accepted, with
+    no disagreement flag from the advisory cross-check."""
+    units = host_mod.derive_units(golden_envelope)
+    unit = next(u for u in units if u["qids"])
+    by_topic, culm_by_topic = _topic_layout(settled_rows)
+    topic_id, pair = next(
+        (tid, rows) for tid, rows in by_topic.items()
+        if len(rows) >= 2 and tid in culm_by_topic
+    )
+    culmination_title = culm_by_topic[topic_id]["concept_title"]
+
     result = host_mod.host(
         golden_envelope, settled_rows,
-        provider=provider, critic=_verified_critic,
+        provider=_placement_provider(pair, culmination_title),
+        critic=_verified_critic,
         store=kernel.DecisionStore(),
     )
-    routed = result["qid_map"][unit["qids"][0]]
-    assert routed["decision"] == "routed"
-    assert routed["routing_rule"] == "same_topic_culmination"
-    assert _normal(routed["concept_title"]) == _normal(
-        culm_by_topic[topic_id]["concept_title"]
+    placed = result["qid_map"][unit["qids"][0]]
+    assert placed["decision"] == "api_placement"
+    assert _normal(placed["concept_title"]) == _normal(culmination_title)
+    assert placed["falls_under"] == [
+        _normal(pair[0]["concept_title"]),
+        _normal(pair[1]["concept_title"]),
+    ]
+    assert not any(
+        "literal reading" in flag
+        for flag in placed.get("review_flags") or []
     )
+
+
+def test_an_api_placement_disagreeing_with_the_rules_ships_flagged(
+    golden_envelope, settled_rows,
+):
+    """The API's placement stands (decide-once), but a placement that a
+    literal reading of the rules would send elsewhere carries a review
+    flag naming the expected destination."""
+    units = host_mod.derive_units(golden_envelope)
+    unit = next(u for u in units if u["qids"])
+    by_topic, culm_by_topic = _topic_layout(settled_rows)
+    topic_id, pair = next(
+        (tid, rows) for tid, rows in by_topic.items()
+        if len(rows) >= 2 and tid in culm_by_topic
+    )
+
+    result = host_mod.host(
+        golden_envelope, settled_rows,
+        provider=_placement_provider(pair, pair[0]["concept_title"]),
+        critic=_verified_critic,
+        store=kernel.DecisionStore(),
+    )
+    placed = result["qid_map"][unit["qids"][0]]
+    assert placed["decision"] == "api_placement"
+    assert _normal(placed["concept_title"]) == _normal(
+        pair[0]["concept_title"]
+    )
+    assert any(
+        "literal reading" in flag and "same_topic_culmination" in flag
+        for flag in placed.get("review_flags") or []
+    )
+
+
+def test_a_fabricated_destination_fails_closed(
+    golden_envelope, settled_rows,
+):
+    units = host_mod.derive_units(golden_envelope)
+    by_topic, culm_by_topic = _topic_layout(settled_rows)
+    _topic_id, pair = next(
+        (tid, rows) for tid, rows in by_topic.items()
+        if len(rows) >= 2 and tid in culm_by_topic
+    )
+
+    with pytest.raises(kernel.ContractError) as failed:
+        host_mod.host(
+            golden_envelope, settled_rows,
+            provider=_placement_provider(
+                pair, "A Destination That Does Not Exist"
+            ),
+            critic=_verified_critic,
+            store=kernel.DecisionStore(),
+        )
+    assert "destination" in str(failed.value)
 
 
 def test_critic_dissent_flags_the_host_entries(

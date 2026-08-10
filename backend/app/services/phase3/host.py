@@ -265,12 +265,12 @@ def _host_checker(
                     "existing/create_new"
                 )
             expected_qids = qids_by_unit.get(unit_id) or []
-            membership = row.get("qid_concepts")
+            placements = row.get("qid_placements")
             if expected_qids:
-                if not isinstance(membership, Mapping):
+                if not isinstance(placements, Mapping):
                     defects.append(
-                        f"{unit_id} has no qid_concepts object naming the "
-                        "concepts each question falls under"
+                        f"{unit_id} has no qid_placements object placing "
+                        "each question under its concept"
                     )
                 else:
                     new_title = ""
@@ -280,41 +280,58 @@ def _host_checker(
                         new_title = _normal(
                             row["new_concept"].get("concept_title")
                         ).casefold()
+
+                    def _resolves(title: object) -> bool:
+                        if _resolve_host_title(
+                            title, settled_titles
+                        ) is not None:
+                            return True
+                        return bool(
+                            new_title
+                            and _normal(title).casefold() == new_title
+                        )
+
                     for qid in expected_qids:
-                        titles = membership.get(qid)
-                        if not isinstance(titles, list) or not titles:
+                        placement = placements.get(qid)
+                        if not isinstance(placement, Mapping):
                             defects.append(
-                                f"{unit_id} qid_concepts must list at least "
-                                f"one concept for {qid}"
+                                f"{unit_id} qid_placements is missing {qid}"
                             )
                             continue
-                        from .. import concept_refiner as cr
-
-                        for title in titles:
-                            key = _resolve_host_title(title, settled_titles)
-                            if key is None and (
-                                not new_title
-                                or _normal(title).casefold() != new_title
-                            ):
-                                defects.append(
-                                    f"{unit_id} qid_concepts names "
-                                    f"{str(title)[:60]!r} for {qid} which is "
-                                    "not a settled concept title"
-                                )
-                            elif cr.is_culmination(_normal(title)):
-                                defects.append(
-                                    f"{unit_id} qid_concepts lists a "
-                                    f"culmination row for {qid}; name the "
-                                    "teaching concepts it falls under — the "
-                                    "pipeline routes to culminations itself"
-                                )
+                        falls_under = placement.get("falls_under")
+                        if not isinstance(falls_under, list) or not falls_under:
+                            defects.append(
+                                f"{unit_id} placement for {qid} must list "
+                                "at least one concept in falls_under"
+                            )
+                        else:
+                            for title in falls_under:
+                                if not _resolves(title):
+                                    defects.append(
+                                        f"{unit_id} falls_under names "
+                                        f"{str(title)[:60]!r} for {qid} "
+                                        "which is not a settled concept "
+                                        "title"
+                                    )
+                        destination = placement.get(
+                            "destination_concept_title"
+                        )
+                        if not _resolves(destination):
+                            defects.append(
+                                f"{unit_id} destination "
+                                f"{str(destination)[:60]!r} for {qid} is "
+                                "not a settled concept title; place the "
+                                "question under an exact settled concept "
+                                "(a Culmination row when the rules call "
+                                "for it)"
+                            )
                     unknown_qids = sorted(
-                        set(membership) - set(expected_qids)
+                        set(placements) - set(expected_qids)
                     )
                     if unknown_qids:
                         defects.append(
-                            f"{unit_id} qid_concepts names unknown qid(s): "
-                            + ", ".join(unknown_qids[:4])
+                            f"{unit_id} qid_placements names unknown "
+                            "qid(s): " + ", ".join(unknown_qids[:4])
                         )
         missing = sorted(expected - seen)
         if missing:
@@ -435,18 +452,36 @@ def host(
                 "durable source idea; create_new only when no existing row "
                 "can host a distinct durable idea, and then define the "
                 "complete source-grounded concept. Confidence floor is "
-                f"{policy}. Separately, for EVERY qid list in qid_concepts "
-                "every settled concept the whole question falls under (a "
-                "question with sub-questions is one unbroken question). "
-                "The pipeline routes each question deterministically from "
-                "that membership: one concept keeps the question; several "
-                "concepts in one topic send it to that topic's "
-                "culmination; concepts across topics send it to the "
-                "involved concept in the later topic, or to the later "
-                "topic's culmination when more than two concepts are "
-                "involved. Never omit a concept the question genuinely "
-                "requires, and never pad the list."
+                f"{policy}. Separately, place EVERY qid in qid_placements "
+                "by understanding the whole question against the settled "
+                "concepts. Placement rules: (1) a question that falls "
+                "under one specific concept alone goes under that same "
+                "concept; (2) a question that falls under two or more "
+                "concepts within the same topic goes under that topic's "
+                "Culmination concept; (3) a question that falls under two "
+                "different concepts across different topics goes under "
+                "the involved concept belonging to the LATER topic in "
+                "topics_in_teaching_order; (4) a question that falls "
+                "under more than one concept in a topic and another "
+                "concept in another topic goes in the Culmination "
+                "concept of the later topic. Placement is MOST-LIKELY, "
+                "not sure-shot: when a question is close to what a "
+                "concept teaches, place it there — never leave a "
+                "question unplaced and never drop one. A case can hold "
+                "several questions; place every one of them. Never break "
+                "a question apart — sub-questions stay with their "
+                "question, exactly as it is. List its genuine concepts "
+                "in falls_under and name your placement in "
+                "destination_concept_title."
             ),
+            "topics_in_teaching_order": [
+                {
+                    "topic_id": str(row.get("topic_id") or ""),
+                    "title": str(row.get("title") or ""),
+                }
+                for row in env["graph"]["topics"]
+                if isinstance(row, Mapping)
+            ],
             "units": [
                 {
                     "unit_id": row["unit_id"],
@@ -532,38 +567,41 @@ def host(
             if flags:
                 entry["review_flags"] = list(flags)
             host_map[unit["unit_id"]] = entry
-            # House routing rule: a question goes where its full concept
-            # membership says, not automatically to its Type's host.
-            membership = verdict.get("qid_concepts")
+            # House routing rule, applied BY THE MODEL: placing a question
+            # means understanding it against the concepts, so the API names
+            # each question's destination itself. The deterministic reading
+            # of the rules is computed only as an advisory cross-check —
+            # a disagreement ships as a review flag, never a block.
+            placements = verdict.get("qid_placements")
+
+            def _resolve_row(title: object) -> Mapping[str, Any] | None:
+                key = _resolve_host_title(title, settled_titles)
+                if key is not None:
+                    return settled_titles[key]
+                if (
+                    str(verdict.get("decision")) == "create_new"
+                    and _normal(title).casefold()
+                    == _normal(entry_source.get("concept_title")).casefold()
+                ):
+                    return entry_source
+                return None
+
             for qid in unit["qids"]:
-                named = (
-                    membership.get(qid)
-                    if isinstance(membership, Mapping)
+                placement = (
+                    placements.get(qid)
+                    if isinstance(placements, Mapping)
                     else None
                 )
-                rows_for_qid: list[Mapping[str, Any]] = []
-                for title in named or []:
-                    key = _resolve_host_title(title, settled_titles)
-                    if key is not None:
-                        rows_for_qid.append(settled_titles[key])
-                    elif (
-                        str(verdict.get("decision")) == "create_new"
-                        and _normal(title).casefold()
-                        == _normal(entry_source.get("concept_title")).casefold()
-                    ):
-                        rows_for_qid.append(entry_source)
-                if not rows_for_qid:
-                    # Replayed decisions from before the routing rule carry
-                    # no membership; the unit host is their single concept.
-                    rows_for_qid = [entry_source]
-                destination, rule = _route_question(
-                    rows_for_qid,
-                    topic_order=topic_order,
-                    culmination_by_topic=culmination_by_topic,
+                placement = placement if isinstance(placement, Mapping) else {}
+                destination = _resolve_row(
+                    placement.get("destination_concept_title")
                 )
+                if destination is None:
+                    # Replayed decisions from before the routing rule carry
+                    # no placement; the unit host is their destination.
+                    destination = entry_source
                 qid_entry = {
-                    "decision": "routed",
-                    "routing_rule": rule,
+                    "decision": "api_placement",
                     "concept_title": _normal(
                         destination.get("concept_title")
                     ),
@@ -575,13 +613,38 @@ def host(
                         destination.get("_semantic_topic_id") or ""
                     ),
                     "confidence": confidence,
+                    "falls_under": [
+                        _normal(title)
+                        for title in placement.get("falls_under") or []
+                        if _normal(title)
+                    ],
+                    "placement_reason": _normal(placement.get("reason")),
                 }
                 qid_flags = list(flags)
-                if rule.endswith("_missing"):
-                    qid_flags.append(
-                        f"{qid}: its topic has no culmination row; routed "
-                        "to a topic concept instead"
+                membership_rows = [
+                    row
+                    for row in (
+                        _resolve_row(title)
+                        for title in placement.get("falls_under") or []
                     )
+                    if row is not None
+                ]
+                if membership_rows:
+                    expected, rule = _route_question(
+                        membership_rows,
+                        topic_order=topic_order,
+                        culmination_by_topic=culmination_by_topic,
+                    )
+                    if _normal(expected.get("concept_title")).casefold() != (
+                        _normal(destination.get("concept_title")).casefold()
+                    ):
+                        qid_flags.append(
+                            f"{qid}: the API placed this question under "
+                            f"'{_normal(destination.get('concept_title'))[:60]}' "
+                            "but a literal reading of the house routing "
+                            f"rules ({rule}) would place it under "
+                            f"'{_normal(expected.get('concept_title'))[:60]}'"
+                        )
                 if qid_flags:
                     qid_entry["review_flags"] = qid_flags
                 qid_map[qid] = qid_entry
