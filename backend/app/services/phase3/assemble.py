@@ -78,23 +78,31 @@ def render_types_section(
         if case_id:
             by_type[type_id].append(case_id)
 
+    def _ordinal(identifier: str, prefix: str) -> int:
+        # Continuous chapter-wide numbering: TYPE-0013 is "Type 13" on
+        # every concept that hosts it, mirroring the mined taxonomy.
+        try:
+            return int(identifier.rsplit("-", 1)[1])
+        except (IndexError, ValueError):
+            raise AssemblyError(
+                f"cannot number {prefix} from identifier {identifier!r}"
+            )
+
     pieces: list[str] = []
-    for type_number, type_id in enumerate(sorted(by_type), start=1):
+    for type_id in sorted(by_type):
         mined = types.get(type_id)
         if mined is None:
             raise AssemblyError(f"hosted unit references unknown {type_id}")
-        piece = f"Type {type_number:02d}: {mined['title']}"
+        piece = f"Type {_ordinal(type_id, 'Type'):02d}: {mined['title']}"
         if mined["definition"]:
             piece += f" — {mined['definition']}"
-        for case_number, case_id in enumerate(
-            sorted(by_type[type_id]), start=1
-        ):
+        for case_id in sorted(by_type[type_id]):
             case = cases.get((type_id, case_id))
             if case is None:
                 raise AssemblyError(
                     f"hosted unit references unknown {type_id}::{case_id}"
                 )
-            piece += f" Case {case_number:02d}: {case['title']}"
+            piece += f" Case {_ordinal(case_id, 'Case'):02d}: {case['title']}"
             if case["example"]:
                 piece += f" Example: {case['example']}"
         pieces.append(piece)
