@@ -6920,12 +6920,24 @@ def prepare_generation_graph(
         hierarchy_provider=hierarchy_provider,
         critic_provider=critic_provider,
     )
+    def _automatic_reconciliation_allowed() -> bool:
+        # Under the rewritten pipeline the converter-markup anomaly is
+        # adjudicated automatically: the provider decides against the
+        # verified original-PDF page evidence (the same material a human
+        # reviewer would be shown) and its verdict ships in the audit.
+        # The legacy path keeps the explicit human decision.
+        try:
+            from .phase3 import runner as _phase3_runner
+        except ImportError:  # pragma: no cover - defensive ordering
+            return False
+        return _phase3_runner.rewrite_enabled()
+
     graph = reconcile_source_anomalies(
         graph,
         canonical=canonical,
         page_bundle=page_bundle,
         source_path=source_path,
-        allow_automatic_reconciliation=False,
+        allow_automatic_reconciliation=_automatic_reconciliation_allowed(),
     )
     semantic_source = render_semantic_source(graph, canonical)
     graph["semantic_source_sha256"] = _sha256_text(semantic_source)
