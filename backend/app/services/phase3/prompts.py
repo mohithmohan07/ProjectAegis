@@ -24,9 +24,13 @@ TOPOLOGY_SYSTEM = _SHARED + (
     "[{\"concept_id\", \"decision\": \"keep|refine|split\", \"segments\": "
     "[{\"concept_title\", \"parent_concept\", \"concept_details\", "
     "\"keywords\"}], \"confidence\", \"reason\"}]}. keep must not rewrite "
-    "the claim; refine corrects it against the source; split emits one "
-    "segment per distinct teachable idea. concept_details must begin with "
-    "'Description: ' and keep any 'Achieving Mastery:' line."
+    "the claim; refine corrects it against the source; split is rare — "
+    "only for a row conflating ideas a teacher would lesson-plan apart, "
+    "never for carving one coherent explanation into aspects or steps, "
+    "and every segment must stand as a substantial concept with a full "
+    "Description and its own distinct 'Achieving Mastery:' line. "
+    "concept_details must begin with 'Description: ' and keep any "
+    "'Achieving Mastery:' line."
 )
 
 GROUNDING_SYSTEM = _SHARED + (
