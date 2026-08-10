@@ -30,6 +30,8 @@ CONTENT_CODES = {
     "verbatim_source_description",
     "generic_misconception",
     "generic_error_analysis",
+    "misconception_framing",
+    "error_analysis_framing",
     "description_truncated_clause",
 }
 
@@ -69,7 +71,9 @@ def _failures(
                 title = _normal(
                     dict(rows[index]).get("concept_title")
                 )
-                if entry["code"] == "generic_error_analysis":
+                if entry["code"] in (
+                    "generic_error_analysis", "error_analysis_framing",
+                ):
                     # A concrete, filter-verified skeleton the model can
                     # adapt: actor + faulty action + 'instead of' contrast.
                     entry["example_repair"] = (
@@ -77,10 +81,13 @@ def _failures(
                         "sequence instead of locating it at its actual "
                         "point in the chapter's chronology."
                     )
-                elif entry["code"] == "generic_misconception":
+                elif entry["code"] in (
+                    "generic_misconception", "misconception_framing",
+                ):
                     entry["example_repair"] = (
                         "The learner may believe <state one specific "
-                        f"wrong claim about {title}>."
+                        f"wrong claim about {title}> — a belief "
+                        "statement, not an action or a correction."
                     )
                 failures.setdefault(index, []).append(entry)
     return failures
@@ -158,7 +165,9 @@ def _checker(
                     f"this normalized analysis text: "
                     f"{analysis_tail.strip()[:300]!r}"
                 )
-                if code["code"] == "generic_error_analysis":
+                if code["code"] in (
+                    "generic_error_analysis", "error_analysis_framing",
+                ):
                     # Distinguish the normalizer's two silent kill paths:
                     # a shape rejection, and the overlap filter dropping
                     # an EA that restates the Misconception's content.
