@@ -3846,7 +3846,13 @@ def _inventory_item_owner_topic(item: dict) -> tuple[str, str]:
     # owner from source text in teaching order instead, exactly as Phase 3.3
     # does when its certification pair fails.
     live_without_owner = False
-    if config.use_live_generation():
+    if config.use_live_generation() and not (
+        # Under the rewritten Phase 3 no item ever met the old 3.3
+        # certification pair, so its absence is not an integrity fault;
+        # placement authority is the Host pass's API decision and the
+        # printed topic here is provenance only (hub-note alignment).
+        _rewrite_placement_authority_active()
+    ):
         from . import canonical_source_phase3 as _phase3
 
         live_without_owner = bool(
