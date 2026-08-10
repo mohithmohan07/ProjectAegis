@@ -314,18 +314,20 @@ def _analysis_checker(
             seen.add(concept_id)
             body = str(row.get("misconception_error_analysis") or "")
             lowered = body.casefold()
-            if "misconception" not in lowered or "error analysis" not in (
+            # Either section alone is a complete analysis; both appear only
+            # when they carry genuinely different insight.
+            if "misconception" not in lowered and "error analysis" not in (
                 lowered
             ):
                 defects.append(
-                    f"{concept_id} analysis must contain both a "
-                    "Misconceptions and an Error Analysis part"
+                    f"{concept_id} analysis must contain a Misconceptions "
+                    "or an Error Analysis part (either one is sufficient)"
                 )
                 continue
             if "learner" not in lowered and "student" not in lowered:
                 defects.append(
-                    f"{concept_id} Error Analysis must name the learner or "
-                    "student and a concrete faulty action or reasoning step"
+                    f"{concept_id} analysis must name the learner or "
+                    "student and their belief or concrete faulty action"
                 )
         missing = sorted(expected - seen)
         if missing:
@@ -627,10 +629,13 @@ def settle(
             payload = {
                 "stage": "learner_analysis",
                 "rules": (
-                    "Write Misconceptions and Error Analysis for each "
-                    "concept. Error Analysis must name the learner and a "
-                    "concrete faulty action or reasoning step, not another "
-                    "belief."
+                    "Write the learner analysis for each concept: "
+                    "'Misconceptions:' names a plausible learner belief; "
+                    "'Error Analysis:' names the learner and a concrete "
+                    "faulty action or reasoning step, not another belief. "
+                    "Either section alone is sufficient — write both ONLY "
+                    "when they carry genuinely different insight, and "
+                    "never one as a paraphrase of the other."
                 ),
                 "topic": {"topic_id": topic_id, "title": topic_title},
                 "concepts": [

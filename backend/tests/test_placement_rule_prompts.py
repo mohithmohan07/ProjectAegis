@@ -323,12 +323,13 @@ def test_activity_hub_prompts_carry_the_shared_rules():
     assert source.count("+ placement_policy.PLACEMENT_RULES") == 2
 
 
-def test_type_mining_prompts_carry_the_fragment_note():
-    """Pass 4 splits mint dotted qids; mining must place each on its own."""
+def test_type_mining_prompts_carry_the_polished_wording_note():
+    """Mining classifies by polished wording and never breaks a question."""
     from app.services import generation, question_polishing
 
     note = question_polishing.FRAGMENT_MINING_NOTE
-    assert "never re-merge fragments into one Example" in note
+    assert "ONE question" in note
+    assert "never" in note and "break" in note
     assert "polished_task" in note
 
     source = Path(generation.__file__).read_text(encoding="utf-8")

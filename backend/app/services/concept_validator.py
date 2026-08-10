@@ -95,9 +95,18 @@ _CANONICAL_IMAGE_TAG_RE = re.compile(
     re.IGNORECASE,
 )
 _CANONICAL_ANALYSIS_LABEL = "Misconception/ Error Analysis"
+# Either section alone is a complete learner analysis; both appear only when
+# they carry genuinely different insight (reviewer contract). The combined
+# both-sections form keeps its exact legacy shape.
 _CANONICAL_ANALYSIS_CONTENT_RE = re.compile(
-    r"^\s*Misconceptions:\s*(?P<misconception>.+?)\s*;\s*"
-    r"Error Analysis:\s*(?P<error_analysis>.+?)\s*$",
+    r"^\s*(?:"
+    r"Misconceptions:\s*(?P<misconception>.+?)\s*;\s*"
+    r"Error Analysis:\s*(?P<error_analysis>.+?)"
+    r"|Misconceptions:\s*(?P<misconception_only>"
+    r"(?:(?!Error Analysis:).)+?)"
+    r"|Error Analysis:\s*(?P<error_analysis_only>"
+    r"(?:(?!Misconceptions:).)+?)"
+    r")\s*$",
     re.DOTALL,
 )
 # A malformed newline-boundary combined label can leave ``Misconception/`` at
@@ -1316,26 +1325,37 @@ def validate_concept_rows(
                 _add(
                     errors, i, "concept_details", "analysis_section_format",
                     "normal concepts require exactly one canonical "
-                    "'Misconception/ Error Analysis: Misconceptions: ...; "
-                    "Error Analysis: ...' section",
+                    "'Misconception/ Error Analysis:' section carrying "
+                    "'Misconceptions: ...', 'Error Analysis: ...', or "
+                    "'Misconceptions: ...; Error Analysis: ...'",
                 )
             combined_misconception = (
-                canonical_match.group("misconception").strip()
+                (
+                    canonical_match.group("misconception")
+                    or canonical_match.group("misconception_only")
+                    or ""
+                ).strip()
                 if canonical_match else ""
             )
             combined_error_analysis = (
-                canonical_match.group("error_analysis").strip()
+                (
+                    canonical_match.group("error_analysis")
+                    or canonical_match.group("error_analysis_only")
+                    or ""
+                ).strip()
                 if canonical_match else ""
             )
-            if not combined_misconception:
+            # Either section alone is complete; only an analysis with
+            # NEITHER insight is missing content.
+            if (
+                canonical_match is not None
+                and not combined_misconception
+                and not combined_error_analysis
+            ):
                 _add(
-                    errors, i, "concept_details", "missing_misconception",
-                    "combined learner analysis must include 'Misconceptions:'",
-                )
-            if not combined_error_analysis:
-                _add(
-                    errors, i, "concept_details", "missing_error_analysis",
-                    "combined learner analysis must include 'Error Analysis:'",
+                    errors, i, "concept_details", "missing_learner_analysis",
+                    "learner analysis must carry 'Misconceptions:' or "
+                    "'Error Analysis:' (either one is sufficient)",
                 )
 
         if not is_culm:

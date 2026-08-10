@@ -40,10 +40,14 @@ GROUNDING_SYSTEM = _SHARED + (
 
 ANALYSIS_SYSTEM = _SHARED + (
     " Task: write learner analysis. Response schema: {\"rows\": "
-    "[{\"concept_id\", \"misconception_error_analysis\"}]}. The text must "
-    "contain 'Misconceptions:' naming a plausible learner belief and "
-    "'Error Analysis:' naming the learner and a concrete faulty action or "
-    "reasoning step, not another belief."
+    "[{\"concept_id\", \"misconception_error_analysis\"}]}. Write the "
+    "genuine insight(s) for this concept: 'Misconceptions:' names a "
+    "plausible learner belief; 'Error Analysis:' names the learner and a "
+    "concrete faulty action or reasoning step, not another belief. "
+    "Either section alone is sufficient — include both ONLY when they "
+    "carry genuinely different insight. Never write one as a paraphrase "
+    "of the other: an Error Analysis that merely restates the "
+    "misconception as an action adds nothing and must be omitted."
 )
 
 HOST_SYSTEM = _SHARED + (
@@ -73,7 +77,14 @@ HOST_SYSTEM = _SHARED + (
     "place it there — never leave a question unplaced and never drop "
     "one. A case can hold several questions; place every one of them. "
     "Never break a question apart: a question with sub-questions is "
-    "placed whole, exactly as it is. falls_under lists every teaching "
+    "placed whole, exactly as it is. Weigh each question's own wording, "
+    "kind, and printed position: in-text/checkpoint questions belong "
+    "with the material they are printed inside; end-of-chapter "
+    "exercises place purely by what they ask. Surface similarity is "
+    "not ownership — an image/caricature/table question belongs to the "
+    "concept teaching that content, not to another concept that also "
+    "involves images. Exactly one destination per question; ties "
+    "resolve to the later topic. falls_under lists every teaching "
     "concept the whole question genuinely requires; "
     "destination_concept_title is your placement under these rules and "
     "must be the EXACT title of a settled concept row from the request "
@@ -94,10 +105,12 @@ POLISH_SYSTEM = _SHARED + (
     "language (never repeat a long contiguous source passage), "
     "Misconceptions must name a concept-specific incorrect belief, "
     "Error Analysis must name the learner and a concrete faulty action "
-    "or reasoning step, and no sentence may end truncated. Keep every "
-    "other section — the 'Achieving Mastery:' line, Types, the "
-    "Misconception/ Error Analysis structure — intact and in place, "
-    "keep the concept's meaning, and never rename it."
+    "or reasoning step, and no sentence may end truncated. The learner "
+    "analysis needs at least ONE genuine section — Misconceptions or "
+    "Error Analysis; both only when they carry different insight, and "
+    "never one restating the other. Keep every other section — the "
+    "'Achieving Mastery:' line, Types — intact and in place, keep the "
+    "concept's meaning, and never rename it."
 )
 
 CRITIC_SYSTEM = _SHARED + (

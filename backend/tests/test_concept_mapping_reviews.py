@@ -3559,10 +3559,13 @@ def test_validator_warns_on_mathpix_in_description():
     assert any(e["code"] == "description_image_url" for e in report["errors"])
 
 
-def test_expected_min_skeleton_rows_is_denser_for_history_scale():
-    # ~10k chars should expect more than the old content//3000 floor.
-    text = "x" * 10_000
-    assert g._expected_min_skeleton_rows(text) >= 4
+def test_expected_min_skeleton_rows_only_guards_failed_extraction():
+    # Reviewers found char-density floors bred thin micro-concepts. The
+    # floor now only catches a substantial chunk collapsing to 1-2 rows;
+    # concept count is otherwise the model's judgment.
+    assert g._expected_min_skeleton_rows("x" * 1_000) == 1
+    assert g._expected_min_skeleton_rows("x" * 10_000) == 2
+    assert g._expected_min_skeleton_rows("x" * 40_000) == 3
 
 
 def test_history_descriptive_examples_are_not_short_case_errors():

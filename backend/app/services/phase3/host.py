@@ -441,6 +441,35 @@ def host(
         for row in env["graph"]["blocks"]
         if isinstance(row, Mapping) and str(row.get("block_id") or "")
     ]
+    # Placement needs each question's own evidence, not just its Case's
+    # summary: reviewers found visually themed questions clustering into the
+    # chapter's first image concept and end-of-chapter exercises drifting to
+    # unrelated topics. Give the model the wording, the kind, and where the
+    # book prints the question.
+    question_info: dict[str, dict[str, Any]] = {}
+    for item in (env.get("inventory") or {}).get("items") or []:
+        if not isinstance(item, Mapping):
+            continue
+        qid = str(item.get("qid") or "").strip()
+        if not qid:
+            continue
+        text = str(
+            item.get("polished_task")
+            or item.get("normalized_task")
+            or item.get("raw_task")
+            or ""
+        )
+        question_info[qid] = {
+            "qid": qid,
+            "kind": str(item.get("source_kind") or ""),
+            "printed_under_topic": str(
+                item.get("source_location_topic_title")
+                or item.get("topic_hint")
+                or ""
+            ),
+            "chapter_wide": bool(item.get("_chapter_wide_task")),
+            "text": text[:600],
+        }
 
     for start in range(0, len(units), _BATCH_SIZE):
         batch = units[start:start + _BATCH_SIZE]
@@ -472,7 +501,21 @@ def host(
                 "a question apart — sub-questions stay with their "
                 "question, exactly as it is. List its genuine concepts "
                 "in falls_under and name your placement in "
-                "destination_concept_title."
+                "destination_concept_title. Use each question's own "
+                "entry in the unit's questions list — its full wording, "
+                "kind, and printed_under_topic — as primary evidence: "
+                "an in-text or checkpoint question belongs with the "
+                "material it is printed inside, so weigh that topic's "
+                "concepts first; an end-of-chapter exercise is printed "
+                "under the last section, so its printing position means "
+                "nothing — place it purely by what it asks. Surface "
+                "similarity is NOT ownership: a question about a "
+                "picture, caricature, map, or table belongs to the "
+                "concept that teaches THAT content, never to another "
+                "concept merely because it also involves images. Each "
+                "question gets EXACTLY ONE destination; when the rules "
+                "leave two candidates, the later topic in teaching "
+                "order wins."
             ),
             "topics_in_teaching_order": [
                 {
@@ -490,6 +533,11 @@ def host(
                     "pattern": row["pattern"],
                     "concept_match_hint": row["concept_match_hint"],
                     "qids": row["qids"],
+                    "questions": [
+                        question_info[qid]
+                        for qid in row["qids"]
+                        if qid in question_info
+                    ],
                 }
                 for row in batch
             ],
