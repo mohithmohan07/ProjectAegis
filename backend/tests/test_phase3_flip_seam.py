@@ -128,3 +128,62 @@ def test_flag_off_keeps_the_old_path(monkeypatch, fixture_env):
     # The old path normalizes rows on the way through; the sentinel row
     # surviving proves the original prepare chain ran, not the rewrite.
     assert [row["concept_title"] for row in rows] == ["Old Path Row"]
+
+
+def test_the_sealed_envelope_is_reused_across_resumes(
+    monkeypatch, tmp_path, fixture_env,
+):
+    """Resume-time inventory refreshes must not re-bill the run: while the
+    source contract and boundary skeleton are unchanged, the persisted
+    sealed envelope is reused so every stored decision replays."""
+    sealed: list[str] = []
+
+    def fake_run(env, *, store_dir=None, providers=None):
+        sealed.append(env["envelope_sha256"])
+        return {
+            "records": [{"concept_title": "Stub Row"}],
+            "host_map": {}, "qid_map": {}, "new_concepts": [],
+            "coverage": {"items": 0, "routed_qids": [], "unrouted": []},
+            "summary": {
+                "row_count": 1, "flagged_row_count": 0, "routed_qids": 0,
+                "unrouted_items": 0,
+                "envelope_sha256": env["envelope_sha256"],
+            },
+        }
+
+    monkeypatch.setenv("AEGIS_PHASE3_REWRITE", "1")
+    monkeypatch.setattr(runner, "run", fake_run)
+    session = {
+        "artifact_dir": tmp_path,
+        "canonical": fixture_env["canonical"],
+    }
+    common = dict(
+        subject="History",
+        mmd_text="canonical semantic source",
+        meta=fixture_env["metadata"],
+        source_sections=[],
+        source_topic_excerpts=[],
+        method_anchors=[],
+        mined_types=copy.deepcopy(fixture_env["mined_types"]),
+    )
+    with phase3.activate_session(session), phase3.activate(
+        _graph_from(fixture_env)
+    ):
+        generation._prepare_final_concept_content(
+            copy.deepcopy(fixture_env["skeleton_rows"]),
+            question_task_inventory=copy.deepcopy(fixture_env["inventory"]),
+            **common,
+        )
+        # A refreshed (byte-different, semantically equivalent) inventory
+        # on resume must NOT change the envelope.
+        drifted = copy.deepcopy(fixture_env["inventory"])
+        drifted["_resume_refresh_marker"] = "different-bytes"
+        generation._prepare_final_concept_content(
+            copy.deepcopy(fixture_env["skeleton_rows"]),
+            question_task_inventory=drifted,
+            **common,
+        )
+
+    assert len(sealed) == 2
+    assert sealed[0] == sealed[1]
+    assert (tmp_path / "source.phase3-envelope.json").exists()

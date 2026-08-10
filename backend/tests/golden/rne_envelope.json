@@ -13,6 +13,18 @@
   "unit": "Modern World History"
  },
  "graph": {
+  "source_contract_hash": "7c9abe9903eef7324319f630032c8a0302929e6bae731f1dd51416af9ca84d61",
+  "metadata": {
+   "board": "CBSE",
+   "chapter_code": "10CBSS_TheRiseOfNat",
+   "chapter_id": 1759,
+   "chapter_title": "The Rise of Nationalism in Europe",
+   "grade": "10",
+   "learning_kind": "Post",
+   "subject": "History",
+   "subject_adapter": "social_science",
+   "unit": "Modern World History"
+  },
   "topics": [
    {
     "display_title": "The French Revolution and the Idea of the Nation",
@@ -10909,5 +10921,5 @@
   ]
  },
  "acsd_ledger": {},
- "envelope_sha256": "5cb7ebb8c46e02f0076fac1c0b589ff7e1e7ff42a225adc69c931dfb1c040450"
+ "envelope_sha256": "13099bd0d87bd64035d55558e9a820daea433e09492114f835b297a2beb6d6dd"
 }

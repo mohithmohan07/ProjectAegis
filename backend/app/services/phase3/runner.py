@@ -21,6 +21,7 @@ from . import assemble as assemble_mod
 from . import envelope as envelope_mod
 from . import host as host_mod
 from . import kernel
+from . import polish as polish_mod
 from . import settle as settle_mod
 
 
@@ -112,6 +113,24 @@ def run(
         critic=injected.get("critic"),
         store=store,
     )
+    # Terminal content quality (generic analysis, verbatim Descriptions)
+    # is converged BEFORE Assemble seals anything, on settled and
+    # host-created rows alike; only failing rows cost a model call.
+    progress.step(
+        "Phase 3 — Polish: converging content on the terminal quality "
+        "gate",
+        value=0.94,
+    )
+    new_concepts = hosts.get("new_concepts") or []
+    polished = polish_mod.polish(
+        env,
+        [*settled, *new_concepts],
+        provider=injected.get("polish"),
+        store=store,
+    )
+    settled = polished[:len(settled)]
+    hosts = {**hosts, "new_concepts": polished[len(settled):]}
+    _snapshot_settled_rows(env, settled, store_dir)
     progress.step(
         "Phase 3 — Assemble: embedding Types and routing QIDs "
         "(deterministic)",

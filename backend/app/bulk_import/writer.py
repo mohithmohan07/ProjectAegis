@@ -361,6 +361,15 @@ _HUB_PREFIX_RE = re.compile(
 )
 
 
+def _api_question_placement_active() -> bool:
+    """Whether the rewritten Phase 3's routing rules own question placement."""
+    try:
+        from app.services.phase3 import runner as _phase3_runner
+    except ImportError:  # pragma: no cover - defensive import ordering
+        return False
+    return _phase3_runner.rewrite_enabled()
+
+
 def _validate_concepts_workbook_bytes(
     data: bytes,
     concepts: list[models.Concept],
@@ -496,7 +505,12 @@ def _validate_concepts_workbook_bytes(
             f"{chapter}/Type {number}"
             for (chapter, number), hosts in type_hosts.items()
             if len(hosts) > 1)
-        if split_types:
+        if split_types and not _api_question_placement_active():
+            # Under the rewritten Phase 3 the house routing rules place
+            # each question on the concept it belongs to, so two questions
+            # of one Type can legitimately live on different hosts (their
+            # shared Type keeps its one chapter-wide number). The
+            # single-host expectation belongs to the legacy allocator.
             issues.append(
                 "regular Type number(s) span multiple concept hosts: "
                 + ", ".join(split_types))

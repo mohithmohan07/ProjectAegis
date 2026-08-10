@@ -3846,7 +3846,13 @@ def _inventory_item_owner_topic(item: dict) -> tuple[str, str]:
     # owner from source text in teaching order instead, exactly as Phase 3.3
     # does when its certification pair fails.
     live_without_owner = False
-    if config.use_live_generation():
+    if config.use_live_generation() and not (
+        # Under the rewritten Phase 3 no item ever met the old 3.3
+        # certification pair, so its absence is not an integrity fault;
+        # placement authority is the Host pass's API decision and the
+        # printed topic here is provenance only (hub-note alignment).
+        _rewrite_placement_authority_active()
+    ):
         from . import canonical_source_phase3 as _phase3
 
         live_without_owner = bool(
@@ -3937,7 +3943,25 @@ def _normalize_activity_hubs_from_inventory(
         isinstance(mined_types, dict)
         and _PLACEMENT_CERTIFICATIONS_KEY in mined_types
     )
-    if certification_declared and items:
+    if _rewrite_placement_authority_active() and items:
+        # Under the rewritten Phase 3 the Host pass's API placement is the
+        # hub's authority: the released rows record every question's
+        # destination in _aegis_release_qids (a Culmination row included,
+        # when the house routing rules put it there). The certified-host
+        # ledger this function otherwise demands does not exist.
+        for item in items:
+            qid = str(item.get("qid") or "").strip()
+            bound = next(
+                (
+                    index
+                    for index, record in enumerate(records)
+                    if qid in (record.get("_aegis_release_qids") or [])
+                ),
+                -1,
+            )
+            if bound >= 0:
+                target_by_qid[qid] = bound
+    elif certification_declared and items:
         ledger = _placement_certification_ledger(mined_types)
         if not ledger:
             raise RuntimeError(
@@ -4055,6 +4079,12 @@ def _hub_inventory_contract_violations(
             continue
         index = locations[0]
         record = records[index]
+        # Under the rewritten Phase 3 a hub legitimately lives wherever
+        # the API placed its question — a Culmination row or a later
+        # topic included, per the house routing rules — so host-locality
+        # opinions are legacy-only; presence/duplication checks remain.
+        if _rewrite_placement_authority_active():
+            continue
         if cr.is_culmination(record.get("concept_title") or ""):
             violations.append({
                 "qid": qid,
@@ -15276,6 +15306,21 @@ def _resolved_type_case_qid_placement_ledger(
     return copy.deepcopy(reference)
 
 
+def _rewrite_placement_authority_active() -> bool:
+    """Whether the rewritten Phase 3 is the placement authority.
+
+    The old 3.2/3.3 machinery minted per-row placement contracts and a
+    certified QID placement ledger; the terminal gates verify those
+    artifacts. The rewritten pipeline replaces that machinery with its own
+    sealed chain (envelope seal, decide-once store, row certificates,
+    ordered lineage, closed-world QID coverage), so under the rewrite flag
+    the old-artifact gates must not demand what no longer exists.
+    """
+    from .phase3 import runner as _phase3_runner
+
+    return _phase3_runner.rewrite_enabled()
+
+
 def _final_type_case_qid_host_manifests(
     records: list[dict],
     inventory: dict | None,
@@ -15301,6 +15346,7 @@ def _final_type_case_qid_host_manifests(
             config.use_live_generation()
             and isinstance(_phase3.active_graph(), dict)
             and (inventory or {}).get("items")
+            and not _rewrite_placement_authority_active()
         ):
             raise RuntimeError(
                 "type_case_owner_uncertified: live finalization has no "
@@ -15814,6 +15860,13 @@ def _relocate_chapter_wide_examples_from_culminations(
     first, then exact-dedupe with the target first so the earlier Culmination
     copy cannot win merely because it occurs first in chapter order.
     """
+    if _rewrite_placement_authority_active():
+        # A question on a Culmination is a deliberate decision under the
+        # house routing rules (multi-concept questions pool there); moving
+        # its rendered Example back to a mined-hint concept both overrides
+        # that decision and duplicates the Type heading onto a second host,
+        # which the workbook writer then rejects.
+        return [dict(record) for record in records]
     out = [dict(record) for record in records]
     mined_by_qid = _mined_assignment_units_by_qid(mined_types)
     moved = 0
@@ -16765,6 +16818,13 @@ def _validate_final_or_raise(
             f"{len(coverage_defects['duplicate'])} duplicate source "
             "question(s)"
         )
+    # The semantic ownership family verifies Phase 3.3's certified
+    # placement artifacts (owner topics, hub contracts, certified hosts).
+    # Under the rewritten Phase 3 those artifacts do not exist: question
+    # ownership is the Host pass's API placement (checker-complete, with
+    # the deterministic rule reading as an advisory flag), and the exact
+    # rendered-coverage check above still guarantees every inventory
+    # question appears exactly once.
     semantic_defects = (
         {
             "unexpected_examples": _unexpected_rendered_type_examples(
@@ -16791,6 +16851,7 @@ def _validate_final_or_raise(
                 _hub_inventory_examples_in_types(records, inventory)),
         }
         if inventory is not None
+        and not _rewrite_placement_authority_active()
         else {}
     )
     nonempty_semantic = {
@@ -22848,6 +22909,7 @@ def concepts_from_mmd(
                     ),
                     require_placement_contracts=(
                         production_grounding_required
+                        and not _rewrite_placement_authority_active()
                     ),
                 )
                 if grounding_certificate_required

@@ -950,7 +950,10 @@ def _deposit_concepts(
                     else None
                 ),
                 require_semantic_graph=config.use_live_generation(),
-                require_placement_contracts=config.use_live_generation(),
+                require_placement_contracts=(
+                    config.use_live_generation()
+                    and not generation._rewrite_placement_authority_active()
+                ),
                 type_case_qid_placement_ledger=(
                     type_case_qid_placement_ledger
                 ),
@@ -1037,8 +1040,16 @@ def _deposit_concepts(
                 "question/task inventory coverage failed before deposit: "
                 + "; ".join(defect_parts)
             )
-        topic_violations = generation._rendered_inventory_topic_violations(
-            records, inventory, mined_types)
+        # Topic locality is a legacy-placement expectation: under the
+        # rewritten Phase 3 the house routing rules deliberately move a
+        # multi-concept question to a later topic (or its culmination), so
+        # the API placement is the authority and this check is legacy-only.
+        topic_violations = (
+            generation._rendered_inventory_topic_violations(
+                records, inventory, mined_types)
+            if not generation._rewrite_placement_authority_active()
+            else []
+        )
         if topic_violations:
             qids = sorted({
                 str(item.get("qid") or "").strip()
@@ -1130,7 +1141,10 @@ def _deposit_concepts(
                     else None
                 ),
                 require_semantic_graph=config.use_live_generation(),
-                require_placement_contracts=config.use_live_generation(),
+                require_placement_contracts=(
+                    config.use_live_generation()
+                    and not generation._rewrite_placement_authority_active()
+                ),
                 type_case_qid_placement_ledger=(
                     type_case_qid_placement_ledger
                 ),
