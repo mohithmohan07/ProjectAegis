@@ -17,7 +17,12 @@ from . import envelope as envelope_mod
 from . import kernel
 from .. import progress
 
-_BATCH_SIZE = 8
+# One decision PER ROW: batching couples unrelated rows through the
+# bounded-correction loop (a row repaired on attempt 1 can regress on
+# attempt 2 while a sibling converges — rehearsal 9 looped exactly this
+# way), while an isolated row converges on the first attempt. Per-row
+# decisions also replay individually from the store.
+_BATCH_SIZE = 1
 
 # The subset of the deposit gate's fatal codes that are row-local content
 # quality (repairable by rewriting concept_details alone).
@@ -57,10 +62,27 @@ def _failures(
         ):
             index = error.get("row_index", -1)
             if isinstance(index, int) and 0 <= index < len(rows):
-                failures.setdefault(index, []).append({
+                entry = {
                     "code": str(error.get("code") or ""),
                     "message": str(error.get("message") or ""),
-                })
+                }
+                title = _normal(
+                    dict(rows[index]).get("concept_title")
+                )
+                if entry["code"] == "generic_error_analysis":
+                    # A concrete, filter-verified skeleton the model can
+                    # adapt: actor + faulty action + 'instead of' contrast.
+                    entry["example_repair"] = (
+                        f"Students may place {title} in the wrong "
+                        "sequence instead of locating it at its actual "
+                        "point in the chapter's chronology."
+                    )
+                elif entry["code"] == "generic_misconception":
+                    entry["example_repair"] = (
+                        "The learner may believe <state one specific "
+                        f"wrong claim about {title}>."
+                    )
+                failures.setdefault(index, []).append(entry)
     return failures
 
 
