@@ -15860,6 +15860,13 @@ def _relocate_chapter_wide_examples_from_culminations(
     first, then exact-dedupe with the target first so the earlier Culmination
     copy cannot win merely because it occurs first in chapter order.
     """
+    if _rewrite_placement_authority_active():
+        # A question on a Culmination is a deliberate decision under the
+        # house routing rules (multi-concept questions pool there); moving
+        # its rendered Example back to a mined-hint concept both overrides
+        # that decision and duplicates the Type heading onto a second host,
+        # which the workbook writer then rejects.
+        return [dict(record) for record in records]
     out = [dict(record) for record in records]
     mined_by_qid = _mined_assignment_units_by_qid(mined_types)
     moved = 0
