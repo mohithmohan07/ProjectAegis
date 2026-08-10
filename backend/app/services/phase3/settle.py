@@ -110,6 +110,25 @@ def _batched(values: list, size: int = _BATCH_SIZE) -> list[list]:
 # stage 1: topology
 
 
+
+def _pin_flags(
+    flags: list[str],
+    batch_ids: list[str],
+    row_id: str,
+) -> list[str]:
+    """Attach concept-specific flags to their concept; general ones to all.
+
+    A critic issue naming a specific concept must land only on that row
+    (staging showed whole batches flagged for one concept's dissent).
+    """
+    pinned = [flag for flag in flags if row_id in flag]
+    general = [
+        flag for flag in flags
+        if not any(candidate in flag for candidate in batch_ids)
+    ]
+    return pinned + general
+
+
 def _topology_checker(
     batch: list[dict[str, Any]],
 ) -> Callable[[Mapping[str, Any]], list[str]]:
@@ -146,7 +165,8 @@ def _topology_checker(
                 confidence = 0.0
             if not confidence_policy.accepts(confidence):
                 defects.append(
-                    f"{concept_id} confidence {confidence:.3f} is below "
+                    f"[confidence] {concept_id} confidence "
+                    f"{confidence:.3f} is below "
                     f"{confidence_policy.threshold_text()}"
                 )
             segments = row.get("segments")
@@ -254,7 +274,8 @@ def _grounding_checker(
                 confidence = 0.0
             if not confidence_policy.accepts(confidence):
                 defects.append(
-                    f"{concept_id} confidence {confidence:.3f} is below "
+                    f"[confidence] {concept_id} confidence "
+                    f"{confidence:.3f} is below "
                     f"{confidence_policy.threshold_text()}"
                 )
         missing = sorted(expected - seen)
@@ -496,7 +517,11 @@ def settle(
                         "_phase32_segment_order": order,
                     }
                     index = len(settled) + len(topic_settled)
-                    flags = list(decision.get("review_flags") or [])
+                    flags = _pin_flags(
+                        list(decision.get("review_flags") or []),
+                        [c["concept_id"] for c in batch],
+                        row["concept_id"],
+                    )
                     if flags:
                         flags_by_row[index] = flags
                     topic_settled.append(settled_row)
@@ -581,7 +606,11 @@ def settle(
                     )
                 except (TypeError, ValueError):
                     row["_source_grounding_confidence"] = 0.0
-                flags = list(decision.get("review_flags") or [])
+                flags = _pin_flags(
+                    list(decision.get("review_flags") or []),
+                    concept_ids,
+                    concept_id,
+                )
                 if flags:
                     flags_by_row.setdefault(
                         len(settled) + position, []
@@ -686,4 +715,8 @@ def settle(
                 *(settled[index].get("review_flags") or []),
                 *flags,
             ]
+
+    # Certificate lineage is sealed exactly once, over the FINAL payload in
+    # Assemble (attempt 8: a Settle-time seal fights the re-seal after Host
+    # adds new concepts — 'ordered grounded concept set changed').
     return settled

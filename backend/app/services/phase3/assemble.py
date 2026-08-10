@@ -200,6 +200,29 @@ def assemble(
                 ),
             })
 
+    # Host may have created new concepts; the deposit chain verifies the
+    # certificate lineage against the FINAL payload, so re-stamp and
+    # re-seal the complete row set (attempt 7: attested 63, payload 68).
+    from .. import canonical_source_phase31_grounding_contract as phase31
+    from .. import grounding_certificate
+
+    known_blocks = {
+        str(row.get("block_id") or "")
+        for row in env["graph"]["blocks"]
+        if isinstance(row, Mapping) and str(row.get("block_id") or "")
+    }
+    for number, row in enumerate(rows, start=1):
+        row["_source_grounding_concept_id"] = f"CONCEPT-GROUND-{number:04d}"
+        row["_source_grounding_version"] = phase31._GROUNDING_VERSION
+    grounding_certificate.seal_records(
+        rows,
+        source_contract_hash=str(env.get("source_contract_hash") or ""),
+        semantic_topology_sha256=(
+            grounding_certificate.semantic_topology_sha256(env["graph"])
+        ),
+        allowed_block_ids=known_blocks,
+    )
+
     return {
         "rows": rows,
         "coverage": {

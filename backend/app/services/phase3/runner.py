@@ -32,6 +32,44 @@ def rewrite_enabled() -> bool:
     ).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _snapshot_settled_rows(
+    env: Mapping[str, Any],
+    settled: list[dict[str, Any]],
+    store_dir: str | Path | None,
+) -> None:
+    """Persist the settled rows so a later failure release can ship them.
+
+    Written beside the decision store in the job's durable artifact
+    directory, in the same shape as the legacy validated-topology cache so
+    the release upgrade path verifies it identically.
+    """
+
+    if not store_dir:
+        return
+    import json
+
+    from .. import canonical_source_phase3 as phase3_core
+
+    try:
+        path = Path(store_dir).parent / "source.phase3-settled-rows.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "records": settled,
+                    "records_sha256": phase3_core._sha256_json(settled),
+                    "source_contract_hash": str(
+                        env.get("source_contract_hash") or ""
+                    ),
+                },
+                ensure_ascii=False,
+                indent=1,
+            ),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass  # snapshotting is best-effort; the store already has decisions
+
+
 def run(
     env: Mapping[str, Any],
     *,
@@ -63,6 +101,7 @@ def run(
         critic=injected.get("critic"),
         store=store,
     )
+    _snapshot_settled_rows(env, settled, store_dir)
     progress.step(
         "Phase 3 — Host: certifying Type/Case and QID hosts", value=0.91
     )

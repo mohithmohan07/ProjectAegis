@@ -129,7 +129,8 @@ def _host_checker(
                 confidence = 0.0
             if not confidence_policy.accepts(confidence):
                 defects.append(
-                    f"{unit_id} host confidence {confidence:.3f} is below "
+                    f"[confidence] {unit_id} host confidence "
+                    f"{confidence:.3f} is below "
                     f"{confidence_policy.threshold_text()}"
                 )
             if decision == "existing":

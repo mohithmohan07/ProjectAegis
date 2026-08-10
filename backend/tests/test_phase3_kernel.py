@@ -193,3 +193,34 @@ def test_envelope_rejects_missing_fields_and_broken_seals():
     tampered["source_contract_hash"] = "S-2"
     with pytest.raises(envelope_mod.EnvelopeError, match="seal"):
         envelope_mod.validate(tampered)
+
+
+def test_pure_confidence_shortfall_ships_flagged_after_bounded_attempts():
+    """An honest sub-floor confidence must not kill a run (staging: one
+    0.880 grounding failed a whole chapter). Structural defects still
+    fail closed; confidence-only shortfalls ship with review flags."""
+    calls = 0
+
+    def provider(_request: dict) -> dict:
+        nonlocal calls
+        calls += 1
+        return {"confidence": 0.88}
+
+    decision = kernel.decide(
+        kind="test",
+        unit_id="U-1",
+        envelope_sha256="e" * 64,
+        payload=_payload(),
+        provider=provider,
+        checker=lambda _r: [
+            "[confidence] C-1 confidence 0.880 is below 0.920"
+        ],
+        store=kernel.DecisionStore(),
+    )
+
+    assert calls == 3
+    assert decision["response"] == {"confidence": 0.88}
+    assert any(
+        "0.880 is below 0.920" in flag and "shipped for review" in flag
+        for flag in decision["review_flags"]
+    )

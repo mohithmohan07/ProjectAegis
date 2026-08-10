@@ -478,6 +478,17 @@ def run_with_semantic_recovery(
             # caller persist/return it without invoking any recovery model.
             raise
         except Exception as exc:
+            from .phase3 import runner as _phase3_runner
+
+            if _phase3_runner.rewrite_enabled():
+                # Decide-once: under the rewritten Phase 3 there is no
+                # checkpoint-repair courtroom. A repair rewrites the 81%
+                # rows, which changes the sealed envelope, which invalidates
+                # every cached decision — one rejected row then re-bills the
+                # whole Settle pass (observed twice in staging). Fail closed
+                # with the real defect instead; the release ships everything
+                # already decided.
+                raise
             assessment = classify_failure(exc)
             checkpoint = checkpoint_snapshot() or {}
             signature = failure_signature(exc, checkpoint)

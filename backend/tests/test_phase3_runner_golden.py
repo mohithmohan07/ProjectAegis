@@ -116,6 +116,34 @@ def test_runner_produces_publication_ready_output(
     assert again == result
 
 
+def test_settled_rows_snapshot_lands_beside_the_store(
+    golden_envelope, replay_providers, tmp_path_factory,
+):
+    """A failure after Settle must leave the release something to ship."""
+    import json
+
+    from app.services import canonical_source_phase3 as phase3_core
+
+    artifact_dir = tmp_path_factory.mktemp("artifacts")
+    store_dir = artifact_dir / "phase3-decisions"
+    runner.run(
+        golden_envelope, store_dir=store_dir, providers=replay_providers,
+    )
+
+    snapshot = json.loads(
+        (artifact_dir / "source.phase3-settled-rows.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert len(snapshot["records"]) == 53
+    assert snapshot["records_sha256"] == phase3_core._sha256_json(
+        snapshot["records"]
+    )
+    assert snapshot["source_contract_hash"] == golden_envelope[
+        "source_contract_hash"
+    ]
+
+
 def test_the_flag_defaults_off(monkeypatch):
     monkeypatch.delenv("AEGIS_PHASE3_REWRITE", raising=False)
     assert runner.rewrite_enabled() is False

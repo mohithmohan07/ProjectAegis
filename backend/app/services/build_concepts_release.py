@@ -614,6 +614,7 @@ def _release_summary(
 
 
 _FINAL_TOPOLOGY_ARTIFACT = "source.phase31-final-topology-cache.json"
+_SETTLED_ROWS_ARTIFACT = "source.phase3-settled-rows.json"
 
 
 def _learner_analysis_count(rows: Iterable[Mapping[str, Any]]) -> int:
@@ -640,40 +641,54 @@ def _validated_artifact_topology(
     if not callable(helper) or not getattr(job, "id", None):
         return None
     try:
-        path = (
-            Path(helper(int(job.id))).resolve() / _FINAL_TOPOLOGY_ARTIFACT
-        )
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        directory = Path(helper(int(job.id))).resolve()
     except Exception:
-        return None
-    if not isinstance(raw, Mapping):
-        return None
-    rows = raw.get("records")
-    if not isinstance(rows, list) or not rows:
         return None
     from . import canonical_source_phase3 as phase3
 
-    if raw.get("records_sha256") != phase3._sha256_json(rows):
-        return None
-    cache_contract = str(raw.get("source_contract_hash") or "")
-    current_contracts = {
-        str(row.get("_semantic_graph_contract") or "")
-        for row in current_rows
-        if isinstance(row, Mapping)
-        and row.get("_semantic_graph_contract")
-    }
-    if cache_contract and current_contracts and (
-        cache_contract not in current_contracts
+    best: list[dict[str, Any]] | None = None
+    # The rewritten Phase 3 snapshots its settled rows separately from the
+    # legacy validated-topology cache; a failure release must consider both
+    # (job 26 shipped bare checkpoint rows because it only knew the old one).
+    for filename in (_SETTLED_ROWS_ARTIFACT, _FINAL_TOPOLOGY_ARTIFACT):
+        try:
+            raw = json.loads(
+                (directory / filename).read_text(encoding="utf-8")
+            )
+        except Exception:
+            continue
+        if not isinstance(raw, Mapping):
+            continue
+        rows = raw.get("records")
+        if not isinstance(rows, list) or not rows:
+            continue
+        if raw.get("records_sha256") != phase3._sha256_json(rows):
+            continue
+        cache_contract = str(raw.get("source_contract_hash") or "")
+        current_contracts = {
+            str(row.get("_semantic_graph_contract") or "")
+            for row in current_rows
+            if isinstance(row, Mapping)
+            and row.get("_semantic_graph_contract")
+        }
+        if cache_contract and current_contracts and (
+            cache_contract not in current_contracts
+        ):
+            continue
+        candidate = [
+            copy.deepcopy(dict(row))
+            for row in rows
+            if isinstance(row, Mapping)
+        ]
+        if best is None or _learner_analysis_count(candidate) > (
+            _learner_analysis_count(best)
+        ):
+            best = candidate
+    if best is None or _learner_analysis_count(best) <= (
+        _learner_analysis_count(current_rows)
     ):
         return None
-    candidate = [
-        copy.deepcopy(dict(row)) for row in rows if isinstance(row, Mapping)
-    ]
-    if _learner_analysis_count(candidate) <= _learner_analysis_count(
-        current_rows
-    ):
-        return None
-    return candidate
+    return best
 
 
 def stage_release(
