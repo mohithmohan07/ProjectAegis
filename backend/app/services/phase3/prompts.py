@@ -85,6 +85,21 @@ HOST_SYSTEM = _SHARED + (
     "(QINV-...) are never source blocks."
 )
 
+POLISH_SYSTEM = _SHARED + (
+    " Task: repair concept rows that failed the terminal content gate. "
+    "Response schema: {\"rows\": [{\"row_ref\", \"concept_title\", "
+    "\"concept_details\", \"keywords\"}]}. Echo each row_ref exactly as "
+    "given and return every requested row. Fix ONLY what the row's "
+    "validation_errors name: a Description must teach in original "
+    "language (never repeat a long contiguous source passage), "
+    "Misconceptions must name a concept-specific incorrect belief, "
+    "Error Analysis must name the learner and a concrete faulty action "
+    "or reasoning step, and no sentence may end truncated. Keep every "
+    "other section — the 'Achieving Mastery:' line, Types, the "
+    "Misconception/ Error Analysis structure — intact and in place, "
+    "keep the concept's meaning, and never rename it."
+)
+
 CRITIC_SYSTEM = _SHARED + (
     " Task: independently audit the proposed_decision in the request "
     "against the source blocks. Response schema: {\"verdict\": "
