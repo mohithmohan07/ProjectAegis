@@ -33,6 +33,12 @@ CONTENT_CODES = {
     "misconception_framing",
     "error_analysis_framing",
     "description_truncated_clause",
+    # A row can reach the boundary with no (or malformed) learner
+    # analysis: the old path papered that over with a deterministic
+    # fallback the gate forbids; authoring real analysis is model work.
+    "analysis_section_format",
+    "missing_misconception",
+    "missing_error_analysis",
 }
 
 
@@ -88,6 +94,19 @@ def _failures(
                         "The learner may believe <state one specific "
                         f"wrong claim about {title}> — a belief "
                         "statement, not an action or a correction."
+                    )
+                elif entry["code"] in (
+                    "analysis_section_format",
+                    "missing_misconception",
+                    "missing_error_analysis",
+                ):
+                    entry["example_repair"] = (
+                        "End concept_details with exactly one combined "
+                        "section: '// Misconception/ Error Analysis: "
+                        "Misconceptions: <one specific wrong belief "
+                        f"about {title}>.; Error Analysis: <the learner "
+                        "performing one concrete faulty action, with an "
+                        "instead-of contrast>.'"
                     )
                 failures.setdefault(index, []).append(entry)
     return failures
