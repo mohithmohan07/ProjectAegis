@@ -337,9 +337,14 @@ def phase2_inventory_issues(
                 "qid": qid,
                 "rich_text_issues": rich_issues,
             })
+        citation_severity = (
+            "warning"
+            if canonical_source.figure_citations_ship_for_review()
+            else "error"
+        )
         if task.get("unresolved_figure_reference_ids"):
             issues.append({
-                "severity": "error",
+                "severity": citation_severity,
                 "code": "phase2_unresolved_figure_reference",
                 "message": "A canonical task contains an unresolved explicit Figure reference.",
                 "qid": qid,
@@ -347,7 +352,7 @@ def phase2_inventory_issues(
             })
         if task.get("ambiguous_figure_reference_ids"):
             issues.append({
-                "severity": "error",
+                "severity": citation_severity,
                 "code": "phase2_ambiguous_figure_reference",
                 "message": "A canonical task has an ambiguous explicit Figure reference.",
                 "qid": qid,

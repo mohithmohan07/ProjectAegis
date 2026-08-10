@@ -847,6 +847,24 @@ def _issue(
     return {"severity": severity, "code": code, "message": message, **extra}
 
 
+def figure_citations_ship_for_review() -> bool:
+    """Whether an unmatchable explicit Figure citation ships flagged.
+
+    Caption detection is sensitive to converter rendering variance: the
+    same book compiles clean or fatally depending on how a caption line
+    happens to be emitted, and a single unmatched "Fig. X.Y" citation
+    used to block an entire chapter after the full (and expensive)
+    verified extraction had already succeeded. Under the rewritten
+    pipeline the citation ships as a review flag on its task instead of
+    blocking generation; the legacy path keeps the hard gate.
+    """
+    try:
+        from .phase3 import runner as _phase3_runner
+    except ImportError:  # pragma: no cover - defensive import ordering
+        return False
+    return _phase3_runner.rewrite_enabled()
+
+
 def _validate(
     source: str,
     canonical: dict[str, Any],
@@ -926,9 +944,12 @@ def _validate(
                 task_id=task["task_id"],
                 figure_refs=missing,
             ))
+        citation_severity = (
+            "warning" if figure_citations_ship_for_review() else "error"
+        )
         if task.get("unresolved_figure_reference_ids"):
             issues.append(_issue(
-                "error",
+                citation_severity,
                 "unresolved_explicit_figure_reference",
                 "An explicit source Figure reference does not resolve to the canonical Figure registry.",
                 task_id=task["task_id"],
@@ -936,7 +957,7 @@ def _validate(
             ))
         if task.get("ambiguous_figure_reference_ids"):
             issues.append(_issue(
-                "error",
+                citation_severity,
                 "ambiguous_explicit_figure_reference",
                 "An explicit source Figure reference resolves to more than one Figure object.",
                 task_id=task["task_id"],
