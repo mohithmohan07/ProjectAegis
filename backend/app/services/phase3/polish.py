@@ -138,10 +138,25 @@ def _checker(
         for position, codes in remaining.items():
             ref = candidates[position][0]
             title = _normal(candidates[position][1].get("concept_title"))
+            # Show the model (and the failure log) the exact text the
+            # gate judged, post-normalization — the normalizer may have
+            # replaced or dropped what the model wrote.
+            from .. import concept_validator as cv
+
+            judged = cv.ensure_valid_learner_analysis(
+                [dict(candidates[position][1])]
+            )[0]
+            analysis_tail = str(judged.get("concept_details") or "")
+            if "// Misconception/ Error Analysis:" in analysis_tail:
+                analysis_tail = analysis_tail.split(
+                    "// Misconception/ Error Analysis:", 1
+                )[1]
             for code in codes:
                 message = (
                     f"row_ref {ref} ({title[:50]}) still fails "
-                    f"{code['code']}: {code['message']}"
+                    f"{code['code']}: {code['message']}; the gate judged "
+                    f"this normalized analysis text: "
+                    f"{analysis_tail.strip()[:300]!r}"
                 )
                 if code["code"] == "generic_error_analysis":
                     # The house normalizer silently REPLACES any Error
