@@ -714,20 +714,7 @@ def settle(
                 *flags,
             ]
 
-    # The deposit chain verifies the grounding-certificate lineage on every
-    # row (attempt 6 failed there); stamp and seal in settled order.
-    from .. import canonical_source_phase31_grounding_contract as phase31
-    from .. import grounding_certificate
-
-    for number, row in enumerate(settled, start=1):
-        row["_source_grounding_concept_id"] = f"CONCEPT-GROUND-{number:04d}"
-        row["_source_grounding_version"] = phase31._GROUNDING_VERSION
-    grounding_certificate.seal_records(
-        settled,
-        source_contract_hash=str(env.get("source_contract_hash") or ""),
-        semantic_topology_sha256=(
-            grounding_certificate.semantic_topology_sha256(env["graph"])
-        ),
-        allowed_block_ids=known_blocks,
-    )
+    # Certificate lineage is sealed exactly once, over the FINAL payload in
+    # Assemble (attempt 8: a Settle-time seal fights the re-seal after Host
+    # adds new concepts — 'ordered grounded concept set changed').
     return settled
