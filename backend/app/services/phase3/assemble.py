@@ -47,16 +47,15 @@ def _type_catalog(env: Mapping[str, Any]) -> tuple[dict, dict]:
         for case in mined.get("case_prompts") or []:
             if not isinstance(case, Mapping):
                 continue
-            example = ""
-            for row in case.get("examples") or []:
-                if isinstance(row, Mapping) and _normal(
-                    row.get("example_prompt")
-                ):
-                    example = _normal(row.get("example_prompt"))
-                    break
+            examples = [
+                _normal(row.get("example_prompt"))
+                for row in case.get("examples") or []
+                if isinstance(row, Mapping)
+                and _normal(row.get("example_prompt"))
+            ]
             cases[(type_id, str(case.get("case_id") or ""))] = {
                 "title": _normal(case.get("case_title")),
-                "example": example,
+                "examples": examples,
             }
     return types, cases
 
@@ -103,8 +102,8 @@ def render_types_section(
                     f"hosted unit references unknown {type_id}::{case_id}"
                 )
             piece += f" Case {_ordinal(case_id, 'Case'):02d}: {case['title']}"
-            if case["example"]:
-                piece += f" Example: {case['example']}"
+            for example in case["examples"]:
+                piece += f" Example: {example}"
         pieces.append(piece)
     return " ".join(pieces)
 
