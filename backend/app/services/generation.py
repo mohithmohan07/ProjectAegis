@@ -3937,7 +3937,25 @@ def _normalize_activity_hubs_from_inventory(
         isinstance(mined_types, dict)
         and _PLACEMENT_CERTIFICATIONS_KEY in mined_types
     )
-    if certification_declared and items:
+    if _rewrite_placement_authority_active() and items:
+        # Under the rewritten Phase 3 the Host pass's API placement is the
+        # hub's authority: the released rows record every question's
+        # destination in _aegis_release_qids (a Culmination row included,
+        # when the house routing rules put it there). The certified-host
+        # ledger this function otherwise demands does not exist.
+        for item in items:
+            qid = str(item.get("qid") or "").strip()
+            bound = next(
+                (
+                    index
+                    for index, record in enumerate(records)
+                    if qid in (record.get("_aegis_release_qids") or [])
+                ),
+                -1,
+            )
+            if bound >= 0:
+                target_by_qid[qid] = bound
+    elif certification_declared and items:
         ledger = _placement_certification_ledger(mined_types)
         if not ledger:
             raise RuntimeError(
@@ -4055,6 +4073,12 @@ def _hub_inventory_contract_violations(
             continue
         index = locations[0]
         record = records[index]
+        # Under the rewritten Phase 3 a hub legitimately lives wherever
+        # the API placed its question — a Culmination row or a later
+        # topic included, per the house routing rules — so host-locality
+        # opinions are legacy-only; presence/duplication checks remain.
+        if _rewrite_placement_authority_active():
+            continue
         if cr.is_culmination(record.get("concept_title") or ""):
             violations.append({
                 "qid": qid,

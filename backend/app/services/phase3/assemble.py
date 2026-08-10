@@ -252,22 +252,57 @@ def assemble(
     # boundary. Run those exact passes here, pre-seal, and require them to
     # be a fixpoint — otherwise the caller would mutate a sealed row and
     # the lineage check would correctly refuse the payload (attempt 10:
-    # 'ordered grounded concept set changed after verification').
-    from .. import concept_validator as cv
-    from .. import generation
+    # 'ordered grounded concept set changed after verification'). The
+    # deposit boundary re-runs its own deterministic cleanup over the
+    # sealed payload and requires it to be FULLY idempotent with what
+    # cleared the final gate, so the sealed rows must be a fixpoint of
+    # the DEPOSIT pipeline as well (staging: Title Case cleanup broke
+    # row identity at the deposit-time certificate check).
+    def _deposit_deterministic_pipeline(
+        candidate_rows: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        from .. import concept_cleanup
+        from .. import concept_refiner
+        from .. import concept_validator as cv
+        from .. import generation
 
-    rows = cv.ensure_valid_learner_analysis(rows)
-    rows = generation._ensure_mastery_lines_via_api(
-        rows, meta={}, use_api=False
-    )
+        meta = env.get("metadata") or {}
+        out_rows = [
+            concept_cleanup.clean_concept_record(dict(row))
+            for row in candidate_rows
+        ]
+        out_rows = concept_cleanup.filter_review_violations(
+            out_rows,
+            subject=str(meta.get("subject") or ""),
+            board=str(meta.get("board") or ""),
+            chapter_title=str(meta.get("chapter_title") or ""),
+        )
+        out_rows = concept_cleanup.dedupe_similar_titles_chapter_wide(
+            out_rows
+        )
+        out_rows = concept_refiner.refine_chapter(out_rows)
+        out_rows = cv.ensure_valid_learner_analysis(out_rows)
+        out_rows = generation._ensure_mastery_lines_via_api(
+            out_rows, meta={}, use_api=False
+        )
+        out_rows = generation._ensure_terminal_culmination_contract(
+            out_rows
+        )
+        out_rows = generation._canonicalize_concept_rich_text(out_rows)
+        out_rows = generation._normalize_activity_hubs_from_inventory(
+            out_rows, dict(env["inventory"]), dict(env["mined_types"])
+        )
+        out_rows = generation._enforce_rendered_inventory_coverage(
+            out_rows, dict(env["inventory"]), dict(env["mined_types"])
+        )
+        out_rows = generation._canonicalize_concept_rich_text(out_rows)
+        out_rows = concept_refiner.renumber_types_continuously(out_rows)
+        out_rows = cv.ensure_valid_learner_analysis(out_rows)
+        return out_rows
+
     rows = cr.set_culmination_recap(rows)
-    rows = generation._canonicalize_concept_rich_text(rows)
-    replayed = cv.ensure_valid_learner_analysis(copy.deepcopy(rows))
-    replayed = generation._ensure_mastery_lines_via_api(
-        replayed, meta={}, use_api=False
-    )
-    replayed = generation._ensure_terminal_culmination_contract(replayed)
-    replayed = generation._canonicalize_concept_rich_text(replayed)
+    rows = _deposit_deterministic_pipeline(rows)
+    replayed = _deposit_deterministic_pipeline(copy.deepcopy(rows))
     if replayed != rows:
         changed = [
             index
@@ -276,9 +311,10 @@ def assemble(
         ]
         raise AssemblyError(
             "assembled rows are not stable under the deterministic "
-            "post-assembly content passes (changed row indexes: "
+            "deposit pipeline (changed row indexes: "
             + ",".join(str(index) for index in changed[:8])
-            + "); sealing them would break the certificate lineage"
+            + f"; row count {len(rows)} -> {len(replayed)}); sealing "
+            "them would break the certificate at the deposit boundary"
         )
 
     # Host may have created new concepts; the deposit chain verifies the
