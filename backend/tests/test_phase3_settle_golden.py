@@ -163,7 +163,23 @@ def _providers(mapping: dict[str, list[dict]]):
                 "achieving_mastery": mastery,
                 "misconception_error_analysis": parts[1],
             })
-        return {"rows": rows}
+        response: dict = {"rows": rows}
+        culms = request.get("culminations") or []
+        if culms:
+            response["culminations"] = [
+                {
+                    "concept_id": culm["concept_id"],
+                    "consolidation": (
+                        "Together these concepts let the learner connect "
+                        + ", ".join(culm["member_concepts"][:3])
+                        + " into one coherent account of the topic, moving "
+                        "from each idea on its own to the combined "
+                        "understanding the chapter builds toward."
+                    ),
+                }
+                for culm in culms
+            ]
+        return response
 
     def critic(_request: dict) -> dict:
         return {"verdict": "verified", "confidence": 0.999, "issues": []}
