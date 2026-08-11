@@ -672,3 +672,55 @@ def test_an_ordinary_generation_failure_becomes_a_release(db):
         "phase 3.3 contract is unavailable" in str(issue.get("message", ""))
         for issue in payload["issues"]
     )
+
+
+def test_release_bulk_import_workbook_renders_canonical_rows_without_db_upload(db):
+    """Creators get the Bulk Import file at run completion: the released
+    rows render through the canonical writer on transient objects, with the
+    authored chapter metadata applied and no concept touching the database."""
+    from app import bulk_import as _bi
+
+    job, chapter = _job(db)
+    # A finalized chapter duration wins over authored metadata by design;
+    # this test exercises the authored path, so the shared fixture chapter
+    # must not carry one from an earlier test's upload.
+    chapter.chapter_duration = ""
+    chapter.chapter_description = ""
+    db.commit()
+    concepts_before = db.query(models.Concept).count()
+    release.stage_release(
+        db,
+        job,
+        target_chapter_id=chapter.id,
+        records=_records(),
+        inventory=_inventory(),
+        mined_types=_mined_types(),
+    )
+    db.refresh(job)
+    payload = release.release_payload(job)
+    payload["chapter_meta"] = {
+        "chapter_description": "An authored chapter description.",
+        "chapter_duration_minutes": 120,
+        "topic_descriptions": {
+            _bi.normalize_question_text("Topic A"): "Topic A teaches the method.",
+        },
+    }
+    inventory = copy.deepcopy(dict(job.question_inventory or {}))
+    inventory[release.RELEASE_KEY] = payload
+    job.question_inventory = inventory
+    db.commit()
+
+    data = release_files.build_release_bulk_import_workbook(db, job)
+    workbook = load_workbook(io.BytesIO(data))
+    from app.bulk_import import SHEET_OBJECTIVE
+
+    sheet = workbook[SHEET_OBJECTIVE]
+    rows = list(sheet.iter_rows(min_row=3, values_only=True))
+    assert rows, "the canonical export must carry the released concept rows"
+    first = rows[0]
+    values = [str(value or "") for value in first]
+    assert any("Released Concept Alpha" in value for value in values)
+    assert any("An authored chapter description." in value for value in values)
+    assert any("120 minutes" in value for value in values)
+    assert any("Topic A teaches the method." in value for value in values)
+    assert db.query(models.Concept).count() == concepts_before

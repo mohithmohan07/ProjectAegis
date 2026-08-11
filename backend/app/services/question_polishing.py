@@ -57,7 +57,8 @@ FRAGMENT_MINING_NOTE = (
     "\n\nPolished inventory wording:\n"
     "- When an item carries polished_task, that is the question's shipping "
     "wording; raw_task is the source audit copy. Classify by what the "
-    "polished wording asks.\n"
+    "polished wording asks, and copy the polished_task IN FULL as the "
+    "example_prompt — never the raw textbook prose it replaced.\n"
     "- A multi-part question (sub-parts a), b), c) …) is ONE question. "
     "Classify it as a single item by everything it asks together — never "
     "break its parts into separate Cases or Examples. If its parts span "
@@ -102,6 +103,26 @@ POLISH_SYSTEM = prompts.register(
         "a), b), c) …) is one question and stays one question, with every "
         "part kept in order inside polished_task. Do not drop, merge, or "
         "reorder parts.\n"
+        "8. Textbooks often phrase checkpoints as teaching prose rather "
+        "than test items. These are still questions and MUST become proper "
+        "standalone test items:\n"
+        "   - A rhetorical chain that answers itself ('Now, what do you "
+        "need? … You will find that you need both a and d.') keeps only "
+        "the real ask and DROPS every sentence that states or hints at "
+        "the answer. Removing the textbook's own embedded answer is "
+        "required — it is not a change to the ask.\n"
+        "   - A pointer like 'It is left as an exercise for you to "
+        "explain why each of the lists above is an AP' becomes a direct "
+        "instruction, with the referenced lists/data carried into the "
+        "question or described as provided.\n"
+        "   - The polished item must read as something a student can be "
+        "handed cold and answer.\n"
+        "9. A question carrying a shared_context field references material "
+        "printed near it in the book ('the lists above', 'the following "
+        "table') that does NOT travel with the question. It is never "
+        "standalone as printed: rewrite it as a direct instruction that "
+        "EMBEDS the needed material from shared_context inside "
+        "polished_task, so the item is complete without the book open.\n"
         "\n"
         "Return every qid you were given, exactly once."
     ),
@@ -219,6 +240,17 @@ def _batch_payload(meta: dict, batch: list[dict[str, Any]]) -> str:
                 "task": _item_source_text(item),
                 "options": [str(o) for o in (item.get("options") or [])],
                 "has_images": bool(item.get("image_urls")),
+                **(
+                    {
+                        "requires_context": True,
+                        "shared_context": str(
+                            item.get("shared_context") or ""
+                        ),
+                    }
+                    if item.get("requires_context")
+                    or str(item.get("shared_context") or "").strip()
+                    else {}
+                ),
             }
             for item in batch
         ],

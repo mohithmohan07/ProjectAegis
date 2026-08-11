@@ -83,10 +83,17 @@ def _failures(
                 ):
                     # A concrete, filter-verified skeleton the model can
                     # adapt: actor + faulty action + 'instead of' contrast.
+                    # Either-one contract: deleting the failing section is
+                    # a legitimate repair when the other one is genuine.
                     entry["example_repair"] = (
                         f"Students may place {title} in the wrong "
                         "sequence instead of locating it at its actual "
-                        "point in the chapter's chronology."
+                        "point in the chapter's chronology. — OR, if no "
+                        "genuinely distinct procedural mistake exists "
+                        "for this concept, DELETE the Error Analysis "
+                        "part and keep only the Misconceptions "
+                        "sentence; either section alone satisfies the "
+                        "gate."
                     )
                 elif entry["code"] in (
                     "generic_misconception", "misconception_framing",
@@ -94,7 +101,11 @@ def _failures(
                     entry["example_repair"] = (
                         "The learner may believe <state one specific "
                         f"wrong claim about {title}> — a belief "
-                        "statement, not an action or a correction."
+                        "statement, not an action or a correction. — "
+                        "OR, if no genuine wrong belief exists for "
+                        "this concept, DELETE the Misconceptions part "
+                        "and keep only the Error Analysis sentence; "
+                        "either section alone satisfies the gate."
                     )
                 elif entry["code"] in (
                     "analysis_section_format",
@@ -235,7 +246,12 @@ def _checker(
                             "believe/think/assume/expect/interpret/"
                             "misunderstand/regard/consider/confuse/"
                             "mistake/treat as the verb and never write "
-                            "'did not'/'does not' corrections"
+                            "'did not'/'does not' corrections. If no "
+                            "genuinely distinct procedural mistake "
+                            "exists for this concept, DELETE the Error "
+                            "Analysis part and keep only the "
+                            "Misconceptions sentence — either section "
+                            "alone satisfies the gate"
                         )
                 elif code["code"] in (
                     "misconception_framing", "generic_misconception",

@@ -152,11 +152,34 @@ def _providers(mapping: dict[str, list[dict]]):
                 "golden normal row lacks learner analysis: "
                 + row["concept_title"]
             )
+            description, mastery = re.split(
+                r"\nAchieving Mastery:\s*", parts[0], maxsplit=1
+            )
             rows.append({
                 "concept_id": concept["concept_id"],
+                "concept_description": re.sub(
+                    r"^Description:\s*", "", description
+                ),
+                "achieving_mastery": mastery,
                 "misconception_error_analysis": parts[1],
             })
-        return {"rows": rows}
+        response: dict = {"rows": rows}
+        culms = request.get("culminations") or []
+        if culms:
+            response["culminations"] = [
+                {
+                    "concept_id": culm["concept_id"],
+                    "consolidation": (
+                        "Together these concepts let the learner connect "
+                        + ", ".join(culm["member_concepts"][:3])
+                        + " into one coherent account of the topic, moving "
+                        "from each idea on its own to the combined "
+                        "understanding the chapter builds toward."
+                    ),
+                }
+                for culm in culms
+            ]
+        return response
 
     def critic(_request: dict) -> dict:
         return {"verdict": "verified", "confidence": 0.999, "issues": []}
@@ -360,6 +383,110 @@ def test_grounding_on_an_unknown_block_still_fails_closed(
             critic=critic,
             store=kernel.DecisionStore(),
         )
+
+
+def _authored_row(concept_id: str = "C-1", **overrides) -> dict:
+    row = {
+        "concept_id": concept_id,
+        "concept_description": (
+            "A rational number is any number expressible as p/q with "
+            "integers p and q where q is non-zero; the form is not unique "
+            "because multiplying numerator and denominator by the same "
+            "non-zero integer yields an equivalent rational, so comparisons "
+            "and arithmetic first bring numbers to a common denominator."
+        ),
+        "achieving_mastery": (
+            "Learners can express any terminating decimal as p/q in "
+            "standard form."
+        ),
+        "misconception_error_analysis": (
+            "Misconceptions: Learners believe every fraction bar means a "
+            "value below one."
+        ),
+    }
+    row.update(overrides)
+    return row
+
+
+def test_authoring_checker_accepts_a_complete_authored_batch():
+    check = settle._authoring_checker(["C-1"])
+    assert check({"rows": [_authored_row()]}) == []
+
+
+def test_authoring_checker_rejects_repeated_mastery_and_analysis():
+    check = settle._authoring_checker(["C-1", "C-2"])
+    first = _authored_row("C-1")
+    second = _authored_row(
+        "C-2",
+        achieving_mastery=first["achieving_mastery"],
+        misconception_error_analysis=first["misconception_error_analysis"],
+    )
+    defects = check({"rows": [first, second]})
+    assert any("distinct mastery statement" in d for d in defects)
+    assert any("its own content" in d for d in defects)
+
+
+def test_authoring_checker_rejects_the_repeated_outer_label():
+    """A leading outer label is stripped by normalization; one embedded
+    in the body would render the tag twice and must be a defect."""
+    check = settle._authoring_checker(["C-1"])
+    row = _authored_row(
+        misconception_error_analysis=(
+            "Misconceptions: Learners believe every fraction bar means a "
+            "value below one. Misconception/ Error Analysis: The learner "
+            "also inverts the wrong fraction."
+        ),
+    )
+    defects = check({"rows": [row]})
+    assert any("repeats the" in d and "label" in d for d in defects)
+
+
+def test_authoring_checker_rejects_a_thin_description():
+    check = settle._authoring_checker(["C-1"])
+    row = _authored_row(concept_description="Rational numbers are p/q.")
+    defects = check({"rows": [row]})
+    assert any("too thin" in d for d in defects)
+
+
+def test_authoring_checker_rejects_raw_math_outside_katex_tags():
+    """Bare TeX that deterministic repair cannot wrap (an equation with
+    bracket groups) must come back as a correction defect; unambiguous
+    lone tokens are wrapped silently and pass."""
+    check = settle._authoring_checker(["C-1"])
+    row = _authored_row(
+        concept_description=(
+            "For the first n terms of an arithmetic progression, let a be "
+            "the first term and d the common difference; the sum formula "
+            "S_n = n/2[2a + (n − 1)d] links these quantities, and when any "
+            "three are known the fourth follows by substituting into the "
+            "formula and solving the resulting linear or quadratic "
+            "equation in the unknown."
+        ),
+    )
+    defects = check({"rows": [row]})
+    assert any("wire" in d and "[Katex]" in d for d in defects)
+
+    wrappable = _authored_row(
+        concept_description=(
+            "The nth term a_n of an arithmetic progression grows by the "
+            "common difference at every step, so listing successive values "
+            "and checking that each consecutive difference is the same "
+            "fixed number verifies the progression before any formula is "
+            "applied to compute later terms from earlier ones."
+        ),
+    )
+    assert check({"rows": [wrappable]}) == []
+
+
+def test_authoring_checker_accepts_either_analysis_section_alone():
+    check = settle._authoring_checker(["C-1"])
+    row = _authored_row(
+        misconception_error_analysis=(
+            "Error Analysis: The learner cross-multiplies without first "
+            "matching the denominators' signs."
+        ),
+    )
+    assert check({"rows": [row]}) == []
 
 
 def test_critic_dissent_ships_flags_on_the_settled_rows(

@@ -256,6 +256,33 @@ def release_latest_output(
         raise HTTPException(400, str(e))
 
 
+@router.get("/uploads/{job_id}/release-bulk-import.xlsx")
+def download_release_bulk_import(
+    job_id: int,
+    db: Session = Depends(get_db),
+    user: auth.Principal = Depends(auth.require_user),
+):
+    """The released rows in the canonical Bulk Import workbook format."""
+    try:
+        job = uploads.get_job(
+            db, job_id, owner_sub=user.sub, module="build_concepts")
+        content = release_files.build_release_bulk_import_workbook(db, job)
+    except uploads.UploadJobNotFound as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return Response(
+        content=content,
+        media_type=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+        headers={
+            "Content-Disposition":
+                f'attachment; filename="bulk_import_job_{job_id}.xlsx"',
+        },
+    )
+
+
 @router.get("/uploads/{job_id}/release.xlsx")
 def download_released_workbook(
     job_id: int,

@@ -358,11 +358,17 @@ def upsert_chapters(db: Session, rows: list[SyllabusRow]) -> dict[str, int]:
             skipped += 1
             continue
 
+        # CBSE files History/Geography/Civics/Economics under Social
+        # Science — the chapter code already does (10CBSS_...), so the
+        # stored subject must match or the subject dropdowns never offer
+        # Social Science.
         chapter = models.Chapter(
             chapter_code=code,
             board=row.board,
             grade=row.grade,
-            subject=row.subject,
+            subject=directory.effective_subject_for_tags(
+                row.board, row.subject,
+            ),
             unit=row.unit,
             chapter_title=row.chapter,
             chapter_display_name=directory.chapter_titled_cell(

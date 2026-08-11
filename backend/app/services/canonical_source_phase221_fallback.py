@@ -507,6 +507,12 @@ Block rules:
   exact visible cue in source_label and the body in text.
 - task: separate learner instructions/questions from surrounding narrative and
   preserve the visible task cue (Activity, Discuss, Project, etc.) in source_label.
+- A worked example — a cue like "Example 3 :" followed by a problem statement
+  whose solution is printed right after it — is a real question: emit the
+  problem statement as a task block with the exact cue (e.g. "Example 3") in
+  source_label, ending exactly where the printed solution begins. The printed
+  solution returns as ordinary paragraph/math blocks in reading order, never
+  inside the task text. Never emit the bare "Example N :" cue as a heading.
 - source_label must be empty on heading, paragraph, list, table, figure, math,
   and other blocks. Never attach a source-box cue to an ordinary paragraph.
 - table: return every visible cell in table_rows.
@@ -532,7 +538,10 @@ Approve only when every meaningful block is present, wording is verbatim,
 reading order and block roles are correct, task/figure ownership is supported,
 and no content was invented. A visibly labelled historical source, excerpt,
 passage, case study, or source box that is not a learner task must use
-kind=source and retain its exact cue in source_label. Do not rewrite or repair
+kind=source and retain its exact cue in source_label. A worked example's
+problem statement (a cue like "Example 3 :" with its solution printed after
+it) must be a kind=task block carrying the exact cue in source_label, with
+the printed solution left as ordinary blocks. Do not rewrite or repair
 the candidate. Return needs_correction or ambiguous when any material defect
 remains. Output strict JSON only.
 """.strip()
@@ -549,8 +558,10 @@ figure link unless the original page proves the candidate wrong.
 
 Use kind=source for a visibly labelled historical source, excerpt, passage, case
 study, or source box that is not a learner task. Put its exact visible cue in
-source_label and its body in text. Use kind=task only for learner instructions or
-questions, with the exact task cue in source_label. source_label must be empty on
+source_label and its body in text. Use kind=task for learner instructions or
+questions AND for a worked example's problem statement (cue like "Example 3"
+in source_label, printed solution left as ordinary blocks), with the exact
+task cue in source_label. source_label must be empty on
 all other block kinds. Never discard a visible cue merely to satisfy the schema.
 Output the complete strict JSON pages array only.
 """.strip()
@@ -1296,7 +1307,9 @@ def _task_match_key(value: object) -> str:
 def _canonical_block_text(block: dict[str, Any]) -> str:
     raw = str(block.get("raw_text") or block.get("display_text") or "")
     if block.get("kind") == "table":
-        return structure.normalize_task_table_markup(raw)
+        # Comparison key, not display: the page-side key is raw cells
+        # joined with pipes, so tables flatten the same way here.
+        return structure.flatten_table_markup(raw)
     return kr._IMAGE_TAG_RE.sub(" ", raw).strip()
 
 
@@ -1607,8 +1620,12 @@ def apply_page_acsd_relationships(
             task["parent_source_label"] = label
             activity = _normal(label) in {"activity", "project"}
             task["activity_origin"] = activity
+            worked = bool(re.fullmatch(
+                r"(?:solved\s+)?examples?\s*\d*", _normal(label)
+            ))
             task["source_kind"] = (
-                "activity" if activity else (
+                "activity" if activity else
+                "worked_example" if worked else (
                     "exercise"
                     if _normal(label) in {"write in brief", "questions", "exercises"}
                     else "checkpoint_question"

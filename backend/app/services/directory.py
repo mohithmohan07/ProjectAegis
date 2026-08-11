@@ -340,7 +340,12 @@ def tree(db: Session) -> list[dict]:
     for ch in chapters:
         board = root.setdefault(ch.board or "Unknown", {})
         grade = board.setdefault(ch.grade or "—", {})
-        subject = grade.setdefault(ch.subject or "General", {})
+        # Chapters imported before the subject-mapping fix carry the raw
+        # CBSE component (History, Geography, ...) — present them under
+        # Social Science so the dropdowns match the chapter codes.
+        subject = grade.setdefault(
+            effective_subject_for_tags(ch.board, ch.subject) or "General", {}
+        )
         unit = subject.setdefault(ch.unit or "General Unit", [])
         unit.append({
             "id": ch.id,

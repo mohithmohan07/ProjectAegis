@@ -136,8 +136,19 @@ def upload_release_to_database(
             merged_ids.append(existing.id)
 
         active_ids = sorted(set(created_ids + merged_ids))
+        # Freshly inserted concepts are not in the chapter's already-loaded
+        # relationship collections, so the summary counted 0 concepts and
+        # skipped every fallback (reviewers saw "develops 0 concept(s)",
+        # an empty topic description, and no duration). Reload from the
+        # flushed state, and apply the metadata authored at release time.
+        db.flush()
+        db.expire_all()
+        chapter = db.get(models.Chapter, chapter_id)
+        if chapter is None:
+            raise ValueError("the release target chapter no longer exists")
         build_concepts._sync_chapter_topic_summary(
             chapter,
+            copy.deepcopy(payload.get("chapter_meta") or {}),
             active_concept_ids=set(active_ids),
             pre_post=pre_post,
         )
