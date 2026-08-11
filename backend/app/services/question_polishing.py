@@ -117,6 +117,12 @@ POLISH_SYSTEM = prompts.register(
         "question or described as provided.\n"
         "   - The polished item must read as something a student can be "
         "handed cold and answer.\n"
+        "9. A question carrying a shared_context field references material "
+        "printed near it in the book ('the lists above', 'the following "
+        "table') that does NOT travel with the question. It is never "
+        "standalone as printed: rewrite it as a direct instruction that "
+        "EMBEDS the needed material from shared_context inside "
+        "polished_task, so the item is complete without the book open.\n"
         "\n"
         "Return every qid you were given, exactly once."
     ),
@@ -234,6 +240,17 @@ def _batch_payload(meta: dict, batch: list[dict[str, Any]]) -> str:
                 "task": _item_source_text(item),
                 "options": [str(o) for o in (item.get("options") or [])],
                 "has_images": bool(item.get("image_urls")),
+                **(
+                    {
+                        "requires_context": True,
+                        "shared_context": str(
+                            item.get("shared_context") or ""
+                        ),
+                    }
+                    if item.get("requires_context")
+                    or str(item.get("shared_context") or "").strip()
+                    else {}
+                ),
             }
             for item in batch
         ],
