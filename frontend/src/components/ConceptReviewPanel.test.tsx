@@ -5,6 +5,10 @@ import type { ConceptRevision } from "../types";
 
 const apiMock = vi.hoisted(() => ({
   conceptReleaseUrl: vi.fn((id: number) => `/release/${id}.xlsx`),
+  conceptReleaseBulkImportUrl: vi.fn(
+    (id: number) => `/release/${id}-bulk-import.xlsx`,
+  ),
+  inventoryCsvUrl: vi.fn((id: number) => `/inventory/${id}.csv`),
   listConceptRevisions: vi.fn(),
   submitConceptRevision: vi.fn(),
 }));
@@ -40,8 +44,14 @@ beforeEach(() => {
 test("offers the current output for download", async () => {
   render(<ConceptReviewPanel jobId={7} />);
 
-  const link = await screen.findByTestId("download-output");
-  expect(link.getAttribute("href")).toBe("/release/7.xlsx");
+  const bulkImport = await screen.findByTestId("download-bulk-import");
+  expect(bulkImport.getAttribute("href")).toBe(
+    "/release/7-bulk-import.xlsx",
+  );
+  const inventory = await screen.findByTestId("download-inventory");
+  expect(inventory.getAttribute("href")).toBe("/inventory/7.csv");
+  const review = await screen.findByTestId("download-output");
+  expect(review.getAttribute("href")).toBe("/release/7.xlsx");
 });
 
 test("submits an instruction and refreshes the history", async () => {
