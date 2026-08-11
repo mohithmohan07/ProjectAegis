@@ -167,6 +167,38 @@ def test_rne_independent_subparts_are_leaf_cases_but_dependent_parts_stay_atomic
     assert not dependent.get("leaf_cases")
 
 
+def test_never_split_inventory_keeps_multi_part_questions_whole(monkeypatch):
+    """Reviewer rule under the rewrite: sub-questions stay with their
+    question. The ledger keeps its leaf cases, but the inventory
+    materializes the parent task as ONE item carrying the full wording."""
+    source = (DATA / "RNE.mmd").read_text(encoding="utf-8")
+    compiled = phase2.compile_phase2_source(
+        source,
+        source_filename="RNE.mmd",
+        consumer_module="build_concepts",
+    )
+    canonical = compiled.canonical
+
+    monkeypatch.setenv("AEGIS_PHASE3_REWRITE", "1")
+    inventory = phase2.inventory_from_canonical(canonical)
+    by_qid = {
+        str(item.get("qid")): item for item in inventory["items"]
+    }
+    assert "QINV-0016" in by_qid
+    assert not any("." in qid for qid in by_qid)
+    whole = by_qid["QINV-0016"]
+    for part in (
+        "a) Guiseppe Mazzini",
+        "e) The role of women in nationalist struggles",
+    ):
+        assert part in whole["raw_task"]
+
+    monkeypatch.delenv("AEGIS_PHASE3_REWRITE", raising=False)
+    legacy = phase2.inventory_from_canonical(canonical)
+    legacy_qids = {str(item.get("qid")) for item in legacy["items"]}
+    assert "QINV-0016.1" in legacy_qids and "QINV-0016" not in legacy_qids
+
+
 def test_rne_reference_taxonomy_is_11_reusable_types_and_31_routable_cases():
     """Lock the intended method taxonomy without pinning Cases to one host.
 
