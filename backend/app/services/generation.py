@@ -11739,6 +11739,11 @@ def _ensure_mastery_lines_via_api(
     """
     import json as _json
 
+    if use_api and _rewrite_placement_authority_active():
+        # Settle's content-authoring pass owns mastery under the rewrite;
+        # this pass only normalizes format and backfills deterministically.
+        use_api = False
+
     targets: list[int] = []
     for i, rec in enumerate(records):
         if cr.is_culmination(rec.get("concept_title", "")):
@@ -16992,6 +16997,16 @@ def _refine_descriptions_via_api(
     import json as _json
 
     if not records:
+        return records
+    if _rewrite_placement_authority_active():
+        # Settle's single content-authoring pass writes the final
+        # Description (with mastery and learner analysis) grounded on each
+        # concept's own source blocks — a second dedicated pass here would
+        # be redundant API load under concurrent creator runs.
+        progress.log(
+            "Description authoring deferred to Settle's single content "
+            "pass (description, mastery, and learner analysis in one "
+            "decision).")
         return records
     if not (mmd_text or "").strip():
         progress.log("Description refinement skipped — no chapter source text.", level="warning")

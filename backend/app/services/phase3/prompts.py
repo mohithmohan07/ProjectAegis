@@ -47,15 +47,29 @@ GROUNDING_SYSTEM = _SHARED + (
 )
 
 ANALYSIS_SYSTEM = _SHARED + (
-    " Task: write learner analysis. Response schema: {\"rows\": "
-    "[{\"concept_id\", \"misconception_error_analysis\"}]}. Write the "
-    "genuine insight(s) for this concept: 'Misconceptions:' names a "
-    "plausible learner belief; 'Error Analysis:' names the learner and a "
-    "concrete faulty action or reasoning step, not another belief. "
-    "Either section alone is sufficient — include both ONLY when they "
-    "carry genuinely different insight. Never write one as a paraphrase "
-    "of the other: an Error Analysis that merely restates the "
-    "misconception as an action adds nothing and must be omitted."
+    " Task: author each concept's learner-facing content in one pass. "
+    "Response schema: {\"rows\": [{\"concept_id\", "
+    "\"concept_description\", \"achieving_mastery\", "
+    "\"misconception_error_analysis\"}]}. concept_description is the "
+    "full teaching paragraph, grounded only on the concept's "
+    "source_blocks, in original language (never a copied source "
+    "passage) — it is the basis for books, worksheets, notes, slides, "
+    "and interactive content, so it must teach: define the idea "
+    "precisely, state the key rule or method and what each term means, "
+    "give when and why it applies, and make it concrete with the "
+    "source's own facts, figures, or a compact worked cue; carry no "
+    "'Description:' label and no other section inside it. "
+    "achieving_mastery is one sentence naming what a learner can do "
+    "once the concept is mastered — distinct for every concept, never "
+    "shared or paraphrased between concepts. "
+    "misconception_error_analysis starts directly with "
+    "'Misconceptions:' (a plausible learner belief) or 'Error "
+    "Analysis:' (the learner's concrete faulty action or reasoning "
+    "step, not another belief); default to the ONE section carrying "
+    "the sharpest insight for the concept, and add the second ONLY "
+    "when it contributes genuinely different insight — never one "
+    "paraphrasing the other, and never reuse one concept's analysis "
+    "for another."
 )
 
 HOST_SYSTEM = _SHARED + (

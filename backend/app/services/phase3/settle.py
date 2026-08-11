@@ -1,9 +1,12 @@
-"""Pass 1 — Settle: topology, grounding, and learner analysis.
+"""Pass 1 — Settle: topology, grounding, and content authoring.
 
 Consumes the sealed envelope, decides every normal concept exactly once
 through the kernel, and emits the settled row set — the artifact the old
 pipeline knew as the validated final concept topology. Culminations are
-derived, never decided.
+derived, never decided. Stage 3 authors each concept's Description,
+Achieving Mastery, and Misconception/Error Analysis in a single decision
+grounded on the concept's own source blocks — there is no separate
+description-refinement or mastery pass under the rewrite.
 """
 from __future__ import annotations
 
@@ -24,6 +27,12 @@ _DECISIONS = {"keep", "refine", "split"}
 
 _ANALYSIS_SPLIT = re.compile(
     r"\s*//\s*Misconception/?\s*Error Analysis:\s*", re.IGNORECASE
+)
+
+_FIELD_LABEL = re.compile(
+    r"^(?:Description|Achieving Mastery|Misconception/?\s*Error Analysis)"
+    r"\s*:\s*",
+    re.IGNORECASE,
 )
 
 
@@ -93,6 +102,14 @@ def _blocks_by_topic(env: Mapping[str, Any]) -> dict[str, list[dict[str, Any]]]:
             "text": text_by_id.get(block_id, ""),
         })
     return grouped
+
+
+def _block_texts(env: Mapping[str, Any]) -> dict[str, str]:
+    return {
+        str(row.get("block_id") or ""): str(row.get("display_text") or "")
+        for row in env["canonical"]["blocks"]
+        if isinstance(row, Mapping)
+    }
 
 
 def _known_block_ids(env: Mapping[str, Any]) -> set[str]:
@@ -310,10 +327,11 @@ def _grounding_checker(
 
 
 # ---------------------------------------------------------------------------
-# stage 3: learner analysis
+# stage 3: content authoring (one decision per batch — description,
+# mastery, and learner analysis together, so none can drift apart)
 
 
-def _analysis_checker(
+def _authoring_checker(
     concept_ids: list[str],
 ) -> Callable[[Mapping[str, Any]], list[str]]:
     expected = set(concept_ids)
@@ -324,9 +342,11 @@ def _analysis_checker(
         if not isinstance(rows, list):
             return ["response has no rows array"]
         seen: set[str] = set()
+        mastery_seen: dict[str, str] = {}
+        analysis_seen: dict[str, str] = {}
         for row in rows:
             if not isinstance(row, Mapping):
-                defects.append("an analysis entry is not an object")
+                defects.append("an authored entry is not an object")
                 continue
             concept_id = str(row.get("concept_id") or "")
             if concept_id not in expected or concept_id in seen:
@@ -335,7 +355,45 @@ def _analysis_checker(
                 )
                 continue
             seen.add(concept_id)
-            body = str(row.get("misconception_error_analysis") or "")
+
+            description = _FIELD_LABEL.sub(
+                "", _normal(row.get("concept_description"))
+            )
+            if len(description.split()) < 30:
+                defects.append(
+                    f"{concept_id} concept_description is too thin — write "
+                    "the full teaching paragraph a writer could author book "
+                    "sections, worksheets, notes, and slides from"
+                )
+            if re.search(
+                r"(?:Achieving Mastery|Misconceptions?|Error Analysis)\s*:",
+                description,
+            ):
+                defects.append(
+                    f"{concept_id} concept_description must carry only the "
+                    "teaching paragraph — mastery and learner analysis go "
+                    "in their own fields"
+                )
+
+            mastery = _FIELD_LABEL.sub(
+                "", _normal(row.get("achieving_mastery"))
+            )
+            if not mastery:
+                defects.append(f"{concept_id} achieving_mastery is empty")
+            else:
+                key = mastery.casefold()
+                if key in mastery_seen:
+                    defects.append(
+                        f"{concept_id} achieving_mastery repeats "
+                        f"{mastery_seen[key]}'s — every concept needs its "
+                        "own distinct mastery statement"
+                    )
+                else:
+                    mastery_seen[key] = concept_id
+
+            body = _FIELD_LABEL.sub(
+                "", _normal(row.get("misconception_error_analysis"))
+            )
             lowered = body.casefold()
             # Either section alone is a complete analysis; both appear only
             # when they carry genuinely different insight.
@@ -347,14 +405,36 @@ def _analysis_checker(
                     "or an Error Analysis part (either one is sufficient)"
                 )
                 continue
+            if re.search(r"misconception/\s*error analysis", lowered):
+                defects.append(
+                    f"{concept_id} analysis repeats the "
+                    "'Misconception/ Error Analysis' label — start "
+                    "directly with 'Misconceptions:' or 'Error Analysis:'"
+                )
+            if (
+                len(re.findall(r"misconceptions?\s*:", lowered)) > 1
+                or len(re.findall(r"error analysis\s*:", lowered)) > 1
+            ):
+                defects.append(
+                    f"{concept_id} analysis repeats a section label — at "
+                    "most one Misconceptions and one Error Analysis section"
+                )
             if "learner" not in lowered and "student" not in lowered:
                 defects.append(
                     f"{concept_id} analysis must name the learner or "
                     "student and their belief or concrete faulty action"
                 )
+            if lowered in analysis_seen:
+                defects.append(
+                    f"{concept_id} analysis repeats {analysis_seen[lowered]}"
+                    "'s — each concept's analysis must come from its own "
+                    "content"
+                )
+            else:
+                analysis_seen[lowered] = concept_id
         missing = sorted(expected - seen)
         if missing:
-            defects.append("unanalysed concept(s): " + ", ".join(missing))
+            defects.append("unauthored concept(s): " + ", ".join(missing))
         return defects
 
     return check
@@ -429,6 +509,7 @@ def settle(
     topics = _topic_rows(env)
     blocks_by_topic = _blocks_by_topic(env)
     known_blocks = _known_block_ids(env)
+    block_texts = _block_texts(env)
 
     normal_rows: list[dict[str, Any]] = []
     culmination_rows: list[dict[str, Any]] = []
@@ -674,7 +755,7 @@ def settle(
                 if flags:
                     local_flags.setdefault(position, []).extend(flags)
 
-        # -- stage 3: learner analysis -----------------------------------
+        # -- stage 3: content authoring (single pass) --------------------
         for offset_batch in _batched(list(range(len(topic_settled)))):
             batch_rows = [topic_settled[i] for i in offset_batch]
             concept_ids = [
@@ -683,58 +764,91 @@ def settle(
                 for row in batch_rows
             ]
             payload = {
-                "stage": "learner_analysis",
+                "stage": "content_authoring",
                 "rules": (
-                    "Write the learner analysis for each concept: "
-                    "'Misconceptions:' names a plausible learner belief; "
-                    "'Error Analysis:' names the learner and a concrete "
-                    "faulty action or reasoning step, not another belief. "
-                    "Either section alone is sufficient — write both ONLY "
-                    "when they carry genuinely different insight, and "
-                    "never one as a paraphrase of the other."
+                    "Author each concept's learner-facing content in ONE "
+                    "pass, grounded only on its source_blocks. "
+                    "concept_description: the full teaching paragraph in "
+                    "original language — this text is the basis for books, "
+                    "worksheets, notes, slides, and interactive content, so "
+                    "it must TEACH, not summarize: define the idea "
+                    "precisely, state the key rule, property, or method and "
+                    "what each term means, give the conditions and when/why "
+                    "it applies, show the reasoning that makes it work, and "
+                    "make it concrete with the source's own facts, figures, "
+                    "or a compact worked cue. achieving_mastery: ONE "
+                    "sentence naming what a learner can DO once this "
+                    "concept is mastered — distinct for every concept, "
+                    "never shared or paraphrased between concepts. "
+                    "misconception_error_analysis: the genuine learner "
+                    "insight for THIS concept — 'Misconceptions:' names a "
+                    "plausible learner belief; 'Error Analysis:' names the "
+                    "learner and a concrete faulty action or reasoning "
+                    "step, not another belief. Default to the ONE section "
+                    "that carries the sharpest insight for this concept; "
+                    "add the second ONLY when it contributes genuinely "
+                    "different insight — never as a paraphrase of the "
+                    "first, and never reuse one concept's analysis for "
+                    "another. Start the field directly with "
+                    "'Misconceptions:' or 'Error Analysis:' — never repeat "
+                    "the outer 'Misconception/ Error Analysis' label."
                 ),
                 "topic": {"topic_id": topic_id, "title": topic_title},
                 "concepts": [
                     {
                         "concept_id": concept_id,
                         "concept_title": row["concept_title"],
-                        "concept_details": row["concept_details"],
+                        "draft_concept_details": row["concept_details"],
+                        "source_blocks": [
+                            {
+                                "block_id": block_id,
+                                "text": block_texts.get(block_id, ""),
+                            }
+                            for block_id in (
+                                row.get("_source_block_ids") or []
+                            )
+                        ],
                     }
                     for concept_id, row in zip(concept_ids, batch_rows)
                 ],
             }
             decision = kernel.decide(
-                kind="settle.analysis",
-                unit_id=f"{topic_id}#analysis{offset_batch[0]}",
+                kind="settle.author",
+                unit_id=f"{topic_id}#author{offset_batch[0]}",
                 envelope_sha256=envelope_sha,
                 payload=payload,
                 provider=analysis_provider,
-                checker=_analysis_checker(concept_ids),
+                checker=_authoring_checker(concept_ids),
                 critic=None,
                 store=store,
                 policy_version=policy,
             )
-            analysed_by_id = {
+            authored_by_id = {
                 str(row.get("concept_id") or ""): row
                 for row in decision["response"].get("rows") or []
                 if isinstance(row, Mapping)
             }
             for concept_id, row in zip(concept_ids, batch_rows):
-                body = _normal(
-                    analysed_by_id[concept_id].get(
-                        "misconception_error_analysis"
-                    )
+                authored = authored_by_id[concept_id]
+                description = _FIELD_LABEL.sub(
+                    "", _normal(authored.get("concept_description"))
+                )
+                mastery = _FIELD_LABEL.sub(
+                    "", _normal(authored.get("achieving_mastery"))
+                )
+                analysis = _FIELD_LABEL.sub(
+                    "", _normal(authored.get("misconception_error_analysis"))
                 )
                 row["concept_details"] = (
-                    row["concept_details"].rstrip()
-                    + " // Misconception/ Error Analysis: "
-                    + body
+                    "Description: " + description
+                    + "\nAchieving Mastery: " + mastery
+                    + " // Misconception/ Error Analysis: " + analysis
                 )
 
         topic_flag_count = sum(1 for flags in local_flags.values() if flags)
         progress.log(
             f"Settle: {topic_title!r} settled — {len(topic_settled)} "
-            "concept(s) decided, grounded, and analysed"
+            "concept(s) decided, grounded, and authored"
             + (
                 f"; {topic_flag_count} carrying review flags."
                 if topic_flag_count
