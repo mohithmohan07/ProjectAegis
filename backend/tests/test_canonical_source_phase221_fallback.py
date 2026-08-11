@@ -789,3 +789,38 @@ def test_verified_page_acsd_rehydrates_after_future_core_recompile(
     )
     assert canonical["tasks"][0]["display_prompt"].count("[img ") == 1
     assert report["source_reconstruction"]["page_count"] == 2
+
+
+def test_worked_example_task_block_classifies_as_worked_example(
+    tmp_path: Path, monkeypatch,
+):
+    """A verified 'Example N' task block enters the ledger as a
+    worked_example item — the AP review found all 16 of the textbook's
+    worked example problems missing because they never became tasks."""
+    pdf = tmp_path / "source.pdf"
+    _make_pdf(pdf)
+    artifact_dir = tmp_path / "canonical-source"
+    monkeypatch.setenv("AEGIS_PUBLIC_BASE_URL", "https://aegis.example")
+    monkeypatch.setenv("AEGIS_SOURCE_ASSET_SECRET", "test-secret")
+    monkeypatch.setattr(fallback, "_CACHE_DIR", tmp_path / "cache")
+
+    def provider(pages: list[fallback.PdfPage]) -> dict:
+        result = _verified_provider(pages)
+        for page in result["pages"]:
+            if page["page_number"] != 2:
+                continue
+            task = page["blocks"][0]
+            task["source_label"] = "Example 3"
+        return result
+
+    result = fallback.reconstruct_pdf_to_acsd(
+        pdf,
+        job_id=51,
+        artifact_dir=artifact_dir,
+        fallback_reason=["mathpix_hard_failure:test"],
+        provider=provider,
+    )
+
+    task = result["canonical"]["tasks"][0]
+    assert task["source_label"] == "Example 3"
+    assert task["source_kind"] == "worked_example"
