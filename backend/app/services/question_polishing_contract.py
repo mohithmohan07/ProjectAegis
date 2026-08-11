@@ -106,10 +106,19 @@ def install(generation: ModuleType | None = None) -> None:
                 return original_task_text(item)
             # The polished wording rides the same rendering pipeline (image
             # tags, solution stripping, rich-text canonicalization) as the
-            # source wording it replaces.
-            return original_task_text(
-                {**item, "raw_task": polished, "normalized_task": polished}
-            )
+            # source wording it replaces. The ACSD source contract pins the
+            # display to the canonical source prompt, which would silently
+            # discard the polish (reviewers saw verbatim textbook prose,
+            # answers included, shipping as Examples) — so the override
+            # clears the contract markers and lets the standard raw-to-
+            # display rendering run on the polished wording.
+            return original_task_text({
+                **item,
+                "raw_task": polished,
+                "normalized_task": polished,
+                "_acsd_source_contract": "",
+                "_acsd_display_prompt": "",
+            })
 
         _inventory_task_text._question_polishing_installed = True
         generation._inventory_task_text = _inventory_task_text

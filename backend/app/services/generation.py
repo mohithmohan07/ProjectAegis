@@ -16015,6 +16015,12 @@ def _repair_rendered_inventory_coverage(
     concept_payload = _scope_payload_from_records(out)
 
     def placement_index(qid: str, item: dict) -> int:
+        # Under the rewrite the routed destination is stamped on the row
+        # itself; the question's own placement is authoritative for where
+        # its Example text belongs.
+        for index, row in enumerate(out):
+            if qid in (row.get("_aegis_release_qids") or []):
+                return index
         certified_cid = _certified_host_cid(
             mined_types, qid, concept_payload)
         if certified_cid:

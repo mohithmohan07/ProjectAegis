@@ -266,6 +266,36 @@ def test_new_runs_never_produce_fragments_for_the_anchor_refresh(monkeypatch):
         refreshed["items"])
 
 
+def test_polished_wording_ships_under_the_acsd_source_contract():
+    """Mathematics review: verbatim textbook prose (answers included) was
+    shipping as Examples because the ACSD contract pinned the display to
+    the canonical source prompt, silently discarding the polish."""
+    from app.services import canonical_source_phase2 as phase2
+
+    prose = (
+        "Now, what is the minimum information you need? You will find "
+        "that you need both."
+    )
+    item = {
+        "qid": "QINV-0001",
+        "source_kind": "intext_question",
+        "raw_task": prose,
+        "normalized_task": prose,
+        "polished_task": (
+            "What is the minimum information needed to specify an "
+            "arithmetic progression?"
+        ),
+        "_acsd_source_contract": phase2.SOURCE_CONTRACT_MODE,
+        "_acsd_display_prompt": prose,
+    }
+    shipped = generation._inventory_task_text(item)
+    assert shipped.startswith("What is the minimum information needed")
+    assert "You will find" not in shipped
+    # Without a polish, the canonical source display still ships verbatim.
+    bare = {k: v for k, v in item.items() if k != "polished_task"}
+    assert generation._inventory_task_text(bare) == prose
+
+
 def test_hub_rows_are_never_polished():
     """Phase 3.9 compares hub wire text exactly; polishing must skip hubs."""
     result = question_polishing.polish_inventory(
