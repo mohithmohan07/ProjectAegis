@@ -84,10 +84,14 @@ def build_release_bulk_import_workbook(db, job: models.UploadJob) -> bytes:
         unit=source_chapter.unit,
         chapter_title=source_chapter.chapter_title,
         chapter_display_name=source_chapter.chapter_display_name,
-        chapter_description=source_chapter.chapter_description,
+        # Never inherit a possibly-stale stored description: the authored
+        # release metadata or a fresh deterministic summary over THESE rows
+        # fills it below. The stored duration is kept — a finalized
+        # duration wins over authored metadata by design.
+        chapter_description="",
         chapter_duration=source_chapter.chapter_duration,
-        pre_topics=source_chapter.pre_topics,
-        post_topics=source_chapter.post_topics,
+        pre_topics="",
+        post_topics="",
     )
     chapter.id = -1
     topics_by_key: dict[str, models.Topic] = {}
@@ -104,6 +108,9 @@ def build_release_bulk_import_workbook(db, job: models.UploadJob) -> bytes:
             topic.id = -(len(topics_by_key) + 1)
             topic.source_order = len(topics_by_key) + 1
             topic.chapter = chapter
+            # Relationships only assign foreign keys at flush; the export
+            # scope groups topics by chapter_id, so set it explicitly.
+            topic.chapter_id = chapter.id
             topics_by_key[key] = topic
         concept = models.Concept(
             concept_title=str(
