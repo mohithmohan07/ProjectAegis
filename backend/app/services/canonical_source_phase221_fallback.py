@@ -1032,12 +1032,18 @@ def extract_pdf_to_page_acsd(
         # Batches are independent by construction (disjoint page ranges,
         # per-batch cache keys, per-thread PDF handles), so they overlap up
         # to the shared OpenAI concurrency gate. Assembly below stays in
-        # deterministic batch order regardless of completion order.
+        # deterministic batch order regardless of completion order. Each
+        # task runs under a copy of the caller's contextvars so progress
+        # events keep flowing to the active sink.
+        import contextvars
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = {
-                pool.submit(_one_batch, batch_index, start_page): batch_index
+                pool.submit(
+                    contextvars.copy_context().run,
+                    _one_batch, batch_index, start_page,
+                ): batch_index
                 for batch_index, start_page in starts
             }
             for future in as_completed(futures):

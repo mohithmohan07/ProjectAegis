@@ -14,6 +14,7 @@ from typing import Any, Callable, Mapping
 
 from . import envelope as envelope_mod
 from . import kernel
+from ... import config
 from .. import progress
 from .. import semantic_confidence_policy as confidence_policy
 
@@ -471,7 +472,13 @@ def host(
             "text": text[:600],
         }
 
-    for start in range(0, len(units), _BATCH_SIZE):
+    def _decide_units_batch(
+        start: int,
+    ) -> tuple[dict[str, dict], dict[str, dict], list[dict]]:
+        """Certify one unit batch; outputs merge in batch order."""
+        batch_hosts: dict[str, dict[str, Any]] = {}
+        batch_qids: dict[str, dict[str, Any]] = {}
+        batch_new: list[dict[str, Any]] = []
         batch = units[start:start + _BATCH_SIZE]
         payload = {
             "stage": "host",
@@ -590,7 +597,7 @@ def host(
                         "api-created-missing-type-host"
                     ),
                 }
-                new_concepts.append(created)
+                batch_new.append(created)
                 entry_source: Mapping[str, Any] = created
             else:
                 entry_source = settled_titles[
@@ -614,7 +621,7 @@ def host(
             }
             if flags:
                 entry["review_flags"] = list(flags)
-            host_map[unit["unit_id"]] = entry
+            batch_hosts[unit["unit_id"]] = entry
             # House routing rule, applied BY THE MODEL: placing a question
             # means understanding it against the concepts, so the API names
             # each question's destination itself. The deterministic reading
@@ -695,7 +702,22 @@ def host(
                         )
                 if qid_flags:
                     qid_entry["review_flags"] = qid_flags
-                qid_map[qid] = qid_entry
+                batch_qids[qid] = qid_entry
+        return batch_hosts, batch_qids, batch_new
+
+    # Unit batches are independent decisions (the concept payload is built
+    # once and never grows mid-run), so they overlap up to the shared
+    # OpenAI concurrency gate; merging in batch order keeps host_map,
+    # qid_map, and new_concepts identical to the sequential path.
+    workers = max(1, int(getattr(config, "OPENAI_MAX_CONCURRENCY", 1)))
+    for batch_hosts, batch_qids, batch_new in kernel.parallel_map_in_order(
+        range(0, len(units), _BATCH_SIZE),
+        _decide_units_batch,
+        max_workers=workers,
+    ):
+        host_map.update(batch_hosts)
+        qid_map.update(batch_qids)
+        new_concepts.extend(batch_new)
 
     flagged = sum(
         1 for entry in host_map.values() if entry.get("review_flags")

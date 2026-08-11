@@ -15,6 +15,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -77,6 +78,11 @@ class DecisionStore:
     def __init__(self, directory: str | Path | None = None) -> None:
         self._directory = Path(directory) if directory else None
         self._memory: dict[str, dict[str, Any]] = {}
+        # Independent decisions (Settle topics, Host batches) may resolve
+        # from a bounded worker pool; keys are distinct per decision, so the
+        # lock only guards the map/file bookkeeping, never serializes model
+        # calls.
+        self._lock = threading.Lock()
         if self._directory is not None:
             self._directory.mkdir(parents=True, exist_ok=True)
 
@@ -86,8 +92,9 @@ class DecisionStore:
 
     def get(self, key: str) -> dict[str, Any] | None:
         if self._directory is None:
-            found = self._memory.get(key)
-            return copy.deepcopy(found) if found else None
+            with self._lock:
+                found = self._memory.get(key)
+                return copy.deepcopy(found) if found else None
         path = self._path(key)
         if not path.is_file():
             return None
@@ -97,23 +104,64 @@ class DecisionStore:
             return None
 
     def put(self, key: str, decision: Mapping[str, Any]) -> dict[str, Any]:
+        record = copy.deepcopy(dict(decision))
+        if self._directory is None:
+            with self._lock:
+                existing = self._memory.get(key)
+                if existing is not None:
+                    return copy.deepcopy(existing)
+                self._memory[key] = record
+                return copy.deepcopy(record)
         existing = self.get(key)
         if existing is not None:
             return existing
-        record = copy.deepcopy(dict(decision))
-        if self._directory is None:
-            self._memory[key] = record
-        else:
-            self._path(key).write_text(
-                json.dumps(record, ensure_ascii=False, indent=1),
-                encoding="utf-8",
-            )
+        self._path(key).write_text(
+            json.dumps(record, ensure_ascii=False, indent=1),
+            encoding="utf-8",
+        )
         return copy.deepcopy(record)
 
     def keys(self) -> list[str]:
         if self._directory is None:
             return sorted(self._memory)
         return sorted(p.stem for p in self._directory.glob("*.json"))
+
+
+def parallel_map_in_order(items, worker, *, max_workers: int) -> list:
+    """Run ``worker`` over ``items`` on a bounded pool; results in input order.
+
+    For independent decisions only (Settle topics, Host unit batches): the
+    shared OpenAI gate still bounds real provider concurrency, the decision
+    store is content-addressed per decision, and results merge in input
+    order so output is byte-identical to the sequential path. Each task
+    runs under a copy of the caller's contextvars so progress events keep
+    flowing to the active sink. ``max_workers <= 1`` degrades to a plain
+    loop.
+    """
+    items = list(items)
+    if max_workers <= 1 or len(items) <= 1:
+        return [worker(item) for item in items]
+    import contextvars
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(
+        max_workers=min(int(max_workers), len(items))
+    ) as pool:
+        futures = [
+            pool.submit(contextvars.copy_context().run, worker, item)
+            for item in items
+        ]
+        results = []
+        try:
+            for future in futures:
+                results.append(future.result())
+        except BaseException:
+            # Fail fast: a failed decision stops the run, so queued sibling
+            # batches must not keep spending provider calls.
+            for other in futures:
+                other.cancel()
+            raise
+        return results
 
 
 def advisory_flags(review: Mapping[str, Any] | None) -> list[str]:

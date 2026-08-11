@@ -13,6 +13,7 @@ from typing import Any, Callable, Mapping
 
 from . import envelope as envelope_mod
 from . import kernel
+from ... import config
 from .. import concept_refiner as cr
 from .. import progress
 from .. import semantic_confidence_policy as confidence_policy
@@ -458,7 +459,11 @@ def settle(
     settled: list[dict[str, Any]] = []
     flags_by_row: dict[int, list[str]] = {}
 
-    for topic in topics:
+    def _settle_topic(
+        topic: Mapping[str, Any],
+    ) -> tuple[list[dict[str, Any]], dict[int, list[str]], list[dict[str, Any]]]:
+        """Settle one topic's concepts; flags are keyed by topic offset."""
+        local_flags: dict[int, list[str]] = {}
         topic_id = str(topic.get("topic_id") or "")
         topic_title = str(topic.get("title") or topic_id)
         topic_blocks = blocks_by_topic.get(topic_id, [])
@@ -469,7 +474,7 @@ def settle(
             if str(row.get("_semantic_topic_id") or "") == topic_id
         ]
         if not topic_concepts:
-            continue
+            return [], {}, []
 
         # -- stage 1: topology -------------------------------------------
         topic_settled: list[dict[str, Any]] = []
@@ -551,14 +556,14 @@ def settle(
                         "_phase32_origin_concept_id": row["concept_id"],
                         "_phase32_segment_order": order,
                     }
-                    index = len(settled) + len(topic_settled)
+                    index = len(topic_settled)
                     flags = _pin_flags(
                         list(decision.get("review_flags") or []),
                         [c["concept_id"] for c in batch],
                         row["concept_id"],
                     )
                     if flags:
-                        flags_by_row[index] = flags
+                        local_flags[index] = flags
                     topic_settled.append(settled_row)
 
         # -- stage 2: grounding ------------------------------------------
@@ -665,9 +670,7 @@ def settle(
                     concept_id,
                 )
                 if flags:
-                    flags_by_row.setdefault(
-                        len(settled) + position, []
-                    ).extend(flags)
+                    local_flags.setdefault(position, []).extend(flags)
 
         # -- stage 3: learner analysis -----------------------------------
         for offset_batch in _batched(list(range(len(topic_settled)))):
@@ -726,11 +729,7 @@ def settle(
                     + body
                 )
 
-        topic_flag_count = sum(
-            1
-            for index in flags_by_row
-            if len(settled) <= index < len(settled) + len(topic_settled)
-        )
+        topic_flag_count = sum(1 for flags in local_flags.values() if flags)
         progress.log(
             f"Settle: {topic_title!r} settled — {len(topic_settled)} "
             "concept(s) decided, grounded, and analysed"
@@ -741,9 +740,9 @@ def settle(
             ),
             level="success",
         )
-        settled.extend(topic_settled)
 
         # -- culminations: derived, never decided ------------------------
+        culm_rows: list[dict[str, Any]] = []
         for row in culmination_rows:
             if str(row.get("_semantic_topic_id") or "") != topic_id:
                 continue
@@ -752,7 +751,7 @@ def settle(
                 for block_id in source.get("_source_block_ids") or []:
                     if block_id not in derived_blocks:
                         derived_blocks.append(block_id)
-            settled.append({
+            culm_rows.append({
                 "topic": row.get("topic"),
                 "parent_concept": _normal(row.get("parent_concept")),
                 "concept_title": _normal(row.get("concept_title")),
@@ -764,6 +763,22 @@ def settle(
                     "derived-from-verified-topic-concepts"
                 ),
             })
+        return topic_settled, local_flags, culm_rows
+
+    # Topics are independent decision streams (each one's topology ->
+    # grounding -> analysis chain stays sequential inside its worker), so
+    # they overlap up to the shared OpenAI concurrency gate. Merging in
+    # topic order keeps output byte-identical to the sequential path.
+    workers = max(1, int(getattr(config, "OPENAI_MAX_CONCURRENCY", 1)))
+    for topic_settled, local_flags, culm_rows in kernel.parallel_map_in_order(
+        topics, _settle_topic, max_workers=workers,
+    ):
+        base = len(settled)
+        for offset, flags in local_flags.items():
+            if flags:
+                flags_by_row.setdefault(base + offset, []).extend(flags)
+        settled.extend(topic_settled)
+        settled.extend(culm_rows)
 
     for index, flags in flags_by_row.items():
         if 0 <= index < len(settled) and flags:
