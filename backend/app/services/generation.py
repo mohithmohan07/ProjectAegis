@@ -867,16 +867,26 @@ prompts.register(
 prompts.register(
     "concepts.detail.math", category=_CONCEPTS_CAT,
     label="Description guidance (math/physics)",
-    default="45-90 words, source-grounded: define the idea, state the key "
-            "rule/property or method, include conditions/when to use it, and "
-            "add one compact worked cue only when it clarifies the concept")
+    default="90-180 words, source-grounded and authorable — this text is the "
+            "basis for books, worksheets, notes, slides, and interactive "
+            "content, so it must TEACH, not summarize: define the idea "
+            "precisely, state the key rule/property or method with its "
+            "formula and what each symbol means, give the conditions and "
+            "when/why to use it, show the reasoning that makes it work, and "
+            "include a compact worked cue or representative values where "
+            "they make the method concrete")
 
 prompts.register(
     "concepts.detail.descriptive", category=_CONCEPTS_CAT,
     label="Description guidance (other subjects)",
-    default="45-90 words, source-grounded: explain the idea clearly for lesson "
-            "planning, include the key characteristics/process/relationship, "
-            "and add one compact example only when it clarifies the concept")
+    default="90-180 words, source-grounded and authorable — this text is the "
+            "basis for books, worksheets, notes, slides, and interactive "
+            "content, so it must TEACH, not summarize: explain the idea "
+            "fully with its key characteristics/process/relationship, name "
+            "the specific people, places, dates, terms, and causal links "
+            "involved, explain why it matters in the chapter's argument, "
+            "and include a compact example or illustration where it makes "
+            "the idea concrete")
 
 prompts.register(
     "concepts.system", category=_CONCEPTS_CAT,
@@ -1269,11 +1279,15 @@ Rules:
 - Do not use exercise/question-type headings as concepts.
 - Avoid repeated sibling openers.
 - concept_description starts with "Description:" and TEACHES the concept in
-  3-6 substantive sentences: name the key people, places, rules, formulas,
-  relationships, and the reasoning that connects them, drawn from the source.
-  A description that merely restates the title or lists a bare fact is a
-  defect — if you cannot write a substantive description, the row is not a
-  real concept and belongs inside a neighbouring one.
+  a full teaching paragraph (roughly 5-9 substantive sentences): name the
+  key people, places, rules, formulas, relationships, and the reasoning
+  that connects them, drawn from the source. This text becomes the basis
+  for books, worksheets, notes, slides, and interactive content, so it
+  must carry enough substance that a writer could author those materials
+  from the description alone. A description that merely restates the title
+  or lists a bare fact is a defect — if you cannot write a substantive
+  description, the row is not a real concept and belongs inside a
+  neighbouring one.
 - Keep source_evidence short: the phrase/heading/problem source that justifies the concept.
 - source_evidence is for validation/debug only and must not be written to workbook.
 """)
@@ -1437,9 +1451,13 @@ Rules:
   repair only missing, generic, mislabeled, overlapping, or misclassified
   content. Do not move activities into Description or Culmination.
 - Description answers: what the concept is; what rule/process/relationship/method matters;
-  when/why it is used. Ground it in the source: name the key people, places,
-  dates, formulas, quantities, conditions, and causal links that a teacher
-  needs — do not stop at a vague one-sentence gloss.
+  when/why it is used; and the reasoning that makes it work. Ground it in the
+  source: name the key people, places, dates, formulas, quantities,
+  conditions, and causal links that a teacher needs — do not stop at a vague
+  one-sentence gloss. This text is the basis for books, worksheets, notes,
+  slides, and interactive content: write a full teaching paragraph with
+  enough substance that a writer could author those materials from the
+  Description alone.
 - Never cite textbook section numbers in Description (for example "Section
   5.2" or "§2.1"). State the actual idea instead.
 - END every Description with a mastery statement on its OWN line — a literal
