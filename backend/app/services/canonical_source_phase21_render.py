@@ -243,9 +243,18 @@ def normalize_final_records(
     inventory: dict | None,
     mined_types: dict | None,
 ) -> list[dict]:
-    out = restore_mined_type_taxonomy(
-        generation, records, inventory, mined_types
-    )
+    from .phase3 import runner as phase3_runner
+
+    if phase3_runner.rewrite_enabled():
+        # The rewritten Assemble pass renders Types per-question from the
+        # sealed mined taxonomy (wire-format repaired); rebuilding them
+        # here overwrote that authoritative rendering with unrepaired
+        # taxonomy text and re-pooled Examples off their routed rows.
+        out = copy.deepcopy(records)
+    else:
+        out = restore_mined_type_taxonomy(
+            generation, records, inventory, mined_types
+        )
     cleaned: list[dict] = []
     for raw_record in out:
         record = copy.deepcopy(raw_record)
