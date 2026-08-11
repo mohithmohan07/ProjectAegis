@@ -67,11 +67,11 @@ export function ConceptReviewPanel({ jobId }: { jobId: number }) {
       <p>
         <a
           className="btn"
-          href={api.conceptReleaseUrl(jobId)}
+          href={api.conceptReleaseBulkImportUrl(jobId)}
           download
-          data-testid="download-output"
+          data-testid="download-bulk-import"
         >
-          Download current output
+          Download output (Bulk Import)
         </a>
         {" "}
         <a
@@ -81,6 +81,15 @@ export function ConceptReviewPanel({ jobId }: { jobId: number }) {
           data-testid="download-inventory"
         >
           Question/Task Inventory
+        </a>
+        {" "}
+        <a
+          className="btn ghost"
+          href={api.conceptReleaseUrl(jobId)}
+          download
+          data-testid="download-output"
+        >
+          Review workbook (diagnostics)
         </a>
       </p>
 

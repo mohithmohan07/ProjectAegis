@@ -319,6 +319,9 @@ export const api = {
   /** Absolute URL of the released workbook, for a plain browser download. */
   conceptReleaseUrl: (jobId: number) =>
     `${BASE}/build-concepts/uploads/${jobId}/release.xlsx`,
+  /** Released rows in the canonical Bulk Import workbook format. */
+  conceptReleaseBulkImportUrl: (jobId: number) =>
+    `${BASE}/build-concepts/uploads/${jobId}/release-bulk-import.xlsx`,
   uploadConceptRelease: (jobId: number) =>
     http<Record<string, unknown>>(
       `/build-concepts/uploads/${jobId}/upload-release`,

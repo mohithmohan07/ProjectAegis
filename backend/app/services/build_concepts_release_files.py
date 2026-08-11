@@ -37,6 +37,129 @@ _EXAMPLE_FILL = PatternFill("solid", fgColor="F3F3F3")
 _BLOCK_ID_RE = re.compile(r"\bBLK-[A-Za-z0-9_-]+\b")
 
 
+def build_release_bulk_import_workbook(db, job: models.UploadJob) -> bytes:
+    """The released rows in the canonical Bulk Import workbook format.
+
+    After the explicit database upload the released rows exist as real
+    concepts, so the canonical by-id writer serves the exact export. Before
+    that upload the same canonical row renderer runs over transient
+    (never-persisted) chapter/topic/concept copies built from the release
+    payload — creators get the Bulk Import file the moment a run completes,
+    with the authored chapter/topic metadata applied, and the database stays
+    untouched.
+    """
+    from ..bulk_import import writer as bi_writer
+    from . import build_concepts
+
+    payload = release_payload(job)
+    if payload is None:
+        raise ValueError("this upload has no staged release")
+    summary = payload.get("summary") or {}
+    result_ids = [int(v) for v in (job.result_ids or []) if v]
+    if bool(summary.get("database_uploaded")) and result_ids:
+        return bi_writer.write_concepts_workbook(db, result_ids)
+
+    source_chapter = db.get(
+        models.Chapter, int(payload.get("target_chapter_id") or 0)
+    )
+    if source_chapter is None:
+        raise ValueError("the release target chapter no longer exists")
+    records = [
+        row for row in payload.get("records") or []
+        if isinstance(row, Mapping)
+        and str(row.get("topic") or "").strip()
+        and str(
+            row.get("concept_title") or row.get("concept") or ""
+        ).strip()
+    ]
+    if not records:
+        raise ValueError("the release contains no concept rows to export")
+
+    pre_post = "Pre" if job.learning_kind == "pre" else "Post"
+    chapter = models.Chapter(
+        chapter_code=source_chapter.chapter_code,
+        board=source_chapter.board,
+        grade=source_chapter.grade,
+        subject=source_chapter.subject,
+        unit=source_chapter.unit,
+        chapter_title=source_chapter.chapter_title,
+        chapter_display_name=source_chapter.chapter_display_name,
+        chapter_description=source_chapter.chapter_description,
+        chapter_duration=source_chapter.chapter_duration,
+        pre_topics=source_chapter.pre_topics,
+        post_topics=source_chapter.post_topics,
+    )
+    chapter.id = -1
+    topics_by_key: dict[str, models.Topic] = {}
+    concepts: list[models.Concept] = []
+    for index, record in enumerate(records, start=1):
+        topic_title = str(record.get("topic") or "").strip()
+        key = topic_title.casefold()
+        topic = topics_by_key.get(key)
+        if topic is None:
+            topic = models.Topic(
+                topic_title=topic_title,
+                pre_post_learning=pre_post,
+            )
+            topic.id = -(len(topics_by_key) + 1)
+            topic.source_order = len(topics_by_key) + 1
+            topic.chapter = chapter
+            topics_by_key[key] = topic
+        concept = models.Concept(
+            concept_title=str(
+                record.get("concept_title") or record.get("concept") or ""
+            ),
+            concept_display_name=str(
+                record.get("concept_title") or record.get("concept") or ""
+            ),
+            parent_concept=str(record.get("parent_concept") or ""),
+            concept_details=str(
+                record.get("concept_details")
+                or record.get("concept_description")
+                or ""
+            ),
+            keywords=str(record.get("keywords") or ""),
+            sources=str(job.source_book or job.filename or ""),
+        )
+        concept.id = -index
+        concept.source_order = index
+        concept.topic = topic
+        concepts.append(concept)
+    # The same summary logic the database upload runs, on the transient
+    # copy: authored chapter/topic metadata from the release payload, with
+    # deterministic fallbacks for anything missing.
+    build_concepts._sync_chapter_topic_summary(
+        chapter,
+        dict(payload.get("chapter_meta") or {}),
+        active_concept_ids=None,
+        pre_post=pre_post,
+    )
+
+    wb = bi_writer._new_workbook()
+    ws = wb[bi_writer.SHEET_BY_KIND["objective"]]
+    export_scope = bi_writer.ConceptExportScope(concepts)
+    next_row = 3
+    for concept in concepts:
+        for topic in sorted(
+            bi_writer._concept_placements(concept),
+            key=bi_writer._source_order_key,
+        ):
+            for column, value in enumerate(
+                bi_writer._concept_to_row(
+                    concept,
+                    "objective",
+                    topic,
+                    export_scope=export_scope,
+                ),
+                start=1,
+            ):
+                bi_writer._write_cell(ws, row=next_row, column=column, value=value)
+            next_row += 1
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()
+
+
 def _json_bytes(value: Any) -> bytes:
     return json.dumps(
         value,
