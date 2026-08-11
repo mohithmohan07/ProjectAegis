@@ -110,9 +110,12 @@ def _batch_size() -> int:
 def _parallel_batches() -> int:
     """Concurrent page-batch extractions. Batches are independent (own page
     range, own cache key), so they overlap safely up to the shared OpenAI
-    concurrency gate; the default matches AEGIS_OPENAI_MAX_CONCURRENCY."""
+    concurrency gate. Default 1: every concurrent conversion contributes
+    this many contenders for the shared slots, so a multi-creator
+    deployment raises it only together with AEGIS_OPENAI_MAX_CONCURRENCY
+    (keep runs x workers <= gate)."""
     return max(1, min(8, int(os.environ.get(
-        "AEGIS_GPT_PDF_ACSD_PARALLEL_BATCHES", "3"
+        "AEGIS_GPT_PDF_ACSD_PARALLEL_BATCHES", "1"
     ))))
 
 

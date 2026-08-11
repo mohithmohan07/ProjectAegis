@@ -224,6 +224,36 @@ def test_settle_reproduces_job_23s_validated_topology(
     assert not any(row.get("review_flags") for row in settled)
 
 
+def test_parallel_topics_produce_the_sequential_output(
+    golden_envelope, golden_rows, monkeypatch,
+):
+    """Per-run decision parallelism is pure orchestration: with workers > 1
+    the settled rows are byte-identical to the sequential default."""
+    mapping = _replay_map(golden_envelope, golden_rows)
+    topology, grounding, analysis, critic = _providers(mapping)
+
+    monkeypatch.delenv("AEGIS_PHASE3_DECISION_WORKERS", raising=False)
+    sequential = settle.settle(
+        golden_envelope,
+        topology_provider=topology,
+        grounding_provider=grounding,
+        analysis_provider=analysis,
+        critic=critic,
+        store=kernel.DecisionStore(),
+    )
+    monkeypatch.setenv("AEGIS_PHASE3_DECISION_WORKERS", "3")
+    parallel = settle.settle(
+        golden_envelope,
+        topology_provider=topology,
+        grounding_provider=grounding,
+        analysis_provider=analysis,
+        critic=critic,
+        store=kernel.DecisionStore(),
+    )
+
+    assert parallel == sequential
+
+
 def test_settle_resume_is_free_and_identical(golden_envelope, golden_rows):
     mapping = _replay_map(golden_envelope, golden_rows)
     topology, grounding, analysis, critic = _providers(mapping)

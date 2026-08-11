@@ -769,7 +769,9 @@ def settle(
     # grounding -> analysis chain stays sequential inside its worker), so
     # they overlap up to the shared OpenAI concurrency gate. Merging in
     # topic order keeps output byte-identical to the sequential path.
-    workers = max(1, int(getattr(config, "OPENAI_MAX_CONCURRENCY", 1)))
+    # Default is sequential: per-run parallelism is a deployment choice
+    # sized against concurrent creator runs (see phase3_decision_workers).
+    workers = config.phase3_decision_workers()
     for topic_settled, local_flags, culm_rows in kernel.parallel_map_in_order(
         topics, _settle_topic, max_workers=workers,
     ):

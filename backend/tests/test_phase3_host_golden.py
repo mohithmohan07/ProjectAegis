@@ -202,12 +202,9 @@ def test_a_fabricated_host_title_fails_closed_after_bounded_corrections(
             for unit in request["units"]
         ]}
 
-    # Pin the batches sequential so the per-decision attempt budget is the
-    # only variable: under parallelism sibling batches legitimately start
-    # before the first failure propagates.
-    from app import config as app_config
-
-    monkeypatch.setattr(app_config, "OPENAI_MAX_CONCURRENCY", 1)
+    # Batches run sequentially by default (AEGIS_PHASE3_DECISION_WORKERS
+    # unset), so the per-decision attempt budget is the only variable.
+    monkeypatch.delenv("AEGIS_PHASE3_DECISION_WORKERS", raising=False)
     with pytest.raises(kernel.ContractError) as failed:
         host_mod.host(
             golden_envelope, settled_rows,

@@ -709,7 +709,9 @@ def host(
     # once and never grows mid-run), so they overlap up to the shared
     # OpenAI concurrency gate; merging in batch order keeps host_map,
     # qid_map, and new_concepts identical to the sequential path.
-    workers = max(1, int(getattr(config, "OPENAI_MAX_CONCURRENCY", 1)))
+    # Default is sequential: per-run parallelism is a deployment choice
+    # sized against concurrent creator runs (see phase3_decision_workers).
+    workers = config.phase3_decision_workers()
     for batch_hosts, batch_qids, batch_new in kernel.parallel_map_in_order(
         range(0, len(units), _BATCH_SIZE),
         _decide_units_batch,
