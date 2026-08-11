@@ -36,7 +36,7 @@ def _host_key(entry: Mapping[str, Any]) -> tuple[str, str]:
 
 def _type_catalog(env: Mapping[str, Any]) -> tuple[dict, dict]:
     types: dict[str, dict[str, str]] = {}
-    cases: dict[tuple[str, str], dict[str, str]] = {}
+    cases: dict[tuple[str, str], dict[str, Any]] = {}
     for mined in env["mined_types"].get("types") or []:
         if not isinstance(mined, Mapping):
             continue
@@ -48,12 +48,17 @@ def _type_catalog(env: Mapping[str, Any]) -> tuple[dict, dict]:
         for case in mined.get("case_prompts") or []:
             if not isinstance(case, Mapping):
                 continue
-            examples = [
-                _normal(row.get("example_prompt"))
-                for row in case.get("examples") or []
-                if isinstance(row, Mapping)
-                and _normal(row.get("example_prompt"))
-            ]
+            examples = []
+            for row in case.get("examples") or []:
+                if not isinstance(row, Mapping):
+                    continue
+                prompt = _normal(row.get("example_prompt"))
+                if not prompt:
+                    continue
+                examples.append({
+                    "qid": str(row.get("source_question_id") or ""),
+                    "prompt": prompt,
+                })
             cases[(type_id, str(case.get("case_id") or ""))] = {
                 "title": _normal(case.get("case_title")),
                 "examples": examples,
@@ -62,21 +67,18 @@ def _type_catalog(env: Mapping[str, Any]) -> tuple[dict, dict]:
 
 
 def render_types_section(
-    unit_ids: list[str],
+    hosted: Mapping[str, Mapping[str, list[str]]],
     *,
     types: Mapping[str, Mapping[str, str]],
-    cases: Mapping[tuple[str, str], Mapping[str, str]],
+    cases: Mapping[tuple[str, str], Mapping[str, Any]],
 ) -> str:
-    """Render the house Types section for one concept's hosted units."""
+    """Render the Types section for one concept's hosted case examples.
 
-    by_type: dict[str, list[str]] = {}
-    for unit_id in unit_ids:
-        parts = unit_id.split("::")
-        type_id = parts[0]
-        case_id = parts[1] if len(parts) > 1 else ""
-        by_type.setdefault(type_id, [])
-        if case_id:
-            by_type[type_id].append(case_id)
+    ``hosted`` maps type_id -> case_id -> the example prompts whose own
+    QUESTIONS were placed on this concept. A Case whose questions span
+    concepts appears on each destination with only that concept's
+    examples — the visible text always agrees with per-question routing.
+    """
 
     def _ordinal(identifier: str, prefix: str) -> int:
         # Continuous chapter-wide numbering: TYPE-0013 is "Type 13" on
@@ -89,21 +91,25 @@ def render_types_section(
             )
 
     pieces: list[str] = []
-    for type_id in sorted(by_type):
+    for type_id in sorted(hosted):
         mined = types.get(type_id)
         if mined is None:
             raise AssemblyError(f"hosted unit references unknown {type_id}")
         piece = f"Type {_ordinal(type_id, 'Type'):02d}: {mined['title']}"
         if mined["definition"]:
             piece += f" — {mined['definition']}"
-        for case_id in sorted(by_type[type_id]):
+        for case_id in sorted(hosted[type_id]):
+            if not case_id:
+                for example in hosted[type_id][case_id]:
+                    piece += f" Example: {example}"
+                continue
             case = cases.get((type_id, case_id))
             if case is None:
                 raise AssemblyError(
                     f"hosted unit references unknown {type_id}::{case_id}"
                 )
             piece += f" Case {_ordinal(case_id, 'Case'):02d}: {case['title']}"
-            for example in case["examples"]:
+            for example in hosted[type_id][case_id]:
                 piece += f" Example: {example}"
         pieces.append(piece)
     return " ".join(pieces)
@@ -158,7 +164,6 @@ def assemble(
             )
         row_by_key[key] = row
 
-    units_by_key: dict[tuple[str, str], list[str]] = {}
     flags_by_key: dict[tuple[str, str], list[str]] = {}
     for unit_id, entry in (host_result.get("host_map") or {}).items():
         key = _host_key(entry)
@@ -167,50 +172,64 @@ def assemble(
                 f"host entry for {unit_id} names a row that does not "
                 "exist: " + str(entry.get("concept_title"))[:80]
             )
-        units_by_key.setdefault(key, []).append(str(unit_id))
         for flag in entry.get("review_flags") or []:
             flags_by_key.setdefault(key, []).append(str(flag))
 
-    # House contract: a Type lives on exactly ONE concept host. If cases
-    # of the same Type were hosted on different concepts, consolidate the
-    # whole Type onto its majority host.
-    host_by_type: dict[str, tuple[str, str]] = {}
-    for key, unit_ids in units_by_key.items():
-        for unit_id in unit_ids:
-            type_id = unit_id.split("::")[0]
-            host_by_type.setdefault(type_id, key)
-    counts: dict[tuple[str, tuple[str, str]], int] = {}
-    for key, unit_ids in units_by_key.items():
-        for unit_id in unit_ids:
-            type_id = unit_id.split("::")[0]
-            counts[(type_id, key)] = counts.get((type_id, key), 0) + 1
-    for type_id in list(host_by_type):
-        best = max(
-            (k for (t, k) in counts if t == type_id),
-            key=lambda k: counts[(type_id, k)],
-        )
-        host_by_type[type_id] = best
-    consolidated: dict[tuple[str, str], list[str]] = {}
-    for key, unit_ids in units_by_key.items():
-        for unit_id in unit_ids:
-            type_id = unit_id.split("::")[0]
-            consolidated.setdefault(host_by_type[type_id], []).append(unit_id)
-    units_by_key = consolidated
+    # Each EXAMPLE renders at its own question's destination (qid_map),
+    # so the visible Types text always agrees with per-question routing —
+    # reviewers found the old whole-Case pooling contradicted correct
+    # placements. A Case (or Type) whose questions span concepts appears
+    # on each destination with only that concept's examples; an example
+    # whose qid was never routed stays with its unit's host.
+    qid_map = host_result.get("qid_map") or {}
+    sections_by_key: dict[
+        tuple[str, str], dict[str, dict[str, list[str]]]
+    ] = {}
+    routes_by_key: dict[tuple[str, str], set[str]] = {}
+    for unit_id, entry in (host_result.get("host_map") or {}).items():
+        parts = str(unit_id).split("::")
+        type_id = parts[0]
+        case_id = parts[1] if len(parts) > 1 else ""
+        unit_key = _host_key(entry)
+        case_examples = (cases.get((type_id, case_id)) or {}).get(
+            "examples"
+        ) or []
+        if not case_examples:
+            # A unit with no examples still marks its Type/Case on the
+            # host so the taxonomy stays visible somewhere.
+            sections_by_key.setdefault(unit_key, {}).setdefault(
+                type_id, {}
+            ).setdefault(case_id, [])
+            routes_by_key.setdefault(unit_key, set()).add(str(unit_id))
+            continue
+        for example in case_examples:
+            qid = example["qid"]
+            destination = qid_map.get(qid) if qid else None
+            dest_key = (
+                _host_key(destination)
+                if isinstance(destination, Mapping)
+                else unit_key
+            )
+            if dest_key not in row_by_key:
+                raise AssemblyError(
+                    f"qid {qid} routes to a row that does not exist: "
+                    + str((destination or entry).get("concept_title"))[:80]
+                )
+            sections_by_key.setdefault(dest_key, {}).setdefault(
+                type_id, {}
+            ).setdefault(case_id, []).append(example["prompt"])
+            routes_by_key.setdefault(dest_key, set()).add(str(unit_id))
 
-    for key, unit_ids in units_by_key.items():
+    for key, hosted in sections_by_key.items():
         row = row_by_key[key]
-        section = render_types_section(
-            sorted(unit_ids), types=types, cases=cases
-        )
+        section = render_types_section(hosted, types=types, cases=cases)
         row["concept_details"] = _inject_types(
             str(row.get("concept_details") or ""), section
         )
-        row["_aegis_release_type_case_routes"] = sorted(unit_ids)
+        row["_aegis_release_type_case_routes"] = sorted(routes_by_key[key])
     for key, flags in flags_by_key.items():
         row = row_by_key[key]
         row["review_flags"] = [*(row.get("review_flags") or []), *flags]
-
-    qid_map = host_result.get("qid_map") or {}
     for qid, entry in qid_map.items():
         key = _host_key(entry)
         if key not in row_by_key:

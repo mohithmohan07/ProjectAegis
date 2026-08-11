@@ -36,9 +36,10 @@ CONTENT_CODES = {
     # A row can reach the boundary with no (or malformed) learner
     # analysis: the old path papered that over with a deterministic
     # fallback the gate forbids; authoring real analysis is model work.
+    # Either section alone is sufficient — only an analysis carrying
+    # neither insight is missing content.
     "analysis_section_format",
-    "missing_misconception",
-    "missing_error_analysis",
+    "missing_learner_analysis",
 }
 
 
@@ -97,16 +98,18 @@ def _failures(
                     )
                 elif entry["code"] in (
                     "analysis_section_format",
-                    "missing_misconception",
-                    "missing_error_analysis",
+                    "missing_learner_analysis",
                 ):
                     entry["example_repair"] = (
-                        "End concept_details with exactly one combined "
-                        "section: '// Misconception/ Error Analysis: "
-                        "Misconceptions: <one specific wrong belief "
-                        f"about {title}>.; Error Analysis: <the learner "
-                        "performing one concrete faulty action, with an "
-                        "instead-of contrast>.'"
+                        "End concept_details with exactly one section "
+                        "'// Misconception/ Error Analysis: ' carrying "
+                        "the genuine insight(s): 'Misconceptions: <one "
+                        f"specific wrong belief about {title}>.' or "
+                        "'Error Analysis: <the learner performing one "
+                        "concrete faulty action, with an instead-of "
+                        "contrast>.' — or both joined with '; ' ONLY "
+                        "when they say genuinely different things; "
+                        "never write one as a paraphrase of the other."
                     )
                 failures.setdefault(index, []).append(entry)
     return failures

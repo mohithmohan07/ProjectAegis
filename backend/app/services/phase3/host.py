@@ -14,6 +14,7 @@ from typing import Any, Callable, Mapping
 
 from . import envelope as envelope_mod
 from . import kernel
+from ... import config
 from .. import progress
 from .. import semantic_confidence_policy as confidence_policy
 
@@ -441,8 +442,43 @@ def host(
         for row in env["graph"]["blocks"]
         if isinstance(row, Mapping) and str(row.get("block_id") or "")
     ]
+    # Placement needs each question's own evidence, not just its Case's
+    # summary: reviewers found visually themed questions clustering into the
+    # chapter's first image concept and end-of-chapter exercises drifting to
+    # unrelated topics. Give the model the wording, the kind, and where the
+    # book prints the question.
+    question_info: dict[str, dict[str, Any]] = {}
+    for item in (env.get("inventory") or {}).get("items") or []:
+        if not isinstance(item, Mapping):
+            continue
+        qid = str(item.get("qid") or "").strip()
+        if not qid:
+            continue
+        text = str(
+            item.get("polished_task")
+            or item.get("normalized_task")
+            or item.get("raw_task")
+            or ""
+        )
+        question_info[qid] = {
+            "qid": qid,
+            "kind": str(item.get("source_kind") or ""),
+            "printed_under_topic": str(
+                item.get("source_location_topic_title")
+                or item.get("topic_hint")
+                or ""
+            ),
+            "chapter_wide": bool(item.get("_chapter_wide_task")),
+            "text": text[:600],
+        }
 
-    for start in range(0, len(units), _BATCH_SIZE):
+    def _decide_units_batch(
+        start: int,
+    ) -> tuple[dict[str, dict], dict[str, dict], list[dict]]:
+        """Certify one unit batch; outputs merge in batch order."""
+        batch_hosts: dict[str, dict[str, Any]] = {}
+        batch_qids: dict[str, dict[str, Any]] = {}
+        batch_new: list[dict[str, Any]] = []
         batch = units[start:start + _BATCH_SIZE]
         payload = {
             "stage": "host",
@@ -472,7 +508,21 @@ def host(
                 "a question apart — sub-questions stay with their "
                 "question, exactly as it is. List its genuine concepts "
                 "in falls_under and name your placement in "
-                "destination_concept_title."
+                "destination_concept_title. Use each question's own "
+                "entry in the unit's questions list — its full wording, "
+                "kind, and printed_under_topic — as primary evidence: "
+                "an in-text or checkpoint question belongs with the "
+                "material it is printed inside, so weigh that topic's "
+                "concepts first; an end-of-chapter exercise is printed "
+                "under the last section, so its printing position means "
+                "nothing — place it purely by what it asks. Surface "
+                "similarity is NOT ownership: a question about a "
+                "picture, caricature, map, or table belongs to the "
+                "concept that teaches THAT content, never to another "
+                "concept merely because it also involves images. Each "
+                "question gets EXACTLY ONE destination; when the rules "
+                "leave two candidates, the later topic in teaching "
+                "order wins."
             ),
             "topics_in_teaching_order": [
                 {
@@ -490,6 +540,11 @@ def host(
                     "pattern": row["pattern"],
                     "concept_match_hint": row["concept_match_hint"],
                     "qids": row["qids"],
+                    "questions": [
+                        question_info[qid]
+                        for qid in row["qids"]
+                        if qid in question_info
+                    ],
                 }
                 for row in batch
             ],
@@ -542,7 +597,7 @@ def host(
                         "api-created-missing-type-host"
                     ),
                 }
-                new_concepts.append(created)
+                batch_new.append(created)
                 entry_source: Mapping[str, Any] = created
             else:
                 entry_source = settled_titles[
@@ -566,7 +621,7 @@ def host(
             }
             if flags:
                 entry["review_flags"] = list(flags)
-            host_map[unit["unit_id"]] = entry
+            batch_hosts[unit["unit_id"]] = entry
             # House routing rule, applied BY THE MODEL: placing a question
             # means understanding it against the concepts, so the API names
             # each question's destination itself. The deterministic reading
@@ -647,7 +702,24 @@ def host(
                         )
                 if qid_flags:
                     qid_entry["review_flags"] = qid_flags
-                qid_map[qid] = qid_entry
+                batch_qids[qid] = qid_entry
+        return batch_hosts, batch_qids, batch_new
+
+    # Unit batches are independent decisions (the concept payload is built
+    # once and never grows mid-run), so they overlap up to the shared
+    # OpenAI concurrency gate; merging in batch order keeps host_map,
+    # qid_map, and new_concepts identical to the sequential path.
+    # Default is sequential: per-run parallelism is a deployment choice
+    # sized against concurrent creator runs (see phase3_decision_workers).
+    workers = config.phase3_decision_workers()
+    for batch_hosts, batch_qids, batch_new in kernel.parallel_map_in_order(
+        range(0, len(units), _BATCH_SIZE),
+        _decide_units_batch,
+        max_workers=workers,
+    ):
+        host_map.update(batch_hosts)
+        qid_map.update(batch_qids)
+        new_concepts.extend(batch_new)
 
     flagged = sum(
         1 for entry in host_map.values() if entry.get("review_flags")

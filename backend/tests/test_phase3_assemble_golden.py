@@ -72,38 +72,48 @@ def test_types_are_embedded_in_the_house_format(assembled, golden_envelope):
     result, golden_hosts, _settled = assembled
     types, cases = assemble_mod._type_catalog(golden_envelope)
 
-    # House contract: the whole Type lives on ONE host (its majority
-    # host), while QIDs keep their per-case certified routing.
+    # Per-question rendering: every Example appears on the row its own
+    # question was placed on, so the visible Types text always agrees
+    # with qid routing (reviewers found whole-Case pooling contradicted
+    # correct placements). CASE-0002's title renders wherever one of its
+    # examples' questions landed.
+    case_qids = [
+        example["qid"]
+        for example in cases[("TYPE-0001", "CASE-0002")]["examples"]
+        if example["qid"]
+    ]
+    assert case_qids
+    destination = _normal(
+        golden_hosts["qid_map"][case_qids[0]]["concept_title"]
+    )
     row = next(
         row for row in result["rows"]
-        if any(
-            unit.startswith("TYPE-0001::")
-            for unit in row.get("_aegis_release_type_case_routes") or []
-        )
+        if _normal(row["concept_title"]) == destination
     )
     details = row["concept_details"]
     assert " // Types: " in details
     assert types["TYPE-0001"]["title"] in details
     assert cases[("TYPE-0001", "CASE-0002")]["title"] in details
-    # Example completeness is enforced against the source inventory by
-    # the exact-coverage gate (deposit parity may relocate or drop
-    # fixture examples whose wording the inventory cannot certify).
     # Order: Description, Mastery, Types, then learner analysis.
     assert details.index("// Types:") < details.index("Misconception/")
     # Chapter-wide continuous numbering is applied by the deposit-parity
     # pipeline in ROW order, so this host carries a numbered Type whose
     # ordinal depends on its position, not on the taxonomy id.
     assert re.search(r"Type \d{2}: ", details)
-    assert "TYPE-0001::CASE-0002::0002" in row[
-        "_aegis_release_type_case_routes"
+    assert any(
+        unit.startswith("TYPE-0001::CASE-0002")
+        for unit in row["_aegis_release_type_case_routes"]
+    )
+    # The rendered example text lives ONLY on its question's destination.
+    example_prompt = cases[("TYPE-0001", "CASE-0002")]["examples"][0][
+        "prompt"
     ]
-    # No Type spans two hosts anywhere in the assembled output.
-    seen: dict[str, str] = {}
-    for out_row in result["rows"]:
-        for unit in out_row.get("_aegis_release_type_case_routes") or []:
-            type_id = unit.split("::")[0]
-            owner = _normal(out_row["concept_title"])
-            assert seen.setdefault(type_id, owner) == owner, type_id
+    carriers = [
+        _normal(out_row["concept_title"])
+        for out_row in result["rows"]
+        if example_prompt[:80] in str(out_row["concept_details"])
+    ]
+    assert carriers == [destination]
 
 
 def test_every_certified_qid_routes_to_its_host_row(assembled):

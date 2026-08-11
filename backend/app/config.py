@@ -222,6 +222,26 @@ OPENAI_SLOT_WAIT_LOG_SECONDS = max(
     1.0,
     float(os.environ.get("AEGIS_OPENAI_SLOT_WAIT_LOG_SECONDS", "20")),
 )
+
+
+def phase3_decision_workers() -> int:
+    """Per-run parallel decision workers for Settle topics / Host batches.
+
+    Multi-tenant sizing rule: every concurrent generation run contributes up
+    to this many contenders for the shared OPENAI_MAX_CONCURRENCY slots, so
+    a deployment with N simultaneous creators should keep
+
+        N x AEGIS_PHASE3_DECISION_WORKERS <= AEGIS_OPENAI_MAX_CONCURRENCY
+
+    or slot queue waits grow toward AEGIS_OPENAI_SLOT_WAIT_TIMEOUT_SECONDS
+    and can fail runs. The DEFAULT is 1 — exactly the sequential behavior —
+    so parallelism inside one run is always an explicit deployment choice
+    made together with the gate size (e.g. 3 creators: gate 9, workers 3).
+    """
+    raw = os.environ.get("AEGIS_PHASE3_DECISION_WORKERS", "").strip()
+    if raw:
+        return max(1, int(raw))
+    return 1
 OPENAI_TRANSIENT_RETRIES = max(
     0, int(os.environ.get("AEGIS_OPENAI_TRANSIENT_RETRIES", "10")))
 OPENAI_BACKOFF_MAX_SECONDS = max(

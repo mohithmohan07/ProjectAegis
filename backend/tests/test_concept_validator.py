@@ -1145,6 +1145,36 @@ def test_strict_analysis_requires_one_exact_combined_section():
     assert "analysis_section_format" in _codes(orphan_report)
 
 
+def test_strict_analysis_accepts_either_section_alone():
+    """Reviewer contract: Misconception OR Error Analysis is sufficient;
+    both appear only when they carry genuinely different insight."""
+    misconception_only = _rec(
+        "Signed Substitution",
+        "Description: Signed values retain their signs during substitution "
+        "into a formula. // Misconception/ Error Analysis: "
+        "Misconceptions: Students may believe a negative input always makes "
+        "the final result negative.",
+    )
+    report = cv.validate_concept_rows(
+        [misconception_only], strict_analysis_section=True)
+    assert not ({
+        "analysis_section_format", "missing_learner_analysis",
+    } & _codes(report))
+
+    error_only = _rec(
+        "Signed Substitution",
+        "Description: Signed values retain their signs during substitution "
+        "into a formula. // Misconception/ Error Analysis: Error Analysis: "
+        "Students may omit a negative sign while substituting a value "
+        "instead of carrying it through the calculation.",
+    )
+    report = cv.validate_concept_rows(
+        [error_only], strict_analysis_section=True)
+    assert not ({
+        "analysis_section_format", "missing_learner_analysis",
+    } & _codes(report))
+
+
 def test_strict_figure_examples_require_matching_canonical_image_tag():
     assert cv._example_figure_ids("Refer to Fig．1（a） and Fig. 11.4.") == [
         "1(a)", "11.4",

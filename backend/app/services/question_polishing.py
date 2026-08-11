@@ -4,9 +4,10 @@ Step 4 of ``docs/build-concepts-manual-process.md``. Textbook phrasing is
 often unusable as a standalone test item — "Look at the figure once again and
 guess why…" presumes the book is open at that page. This pass rewrites every
 question in the inventory into a self-contained form (the referenced figure
-ships with the question), and records a **semantic split** where one question
-genuinely spans more than one concept: fragments minted as ``QINV-0009.1``,
-``QINV-0009.2``, each carrying the parent QID in its own id.
+ships with the question). Questions are NEVER split: a multi-part question
+(sub-questions included) stays one item and is placed as one unit by the
+routing rules — a question spanning concepts or topics goes to the
+appropriate culmination concept, whole.
 
 The polished form is a derived artifact. ``raw_task`` / ``normalized_task``
 are never touched — they are the source audit copy, and every deterministic
@@ -31,10 +32,12 @@ from typing import Any, Callable
 from .. import config
 from . import progress, prompts
 
-POLISHING_VERSION = 1
+POLISHING_VERSION = 2
 
 # Flags recorded on inventory items. Absent flag == untouched source wording.
 FLAG_POLISHED = "polished_for_review"
+# Legacy flag: splits are no longer produced (questions are never broken),
+# but inventories persisted by earlier versions may still carry it.
 FLAG_SPLIT = "split_for_review"
 FLAG_KEPT = "kept_original"
 
@@ -44,24 +47,22 @@ FLAG_KEPT = "kept_original"
 SKIP_KINDS = frozenset({"activity", "experiment_task"})
 
 _BATCH_SIZE = 12
-_MAX_FRAGMENTS = 6
 
 _memory_lock = threading.Lock()
 _memory_cache: dict[str, dict[str, Any]] = {}
 
-# Appended to the Type-mining prompts so classification understands the two
+# Appended to the Type-mining prompts so classification understands the
 # artifacts this pass adds to inventory items.
 FRAGMENT_MINING_NOTE = (
     "\n\nPolished inventory wording:\n"
     "- When an item carries polished_task, that is the question's shipping "
     "wording; raw_task is the source audit copy. Classify by what the "
     "polished wording asks.\n"
-    "- An item whose qid has a dotted suffix (QINV-0009.1) is an "
-    "independent question split from its parent because it spans concepts. "
-    "Classify and place each such item entirely on its own merits — never "
-    "re-merge fragments into one Example, and never place a fragment "
-    "because of where its sibling or parent belongs. Its polished_task is "
-    "its entire ask.\n"
+    "- A multi-part question (sub-parts a), b), c) …) is ONE question. "
+    "Classify it as a single item by everything it asks together — never "
+    "break its parts into separate Cases or Examples. If its parts span "
+    "different concepts or topics, that makes it a culmination-level "
+    "question, not several questions.\n"
 )
 
 POLISH_SYSTEM = prompts.register(
@@ -81,9 +82,7 @@ POLISH_SYSTEM = prompts.register(
         "properly phrased, self-contained test item.\n"
         "\n"
         "Return ONE JSON object:\n"
-        '{"items": [{"qid": "...", "polished_task": "...",\n'
-        '  "fragments": [{"polished_task": "...", "reason": "..."}],\n'
-        '  "note": ""}]}\n'
+        '{"items": [{"qid": "...", "polished_task": "...", "note": ""}]}\n'
         "\n"
         "Polishing rules — all hard requirements:\n"
         "1. NEVER change what the question asks, its difficulty, or its "
@@ -99,16 +98,10 @@ POLISH_SYSTEM = prompts.register(
         "5. Never answer the question, and never add solution hints.\n"
         "6. If the source wording is already a clean standalone test item, "
         "return it unchanged as polished_task.\n"
-        "\n"
-        "Splitting — the exception, not the rule:\n"
-        "Return fragments ONLY when one question genuinely asks several "
-        "independently answerable things that belong to different concepts "
-        "or topics. Each fragment must be a self-contained polished "
-        "question, and together the fragments must cover everything the "
-        "original asked — never drop a part. Most questions produce no "
-        "fragments. A multi-part question whose parts all exercise the same "
-        "concept stays whole. When you do split, still return the whole "
-        "question's polished form as polished_task.\n"
+        "7. NEVER split a question. A multi-part question (sub-questions "
+        "a), b), c) …) is one question and stays one question, with every "
+        "part kept in order inside polished_task. Do not drop, merge, or "
+        "reorder parts.\n"
         "\n"
         "Return every qid you were given, exactly once."
     ),
@@ -288,37 +281,16 @@ def _decision_for(item: dict[str, Any], row: dict[str, Any]) -> dict[str, Any]:
     if defect:
         return {"flag": FLAG_KEPT, "note": defect}
 
-    fragments: list[dict[str, str]] = []
-    for offset, fragment in enumerate(
-        list(row.get("fragments") or [])[:_MAX_FRAGMENTS], start=1
-    ):
-        if not isinstance(fragment, dict):
-            continue
-        text = str(fragment.get("polished_task") or "").strip()
-        if not text or _too_short(text):
-            # One unusable fragment invalidates the split, never the polish:
-            # partial fragments could not cover everything the original asked.
-            fragments = []
-            break
-        fragments.append({
-            "fragment_qid": f"{item['qid']}.{offset}",
-            "polished_task": text,
-            "reason": str(fragment.get("reason") or "")[:300],
-        })
-    if len(fragments) == 1:
-        fragments = []  # a "split" into one part is not a split
-
+    # Questions are never split: any fragments a model returns are ignored;
+    # the whole question's polished form is the only shipping artifact.
     unchanged = _squash(polished) == _squash(_item_source_text(item))
-    if unchanged and not fragments:
+    if unchanged:
         return {"note": str(row.get("note") or "")[:300]}
-    decision: dict[str, Any] = {
+    return {
         "polished_task": polished,
-        "flag": FLAG_SPLIT if fragments else FLAG_POLISHED,
+        "flag": FLAG_POLISHED,
         "note": str(row.get("note") or "")[:300],
     }
-    if fragments:
-        decision["fragments"] = fragments
-    return decision
 
 
 def _fragment_items(parent: dict[str, Any]) -> list[dict[str, Any]]:
@@ -503,7 +475,7 @@ def polish_inventory(
         decisions = _decisions_via_api(meta or {}, eligible, api_call)
         _store_cached(key, decisions)
 
-    polished_count = split_count = kept_count = 0
+    polished_count = kept_count = 0
     for item in eligible:
         decision = decisions.get(str(item["qid"]))
         if not isinstance(decision, dict):
@@ -520,17 +492,13 @@ def polish_inventory(
         item["polished_task"] = str(decision.get("polished_task") or "")
         item["polish_flag"] = flag
         item["polish_note"] = note
-        fragments = decision.get("fragments") or []
-        if fragments:
-            item["polish_fragments"] = copy.deepcopy(fragments)
-            split_count += 1
-        else:
-            polished_count += 1
+        polished_count += 1
     progress.log(
         f"Question polishing: {polished_count} question(s) rewritten, "
-        f"{split_count} split into fragments, {kept_count} kept original "
-        f"and flagged, "
-        f"{len(eligible) - polished_count - split_count - kept_count} "
-        "already standalone."
+        f"{kept_count} kept original and flagged, "
+        f"{len(eligible) - polished_count - kept_count} already standalone. "
+        "Questions are never split; multi-part questions stay whole."
     )
+    # Legacy inventories persisted by earlier versions may still carry
+    # expanded fragments; both helpers are no-ops on never-split inventories.
     return supersede_restored_parents(expand_split_items(result))

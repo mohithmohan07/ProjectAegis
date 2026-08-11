@@ -1226,8 +1226,22 @@ def analysis_components(details: str) -> tuple[str, str]:
     return _analysis_components(split_sections(details or ""))
 
 
+def _authored_analysis_is_authoritative() -> bool:
+    # Under the rewritten pipeline learner analysis is model-authored and
+    # either section alone is complete: deterministic filler is exactly what
+    # the terminal gate rejects, and a wholly missing analysis is the Polish
+    # pass's to author with a real model call. The legacy path keeps its
+    # historical backfill.
+    try:
+        from .phase3 import runner as _phase3_runner
+    except ImportError:  # pragma: no cover - defensive ordering
+        return False
+    return _phase3_runner.rewrite_enabled()
+
+
 def ensure_analysis_sections(records: list[dict]) -> list[dict]:
-    """Ensure one combined section containing both learner-analysis meanings."""
+    """Ensure one combined section carrying the learner-analysis content."""
+    authored = _authored_analysis_is_authoritative()
     for rec in records:
         if is_culmination(rec.get("concept_title", "")):
             continue
@@ -1241,6 +1255,11 @@ def ensure_analysis_sections(records: list[dict]) -> list[dict]:
         sections = split_sections(details)
         misconception, error_analysis = _analysis_components(sections)
         if misconception and error_analysis:
+            continue
+        if authored:
+            # Either authored section alone is complete; neither present is
+            # model work, never filler. normalize_analysis_sections already
+            # rendered the canonical one-sided combined section.
             continue
         sections = [
             (label, content)

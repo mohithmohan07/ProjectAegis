@@ -202,15 +202,19 @@ def test_canonicalize_accepts_a_granular_map_without_compacting(monkeypatch):
     assert len(out) == 80
 
 
-def test_skeleton_retries_sparse_chunks(monkeypatch):
-    """A big chunk yielding a couple of concepts triggers a density retry."""
+def test_skeleton_retries_only_a_collapsed_extraction(monkeypatch):
+    """The retry is a failed-extraction guard, not a density push: a big
+    chunk collapsing to a single row retries for COVERAGE (never asking for
+    micro-splits), while a modest-but-plausible count is accepted as the
+    model's judgment."""
     calls = {"n": 0}
 
     def fake_openai(system, user, **kw):
         calls["n"] += 1
         if calls["n"] == 1:
             return {"rows": _to_api_rows(_rows(1))}
-        assert "under-extraction" in user
+        assert "COVER every main teaching objective" in user
+        assert "micro-concepts" in user
         return {"rows": _to_api_rows(_rows(8))}
 
     monkeypatch.setattr(g, "_openai_json", fake_openai)
@@ -220,6 +224,24 @@ def test_skeleton_retries_sparse_chunks(monkeypatch):
         [{"text": chunk_text, "sections": []}], meta=g._metadata(subject="Math"))
     assert calls["n"] == 2
     assert len(records) == 8
+
+
+def test_skeleton_accepts_a_modest_concept_count_without_retry(monkeypatch):
+    """Seven substantial concepts for a large chunk is a judgment call, not
+    under-extraction; no density retry fires."""
+    calls = {"n": 0}
+
+    def fake_openai(system, user, **kw):
+        calls["n"] += 1
+        return {"rows": _to_api_rows(_rows(7))}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    monkeypatch.setattr(g, "_repair_records_via_api", lambda records, **kw: records)
+    chunk_text = "SECTION TEXT:\n" + ("alpha beta gamma " * 1500)  # ~25k chars
+    records = g._extract_skeleton_via_api(
+        [{"text": chunk_text, "sections": []}], meta=g._metadata(subject="Math"))
+    assert calls["n"] == 1
+    assert len(records) == 7
 
 
 def test_skeleton_retries_overdense_chunks(monkeypatch):

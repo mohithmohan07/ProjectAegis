@@ -185,7 +185,7 @@ def test_host_resume_is_free_and_identical(
 
 
 def test_a_fabricated_host_title_fails_closed_after_bounded_corrections(
-    golden_envelope, settled_rows,
+    golden_envelope, settled_rows, monkeypatch,
 ):
     calls = {"n": 0}
 
@@ -202,6 +202,9 @@ def test_a_fabricated_host_title_fails_closed_after_bounded_corrections(
             for unit in request["units"]
         ]}
 
+    # Batches run sequentially by default (AEGIS_PHASE3_DECISION_WORKERS
+    # unset), so the per-decision attempt budget is the only variable.
+    monkeypatch.delenv("AEGIS_PHASE3_DECISION_WORKERS", raising=False)
     with pytest.raises(kernel.ContractError) as failed:
         host_mod.host(
             golden_envelope, settled_rows,
@@ -405,6 +408,51 @@ def test_the_api_places_questions_and_culminations_are_valid_destinations(
         "literal reading" in flag
         for flag in placed.get("review_flags") or []
     )
+
+
+def test_host_payload_grounds_placement_in_each_questions_source_position(
+    golden_envelope, settled_rows,
+):
+    """Reviewers found visual questions clustering into the first image
+    concept: the request must carry each question's own wording, kind, and
+    printed location, and the rules must weigh them."""
+    seen: dict = {}
+    units = host_mod.derive_units(golden_envelope)
+    unit = next(u for u in units if u["qids"])
+    by_topic, culm_by_topic = _topic_layout(settled_rows)
+    topic_id, pair = next(
+        (tid, rows) for tid, rows in by_topic.items()
+        if len(rows) >= 2 and tid in culm_by_topic
+    )
+    culmination_title = culm_by_topic[topic_id]["concept_title"]
+    inner = _placement_provider(pair, culmination_title)
+
+    def provider(request: dict) -> dict:
+        seen.setdefault("requests", []).append(request)
+        return inner(request)
+
+    host_mod.host(
+        golden_envelope, settled_rows,
+        provider=provider,
+        critic=_verified_critic,
+        store=kernel.DecisionStore(),
+    )
+    request = next(
+        r for r in seen["requests"]
+        if any(u["unit_id"] == unit["unit_id"] for u in r["units"])
+    )
+    sent_unit = next(
+        u for u in request["units"] if u["unit_id"] == unit["unit_id"]
+    )
+    assert sent_unit["questions"], "units must carry per-question evidence"
+    entry = sent_unit["questions"][0]
+    assert set(entry) >= {
+        "qid", "kind", "printed_under_topic", "chapter_wide", "text",
+    }
+    assert entry["qid"] in unit["qids"]
+    rules = request["rules"]
+    assert "printed_under_topic" in rules
+    assert "Surface similarity is NOT ownership" in rules
 
 
 def test_an_api_placement_disagreeing_with_the_rules_ships_flagged(

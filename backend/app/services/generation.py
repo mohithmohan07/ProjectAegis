@@ -1193,16 +1193,23 @@ COVERAGE IS MANDATORY (most important rule):
   never assume a fixed structure merely because the subject has a familiar
   name. A narrative may be organized like a procedural text, and a quantitative
   text may be organized as episodes or investigations.
-- A normal textbook section yields 2-5 concepts; a full chapter usually yields
-  18-40 concepts, depending on chapter size. Prefer discrete mastery units
-  over broad umbrella concepts.
+- Let the chapter's own teaching structure decide how many concepts there
+  are — there is no quota. A concept is something a teacher would plan and
+  teach as one coherent lesson segment: SUBSTANTIAL, self-standing, and
+  worth a full description. Judge each candidate row: if its description
+  would be thin — one or two sentences restating a heading, a single fact,
+  a single formula variant, or a sliver of a bigger explanation — it is NOT
+  a concept; fold it into the concept it belongs to and let that concept's
+  description carry the full depth.
 - A concept is a durable teaching/mastery objective, not every term, example,
   subheading, exercise prompt, case, or factual detail.
-- When several definitions, examples, sub-types, or procedures serve one
-  reusable objective, merge them under the same concept.
-- Keep SEPARATE concepts when the textbook teaches distinct country cases,
-  people, events, laws, methods, or processes that a teacher would lesson-plan
-  apart — do not collapse them into one umbrella row plus a culmination.
+- When several definitions, examples, sub-types, steps, or procedures serve
+  one reusable objective, merge them under the same concept and write ONE
+  rich description covering them together. Three adjacent rows that would
+  share the same mastery goal are one concept, not three.
+- Keep SEPARATE concepts only when the textbook teaches distinct country
+  cases, people, events, laws, methods, or processes that a teacher would
+  genuinely lesson-plan apart — never split one explanation into fragments.
 - Chapter-opening / pre-section narrative (HEADING PATH: [Chapter opening])
   MUST yield at least one teachable concept under the first main topic from
   that opening content. Never skip opening material just because it precedes
@@ -1261,9 +1268,12 @@ Rules:
   content-specific title for opening material instead of the word "Introduction".
 - Do not use exercise/question-type headings as concepts.
 - Avoid repeated sibling openers.
-- concept_description starts with "Description:" and is 2-4 compact sentences
-  that name the key people, places, rules, formulas, or relationships from the
-  source — not a vague summary.
+- concept_description starts with "Description:" and TEACHES the concept in
+  3-6 substantive sentences: name the key people, places, rules, formulas,
+  relationships, and the reasoning that connects them, drawn from the source.
+  A description that merely restates the title or lists a bare fact is a
+  defect — if you cannot write a substantive description, the row is not a
+  real concept and belongs inside a neighbouring one.
 - Keep source_evidence short: the phrase/heading/problem source that justifies the concept.
 - source_evidence is for validation/debug only and must not be written to workbook.
 """)
@@ -1278,6 +1288,12 @@ otherwise valid concept map. Return ONLY strict JSON:
 
 Rules:
 - Every supplied missing source topic MUST receive at least one normal concept.
+- Every recovered concept must be TAUGHT by the supplied excerpt itself. Do
+  not write concepts for material the excerpt only previews, mentions, or
+  asks about — detailed definitions belong to the sections that teach them.
+  When the missing topic is thin framing material (a chapter opening), ONE
+  modest framing concept grounded in its own text is the correct recovery,
+  not a set of definition concepts imported from later sections.
 - Infer concept grain from that topic's own excerpt and hierarchy, not from the
   subject label or from a conventional textbook template.
 - Preserve the supplied topic string exactly. Never create another topic.
@@ -1639,6 +1655,19 @@ COVERAGE IS MANDATORY (most important rule):
 - A missed question is a defect; an unnecessary one-question Type is also a
   classification defect when that question fits an existing reusable pattern.
 
+APT TAXONOMY SIZE (judge it, no quota):
+- The Type list should read like the handful of question patterns a teacher
+  would naturally recognize in this chapter's exercises — reusable patterns,
+  not a near-relabelling of the question list. A taxonomy approaching one
+  Type per question means the patterns were not actually mined.
+- Before finalizing, re-read your own Type list and merge Types whose
+  answering method and expected response form are the same pattern in
+  different clothes. A Type with a single Case holding a single Example is
+  legitimate only when that question is genuinely one of a kind in this
+  chapter.
+- Let the questions decide how many Types and Cases exist. Do not pad the
+  count up, and do not force dissimilar patterns together to shrink it.
+
 Rules:
 - One inventory item maps to exactly one best-fit Type. If it combines several
   skills, choose the Type that most directly assesses the final ask, or create
@@ -1677,10 +1706,13 @@ CASE WORDING (each Case must be properly defined):
   done, and the distinguishing condition — named by givens / ask / constraint /
   representation, never by a chapter-specific Activity title. A case_title is
   NEVER a raw question.
-- Create a separate Case for every distinct given/asked/constraint combination.
-- Independently answerable child items with stable ``parent_qid`` identities
-  become separate Cases and may be routed to separate concepts. Dependent
-  subparts that share evidence or form one integrated response stay together.
+- Create a separate Case only when a given/asked/constraint combination is a
+  genuinely different variety of the pattern; near-identical variations of
+  the same variety share one Case (a Case can hold several Examples).
+- A multi-part question (sub-parts a), b), c) …) is ONE question and ONE
+  Example — never spread its parts across Cases or Types. Classify it by
+  everything it asks together; parts spanning several concepts make it a
+  culmination-level question, not several questions.
 - Advanced placement: when one Case or task requires methods from more than one
   source topic, set its topic_match_hint to the LATEST of those topics, never an
   earlier one, because a learner can only attempt it after reaching that topic.
@@ -2214,8 +2246,13 @@ Rules:
   and Description text — the ONLY change is appending a line break (\\n)
   followed by exactly:
   Achieving Mastery: <one short sentence stating what the learner can do when this concept is mastered>
-- The sentence must be specific to the concept, e.g.
+- The sentence must be specific to THIS concept alone — name this concept's
+  own skill, rule, or reasoning move, e.g.
   "Achieving Mastery: Using the midpoint property to set up the smaller triangles correctly."
+- Every row in the batch gets its OWN distinct mastery sentence. Never reuse
+  one sentence (or a light paraphrase of it) across sibling concepts: if two
+  rows would honestly earn the same mastery sentence, write each around the
+  part of the skill that row uniquely teaches.
 - Do not add Types or alter the existing single ``Misconception/ Error
   Analysis`` section. No source artifacts (Example 3, Exercise 1.2, Fig 4,
   page numbers) and never the words "MMD"/"MMDs".
@@ -14175,8 +14212,8 @@ _FATAL_CODES = {
     "generic_misconception", "misconception_framing",
     "generic_error_analysis", "error_analysis_framing",
     "issue_section_overlap",
-    "analysis_section_format", "missing_misconception",
-    "missing_error_analysis", "figure_reference_without_image",
+    "analysis_section_format", "missing_learner_analysis",
+    "figure_reference_without_image",
     "figure_reference_image_mismatch", "generic_case_definition",
     "missing_case_definition", "case_without_example",
     "case_question_not_definition", "example_numbering",
@@ -17698,16 +17735,15 @@ def _dedupe_titles_chapter_wide(records: list[dict]) -> list[dict]:
 def _expected_min_skeleton_rows(chunk_text: str) -> int:
     """Minimum plausible concept count for a chunk, from its content size.
 
-    Roughly one teachable concept per ~2,500 chars of source, floored at 2 for
-    any substantial chunk. Deliberately conservative — this only flags clear
-    under-extraction (e.g. a whole chapter collapsed into a handful of rows).
-    Slightly denser than earlier so History-style chapters keep discrete
-    country/case concepts instead of one umbrella row per topic.
+    Only a failed-extraction guard: a substantial chunk that comes back with
+    one or two rows almost certainly collapsed whole sections. Concept count
+    is otherwise the model's judgment — reviewers found char-density floors
+    produced many thin micro-concepts, so no per-character quota applies.
     """
     content = len((chunk_text or "").strip())
     if content < 2_000:
         return 1
-    return max(2, min(28, content // 2_500))
+    return 3 if content >= 15_000 else 2
 
 
 def _expected_max_skeleton_rows(chunk_text: str, headings: list[str]) -> int:
@@ -18626,13 +18662,13 @@ def _extract_skeleton_via_api(
             retry_user = (
                 user
                 + f"\n\nYOUR PREVIOUS ANSWER HAD ONLY {len(chunk_records)} CONCEPTS — "
-                "that is under-extraction. Re-read the section text and extract "
-                "EVERY distinct teachable concept (each definition, rule, law, "
-                "method, procedure, property, distinction, relationship, "
-                "country/case study, or skill). Keep chapter-opening framing "
-                "ideas as their own concept. Do not summarize; split broad "
-                "umbrella concepts (e.g. Germany+Italy as one row) into "
-                "smaller mastery units."
+                "whole sections of this text appear to be missing from the "
+                "map. Re-read the section text and COVER every main teaching "
+                "objective from the first line to the last, including "
+                "chapter-opening framing ideas. Keep each concept substantial "
+                "— do not pad the count with thin micro-concepts; missing "
+                "coverage is the defect being corrected here, not concept "
+                "size."
             )
             retry_data = _openai_json(
                 system, retry_user, purpose="concept_validation")

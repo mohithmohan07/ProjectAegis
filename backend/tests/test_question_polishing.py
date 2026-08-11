@@ -125,30 +125,21 @@ def test_polishing_adds_fields_and_never_touches_source_wording():
     assert "polish_flag" not in untouched
 
 
-def test_a_spanning_question_becomes_first_class_fragment_items():
-    """Fragments are ordinary inventory items; the parent is preserved."""
+def test_a_spanning_question_stays_whole_and_fragments_are_ignored():
+    """Questions are never split: model-proposed fragments are discarded."""
     result = question_polishing.polish_inventory(
         _inventory(), meta=META, api_call=_api_polish)
 
     qids = [item["qid"] for item in result["items"]]
-    assert "QINV-0002" not in qids
-    assert qids[1:3] == ["QINV-0002.1", "QINV-0002.2"]
-    fragments = result["items"][1:3]
-    for fragment in fragments:
-        assert fragment["parent_qid"] == "QINV-0002"
-        assert fragment["polish_flag"] == question_polishing.FLAG_SPLIT
-        assert fragment["polished_task"]
-        # Source audit identity is the parent's, so anchors still match.
-        assert fragment["raw_task"] == (
-            "Describe the zollverein and the Frankfurt Parliament."
-        )
-    parents = result["split_parents"]
-    assert [p["qid"] for p in parents] == ["QINV-0002"]
-    # The dotted shape is the one existing qid tooling already parses.
-    from app.services import semantic_recovery
-
-    for item in fragments:
-        assert semantic_recovery._QID_RE.fullmatch(item["qid"]), item["qid"]
+    assert "QINV-0002" in qids
+    assert not any("." in qid for qid in qids)
+    assert "split_parents" not in result
+    whole = _by_qid(result, "QINV-0002")
+    assert whole["polish_flag"] == question_polishing.FLAG_POLISHED
+    assert "polish_fragments" not in whole
+    # The whole question's polished wording is the shipping artifact.
+    assert "zollverein" in whole["polished_task"]
+    assert "Frankfurt Parliament" in whole["polished_task"]
 
 
 def test_fragments_resolve_to_their_parents_sealed_task():
@@ -167,37 +158,59 @@ def test_fragments_resolve_to_their_parents_sealed_task():
     )
 
 
-def test_fragments_carry_exact_once_coverage_individually():
-    """Each fragment must be placed once; covering both covers the split."""
+def test_whole_questions_carry_exact_once_coverage():
+    """A never-split multi-part question is covered once, as one unit."""
     result = question_polishing.polish_inventory(
         _inventory(), meta=META, api_call=_api_polish)
     types = [{
         "type_id": "TYPE-0001",
         "source_question_ids": [
-            "QINV-0001", "QINV-0002.1", "QINV-0003",
+            "QINV-0001", "QINV-0002", "QINV-0003",
         ],
         "case_prompts": [{
             "case_id": "CASE-0001",
             "examples": [
                 {"source_question_id": qid, "example_prompt": "x"}
-                for qid in ("QINV-0001", "QINV-0002.1", "QINV-0003")
+                for qid in ("QINV-0001", "QINV-0002", "QINV-0003")
             ],
         }],
     }]
 
     missed = generation._uncovered_inventory_items(result, types)
 
-    # The unplaced fragment is missed on its own; its placed sibling is not.
-    # (The activity row is legitimately uncovered by this Type too.)
-    assert [item["qid"] for item in missed] == ["QINV-0002.2", "QINV-0004"]
+    # Every placed question is covered whole; only the activity hub row is
+    # legitimately uncovered by this Type.
+    assert [item["qid"] for item in missed] == ["QINV-0004"]
 
 
-def test_collapse_and_expand_round_trip():
-    result = question_polishing.polish_inventory(
-        _inventory(), meta=META, api_call=_api_polish)
-    expanded_qids = [item["qid"] for item in result["items"]]
+def _legacy_split_inventory() -> dict:
+    """An inventory shape persisted by the old splitting versions."""
+    parent = _item(
+        "QINV-0002", "Describe the zollverein and the Frankfurt Parliament.")
+    parent["polish_fragments"] = [
+        {"polished_task": (
+            "Describe the economic role played by the zollverein in "
+            "binding the German states."
+        ), "reason": "economic nationalism concept"},
+        {"polished_task": (
+            "Explain how the failure of the Frankfurt Parliament shaped "
+            "the course of German unification."
+        ), "reason": "unification concept"},
+    ]
+    return {"items": [
+        _item("QINV-0001", LOOK_AT_FIGURE),
+        parent,
+        _item("QINV-0003", "Name the allegory of the French nation."),
+    ], "stats": {}}
 
-    collapsed = question_polishing.collapse_split_items(result)
+
+def test_legacy_split_inventories_still_collapse_and_expand():
+    """Old persisted splits keep healing even though new runs never split."""
+    expanded = question_polishing.expand_split_items(_legacy_split_inventory())
+    expanded_qids = [item["qid"] for item in expanded["items"]]
+    assert expanded_qids[1:3] == ["QINV-0002.1", "QINV-0002.2"]
+
+    collapsed = question_polishing.collapse_split_items(expanded)
     assert [i["qid"] for i in collapsed["items"]][1] == "QINV-0002"
     assert collapsed["items"][1]["polish_fragments"]
     assert collapsed["split_parents"] == []
@@ -207,13 +220,12 @@ def test_collapse_and_expand_round_trip():
     assert [p["qid"] for p in re_expanded["split_parents"]] == ["QINV-0002"]
 
 
-def test_a_restored_parent_is_superseded_by_its_fragments():
+def test_a_restored_legacy_parent_is_superseded_by_its_fragments():
     """Job 15: persistence dropped split_parents, and the ACSD-ledger
     refresh re-minted the split parents beside their fragments — putting
     the uncertifiable compound question back into exact-once coverage on
     every replay. Fragments supersede a resurrected parent, always."""
-    result = question_polishing.polish_inventory(
-        _inventory(), meta=META, api_call=_api_polish)
+    result = question_polishing.expand_split_items(_legacy_split_inventory())
     result["split_parents"] = []  # simulate the persistence gap
     result["items"].append(_item(
         "QINV-0002", "Describe the zollverein and the Frankfurt Parliament."))
@@ -226,8 +238,8 @@ def test_a_restored_parent_is_superseded_by_its_fragments():
     assert [p["qid"] for p in healed["split_parents"]] == ["QINV-0002"]
 
 
-def test_anchor_refresh_sees_the_parent_and_returns_the_fragments(monkeypatch):
-    """The refresh wrapper collapses for the anchors and re-expands after."""
+def test_new_runs_never_produce_fragments_for_the_anchor_refresh(monkeypatch):
+    """The refresh wrapper passes whole questions through unchanged."""
     result = question_polishing.polish_inventory(
         _inventory(), meta=META, api_call=_api_polish)
     seen: dict = {}
@@ -247,9 +259,9 @@ def test_anchor_refresh_sees_the_parent_and_returns_the_fragments(monkeypatch):
     refreshed = stub._refresh_inventory_from_source_anchors(result, [])
 
     assert "QINV-0002" in seen["qids"]
-    assert "QINV-0002.1" not in seen["qids"]
     refreshed_qids = [i["qid"] for i in refreshed["items"]]
-    assert "QINV-0002.1" in refreshed_qids and "QINV-0002" not in refreshed_qids
+    assert "QINV-0002" in refreshed_qids
+    assert not any("." in qid for qid in refreshed_qids)
     assert refreshed["stats"]["total_inventory_items"] == len(
         refreshed["items"])
 
@@ -408,5 +420,5 @@ def test_prompt_carries_the_hard_requirements():
     assert "standalone" in prompt
     assert "never translate" in prompt.casefold()
     assert "Never answer the question" in prompt
-    assert "fragments ONLY when" in prompt
-    assert "cover everything the original asked" in prompt
+    assert "NEVER split a question" in prompt
+    assert "stays one question" in prompt

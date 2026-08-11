@@ -27,15 +27,21 @@ _history: contextvars.ContextVar[list[dict] | None] = contextvars.ContextVar(
 
 _SENTINEL = object()
 
+# Decision stages may emit from a bounded worker pool (parallel Settle
+# topics / Host batches). Sinks append to queues or job logs that are not
+# themselves synchronized, so one lock serializes delivery.
+_emit_lock = threading.Lock()
+
 
 def _emit(event: dict) -> None:
     event.setdefault("ts", time.time())
-    history = _history.get()
-    if history is not None:
-        history.append(dict(event))
-    sink = _sink.get()
-    if sink is not None:
-        sink(event)
+    with _emit_lock:
+        history = _history.get()
+        if history is not None:
+            history.append(dict(event))
+        sink = _sink.get()
+        if sink is not None:
+            sink(event)
 
 
 def log(message: str, *, level: str = "info") -> None:

@@ -13,17 +13,18 @@ from app.services import generation, workbooks
 
 EXPECTED_REASONING_POLICY = {
     "assessment_generation": "max",
-    "source_extraction": "max",
+    "source_extraction": "high",
     "source_adjudication": "max",
+    "page_transcription": "medium",
     "concept_mapping": "max",
     "concept_detailing": "max",
-    "concept_validation": "max",
+    "concept_validation": "high",
     "semantic_resolution": "max",
     "pre_learning": "max",
     "workbook_planning": "max",
     "workbook_authoring": "max",
-    "revision_editing": "max",
-    "metadata": "max",
+    "revision_editing": "medium",
+    "metadata": "low",
 }
 
 
@@ -59,8 +60,18 @@ def test_default_model_and_complete_reasoning_policy(monkeypatch):
 
     assert openai_policy.configured_openai_model() == "gpt-5.6-luna"
     assert openai_policy.REASONING_EFFORT_BY_PURPOSE == EXPECTED_REASONING_POLICY
-    # Every purpose asks for the deepest deliberation the model will give.
-    assert set(openai_policy.REASONING_EFFORT_BY_PURPOSE.values()) == {"max"}
+    # Judgment-heavy purposes ask for the deepest deliberation the model will
+    # give; fidelity-heavy purposes are verified copy/structure work where
+    # deep reasoning only adds latency.
+    for judgment in (
+        "source_adjudication", "concept_mapping", "concept_detailing",
+        "semantic_resolution",
+    ):
+        assert openai_policy.REASONING_EFFORT_BY_PURPOSE[judgment] == "max"
+    for fidelity in ("page_transcription", "revision_editing", "metadata"):
+        assert openai_policy.REASONING_EFFORT_BY_PURPOSE[fidelity] in {
+            "low", "medium",
+        }
 
 
 def test_model_override_keeps_purpose_policy(monkeypatch):
@@ -71,6 +82,9 @@ def test_model_override_keeps_purpose_policy(monkeypatch):
     }
     assert openai_policy.chat_request_policy(
         "metadata", model="gpt-5.6-luna"
+    )["reasoning_effort"] == "low"
+    assert openai_policy.chat_request_policy(
+        "concept_mapping", model="gpt-5.6-luna"
     )["reasoning_effort"] == "max"
     with pytest.raises(ValueError, match="Unknown OpenAI request purpose"):
         openai_policy.reasoning_effort_for("unregistered")  # type: ignore[arg-type]
@@ -94,7 +108,7 @@ def test_generation_call_sends_model_reasoning_and_json_mode(monkeypatch):
     assert result == {"ok": True}
     call = _CapturingClient.completions.calls[-1]
     assert call["model"] == "gpt-5.6-luna"
-    assert call["reasoning_effort"] == "max"
+    assert call["reasoning_effort"] == "high"
     assert call["response_format"] == {"type": "json_object"}
     assert call["max_completion_tokens"] == 321
     generation._openai_gate = None
@@ -178,7 +192,7 @@ def test_effort_ceiling_is_discovered_once_and_reused_process_wide(monkeypatch):
     monkeypatch.delenv(openai_policy.OPENAI_MODEL_ENV, raising=False)
 
     assert openai_policy.chat_request_policy(
-        "metadata", model="gpt-5.6-luna"
+        "concept_mapping", model="gpt-5.6-luna"
     )["reasoning_effort"] == "max"
 
     assert openai_policy.note_unsupported_reasoning_effort(
@@ -186,15 +200,21 @@ def test_effort_ceiling_is_discovered_once_and_reused_process_wide(monkeypatch):
     ) == "xhigh"
 
     # Every later request — any purpose, any call path — is now built at the
-    # discovered ceiling without touching the provider again.
-    for purpose in ("metadata", "concept_validation", "workbook_authoring"):
+    # discovered ceiling without touching the provider again; purposes whose
+    # policy already sits below the ceiling keep their own effort.
+    for purpose, expected in (
+        ("concept_mapping", "xhigh"),
+        ("workbook_authoring", "xhigh"),
+        ("concept_validation", "high"),
+        ("metadata", "low"),
+    ):
         assert openai_policy.chat_request_policy(
             purpose, model="gpt-5.6-luna"
-        )["reasoning_effort"] == "xhigh"
+        )["reasoning_effort"] == expected
 
     # A different model is unaffected by another model's ceiling.
     assert openai_policy.chat_request_policy(
-        "metadata", model="gpt-5.6-other"
+        "concept_mapping", model="gpt-5.6-other"
     )["reasoning_effort"] == "max"
 
 
@@ -240,7 +260,7 @@ def test_generation_negotiates_effort_instead_of_replaying_the_same_request(
     generation._openai_gate = None
 
     result = generation._openai_json(
-        "system", "user", max_tokens=321, purpose="concept_validation"
+        "system", "user", max_tokens=321, purpose="concept_mapping"
     )
 
     assert result == {"ok": True}
@@ -275,7 +295,7 @@ def test_single_attempt_records_the_ceiling_without_a_second_request(monkeypatch
             "system",
             "user",
             max_tokens=321,
-            purpose="concept_validation",
+            purpose="concept_mapping",
             single_attempt=True,
         )
 

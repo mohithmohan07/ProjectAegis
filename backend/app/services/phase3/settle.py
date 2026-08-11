@@ -13,6 +13,7 @@ from typing import Any, Callable, Mapping
 
 from . import envelope as envelope_mod
 from . import kernel
+from ... import config
 from .. import concept_refiner as cr
 from .. import progress
 from .. import semantic_confidence_policy as confidence_policy
@@ -246,16 +247,38 @@ def _grounding_checker(
                 if str(value)
             ]
             if not block_ids:
-                defects.append(f"{concept_id} has no source block")
-            wrong_topic = [b for b in block_ids if b not in topic_block_ids]
-            if wrong_topic:
-                # Rule 4a: print position is provenance. Cross-topic blocks
-                # may support a claim only as references, never as grounding.
                 defects.append(
-                    f"{concept_id} grounded on block(s) outside its topic: "
+                    f"{concept_id} has no source block — ground on the "
+                    "blocks that teach the claim: the concept's own topic "
+                    "when it teaches it, otherwise the other_topic_blocks "
+                    "that do; never return an empty grounding"
+                )
+            unknown_blocks = [
+                b for b in block_ids if b not in known_block_ids
+            ]
+            if unknown_blocks:
+                defects.append(
+                    f"{concept_id} grounded on unknown block(s): "
+                    + ", ".join(unknown_blocks[:4])
+                )
+            wrong_topic = [
+                b for b in block_ids
+                if b in known_block_ids and b not in topic_block_ids
+            ]
+            if wrong_topic:
+                # Rule 4a: print position is provenance, so grounding
+                # prefers the concept's own topic — the bounded corrections
+                # push the model back there. But a concept whose material
+                # is genuinely taught elsewhere (recovered chapter-opening
+                # rows) must ship flagged with its honest grounding, never
+                # fail the chapter.
+                defects.append(
+                    f"[confidence] {concept_id} grounded on block(s) "
+                    "outside its topic: "
                     + ", ".join(wrong_topic[:4])
-                    + " (cite them in reference_block_ids instead and ground "
-                    "on at least one block from the concept's own topic)"
+                    + " (if the concept's own topic teaches this claim, "
+                    "ground there instead; if it does not, keep this "
+                    "grounding and say so in reason)"
                 )
             references = [
                 str(value)
@@ -314,18 +337,20 @@ def _analysis_checker(
             seen.add(concept_id)
             body = str(row.get("misconception_error_analysis") or "")
             lowered = body.casefold()
-            if "misconception" not in lowered or "error analysis" not in (
+            # Either section alone is a complete analysis; both appear only
+            # when they carry genuinely different insight.
+            if "misconception" not in lowered and "error analysis" not in (
                 lowered
             ):
                 defects.append(
-                    f"{concept_id} analysis must contain both a "
-                    "Misconceptions and an Error Analysis part"
+                    f"{concept_id} analysis must contain a Misconceptions "
+                    "or an Error Analysis part (either one is sufficient)"
                 )
                 continue
             if "learner" not in lowered and "student" not in lowered:
                 defects.append(
-                    f"{concept_id} Error Analysis must name the learner or "
-                    "student and a concrete faulty action or reasoning step"
+                    f"{concept_id} analysis must name the learner or "
+                    "student and their belief or concrete faulty action"
                 )
         missing = sorted(expected - seen)
         if missing:
@@ -434,7 +459,11 @@ def settle(
     settled: list[dict[str, Any]] = []
     flags_by_row: dict[int, list[str]] = {}
 
-    for topic in topics:
+    def _settle_topic(
+        topic: Mapping[str, Any],
+    ) -> tuple[list[dict[str, Any]], dict[int, list[str]], list[dict[str, Any]]]:
+        """Settle one topic's concepts; flags are keyed by topic offset."""
+        local_flags: dict[int, list[str]] = {}
         topic_id = str(topic.get("topic_id") or "")
         topic_title = str(topic.get("title") or topic_id)
         topic_blocks = blocks_by_topic.get(topic_id, [])
@@ -445,7 +474,7 @@ def settle(
             if str(row.get("_semantic_topic_id") or "") == topic_id
         ]
         if not topic_concepts:
-            continue
+            return [], {}, []
 
         # -- stage 1: topology -------------------------------------------
         topic_settled: list[dict[str, Any]] = []
@@ -456,10 +485,21 @@ def settle(
                     "Decide keep, refine, or split for every concept, under "
                     "the written placement rules. keep = the claim is "
                     "correct and singular (do not rewrite it). refine = the "
-                    "claim needs correction against the source. split = the "
-                    "claim bundles distinct teachable ideas; emit one "
-                    "segment per idea. Confidence must reflect source "
-                    f"evidence; the acceptance floor is {policy}."
+                    "claim needs correction against the source. split is "
+                    "RARE: use it only when one row conflates ideas a "
+                    "teacher would genuinely lesson-plan apart — never to "
+                    "carve one coherent explanation into aspects, steps, "
+                    "sub-cases, or definitions. These concepts were already "
+                    "consolidated deliberately: reviewers rejected maps "
+                    "full of thin micro-concepts, so a bundled-looking "
+                    "title alone is not a reason to split. Every segment "
+                    "you do emit must stand as a SUBSTANTIAL concept: a "
+                    "full 3-6 sentence Description teaching it (never a "
+                    "sliver of the parent's text) and its own distinct "
+                    "'Achieving Mastery:' line — segments must never share "
+                    "or paraphrase one mastery sentence. Confidence must "
+                    "reflect source evidence; the acceptance floor is "
+                    f"{policy}."
                 ),
                 "topic": {"topic_id": topic_id, "title": topic_title},
                 "concepts": [
@@ -516,14 +556,14 @@ def settle(
                         "_phase32_origin_concept_id": row["concept_id"],
                         "_phase32_segment_order": order,
                     }
-                    index = len(settled) + len(topic_settled)
+                    index = len(topic_settled)
                     flags = _pin_flags(
                         list(decision.get("review_flags") or []),
                         [c["concept_id"] for c in batch],
                         row["concept_id"],
                     )
                     if flags:
-                        flags_by_row[index] = flags
+                        local_flags[index] = flags
                     topic_settled.append(settled_row)
 
         # -- stage 2: grounding ------------------------------------------
@@ -540,7 +580,14 @@ def settle(
                     "Ground every claim on the minimal exact source blocks "
                     "from the concept's own topic. Print position is "
                     "provenance, never grounding: a block from another "
-                    "topic may only appear in reference_block_ids. The "
+                    "topic may only appear in reference_block_ids. ONE "
+                    "exception: when the concept's own topic does not "
+                    "teach the claim at all (for example a chapter-opening "
+                    "concept whose material is actually taught inside a "
+                    "later section), ground on the chapter blocks that DO "
+                    "teach it — from other_topic_blocks — and explain that "
+                    "in reason; such a decision ships flagged for review. "
+                    "Never return an empty source_block_ids. The "
                     f"acceptance floor is {policy}."
                 ),
                 "topic": {"topic_id": topic_id, "title": topic_title},
@@ -554,6 +601,17 @@ def settle(
                     for concept_id, row in zip(concept_ids, batch_rows)
                 ],
                 "source_blocks": topic_blocks,
+                "other_topic_blocks": [
+                    {
+                        "block_id": row["block_id"],
+                        "topic_id": other_topic_id,
+                        "kind": row["kind"],
+                        "text": row["text"][:400],
+                    }
+                    for other_topic_id, rows in blocks_by_topic.items()
+                    if other_topic_id != topic_id
+                    for row in rows
+                ],
             }
             decision = kernel.decide(
                 kind="settle.grounding",
@@ -612,9 +670,7 @@ def settle(
                     concept_id,
                 )
                 if flags:
-                    flags_by_row.setdefault(
-                        len(settled) + position, []
-                    ).extend(flags)
+                    local_flags.setdefault(position, []).extend(flags)
 
         # -- stage 3: learner analysis -----------------------------------
         for offset_batch in _batched(list(range(len(topic_settled)))):
@@ -627,10 +683,13 @@ def settle(
             payload = {
                 "stage": "learner_analysis",
                 "rules": (
-                    "Write Misconceptions and Error Analysis for each "
-                    "concept. Error Analysis must name the learner and a "
-                    "concrete faulty action or reasoning step, not another "
-                    "belief."
+                    "Write the learner analysis for each concept: "
+                    "'Misconceptions:' names a plausible learner belief; "
+                    "'Error Analysis:' names the learner and a concrete "
+                    "faulty action or reasoning step, not another belief. "
+                    "Either section alone is sufficient — write both ONLY "
+                    "when they carry genuinely different insight, and "
+                    "never one as a paraphrase of the other."
                 ),
                 "topic": {"topic_id": topic_id, "title": topic_title},
                 "concepts": [
@@ -670,11 +729,7 @@ def settle(
                     + body
                 )
 
-        topic_flag_count = sum(
-            1
-            for index in flags_by_row
-            if len(settled) <= index < len(settled) + len(topic_settled)
-        )
+        topic_flag_count = sum(1 for flags in local_flags.values() if flags)
         progress.log(
             f"Settle: {topic_title!r} settled — {len(topic_settled)} "
             "concept(s) decided, grounded, and analysed"
@@ -685,9 +740,9 @@ def settle(
             ),
             level="success",
         )
-        settled.extend(topic_settled)
 
         # -- culminations: derived, never decided ------------------------
+        culm_rows: list[dict[str, Any]] = []
         for row in culmination_rows:
             if str(row.get("_semantic_topic_id") or "") != topic_id:
                 continue
@@ -696,7 +751,7 @@ def settle(
                 for block_id in source.get("_source_block_ids") or []:
                     if block_id not in derived_blocks:
                         derived_blocks.append(block_id)
-            settled.append({
+            culm_rows.append({
                 "topic": row.get("topic"),
                 "parent_concept": _normal(row.get("parent_concept")),
                 "concept_title": _normal(row.get("concept_title")),
@@ -708,6 +763,24 @@ def settle(
                     "derived-from-verified-topic-concepts"
                 ),
             })
+        return topic_settled, local_flags, culm_rows
+
+    # Topics are independent decision streams (each one's topology ->
+    # grounding -> analysis chain stays sequential inside its worker), so
+    # they overlap up to the shared OpenAI concurrency gate. Merging in
+    # topic order keeps output byte-identical to the sequential path.
+    # Default is sequential: per-run parallelism is a deployment choice
+    # sized against concurrent creator runs (see phase3_decision_workers).
+    workers = config.phase3_decision_workers()
+    for topic_settled, local_flags, culm_rows in kernel.parallel_map_in_order(
+        topics, _settle_topic, max_workers=workers,
+    ):
+        base = len(settled)
+        for offset, flags in local_flags.items():
+            if flags:
+                flags_by_row.setdefault(base + offset, []).extend(flags)
+        settled.extend(topic_settled)
+        settled.extend(culm_rows)
 
     for index, flags in flags_by_row.items():
         if 0 <= index < len(settled) and flags:

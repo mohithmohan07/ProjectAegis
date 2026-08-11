@@ -598,6 +598,17 @@ def active_canonical() -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
+def _never_split_questions() -> bool:
+    # Reviewer rule under the rewritten pipeline: a question with
+    # sub-questions stays ONE question, placed whole by the routing rules.
+    # The ledger's leaf cases remain available to the legacy path.
+    try:
+        from .phase3 import runner as _phase3_runner
+    except ImportError:  # pragma: no cover - defensive ordering
+        return False
+    return _phase3_runner.rewrite_enabled()
+
+
 def inventory_from_canonical(canonical: dict[str, Any]) -> dict[str, Any]:
     """Render the production Question / Task Inventory from ACSD task objects."""
     from . import generation
@@ -613,6 +624,10 @@ def inventory_from_canonical(canonical: dict[str, Any]) -> dict[str, Any]:
             if isinstance(leaf, dict)
         ]
         rows = leaf_cases or [task]
+        if leaf_cases and _never_split_questions():
+            # The parent task's display prompt carries the complete
+            # multi-part wording; the whole question is one inventory item.
+            rows = [task]
         for leaf in rows:
             row = copy.deepcopy(task)
             row.update(copy.deepcopy(leaf))
