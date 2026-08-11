@@ -1714,7 +1714,12 @@ def _clean_list(value: str) -> str:
     return text
 
 
-def _clean_table(value: str) -> str:
+def _clean_table(value: str, *, flatten: bool = False) -> str:
+    """Clean publisher table markup.
+
+    Display paths keep the default (KaTeX array wire format); callers that
+    parse or patch individual cells pass ``flatten=True`` for pipe rows.
+    """
     text = str(value or "")
     # Preserve the learner-visible cell content of common publisher layout
     # macros while discarding only their row/column spanning instructions.
@@ -1731,7 +1736,11 @@ def _clean_table(value: str) -> str:
         flags=re.I,
     )
     text = re.sub(r"\\cline\{[^{}]*\}", "\n", text, flags=re.I)
-    text = structure.normalize_task_table_markup(text)
+    text = (
+        structure.flatten_table_markup(text)
+        if flatten
+        else structure.normalize_task_table_markup(text)
+    )
     text = _TABLE_BEGIN_RE.sub("\n", text)
     return text
 
@@ -2387,7 +2396,7 @@ def _render_page_cell(value: object, page: dict[str, Any]) -> str:
 
 def _canonical_table_rows(value: object) -> list[list[str]]:
     protected_text, protected = _protect_rich_tokens(str(value or ""))
-    normalized = _clean_table(protected_text)
+    normalized = _clean_table(protected_text, flatten=True)
     normalized = _restore_rich_tokens(normalized, protected)
     rows: list[list[str]] = []
     for line in normalized.splitlines():

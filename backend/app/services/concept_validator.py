@@ -1788,14 +1788,17 @@ def validate_concept_rows(
                         "culmination Description must begin with the detailed "
                         "canonical form 'Recap of ...'",
                     )
-                if (
-                    _normalized_recap_text(recap)
-                    != _normalized_recap_text(expected_recap)
+                # The canonical recap is a required PREFIX: an authored
+                # consolidation paragraph may follow it (reviewers found a
+                # bare name list too thin for a description), but the recap
+                # itself must name the topic's concepts exactly.
+                if not _normalized_recap_text(recap).startswith(
+                    _normalized_recap_text(expected_recap)
                 ):
                     _add(
                         errors, culmination_index, "concept_details",
                         "culmination_recap_missing_concepts",
-                        "culmination recap must exactly match the canonical "
+                        "culmination recap must begin with the canonical "
                         f"topic recap: {expected_recap}",
                     )
         if require_culmination and topic:

@@ -106,8 +106,19 @@ def strip_leading_task_cue(value: object) -> str:
     return (match.group("body") if match else text).strip()
 
 
-def normalize_task_table_markup(value: object) -> str:
-    """Convert Mathpix tabular layout to readable, non-LaTeX task text."""
+_TABULAR_BLOCK_RE = re.compile(
+    r"\\begin\{tabular\}\{(?P<spec>[^{}]*)\}(?P<body>.*?)\\end\{tabular\}",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def flatten_table_markup(value: object) -> str:
+    """Legacy pipe-row flattening, kept for TEXT COMPARISON only.
+
+    Display rendering uses ``normalize_task_table_markup`` (KaTeX array);
+    block matchers compare flattened cell text because their counterpart
+    keys are built from raw table_rows joined with pipes.
+    """
     text = str(value or "")
     if not _TABLE_HINT_RE.search(text):
         return text
@@ -122,8 +133,103 @@ def normalize_task_table_markup(value: object) -> str:
     text = re.sub(r"\\hline\b", "\n", text, flags=re.IGNORECASE)
     text = re.sub(r"\\\\(?=\s|$)", "\n", text)
     text = re.sub(r"\s*&\s*", " | ", text)
-    lines = [re.sub(r"[ \t]+", " ", line).strip(" |	") for line in text.splitlines()]
+    lines = [
+        re.sub(r"[ \t]+", " ", line).strip(" |	")
+        for line in text.splitlines()
+    ]
     return "\n".join(line for line in lines if line).strip()
+
+
+def _katex_array_cell(cell: str) -> str:
+    """One tabular cell as valid KaTeX array content."""
+    cell = re.sub(r"\s+", " ", str(cell or "")).strip()
+    if not cell:
+        return ""
+    # Unwrap inline math delimiters — inside the array everything is math.
+    cell = re.sub(r"\\\((.*?)\\\)", r"\1", cell)
+    cell = re.sub(r"(?<!\\)\$(.+?)(?<!\\)\$", r"\1", cell)
+    # Purely numeric/symbolic cells and TeX commands stay literal math;
+    # prose is wrapped so words render as words, not juxtaposed variables.
+    if re.fullmatch(r"[0-9.,:%/^*+\-=()\s]+", cell) or re.match(
+        r"^\\[A-Za-z]+", cell
+    ):
+        return cell
+    escaped = re.sub(r"([#%&_{}])", r"\\\1", cell)
+    return r"\text{" + escaped + "}"
+
+
+def normalize_task_table_markup(value: object) -> str:
+    """Render Mathpix tabular layout as a canonical KaTeX array block.
+
+    Reviewers rejected the earlier pipe-flattened tables: the public wire
+    format for a source table is ``[Katex] \\begin{array}{...} ... [/Katex]``
+    with every row ruled, so the table survives as a table. Markup the
+    block regex cannot parse falls back to the legacy readable flattening.
+    """
+    text = str(value or "")
+    if not _TABLE_HINT_RE.search(text):
+        return text
+
+    def _convert(match: re.Match) -> str:
+        spec = re.sub(
+            r"[^lcr|]", "",
+            (match.group("spec") or "").replace("p", "c").replace("X", "c"),
+        )
+        rows: list[str] = []
+        for raw_row in re.split(r"\\\\", match.group("body") or ""):
+            row = re.sub(r"\\hline", " ", raw_row, flags=re.IGNORECASE)
+            row = re.sub(r"\s+", " ", row).strip()
+            if not row:
+                continue
+            rows.append(
+                " & ".join(_katex_array_cell(c) for c in row.split("&"))
+            )
+        if not rows:
+            return " "
+        if not spec:
+            ncols = max(row.count("&") + 1 for row in rows)
+            spec = "|" + "c|" * ncols
+        array = (
+            r"\begin{array}{" + spec + r"} \hline "
+            + r" \\ \hline ".join(rows)
+            + r" \\ \hline \end{array}"
+        )
+        return " [Katex] " + array + " [/Katex] "
+
+    text = _TABULAR_BLOCK_RE.sub(_convert, text)
+    # The converted arrays live inside [Katex] tags; mask them so the
+    # legacy fallback below only ever touches markup OUTSIDE them.
+    masked: list[str] = []
+
+    def _stash(match: re.Match) -> str:
+        masked.append(match.group(0))
+        return f"{len(masked) - 1}"
+
+    text = re.sub(
+        r"\[Katex\].*?\[/Katex\]", _stash, text, flags=re.DOTALL,
+    )
+    if not _TABLE_HINT_RE.search(text):
+        text = re.sub(r"[ \t]+", " ", text)
+        for index, block in enumerate(masked):
+            text = text.replace(f"{index}", block)
+        return text.strip()
+    # Legacy fallback for malformed table markup the block regex missed.
+    text = re.sub(
+        r"\\begin\{tabular\}\{[^{}]*\}",
+        "\n",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"\\end\{tabular\}", "\n", text, flags=re.IGNORECASE)
+    text = _TABLE_COLUMN_SPEC_RE.sub("\n", text)
+    text = re.sub(r"\\hline\b", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"\\\\(?=\s|$)", "\n", text)
+    text = re.sub(r"\s*&\s*", " | ", text)
+    lines = [re.sub(r"[ \t]+", " ", line).strip(" |	") for line in text.splitlines()]
+    text = "\n".join(line for line in lines if line).strip()
+    for index, block in enumerate(masked):
+        text = text.replace(f"{index}", block)
+    return text
 
 
 def canonical_task_display(value: object) -> str:

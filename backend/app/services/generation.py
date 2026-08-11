@@ -1023,6 +1023,9 @@ Your job (apply ALL of these intelligently — do not rely on downstream code):
 
 1. **De-duplicate & de-redundancy.** Merge or drop concepts whose descriptions
    overlap heavily. Each distinct idea appears exactly once in the chapter.
+   Two concepts that interpret the SAME source artifact (the same print,
+   figure, map, passage, or account) from slightly different angles are ONE
+   concept — merge them; a shared artifact never carries two sibling rows.
 
 2. **Distinct naming.** Rewrite sibling concept names so no two share the same
    leading phrase or formulaic opener. Names must be specific, not templated.
@@ -19847,6 +19850,28 @@ def _recover_chapter_opening_concepts_via_api(
         existing_titles.add(title_key)
     if not additions:
         return records
+    # Rare-case clubbing (team review): one or two recovered opening
+    # concepts never justify minting their own chapter-title topic — file
+    # them under the first real section topic instead, where a reader
+    # meets that material anyway.
+    if not existing and len(additions) <= 2:
+        first_section_topic = next(
+            (
+                str(row.get("topic") or "").strip()
+                for row in records
+                if str(row.get("topic") or "").strip()
+                and _topic_comparison_key(row.get("topic") or "") != topic_key
+            ),
+            "",
+        )
+        if first_section_topic:
+            for candidate in additions:
+                candidate["topic"] = first_section_topic
+                if _topic_comparison_key(
+                    candidate.get("parent_concept") or ""
+                ) == topic_key:
+                    candidate["parent_concept"] = first_section_topic
+            topic_key = _topic_comparison_key(first_section_topic)
     out = [dict(row) for row in records]
     insert_at = next(
         (

@@ -690,6 +690,89 @@ def _validated_artifact_topology(
     return best
 
 
+def _chapter_meta_for_release(
+    db: Session,
+    target_chapter_id: int,
+    record_rows: Sequence[Mapping[str, Any]],
+    *,
+    pre_post: str,
+) -> dict[str, Any]:
+    """Author chapter/topic metadata while the model is still in the loop.
+
+    The explicit upload action is contractually model-free, so the chapter
+    description, chapter duration, and per-topic descriptions must be
+    written here and ride the release payload — reviewers received files
+    with an empty topic-description column, a zero concept count, and no
+    duration because the upload had nothing authored to apply.
+    """
+    if not record_rows or not target_chapter_id:
+        return {}
+    try:
+        chapter = db.get(models.Chapter, int(target_chapter_id))
+        if chapter is None:
+            return {}
+        from . import chapter_durations
+
+        grouped: dict[str, list[str]] = {}
+        order: list[str] = []
+        for row in record_rows:
+            topic = str(row.get("topic") or "").strip()
+            title = str(
+                row.get("concept_title") or row.get("concept") or ""
+            ).strip()
+            if not topic or not title:
+                continue
+            if topic not in grouped:
+                grouped[topic] = []
+                order.append(topic)
+            grouped[topic].append(title)
+        if not order:
+            return {}
+        expected = chapter_durations.lookup_duration_minutes(
+            board=chapter.board,
+            grade=chapter.grade,
+            subject=chapter.subject,
+            chapter_title=chapter.chapter_title,
+        )
+        meta = generation._metadata(
+            subject=chapter.subject,
+            board=chapter.board,
+            grade=chapter.grade,
+            unit=chapter.unit,
+            chapter_title=chapter.chapter_title,
+            chapter_id=chapter.id,
+            chapter_code=chapter.chapter_code,
+            finalized_duration_minutes=expected or 0,
+        )
+        last_exc: Exception | None = None
+        for _attempt in range(2):
+            try:
+                return generation.chapter_meta_via_api(
+                    meta=meta,
+                    topics=[
+                        {
+                            "topic": topic,
+                            "pre_post_learning": pre_post,
+                            "concepts": grouped[topic],
+                        }
+                        for topic in order
+                    ],
+                )
+            except Exception as exc:  # noqa: BLE001 — retried once below
+                last_exc = exc
+        raise last_exc if last_exc else RuntimeError("metadata pass failed")
+    except Exception as exc:  # noqa: BLE001 — metadata never blocks release
+        from . import progress
+
+        progress.log(
+            f"Chapter/topic metadata pass failed during release staging "
+            f"({exc}); the upload will fall back to deterministic "
+            "summaries.",
+            level="warning",
+        )
+        return {}
+
+
 def stage_release(
     db: Session,
     job: models.UploadJob,
@@ -820,6 +903,12 @@ def stage_release(
         "final_grounding_certificate": _json_safe(
             final_grounding_certificate or {}
         ),
+        "chapter_meta": _json_safe(_chapter_meta_for_release(
+            db,
+            target,
+            annotated,
+            pre_post="Pre" if job.learning_kind == "pre" else "Post",
+        )),
         "summary": summary,
     }
 

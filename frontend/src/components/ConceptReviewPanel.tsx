@@ -73,6 +73,15 @@ export function ConceptReviewPanel({ jobId }: { jobId: number }) {
         >
           Download current output
         </a>
+        {" "}
+        <a
+          className="btn"
+          href={api.inventoryCsvUrl(jobId)}
+          download
+          data-testid="download-inventory"
+        >
+          Question/Task Inventory
+        </a>
       </p>
 
       {openFlags.length > 0 && (

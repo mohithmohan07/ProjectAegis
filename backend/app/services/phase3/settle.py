@@ -360,14 +360,46 @@ def _math_format_defect(concept_id: str, field: str, text: str) -> str:
 
 def _authoring_checker(
     concept_ids: list[str],
+    culmination_ids: list[str] | None = None,
 ) -> Callable[[Mapping[str, Any]], list[str]]:
     expected = set(concept_ids)
+    expected_culms = set(culmination_ids or ())
 
     def check(response: Mapping[str, Any]) -> list[str]:
         defects: list[str] = []
         rows = response.get("rows")
         if not isinstance(rows, list):
             return ["response has no rows array"]
+        if expected_culms:
+            culm_rows = response.get("culminations")
+            if not isinstance(culm_rows, list):
+                defects.append("response has no culminations array")
+                culm_rows = []
+            culm_seen: set[str] = set()
+            for row in culm_rows:
+                if not isinstance(row, Mapping):
+                    defects.append("a culmination entry is not an object")
+                    continue
+                culm_id = str(row.get("concept_id") or "")
+                if culm_id not in expected_culms or culm_id in culm_seen:
+                    defects.append(
+                        "unknown or repeated culmination concept_id "
+                        f"{culm_id or '<empty>'}"
+                    )
+                    continue
+                culm_seen.add(culm_id)
+                prose = _normal(row.get("consolidation"))
+                if len(prose.split()) < 15:
+                    defects.append(
+                        f"{culm_id} consolidation is too thin — write a "
+                        "short teaching paragraph tying the topic's "
+                        "concepts together, not a name list"
+                    )
+            missing_culms = sorted(expected_culms - culm_seen)
+            if missing_culms:
+                defects.append(
+                    "unauthored culmination(s): " + ", ".join(missing_culms)
+                )
         seen: set[str] = set()
         mastery_seen: dict[str, str] = {}
         analysis_seen: dict[str, str] = {}
@@ -798,6 +830,11 @@ def settle(
                     local_flags.setdefault(position, []).extend(flags)
 
         # -- stage 3: content authoring (single pass) --------------------
+        topic_culms = [
+            row for row in culmination_rows
+            if str(row.get("_semantic_topic_id") or "") == topic_id
+        ]
+        culm_consolidations: dict[str, str] = {}
         for offset_batch in _batched(list(range(len(topic_settled)))):
             batch_rows = [topic_settled[i] for i in offset_batch]
             concept_ids = [
@@ -805,6 +842,14 @@ def settle(
                 f"#{row['_phase32_segment_order']}"
                 for row in batch_rows
             ]
+            # Culminations ride the topic's first authoring decision: their
+            # consolidation prose needs the same grounded context, and one
+            # decision keeps the multi-user API budget flat.
+            batch_culm_ids = (
+                [f"CULM#{i}" for i in range(len(topic_culms))]
+                if offset_batch[0] == 0 and topic_culms
+                else []
+            )
             payload = {
                 "stage": "content_authoring",
                 "rules": (
@@ -826,7 +871,12 @@ def settle(
                     "insight for THIS concept — 'Misconceptions:' names a "
                     "plausible learner belief; 'Error Analysis:' names the "
                     "learner and a concrete faulty action or reasoning "
-                    "step, not another belief. Default to the ONE section "
+                    "step, not another belief. State the belief or action "
+                    "CONCRETELY — what the learner actually thinks or "
+                    "does with THIS concept's content, with the specific "
+                    "quantity, step, or claim named — never a vague "
+                    "'confuses X with Y' or 'misunderstands the "
+                    "relationship'. Default to the ONE section "
                     "that carries the sharpest insight for this concept; "
                     "add the second ONLY when it contributes genuinely "
                     "different insight — never as a paraphrase of the "
@@ -837,7 +887,13 @@ def settle(
                     "every field, wrap EVERY mathematical expression "
                     "exactly as [Katex] valid LaTeX [/Katex]; never emit "
                     "raw TeX, $ delimiters, bare sub/superscripts, or bare "
-                    "equations outside those tags."
+                    "equations outside those tags. When the request carries "
+                    "culminations, also author each one's consolidation: a "
+                    "short teaching paragraph (2-4 sentences, original "
+                    "language) tying the topic's member concepts together — "
+                    "what the learner can now do with them combined — "
+                    "never a list of concept names and never a repeat of "
+                    "any single concept's description."
                 ),
                 "topic": {"topic_id": topic_id, "title": topic_title},
                 "concepts": [
@@ -857,6 +913,26 @@ def settle(
                     }
                     for concept_id, row in zip(concept_ids, batch_rows)
                 ],
+                **(
+                    {
+                        "culminations": [
+                            {
+                                "concept_id": culm_id,
+                                "culmination_title": _normal(
+                                    culm.get("concept_title")
+                                ),
+                                "member_concepts": [
+                                    r["concept_title"] for r in topic_settled
+                                ],
+                            }
+                            for culm_id, culm in zip(
+                                batch_culm_ids, topic_culms
+                            )
+                        ]
+                    }
+                    if batch_culm_ids
+                    else {}
+                ),
             }
             decision = kernel.decide(
                 kind="settle.author",
@@ -864,7 +940,7 @@ def settle(
                 envelope_sha256=envelope_sha,
                 payload=payload,
                 provider=analysis_provider,
-                checker=_authoring_checker(concept_ids),
+                checker=_authoring_checker(concept_ids, batch_culm_ids),
                 critic=None,
                 store=store,
                 policy_version=policy,
@@ -874,6 +950,11 @@ def settle(
                 for row in decision["response"].get("rows") or []
                 if isinstance(row, Mapping)
             }
+            for row in decision["response"].get("culminations") or []:
+                if isinstance(row, Mapping):
+                    culm_consolidations[str(row.get("concept_id") or "")] = (
+                        _normal(row.get("consolidation"))
+                    )
             for concept_id, row in zip(concept_ids, batch_rows):
                 authored = authored_by_id[concept_id]
                 description = _FIELD_LABEL.sub(
@@ -903,21 +984,25 @@ def settle(
             level="success",
         )
 
-        # -- culminations: derived, never decided ------------------------
+        # -- culminations: structure derived, prose authored above -------
         culm_rows: list[dict[str, Any]] = []
-        for row in culmination_rows:
-            if str(row.get("_semantic_topic_id") or "") != topic_id:
-                continue
+        for culm_index, row in enumerate(topic_culms):
             derived_blocks: list[str] = []
             for source in topic_settled:
                 for block_id in source.get("_source_block_ids") or []:
                     if block_id not in derived_blocks:
                         derived_blocks.append(block_id)
+            recap = cr.recap_text([
+                r["concept_title"] for r in topic_settled
+            ])
+            prose = culm_consolidations.get(f"CULM#{culm_index}", "")
             culm_rows.append({
                 "topic": row.get("topic"),
                 "parent_concept": _normal(row.get("parent_concept")),
                 "concept_title": _normal(row.get("concept_title")),
-                "concept_details": str(row.get("concept_details") or ""),
+                "concept_details": (
+                    "Description: " + recap + (f" {prose}" if prose else "")
+                ),
                 "keywords": _normal(row.get("keywords")),
                 "_semantic_topic_id": topic_id,
                 "_source_block_ids": derived_blocks,

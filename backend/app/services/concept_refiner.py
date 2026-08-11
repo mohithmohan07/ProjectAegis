@@ -688,9 +688,22 @@ def set_culmination_recap(records: list[dict]) -> list[dict]:
         recap = recap_text(titles_by_topic.get(rec.get("topic", ""), []))
         sections = split_sections(rec.get("concept_details") or "")
         found = False
-        for i, (label, _content) in enumerate(sections):
+        for i, (label, content) in enumerate(sections):
             if label.strip().lower().startswith("description"):
-                sections[i] = ("Description", recap)
+                # An authored consolidation paragraph after a recap-led
+                # description survives the re-stamp: only the recap
+                # sentence itself is replaced with the canonical form.
+                tail = ""
+                match = re.match(
+                    r"^Recap of\s.*?\.(?:\s+(?=\S)|$)",
+                    str(content or "").strip(),
+                    re.DOTALL,
+                )
+                if match:
+                    tail = str(content or "").strip()[match.end():].strip()
+                sections[i] = (
+                    "Description", recap + (f" {tail}" if tail else "")
+                )
                 found = True
                 break
         if not found:

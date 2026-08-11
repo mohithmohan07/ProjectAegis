@@ -1296,7 +1296,9 @@ def _task_match_key(value: object) -> str:
 def _canonical_block_text(block: dict[str, Any]) -> str:
     raw = str(block.get("raw_text") or block.get("display_text") or "")
     if block.get("kind") == "table":
-        return structure.normalize_task_table_markup(raw)
+        # Comparison key, not display: the page-side key is raw cells
+        # joined with pipes, so tables flatten the same way here.
+        return structure.flatten_table_markup(raw)
     return kr._IMAGE_TAG_RE.sub(" ", raw).strip()
 
 
