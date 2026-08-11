@@ -69,7 +69,10 @@ ANALYSIS_SYSTEM = _SHARED + (
     "the sharpest insight for the concept, and add the second ONLY "
     "when it contributes genuinely different insight — never one "
     "paraphrasing the other, and never reuse one concept's analysis "
-    "for another."
+    "for another. In every field wrap EVERY mathematical expression "
+    "exactly as [Katex] valid LaTeX [/Katex]; never emit raw TeX, $ "
+    "delimiters, bare sub/superscripts, or bare equations outside "
+    "those tags."
 )
 
 HOST_SYSTEM = _SHARED + (

@@ -220,11 +220,18 @@ def assemble(
             ).setdefault(case_id, []).append(example["prompt"])
             routes_by_key.setdefault(dest_key, set()).add(str(unit_id))
 
+    from .. import katex_rules as kr
+
     for key, hosted in sections_by_key.items():
         row = row_by_key[key]
         section = render_types_section(hosted, types=types, cases=cases)
+        # Mined Type/Case titles can carry bare TeX tokens (a_n, S_n) that
+        # the taxonomy miner failed to wrap; the deterministic repair wraps
+        # only unambiguous math and never rewrites wrapped content, so the
+        # rendered section always meets the [Katex] wire contract.
         row["concept_details"] = _inject_types(
-            str(row.get("concept_details") or ""), section
+            str(row.get("concept_details") or ""),
+            kr.repair_unwrapped_math(section),
         )
         row["_aegis_release_type_case_routes"] = sorted(routes_by_key[key])
     for key, flags in flags_by_key.items():

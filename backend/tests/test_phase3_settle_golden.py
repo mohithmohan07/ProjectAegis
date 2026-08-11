@@ -432,6 +432,36 @@ def test_authoring_checker_rejects_a_thin_description():
     assert any("too thin" in d for d in defects)
 
 
+def test_authoring_checker_rejects_raw_math_outside_katex_tags():
+    """Bare TeX that deterministic repair cannot wrap (an equation with
+    bracket groups) must come back as a correction defect; unambiguous
+    lone tokens are wrapped silently and pass."""
+    check = settle._authoring_checker(["C-1"])
+    row = _authored_row(
+        concept_description=(
+            "For the first n terms of an arithmetic progression, let a be "
+            "the first term and d the common difference; the sum formula "
+            "S_n = n/2[2a + (n − 1)d] links these quantities, and when any "
+            "three are known the fourth follows by substituting into the "
+            "formula and solving the resulting linear or quadratic "
+            "equation in the unknown."
+        ),
+    )
+    defects = check({"rows": [row]})
+    assert any("wire" in d and "[Katex]" in d for d in defects)
+
+    wrappable = _authored_row(
+        concept_description=(
+            "The nth term a_n of an arithmetic progression grows by the "
+            "common difference at every step, so listing successive values "
+            "and checking that each consecutive difference is the same "
+            "fixed number verifies the progression before any formula is "
+            "applied to compute later terms from earlier ones."
+        ),
+    )
+    assert check({"rows": [wrappable]}) == []
+
+
 def test_authoring_checker_accepts_either_analysis_section_alone():
     check = settle._authoring_checker(["C-1"])
     row = _authored_row(

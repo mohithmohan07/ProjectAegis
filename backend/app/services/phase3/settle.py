@@ -18,6 +18,7 @@ from . import envelope as envelope_mod
 from . import kernel
 from ... import config
 from .. import concept_refiner as cr
+from .. import katex_rules as kr
 from .. import progress
 from .. import semantic_confidence_policy as confidence_policy
 
@@ -331,6 +332,32 @@ def _grounding_checker(
 # mastery, and learner analysis together, so none can drift apart)
 
 
+_MATH_FORMAT_ISSUES = {
+    "raw_latex",
+    "raw_math_delimiter",
+    "raw_math_expression",
+    "unbalanced_katex",
+    "nested_katex",
+    "malformed_katex",
+}
+
+
+def _math_format_defect(concept_id: str, field: str, text: str) -> str:
+    """Name wire-format violations deterministic repair cannot fix."""
+    issues = _MATH_FORMAT_ISSUES.intersection(
+        kr.rich_text_issues(kr.repair_unwrapped_math(text))
+    )
+    if not issues:
+        return ""
+    return (
+        f"{concept_id} {field} violates the canonical rich-text wire "
+        f"format ({', '.join(sorted(issues))}) — wrap EVERY mathematical "
+        "expression exactly as [Katex] valid LaTeX [/Katex]; never emit "
+        "raw TeX, $ delimiters, bare sub/superscripts, or bare equations "
+        "outside those tags"
+    )
+
+
 def _authoring_checker(
     concept_ids: list[str],
 ) -> Callable[[Mapping[str, Any]], list[str]]:
@@ -374,6 +401,11 @@ def _authoring_checker(
                     "teaching paragraph — mastery and learner analysis go "
                     "in their own fields"
                 )
+            math_defect = _math_format_defect(
+                concept_id, "concept_description", description
+            )
+            if math_defect:
+                defects.append(math_defect)
 
             mastery = _FIELD_LABEL.sub(
                 "", _normal(row.get("achieving_mastery"))
@@ -381,6 +413,11 @@ def _authoring_checker(
             if not mastery:
                 defects.append(f"{concept_id} achieving_mastery is empty")
             else:
+                math_defect = _math_format_defect(
+                    concept_id, "achieving_mastery", mastery
+                )
+                if math_defect:
+                    defects.append(math_defect)
                 key = mastery.casefold()
                 if key in mastery_seen:
                     defects.append(
@@ -432,6 +469,11 @@ def _authoring_checker(
                 )
             else:
                 analysis_seen[lowered] = concept_id
+            math_defect = _math_format_defect(
+                concept_id, "misconception_error_analysis", body
+            )
+            if math_defect:
+                defects.append(math_defect)
         missing = sorted(expected - seen)
         if missing:
             defects.append("unauthored concept(s): " + ", ".join(missing))
@@ -791,7 +833,11 @@ def settle(
                     "first, and never reuse one concept's analysis for "
                     "another. Start the field directly with "
                     "'Misconceptions:' or 'Error Analysis:' — never repeat "
-                    "the outer 'Misconception/ Error Analysis' label."
+                    "the outer 'Misconception/ Error Analysis' label. In "
+                    "every field, wrap EVERY mathematical expression "
+                    "exactly as [Katex] valid LaTeX [/Katex]; never emit "
+                    "raw TeX, $ delimiters, bare sub/superscripts, or bare "
+                    "equations outside those tags."
                 ),
                 "topic": {"topic_id": topic_id, "title": topic_title},
                 "concepts": [
@@ -839,7 +885,7 @@ def settle(
                 analysis = _FIELD_LABEL.sub(
                     "", _normal(authored.get("misconception_error_analysis"))
                 )
-                row["concept_details"] = (
+                row["concept_details"] = kr.repair_unwrapped_math(
                     "Description: " + description
                     + "\nAchieving Mastery: " + mastery
                     + " // Misconception/ Error Analysis: " + analysis
