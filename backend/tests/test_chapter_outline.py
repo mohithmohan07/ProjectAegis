@@ -297,3 +297,27 @@ def test_model_failure_still_degrades_to_deterministic_structure(monkeypatch):
     monkeypatch.setattr(fallback, "_read_verified_batch_cache", lambda _key: None)
 
     assert fallback.derive_chapter_outline(_page_acsd()) is None
+
+
+def test_derive_outline_caches_its_decision(monkeypatch, tmp_path):
+    from app.services import canonical_source_phase22 as phase22
+
+    calls = {"n": 0}
+
+    def _respond(**_kwargs):
+        calls["n"] += 1
+        return _candidate()
+
+    monkeypatch.setattr(phase22, "_openai_multimodal_json", _respond)
+    monkeypatch.setattr(fallback, "_CACHE_DIR", tmp_path / "cache")
+
+    first = fallback.derive_chapter_outline(_page_acsd())
+    second = fallback.derive_chapter_outline(_page_acsd())
+
+    assert first is not None
+    assert first["chapter_title"] == "Three-Dimensional Shapes"
+    assert [t["title"] for t in first["topics"]] == ["Dimensions", "Exercise 1"]
+    # A decided outline is content-addressed by source hash: the second
+    # conversion of the same book must not re-ask the model.
+    assert calls["n"] == 1
+    assert second == first
