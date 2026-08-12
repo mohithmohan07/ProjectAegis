@@ -386,3 +386,46 @@ def test_prompts_state_the_conversation_and_answer_box_rules():
         "speech-bubble exchange posing one activity is correctly ONE task"
         in verification
     )
+
+
+def test_advisory_gate_issues_ship_under_review_flags():
+    # A Grade 6 chapter transcribed and outlined cleanly was refused whole
+    # because one task named a visual the Figure registry could not resolve.
+    # Advisory codes are review notes under GPT-authoritative parsing.
+    canonical = {"tasks": [{"task_id": "TASK-0001", "qid": "QINV-0001"}]}
+    report = {"status": "failed"}
+    issues = [
+        {"severity": "warning", "code": "unresolved_required_visual",
+         "task_id": "TASK-0001"},
+        {"severity": "warning", "code": "display_rich_text_requires_review"},
+    ]
+
+    fallback._accept_gate_issues_with_flags(canonical, report, issues)
+
+    assert canonical["phase2_inventory_ready"] is True
+    assert report["phase2_inventory_ready"] is True
+    assert report["status"] == "passed_with_warnings"
+    flags = canonical["source_review_flags"]
+    assert any("unresolved_required_visual (TASK-0001)" == f for f in flags)
+    assert any("display_rich_text_requires_review" == f for f in flags)
+
+
+def test_real_errors_still_stop_the_pipeline():
+    canonical = {"tasks": [{"task_id": "TASK-0001", "qid": "QINV-0001"}]}
+    issues = [{"severity": "error", "code": "phase2_qid_order_mismatch"}]
+
+    try:
+        fallback._accept_gate_issues_with_flags(canonical, {}, issues)
+    except ValueError as exc:
+        assert "phase2_qid_order_mismatch" in str(exc)
+    else:
+        raise AssertionError("a genuine error must still fail closed")
+
+
+def test_a_source_with_no_tasks_fails_closed():
+    try:
+        fallback._accept_gate_issues_with_flags({"tasks": []}, {}, [])
+    except ValueError as exc:
+        assert "phase2_no_tasks" in str(exc)
+    else:
+        raise AssertionError("a source with no tasks is not usable")

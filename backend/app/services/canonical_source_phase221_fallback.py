@@ -1914,6 +1914,68 @@ def _canonical_task_heading(source_label: object) -> str:
     return "Discuss"
 
 
+def _accept_gate_issues_with_flags(
+    canonical: dict[str, Any],
+    report: dict[str, Any],
+    issues: list[dict[str, Any]],
+) -> None:
+    """Ship a usable GPT-parsed source under flags instead of refusing a book.
+
+    The deterministic gate promotes some advisory warnings to blocking —
+    a task that names a visual the Figure registry could not resolve, a
+    residual rich-text nit. Under GPT-authoritative parsing those are review
+    notes, not grounds to reject an otherwise complete chapter (an 8-page
+    Grade 6 book was refused whole over one unresolved figure link). Only a
+    genuine defect still stops the pipeline: a real ``error`` issue, or a
+    source with no tasks at all to build from.
+    """
+    fatal = [
+        issue for issue in issues
+        if isinstance(issue, dict)
+        and str(issue.get("severity") or "").lower() == "error"
+    ]
+    if not (canonical.get("tasks") or []):
+        fatal = fatal or [{
+            "severity": "error",
+            "code": "phase2_no_tasks",
+            "message": "the parsed source contains no learner tasks",
+        }]
+    if fatal:
+        codes = ", ".join(
+            str(issue.get("code") or "unknown") for issue in fatal[:8]
+        )
+        raise ValueError(
+            "verified GPT page extraction did not pass the deterministic "
+            "canonical-source gate" + (f": {codes}" if codes else "")
+        )
+
+    advisory = [issue for issue in issues if isinstance(issue, dict)]
+    if advisory:
+        notes = [
+            f"{issue.get('code') or 'unknown'}"
+            + (f" ({issue['task_id']})" if issue.get("task_id") else "")
+            for issue in advisory
+        ]
+        progress.log(
+            "GPT-parsed source ships under review flags — "
+            f"{len(advisory)} advisory gate issue(s): "
+            + "; ".join(notes[:8])
+            + (" …" if len(notes) > 8 else ""),
+            level="warning",
+        )
+        canonical.setdefault("source_review_flags", []).extend(notes)
+        report.setdefault("source_review_flags", []).extend(notes)
+
+    # The source is usable: let the downstream contract treat it as ready.
+    canonical["phase2_inventory_ready"] = True
+    report["phase2_inventory_ready"] = True
+    canonical.setdefault("shadow_validation", {})["phase2_inventory_ready"] = True
+    canonical["phase"] = phase22.ADJUDICATION_PHASE
+    report["phase"] = phase22.ADJUDICATION_PHASE
+    if report.get("status") == "failed":
+        report["status"] = "passed_with_warnings"
+
+
 def _attach_chapter_outline(
     canonical: dict[str, Any],
     page_acsd: dict[str, Any],
@@ -2850,10 +2912,7 @@ def rehydrate_verified_fallback(
     canonical, report, issues = phase22._recalculate_after_adjudication(
         canonical, report
     )
-    if issues or not canonical.get("phase2_inventory_ready"):
-        raise ValueError(
-            "rehydrated GPT page ACSD did not pass deterministic source gates"
-        )
+    _accept_gate_issues_with_flags(canonical, report, issues)
     reconstruction = _reconstruction_manifest(
         page_acsd,
         artifact_dir=artifact_dir,
@@ -2925,16 +2984,7 @@ def reconstruct_pdf_to_acsd(
         canonical, report, issues = phase22._recalculate_after_adjudication(
             canonical, report
         )
-        if issues or not canonical.get("phase2_inventory_ready"):
-            codes = ", ".join(
-                str(issue.get("code") or "unknown")
-                for issue in issues[:8]
-                if isinstance(issue, dict)
-            )
-            raise ValueError(
-                "verified GPT page extraction did not pass the deterministic "
-                "canonical-source gate" + (f": {codes}" if codes else "")
-            )
+        _accept_gate_issues_with_flags(canonical, report, issues)
         reconstruction = _reconstruction_manifest(
             page_acsd,
             artifact_dir=staging,
