@@ -8,6 +8,8 @@ inventory leaves.
 """
 from __future__ import annotations
 
+import copy
+
 from app.services import canonical_source_phase21_structure as structure
 from app.services import canonical_source_phase221_fallback as fallback
 
@@ -119,7 +121,9 @@ def test_outline_normalization_drops_ungrounded_references():
     # partition is dropped entirely — the task stays whole.
     assert outline["task_partitions"] == []
     assert any("does not exist" in flag for flag in flags)
-    assert any("not a task block" in flag for flag in flags)
+    # Its parts are verbatim in no task block, so re-aiming has nothing to
+    # aim at and the partition is still dropped.
+    assert any("no task block holds the parts" in flag for flag in flags)
 
 
 def test_outline_without_content_topics_keeps_its_question_boundaries():
@@ -797,3 +801,121 @@ def test_a_stem_from_nowhere_in_the_source_is_still_cleared():
 
     assert any("not verbatim" in flag for flag in flags)
     assert outline["task_partitions"][0]["independent_parts"][0]["stem"] == ""
+
+
+def _exercises_page() -> dict:
+    """The real Balbharati layout: an "Exercises" heading above the task."""
+    return {
+        "pdf_sha256": "abc123",
+        "pages": [{
+            "page_id": "PDF-PAGE-0008",
+            "page_number": 8,
+            "blocks": [
+                {"reading_order": 5, "kind": "paragraph",
+                 "text": "Growth and reproduction are the main characteristics."},
+                {"reading_order": 6, "kind": "heading", "heading_level": 1,
+                 "text": "Exercises"},
+                {"reading_order": 7, "kind": "task",
+                 "source_label": "(1) Suggest the appropriate word for the blanks.",
+                 "text": (
+                     "(a) Every living organism produces another living organism "
+                     "like itself is called as ▯. "
+                     "(b) ▯ and ▯ are the main characteristics of living organisms. "
+                     "(c) The body of living organism is made up of ▯."
+                 )},
+            ],
+        }],
+    }
+
+
+def _exercises_candidate(reading_order: int) -> dict:
+    return {
+        "chapter_title": "Characteristics of Living Organisms",
+        "topics": [{"title": "Exercises", "kind": "content",
+                    "start_page_id": "PDF-PAGE-0008", "start_reading_order": 6}],
+        "task_partitions": [{
+            "page_id": "PDF-PAGE-0008", "reading_order": reading_order,
+            "independent_parts": [
+                {"label": "(a)", "stem": "",
+                 "text": ("Every living organism produces another living organism "
+                          "like itself is called as ▯.")},
+                {"label": "(b)", "stem": "",
+                 "text": "▯ and ▯ are the main characteristics of living organisms."},
+                {"label": "(c)", "stem": "",
+                 "text": "The body of living organism is made up of ▯."},
+            ],
+        }],
+        "notes": [],
+    }
+
+
+def test_a_partition_aimed_at_the_heading_is_re_aimed_at_the_task():
+    # The observed failure: the outline pointed at "Exercises" (#6) instead of
+    # the fill-in block (#7), and three questions were dropped with it.
+    outline, flags = fallback._normalize_chapter_outline(
+        _exercises_page(), _exercises_candidate(reading_order=6)
+    )
+
+    assert len(outline["task_partitions"]) == 1
+    partition = outline["task_partitions"][0]
+    assert partition["reading_order"] == 7
+    assert len(partition["independent_parts"]) == 3
+    assert any("re-aimed" in flag for flag in flags)
+
+
+def test_a_correctly_aimed_partition_is_left_alone():
+    outline, flags = fallback._normalize_chapter_outline(
+        _exercises_page(), _exercises_candidate(reading_order=7)
+    )
+
+    assert outline["task_partitions"][0]["reading_order"] == 7
+    assert not [flag for flag in flags if "re-aimed" in flag]
+
+
+def test_a_partition_whose_parts_are_in_no_block_is_still_dropped():
+    candidate = _exercises_candidate(reading_order=6)
+    for part in candidate["task_partitions"][0]["independent_parts"]:
+        part["text"] = "Wording that appears nowhere in this chapter at all."
+    candidate["task_partitions"][0]["independent_parts"][1]["text"] = (
+        "Another invented sentence with no source behind it whatsoever."
+    )
+
+    outline, flags = fallback._normalize_chapter_outline(
+        _exercises_page(), candidate
+    )
+
+    assert outline is None or outline["task_partitions"] == []
+    assert any("no task block holds the parts" in flag for flag in flags)
+
+
+def test_two_partitions_cannot_claim_the_same_task():
+    page_acsd = _exercises_page()
+    candidate = _exercises_candidate(reading_order=6)
+    # A second partition, also mis-aimed, resolving onto the same block.
+    candidate["task_partitions"].append(
+        copy.deepcopy(candidate["task_partitions"][0])
+    )
+    candidate["task_partitions"][1]["reading_order"] = 5
+
+    outline, flags = fallback._normalize_chapter_outline(page_acsd, candidate)
+
+    assert len(outline["task_partitions"]) == 1
+    assert any("already partitioned" in flag for flag in flags)
+
+
+def test_re_aiming_prefers_the_nearest_qualifying_block():
+    page_acsd = _exercises_page()
+    # A far-away duplicate of the same task; the near one must win.
+    page_acsd["pages"].append({
+        "page_id": "PDF-PAGE-0002",
+        "page_number": 2,
+        "blocks": [dict(page_acsd["pages"][0]["blocks"][2], reading_order=3)],
+    })
+
+    outline, _flags = fallback._normalize_chapter_outline(
+        page_acsd, _exercises_candidate(reading_order=6)
+    )
+
+    partition = outline["task_partitions"][0]
+    assert partition["page_id"] == "PDF-PAGE-0008"
+    assert partition["reading_order"] == 7
