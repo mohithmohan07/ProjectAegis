@@ -321,3 +321,68 @@ def test_derive_outline_caches_its_decision(monkeypatch, tmp_path):
     # conversion of the same book must not re-ask the model.
     assert calls["n"] == 1
     assert second == first
+
+
+def test_trailing_answer_boxes_leave_the_question_text():
+    # Exercise 1(2) shipped "…no vertices and no edges. ▯": the box printed
+    # under a complete description is where the learner writes the answer,
+    # not part of the question. Blanks INSIDE a sentence are the question.
+    strip = fallback._without_trailing_answer_boxes
+
+    assert strip("One face is curved. It has no vertices and no edges. ▯") == (
+        "One face is curved. It has no vertices and no edges."
+    )
+    assert strip("Draw the shape. ▯ ▯") == "Draw the shape."
+    assert strip("Name the solid: □") == "Name the solid:"
+    # In-sentence blanks survive untouched, punctuation included.
+    assert strip("Cuboid has ▯ vertices, ▯ rectangular faces, ▯ edges.") == (
+        "Cuboid has ▯ vertices, ▯ rectangular faces, ▯ edges."
+    )
+    assert strip("It has ▯ vertices, ▯ triangular faces") == (
+        "It has ▯ vertices, ▯ triangular faces"
+    )
+    # A prompt that is nothing but a box is never emptied.
+    assert strip("▯") == "▯"
+
+
+def test_cached_task_replay_drops_trailing_answer_boxes():
+    page_acsd = {
+        "pages": [{
+            "page_id": "PDF-PAGE-0008",
+            "blocks": [
+                {"reading_order": 1, "kind": "task", "source_label": "(2)",
+                 "text": "There are 6 faces, 12 edges and 8 vertices. ▯",
+                 "table_rows": [], "latex": "", "caption": ""},
+                {"reading_order": 2, "kind": "paragraph",
+                 "text": "A trailing box in prose is left alone. ▯",
+                 "table_rows": [], "latex": "", "caption": ""},
+            ],
+        }],
+    }
+
+    fallback._scrub_page_acsd_escape_artifacts(page_acsd)
+
+    blocks = page_acsd["pages"][0]["blocks"]
+    assert blocks[0]["text"] == "There are 6 faces, 12 edges and 8 vertices."
+    assert blocks[1]["text"].endswith("▯")
+
+
+def test_prompts_state_the_conversation_and_answer_box_rules():
+    import re as _re
+
+    def flat(value: str) -> str:
+        # The prompts are hard-wrapped; rules must be matched as prose.
+        return _re.sub(r"\s+", " ", value)
+
+    extraction = flat(fallback._extraction_system_prompt())
+    verification = flat(fallback._verification_system_prompt())
+
+    assert "Never append ▯ to the end of a prompt" in extraction
+    assert "A printed conversation" in extraction
+    assert "is ONE task" in extraction
+    assert "never describe it in words" in extraction
+    assert "never demand it back" in verification
+    assert (
+        "speech-bubble exchange posing one activity is correctly ONE task"
+        in verification
+    )

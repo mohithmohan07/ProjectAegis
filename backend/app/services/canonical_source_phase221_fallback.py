@@ -38,7 +38,7 @@ from . import progress
 # Part of every transcription cache key: bump on any material change to the
 # extraction/verification contract so sealed pages re-derive under the new
 # rules instead of replaying stale judgments.
-FALLBACK_VERSION = "2.3.1"
+FALLBACK_VERSION = "2.3.2"
 FALLBACK_COMPILER = "gpt-pdf-to-acsd-2"
 FALLBACK_ORIGIN = "gpt_pdf_acsd_fallback"
 # Version stamped on the extracted page bundle. Phase 3's page-evidence cache
@@ -523,15 +523,25 @@ Block rules:
   instruction ("Complete the table below.") as the task and the grid as one
   kind=table block that the task names in linked_context_orders. Never emit
   the same table as both a task and a table.
-- Transcribe an empty answer box or ruled blank as ▯ — but only where the
-  page is actually blank. A cell that prints a figure, a word, or a number
-  keeps its printed content; a drawn figure inside a cell stays a figure.
+- ▯ marks a blank the learner fills INSIDE a sentence, where the printed
+  blank interrupts the wording ("A cuboid has ▯ vertices, ▯ edges."). Never
+  append ▯ to the end of a prompt: an answer box, ruled line, or dashed
+  space printed AFTER a complete question is the place to write the answer,
+  not part of the question — leave it out of the task text entirely.
+- A table cell is transcribed only when it prints text. A cell whose content
+  is a drawing carries no cell text: leave it empty, keep the drawing as its
+  own figure block, and never describe it in words ("triangle figure"),
+  substitute a lookalike character or emoji, or mark it ▯.
 - A task block's text is never just its cue: a bare banner word ("Do it.",
   "Activity", "Discuss.") is not a task — attach the cue to the instruction
   that follows it in source_label, or emit no task at all.
 - An activity's numbered steps ("(1) ... (2) ... (3) ...") are ONE procedure:
   keep them inside a single task block, including a closing
   write-down/record step; never emit an individual step as its own task.
+- A printed conversation — speech bubbles, a teacher-and-pupil exchange, a
+  cartoon dialogue — that poses ONE activity is ONE task: keep the whole
+  exchange in a single task block in printed order. Never emit a bubble, a
+  speaker's line, or a follow-up question as its own task.
 - A worked example — a cue like "Example 3 :" followed by a problem statement
   whose solution is printed right after it — is a real question: emit the
   problem statement as a task block with the exact cue (e.g. "Example 3") in
@@ -578,13 +588,17 @@ problem statement (a cue like "Example 3 :" with its solution printed after
 it) must be a kind=task block carrying the exact cue in source_label, with
 the printed solution left as ordinary blocks. Fill-in-the-blanks statements
 and discussion/think-about prompts are learner tasks: their presence as
-kind=task blocks (with ▯ marking a genuinely blank answer box) is required by
-the contract, not invented content. A table the learner completes is the
-instruction as kind=task PLUS one kind=table grid it links through
-linked_context_orders — never the same table twice, and a cell that prints a
-figure, word, or number keeps that content rather than becoming ▯. A task
-whose text is only its bare cue ("Do it.") is a defect. An activity's numbered
-steps must stay one task block. Do not rewrite or repair
+kind=task blocks is required by the contract, not invented content. ▯ marks a
+blank INSIDE a sentence; an answer box printed after a complete question is
+the answer space and is correctly absent from the task text — never demand it
+back. A table the learner completes is the instruction as kind=task PLUS one
+kind=table grid it links through linked_context_orders — never the same table
+twice. A table cell whose printed content is a drawing correctly has empty
+cell text with the drawing kept as its own figure block: do not require a
+worded description, a lookalike character, or ▯ in that cell. A printed
+conversation or speech-bubble exchange posing one activity is correctly ONE
+task block. A task whose text is only its bare cue ("Do it.") is a defect. An
+activity's numbered steps must stay one task block. Do not rewrite or repair
 the candidate. Return needs_correction or ambiguous when any material defect
 remains. Output strict JSON only.
 """.strip()
@@ -1151,6 +1165,18 @@ def _scrub_literal_escape_artifacts(value: str) -> str:
     return _LITERAL_ESCAPE_ARTIFACT_RE.sub(_replace, value)
 
 
+# An answer box printed AFTER a complete question is where the learner writes,
+# not part of the question. Boxes that interrupt a sentence ("has ▯ vertices")
+# are the question and must survive.
+_TRAILING_ANSWER_BOX_RE = re.compile(r"(?:\s*[▯□☐])+\s*$")
+
+
+def _without_trailing_answer_boxes(text: str) -> str:
+    stripped = _TRAILING_ANSWER_BOX_RE.sub("", text).rstrip()
+    # Never empty a task: a prompt that is nothing but boxes keeps its text.
+    return stripped or text
+
+
 def _scrub_page_acsd_escape_artifacts(page_acsd: dict[str, Any]) -> None:
     """Scrub escape artifacts from every text field of a page-ACSD object.
 
@@ -1169,6 +1195,10 @@ def _scrub_page_acsd_escape_artifacts(page_acsd: dict[str, Any]) -> None:
                 value = block.get(field)
                 if isinstance(value, str) and value:
                     block[field] = _scrub_literal_escape_artifacts(value)
+            if str(block.get("kind") or "") == "task":
+                block["text"] = _without_trailing_answer_boxes(
+                    str(block.get("text") or "")
+                )
             rows_value = block.get("table_rows")
             if isinstance(rows_value, list):
                 block["table_rows"] = [
