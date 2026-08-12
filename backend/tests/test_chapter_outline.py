@@ -122,15 +122,48 @@ def test_outline_normalization_drops_ungrounded_references():
     assert any("not a task block" in flag for flag in flags)
 
 
-def test_outline_without_content_topics_is_unusable():
+def test_outline_without_content_topics_keeps_its_question_boundaries():
+    # Sectioning and question boundaries are separate judgments. Losing the
+    # topics must not silently re-deterministize every question split too.
     candidate = _candidate()
     for topic in candidate["topics"]:
         topic["kind"] = "assessment"
 
     outline, flags = fallback._normalize_chapter_outline(_page_acsd(), candidate)
 
-    assert outline is None
+    assert outline is not None
+    assert outline["topics"] == []
+    assert len(outline["task_partitions"]) == 1
     assert any("no usable content topic" in flag for flag in flags)
+
+
+def test_outline_with_neither_topics_nor_partitions_is_unusable():
+    # Nothing of the model's reading survived; claiming a model-judged outline
+    # would suppress the deterministic enumeration with nothing to replace it.
+    candidate = _candidate()
+    for topic in candidate["topics"]:
+        topic["kind"] = "assessment"
+    candidate["task_partitions"] = []
+
+    outline, flags = fallback._normalize_chapter_outline(_page_acsd(), candidate)
+
+    assert outline is None
+    assert any("neither topics nor partitions" in flag for flag in flags)
+
+
+def test_topicless_outline_leaves_heading_structure_deterministic():
+    # With no content topic the renderer must not also swallow the source's
+    # own headings — that is what collapses a chapter into a single topic.
+    page_acsd = _page_acsd()
+    candidate = _candidate()
+    for topic in candidate["topics"]:
+        topic["kind"] = "assessment"
+    outline, _flags = fallback._normalize_chapter_outline(page_acsd, candidate)
+    page_acsd["chapter_outline"] = outline
+
+    rendered = fallback.render_page_acsd_to_mmd(page_acsd)
+
+    assert "# Dimensions" in rendered
 
 
 def test_renderer_promotes_topics_and_demotes_banners():
@@ -522,3 +555,74 @@ def test_model_judged_boundaries_silence_the_enumeration_heuristics():
     structure.materialize_task_leaf_cases(canonical)
 
     assert not canonical["tasks"][0].get("leaf_cases")
+
+
+def test_inventory_records_how_the_source_was_read(monkeypatch):
+    # The counts are the diagnosis: a chapter with nine task blocks and four
+    # questions read very differently depending on whether a model decided
+    # the boundaries or a regular expression did.
+    from app.services import canonical_source_phase2 as phase2
+
+    page_acsd = _page_acsd()
+    outline, _flags = fallback._normalize_chapter_outline(page_acsd, _candidate())
+    canonical = {
+        "chapter_outline": outline,
+        "tasks": [{
+            "task_id": "TASK-0001",
+            "qid": "QINV-0022",
+            "identity_key": "identity-1",
+            "source_kind": "checkpoint_question",
+            "source_label": "(1)",
+            "order": 1,
+            "raw_prompt": (
+                "(1) Select the correct option. (i) What shape? A) Cuboid "
+                "(ii) Which is not 3D? A) square"
+            ),
+            "display_prompt": "(1) Select the correct option. …",
+            "gpt_boundary_parts": [
+                {"label": "(i)", "stem": "Select the correct option.",
+                 "text": "(i) What shape? A) Cuboid"},
+                {"label": "(ii)", "stem": "Select the correct option.",
+                 "text": "(ii) Which is not 3D? A) square"},
+            ],
+        }],
+        "figures": [],
+        "images": [],
+    }
+    structure.materialize_task_leaf_cases(canonical)
+    monkeypatch.setattr(phase2, "_never_split_questions", lambda: True)
+
+    provenance = phase2.inventory_from_canonical(canonical)["extraction_provenance"]
+
+    assert provenance["chapter_outline_applied"] is True
+    assert provenance["chapter_outline_version"] == fallback.OUTLINE_VERSION
+    assert provenance["chapter_outline_topics"] == 2
+    assert provenance["chapter_outline_partitions"] == 1
+    assert provenance["source_task_blocks"] == 1
+    assert provenance["inventory_items"] == 2
+    assert provenance["model_split_items"] == 2
+
+
+def test_inventory_provenance_admits_a_chapter_no_model_outlined():
+    from app.services import canonical_source_phase2 as phase2
+
+    canonical = {
+        "tasks": [{
+            "task_id": "TASK-0001",
+            "qid": "QINV-0001",
+            "identity_key": "identity-1",
+            "source_kind": "checkpoint_question",
+            "order": 1,
+            "raw_prompt": "Answer the whole exercise.",
+            "display_prompt": "Answer the whole exercise.",
+        }],
+        "figures": [],
+        "images": [],
+    }
+
+    provenance = phase2.inventory_from_canonical(canonical)["extraction_provenance"]
+
+    assert provenance["chapter_outline_applied"] is False
+    assert provenance["chapter_outline_topics"] == 0
+    assert provenance["model_split_items"] == 0
+    assert provenance["inventory_items"] == 1

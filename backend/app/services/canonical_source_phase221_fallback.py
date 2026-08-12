@@ -989,7 +989,12 @@ def _normalize_chapter_outline(
         page_numbers.get(t["start_page_id"], 0), t["start_reading_order"],
     ))
     if not any(t["kind"] == "content" for t in topics):
-        return None, flags + ["no usable content topic in the outline"]
+        # The chapter falls back to deterministic sectioning, but the model's
+        # question boundaries are a separate judgment and still stand. Throwing
+        # the whole outline away here used to silently re-deterministize every
+        # question split as well.
+        topics = []
+        flags.append("no usable content topic in the outline")
 
     partitions: list[dict[str, Any]] = []
     for partition in candidate.get("task_partitions") or []:
@@ -1040,6 +1045,12 @@ def _normalize_chapter_outline(
             flags.append(
                 f"dropped a partition of task {ref}: fewer than 2 verbatim parts"
             )
+
+    if not topics and not partitions:
+        # Nothing of the model's reading survived validation. Claiming a
+        # model-judged outline here would suppress the deterministic
+        # enumeration without putting anything in its place.
+        return None, flags + ["the outline carried neither topics nor partitions"]
 
     return {
         "version": OUTLINE_VERSION,

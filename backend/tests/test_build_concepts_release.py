@@ -724,3 +724,108 @@ def test_release_bulk_import_workbook_renders_canonical_rows_without_db_upload(d
     assert any("120 minutes" in value for value in values)
     assert any("Topic A teaches the method." in value for value in values)
     assert db.query(models.Concept).count() == concepts_before
+
+
+def _manifest_rows(job) -> dict[str, str]:
+    workbook = load_workbook(io.BytesIO(release_files.build_release_workbook(job)))
+    sheet = workbook["Release Manifest"]
+    return {
+        str(sheet.cell(row, 1).value): str(sheet.cell(row, 2).value)
+        for row in range(2, sheet.max_row + 1)
+    }
+
+
+def test_a_chapter_the_outline_pass_never_read_says_so_in_the_release(db):
+    # "The exercise questions were not picked up" has two very different
+    # causes. The release has to name which one happened.
+    job, chapter = _job(db)
+    inventory = _inventory()
+    inventory["extraction_provenance"] = {
+        "chapter_outline_applied": False,
+        "chapter_outline_version": "",
+        "chapter_outline_topics": 0,
+        "chapter_outline_partitions": 0,
+        "chapter_outline_review_flags": [],
+        "source_task_blocks": 9,
+        "inventory_items": 4,
+        "model_split_items": 0,
+    }
+    release.stage_release(
+        db,
+        job,
+        target_chapter_id=chapter.id,
+        records=_records(),
+        inventory=inventory,
+        mined_types=_mined_types(),
+    )
+
+    payload = release.release_payload(job)
+    codes = {issue["code"] for issue in payload["issues"]}
+    assert "chapter_outline_not_applied" in codes
+    assert payload["extraction_provenance"]["source_task_blocks"] == 9
+
+    rows = _manifest_rows(job)
+    assert "NOT applied" in rows["Chapter outline"]
+    assert rows["Questions extracted"] == "4"
+    assert rows["Questions from a model-decided split"] == "0"
+
+
+def test_a_model_read_chapter_reports_its_outline_without_raising_a_warning(db):
+    job, chapter = _job(db)
+    inventory = _inventory()
+    inventory["extraction_provenance"] = {
+        "chapter_outline_applied": True,
+        "chapter_outline_version": "chapter-outline-1",
+        "chapter_outline_topics": 8,
+        "chapter_outline_partitions": 5,
+        "chapter_outline_review_flags": [],
+        "source_task_blocks": 9,
+        "inventory_items": 21,
+        "model_split_items": 12,
+    }
+    release.stage_release(
+        db,
+        job,
+        target_chapter_id=chapter.id,
+        records=_records(),
+        inventory=inventory,
+        mined_types=_mined_types(),
+    )
+
+    codes = {issue["code"] for issue in release.release_payload(job)["issues"]}
+    assert "chapter_outline_not_applied" not in codes
+    assert "chapter_outline_topics_unusable" not in codes
+
+    rows = _manifest_rows(job)
+    assert rows["Chapter outline"] == "applied (chapter-outline-1)"
+    assert rows["Outline topics decided"] == "8"
+    assert rows["Questions from a model-decided split"] == "12"
+
+
+def test_boundaries_without_topics_are_reported_as_a_single_topic_risk(db):
+    job, chapter = _job(db)
+    inventory = _inventory()
+    inventory["extraction_provenance"] = {
+        "chapter_outline_applied": True,
+        "chapter_outline_version": "chapter-outline-1",
+        "chapter_outline_topics": 0,
+        "chapter_outline_partitions": 3,
+        "chapter_outline_review_flags": ["no usable content topic in the outline"],
+        "source_task_blocks": 9,
+        "inventory_items": 11,
+        "model_split_items": 6,
+    }
+    release.stage_release(
+        db,
+        job,
+        target_chapter_id=chapter.id,
+        records=_records(),
+        inventory=inventory,
+        mined_types=_mined_types(),
+    )
+
+    issues = {issue["code"]: issue for issue in release.release_payload(job)["issues"]}
+    assert "chapter_outline_topics_unusable" in issues
+    assert issues["chapter_outline_topics_unusable"]["severity"] == "warning"
+    assert issues["chapter_outline_review_flags"]["severity"] == "info"
+    assert "no usable content topic" in _manifest_rows(job)["Outline normalization flags"]

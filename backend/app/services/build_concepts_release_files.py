@@ -207,6 +207,40 @@ def _fit_columns(sheet, maximum: int = 70) -> None:
         sheet.column_dimensions[get_column_letter(column)].width = width
 
 
+def _provenance_manifest_rows(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Manifest lines that answer "was this chapter actually read by a model?".
+
+    A reviewer holding only this workbook can otherwise not tell a chapter
+    with genuinely few questions from one whose outline pass never ran.
+    """
+    provenance = payload.get("extraction_provenance")
+    if not isinstance(provenance, Mapping) or not provenance:
+        return {}
+    applied = bool(provenance.get("chapter_outline_applied"))
+    flags = [str(flag) for flag in provenance.get("chapter_outline_review_flags") or []]
+    rows: dict[str, Any] = {
+        "Chapter outline": (
+            f"applied ({provenance.get('chapter_outline_version') or 'unversioned'})"
+            if applied
+            else "NOT applied — topics and question boundaries fell back to "
+                 "deterministic reading"
+        ),
+    }
+    # A zero here is the diagnosis, not an absence — render the counts as text
+    # so they survive the blank-for-falsy cell rendering.
+    for label, key in (
+        ("Outline topics decided", "chapter_outline_topics"),
+        ("Outline question partitions", "chapter_outline_partitions"),
+        ("Source task blocks", "source_task_blocks"),
+        ("Questions extracted", "inventory_items"),
+        ("Questions from a model-decided split", "model_split_items"),
+    ):
+        rows[label] = str(int(provenance.get(key) or 0))
+    if flags:
+        rows["Outline normalization flags"] = "\n".join(flags)
+    return rows
+
+
 def build_release_workbook(job: models.UploadJob) -> bytes:
     payload = release_payload(job)
     if payload is None:
@@ -338,6 +372,7 @@ def build_release_workbook(job: models.UploadJob) -> bytes:
         "Target chapter ID": payload.get("target_chapter_id"),
         "Checkpoint stage": payload.get("checkpoint_stage"),
         "Checkpoint progress": payload.get("checkpoint_progress"),
+        **_provenance_manifest_rows(payload),
         "Summary": payload.get("summary"),
         "Database publication": (
             "uploaded" if (payload.get("summary") or {}).get("database_uploaded")

@@ -25,7 +25,7 @@ from collections import Counter
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, Mapping, Sequence
 
 from . import canonical_source
 
@@ -644,6 +644,39 @@ def _never_split_questions() -> bool:
     return _phase3_runner.rewrite_enabled()
 
 
+def extraction_provenance(
+    canonical: dict[str, Any],
+    items: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Record how this source was read, so a thin release can be diagnosed.
+
+    A chapter that lands with far fewer questions than the book contains has
+    two very different causes — the model never read it (the outline pass
+    failed and the chapter fell back to deterministic sectioning), or it read
+    it and split nothing. The release workbook has to be able to tell a
+    reviewer which one happened without a rerun.
+    """
+    outline = canonical.get("chapter_outline")
+    outline = outline if isinstance(outline, dict) else {}
+    tasks = [task for task in canonical.get("tasks") or [] if isinstance(task, dict)]
+    model_split_items = sum(
+        1 for item in items
+        if str(item.get("_acsd_decomposition") or "") == "gpt_semantic_boundary"
+    )
+    return {
+        "chapter_outline_applied": bool(outline.get("version")),
+        "chapter_outline_version": str(outline.get("version") or ""),
+        "chapter_outline_topics": len(outline.get("topics") or []),
+        "chapter_outline_partitions": len(outline.get("task_partitions") or []),
+        "chapter_outline_review_flags": [
+            str(flag) for flag in outline.get("review_flags") or []
+        ],
+        "source_task_blocks": len(tasks),
+        "inventory_items": len(items),
+        "model_split_items": model_split_items,
+    }
+
+
 def inventory_from_canonical(canonical: dict[str, Any]) -> dict[str, Any]:
     """Render the production Question / Task Inventory from ACSD task objects."""
     from . import generation
@@ -758,6 +791,7 @@ def inventory_from_canonical(canonical: dict[str, Any]) -> dict[str, Any]:
                 "_acsd_display_prompt": canonical_display,
                 "_acsd_raw_prompt": raw_prompt,
                 "_acsd_source_contract": SOURCE_CONTRACT_MODE,
+                "_acsd_decomposition": str(row.get("decomposition") or ""),
             }
             items.append(item)
 
@@ -765,6 +799,7 @@ def inventory_from_canonical(canonical: dict[str, Any]) -> dict[str, Any]:
         "items": items,
         "stats": generation._inventory_stats(items),
         "source_contract": copy.deepcopy(canonical.get("source_contract") or {}),
+        "extraction_provenance": extraction_provenance(canonical, items),
     }
     return inventory
 

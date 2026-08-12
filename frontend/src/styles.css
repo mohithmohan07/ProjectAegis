@@ -873,3 +873,43 @@ input, select, textarea {
   border-radius: 6px; padding: 10px; line-height: 1.5; font-size: 12px;
 }
 .prompt-text:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+
+/* ---- Concept review: output downloads -------------------------------- */
+/* Three files ship with every run and they are NOT interchangeable: the
+   Bulk Import workbook is the deliverable, the inventory is the audit, the
+   review workbook is diagnostics. They previously rendered as three
+   identical bare links (the `.btn` class they used does not exist), and
+   reviewers downloaded the diagnostics file expecting the deliverable. */
+.downloads {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 10px;
+  margin: 14px 0 18px;
+}
+.download {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+  text-decoration: none;
+  color: var(--text);
+  transition: border-color .15s ease, transform .15s ease;
+}
+.download:hover {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+.download.primary {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel-2));
+}
+.download-name { font-weight: 700; font-size: 13px; }
+.download-name::before { content: "⬇ "; opacity: .65; }
+.download-note {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
