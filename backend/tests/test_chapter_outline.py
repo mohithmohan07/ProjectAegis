@@ -122,15 +122,48 @@ def test_outline_normalization_drops_ungrounded_references():
     assert any("not a task block" in flag for flag in flags)
 
 
-def test_outline_without_content_topics_is_unusable():
+def test_outline_without_content_topics_keeps_its_question_boundaries():
+    # Sectioning and question boundaries are separate judgments. Losing the
+    # topics must not silently re-deterministize every question split too.
     candidate = _candidate()
     for topic in candidate["topics"]:
         topic["kind"] = "assessment"
 
     outline, flags = fallback._normalize_chapter_outline(_page_acsd(), candidate)
 
-    assert outline is None
+    assert outline is not None
+    assert outline["topics"] == []
+    assert len(outline["task_partitions"]) == 1
     assert any("no usable content topic" in flag for flag in flags)
+
+
+def test_outline_with_neither_topics_nor_partitions_is_unusable():
+    # Nothing of the model's reading survived; claiming a model-judged outline
+    # would suppress the deterministic enumeration with nothing to replace it.
+    candidate = _candidate()
+    for topic in candidate["topics"]:
+        topic["kind"] = "assessment"
+    candidate["task_partitions"] = []
+
+    outline, flags = fallback._normalize_chapter_outline(_page_acsd(), candidate)
+
+    assert outline is None
+    assert any("neither topics nor partitions" in flag for flag in flags)
+
+
+def test_topicless_outline_leaves_heading_structure_deterministic():
+    # With no content topic the renderer must not also swallow the source's
+    # own headings — that is what collapses a chapter into a single topic.
+    page_acsd = _page_acsd()
+    candidate = _candidate()
+    for topic in candidate["topics"]:
+        topic["kind"] = "assessment"
+    outline, _flags = fallback._normalize_chapter_outline(page_acsd, candidate)
+    page_acsd["chapter_outline"] = outline
+
+    rendered = fallback.render_page_acsd_to_mmd(page_acsd)
+
+    assert "# Dimensions" in rendered
 
 
 def test_renderer_promotes_topics_and_demotes_banners():
@@ -522,3 +555,245 @@ def test_model_judged_boundaries_silence_the_enumeration_heuristics():
     structure.materialize_task_leaf_cases(canonical)
 
     assert not canonical["tasks"][0].get("leaf_cases")
+
+
+def test_inventory_records_how_the_source_was_read(monkeypatch):
+    # The counts are the diagnosis: a chapter with nine task blocks and four
+    # questions read very differently depending on whether a model decided
+    # the boundaries or a regular expression did.
+    from app.services import canonical_source_phase2 as phase2
+
+    page_acsd = _page_acsd()
+    outline, _flags = fallback._normalize_chapter_outline(page_acsd, _candidate())
+    canonical = {
+        "chapter_outline": outline,
+        "tasks": [{
+            "task_id": "TASK-0001",
+            "qid": "QINV-0022",
+            "identity_key": "identity-1",
+            "source_kind": "checkpoint_question",
+            "source_label": "(1)",
+            "order": 1,
+            "raw_prompt": (
+                "(1) Select the correct option. (i) What shape? A) Cuboid "
+                "(ii) Which is not 3D? A) square"
+            ),
+            "display_prompt": "(1) Select the correct option. …",
+            "gpt_boundary_parts": [
+                {"label": "(i)", "stem": "Select the correct option.",
+                 "text": "(i) What shape? A) Cuboid"},
+                {"label": "(ii)", "stem": "Select the correct option.",
+                 "text": "(ii) Which is not 3D? A) square"},
+            ],
+        }],
+        "figures": [],
+        "images": [],
+    }
+    structure.materialize_task_leaf_cases(canonical)
+    monkeypatch.setattr(phase2, "_never_split_questions", lambda: True)
+
+    provenance = phase2.inventory_from_canonical(canonical)["extraction_provenance"]
+
+    assert provenance["chapter_outline_applied"] is True
+    assert provenance["chapter_outline_version"] == fallback.OUTLINE_VERSION
+    assert provenance["chapter_outline_topics"] == 2
+    assert provenance["chapter_outline_partitions"] == 1
+    assert provenance["source_task_blocks"] == 1
+    assert provenance["inventory_items"] == 2
+    assert provenance["model_split_items"] == 2
+
+
+def test_inventory_provenance_admits_a_chapter_no_model_outlined():
+    from app.services import canonical_source_phase2 as phase2
+
+    canonical = {
+        "tasks": [{
+            "task_id": "TASK-0001",
+            "qid": "QINV-0001",
+            "identity_key": "identity-1",
+            "source_kind": "checkpoint_question",
+            "order": 1,
+            "raw_prompt": "Answer the whole exercise.",
+            "display_prompt": "Answer the whole exercise.",
+        }],
+        "figures": [],
+        "images": [],
+    }
+
+    provenance = phase2.inventory_from_canonical(canonical)["extraction_provenance"]
+
+    assert provenance["chapter_outline_applied"] is False
+    assert provenance["chapter_outline_topics"] == 0
+    assert provenance["model_split_items"] == 0
+    assert provenance["inventory_items"] == 1
+
+
+def test_run_in_heading_punctuation_is_trimmed_from_topic_titles():
+    # Balbharati prints "Excretion -" run into its own paragraph. The words
+    # are the topic; the joiner is typesetting.
+    candidate = _candidate()
+    candidate["topics"][0]["title"] = "Growth and Development-"
+    candidate["topics"][1]["title"] = "Response to Stimuli : "
+
+    outline, _flags = fallback._normalize_chapter_outline(_page_acsd(), candidate)
+
+    assert [t["title"] for t in outline["topics"]] == [
+        "Growth and Development", "Response to Stimuli",
+    ]
+
+
+def test_a_title_that_is_only_punctuation_survives_the_trim():
+    candidate = _candidate()
+    candidate["topics"][0]["title"] = "--"
+
+    outline, _flags = fallback._normalize_chapter_outline(_page_acsd(), candidate)
+
+    assert outline["topics"][0]["title"] == "--"
+
+
+def test_unlabelled_bullet_parts_partition_like_lettered_ones():
+    # "What will happen if…" prints seven independent scenarios with no item
+    # markers at all. A missing label must not cost the split.
+    page_acsd = {
+        "pdf_sha256": "abc123",
+        "pages": [{
+            "page_id": "PDF-PAGE-0001",
+            "page_number": 1,
+            "blocks": [
+                {"reading_order": 1, "kind": "heading", "heading_level": 1,
+                 "text": "Growth"},
+                {"reading_order": 2, "kind": "task", "source_label": "",
+                 "text": (
+                     "What Will Happen, if… "
+                     "There is a large beehive on a tree branch. Some children "
+                     "light a fire under that tree. "
+                     "A hen and her chicks are picking grains. A cat or a snake "
+                     "approaches them."
+                 )},
+            ],
+        }],
+    }
+    candidate = {
+        "chapter_title": "Characteristics of Living Organisms",
+        "topics": [{"title": "Growth", "kind": "content",
+                    "start_page_id": "PDF-PAGE-0001", "start_reading_order": 1}],
+        "task_partitions": [{
+            "page_id": "PDF-PAGE-0001", "reading_order": 2,
+            "independent_parts": [
+                {"label": "", "stem": "What Will Happen, if…",
+                 "text": (
+                     "There is a large beehive on a tree branch. Some children "
+                     "light a fire under that tree."
+                 )},
+                {"label": "", "stem": "What Will Happen, if…",
+                 "text": (
+                     "A hen and her chicks are picking grains. A cat or a snake "
+                     "approaches them."
+                 )},
+            ],
+        }],
+        "notes": [],
+    }
+
+    outline, flags = fallback._normalize_chapter_outline(page_acsd, candidate)
+
+    assert flags == []
+    parts = outline["task_partitions"][0]["independent_parts"]
+    assert len(parts) == 2
+    assert parts[0]["label"] == ""
+    assert parts[0]["stem"] == "What Will Happen, if…"
+
+
+def test_task_cues_stop_minting_a_section_each_under_an_outline():
+    # Every task block used to emit "# Discuss", so a 24-task chapter derived
+    # 24 sections nobody asked for around the outline's real topics.
+    page_acsd = _page_acsd()
+    outline, _flags = fallback._normalize_chapter_outline(page_acsd, _candidate())
+    page_acsd["chapter_outline"] = outline
+
+    rendered = fallback.render_page_acsd_to_mmd(page_acsd)
+
+    assert "# Discuss" not in rendered
+    assert "**Discuss**" in rendered
+    # The outline's own topic keeps its heading weight.
+    assert "# Dimensions" in rendered
+
+
+def test_task_cues_stay_headings_when_no_outline_decided_the_structure():
+    rendered = fallback.render_page_acsd_to_mmd(_page_acsd())
+
+    assert "# Discuss" in rendered
+
+
+def test_the_bold_task_cue_is_still_stripped_when_matching_tasks():
+    assert fallback._task_match_key("**Discuss**\nName two solids.") == (
+        fallback._task_match_key("# Discuss\nName two solids.")
+    )
+    assert fallback._task_match_key("**Discuss**\nName two solids.") == (
+        "name two solids."
+    )
+
+
+def test_a_stem_printed_as_the_block_cue_is_verbatim_enough():
+    # Balbharati prints "What Will Happen, if…" as the cue over seven
+    # scenarios, and the transcription captures it as the block's
+    # source_label rather than as part of the block text.
+    page_acsd = {
+        "pdf_sha256": "abc123",
+        "pages": [{
+            "page_id": "PDF-PAGE-0001",
+            "page_number": 1,
+            "blocks": [
+                {"reading_order": 1, "kind": "heading", "heading_level": 1,
+                 "text": "Growth"},
+                {"reading_order": 3, "kind": "task",
+                 "source_label": "What Will Happen, if…",
+                 "text": (
+                     "There is a large beehive on a tree branch. Some children "
+                     "light a fire under that tree. "
+                     "A small baby in a cradle feels hungry or its clothes get wet."
+                 )},
+            ],
+        }],
+    }
+    candidate = {
+        "chapter_title": "Characteristics of Living Organisms",
+        "topics": [{"title": "Growth", "kind": "content",
+                    "start_page_id": "PDF-PAGE-0001", "start_reading_order": 1}],
+        "task_partitions": [{
+            "page_id": "PDF-PAGE-0001", "reading_order": 3,
+            "independent_parts": [
+                {"label": "", "stem": "What Will Happen, if…",
+                 "text": (
+                     "There is a large beehive on a tree branch. Some children "
+                     "light a fire under that tree."
+                 )},
+                {"label": "", "stem": "What Will Happen, if…",
+                 "text": (
+                     "A small baby in a cradle feels hungry or its clothes get wet."
+                 )},
+            ],
+        }],
+        "notes": [],
+    }
+
+    outline, flags = fallback._normalize_chapter_outline(page_acsd, candidate)
+
+    assert flags == []
+    parts = outline["task_partitions"][0]["independent_parts"]
+    assert [part["stem"] for part in parts] == [
+        "What Will Happen, if…", "What Will Happen, if…",
+    ]
+
+
+def test_a_stem_from_nowhere_in_the_source_is_still_cleared():
+    page_acsd = _page_acsd()
+    candidate = _candidate()
+    candidate["task_partitions"][0]["independent_parts"][0]["stem"] = (
+        "Answer in your own words."
+    )
+
+    outline, flags = fallback._normalize_chapter_outline(page_acsd, candidate)
+
+    assert any("not verbatim" in flag for flag in flags)
+    assert outline["task_partitions"][0]["independent_parts"][0]["stem"] == ""

@@ -143,3 +143,30 @@ test("an empty instruction cannot be submitted", async () => {
   expect(button.disabled).toBe(true);
   expect(apiMock.submitConceptRevision).not.toHaveBeenCalled();
 });
+
+test("labels each download so the deliverable is not confused with diagnostics", async () => {
+  apiMock.listConceptRevisions.mockResolvedValue({ revisions: [] });
+  render(<ConceptReviewPanel jobId={7} />);
+  await waitFor(() => expect(apiMock.listConceptRevisions).toHaveBeenCalled());
+
+  const bulk = screen.getByTestId("download-bulk-import");
+  const inventory = screen.getByTestId("download-inventory");
+  const diagnostics = screen.getByTestId("download-output");
+
+  // Each says what it is, so a reviewer does not grab the wrong file.
+  expect(bulk.textContent).toMatch(/Bulk Import workbook/i);
+  expect(bulk.textContent).toMatch(/deliverable/i);
+  expect(inventory.textContent).toMatch(/Question \/ Task Inventory/i);
+  expect(diagnostics.textContent).toMatch(/Diagnostics only/i);
+
+  // The deliverable is the visually primary choice.
+  expect(bulk.className).toMatch(/primary/);
+  expect(diagnostics.className).not.toMatch(/primary/);
+
+  // The old markup used a `.btn` class the stylesheet never defined, so all
+  // three rendered as bare links.
+  for (const element of [bulk, inventory, diagnostics]) {
+    expect(element.className).not.toMatch(/\bbtn\b/);
+    expect(element.className).toMatch(/download/);
+  }
+});

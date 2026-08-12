@@ -239,6 +239,65 @@ def _issue(
     }
 
 
+def _extraction_provenance(inventory: Mapping[str, Any]) -> dict[str, Any]:
+    """How the source was read, recorded by the Phase 2 inventory build."""
+    value = inventory.get("extraction_provenance")
+    return copy.deepcopy(dict(value)) if isinstance(value, Mapping) else {}
+
+
+def _extraction_provenance_issues(
+    provenance: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Say so in the release when the chapter was not read end to end.
+
+    "The exercise questions were not picked up" has to be answerable from the
+    release itself. A chapter whose outline pass did not apply was sectioned
+    and split deterministically, which is exactly the failure mode that leaves
+    a whole exercise section standing as one task.
+    """
+    if not provenance:
+        return []
+    issues: list[dict[str, Any]] = []
+    if not provenance.get("chapter_outline_applied"):
+        issues.append(_issue(
+            code="chapter_outline_not_applied",
+            severity="warning",
+            phase="source-conversion",
+            message=(
+                "No model-decided chapter outline reached this run, so topics "
+                "and question boundaries fell back to deterministic reading. "
+                "Multi-part exercise sections are likely to have stayed whole. "
+                "Re-run the source conversion for this chapter."
+            ),
+            details=dict(provenance),
+        ))
+    elif not provenance.get("chapter_outline_topics"):
+        issues.append(_issue(
+            code="chapter_outline_topics_unusable",
+            severity="warning",
+            phase="source-conversion",
+            message=(
+                "The chapter outline decided question boundaries but no usable "
+                "topic, so the chapter was sectioned deterministically and may "
+                "have landed under a single topic."
+            ),
+            details=dict(provenance),
+        ))
+    flags = [str(flag) for flag in provenance.get("chapter_outline_review_flags") or []]
+    if flags:
+        issues.append(_issue(
+            code="chapter_outline_review_flags",
+            severity="info",
+            phase="source-conversion",
+            message=(
+                f"The chapter outline was accepted with {len(flags)} "
+                "normalization flag(s); see the details for what was adjusted."
+            ),
+            details=flags,
+        ))
+    return issues
+
+
 def _pending_issue(pending: Mapping[str, Any]) -> dict[str, Any]:
     item = pending.get("item") if isinstance(pending.get("item"), Mapping) else {}
     evidence = [
@@ -537,7 +596,63 @@ def audit_type_cases(
             phase="type_case_release",
             qids=[qid],
         ))
+    issues.extend(_repeated_question_issues(output))
     return output, issues, routes
+
+
+_QUESTION_TEXT_NOISE_RE = re.compile(r"[^0-9a-z ]+")
+# Only a LEADING item marker — "(2)", "3.", "b)", "(iv)". Digits inside the
+# question are part of it ("What is 2 + 3?") and must survive.
+_QUESTION_ITEM_MARKER_RE = re.compile(
+    r"^\(?\s*(?:[0-9]{1,3}|[a-z]|[ivxl]{1,5})\s*[\).:]\s+"
+)
+
+
+def _question_text_key(value: object) -> str:
+    """Compare questions by their words, not their punctuation or numbering."""
+    text = _QUESTION_ITEM_MARKER_RE.sub("", _normal(value))
+    text = _QUESTION_TEXT_NOISE_RE.sub(" ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _repeated_question_issues(
+    rows: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Flag one question reaching the learner twice under different QIDs.
+
+    ``duplicate_qid_assignment`` catches the same QID placed twice. This
+    catches the other half: two distinct source questions whose wording is the
+    same, which a reviewer reads as the deck simply repeating itself.
+    """
+    qids_by_text: dict[str, list[str]] = {}
+    for row in rows:
+        if str(row.get("row_kind") or "") != "example":
+            continue
+        key = _question_text_key(row.get("example_prompt"))
+        qid = _normal(row.get("example_qid"))
+        if len(key) < 25 or not qid:
+            # Very short prompts ("Why?", "Explain.") legitimately recur as
+            # the tail of different questions; they are not a repeat.
+            continue
+        seen = qids_by_text.setdefault(key, [])
+        if qid not in seen:
+            seen.append(qid)
+    issues: list[dict[str, Any]] = []
+    for key, qids in sorted(qids_by_text.items()):
+        if len(qids) < 2:
+            continue
+        issues.append(_issue(
+            code="repeated_question_text",
+            message=(
+                f"{', '.join(qids)} carry the same question wording; the "
+                "learner would meet this question more than once."
+            ),
+            severity="warning",
+            phase="type_case_release",
+            qids=list(qids),
+            details={"question_text": key[:400]},
+        ))
+    return issues
 
 
 def _issue_matches_record(issue: Mapping[str, Any], record: Mapping[str, Any]) -> bool:
@@ -847,6 +962,8 @@ def stage_release(
             ),
             phase="release",
         ))
+    provenance = _extraction_provenance(inventory_value)
+    issues.extend(_extraction_provenance_issues(provenance))
     if upgraded_from_cache:
         issues.append(_issue(
             code="release_rows_upgraded_from_validated_cache",
@@ -898,6 +1015,7 @@ def stage_release(
         "issues": _json_safe(issues),
         "type_case_rows": _json_safe(type_case_rows),
         "question_task_inventory": _json_safe(inventory_value),
+        "extraction_provenance": _json_safe(provenance),
         "mined_types": _json_safe(types_value),
         "pending_decision_snapshot": _json_safe(pending),
         "final_grounding_certificate": _json_safe(
