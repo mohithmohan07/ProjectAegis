@@ -688,6 +688,18 @@ def _tokens(value: str) -> set[str]:
     return {token.casefold() for token in _WORD_RE.findall(value)}
 
 
+# A transcribed literal backslash-escape (the two characters "\" + "n") that
+# cannot start a real LaTeX command — every genuine command beginning with
+# \n, \t, or \r continues in lowercase (\neq, \nabla, \theta, \rho). GPT page
+# transcription occasionally double-escapes an in-cell line break ("Pyramid
+# /\nPrism"), which later trips the raw-LaTeX wire-format validator.
+_LITERAL_ESCAPE_ARTIFACT_RE = re.compile(r"[ \t]*\\[nrt](?![a-z])[ \t]*")
+
+
+def _scrub_literal_escape_artifacts(value: str) -> str:
+    return _LITERAL_ESCAPE_ARTIFACT_RE.sub(" ", value)
+
+
 def _canonicalize_source_cue_block(raw: dict[str, Any]) -> dict[str, Any]:
     """Normalize the model's historical-source cue into an explicit source block.
 
@@ -788,6 +800,31 @@ def validate_page_extraction(
             rows_value = raw.get("table_rows") or []
             heading_level = int(raw.get("heading_level") or 0)
             source_label = str(raw.get("source_label") or "").strip()
+            scrubbed_text = _scrub_literal_escape_artifacts(text).strip()
+            scrubbed_label = _scrub_literal_escape_artifacts(source_label).strip()
+            scrubbed_rows = [
+                [_scrub_literal_escape_artifacts(str(cell or "")) for cell in table_row]
+                if isinstance(table_row, list) else table_row
+                for table_row in rows_value
+            ] if isinstance(rows_value, list) else rows_value
+            if (
+                scrubbed_text != text
+                or scrubbed_label != source_label
+                or scrubbed_rows != rows_value
+            ):
+                # Prose and table cells only — a math block's latex field keeps
+                # its backslashes untouched.
+                flags.append(
+                    f"block {order}: normalized literal escape artifact(s) "
+                    "in transcribed text"
+                )
+                text = scrubbed_text
+                source_label = scrubbed_label
+                rows_value = scrubbed_rows
+                raw["text"] = scrubbed_text
+                raw["source_label"] = scrubbed_label
+                if isinstance(raw.get("table_rows"), list):
+                    raw["table_rows"] = scrubbed_rows
             if kind not in {"figure", "math", "table", "source"} and not text:
                 flags.append(f"dropped empty {kind} block {order}")
                 continue

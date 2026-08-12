@@ -186,3 +186,43 @@ def test_prompts_treat_vertical_running_labels_as_non_semantic_navigation():
     assert "kind=navigation" in extraction
     assert "such navigation is omitted" in verification
     assert "Never introduce kind=sidebar or reading_order=0" in correction
+
+
+def test_literal_escape_artifacts_are_scrubbed_from_transcribed_text():
+    # Job 13 (3D Shapes): GPT transcribed an in-cell line break as the two
+    # literal characters backslash+n ("Pyramid /\nPrism"), which later trips
+    # the raw-LaTeX wire-format validator when the table rides along as a
+    # task's shared context. Real LaTeX commands beginning with \n, \t, or
+    # \r continue in lowercase and must survive untouched.
+    table = _block(
+        kind="table",
+        text="",
+        order=1,
+        bbox=[100, 100, 900, 400],
+    )
+    table["table_rows"] = [
+        ["Pyramid /\\nPrism", "Triangular"],
+        ["Picture", ""],
+    ]
+    paragraph = _block(
+        kind="paragraph",
+        text="A concluding historical paragraph with \\neq preserved.",
+        order=2,
+        bbox=[100, 450, 900, 600],
+    )
+
+    normalized, reason = fallback.validate_page_extraction(
+        [_page()], _candidate(table, paragraph))
+
+    assert reason == ""
+    assert normalized is not None
+    page = normalized["pages"][0]
+    blocks = page["blocks"]
+    scrubbed_table = next(b for b in blocks if b["kind"] == "table")
+    assert scrubbed_table["table_rows"][0][0] == "Pyramid / Prism"
+    scrubbed_paragraph = next(b for b in blocks if b["kind"] == "paragraph")
+    assert "\\neq" in scrubbed_paragraph["text"]
+    assert any(
+        "literal escape artifact" in flag
+        for flag in page.get("review_flags") or []
+    )
