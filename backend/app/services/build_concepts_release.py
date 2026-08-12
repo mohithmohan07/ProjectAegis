@@ -747,7 +747,7 @@ def _chapter_meta_for_release(
         last_exc: Exception | None = None
         for _attempt in range(2):
             try:
-                authored = generation.chapter_meta_via_api(
+                return generation.chapter_meta_via_api(
                     meta=meta,
                     topics=[
                         {
@@ -758,10 +758,6 @@ def _chapter_meta_for_release(
                         for topic in order
                     ],
                 )
-                source_title = _source_chapter_title()
-                if source_title:
-                    authored["source_chapter_title"] = source_title
-                return authored
             except Exception as exc:  # noqa: BLE001 — retried once below
                 last_exc = exc
         raise last_exc if last_exc else RuntimeError("metadata pass failed")
@@ -774,25 +770,7 @@ def _chapter_meta_for_release(
             "summaries.",
             level="warning",
         )
-        source_title = _source_chapter_title()
-        return (
-            {"source_chapter_title": source_title} if source_title else {}
-        )
-
-
-def _source_chapter_title() -> str:
-    """The book's own printed chapter name, when the conversion decided one."""
-    try:
-        from . import canonical_source_phase2 as phase2
-
-        canonical = phase2.active_canonical()
-        if isinstance(canonical, dict):
-            document = canonical.get("document") or {}
-            if isinstance(document, dict):
-                return str(document.get("source_chapter_title") or "").strip()
-    except Exception:  # noqa: BLE001 — metadata nicety, never load-bearing
-        pass
-    return ""
+        return {}
 
 
 def stage_release(

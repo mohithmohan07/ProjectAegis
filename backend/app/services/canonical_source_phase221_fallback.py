@@ -1867,15 +1867,10 @@ def _attach_chapter_outline(
     outline = page_acsd.get("chapter_outline")
     if not isinstance(outline, dict):
         return
+    # The outline's chapter_title stays internal provenance only: the chapter
+    # NAME the user sees always comes from the directory row they selected in
+    # the concept-building page dropdowns, never from the book.
     canonical["chapter_outline"] = copy.deepcopy(outline)
-    title = str(outline.get("chapter_title") or "").strip()
-    if title:
-        document = canonical.setdefault("document", {})
-        if isinstance(document, dict):
-            # The book's own printed chapter name; the directory row keeps the
-            # syllabus identity, but released metadata should name the chapter
-            # the way the source does.
-            document["source_chapter_title"] = title
 
 
 def render_page_acsd_to_mmd(page_acsd: dict[str, Any]) -> str:
