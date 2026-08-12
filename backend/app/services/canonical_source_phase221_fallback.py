@@ -509,6 +509,7 @@ Block rules:
   exact visible cue in source_label and the body in text.
 - task: separate learner instructions/questions from surrounding narrative and
   preserve the visible task cue (Activity, Discuss, Project, etc.) in source_label.
+  A task with no visible cue leaves source_label empty — never invent one.
 - A worked example — a cue like "Example 3 :" followed by a problem statement
   whose solution is printed right after it — is a real question: emit the
   problem statement as a task block with the exact cue (e.g. "Example 3") in
@@ -765,8 +766,9 @@ def validate_page_extraction(
                 return None, f"{page_id} heading block {order} has no hierarchy level"
             if kind != "heading" and heading_level != 0:
                 return None, f"{page_id} non-heading block {order} has a heading level"
-            if kind == "task" and not source_label:
-                return None, f"{page_id} task block {order} has no source cue"
+            # A task without a visible cue is legitimate (many books print
+            # bare instructions); whether a VISIBLE cue was dropped is the
+            # model verifier's judgement, not a deterministic presence rule.
             if kind == "source" and not source_label:
                 return None, f"{page_id} source block {order} has no source cue"
             if kind not in {"task", "source"} and source_label:
