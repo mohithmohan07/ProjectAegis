@@ -274,7 +274,8 @@ def build_release_workbook(job: models.UploadJob) -> bytes:
             status,
             "\n".join(str(value) for value in errors),
             record.get("topic", ""),
-            record.get("parent_concept", ""),
+            # Parent Concept ships empty, same as the Bulk Import deliverable.
+            "",
             record.get("concept_title") or record.get("concept") or "",
             record.get("concept_details") or record.get("concept_description") or "",
             record.get("keywords", ""),

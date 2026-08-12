@@ -597,21 +597,28 @@ def test_writer_leaves_group_columns_empty_for_concept_rows(db):
     assert row[basic_idx + 2] == ""
 
 
-def test_writer_uses_canonical_parent_concept_column(db):
-    """parent_concept is now a first-class canonical column (no fallback)."""
+def test_writer_keeps_the_parent_concept_column_but_ships_it_empty(db):
+    """Concepts sit flat under their topic; the column stays for shape only."""
     concept = db.query(models.Concept).join(models.Topic).join(models.Chapter).first()
     concept.parent_concept = "Cell Organisation"
     row = writer._concept_to_row(concept, "objective")
     parent_idx = bi.OBJECTIVE_FIELDS.index("parent_concept")
-    assert row[parent_idx] == "Cell Organisation"
+    # The column must survive — removing it would change the canonical
+    # workbook shape — but it carries nothing.
+    assert "parent_concept" in bi.OBJECTIVE_FIELDS
+    assert row[parent_idx] == ""
     # keywords / related_concepts columns are gone from new workbooks.
     assert "keywords" not in bi.OBJECTIVE_FIELDS
     assert "related_concepts" not in bi.OBJECTIVE_FIELDS
 
 
-def test_writer_falls_back_to_related_concepts_on_legacy_workbook(db):
-    """Legacy workbooks (no parent_concept column) still get the parent marker
-    in their related_concepts column."""
+def test_the_legacy_parent_marker_no_longer_leaks_into_related_concepts(db):
+    """A legacy workbook has no parent column, and must not smuggle one in.
+
+    Older workbooks carried the parent as a "parent: X" marker inside
+    related_concepts. With Parent Concept shipping empty, that back door has
+    to close too, or the grouping reappears under another name.
+    """
     concept = db.query(models.Concept).join(models.Topic).join(models.Chapter).first()
     concept.parent_concept = "Cell Organisation"
     row = writer._concept_to_row(
@@ -620,10 +627,10 @@ def test_writer_falls_back_to_related_concepts_on_legacy_workbook(db):
         len(bi.CHAPTER_FIELDS) + len(bi.TOPIC_FIELDS)
         + bi.LEGACY_CONCEPT_FIELDS.index("related_concepts")
     )
-    assert "parent: Cell Organisation" in row[related_idx]
+    assert "parent:" not in (row[related_idx] or "")
 
 
-def test_append_concepts_writes_parent_concept_column(db, tmp_path):
+def test_append_concepts_keeps_the_parent_column_blank(db, tmp_path):
     import openpyxl
 
     concept = db.query(models.Concept).join(models.Topic).join(models.Chapter).first()
@@ -638,7 +645,8 @@ def test_append_concepts_writes_parent_concept_column(db, tmp_path):
     out = openpyxl.load_workbook(path)[bi.SHEET_OBJECTIVE]
     headers = [c.value for c in out[2]]
     parent_idx = headers.index("parent_concept") + 1
-    assert out.cell(row=3, column=parent_idx).value == "Cell Organisation"
+    # The header stays so the canonical shape is unchanged; the cell is empty.
+    assert out.cell(row=3, column=parent_idx).value in (None, "")
 
 
 def test_roundtrip_recovers_clean_titles(db):

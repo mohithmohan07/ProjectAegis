@@ -249,7 +249,8 @@ def test_real_certified_deposit_binds_db_audit_and_workbook_atomically(
     assert published_normal == [{
         "topic_display_name": normal_payload["topic"],
         "concept_display_name": normal_payload["concept_title"],
-        "parent_concept": normal_payload["parent_concept"],
+        # Ships empty regardless of what the deposit authored.
+        "parent_concept": None,
         "concept_details": normal_payload["concept_details"],
     }]
 
