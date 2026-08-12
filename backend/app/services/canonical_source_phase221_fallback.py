@@ -742,7 +742,7 @@ def _tokens(value: str) -> set[str]:
 # decide the chapter title, the topic outline, and per-task question
 # boundaries; deterministic code only validates references and compiles.
 
-OUTLINE_VERSION = "chapter-outline-4"
+OUTLINE_VERSION = "chapter-outline-5"
 
 
 def _outline_cache_key(pdf_sha256: str) -> str:
@@ -932,6 +932,61 @@ Return JSON per the schema. notes: anything you judged worth flagging.
 """.strip()
 
 
+def _resolve_partition_block(
+    blocks_by_ref: dict[tuple[str, int], dict[str, Any]],
+    page_numbers: dict[str, int],
+    claimed: tuple[str, int],
+    raw_parts: list[Any],
+) -> tuple[tuple[str, int], dict[str, Any] | None]:
+    """Find the task block that verbatim holds a partition's parts.
+
+    Returns the claimed reference untouched when it is already right. When it
+    is not, the only blocks considered are task blocks containing EVERY part
+    verbatim, so a repair is grounded in the source rather than guessed; the
+    nearest such block to the claim wins. Returns ``None`` when no block
+    qualifies, which stays a dropped partition.
+    """
+    part_keys = [
+        _normal(part.get("text"))
+        for part in raw_parts
+        if isinstance(part, dict) and _normal(part.get("text"))
+    ]
+    if len(part_keys) < 2:
+        # Nothing to resolve against, and a one-part partition is dropped
+        # downstream anyway. Report the claim so the caller flags it normally.
+        block = blocks_by_ref.get(claimed)
+        if block is not None and str(block.get("kind") or "") == "task":
+            return claimed, block
+        return claimed, None
+
+    def _holds_every_part(block: dict[str, Any]) -> bool:
+        if str(block.get("kind") or "") != "task":
+            return False
+        text_key = _normal(block.get("text"))
+        return all(key in text_key for key in part_keys)
+
+    claimed_block = blocks_by_ref.get(claimed)
+    if claimed_block is not None and _holds_every_part(claimed_block):
+        return claimed, claimed_block
+
+    claimed_page = page_numbers.get(claimed[0], 0)
+    candidates = [
+        (candidate_ref, block)
+        for candidate_ref, block in blocks_by_ref.items()
+        if _holds_every_part(block)
+    ]
+    if not candidates:
+        return claimed, None
+    # Nearest to the claim: same page first, then closest reading order.
+    candidates.sort(key=lambda item: (
+        abs(page_numbers.get(item[0][0], 0) - claimed_page),
+        abs(item[0][1] - claimed[1]),
+        page_numbers.get(item[0][0], 0),
+        item[0][1],
+    ))
+    return candidates[0]
+
+
 _RUN_IN_PUNCTUATION_RE = re.compile(r"[\s\-–—:;,\.]+$")
 
 
@@ -1020,16 +1075,42 @@ def _normalize_chapter_outline(
         flags.append("no usable content topic in the outline")
 
     partitions: list[dict[str, Any]] = []
+    resolved_refs: set[tuple[str, int]] = set()
     for partition in candidate.get("task_partitions") or []:
         if not isinstance(partition, dict):
             continue
-        ref = (
+        claimed = (
             str(partition.get("page_id") or ""),
             int(partition.get("reading_order") or 0),
         )
-        block = blocks_by_ref.get(ref)
-        if block is None or str(block.get("kind") or "") != "task":
-            flags.append(f"dropped a partition: {ref} is not a task block")
+        # The model's judgment is WHICH parts are independent questions; the
+        # block pointer is bookkeeping it sometimes gets wrong — aiming at the
+        # "Exercises" heading instead of the task beneath it, which used to
+        # drop the whole partition and its questions with it. The parts are
+        # required to be verbatim, so the source itself says which block was
+        # meant: resolve by that evidence, and keep the pointer only as a hint
+        # for which candidate is nearest.
+        ref, block = _resolve_partition_block(
+            blocks_by_ref, page_numbers, claimed,
+            partition.get("independent_parts") or [],
+        )
+        if block is None:
+            flags.append(
+                f"dropped a partition: no task block holds the parts claimed "
+                f"at {claimed}"
+            )
+            continue
+        if ref != claimed:
+            flags.append(
+                f"partition claimed at {claimed} was re-aimed at {ref}, the "
+                "task block that verbatim holds its parts"
+            )
+        if ref in resolved_refs:
+            # One task cannot be partitioned twice; downstream keys partitions
+            # by block, so a second one would silently replace the first.
+            flags.append(
+                f"dropped a partition: task {ref} was already partitioned"
+            )
             continue
         task_key = _normal(str(block.get("text") or ""))
         # A shared instruction is normally printed as the cue ABOVE the list it
@@ -1065,6 +1146,7 @@ def _normalize_chapter_outline(
                 "text": text,
             })
         if len(parts) >= 2:
+            resolved_refs.add(ref)
             partitions.append({
                 "page_id": ref[0],
                 "reading_order": ref[1],
