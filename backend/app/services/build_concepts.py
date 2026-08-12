@@ -2445,13 +2445,28 @@ def inventory_csv(
         db, job_id, owner_sub=owner_sub, module="build_concepts")
     data = job.question_inventory or {}
     items = data.get("items", [])
+    mined_types = data.get("mined_types", [])
+    if not items:
+        # A release-first job keeps its inventory inside the staged release
+        # payload; the download must serve it from there (the webpage's
+        # Question/Task Inventory button 404ed on every fresh run).
+        from .build_concepts_release import RELEASE_KEY
+
+        release = data.get(RELEASE_KEY) or {}
+        release_inventory = release.get("question_task_inventory") or {}
+        items = release_inventory.get("items", [])
+        release_types = release.get("mined_types") or {}
+        if isinstance(release_types, dict):
+            mined_types = release_types.get("types", [])
+        elif isinstance(release_types, list):
+            mined_types = release_types
     if not items:
         raise ValueError(
             "no question/task inventory stored for this job — run a live "
             "concept generation first")
 
     types_by_qid: dict[str, list[tuple[str, str]]] = {}
-    for t in data.get("mined_types", []):
+    for t in mined_types:
         tid = (t.get("type_id") or "").strip()
         title = (t.get("type_title") or "").strip()
         qids = set(t.get("source_question_ids") or [])

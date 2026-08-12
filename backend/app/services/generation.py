@@ -14762,11 +14762,21 @@ def _invalid_inventory_items(inventory: dict | None) -> list[dict]:
             source_kind not in _HUB_INVENTORY_KINDS
             and cv._example_too_short(text)
         ):
-            invalid.append({
-                "index": index,
-                "qid": qid,
-                "reason": "stub_task",
-            })
+            # A short imperative whose substance lives in its shared context
+            # ("Complete the table below." plus the table) is a complete
+            # source task, not an extraction stub: the context ships with the
+            # public prompt once rendering embeds it.
+            context = str(item.get("shared_context") or "").strip()
+            if not (
+                item.get("requires_context")
+                and context
+                and not cv._example_too_short(f"{context} {text}")
+            ):
+                invalid.append({
+                    "index": index,
+                    "qid": qid,
+                    "reason": "stub_task",
+                })
     return invalid
 
 
