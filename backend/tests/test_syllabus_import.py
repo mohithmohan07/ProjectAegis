@@ -328,3 +328,132 @@ def test_bootstrap_applies_reissued_workbooks_to_a_populated_database(
     assert result["created"] > 0
     assert isolated_db.query(models.Chapter).filter_by(
         chapter_title="Knowing Our Numbers").count() == 1
+
+
+def test_karnataka_files_every_social_strand_under_social_science():
+    """Karnataka teaches Social Science as one subject, like CBSE.
+
+    History/Civics/Geography/Economics/Sociology/Business Studies were
+    stored as separate Karnataka subjects, so the dropdown offered six
+    divisions the board does not examine separately.
+    """
+    from app.services import directory
+
+    for strand in (
+        "History", "Civics", "Geography", "Economics",
+        "Sociology", "Business Studies",
+    ):
+        assert directory.effective_subject_for_tags(
+            "Karnataka", strand) == "Social Science"
+    # Non-social subjects are untouched.
+    assert directory.effective_subject_for_tags(
+        "Karnataka", "Mathematics") == "Mathematics"
+
+
+def test_icse_examines_history_and_civics_as_one_subject():
+    """ICSE sets History and Civics as a single paper; Geography stands alone."""
+    from app.services import directory
+
+    assert directory.effective_subject_for_tags(
+        "ICSE", "History") == "History and Civics"
+    assert directory.effective_subject_for_tags(
+        "ICSE", "Civics") == "History and Civics"
+    assert directory.effective_subject_for_tags(
+        "ICSE", "Geography") == "Geography"
+    # ICSE does not consolidate into Social Science.
+    assert directory.effective_subject_for_tags(
+        "ICSE", "Economics") == "Economics"
+
+
+def test_subject_banner_beats_chapter_numbers_in_the_subject_column(tmp_path):
+    """A banner row names the block's subject; the rows hold chapter numbers.
+
+    The Karnataka sheets carry "Grade 6 Physical Education" over rows whose
+    subject column reads "Chapter 1", "Chapter 2" … so the directory offered
+    eleven subjects called "Chapter N".
+    """
+    path = tmp_path / "kstate.xlsx"
+    _write_xlsx(path, [
+        ["Subject", "Unit", "Chapter"],
+        ["Mathematics", "Number System (06_KSTATE)", "Patterns in Mathematics"],
+        ["Grade 6 Physical Education", None, None],
+        ["Chapter 1", "Theory (06_KSTATE)", "Meaning of Physical Education"],
+        ["Chapter 2", "Theory (06_KSTATE)", "Kabaddi"],
+    ])
+
+    rows = svc.parse_workbook(path, default_board="Karnataka")
+
+    subjects = {r.subject for r in rows}
+    assert "Physical Education" in subjects
+    assert not any(s.lower().startswith("chapter") for s in subjects)
+    assert {r.chapter for r in rows} >= {"Kabaddi", "Patterns in Mathematics"}
+
+
+def test_tracker_sheets_are_not_syllabus(tmp_path):
+    path = tmp_path / "with_status.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Grade 06"
+    for row in [
+        ["Subject", "Unit", "Chapter"],
+        ["Mathematics", "Number System", "Patterns in Mathematics"],
+    ]:
+        ws.append(row)
+    tracker = wb.create_sheet("Maths Chapter wise status")
+    for row in [
+        ["Grade", "Chapter Name", "Concept Mapping", "Assessments"],
+        [10, "Real Numbers", False, True],
+    ]:
+        tracker.append(row)
+    wb.save(path)
+
+    rows = svc.parse_workbook(path, default_board="Karnataka")
+
+    assert {r.chapter for r in rows} == {"Patterns in Mathematics"}
+
+
+def test_refresh_migrates_a_refiled_chapter_and_keeps_its_work(
+    isolated_db, tmp_path, monkeypatch,
+):
+    """A chapter that changes subject must MOVE, not be stranded or dropped.
+
+    Karnataka History becomes Social Science. Leaving the old row behind
+    kept a subject the syllabus no longer has in the dropdown; deleting it
+    would have destroyed authored concepts.
+    """
+    from app.services import directory
+
+    path = tmp_path / "kstate.xlsx"
+    _write_xlsx(path, [
+        ["Subject", "Unit", "Chapter"],
+        ["Social Science", "Ancient India (06_KSTATE)", "India - Our Pride"],
+    ], sheet_name="Grade 06")
+    monkeypatch.setattr(svc, "_discover_workbooks", lambda: [path])
+    monkeypatch.setattr(svc, "_missing_expected_files", lambda: [])
+    monkeypatch.setattr(
+        svc, "_infer_file_options", lambda name: {"default_board": "Karnataka"})
+
+    legacy = models.Chapter(
+        chapter_code="06KAHI_India_Our_Pride",
+        board="Karnataka", grade="06", subject="History",
+        unit="Ancient India (06_KSTATE)", chapter_title="India - Our Pride",
+        chapter_display_name="India - Our Pride",
+    )
+    isolated_db.add(legacy)
+    isolated_db.commit()
+    legacy_id = legacy.id
+    isolated_db.add(models.Topic(
+        topic_title="Authored Topic", pre_post_learning="Post",
+        chapter_id=legacy_id))
+    isolated_db.commit()
+
+    result = svc.refresh_syllabus(isolated_db)
+    isolated_db.expire_all()
+
+    moved = isolated_db.get(models.Chapter, legacy_id)
+    assert moved is not None, "the chapter must not be deleted"
+    assert moved.subject == "Social Science"
+    assert len(moved.topics) == 1, "authored work travels with the chapter"
+    assert result["migrated"] == 1
+    assert result["pruned"] == 0
+    assert isolated_db.query(models.Chapter).count() == 1

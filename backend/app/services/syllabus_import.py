@@ -119,6 +119,27 @@ def _parse_sheet_name(name: str) -> dict[str, str]:
     return hints
 
 
+def _is_tracker_sheet(title: str) -> bool:
+    """Whether a sheet is a progress tracker rather than syllabus structure.
+
+    The Karnataka workbook carries a "Maths Chapter wise status" tab whose
+    columns are Grade / Chapter Name / Concept Mapping / Assessments /
+    Tagging. The generic parser read it as syllabus. Maharashtra parsing
+    already skipped these tabs.
+    """
+    key = (title or "").strip().lower()
+    return "status" in key or "chapter wise" in key
+
+
+# "Grade 6 Physical Education" announces the subject for the rows beneath
+# it; those rows carry a chapter NUMBER where a subject belongs, which is
+# how "Chapter 1" … "Chapter 11" reached the subject dropdown.
+_SUBJECT_BANNER_RE = re.compile(
+    r"^\s*(?:grade|class|std)\s*\d+\s+(?P<subject>.+?)\s*$", re.IGNORECASE)
+_CHAPTER_NUMBER_RE = re.compile(
+    r"^\s*(?:chapter\s*)?\d+(?:\.\d+)?\s*$", re.IGNORECASE)
+
+
 def _forward_fill(values: list[str]) -> list[str]:
     last = ""
     out: list[str] = []
@@ -250,6 +271,17 @@ def _rows_from_sheet(ws, *, default_board: str = "", default_subject: str = "",
     unit_col = [_cell_str(r[colmap["unit"]]) if colmap.get("unit") is not None and len(r) > colmap["unit"] else ""
                 for r in data_rows]
 
+    # A banner row names the subject for the block beneath it; those rows
+    # hold chapter numbers in the subject column.
+    banner = ""
+    for index, value in enumerate(subject_col):
+        match = _SUBJECT_BANNER_RE.match(value)
+        if match:
+            banner = match.group("subject").strip()
+            subject_col[index] = ""
+        elif banner and _CHAPTER_NUMBER_RE.match(value):
+            subject_col[index] = banner
+
     grade_col = _forward_fill(grade_col)
     subject_col = _forward_fill(subject_col)
     unit_col = _forward_fill(unit_col)
@@ -314,6 +346,8 @@ def parse_workbook(
     boards = universal_boards or ([default_board] if default_board else [])
 
     for ws in wb.worksheets:
+        if _is_tracker_sheet(ws.title):
+            continue
         sheet_rows = _rows_from_sheet(
             ws,
             default_board=default_board,
@@ -493,7 +527,8 @@ def refresh_syllabus(db: Session, *, prune: bool = True) -> dict:
     if not paths:
         return {
             "created": 0, "skipped": 0, "total_rows": 0, "loaded_files": [],
-            "missing_files": missing, "pruned": 0, "retained_with_content": [],
+            "missing_files": missing, "migrated": 0, "pruned": 0,
+            "retained_with_content": [],
         }
 
     all_rows: list[SyllabusRow] = []
@@ -504,21 +539,62 @@ def refresh_syllabus(db: Session, *, prune: bool = True) -> dict:
         all_rows.extend(parse_workbook(path, universal_boards=universal, **opts))
         loaded.append(path.name)
 
+    # Codes must be computed exactly as upsert_chapters does, or a
+    # code-shape difference makes every stored chapter look superseded.
+    desired: dict[str, SyllabusRow] = {}
+    by_identity: dict[tuple[str, str, str], SyllabusRow] = {}
+    for row in all_rows:
+        code = directory.make_chapter_code(
+            row.board, row.grade, row.subject, row.chapter,
+        )
+        desired[code] = row
+        by_identity.setdefault(
+            (row.board, row.grade, row.chapter.strip().lower()), row,
+        )
+
+    reconcile = bool(prune and all_rows and not missing)
+    migrated = 0
+    pruned = 0
+    retained: list[str] = []
+
+    # Reconcile BEFORE inserting. A chapter that changed subject keeps its
+    # identity (board + grade + title) but earns a new code, so moving it
+    # first lets the insert pass skip it. Inserting first would leave the
+    # old row beside the new one and list the chapter twice.
+    if reconcile:
+        taken = {c.chapter_code for c in db.query(models.Chapter).all()}
+        for chapter in db.query(models.Chapter).all():
+            if chapter.chapter_code in desired:
+                continue
+            moved = by_identity.get((
+                chapter.board,
+                chapter.grade,
+                (chapter.chapter_title or "").strip().lower(),
+            ))
+            if moved is None:
+                continue
+            new_code = directory.make_chapter_code(
+                moved.board, moved.grade, moved.subject, moved.chapter,
+            )
+            if new_code in taken:
+                # Another row already holds the new identity; leave this one
+                # to the content check below instead of duplicating it.
+                continue
+            taken.discard(chapter.chapter_code)
+            taken.add(new_code)
+            chapter.subject = directory.effective_subject_for_tags(
+                moved.board, moved.subject,
+            )
+            chapter.unit = moved.unit
+            chapter.chapter_code = new_code
+            migrated += 1
+        db.commit()
+
     counts = upsert_chapters(db, all_rows) if all_rows else {
         "created": 0, "skipped": 0, "total_rows": 0,
     }
 
-    pruned = 0
-    retained: list[str] = []
-    if prune and all_rows and not missing:
-        # Must match upsert_chapters exactly, or a code-shape difference
-        # makes every stored chapter look superseded.
-        desired = {
-            directory.make_chapter_code(
-                row.board, row.grade, row.subject, row.chapter,
-            )
-            for row in all_rows
-        }
+    if reconcile:
         for chapter in db.query(models.Chapter).all():
             if chapter.chapter_code in desired:
                 continue
@@ -536,6 +612,7 @@ def refresh_syllabus(db: Session, *, prune: bool = True) -> dict:
         "loaded_files": loaded,
         **counts,
         "missing_files": missing,
+        "migrated": migrated,
         "pruned": pruned,
         "retained_with_content": retained,
     }
