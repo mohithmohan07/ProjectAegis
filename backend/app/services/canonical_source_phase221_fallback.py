@@ -1426,13 +1426,25 @@ def validate_page_extraction(
         )
         extracted_tokens = _tokens(extracted_text)
         if len(text_layer_tokens) >= 30:
+            # The embedded text layer is corroborating evidence, not the
+            # authority — the page image is. A book whose text layer is
+            # garbled, differently ordered, or in another script would fail
+            # this comparison while the model read the page perfectly, so a
+            # divergence is reported for review and the independent verifier
+            # decides whether the transcription is faithful.
             overlap = len(text_layer_tokens & extracted_tokens)
             coverage = overlap / max(1, len(text_layer_tokens))
             precision = overlap / max(1, len(extracted_tokens))
             if coverage < 0.35:
-                return None, f"{page_id} text-layer token coverage {coverage:.2f} is too low"
+                flags.append(
+                    f"text-layer token coverage {coverage:.2f} is low; the "
+                    "transcription diverges from the embedded text layer"
+                )
             if len(extracted_tokens) >= 30 and precision < 0.55:
-                return None, f"{page_id} extracted-token precision {precision:.2f} is too low"
+                flags.append(
+                    f"extracted-token precision {precision:.2f} is low; the "
+                    "transcription diverges from the embedded text layer"
+                )
         normalized_page: dict[str, Any] = {
             "page_id": page_id,
             "page_number": page.page_number,
@@ -1912,6 +1924,57 @@ def _canonical_task_heading(source_label: object) -> str:
     if label in {"write in brief", "questions", "exercises"}:
         return "Write in brief"
     return "Discuss"
+
+
+_TASK_FIGURE_ISSUE_CODES = frozenset({
+    "unresolved_required_visual",
+    "unresolved_explicit_figure_reference",
+    "ambiguous_explicit_figure_reference",
+})
+
+
+def _refresh_task_figure_issues(
+    canonical: dict[str, Any],
+    report: dict[str, Any],
+) -> None:
+    """Drop figure verdicts the model's own links have since answered.
+
+    Validation runs once, on the deterministic parse of the rendered MMD,
+    BEFORE the verified page relationships are applied — so its task/figure
+    verdicts are guesses made from prose ("draw a circle of radius 6 cm"
+    reads like a figure reference). Once the model's explicit
+    linked_visual_orders are authoritative, those guesses are stale: a task
+    was reported as needing an unresolvable visual while carrying no visual
+    requirement at all. Re-check each task-scoped figure issue against the
+    task as it now stands, and keep only what is still true.
+    """
+    tasks_by_id = {
+        str(task.get("task_id") or ""): task
+        for task in canonical.get("tasks") or []
+        if isinstance(task, dict)
+    }
+    kept: list[dict[str, Any]] = []
+    for issue in report.get("issues") or []:
+        if not isinstance(issue, dict):
+            continue
+        code = str(issue.get("code") or "")
+        task = tasks_by_id.get(str(issue.get("task_id") or ""))
+        if code not in _TASK_FIGURE_ISSUE_CODES or task is None:
+            kept.append(issue)
+            continue
+        if code == "unresolved_required_visual":
+            still_true = bool(
+                task.get("requires_visual")
+                and not task.get("figure_refs")
+                and not task.get("image_urls")
+            )
+        elif code == "unresolved_explicit_figure_reference":
+            still_true = bool(task.get("unresolved_figure_reference_ids"))
+        else:
+            still_true = bool(task.get("ambiguous_figure_reference_ids"))
+        if still_true:
+            kept.append(issue)
+    report["issues"] = kept
 
 
 def _accept_gate_issues_with_flags(
@@ -2904,6 +2967,7 @@ def rehydrate_verified_fallback(
     report = copy.deepcopy(report)
     _attach_chapter_outline(canonical, page_acsd)
     relationship_count = apply_page_acsd_relationships(canonical, page_acsd)
+    _refresh_task_figure_issues(canonical, report)
     canonical, report, issues = phase22._recalculate_after_adjudication(
         canonical, report
     )
@@ -2976,6 +3040,7 @@ def reconstruct_pdf_to_acsd(
         report = copy.deepcopy(compiled.report)
         _attach_chapter_outline(canonical, page_acsd)
         relationship_count = apply_page_acsd_relationships(canonical, page_acsd)
+        _refresh_task_figure_issues(canonical, report)
         canonical, report, issues = phase22._recalculate_after_adjudication(
             canonical, report
         )

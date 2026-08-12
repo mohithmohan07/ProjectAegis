@@ -528,6 +528,16 @@ def _independent_visual_task_clusters(
     return clusters
 
 
+def _model_judged_boundaries(canonical: dict[str, Any]) -> bool:
+    """Whether a chapter-outline pass decided this source's question boundaries.
+
+    Its presence means a model read the whole chapter and ruled on every
+    task; deterministic enumeration must not offer a competing answer.
+    """
+    outline = canonical.get("chapter_outline")
+    return isinstance(outline, dict) and bool(outline.get("version"))
+
+
 def materialize_task_leaf_cases(canonical: dict[str, Any]) -> int:
     """Create stable inventory leaves without replacing canonical parents."""
     total_leaves = 0
@@ -558,6 +568,14 @@ def materialize_task_leaf_cases(canonical: dict[str, Any]) -> int:
             part for part in task.get("gpt_boundary_parts") or []
             if isinstance(part, dict) and str(part.get("text") or "").strip()
         ]
+        if not gpt_parts and _model_judged_boundaries(canonical):
+            # Under model-judged boundaries the outline pass is the only
+            # authority on whether a question splits. Running the
+            # enumeration heuristics here would compute leaves that the
+            # inventory then discards — wasted work that reads like a second
+            # opinion. A task the model left whole stays whole.
+            continue
+
         provisional: list[dict[str, Any]] = []
         if gpt_parts:
             # The chapter-outline judge decided these subparts are independent

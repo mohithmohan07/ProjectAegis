@@ -429,3 +429,96 @@ def test_a_source_with_no_tasks_fails_closed():
         assert "phase2_no_tasks" in str(exc)
     else:
         raise AssertionError("a source with no tasks is not usable")
+
+
+def test_stale_figure_verdicts_are_dropped_after_model_links_apply():
+    # Validation runs on the deterministic parse before the verified page
+    # relationships are applied, so "draw a circle of radius 6 cm" read as a
+    # figure reference. Job 20 flagged TASK-00018 as needing an unresolvable
+    # visual while the task carried no visual requirement at all.
+    canonical = {
+        "tasks": [
+            {"task_id": "TASK-00018", "requires_visual": False,
+             "figure_refs": [], "image_urls": [],
+             "unresolved_figure_reference_ids": [],
+             "ambiguous_figure_reference_ids": []},
+            {"task_id": "TASK-00021", "requires_visual": True,
+             "figure_refs": [], "image_urls": [],
+             "unresolved_figure_reference_ids": ["Fig. 1.4"],
+             "ambiguous_figure_reference_ids": []},
+        ],
+    }
+    report = {"issues": [
+        {"severity": "warning", "code": "unresolved_required_visual",
+         "task_id": "TASK-00018"},
+        {"severity": "warning", "code": "unresolved_required_visual",
+         "task_id": "TASK-00021"},
+        {"severity": "warning", "code": "unresolved_explicit_figure_reference",
+         "task_id": "TASK-00021"},
+        {"severity": "warning", "code": "unresolved_explicit_figure_reference",
+         "task_id": "TASK-00018"},
+        {"severity": "error", "code": "source_reconstruction_mismatch"},
+    ]}
+
+    fallback._refresh_task_figure_issues(canonical, report)
+
+    codes = [(i["code"], i.get("task_id")) for i in report["issues"]]
+    # TASK-00018's verdicts are stale and gone; TASK-00021 still genuinely
+    # names a Figure that does not resolve, and unrelated issues survive.
+    assert ("unresolved_required_visual", "TASK-00018") not in codes
+    assert ("unresolved_explicit_figure_reference", "TASK-00018") not in codes
+    assert ("unresolved_required_visual", "TASK-00021") in codes
+    assert ("unresolved_explicit_figure_reference", "TASK-00021") in codes
+    assert ("source_reconstruction_mismatch", None) in codes
+
+
+def test_text_layer_divergence_is_reviewed_not_rejected():
+    # The page image is the authority; the embedded text layer is only
+    # corroboration. A garbled or differently-ordered text layer must not
+    # reject a page the model read correctly.
+    page = fallback.PdfPage(
+        page_id="PDF-PAGE-0001",
+        page_number=1,
+        text=" ".join(f"gibberish{n}" for n in range(60)),
+        image_data_url="data:image/jpeg;base64,AA==",
+        width=600.0,
+        height=800.0,
+    )
+    candidate = {"pages": [{
+        "page_id": "PDF-PAGE-0001",
+        "confidence": 0.99,
+        "blocks": [{
+            "reading_order": 1, "kind": "paragraph",
+            "bbox": [10, 10, 900, 200],
+            "text": " ".join(f"realword{n}" for n in range(60)),
+            "heading_level": 0, "source_label": "", "latex": "",
+            "table_rows": [], "linked_visual_orders": [],
+            "linked_context_orders": [], "caption": "", "confidence": 0.99,
+        }],
+    }]}
+
+    normalized, reason = fallback.validate_page_extraction([page], candidate)
+
+    assert reason == ""
+    assert normalized is not None
+    flags = normalized["pages"][0].get("review_flags") or []
+    assert any("diverges from the embedded text layer" in f for f in flags)
+
+
+def test_model_judged_boundaries_silence_the_enumeration_heuristics():
+    # With an outline present the model ruled on every task; a task it left
+    # whole must not be split by the deterministic enumerator.
+    canonical = {
+        "chapter_outline": {"version": fallback.OUTLINE_VERSION},
+        "tasks": [{
+            "task_id": "TASK-0001",
+            "qid": "QINV-0001",
+            "identity_key": "identity-1",
+            "raw_prompt": "Answer: (a) define X. (b) define Y. (c) define Z.",
+            "display_prompt": "Answer: (a) define X. (b) define Y. (c) define Z.",
+        }],
+    }
+
+    structure.materialize_task_leaf_cases(canonical)
+
+    assert not canonical["tasks"][0].get("leaf_cases")
