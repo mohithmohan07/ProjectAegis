@@ -15,6 +15,7 @@ export interface RunState {
   lines: RunLine[];
   progress: number;         // 0..1
   progressLabel: string;
+  etaLabel: string;         // e.g. "~7 min left" (empty when unknown)
   status: "idle" | "running" | "paused" | "done" | "error";
   usage: OpenAIUsage | null;
   usagePresentation: RunUsagePresentation | null;
@@ -61,7 +62,8 @@ interface RunConsoleApi {
 const MAX_LINES = 800;
 const INITIAL: RunState = {
   active: false, open: true, title: "", lines: [], progress: 0,
-  progressLabel: "", status: "idle", usage: null, usagePresentation: null,
+  progressLabel: "", etaLabel: "", status: "idle", usage: null,
+  usagePresentation: null,
 };
 
 const RunConsoleContext = createContext<RunConsoleApi | null>(null);
@@ -84,6 +86,7 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
       if (evt.type === "progress") {
         next.progress = evt.value;
         if (evt.label) next.progressLabel = evt.label;
+        next.etaLabel = evt.eta_label ?? next.etaLabel;
       } else if (evt.type === "step") {
         next.progressLabel = evt.label;
         next.lines = [...s.lines, { level: "step", message: evt.label, ts: evt.ts ?? Date.now() / 1000 }];
@@ -123,6 +126,7 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
       title,
       lines: [],
       progress: 0,
+      etaLabel: "",
       usage: initialUsage,
       usagePresentation: usagePresentation ? presentation : null,
       progressLabel: "Starting…", status: "running",

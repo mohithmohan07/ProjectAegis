@@ -124,7 +124,10 @@ def test_vertical_margin_heading_is_navigation_even_with_valid_order():
     assert sidebar["heading_level"] == 0
 
 
-def test_invalid_semantic_block_order_still_fails_closed():
+def test_invalid_semantic_block_order_is_normalized_and_flagged():
+    """Structural quirks no longer fail a book closed: an invalid reading
+    order is reassigned deterministically and the page carries a review
+    flag naming the repair."""
     candidate = _candidate(_block(
         kind="paragraph",
         text="A wide semantic paragraph must not be silently reordered.",
@@ -134,8 +137,13 @@ def test_invalid_semantic_block_order_still_fails_closed():
 
     normalized, reason = fallback.validate_page_extraction([_page()], candidate)
 
-    assert normalized is None
-    assert reason == "PDF-PAGE-0025 has an invalid block order/kind"
+    assert reason == ""
+    assert normalized is not None
+    page = normalized["pages"][0]
+    assert page["blocks"][0]["reading_order"] == 1
+    assert any(
+        "reading_order" in flag for flag in page.get("review_flags") or []
+    )
 
 
 def test_navigation_cannot_become_task_context():

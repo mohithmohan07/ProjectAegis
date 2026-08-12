@@ -115,13 +115,15 @@ def test_unresolved_multi_page_batch_isolated_instead_of_stopping(monkeypatch):
         ids = extraction_page_ids(schema)
         extraction_batch_sizes.append(len(ids))
         if len(ids) > 1:
-            # Keep the page identities exact but force deterministic rejection.
+            # Keep the page identities exact but force deterministic
+            # rejection: a missing blocks array is genuinely unusable
+            # (structural quirks are normalized, never rejected, now).
             return {
                 "pages": [
                     {
                         "page_id": page_id,
                         "confidence": 0.999,
-                        "blocks": [_block("Invalid group geometry", order=0)],
+                        "blocks": None,
                     }
                     for page_id in ids
                 ]

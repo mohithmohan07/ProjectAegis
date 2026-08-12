@@ -19,6 +19,7 @@ import os
 import re
 import shutil
 import tempfile
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -497,6 +498,8 @@ You are the Aegis PDF-to-ACSD source transcriber. The supplied original PDF
 page images are the only authority; the text layer is supporting evidence and
 may be incomplete. Return every meaningful textbook block in exact visual
 reading order. Never paraphrase, summarise, complete, or infer unseen wording.
+Verbatim includes the source's own printed spelling errors — never silently
+correct a typo the page visibly carries.
 Omit only repeated running headers, footers, and bare page numbers.
 
 Block rules:
@@ -507,6 +510,7 @@ Block rules:
   exact visible cue in source_label and the body in text.
 - task: separate learner instructions/questions from surrounding narrative and
   preserve the visible task cue (Activity, Discuss, Project, etc.) in source_label.
+  A task with no visible cue leaves source_label empty — never invent one.
 - A worked example — a cue like "Example 3 :" followed by a problem statement
   whose solution is printed right after it — is a real question: emit the
   problem statement as a task block with the exact cue (e.g. "Example 3") in
@@ -536,7 +540,17 @@ You are the independent Aegis PDF-to-ACSD verification reviewer. Compare the
 candidate page/block extraction against the supplied original PDF page images.
 Approve only when every meaningful block is present, wording is verbatim,
 reading order and block roles are correct, task/figure ownership is supported,
-and no content was invented. A visibly labelled historical source, excerpt,
+and no content was invented. Judge ONLY against the extraction contract:
+linked_visual_orders/linked_context_orders belong to task blocks alone — an
+illustrative figure beside prose or poetry needs only its tight bbox and its
+exact visible caption, and must never be rejected for missing ownership
+links or any field the contract does not define for its kind. A candidate's
+review_flags field is Aegis bookkeeping — ignore it. Canonical
+[Katex] ... [/Katex] wrapping of visibly printed mathematics IS the
+contract's required wire format — never reject it as invented markup or an
+extraction artifact; judge only whether the wrapped content matches the
+printed mathematics. Verbatim includes printed spelling errors: a candidate
+that silently corrects the source's own typo is not verbatim. A visibly labelled historical source, excerpt,
 passage, case study, or source box that is not a learner task must use
 kind=source and retain its exact cue in source_label. A worked example's
 problem statement (a cue like "Example 3 :" with its solution printed after
@@ -711,65 +725,119 @@ def validate_page_extraction(
         page_id = str(row.get("page_id") or "")
         page = page_map[page_id]
         confidence = float(row.get("confidence") or 0.0)
-        if confidence < _min_page_confidence():
-            return None, f"{page_id} confidence {confidence:.3f} is below threshold"
         blocks = row.get("blocks")
         if not isinstance(blocks, list):
             return None, f"{page_id} blocks are missing"
+        # Structural opinions never kill a conversion: every book lays its
+        # pages out differently, so deterministic code NORMALIZES what it
+        # can fix mechanically and FLAGS what it cannot — hard rejection is
+        # reserved for content that is genuinely unusable (missing pages,
+        # missing text coverage). The model verifier remains the judge of
+        # verbatim wording and completeness.
+        flags: list[str] = []
+        if confidence < _min_page_confidence():
+            flags.append(
+                f"page transcription confidence {confidence:.3f} is below "
+                f"{_min_page_confidence():.3f}"
+            )
         orders: list[int] = []
         normalized_blocks: list[dict[str, Any]] = []
         figure_orders: set[int] = set()
         for raw in blocks:
             if not isinstance(raw, dict):
-                return None, f"{page_id} contains a non-object block"
-            raw = _canonicalize_source_cue_block(raw)
+                flags.append("dropped a non-object block")
+                continue
+            raw = copy.deepcopy(_canonicalize_source_cue_block(raw))
             order = int(raw.get("reading_order") or 0)
             kind = str(raw.get("kind") or "")
             bbox = raw.get("bbox")
             block_confidence = float(raw.get("confidence") or 0.0)
-            if order < 1 or kind not in _ALLOWED_KINDS:
-                return None, f"{page_id} has an invalid block order/kind"
-            if order in orders:
-                return None, f"{page_id} repeats reading_order {order}"
+            if kind not in _ALLOWED_KINDS:
+                flags.append(f"block {order}: unknown kind {kind!r} kept as 'other'")
+                kind = "other"
+                raw["kind"] = "other"
+            if order < 1 or order in orders:
+                new_order = (max(orders) + 1) if orders else 1
+                flags.append(
+                    f"reassigned invalid/duplicate reading_order {order} "
+                    f"to {new_order}"
+                )
+                order = new_order
+                raw["reading_order"] = order
             if (
                 not isinstance(bbox, list) or len(bbox) != 4
                 or any(not isinstance(value, (int, float)) for value in bbox)
-                or not (0 <= bbox[0] < bbox[2] <= 1000)
-                or not (0 <= bbox[1] < bbox[3] <= 1000)
             ):
-                return None, f"{page_id} block {order} has an invalid bbox"
+                flags.append(f"block {order}: unusable bbox replaced with full page")
+                raw["bbox"] = [0, 0, 1000, 1000]
+            else:
+                clamped = [min(1000.0, max(0.0, float(v))) for v in bbox]
+                if clamped[0] >= clamped[2] or clamped[1] >= clamped[3]:
+                    flags.append(
+                        f"block {order}: degenerate bbox replaced with full page"
+                    )
+                    clamped = [0, 0, 1000, 1000]
+                raw["bbox"] = clamped
             if block_confidence < 0.90:
-                return None, f"{page_id} block {order} confidence is too low"
+                flags.append(
+                    f"block {order}: transcription confidence "
+                    f"{block_confidence:.3f} is low"
+                )
             text = str(raw.get("text") or "").strip()
             latex = str(raw.get("latex") or "").strip()
             rows_value = raw.get("table_rows") or []
-            linked_visuals = list(raw.get("linked_visual_orders") or [])
             heading_level = int(raw.get("heading_level") or 0)
             source_label = str(raw.get("source_label") or "").strip()
             if kind not in {"figure", "math", "table", "source"} and not text:
-                return None, f"{page_id} block {order} has no visible text"
+                flags.append(f"dropped empty {kind} block {order}")
+                continue
             if kind == "source" and not (source_label or text):
-                return None, f"{page_id} source block {order} has no visible content"
+                flags.append(f"dropped empty source block {order}")
+                continue
             if kind == "heading" and heading_level < 1:
-                return None, f"{page_id} heading block {order} has no hierarchy level"
+                raw["heading_level"] = 2
             if kind != "heading" and heading_level != 0:
-                return None, f"{page_id} non-heading block {order} has a heading level"
-            if kind == "task" and not source_label:
-                return None, f"{page_id} task block {order} has no source cue"
+                raw["heading_level"] = 0
+            # A task without a visible cue is legitimate (many books print
+            # bare instructions); whether a VISIBLE cue was dropped is the
+            # model verifier's judgement, not a deterministic presence rule.
             if kind == "source" and not source_label:
-                return None, f"{page_id} source block {order} has no source cue"
+                flags.append(f"source block {order} carries no visible cue")
             if kind not in {"task", "source"} and source_label:
-                return None, f"{page_id} non-task/non-source block {order} has a source cue"
-            if kind != "task" and linked_visuals:
-                return None, f"{page_id} non-task block {order} owns visual links"
+                # Keep the words: fold a stray cue into the block text.
+                if source_label.casefold() not in text.casefold():
+                    raw["text"] = f"{source_label} {text}".strip()
+                raw["source_label"] = ""
+                flags.append(
+                    f"moved stray cue {source_label!r} into block {order}'s text"
+                )
+            if kind != "task" and (raw.get("linked_visual_orders") or []):
+                raw["linked_visual_orders"] = []
+                flags.append(f"stripped visual links from non-task block {order}")
             if kind == "math" and not latex:
-                return None, f"{page_id} math block {order} has no LaTeX"
+                if text:
+                    raw["kind"] = "paragraph"
+                    kind = "paragraph"
+                    flags.append(
+                        f"math block {order} without LaTeX kept as paragraph"
+                    )
+                else:
+                    flags.append(f"dropped empty math block {order}")
+                    continue
             if kind == "table" and not rows_value:
-                return None, f"{page_id} table block {order} has no rows"
+                if text:
+                    raw["kind"] = "paragraph"
+                    kind = "paragraph"
+                    flags.append(
+                        f"table block {order} without rows kept as paragraph"
+                    )
+                else:
+                    flags.append(f"dropped empty table block {order}")
+                    continue
             if kind == "figure":
                 figure_orders.add(order)
             orders.append(order)
-            normalized_blocks.append(copy.deepcopy(raw))
+            normalized_blocks.append(raw)
         if orders != sorted(orders):
             normalized_blocks.sort(key=lambda block: int(block["reading_order"]))
         blocks_by_order = {
@@ -777,17 +845,27 @@ def validate_page_extraction(
             for block in normalized_blocks
         }
         for block in normalized_blocks:
+            kept_visuals = []
             for linked in block.get("linked_visual_orders") or []:
-                if int(linked) not in figure_orders:
-                    return None, (
-                        f"{page_id} task links unknown figure reading_order {linked}"
+                if int(linked) in figure_orders:
+                    kept_visuals.append(linked)
+                else:
+                    flags.append(
+                        f"removed link to unknown figure reading_order {linked}"
                     )
+            if len(kept_visuals) != len(block.get("linked_visual_orders") or []):
+                block["linked_visual_orders"] = kept_visuals
+            kept_context = []
             for linked in block.get("linked_context_orders") or []:
                 target = blocks_by_order.get(int(linked))
                 if target is None or target.get("kind") in {"figure", "task", "heading"}:
-                    return None, (
-                        f"{page_id} task links invalid context reading_order {linked}"
+                    flags.append(
+                        f"removed invalid context link to reading_order {linked}"
                     )
+                else:
+                    kept_context.append(linked)
+            if len(kept_context) != len(block.get("linked_context_orders") or []):
+                block["linked_context_orders"] = kept_context
         text_layer_tokens = _tokens(page.text)
         extracted_text = " ".join(
             str(block.get("text") or "")
@@ -806,12 +884,17 @@ def validate_page_extraction(
                 return None, f"{page_id} text-layer token coverage {coverage:.2f} is too low"
             if len(extracted_tokens) >= 30 and precision < 0.55:
                 return None, f"{page_id} extracted-token precision {precision:.2f} is too low"
-        normalized_pages.append({
+        normalized_page: dict[str, Any] = {
             "page_id": page_id,
             "page_number": page.page_number,
             "confidence": confidence,
             "blocks": normalized_blocks,
-        })
+        }
+        if flags:
+            normalized_page["review_flags"] = [
+                f"{page_id}: {flag}" for flag in flags
+            ]
+        normalized_pages.append(normalized_page)
     normalized_pages.sort(key=lambda row: row["page_number"])
     return {"pages": normalized_pages}, ""
 
@@ -916,9 +999,13 @@ def extract_batch_via_openai(pages: list[PdfPage]) -> dict[str, Any]:
                 "correction_history": correction_history,
             }
         if pass_index >= max_corrections:
+            # The best structurally-normalized candidate travels with the
+            # failure so the orchestrator can ship it under review flags
+            # instead of refusing the whole book.
             return {
                 "status": "review_required",
                 "reason": reason,
+                "pages": copy.deepcopy(normalized["pages"]),
                 "verification": verification,
                 "correction_history": correction_history,
             }
@@ -990,12 +1077,35 @@ def extract_pdf_to_page_acsd(
                 level="info",
             )
             return bundle
-    progress.step("Canonical source — GPT PDF-to-ACSD fallback", value=0.01)
+    # The transcription is the longest stage of a conversion; the bar walks
+    # through its own band batch by batch instead of freezing until the end.
+    band_start = progress.current_value()
+    band_end = (
+        0.92 if band_start >= 0.25 else max(band_start + 0.02, 0.26)
+    )
+    progress.step(
+        "Canonical source — GPT PDF-to-ACSD fallback",
+        value=max(0.01, band_start),
+    )
     progress.log(
         f"GPT PDF-to-ACSD fallback will inspect {page_count} original page(s) "
         f"in {batch_count} verified batch(es).",
         level="warning",
     )
+    batch_progress_lock = threading.Lock()
+    batches_done = [0]
+
+    def _advance_batch_progress() -> None:
+        with batch_progress_lock:
+            batches_done[0] += 1
+            done = batches_done[0]
+        progress.set_progress(
+            band_start + (band_end - band_start) * done / max(1, batch_count),
+            label=(
+                f"PDF transcription: {done}/{batch_count} page batch(es) "
+                "verified"
+            ),
+        )
     def _one_batch(batch_index: int, start_page: int) -> dict[str, Any]:
         batch = collect_pdf_pages(
             path,
@@ -1029,6 +1139,7 @@ def extract_pdf_to_page_acsd(
                 f"({', '.join(page_ids)}; cache {cache_state}).",
                 level="success",
             )
+        _advance_batch_progress()
         return {
             "batch_index": batch_index,
             "page_ids": page_ids,
@@ -1066,10 +1177,32 @@ def extract_pdf_to_page_acsd(
     for batch_index, _start_page in starts:
         outcome = outcomes[batch_index]
         result = outcome["result"]
+        accepted_with_flags = False
         if result.get("status") != "verified":
-            raise ValueError(
-                f"GPT PDF-to-ACSD batch {batch_index}/{batch_count} requires review: "
-                f"{result.get('reason') or 'verification failed'}"
+            candidate_pages = result.get("pages") or []
+            if not candidate_pages:
+                # Only a genuinely unusable transcription (no candidate at
+                # all) stops the source pipeline; residual model disputes
+                # ship under review flags instead.
+                raise ValueError(
+                    f"GPT PDF-to-ACSD batch {batch_index}/{batch_count} "
+                    "requires review: "
+                    f"{result.get('reason') or 'verification failed'}"
+                )
+            unresolved = (
+                "verification unresolved after bounded correction: "
+                + str(result.get("reason") or "unknown reason")[:500]
+            )
+            result = copy.deepcopy(result)
+            for row in result["pages"]:
+                row.setdefault("review_flags", []).append(unresolved)
+            accepted_with_flags = True
+            progress.log(
+                f"GPT PDF-to-ACSD batch {batch_index}/{batch_count} ships "
+                "under review flags — the independent verifier did not "
+                "fully approve the final candidate: "
+                + str(result.get("reason") or "")[:300],
+                level="warning",
             )
         rows = result.get("pages") or []
         accepted.extend(copy.deepcopy(rows))
@@ -1077,7 +1210,11 @@ def extract_pdf_to_page_acsd(
             "batch": batch_index,
             "page_ids": outcome["page_ids"],
             "cache": outcome["cache"],
-            "status": "verified",
+            "status": (
+                "accepted_with_review_flags"
+                if accepted_with_flags
+                else "verified"
+            ),
         })
     accepted.sort(key=lambda row: int(row.get("page_number") or 0))
     expected_pages = list(range(1, page_count + 1))

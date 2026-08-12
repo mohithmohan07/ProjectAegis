@@ -108,11 +108,14 @@ def test_source_block_is_valid_task_context_without_losing_its_label():
 
 
 def test_validation_failure_is_self_corrected_before_human_review(monkeypatch):
+    """A genuinely unusable candidate (no blocks at all) still drives the
+    bounded deterministic correction loop; structural opinions are
+    normalized instead (covered below)."""
     pages = [_page("Describe the visible transformation")]
     calls: list[str] = []
-    invalid = _candidate(_block(
-        kind="task", text="Describe the visible transformation", source_label=""
-    ))
+    invalid = {
+        "pages": [{"page_id": "PDF-PAGE-0002", "confidence": 0.999, "blocks": None}]
+    }
     corrected = _candidate(_block(
         kind="task", text="Describe the visible transformation", source_label="Activity"
     ))
@@ -137,7 +140,7 @@ def test_validation_failure_is_self_corrected_before_human_review(monkeypatch):
     assert result["correction_history"] == [{
         "attempt": 1,
         "stage": "deterministic_validation",
-        "reason": "PDF-PAGE-0002 task block 1 has no source cue",
+        "reason": "PDF-PAGE-0002 blocks are missing",
     }]
     assert calls == [
         "aegis_pdf_page_acsd_extract",
@@ -148,9 +151,9 @@ def test_validation_failure_is_self_corrected_before_human_review(monkeypatch):
 
 def test_correction_loop_is_bounded_when_candidate_never_becomes_valid(monkeypatch):
     pages = [_page("Describe the visible transformation")]
-    invalid = _candidate(_block(
-        kind="task", text="Describe the visible transformation", source_label=""
-    ))
+    invalid = {
+        "pages": [{"page_id": "PDF-PAGE-0002", "confidence": 0.999, "blocks": None}]
+    }
     calls = 0
 
     def fake_openai(**_kwargs):
@@ -165,7 +168,7 @@ def test_correction_loop_is_bounded_when_candidate_never_becomes_valid(monkeypat
     result = fallback.extract_batch_via_openai(pages)
 
     assert result["status"] == "review_required"
-    assert result["reason"] == "PDF-PAGE-0002 task block 1 has no source cue"
+    assert result["reason"] == "PDF-PAGE-0002 blocks are missing"
     assert len(result["correction_history"]) == 2
     assert calls == 3
 

@@ -726,6 +726,8 @@ def host(
     # Default is sequential: per-run parallelism is a deployment choice
     # sized against concurrent creator runs (see phase3_decision_workers).
     workers = config.phase3_decision_workers()
+    batch_total = max(1, (len(units) + _BATCH_SIZE - 1) // _BATCH_SIZE)
+    batches_done = 0
     for batch_hosts, batch_qids, batch_new in kernel.parallel_map_in_order(
         range(0, len(units), _BATCH_SIZE),
         _decide_units_batch,
@@ -734,6 +736,14 @@ def host(
         host_map.update(batch_hosts)
         qid_map.update(batch_qids)
         new_concepts.extend(batch_new)
+        batches_done += 1
+        progress.set_progress(
+            0.91 + 0.03 * batches_done / batch_total,
+            label=(
+                "Phase 3 — Host: assignment batch "
+                f"{batches_done}/{batch_total} certified"
+            ),
+        )
 
     flagged = sum(
         1 for entry in host_map.values() if entry.get("review_flags")
