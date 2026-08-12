@@ -626,3 +626,79 @@ def test_inventory_provenance_admits_a_chapter_no_model_outlined():
     assert provenance["chapter_outline_topics"] == 0
     assert provenance["model_split_items"] == 0
     assert provenance["inventory_items"] == 1
+
+
+def test_run_in_heading_punctuation_is_trimmed_from_topic_titles():
+    # Balbharati prints "Excretion -" run into its own paragraph. The words
+    # are the topic; the joiner is typesetting.
+    candidate = _candidate()
+    candidate["topics"][0]["title"] = "Growth and Development-"
+    candidate["topics"][1]["title"] = "Response to Stimuli : "
+
+    outline, _flags = fallback._normalize_chapter_outline(_page_acsd(), candidate)
+
+    assert [t["title"] for t in outline["topics"]] == [
+        "Growth and Development", "Response to Stimuli",
+    ]
+
+
+def test_a_title_that_is_only_punctuation_survives_the_trim():
+    candidate = _candidate()
+    candidate["topics"][0]["title"] = "--"
+
+    outline, _flags = fallback._normalize_chapter_outline(_page_acsd(), candidate)
+
+    assert outline["topics"][0]["title"] == "--"
+
+
+def test_unlabelled_bullet_parts_partition_like_lettered_ones():
+    # "What will happen if…" prints seven independent scenarios with no item
+    # markers at all. A missing label must not cost the split.
+    page_acsd = {
+        "pdf_sha256": "abc123",
+        "pages": [{
+            "page_id": "PDF-PAGE-0001",
+            "page_number": 1,
+            "blocks": [
+                {"reading_order": 1, "kind": "heading", "heading_level": 1,
+                 "text": "Growth"},
+                {"reading_order": 2, "kind": "task", "source_label": "",
+                 "text": (
+                     "What Will Happen, if… "
+                     "There is a large beehive on a tree branch. Some children "
+                     "light a fire under that tree. "
+                     "A hen and her chicks are picking grains. A cat or a snake "
+                     "approaches them."
+                 )},
+            ],
+        }],
+    }
+    candidate = {
+        "chapter_title": "Characteristics of Living Organisms",
+        "topics": [{"title": "Growth", "kind": "content",
+                    "start_page_id": "PDF-PAGE-0001", "start_reading_order": 1}],
+        "task_partitions": [{
+            "page_id": "PDF-PAGE-0001", "reading_order": 2,
+            "independent_parts": [
+                {"label": "", "stem": "What Will Happen, if…",
+                 "text": (
+                     "There is a large beehive on a tree branch. Some children "
+                     "light a fire under that tree."
+                 )},
+                {"label": "", "stem": "What Will Happen, if…",
+                 "text": (
+                     "A hen and her chicks are picking grains. A cat or a snake "
+                     "approaches them."
+                 )},
+            ],
+        }],
+        "notes": [],
+    }
+
+    outline, flags = fallback._normalize_chapter_outline(page_acsd, candidate)
+
+    assert flags == []
+    parts = outline["task_partitions"][0]["independent_parts"]
+    assert len(parts) == 2
+    assert parts[0]["label"] == ""
+    assert parts[0]["stem"] == "What Will Happen, if…"

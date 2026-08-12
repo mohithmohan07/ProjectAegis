@@ -742,7 +742,7 @@ def _tokens(value: str) -> set[str]:
 # decide the chapter title, the topic outline, and per-task question
 # boundaries; deterministic code only validates references and compiles.
 
-OUTLINE_VERSION = "chapter-outline-1"
+OUTLINE_VERSION = "chapter-outline-2"
 
 
 def _outline_cache_key(pdf_sha256: str) -> str:
@@ -911,10 +911,17 @@ your judgment IS the structure.
      material) is an independent question. Subparts that share one stem's
      data, passage, or figure, or that build on each other's answers, stay
      together — do not partition such tasks at all.
-   - Each part: label = the printed item marker ("(i)", "2)", "b."); text =
-     the part's complete wording COPIED VERBATIM from the task block; stem =
-     any shared instruction that the part needs to stand alone (for example
-     "Select the correct option."), also verbatim, or "" if none.
+   - A printed marker is NOT required. A task block that lists several
+     separate prompts as bullets, dashes, or plain successive sentences —
+     "What will happen if…" scenario lists, a set of unrelated observation
+     questions under one banner — partitions exactly like a lettered one.
+     Judge independence by the content; leave label "" when nothing is
+     printed.
+   - Each part: label = the printed item marker ("(i)", "2)", "b.") or "" if
+     the book prints none; text = the part's complete wording COPIED VERBATIM
+     from the task block; stem = any shared instruction that the part needs to
+     stand alone (for example "Select the correct option."), also verbatim, or
+     "" if none.
    - Never rewrite, complete, or merge wording. Every part text must be a
      contiguous passage of the task block's text.
    - Do not partition a task that is a single question, an activity's
@@ -923,6 +930,22 @@ your judgment IS the structure.
 
 Return JSON per the schema. notes: anything you judged worth flagging.
 """.strip()
+
+
+_RUN_IN_PUNCTUATION_RE = re.compile(r"[\s\-–—:;,\.]+$")
+
+
+def _trim_run_in_punctuation(value: object) -> str:
+    """Drop the dash or colon a run-in heading uses to join its own body.
+
+    Balbharati prints its characteristics as "Growth and Development- ..." on
+    one line with the paragraph. The words are the topic; the joiner is
+    typesetting, and carrying it through puts "Excretion -" on screen.
+    """
+    text = str(value or "").strip()
+    trimmed = _RUN_IN_PUNCTUATION_RE.sub("", text)
+    # Never let the trim empty a title that was only punctuation to begin with.
+    return trimmed or text
 
 
 def _normalize_chapter_outline(
@@ -960,7 +983,7 @@ def _normalize_chapter_outline(
     for topic in candidate.get("topics") or []:
         if not isinstance(topic, dict):
             continue
-        topic_title = str(topic.get("title") or "").strip()
+        topic_title = _trim_run_in_punctuation(topic.get("title"))
         ref = (
             str(topic.get("start_page_id") or ""),
             int(topic.get("start_reading_order") or 0),
