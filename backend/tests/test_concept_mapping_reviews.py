@@ -4636,6 +4636,29 @@ def test_fill_table_below_callout_owns_adjacent_source_tables():
         "reason": "stub_task",
     }]
 
+    # The same short imperative WITH its table riding along as shared context
+    # is a complete source task (job 12: "Complete the table below." killed a
+    # 3D Shapes run at the extraction gate despite carrying the full table).
+    context_backed = {
+        "items": [{
+            "qid": "QINV-0013",
+            "source_kind": "checkpoint_question",
+            "raw_task": "Fill the table below.",
+            "normalized_task": "Fill the table below.",
+            "requires_context": True,
+            "shared_context": (
+                "Name | Figure | Number of Vertices | Number of Sides\n"
+                "Triangle |  | 3 | 3\nQuadrilateral |  |  |"
+            ),
+            # The ACSD source contract pins the public prompt to the bare
+            # display wording, so the stub judgment must consult the shared
+            # context itself rather than rely on context embedding.
+            "_acsd_source_contract": "acsd-phase2-source-critical",
+            "_acsd_display_prompt": "Fill the table below.",
+        }],
+    }
+    assert g._invalid_inventory_items(context_backed) == []
+
     merged = g._merge_source_task_anchors(
         [{
             "qid": "QINV-0013",

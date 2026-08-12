@@ -9,9 +9,10 @@ team requires regardless of which extractor produced them:
    consolidated Types rendered on more than one concept or topic retain the
    SAME ``Type NN`` when their hidden mined-Type identity is supplied. Their
    ``Case NN`` sequence continues across those hosts.
-2. **Culmination concepts use a separate "Miscellaneous Type NN" sequence**
-   that is ALSO continuous across the whole chapter, and never advances (or is
-   advanced by) the regular Type counter.
+2. **One continuous Type sequence for the whole chapter.** Culmination rows
+   share the same ``Type NN`` counter as regular concepts, in row order.
+   They previously carried a separate "Miscellaneous Type NN" sequence, which
+   reviewers read as a second, parallel numbering.
 3. **Type reduction for theory.** Purely theoretical concepts should not carry
    a Types section; we drop any ``Types:`` block that has no concrete ``Case``.
 4. **Culmination description = detailed "Recap of ...".** Culmination rows keep
@@ -415,11 +416,7 @@ def _durable_rendered_type_origins(records: list[dict]) -> dict[tuple, str]:
         topic_key = re.sub(
             r"\W+", " ", str(record.get("topic") or "").lower()
         ).strip()
-        sequence = (
-            "miscellaneous"
-            if is_culmination(record.get("concept_title", ""))
-            else "regular"
-        )
+        sequence = "regular"
         for type_index, match in enumerate(matches):
             end = (
                 matches[type_index + 1].start()
@@ -560,10 +557,10 @@ def reduce_type_sections(details: str) -> str:
 def renumber_types_continuously(records: list[dict]) -> list[dict]:
     """Renumber Types continuously while preserving reusable Type identity.
 
-    Two independent, chapter-wide continuous sequences:
-      * regular concepts  -> "Type 01", "Type 02", ...
-      * culmination rows  -> "Miscellaneous Type 01", "Miscellaneous Type 02", ...
-    Neither advances the other. A supplied hidden ``_origin_type_id`` keeps a
+    ONE chapter-wide continuous sequence -> "Type 01", "Type 02", ... shared
+    by regular concepts and culmination rows alike, in row order. Culminations
+    previously carried a separate "Miscellaneous Type NN" sequence, which read
+    as a parallel numbering to reviewers. A supplied hidden ``_origin_type_id`` keeps a
     mined Type chapter-global even when its Cases have different concept/topic
     hosts. The raw ID is immediately replaced by an opaque origin seal, which
     survives row-local cleanup and checkpoint resume without entering public
@@ -572,11 +569,8 @@ def renumber_types_continuously(records: list[dict]) -> list[dict]:
     number and their Cases continue increasing instead of restarting.
     """
     counter = 0
-    misc_counter = 0
     regular_numbers: dict[tuple[str, ...], int] = {}
     regular_cases: dict[tuple[str, ...], int] = {}
-    misc_numbers: dict[tuple[str, ...], int] = {}
-    misc_cases: dict[tuple[str, ...], int] = {}
     durable_origins = _durable_rendered_type_origins(records)
     for rec in records:
         # This handoff exists only long enough to give rendered fragments their
@@ -609,8 +603,7 @@ def renumber_types_continuously(records: list[dict]) -> list[dict]:
         ]
         topic_key = re.sub(
             r"\W+", " ", str(rec.get("topic") or "").lower()).strip()
-        culmination = is_culmination(rec.get("concept_title", ""))
-        sequence = "miscellaneous" if culmination else "regular"
+        sequence = "regular"
         for type_index, match in enumerate(type_matches):
             if origin_type_ids[type_index]:
                 continue
@@ -629,26 +622,15 @@ def renumber_types_continuously(records: list[dict]) -> list[dict]:
                     "",
                 )
             )
-        if culmination:
-            new_content, misc_counter = _renumber_reusable_block(
-                content,
-                topic_key=topic_key,
-                type_label="Miscellaneous Type",
-                number_by_signature=misc_numbers,
-                case_count_by_signature=misc_cases,
-                next_number=misc_counter,
-                origin_type_ids=origin_type_ids,
-            )
-        else:
-            new_content, counter = _renumber_reusable_block(
-                content,
-                topic_key=topic_key,
-                type_label="Type",
-                number_by_signature=regular_numbers,
-                case_count_by_signature=regular_cases,
-                next_number=counter,
-                origin_type_ids=origin_type_ids,
-            )
+        new_content, counter = _renumber_reusable_block(
+            content,
+            topic_key=topic_key,
+            type_label="Type",
+            number_by_signature=regular_numbers,
+            case_count_by_signature=regular_cases,
+            next_number=counter,
+            origin_type_ids=origin_type_ids,
+        )
         sections[idx] = (label, new_content)
         rec["concept_details"] = join_sections(sections)
         if any(origin_type_ids):

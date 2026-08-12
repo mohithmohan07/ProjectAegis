@@ -62,6 +62,41 @@ _PHASE2_BLOCKING_WARNING_CODES = {
 }
 
 
+# Warning-severity codes that must never refuse a source on their own. Kept
+# separate from ``_PHASE2_BLOCKING_WARNING_CODES`` (which compat layers mutate
+# at install time) so the policy is stable wherever it is consulted.
+_PHASE2_ADVISORY_GATE_CODES = frozenset({
+    "task_anchor_extraction_failed",
+    "unresolved_required_visual",
+    "display_rich_text_requires_review",
+})
+
+
+def partition_gate_issues(
+    issues: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Split source-gate issues into fatal defects and advisory review notes.
+
+    The compiler raises the advisory codes as WARNINGS — a task naming a
+    Figure the registry could not resolve, a residual rich-text nit — and the
+    gate then promoted them to blocking, which refused entire books that had
+    otherwise parsed cleanly. They are review notes; only an error-severity
+    defect genuinely invalidates a source.
+    """
+    fatal: list[dict[str, Any]] = []
+    advisory: list[dict[str, Any]] = []
+    for issue in issues or []:
+        if not isinstance(issue, dict):
+            continue
+        severity = str(issue.get("severity") or "").lower()
+        code = str(issue.get("code") or "")
+        if severity != "error" and code in _PHASE2_ADVISORY_GATE_CODES:
+            advisory.append(issue)
+        else:
+            fatal.append(issue)
+    return fatal, advisory
+
+
 def _sha256_text(value: str) -> str:
     return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
 
@@ -624,9 +659,16 @@ def inventory_from_canonical(canonical: dict[str, Any]) -> dict[str, Any]:
             if isinstance(leaf, dict)
         ]
         rows = leaf_cases or [task]
-        if leaf_cases and _never_split_questions():
+        gpt_decided_split = any(
+            str(leaf.get("decomposition") or "") == "gpt_semantic_boundary"
+            for leaf in leaf_cases
+        )
+        if leaf_cases and _never_split_questions() and not gpt_decided_split:
             # The parent task's display prompt carries the complete
             # multi-part wording; the whole question is one inventory item.
+            # The exception is a split the chapter-outline judge decided:
+            # subparts it deemed independent are separate questions (board
+            # conventions differ, and the model judged the content itself).
             rows = [task]
         for leaf in rows:
             row = copy.deepcopy(task)

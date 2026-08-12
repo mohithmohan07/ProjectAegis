@@ -35,7 +35,10 @@ from . import canonical_source_phase22 as phase22
 from . import katex_rules as kr
 from . import progress
 
-FALLBACK_VERSION = "2.2.2"
+# Part of every transcription cache key: bump on any material change to the
+# extraction/verification contract so sealed pages re-derive under the new
+# rules instead of replaying stale judgments.
+FALLBACK_VERSION = "2.3.2"
 FALLBACK_COMPILER = "gpt-pdf-to-acsd-2"
 FALLBACK_ORIGIN = "gpt_pdf_acsd_fallback"
 # Version stamped on the extracted page bundle. Phase 3's page-evidence cache
@@ -511,6 +514,34 @@ Block rules:
 - task: separate learner instructions/questions from surrounding narrative and
   preserve the visible task cue (Activity, Discuss, Project, etc.) in source_label.
   A task with no visible cue leaves source_label empty — never invent one.
+- Every item the learner is asked to complete is a task, in any subject:
+  a fill-in-the-blanks statement whose blanks sit in the sentence itself, a
+  match-the-pairs or true/false set, a discussion or think-about prompt, and
+  a write/draw/observe instruction. Lower-grade books carry many such small
+  items rather than long exercises; capture every one of them.
+- A table the learner must complete is NOT itself a task. Emit the printed
+  instruction ("Complete the table below.") as the task and the grid as one
+  kind=table block that the task names in linked_context_orders. Never emit
+  the same table as both a task and a table.
+- ▯ marks a blank the learner fills INSIDE a sentence, where the printed
+  blank interrupts the wording ("A cuboid has ▯ vertices, ▯ edges."). Never
+  append ▯ to the end of a prompt: an answer box, ruled line, or dashed
+  space printed AFTER a complete question is the place to write the answer,
+  not part of the question — leave it out of the task text entirely.
+- A table cell is transcribed only when it prints text. A cell whose content
+  is a drawing carries no cell text: leave it empty, keep the drawing as its
+  own figure block, and never describe it in words ("triangle figure"),
+  substitute a lookalike character or emoji, or mark it ▯.
+- A task block's text is never just its cue: a bare banner word ("Do it.",
+  "Activity", "Discuss.") is not a task — attach the cue to the instruction
+  that follows it in source_label, or emit no task at all.
+- An activity's numbered steps ("(1) ... (2) ... (3) ...") are ONE procedure:
+  keep them inside a single task block, including a closing
+  write-down/record step; never emit an individual step as its own task.
+- A printed conversation — speech bubbles, a teacher-and-pupil exchange, a
+  cartoon dialogue — that poses ONE activity is ONE task: keep the whole
+  exchange in a single task block in printed order. Never emit a bubble, a
+  speaker's line, or a follow-up question as its own task.
 - A worked example — a cue like "Example 3 :" followed by a problem statement
   whose solution is printed right after it — is a real question: emit the
   problem statement as a task block with the exact cue (e.g. "Example 3") in
@@ -555,7 +586,19 @@ passage, case study, or source box that is not a learner task must use
 kind=source and retain its exact cue in source_label. A worked example's
 problem statement (a cue like "Example 3 :" with its solution printed after
 it) must be a kind=task block carrying the exact cue in source_label, with
-the printed solution left as ordinary blocks. Do not rewrite or repair
+the printed solution left as ordinary blocks. Fill-in-the-blanks statements
+and discussion/think-about prompts are learner tasks: their presence as
+kind=task blocks is required by the contract, not invented content. ▯ marks a
+blank INSIDE a sentence; an answer box printed after a complete question is
+the answer space and is correctly absent from the task text — never demand it
+back. A table the learner completes is the instruction as kind=task PLUS one
+kind=table grid it links through linked_context_orders — never the same table
+twice. A table cell whose printed content is a drawing correctly has empty
+cell text with the drawing kept as its own figure block: do not require a
+worded description, a lookalike character, or ▯ in that cell. A printed
+conversation or speech-bubble exchange posing one activity is correctly ONE
+task block. A task whose text is only its bare cue ("Do it.") is a defect. An
+activity's numbered steps must stay one task block. Do not rewrite or repair
 the candidate. Return needs_correction or ambiguous when any material defect
 remains. Output strict JSON only.
 """.strip()
@@ -688,6 +731,487 @@ def _tokens(value: str) -> set[str]:
     return {token.casefold() for token in _WORD_RE.findall(value)}
 
 
+# --- GPT chapter outline & question boundaries -------------------------------
+#
+# Structure is a semantic judgment, not a typographic one. Textbooks decorate
+# pages with pedagogy banners ("Understand", "Do it.", "Discuss.", "Think
+# about") that look exactly like headings, and boards disagree about whether
+# "1 a) b)" is one question or three. Deterministic heading/enumeration
+# heuristics produced 50 micro-sections for an 8-page Balbharati chapter and
+# glued three independent MCQs into one item. This pass asks the model to
+# decide the chapter title, the topic outline, and per-task question
+# boundaries; deterministic code only validates references and compiles.
+
+OUTLINE_VERSION = "chapter-outline-1"
+
+
+def _outline_cache_key(pdf_sha256: str) -> str:
+    material = "␟".join([
+        FALLBACK_VERSION,
+        OUTLINE_VERSION,
+        config.OPENAI_MODEL,
+        str(pdf_sha256 or ""),
+        "chapter-outline",
+    ])
+    return _sha256_text(material)
+
+
+def _outline_block_line(block: dict[str, Any]) -> str:
+    order = int(block.get("reading_order") or 0)
+    kind = str(block.get("kind") or "other")
+    text = str(block.get("text") or "").strip()
+    if kind == "heading":
+        return f"  {order} heading[L{int(block.get('heading_level') or 1)}]: {text}"
+    if kind in {"task", "source"}:
+        label = str(block.get("source_label") or "").strip()
+        body = re.sub(r"\s+", " ", text)[:1400]
+        return f"  {order} {kind}[{label or 'no cue'}]: {body}"
+    if kind == "table":
+        rows = [
+            " | ".join(str(cell or "").strip() for cell in row)
+            for row in (block.get("table_rows") or [])[:2]
+            if isinstance(row, list)
+        ]
+        return f"  {order} table: " + " // ".join(rows)[:300]
+    if kind == "figure":
+        return f"  {order} figure: {str(block.get('caption') or '').strip()[:120]}"
+    words = re.sub(r"\s+", " ", text).split(" ")
+    return f"  {order} {kind}: " + " ".join(words[:30])[:400]
+
+
+def _outline_digest(page_acsd: dict[str, Any]) -> str:
+    lines: list[str] = []
+    for page in page_acsd.get("pages") or []:
+        if not isinstance(page, dict):
+            continue
+        lines.append(str(page.get("page_id") or ""))
+        blocks = sorted(
+            [b for b in page.get("blocks") or [] if isinstance(b, dict)],
+            key=lambda b: int(b.get("reading_order") or 0),
+        )
+        for block in blocks:
+            lines.append(_outline_block_line(block))
+    digest = "\n".join(lines)
+    if len(digest) > 90000:
+        # Structure survives; long prose lines are the first to go.
+        lines = [
+            line for line in lines
+            if not re.match(r"\s+\d+ (?:paragraph|other|list)\b", line)
+        ]
+        digest = "\n".join(lines)[:90000]
+    return digest
+
+
+def _outline_schema() -> dict[str, Any]:
+    return {
+        "name": "aegis_chapter_outline",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "chapter_title": {"type": "string"},
+                "topics": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "title": {"type": "string"},
+                            "kind": {
+                                "type": "string",
+                                "enum": ["content", "assessment"],
+                            },
+                            "start_page_id": {"type": "string"},
+                            "start_reading_order": {"type": "integer"},
+                        },
+                        "required": [
+                            "title", "kind",
+                            "start_page_id", "start_reading_order",
+                        ],
+                        "additionalProperties": False,
+                    },
+                },
+                "task_partitions": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "page_id": {"type": "string"},
+                            "reading_order": {"type": "integer"},
+                            "independent_parts": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "label": {"type": "string"},
+                                        "stem": {"type": "string"},
+                                        "text": {"type": "string"},
+                                    },
+                                    "required": ["label", "stem", "text"],
+                                    "additionalProperties": False,
+                                },
+                            },
+                        },
+                        "required": [
+                            "page_id", "reading_order", "independent_parts",
+                        ],
+                        "additionalProperties": False,
+                    },
+                },
+                "notes": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": [
+                "chapter_title", "topics", "task_partitions", "notes",
+            ],
+            "additionalProperties": False,
+        },
+    }
+
+
+def _outline_system_prompt() -> str:
+    return """
+You are the Aegis chapter-outline judge. You receive a structural digest of a
+verified textbook-chapter transcription: pages, blocks in reading order, block
+kinds, heading levels, task cues, and text. Decide the chapter's semantic
+structure. Deterministic code will only validate that your references exist —
+your judgment IS the structure.
+
+1. chapter_title — the chapter's own printed title, verbatim from the opening
+   page (keep printed typos). Never use a series/book name or a section name.
+
+2. topics — the ordered learning sections of the chapter, exactly as the book
+   itself segments them. This holds for every board, subject, and grade —
+   mathematics, science, history, geography, language and literature alike:
+   - A topic starts where the book starts one: a heading that names a subject
+     of study the chapter then teaches. Use the printed wording verbatim.
+   - Pedagogy/activity banners are NEVER topics. They cue an action, not a
+     subject: "Understand", "Do it.", "Discuss.", "Think about", "Revision",
+     "At a glance", "Activity", "Let's recall", "Find out", "Project",
+     "Demonstration / Practical", "Warm-up", "Working with the text",
+     "Thinking about language" and the like are cues inside a topic.
+   - A sub-head that only continues the topic already under way stays INSIDE
+     it; start a new topic only where the book visibly turns to a new subject
+     of the chapter.
+   - PRESERVE the book's own segmentation even when a topic carries very
+     little content. Lower-grade books have short topics by design: never
+     merge topics because they look thin, never split one because it looks
+     long, and never invent a topic the book does not have.
+   - kind="assessment" marks question/exercise collections — an end-of-topic
+     practice set, an end-of-chapter exercise, a question bank — under
+     whatever name the book prints. They are not learning topics; their
+     questions belong to the whole chapter.
+
+3. task_partitions — question boundaries for task blocks that contain more
+   than one INDEPENDENT question:
+   - Boards differ, and this is exactly why you decide it: in some books
+     "1. (a) (b)" is one question with dependent subparts; in others the
+     serial is just a group number and each lettered/numbered item under it
+     is its own complete question. Judge by the content itself, never by the
+     numbering style: a subpart that can be asked and answered on its own
+     (its own MCQ with options, its own fill-in, its own prompt about its own
+     material) is an independent question. Subparts that share one stem's
+     data, passage, or figure, or that build on each other's answers, stay
+     together — do not partition such tasks at all.
+   - Each part: label = the printed item marker ("(i)", "2)", "b."); text =
+     the part's complete wording COPIED VERBATIM from the task block; stem =
+     any shared instruction that the part needs to stand alone (for example
+     "Select the correct option."), also verbatim, or "" if none.
+   - Never rewrite, complete, or merge wording. Every part text must be a
+     contiguous passage of the task block's text.
+   - Do not partition a task that is a single question, an activity's
+     numbered steps (steps are one procedure, not questions), or a table to
+     complete.
+
+Return JSON per the schema. notes: anything you judged worth flagging.
+""".strip()
+
+
+def _normalize_chapter_outline(
+    page_acsd: dict[str, Any],
+    candidate: dict[str, Any],
+) -> tuple[dict[str, Any] | None, list[str]]:
+    """Validate references and verbatim bounds; normalize-and-flag, never fight."""
+    flags: list[str] = []
+    if not isinstance(candidate, dict):
+        return None, ["outline response is not an object"]
+    blocks_by_ref: dict[tuple[str, int], dict[str, Any]] = {}
+    page_numbers: dict[str, int] = {}
+    for page in page_acsd.get("pages") or []:
+        if not isinstance(page, dict):
+            continue
+        page_id = str(page.get("page_id") or "")
+        page_numbers[page_id] = int(page.get("page_number") or 0)
+        for block in page.get("blocks") or []:
+            if isinstance(block, dict):
+                blocks_by_ref[(page_id, int(block.get("reading_order") or 0))] = block
+
+    title = str(candidate.get("chapter_title") or "").strip()
+    if not title:
+        for (page_id, _order), block in sorted(
+            blocks_by_ref.items(),
+            key=lambda item: (page_numbers.get(item[0][0], 0), item[0][1]),
+        ):
+            if block.get("kind") == "heading" and str(block.get("text") or "").strip():
+                title = str(block["text"]).strip()
+                flags.append("chapter title missing; used the first heading")
+                break
+
+    topics: list[dict[str, Any]] = []
+    seen_starts: set[tuple[str, int]] = set()
+    for topic in candidate.get("topics") or []:
+        if not isinstance(topic, dict):
+            continue
+        topic_title = str(topic.get("title") or "").strip()
+        ref = (
+            str(topic.get("start_page_id") or ""),
+            int(topic.get("start_reading_order") or 0),
+        )
+        if not topic_title:
+            flags.append(f"dropped an untitled topic at {ref}")
+            continue
+        if ref not in blocks_by_ref:
+            flags.append(f"dropped topic {topic_title!r}: start {ref} does not exist")
+            continue
+        if ref in seen_starts:
+            flags.append(f"dropped topic {topic_title!r}: duplicate start {ref}")
+            continue
+        seen_starts.add(ref)
+        topics.append({
+            "title": topic_title,
+            "kind": (
+                "assessment"
+                if str(topic.get("kind") or "") == "assessment"
+                else "content"
+            ),
+            "start_page_id": ref[0],
+            "start_reading_order": ref[1],
+        })
+    topics.sort(key=lambda t: (
+        page_numbers.get(t["start_page_id"], 0), t["start_reading_order"],
+    ))
+    if not any(t["kind"] == "content" for t in topics):
+        return None, flags + ["no usable content topic in the outline"]
+
+    partitions: list[dict[str, Any]] = []
+    for partition in candidate.get("task_partitions") or []:
+        if not isinstance(partition, dict):
+            continue
+        ref = (
+            str(partition.get("page_id") or ""),
+            int(partition.get("reading_order") or 0),
+        )
+        block = blocks_by_ref.get(ref)
+        if block is None or str(block.get("kind") or "") != "task":
+            flags.append(f"dropped a partition: {ref} is not a task block")
+            continue
+        task_key = _normal(str(block.get("text") or ""))
+        parts: list[dict[str, str]] = []
+        seen_texts: set[str] = set()
+        for part in partition.get("independent_parts") or []:
+            if not isinstance(part, dict):
+                continue
+            text = str(part.get("text") or "").strip()
+            stem = str(part.get("stem") or "").strip()
+            text_key = _normal(text)
+            if not text_key or text_key in seen_texts:
+                continue
+            if text_key not in task_key:
+                flags.append(
+                    f"dropped a part of task {ref}: not verbatim in the block"
+                )
+                continue
+            if stem and _normal(stem) not in task_key:
+                flags.append(
+                    f"part stem of task {ref} is not verbatim; cleared it"
+                )
+                stem = ""
+            seen_texts.add(text_key)
+            parts.append({
+                "label": str(part.get("label") or "").strip(),
+                "stem": stem,
+                "text": text,
+            })
+        if len(parts) >= 2:
+            partitions.append({
+                "page_id": ref[0],
+                "reading_order": ref[1],
+                "independent_parts": parts,
+            })
+        elif partition.get("independent_parts"):
+            flags.append(
+                f"dropped a partition of task {ref}: fewer than 2 verbatim parts"
+            )
+
+    return {
+        "version": OUTLINE_VERSION,
+        "chapter_title": title,
+        "topics": topics,
+        "task_partitions": partitions,
+        "notes": [
+            str(note) for note in candidate.get("notes") or [] if str(note).strip()
+        ],
+        "review_flags": flags,
+    }, flags
+
+
+def derive_chapter_outline(page_acsd: dict[str, Any]) -> dict[str, Any] | None:
+    """Decide chapter title, topic outline, and question boundaries via GPT.
+
+    Cached per source hash. An unusable response degrades to the deterministic
+    structure (no outline) with a warning — it never blocks the conversion.
+    """
+    pdf_sha = str(page_acsd.get("pdf_sha256") or "")
+    key = _outline_cache_key(pdf_sha)
+    cached = _read_verified_batch_cache(key)
+    if cached is not None and isinstance(cached.get("result"), dict):
+        if cached["result"].get("version") == OUTLINE_VERSION:
+            return copy.deepcopy(cached["result"])
+    digest = _outline_digest(page_acsd)
+    prompt = (
+        "Structural digest of the verified chapter transcription "
+        "(page id, then blocks as `<reading_order> <kind>[cue]: text`):\n\n"
+        + digest
+    )
+    outline: dict[str, Any] | None = None
+    for attempt in range(2):
+        try:
+            candidate = phase22._openai_multimodal_json(
+                system=_outline_system_prompt(),
+                prompt=prompt,
+                pages=[],
+                response_schema=_outline_schema(),
+                purpose="chapter_outline",
+                max_tokens=_max_output_tokens(),
+            )
+        except ValueError as exc:
+            # A wiring mistake (unknown request purpose, malformed schema) is
+            # ours, not the model's: it would silently disable the pass on
+            # every book. Fail loudly instead of quietly shipping the old
+            # deterministic structure.
+            raise RuntimeError(
+                f"chapter-outline pass is misconfigured: {exc}"
+            ) from exc
+        except Exception as exc:  # degraded, never fatal
+            progress.log(
+                f"Chapter-outline pass failed ({exc}); the deterministic "
+                "structure remains in effect for this conversion.",
+                level="warning",
+            )
+            return None
+        outline, flags = _normalize_chapter_outline(page_acsd, candidate)
+        if outline is not None:
+            for flag in flags:
+                progress.log(f"Chapter outline: {flag}", level="warning")
+            break
+        progress.log(
+            "Chapter-outline response was unusable"
+            + (f" ({'; '.join(flags[:3])})" if flags else "")
+            + ("; retrying once." if attempt == 0 else "; continuing without it."),
+            level="warning",
+        )
+    if outline is None:
+        return None
+    content_topics = [t["title"] for t in outline["topics"] if t["kind"] == "content"]
+    progress.log(
+        f"Chapter outline: {outline['chapter_title']!r}; "
+        f"{len(content_topics)} topic(s): "
+        + ", ".join(repr(t) for t in content_topics[:10])
+        + (" …" if len(content_topics) > 10 else "")
+        + f"; {len(outline['task_partitions'])} task(s) partitioned into "
+        "independent questions.",
+        level="success",
+    )
+    _write_verified_batch_cache(key, {
+        "version": FALLBACK_VERSION,
+        "status": "verified",
+        "created_at": time.time(),
+        "model": config.OPENAI_MODEL,
+        "pdf_sha256": pdf_sha,
+        "result": copy.deepcopy(outline),
+    })
+    return outline
+
+
+# GPT page transcription occasionally double-escapes an in-cell line break
+# ("Pyramid /\nPrism", "No. of\nvertical faces"), which later trips the
+# raw-LaTeX wire-format validator. A lowercase-continuation heuristic is not
+# enough ("\nvertical" continues lowercase yet is no command), so the judge is
+# a whitelist of real LaTeX commands that begin with the JSON escape letters:
+# those survive untouched; any other backslash-n/r/t is an escape artifact
+# whose backslash+letter pair is replaced with spacing, keeping the rest of
+# the word ("\nPrism" → " Prism", "\nvertical" → " vertical").
+_LATEX_ESCAPE_LETTER_COMMANDS = frozenset({
+    "ne", "neq", "nabla", "nu", "nmid", "notin", "nless", "ngtr", "nleq",
+    "ngeq", "nleqslant", "ngeqslant", "nsim", "ncong", "nsubseteq",
+    "nsupseteq", "nparallel", "nexists", "natural", "newline", "nolimits",
+    "nonumber", "not", "notag", "nprec", "nsucc",
+    "rho", "rightarrow", "rangle", "rceil", "rfloor", "rbrace", "rbrack",
+    "real", "rtimes", "rightharpoonup", "rightharpoondown",
+    "rightleftharpoons", "rvert",
+    "tan", "tanh", "tau", "theta", "text", "textbf", "textit", "textrm",
+    "times", "top", "tilde", "tfrac", "therefore", "thickapprox", "thicksim",
+    "to", "triangle", "triangledown", "triangleleft", "triangleright",
+    "tbinom",
+})
+_LITERAL_ESCAPE_ARTIFACT_RE = re.compile(r"[ \t]*\\([nrt][A-Za-z]*)")
+
+
+def _scrub_literal_escape_artifacts(value: str) -> str:
+    def _replace(match: re.Match[str]) -> str:
+        token = match.group(1)
+        if token in _LATEX_ESCAPE_LETTER_COMMANDS:
+            return match.group(0)
+        return f" {token[1:]}" if len(token) > 1 else " "
+
+    return _LITERAL_ESCAPE_ARTIFACT_RE.sub(_replace, value)
+
+
+# An answer box printed AFTER a complete question is where the learner writes,
+# not part of the question. Boxes that interrupt a sentence ("has ▯ vertices")
+# are the question and must survive.
+_TRAILING_ANSWER_BOX_RE = re.compile(r"(?:\s*[▯□☐])+\s*$")
+
+
+def _without_trailing_answer_boxes(text: str) -> str:
+    stripped = _TRAILING_ANSWER_BOX_RE.sub("", text).rstrip()
+    # Never empty a task: a prompt that is nothing but boxes keeps its text.
+    return stripped or text
+
+
+def _scrub_page_acsd_escape_artifacts(page_acsd: dict[str, Any]) -> None:
+    """Scrub escape artifacts from every text field of a page-ACSD object.
+
+    Fresh transcriptions are scrubbed during page validation, but a
+    content-addressed cache replays earlier accepted pages verbatim — so the
+    consumers (MMD rendering, ledger building) normalize again in place.
+    A math block's ``latex`` field keeps its backslashes untouched.
+    """
+    for page in page_acsd.get("pages") or []:
+        if not isinstance(page, dict):
+            continue
+        for block in page.get("blocks") or []:
+            if not isinstance(block, dict):
+                continue
+            for field in ("text", "source_label", "caption"):
+                value = block.get(field)
+                if isinstance(value, str) and value:
+                    block[field] = _scrub_literal_escape_artifacts(value)
+            if str(block.get("kind") or "") == "task":
+                block["text"] = _without_trailing_answer_boxes(
+                    str(block.get("text") or "")
+                )
+            rows_value = block.get("table_rows")
+            if isinstance(rows_value, list):
+                block["table_rows"] = [
+                    [
+                        _scrub_literal_escape_artifacts(cell)
+                        if isinstance(cell, str) else cell
+                        for cell in table_row
+                    ]
+                    if isinstance(table_row, list) else table_row
+                    for table_row in rows_value
+                ]
+
+
 def _canonicalize_source_cue_block(raw: dict[str, Any]) -> dict[str, Any]:
     """Normalize the model's historical-source cue into an explicit source block.
 
@@ -788,6 +1312,31 @@ def validate_page_extraction(
             rows_value = raw.get("table_rows") or []
             heading_level = int(raw.get("heading_level") or 0)
             source_label = str(raw.get("source_label") or "").strip()
+            scrubbed_text = _scrub_literal_escape_artifacts(text).strip()
+            scrubbed_label = _scrub_literal_escape_artifacts(source_label).strip()
+            scrubbed_rows = [
+                [_scrub_literal_escape_artifacts(str(cell or "")) for cell in table_row]
+                if isinstance(table_row, list) else table_row
+                for table_row in rows_value
+            ] if isinstance(rows_value, list) else rows_value
+            if (
+                scrubbed_text != text
+                or scrubbed_label != source_label
+                or scrubbed_rows != rows_value
+            ):
+                # Prose and table cells only — a math block's latex field keeps
+                # its backslashes untouched.
+                flags.append(
+                    f"block {order}: normalized literal escape artifact(s) "
+                    "in transcribed text"
+                )
+                text = scrubbed_text
+                source_label = scrubbed_label
+                rows_value = scrubbed_rows
+                raw["text"] = scrubbed_text
+                raw["source_label"] = scrubbed_label
+                if isinstance(raw.get("table_rows"), list):
+                    raw["table_rows"] = scrubbed_rows
             if kind not in {"figure", "math", "table", "source"} and not text:
                 flags.append(f"dropped empty {kind} block {order}")
                 continue
@@ -877,13 +1426,25 @@ def validate_page_extraction(
         )
         extracted_tokens = _tokens(extracted_text)
         if len(text_layer_tokens) >= 30:
+            # The embedded text layer is corroborating evidence, not the
+            # authority — the page image is. A book whose text layer is
+            # garbled, differently ordered, or in another script would fail
+            # this comparison while the model read the page perfectly, so a
+            # divergence is reported for review and the independent verifier
+            # decides whether the transcription is faithful.
             overlap = len(text_layer_tokens & extracted_tokens)
             coverage = overlap / max(1, len(text_layer_tokens))
             precision = overlap / max(1, len(extracted_tokens))
             if coverage < 0.35:
-                return None, f"{page_id} text-layer token coverage {coverage:.2f} is too low"
+                flags.append(
+                    f"text-layer token coverage {coverage:.2f} is low; the "
+                    "transcription diverges from the embedded text layer"
+                )
             if len(extracted_tokens) >= 30 and precision < 0.55:
-                return None, f"{page_id} extracted-token precision {precision:.2f} is too low"
+                flags.append(
+                    f"extracted-token precision {precision:.2f} is low; the "
+                    "transcription diverges from the embedded text layer"
+                )
         normalized_page: dict[str, Any] = {
             "page_id": page_id,
             "page_number": page.page_number,
@@ -1076,6 +1637,16 @@ def extract_pdf_to_page_acsd(
                 "were replayed.",
                 level="info",
             )
+            # A bundle sealed before the outline pass existed (or under an
+            # older outline version) still gets the semantic structure.
+            existing_outline = bundle.get("chapter_outline")
+            if (
+                not isinstance(existing_outline, dict)
+                or existing_outline.get("version") != OUTLINE_VERSION
+            ):
+                outline = derive_chapter_outline(bundle)
+                if outline is not None:
+                    bundle["chapter_outline"] = outline
             return bundle
     # The transcription is the longest stage of a conversion; the bar walks
     # through its own band batch by batch instead of freezing until the end.
@@ -1233,6 +1804,9 @@ def extract_pdf_to_page_acsd(
         "pages": accepted,
         "batches": decisions,
     }
+    outline = derive_chapter_outline(bundle)
+    if outline is not None:
+        bundle["chapter_outline"] = outline
     _write_verified_batch_cache(_bundle_cache_key(pdf_sha), {
         "version": FALLBACK_VERSION,
         "status": "verified",
@@ -1352,6 +1926,128 @@ def _canonical_task_heading(source_label: object) -> str:
     return "Discuss"
 
 
+_TASK_FIGURE_ISSUE_CODES = frozenset({
+    "unresolved_required_visual",
+    "unresolved_explicit_figure_reference",
+    "ambiguous_explicit_figure_reference",
+})
+
+
+def _refresh_task_figure_issues(
+    canonical: dict[str, Any],
+    report: dict[str, Any],
+) -> None:
+    """Drop figure verdicts the model's own links have since answered.
+
+    Validation runs once, on the deterministic parse of the rendered MMD,
+    BEFORE the verified page relationships are applied — so its task/figure
+    verdicts are guesses made from prose ("draw a circle of radius 6 cm"
+    reads like a figure reference). Once the model's explicit
+    linked_visual_orders are authoritative, those guesses are stale: a task
+    was reported as needing an unresolvable visual while carrying no visual
+    requirement at all. Re-check each task-scoped figure issue against the
+    task as it now stands, and keep only what is still true.
+    """
+    tasks_by_id = {
+        str(task.get("task_id") or ""): task
+        for task in canonical.get("tasks") or []
+        if isinstance(task, dict)
+    }
+    kept: list[dict[str, Any]] = []
+    for issue in report.get("issues") or []:
+        if not isinstance(issue, dict):
+            continue
+        code = str(issue.get("code") or "")
+        task = tasks_by_id.get(str(issue.get("task_id") or ""))
+        if code not in _TASK_FIGURE_ISSUE_CODES or task is None:
+            kept.append(issue)
+            continue
+        if code == "unresolved_required_visual":
+            still_true = bool(
+                task.get("requires_visual")
+                and not task.get("figure_refs")
+                and not task.get("image_urls")
+            )
+        elif code == "unresolved_explicit_figure_reference":
+            still_true = bool(task.get("unresolved_figure_reference_ids"))
+        else:
+            still_true = bool(task.get("ambiguous_figure_reference_ids"))
+        if still_true:
+            kept.append(issue)
+    report["issues"] = kept
+
+
+def _accept_gate_issues_with_flags(
+    canonical: dict[str, Any],
+    report: dict[str, Any],
+    issues: list[dict[str, Any]],
+) -> None:
+    """Ship a usable GPT-parsed source under flags instead of refusing a book.
+
+    The deterministic gate promotes some advisory warnings to blocking —
+    a task that names a visual the Figure registry could not resolve, a
+    residual rich-text nit. Under GPT-authoritative parsing those are review
+    notes, not grounds to reject an otherwise complete chapter (an 8-page
+    Grade 6 book was refused whole over one unresolved figure link). Only a
+    genuine defect still stops the pipeline: a real ``error`` issue, or a
+    source with no tasks at all to build from.
+    """
+    fatal, advisory = phase2.partition_gate_issues(issues)
+    if not (canonical.get("tasks") or []):
+        fatal = fatal or [{
+            "severity": "error",
+            "code": "phase2_no_tasks",
+            "message": "the parsed source contains no learner tasks",
+        }]
+    if fatal:
+        codes = ", ".join(
+            str(issue.get("code") or "unknown") for issue in fatal[:8]
+        )
+        raise ValueError(
+            "verified GPT page extraction did not pass the deterministic "
+            "canonical-source gate" + (f": {codes}" if codes else "")
+        )
+
+    if advisory:
+        notes = [
+            f"{issue.get('code') or 'unknown'}"
+            + (f" ({issue['task_id']})" if issue.get("task_id") else "")
+            for issue in advisory
+        ]
+        progress.log(
+            "GPT-parsed source ships under review flags — "
+            f"{len(advisory)} advisory gate issue(s): "
+            + "; ".join(notes[:8])
+            + (" …" if len(notes) > 8 else ""),
+            level="warning",
+        )
+        canonical.setdefault("source_review_flags", []).extend(notes)
+        report.setdefault("source_review_flags", []).extend(notes)
+
+    # The source is usable: let the downstream contract treat it as ready.
+    canonical["phase2_inventory_ready"] = True
+    report["phase2_inventory_ready"] = True
+    canonical.setdefault("shadow_validation", {})["phase2_inventory_ready"] = True
+    canonical["phase"] = phase22.ADJUDICATION_PHASE
+    report["phase"] = phase22.ADJUDICATION_PHASE
+    if report.get("status") == "failed":
+        report["status"] = "passed_with_warnings"
+
+
+def _attach_chapter_outline(
+    canonical: dict[str, Any],
+    page_acsd: dict[str, Any],
+) -> None:
+    """Carry the GPT-decided outline onto the compiled canonical source."""
+    outline = page_acsd.get("chapter_outline")
+    if not isinstance(outline, dict):
+        return
+    # The outline's chapter_title stays internal provenance only: the chapter
+    # NAME the user sees always comes from the directory row they selected in
+    # the concept-building page dropdowns, never from the book.
+    canonical["chapter_outline"] = copy.deepcopy(outline)
+
+
 def render_page_acsd_to_mmd(page_acsd: dict[str, Any]) -> str:
     """Render verified page objects to deterministic, parser-safe MMD.
 
@@ -1360,6 +2056,19 @@ def render_page_acsd_to_mmd(page_acsd: dict[str, Any]) -> str:
     :func:`apply_page_acsd_relationships`; the renderer never moves a Figure to
     make a parser heuristic happy.
     """
+    _scrub_page_acsd_escape_artifacts(page_acsd)
+    outline = page_acsd.get("chapter_outline") or {}
+    topic_by_start: dict[tuple[str, int], dict[str, Any]] = {
+        (
+            str(topic.get("start_page_id") or ""),
+            int(topic.get("start_reading_order") or 0),
+        ): topic
+        for topic in outline.get("topics") or []
+        if isinstance(topic, dict)
+    }
+    outline_active = any(
+        topic.get("kind") == "content" for topic in topic_by_start.values()
+    )
     parts = [
         "<!-- source_origin: gpt-pdf-to-acsd -->",
         f"<!-- compiler_version: {FALLBACK_COMPILER} -->",
@@ -1369,6 +2078,7 @@ def render_page_acsd_to_mmd(page_acsd: dict[str, Any]) -> str:
         # Page provenance lives in ``source.gpt-page-acsd.json``. Avoid adding
         # synthetic page-marker prose to the semantic source consumed by the
         # concept extractor.
+        page_id = str(page.get("page_id") or "")
         blocks = sorted(
             [block for block in page.get("blocks") or [] if isinstance(block, dict)],
             key=lambda block: int(block.get("reading_order") or 0),
@@ -1376,6 +2086,17 @@ def render_page_acsd_to_mmd(page_acsd: dict[str, Any]) -> str:
         for block in blocks:
             kind = str(block.get("kind") or "other")
             text = str(block.get("text") or "").strip()
+            topic = topic_by_start.get(
+                (page_id, int(block.get("reading_order") or 0))
+            )
+            if topic is not None and topic.get("kind") == "content":
+                # The outline judged this block to open a chapter topic. The
+                # topic heading IS the structure; the block itself is skipped
+                # only when it was that same heading.
+                parts.append(_markdown_heading(1, str(topic.get("title") or text)))
+                parts.append("")
+                if kind == "heading":
+                    continue
             if kind == "figure":
                 url = str(block.get("asset_url") or "").strip()
                 if url:
@@ -1383,9 +2104,17 @@ def render_page_acsd_to_mmd(page_acsd: dict[str, Any]) -> str:
                         url, str(block.get("caption") or "")
                     ))
             elif kind == "heading":
-                parts.append(_markdown_heading(
-                    int(block.get("heading_level") or 1), text
-                ))
+                if outline_active:
+                    # Under a decided outline, every other heading is a
+                    # pedagogy banner or decorative sub-head: keep the words
+                    # without the structural weight that minted a section per
+                    # banner ("Understand", "Do it.", 50 sections a chapter).
+                    if text:
+                        parts.append(f"**{text}**")
+                else:
+                    parts.append(_markdown_heading(
+                        int(block.get("heading_level") or 1), text
+                    ))
             elif kind == "source":
                 label = str(block.get("source_label") or "").strip()
                 label_key = _normal(label)
@@ -1567,6 +2296,7 @@ def apply_page_acsd_relationships(
     restores its exact source block location, preserves explicit cross-page
     Figure/context references, and applies page-local ownership links.
     """
+    _scrub_page_acsd_escape_artifacts(page_acsd)
     figure_payload = _figure_payload_from_canonical(canonical)
     figures_by_id = {
         str(figure.get("figure_id") or ""): figure
@@ -1620,6 +2350,45 @@ def apply_page_acsd_relationships(
         for block in page.get("blocks") or []
         if isinstance(block, dict) and block.get("kind") == "task"
     )
+
+    outline = page_acsd.get("chapter_outline") or {}
+    outline_partitions: dict[tuple[str, int], list[dict[str, Any]]] = {
+        (
+            str(partition.get("page_id") or ""),
+            int(partition.get("reading_order") or 0),
+        ): [
+            part for part in partition.get("independent_parts") or []
+            if isinstance(part, dict)
+        ]
+        for partition in outline.get("task_partitions") or []
+        if isinstance(partition, dict)
+    }
+    page_number_by_id = {
+        str(page.get("page_id") or ""): int(page.get("page_number") or 0)
+        for page in page_acsd.get("pages") or []
+        if isinstance(page, dict)
+    }
+    outline_starts = sorted(
+        (
+            (
+                page_number_by_id.get(str(t.get("start_page_id") or ""), 0),
+                int(t.get("start_reading_order") or 0),
+                str(t.get("kind") or "content"),
+            )
+            for t in outline.get("topics") or []
+            if isinstance(t, dict)
+        ),
+    )
+
+    def _in_assessment_span(ref: tuple[str, int]) -> bool:
+        position = (page_number_by_id.get(ref[0], 0), ref[1])
+        latest_kind = ""
+        for start_page, start_order, kind in outline_starts:
+            if (start_page, start_order) <= position:
+                latest_kind = kind
+            else:
+                break
+        return latest_kind == "assessment"
 
     def add_figure(
         figure_id: str,
@@ -1945,6 +2714,19 @@ def apply_page_acsd_relationships(
                 ],
                 "linked_context_orders": linked_context_orders,
             }
+            task_ref = (
+                str(page.get("page_id") or ""),
+                int(block.get("reading_order") or 0),
+            )
+            gpt_parts = outline_partitions.get(task_ref)
+            if gpt_parts:
+                task["gpt_boundary_parts"] = copy.deepcopy(gpt_parts)
+            if _in_assessment_span(task_ref):
+                # Questions of an exercise/practice collection belong to the
+                # chapter, not to whichever topic happens to precede the set;
+                # the existing chapter-wide machinery assigns real topics.
+                task["chapter_wide"] = True
+                task["_topic_scope"] = "chapter"
             body = _without_asset_tags(verified_prompt, fallback_urls)
             tags = []
             for url in display_urls:
@@ -2183,14 +2965,13 @@ def rehydrate_verified_fallback(
 
     canonical = copy.deepcopy(canonical)
     report = copy.deepcopy(report)
+    _attach_chapter_outline(canonical, page_acsd)
     relationship_count = apply_page_acsd_relationships(canonical, page_acsd)
+    _refresh_task_figure_issues(canonical, report)
     canonical, report, issues = phase22._recalculate_after_adjudication(
         canonical, report
     )
-    if issues or not canonical.get("phase2_inventory_ready"):
-        raise ValueError(
-            "rehydrated GPT page ACSD did not pass deterministic source gates"
-        )
+    _accept_gate_issues_with_flags(canonical, report, issues)
     reconstruction = _reconstruction_manifest(
         page_acsd,
         artifact_dir=artifact_dir,
@@ -2257,20 +3038,13 @@ def reconstruct_pdf_to_acsd(
         )
         canonical = copy.deepcopy(compiled.canonical)
         report = copy.deepcopy(compiled.report)
+        _attach_chapter_outline(canonical, page_acsd)
         relationship_count = apply_page_acsd_relationships(canonical, page_acsd)
+        _refresh_task_figure_issues(canonical, report)
         canonical, report, issues = phase22._recalculate_after_adjudication(
             canonical, report
         )
-        if issues or not canonical.get("phase2_inventory_ready"):
-            codes = ", ".join(
-                str(issue.get("code") or "unknown")
-                for issue in issues[:8]
-                if isinstance(issue, dict)
-            )
-            raise ValueError(
-                "verified GPT page extraction did not pass the deterministic "
-                "canonical-source gate" + (f": {codes}" if codes else "")
-            )
+        _accept_gate_issues_with_flags(canonical, report, issues)
         reconstruction = _reconstruction_manifest(
             page_acsd,
             artifact_dir=staging,

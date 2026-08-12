@@ -62,8 +62,9 @@ def test_writer_composes_tags_labels_and_clean_display(db):
 
 
 def test_deposit_applies_numbering_recap_titlecase_and_topic_columns(db):
-    """End-to-end deposit: continuous Type NN, Miscellaneous for culmination,
-    Recap description, Title Case, and tagged pre/post topic columns."""
+    """End-to-end deposit: one continuous Type NN sequence shared by
+    culminations, Recap description, Title Case, and tagged pre/post topic
+    columns."""
     from app.services import build_concepts
 
     chapter = models.Chapter(
@@ -124,13 +125,20 @@ def test_deposit_applies_numbering_recap_titlecase_and_topic_columns(db):
     assert {"Operations on Numbers", "Powers and Roots"} <= topic_titles
     assert "Addition of Integers" in by_title
 
-    # Continuous Type numbering across the chapter (culmination excluded).
+    # ONE continuous Type sequence in row order: culminations take their
+    # number from it and advance it, instead of running a parallel
+    # "Miscellaneous Type NN" numbering.
     assert "Type 01: Direct" in by_title["Addition of Integers"].concept_details
-    assert "Type 02: Compute" in by_title["Squares of Numbers"].concept_details
+    assert "Type 02: Mixed" in by_title[
+        "Culmination - Operations on Numbers"].concept_details
+    assert "Type 03: Compute" in by_title["Squares of Numbers"].concept_details
+    assert "Type 04: Mixed" in by_title[
+        "Culmination - Powers and Roots"].concept_details
 
-    # Culmination: Miscellaneous Type sequence + Description collapses to "Recap".
+    # Culmination: shares the chapter Type sequence, Description collapses
+    # to "Recap", and no row carries the old "Miscellaneous" prefix.
     culm = by_title["Culmination - Operations on Numbers"].concept_details
-    assert "Miscellaneous Type 01: Mixed" in culm
+    assert "Miscellaneous" not in culm
     assert "Description: Recap" in culm
     assert "long synthesis" not in culm
     assert "Misconceptions: Students may believe mixed review tasks use only one operation." in culm

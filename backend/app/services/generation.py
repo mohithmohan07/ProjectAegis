@@ -14762,11 +14762,21 @@ def _invalid_inventory_items(inventory: dict | None) -> list[dict]:
             source_kind not in _HUB_INVENTORY_KINDS
             and cv._example_too_short(text)
         ):
-            invalid.append({
-                "index": index,
-                "qid": qid,
-                "reason": "stub_task",
-            })
+            # A short imperative whose substance lives in its shared context
+            # ("Complete the table below." plus the table) is a complete
+            # source task, not an extraction stub: the context ships with the
+            # public prompt once rendering embeds it.
+            context = str(item.get("shared_context") or "").strip()
+            if not (
+                item.get("requires_context")
+                and context
+                and not cv._example_too_short(f"{context} {text}")
+            ):
+                invalid.append({
+                    "index": index,
+                    "qid": qid,
+                    "reason": "stub_task",
+                })
     return invalid
 
 
@@ -19057,6 +19067,16 @@ def _enforce_culminations(records: list[dict]) -> list[dict]:
     for topic in order:
         out.extend(normal[topic])
         topic_culms = culms[topic]
+        if len(normal[topic]) < 2:
+            # Nothing to consolidate: a one-concept topic ships without a
+            # culmination, and any stray one is dropped rather than kept.
+            if topic_culms:
+                progress.log(
+                    f"Dropped {len(topic_culms)} culmination row(s) in topic "
+                    f"'{topic}': it teaches a single concept.",
+                    level="warning",
+                )
+            continue
         if topic_culms:
             keep = dict(topic_culms[0])
             keep["parent_concept"] = "Culmination"
@@ -19124,6 +19144,9 @@ def _ensure_culmination_rows(records: list[dict]) -> list[dict]:
     for topic in order:
         topic_records = topics[topic]
         out.extend(topic_records)
+        if len(topic_records) < 2:
+            # Nothing to consolidate in a single-concept topic.
+            continue
         out.append({
             "topic": topic,
             "parent_concept": "Culmination",

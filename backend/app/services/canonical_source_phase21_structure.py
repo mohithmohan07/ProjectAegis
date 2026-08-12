@@ -528,6 +528,16 @@ def _independent_visual_task_clusters(
     return clusters
 
 
+def _model_judged_boundaries(canonical: dict[str, Any]) -> bool:
+    """Whether a chapter-outline pass decided this source's question boundaries.
+
+    Its presence means a model read the whole chapter and ruled on every
+    task; deterministic enumeration must not offer a competing answer.
+    """
+    outline = canonical.get("chapter_outline")
+    return isinstance(outline, dict) and bool(outline.get("version"))
+
+
 def materialize_task_leaf_cases(canonical: dict[str, Any]) -> int:
     """Create stable inventory leaves without replacing canonical parents."""
     total_leaves = 0
@@ -554,7 +564,46 @@ def materialize_task_leaf_cases(canonical: dict[str, Any]) -> int:
             if isinstance(row, dict)
         )
 
+        gpt_parts = [
+            part for part in task.get("gpt_boundary_parts") or []
+            if isinstance(part, dict) and str(part.get("text") or "").strip()
+        ]
+        if not gpt_parts and _model_judged_boundaries(canonical):
+            # Under model-judged boundaries the outline pass is the only
+            # authority on whether a question splits. Running the
+            # enumeration heuristics here would compute leaves that the
+            # inventory then discards — wasted work that reads like a second
+            # opinion. A task the model left whole stays whole.
+            continue
+
         provisional: list[dict[str, Any]] = []
+        if gpt_parts:
+            # The chapter-outline judge decided these subparts are independent
+            # questions (board conventions differ; the model judged content,
+            # not typography). Its verbatim parts replace the enumeration
+            # heuristics entirely for this task.
+            inherited_context = str(task.get("shared_context") or "").strip()
+            base = sources[0]
+            for part in gpt_parts:
+                stem = str(part.get("stem") or "").strip()
+                raw_part = str(part.get("text") or "").strip()
+                leaf_context = "\n\n".join(
+                    value for value in (inherited_context, stem) if value
+                )
+                provisional.append({
+                    **base,
+                    "base_task": False,
+                    "raw_prompt": raw_part,
+                    "display_prompt": canonical_task_display(
+                        " ".join(value for value in (stem, raw_part) if value)
+                    ),
+                    "shared_context": leaf_context,
+                    "requires_context": bool(leaf_context),
+                    "subpart_label": str(part.get("label") or "").strip(),
+                    "decomposition": "gpt_semantic_boundary",
+                })
+            sources = []
+
         for source in sources:
             raw_prompt = str(source.get("raw_prompt") or "").strip()
             stem, enumerated = _independent_enumerated_parts(raw_prompt)

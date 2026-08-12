@@ -834,6 +834,12 @@ def settle(
             row for row in culmination_rows
             if str(row.get("_semantic_topic_id") or "") == topic_id
         ]
+        if len(topic_settled) < 2:
+            # A culmination consolidates several concepts into one recap. A
+            # topic that teaches exactly one concept has nothing to
+            # consolidate — the recap would only restate it — so it ships
+            # without one, and no consolidation prose is authored for it.
+            topic_culms = []
         culm_consolidations: dict[str, str] = {}
         for offset_batch in _batched(list(range(len(topic_settled)))):
             batch_rows = [topic_settled[i] for i in offset_batch]

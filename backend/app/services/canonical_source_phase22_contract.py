@@ -114,16 +114,30 @@ def install(generation: ModuleType | None = None) -> None:
                 )
                 issues = phase2.phase2_inventory_issues(canonical, report)
 
-        if issues:
+        fatal, advisory = phase2.partition_gate_issues(issues)
+        if fatal:
             sample = "; ".join(
-                phase211.format_issue_for_ui(item) for item in issues[:5]
+                phase211.format_issue_for_ui(item) for item in fatal[:5]
             )
             adjudication = canonical.get("source_adjudication") or {}
             status = str(adjudication.get("status") or "not_run")
             raise ValueError(
                 "Phase 2.2 canonical source adjudication could not verify every "
                 "source-critical issue before concept generation "
-                f"({len(issues)} issue(s), adjudication={status}): {sample}"
+                f"({len(fatal)} issue(s), adjudication={status}): {sample}"
+            )
+        if advisory:
+            # Advisory defects travel with the source as review notes rather
+            # than refusing a chapter that parsed cleanly otherwise.
+            progress.log(
+                f"Source ships with {len(advisory)} review flag(s): "
+                + "; ".join(
+                    phase211.format_issue_for_ui(item) for item in advisory[:5]
+                ),
+                level="warning",
+            )
+            canonical.setdefault("source_review_flags", []).extend(
+                str(item.get("code") or "unknown") for item in advisory
             )
 
         phase2.prune_legacy_inventory_checkpoints(db, job)

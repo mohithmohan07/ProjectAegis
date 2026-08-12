@@ -1802,11 +1802,22 @@ def validate_concept_rows(
                         f"topic recap: {expected_recap}",
                     )
         if require_culmination and topic:
-            if len(culms) != 1:
+            # A culmination consolidates several concepts, so only a topic
+            # teaching more than one requires it. A topic teaching exactly
+            # one has nothing to consolidate — generation omits the row —
+            # but an existing single-concept culmination (legacy chapters,
+            # hand-authored rows) is tolerated here rather than failing a
+            # whole revalidation. Either way, at most one, and it goes last.
+            if len(normal) > 1 and not culms:
                 row_i = indexed[-1][0] if indexed else -1
                 _add(errors, row_i, "concept_title", "culmination_count",
-                     "exactly one culmination row is required per topic")
-            elif culms[0][0] != indexed[-1][0]:
+                     "exactly one culmination row is required for a topic "
+                     f"teaching {len(normal)} concepts")
+            elif len(culms) > 1:
+                row_i = indexed[-1][0] if indexed else -1
+                _add(errors, row_i, "concept_title", "culmination_count",
+                     "at most one culmination row is allowed per topic")
+            elif culms and culms[0][0] != indexed[-1][0]:
                 _add(errors, culms[0][0], "concept_title", "culmination_order",
                      "culmination row must be last in its topic")
 

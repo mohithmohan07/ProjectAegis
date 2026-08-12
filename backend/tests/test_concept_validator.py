@@ -1236,6 +1236,7 @@ def test_validator_requires_one_culmination_last_per_topic():
     )
     report = cv.validate_concept_rows([
         _rec("Skill A"),
+        _rec("Skill B"),
         _rec("Culmination - Skill A", culmination_details, parent="Culmination"),
     ], require_culmination=True)
     assert report["ok"]
@@ -1243,5 +1244,26 @@ def test_validator_requires_one_culmination_last_per_topic():
     bad = cv.validate_concept_rows([
         _rec("Culmination - Skill A", culmination_details, parent="Culmination"),
         _rec("Skill A"),
+        _rec("Skill B"),
     ], require_culmination=True)
     assert any(e["code"] == "culmination_order" for e in bad["errors"])
+
+
+def test_single_concept_topic_needs_no_culmination():
+    # A culmination consolidates several concepts; with one concept its recap
+    # would only restate it, so generation omits the row and validation must
+    # not demand it back.
+    report = cv.validate_concept_rows(
+        [_rec("Skill A")], require_culmination=True)
+    assert report["ok"]
+    assert not any(
+        e["code"] == "culmination_count" for e in report["errors"]
+    )
+
+
+def test_multi_concept_topic_still_requires_its_culmination():
+    report = cv.validate_concept_rows([
+        _rec("Skill A"),
+        _rec("Skill B"),
+    ], require_culmination=True)
+    assert any(e["code"] == "culmination_count" for e in report["errors"])

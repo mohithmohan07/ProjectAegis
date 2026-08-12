@@ -180,7 +180,7 @@ def test_type_refinement_numbers_examples_within_each_case():
     assert "Examples:" not in details
 
 
-def test_culmination_uses_separate_miscellaneous_sequence():
+def test_culmination_types_share_one_continuous_sequence():
     records = [
         _rec("A", "Description: a // Types: Type 01: X Case 01: q1 // Misconception: m"),
         _rec("Culmination - Topic 01", "Description: c // Types: Type 01: Mix Case 01: q // Misconception: m"),
@@ -188,24 +188,42 @@ def test_culmination_uses_separate_miscellaneous_sequence():
         _rec("Culmination - Topic 02", "Description: c // Types: Type 01: Mix2 Case 01: q // Misconception: m"),
     ]
     out = cr.renumber_types_continuously(records)
+    # ONE chapter-wide sequence in row order: a culmination both takes the
+    # next number and advances it, instead of running a parallel
+    # "Miscellaneous Type NN" numbering beside the regular one.
     assert "Type 01: X" in out[0]["concept_details"]
-    # Culmination uses the Miscellaneous sequence (does not touch the chapter counter).
-    assert "Miscellaneous Type 01: Mix" in out[1]["concept_details"]
-    # B continues the regular sequence from A (Type 02), ignoring the culmination.
-    assert "Type 02: Y" in out[2]["concept_details"]
-    # The 2nd culmination continues the Miscellaneous sequence (02), chapter-wide.
-    assert "Miscellaneous Type 02: Mix2" in out[3]["concept_details"]
+    assert "Type 02: Mix" in out[1]["concept_details"]
+    assert "Type 03: Y" in out[2]["concept_details"]
+    assert "Type 04: Mix2" in out[3]["concept_details"]
+    assert not any(
+        "Miscellaneous" in rec["concept_details"] for rec in out
+    )
 
 
-def test_miscellaneous_numbering_is_idempotent():
+def test_culmination_type_numbering_is_idempotent():
     records = [
         _rec("Culmination - T", "Description: c // Types: Type 01: M Case 01: q // Misconception: m"),
     ]
     once = cr.renumber_types_continuously(records)
     twice = cr.renumber_types_continuously(once)
-    # Re-running must not stack the prefix.
-    assert "Miscellaneous Type 01: M" in twice[0]["concept_details"]
-    assert "Miscellaneous Miscellaneous" not in twice[0]["concept_details"]
+    assert "Type 01: M" in twice[0]["concept_details"]
+    # A legacy row carrying the old prefix is rewritten, never stacked.
+    assert "Miscellaneous" not in twice[0]["concept_details"]
+
+
+def test_legacy_miscellaneous_rows_join_the_continuous_sequence():
+    records = [
+        _rec("A", "Description: a // Types: Type 01: X Case 01: q1 // Misconception: m"),
+        _rec(
+            "Culmination - T",
+            "Description: c // Types: Miscellaneous Type 01: M Case 01: q"
+            " // Misconception: m",
+        ),
+    ]
+    out = cr.renumber_types_continuously(records)
+    assert "Type 01: X" in out[0]["concept_details"]
+    assert "Type 02: M" in out[1]["concept_details"]
+    assert "Miscellaneous" not in out[1]["concept_details"]
 
 
 def test_reduce_types_drops_caseless_theory_block():
@@ -382,8 +400,8 @@ def test_culmination_description_becomes_recap():
     # Description collapses to exactly "Recap".
     assert "Description: Recap" in culm
     assert "long synthesis" not in culm
-    # Types (Miscellaneous sequence) and Misconception are preserved.
-    assert "Miscellaneous Type 01: Mixed" in culm
+    # Types continue the one chapter sequence, and Misconception survives.
+    assert "Type 02: Mixed" in culm
     assert "Misconceptions: keep me" in culm
     # Regular concept keeps its continuous Type numbering.
     assert "Type 01: P" in out[0]["concept_details"]

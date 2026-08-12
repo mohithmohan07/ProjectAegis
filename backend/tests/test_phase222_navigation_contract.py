@@ -186,3 +186,89 @@ def test_prompts_treat_vertical_running_labels_as_non_semantic_navigation():
     assert "kind=navigation" in extraction
     assert "such navigation is omitted" in verification
     assert "Never introduce kind=sidebar or reading_order=0" in correction
+
+
+def test_literal_escape_artifacts_are_scrubbed_from_transcribed_text():
+    # Job 13 (3D Shapes): GPT transcribed an in-cell line break as the two
+    # literal characters backslash+n ("Pyramid /\nPrism"), which later trips
+    # the raw-LaTeX wire-format validator when the table rides along as a
+    # task's shared context. Real LaTeX commands beginning with \n, \t, or
+    # \r continue in lowercase and must survive untouched.
+    table = _block(
+        kind="table",
+        text="",
+        order=1,
+        bbox=[100, 100, 900, 400],
+    )
+    table["table_rows"] = [
+        ["Pyramid /\\nPrism", "Triangular"],
+        # Lowercase continuation is still an artifact ("\nvertical" is no
+        # LaTeX command) — the judge is a command whitelist, not case.
+        ["No. of\\nvertical faces", "3"],
+        ["Picture", ""],
+    ]
+    paragraph = _block(
+        kind="paragraph",
+        text="A concluding historical paragraph with \\neq preserved.",
+        order=2,
+        bbox=[100, 450, 900, 600],
+    )
+
+    normalized, reason = fallback.validate_page_extraction(
+        [_page()], _candidate(table, paragraph))
+
+    assert reason == ""
+    assert normalized is not None
+    page = normalized["pages"][0]
+    blocks = page["blocks"]
+    scrubbed_table = next(b for b in blocks if b["kind"] == "table")
+    assert scrubbed_table["table_rows"][0][0] == "Pyramid / Prism"
+    scrubbed_paragraph = next(b for b in blocks if b["kind"] == "paragraph")
+    assert "\\neq" in scrubbed_paragraph["text"]
+    assert any(
+        "literal escape artifact" in flag
+        for flag in page.get("review_flags") or []
+    )
+
+
+def test_cached_page_acsd_replay_is_scrubbed_at_consume_time():
+    # The content-addressed batch cache replays earlier accepted pages
+    # verbatim, bypassing extraction-time validation — so the consumers must
+    # normalize again (run 3 replayed run 2's "Pyramid /\nPrism" untouched).
+    page_acsd = {
+        "pages": [{
+            "page_id": "PDF-PAGE-0025",
+            "blocks": [{
+                "reading_order": 1,
+                "kind": "table",
+                "bbox": [100, 100, 900, 400],
+                "text": "",
+                "heading_level": 0,
+                "source_label": "",
+                "latex": "",
+                "table_rows": [
+                    ["Pyramid /\\nPrism", "Triangular"],
+                    ["No. of\\nvertical faces", "3"],
+                ],
+                "linked_visual_orders": [],
+                "linked_context_orders": [],
+                "caption": "",
+                "confidence": 0.999,
+            }],
+        }],
+    }
+
+    rendered = fallback.render_page_acsd_to_mmd(page_acsd)
+
+    assert "\\nPrism" not in rendered
+    assert "Pyramid / Prism" in rendered
+
+    # The ledger path normalizes the same replayed object before building
+    # shared contexts from its table cells.
+    fallback._scrub_page_acsd_escape_artifacts(page_acsd)
+    rows = page_acsd["pages"][0]["blocks"][0]["table_rows"]
+    assert rows[0][0] == "Pyramid / Prism"
+    assert rows[1][0] == "No. of vertical faces"
+    assert fallback._page_context_text(
+        page_acsd["pages"][0]["blocks"][0]
+    ).startswith("Pyramid / Prism | Triangular")

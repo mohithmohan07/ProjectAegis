@@ -1047,7 +1047,16 @@ def test_pipeline_restores_skeleton_method_rows_before_description_and_cleanup(
     assert len(title_keys) == len(set(title_keys))
     for topic in {record["topic"] for record in out}:
         topic_rows = [record for record in out if record["topic"] == topic]
-        assert g.cr.is_culmination(topic_rows[-1]["concept_title"])
+        taught = [
+            record for record in topic_rows
+            if not g.cr.is_culmination(record["concept_title"])
+        ]
+        # A culmination closes a topic that teaches several concepts; a
+        # single-concept topic has nothing to consolidate and carries none.
+        if len(taught) > 1:
+            assert g.cr.is_culmination(topic_rows[-1]["concept_title"])
+        else:
+            assert topic_rows == taught
     assert g._missing_method_anchors(out, anchors) == []
 
 
@@ -1274,7 +1283,16 @@ def test_final_pipeline_restores_post_description_method_snapshot(monkeypatch):
         )
     for topic in {record["topic"] for record in out}:
         topic_rows = [record for record in out if record["topic"] == topic]
-        assert g.cr.is_culmination(topic_rows[-1]["concept_title"])
+        taught = [
+            record for record in topic_rows
+            if not g.cr.is_culmination(record["concept_title"])
+        ]
+        # A culmination closes a topic that teaches several concepts; a
+        # single-concept topic has nothing to consolidate and carries none.
+        if len(taught) > 1:
+            assert g.cr.is_culmination(topic_rows[-1]["concept_title"])
+        else:
+            assert topic_rows == taught
     assert g._missing_method_anchors(out, anchors) == []
     assert g._fatal_errors(g._validate_final_or_raise(out)) == []
 

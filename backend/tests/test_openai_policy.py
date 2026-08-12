@@ -16,6 +16,7 @@ EXPECTED_REASONING_POLICY = {
     "source_extraction": "high",
     "source_adjudication": "max",
     "page_transcription": "medium",
+    "chapter_outline": "max",
     "concept_mapping": "max",
     "concept_detailing": "max",
     "concept_validation": "high",
