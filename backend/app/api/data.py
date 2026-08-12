@@ -184,10 +184,16 @@ def reset_data(
 
 @router.post("/syllabus/import")
 def import_syllabus(db: Session = Depends(get_db)):
-    """Load unit/chapter syllabus workbooks from ``data/syllabus/``."""
+    """Mirror the bundled ``data/syllabus/`` workbooks into the database.
+
+    Adds what is new and retires superseded EMPTY chapters, so a re-issued
+    syllabus does not leave the same chapter listed twice under its old and
+    new subject. Chapters carrying authored work are never deleted; they come
+    back in ``retained_with_content`` for a human to resolve.
+    """
     from ..services import syllabus_import as syllabus_svc
 
-    return syllabus_svc.load_all_syllabus_files(db)
+    return syllabus_svc.refresh_syllabus(db)
 
 
 @router.post("/syllabus/upload")

@@ -126,10 +126,18 @@ _BOOK_TAG_HINTS = [
     ("full marks", "Fullmarks"),
 ]
 
-_CBSE_SOCIAL_SCIENCE_COMPONENTS = {
+# Boards that teach the social-science strands as ONE subject. CBSE and
+# Karnataka both do; ICSE keeps History/Geography standalone, so it is
+# deliberately absent.
+_SOCIAL_SCIENCE_BOARDS = {"CBSE", "KARNATAKA"}
+_SOCIAL_SCIENCE_COMPONENTS = {
     "history", "geography", "civics", "economics", "political science",
-    "social studies", "social science",
+    "social studies", "social science", "sociology", "business studies",
 }
+# Retained for callers importing the older name.
+_CBSE_SOCIAL_SCIENCE_COMPONENTS = _SOCIAL_SCIENCE_COMPONENTS
+# ICSE examines History and Civics as one paper.
+_ICSE_HISTORY_CIVICS = {"history", "civics", "history and civics", "history & civics"}
 
 
 def parse_chapter_human_tag(text: str) -> dict | None:
@@ -181,12 +189,21 @@ def primary_book_source(sources: str) -> str:
 def effective_subject_for_tags(board: str, subject: str) -> str:
     """Subject used in export tags/codes.
 
-    CBSE stores History/Geography/Civics/Economics under Social Science for
-    import IDs, while ICSE keeps History/Geography as standalone subjects.
+    CBSE and Karnataka store History/Geography/Civics/Economics/Sociology/
+    Business Studies under Social Science for import IDs; ICSE keeps
+    History and Geography as standalone subjects.
     """
     subj = (subject or "").strip()
-    if (board or "").strip().upper() == "CBSE" and subj.lower() in _CBSE_SOCIAL_SCIENCE_COMPONENTS:
+    board_key = (board or "").strip().upper()
+    if (
+        board_key in _SOCIAL_SCIENCE_BOARDS
+        and subj.lower() in _SOCIAL_SCIENCE_COMPONENTS
+    ):
         return "Social Science"
+    # ICSE teaches History and Civics as a single paper, so they are one
+    # subject rather than two — Geography stays standalone.
+    if board_key == "ICSE" and subj.lower() in _ICSE_HISTORY_CIVICS:
+        return "History and Civics"
     return subj
 
 

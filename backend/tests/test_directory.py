@@ -33,8 +33,14 @@ def test_chapter_tag_includes_book_and_board_tokens():
         == "09_Social_Science_CBSE_Gateway_to_Social_Science"
     assert directory.chapter_tag("CBSE", "10", "History", book="NCERT") \
         == "10_Social_Science_CBSE_NCERT"
+    # ICSE examines History and Civics as one paper, so both strands tag as
+    # the single subject (Geography stays standalone).
     assert directory.chapter_tag("ICSE", "10", "History", book="Morningstar") \
-        == "10_History_ICSE_MorningStar"
+        == "10_History_and_Civics_ICSE_MorningStar"
+    assert directory.chapter_tag("ICSE", "10", "Civics", book="Morningstar") \
+        == "10_History_and_Civics_ICSE_MorningStar"
+    assert directory.chapter_tag("ICSE", "10", "Geography", book="Morningstar") \
+        == "10_Geography_ICSE_MorningStar"
 
 
 def test_chapter_titled_cell_matches_required_format():
@@ -138,7 +144,13 @@ def test_new_subject_codes_roundtrip():
 def test_cbse_social_science_component_subjects_use_ss_code():
     assert directory.code_prefix("CBSE", "09", "Geography") == "09CBSS"
     assert directory.code_prefix("CBSE", "10", "History") == "10CBSS"
-    assert directory.code_prefix("ICSE", "10", "History") == "10ICHS"
+    # ICSE History and Civics share one code, the same shape Maharashtra
+    # already uses for that subject.
+    assert directory.code_prefix("ICSE", "10", "History") == "10ICHI"
+    assert directory.code_prefix("ICSE", "10", "Civics") == "10ICHI"
+    # Karnataka consolidates its social strands like CBSE.
+    assert directory.code_prefix("Karnataka", "10", "History") == "10KSSS"
+    assert directory.code_prefix("Karnataka", "10", "Sociology") == "10KSSS"
     assert directory.make_chapter_code(
         "CBSE", "09", "Geography", "Landforms Earth's Living Canvas"
     ).startswith("09CBSS_")

@@ -32,3 +32,16 @@ def test_normalize_unit_and_board():
     assert normalize_board("", filename="UnitChapter_List__CBSE.xlsx") == "CBSE"
     assert normalize_board("", filename="UnitChapter_List__KSTATE.xlsx") == "Karnataka"
     assert normalize_board("", filename="UnitChapter_List__Maharashtra_Board.xlsx") == "Maharashtra"
+
+
+def test_subject_spelling_variants_collapse_to_one_name():
+    """The Karnataka sheets spell this both ways across grades.
+
+    Both spellings reached the directory, so the same subject appeared
+    twice in the dropdown.
+    """
+    from app.services.text_normalize import normalize_subject
+
+    assert normalize_subject("Rythmic Activities") == "Rhythmic Activities"
+    assert normalize_subject("Rhythmic Activities") == "Rhythmic Activities"
+    assert normalize_subject("rythmic activities") == "Rhythmic Activities"
