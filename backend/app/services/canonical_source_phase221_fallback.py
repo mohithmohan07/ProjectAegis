@@ -1068,6 +1068,14 @@ def derive_chapter_outline(page_acsd: dict[str, Any]) -> dict[str, Any] | None:
                 purpose="chapter_outline",
                 max_tokens=_max_output_tokens(),
             )
+        except ValueError as exc:
+            # A wiring mistake (unknown request purpose, malformed schema) is
+            # ours, not the model's: it would silently disable the pass on
+            # every book. Fail loudly instead of quietly shipping the old
+            # deterministic structure.
+            raise RuntimeError(
+                f"chapter-outline pass is misconfigured: {exc}"
+            ) from exc
         except Exception as exc:  # degraded, never fatal
             progress.log(
                 f"Chapter-outline pass failed ({exc}); the deterministic "

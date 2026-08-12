@@ -259,3 +259,41 @@ def test_deterministic_leaves_still_never_split(monkeypatch):
     inventory = phase2.inventory_from_canonical(canonical)
 
     assert [item["qid"] for item in inventory["items"]] == ["QINV-0031"]
+
+
+def test_outline_request_purpose_is_registered():
+    # The policy module rejects unknown purposes with ValueError, and the
+    # outline pass degrades on exception — so an unregistered purpose would
+    # silently disable the pass for every book. Pin the registration.
+    from aegis_pipeline import openai_policy
+
+    assert openai_policy.reasoning_effort_for("chapter_outline") == "max"
+
+
+def test_misconfigured_outline_pass_fails_loudly(monkeypatch):
+    from app.services import canonical_source_phase22 as phase22
+
+    def _boom(**_kwargs):
+        raise ValueError("Unknown OpenAI request purpose 'chapter_outline'")
+
+    monkeypatch.setattr(phase22, "_openai_multimodal_json", _boom)
+    monkeypatch.setattr(fallback, "_read_verified_batch_cache", lambda _key: None)
+
+    try:
+        fallback.derive_chapter_outline(_page_acsd())
+    except RuntimeError as exc:
+        assert "misconfigured" in str(exc)
+    else:
+        raise AssertionError("a wiring error must not degrade silently")
+
+
+def test_model_failure_still_degrades_to_deterministic_structure(monkeypatch):
+    from app.services import canonical_source_phase22 as phase22
+
+    def _boom(**_kwargs):
+        raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(phase22, "_openai_multimodal_json", _boom)
+    monkeypatch.setattr(fallback, "_read_verified_batch_cache", lambda _key: None)
+
+    assert fallback.derive_chapter_outline(_page_acsd()) is None

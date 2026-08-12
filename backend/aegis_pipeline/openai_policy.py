@@ -54,6 +54,7 @@ OpenAIPurpose = Literal[
     "source_extraction",
     "source_adjudication",
     "page_transcription",
+    "chapter_outline",
     "concept_mapping",
     "concept_detailing",
     "concept_validation",
@@ -89,6 +90,10 @@ REASONING_EFFORT_BY_PURPOSE: Final[dict[OpenAIPurpose, ReasoningEffort]] = {
     # Faithful page transcription with an independent verification pass;
     # accuracy comes from the verify/correct loop, not from deliberation.
     "page_transcription": "medium",
+    # Deciding a chapter's topic structure and which subparts are independent
+    # questions is pure judgment over the whole chapter at once — the same
+    # class of work as semantic adjudication, and it runs once per source.
+    "chapter_outline": "max",
     "concept_mapping": "max",
     "concept_detailing": "max",
     "concept_validation": "high",
