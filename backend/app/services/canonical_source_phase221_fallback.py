@@ -1929,11 +1929,7 @@ def _accept_gate_issues_with_flags(
     genuine defect still stops the pipeline: a real ``error`` issue, or a
     source with no tasks at all to build from.
     """
-    fatal = [
-        issue for issue in issues
-        if isinstance(issue, dict)
-        and str(issue.get("severity") or "").lower() == "error"
-    ]
+    fatal, advisory = phase2.partition_gate_issues(issues)
     if not (canonical.get("tasks") or []):
         fatal = fatal or [{
             "severity": "error",
@@ -1949,7 +1945,6 @@ def _accept_gate_issues_with_flags(
             "canonical-source gate" + (f": {codes}" if codes else "")
         )
 
-    advisory = [issue for issue in issues if isinstance(issue, dict)]
     if advisory:
         notes = [
             f"{issue.get('code') or 'unknown'}"
