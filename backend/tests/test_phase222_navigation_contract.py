@@ -202,6 +202,9 @@ def test_literal_escape_artifacts_are_scrubbed_from_transcribed_text():
     )
     table["table_rows"] = [
         ["Pyramid /\\nPrism", "Triangular"],
+        # Lowercase continuation is still an artifact ("\nvertical" is no
+        # LaTeX command) — the judge is a command whitelist, not case.
+        ["No. of\\nvertical faces", "3"],
         ["Picture", ""],
     ]
     paragraph = _block(
@@ -243,7 +246,10 @@ def test_cached_page_acsd_replay_is_scrubbed_at_consume_time():
                 "heading_level": 0,
                 "source_label": "",
                 "latex": "",
-                "table_rows": [["Pyramid /\\nPrism", "Triangular"]],
+                "table_rows": [
+                    ["Pyramid /\\nPrism", "Triangular"],
+                    ["No. of\\nvertical faces", "3"],
+                ],
                 "linked_visual_orders": [],
                 "linked_context_orders": [],
                 "caption": "",
@@ -260,7 +266,9 @@ def test_cached_page_acsd_replay_is_scrubbed_at_consume_time():
     # The ledger path normalizes the same replayed object before building
     # shared contexts from its table cells.
     fallback._scrub_page_acsd_escape_artifacts(page_acsd)
-    cell = page_acsd["pages"][0]["blocks"][0]["table_rows"][0][0]
-    assert cell == "Pyramid / Prism"
+    rows = page_acsd["pages"][0]["blocks"][0]["table_rows"]
+    assert rows[0][0] == "Pyramid / Prism"
+    assert rows[1][0] == "No. of vertical faces"
     assert fallback._page_context_text(
-        page_acsd["pages"][0]["blocks"][0]) == "Pyramid / Prism | Triangular"
+        page_acsd["pages"][0]["blocks"][0]
+    ).startswith("Pyramid / Prism | Triangular")

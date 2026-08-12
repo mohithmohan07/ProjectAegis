@@ -624,9 +624,16 @@ def inventory_from_canonical(canonical: dict[str, Any]) -> dict[str, Any]:
             if isinstance(leaf, dict)
         ]
         rows = leaf_cases or [task]
-        if leaf_cases and _never_split_questions():
+        gpt_decided_split = any(
+            str(leaf.get("decomposition") or "") == "gpt_semantic_boundary"
+            for leaf in leaf_cases
+        )
+        if leaf_cases and _never_split_questions() and not gpt_decided_split:
             # The parent task's display prompt carries the complete
             # multi-part wording; the whole question is one inventory item.
+            # The exception is a split the chapter-outline judge decided:
+            # subparts it deemed independent are separate questions (board
+            # conventions differ, and the model judged the content itself).
             rows = [task]
         for leaf in rows:
             row = copy.deepcopy(task)

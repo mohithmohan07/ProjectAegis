@@ -554,7 +554,38 @@ def materialize_task_leaf_cases(canonical: dict[str, Any]) -> int:
             if isinstance(row, dict)
         )
 
+        gpt_parts = [
+            part for part in task.get("gpt_boundary_parts") or []
+            if isinstance(part, dict) and str(part.get("text") or "").strip()
+        ]
         provisional: list[dict[str, Any]] = []
+        if gpt_parts:
+            # The chapter-outline judge decided these subparts are independent
+            # questions (board conventions differ; the model judged content,
+            # not typography). Its verbatim parts replace the enumeration
+            # heuristics entirely for this task.
+            inherited_context = str(task.get("shared_context") or "").strip()
+            base = sources[0]
+            for part in gpt_parts:
+                stem = str(part.get("stem") or "").strip()
+                raw_part = str(part.get("text") or "").strip()
+                leaf_context = "\n\n".join(
+                    value for value in (inherited_context, stem) if value
+                )
+                provisional.append({
+                    **base,
+                    "base_task": False,
+                    "raw_prompt": raw_part,
+                    "display_prompt": canonical_task_display(
+                        " ".join(value for value in (stem, raw_part) if value)
+                    ),
+                    "shared_context": leaf_context,
+                    "requires_context": bool(leaf_context),
+                    "subpart_label": str(part.get("label") or "").strip(),
+                    "decomposition": "gpt_semantic_boundary",
+                })
+            sources = []
+
         for source in sources:
             raw_prompt = str(source.get("raw_prompt") or "").strip()
             stem, enumerated = _independent_enumerated_parts(raw_prompt)

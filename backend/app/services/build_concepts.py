@@ -1391,6 +1391,13 @@ def _sync_chapter_topic_summary(
                 # concepts are moved between topics.
                 t.topic_description = "Covers " + ", ".join(names) + "."
 
+    source_title = str(meta_summary.get("source_chapter_title") or "").strip()
+    if source_title:
+        # The book's own printed chapter name (read by the conversion's
+        # outline pass). The tagged chapter_title keeps the directory/syllabus
+        # identity; the display name is what reviewers read.
+        chapter.chapter_display_name = source_title
+
     n_concepts = sum(
         sum(
             1 for concept in topic.concepts
