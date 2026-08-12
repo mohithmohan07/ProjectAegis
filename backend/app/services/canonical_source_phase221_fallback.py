@@ -514,16 +514,18 @@ Block rules:
 - task: separate learner instructions/questions from surrounding narrative and
   preserve the visible task cue (Activity, Discuss, Project, etc.) in source_label.
   A task with no visible cue leaves source_label empty — never invent one.
-- Every item the learner is asked to complete is a task, including a
-  fill-in-the-blanks statement with empty boxes or lines ("A cuboid has ▯
-  vertices, ▯ rectangular faces, ▯ edges." — transcribe each empty box as ▯),
-  a table the learner must complete, and a discussion or think-about prompt.
-  Lower-grade books carry many such small items; capture every one.
-- A task block's text is never just its cue: "Do it." alone is a banner, not a
-  task — attach the cue to the instruction that follows it, or emit no task.
-- An activity's numbered steps ("(1) Cut... (2) Place... (3) Write...") are
-  ONE procedure: keep them inside one task block, including a final
-  write-the-elements step; never emit a step as its own task.
+- Every item the learner is asked to complete is a task, in any subject:
+  a fill-in-the-blanks statement with empty boxes or ruled lines (transcribe
+  each empty box as ▯), a table the learner must complete, a match-the-pairs
+  or true/false set, a discussion or think-about prompt, and a
+  write/draw/observe instruction. Lower-grade books carry many such small
+  items rather than long exercises; capture every one of them.
+- A task block's text is never just its cue: a bare banner word ("Do it.",
+  "Activity", "Discuss.") is not a task — attach the cue to the instruction
+  that follows it in source_label, or emit no task at all.
+- An activity's numbered steps ("(1) ... (2) ... (3) ...") are ONE procedure:
+  keep them inside a single task block, including a closing
+  write-down/record step; never emit an individual step as its own task.
 - A worked example — a cue like "Example 3 :" followed by a problem statement
   whose solution is printed right after it — is a real question: emit the
   problem statement as a task block with the exact cue (e.g. "Example 3") in
@@ -854,32 +856,38 @@ your judgment IS the structure.
    page (keep printed typos). Never use a series/book name or a section name.
 
 2. topics — the ordered learning sections of the chapter, exactly as the book
-   itself segments them:
-   - A topic starts where the book starts one: a real content heading such as
-     "Dimensions" or "Two Dimensional Shapes". Use the printed wording.
-   - Pedagogy/activity banners are NEVER topics: "Understand", "Do it.",
-     "Discuss.", "Think about", "Revision", "At a glance", "Demonstration /
-     Practical", "Mathematical Discussion" and the like are cues inside a
-     topic, not structure.
-   - Sub-heads that only continue the current subject ("(1) Triangular
-     Prism", "Pyramid", "Cone", "Sphere") stay INSIDE their topic unless the
-     book visibly treats them as new sections of the chapter.
-   - PRESERVE the book's segmentation even when a topic has very little
-     content. Lower-grade books have thin topics; never merge topics because
-     they look small, and never invent topics the book does not have.
-   - kind="assessment" marks question/exercise collections ("Practice Set
-     1.1", "Exercise 1", end-of-chapter questions): they are not learning
-     topics; their questions belong to the whole chapter.
+   itself segments them. This holds for every board, subject, and grade —
+   mathematics, science, history, geography, language and literature alike:
+   - A topic starts where the book starts one: a heading that names a subject
+     of study the chapter then teaches. Use the printed wording verbatim.
+   - Pedagogy/activity banners are NEVER topics. They cue an action, not a
+     subject: "Understand", "Do it.", "Discuss.", "Think about", "Revision",
+     "At a glance", "Activity", "Let's recall", "Find out", "Project",
+     "Demonstration / Practical", "Warm-up", "Working with the text",
+     "Thinking about language" and the like are cues inside a topic.
+   - A sub-head that only continues the topic already under way stays INSIDE
+     it; start a new topic only where the book visibly turns to a new subject
+     of the chapter.
+   - PRESERVE the book's own segmentation even when a topic carries very
+     little content. Lower-grade books have short topics by design: never
+     merge topics because they look thin, never split one because it looks
+     long, and never invent a topic the book does not have.
+   - kind="assessment" marks question/exercise collections — an end-of-topic
+     practice set, an end-of-chapter exercise, a question bank — under
+     whatever name the book prints. They are not learning topics; their
+     questions belong to the whole chapter.
 
 3. task_partitions — question boundaries for task blocks that contain more
    than one INDEPENDENT question:
-   - Boards differ: in some books "1. (a) (b)" is one question with dependent
-     subparts; in others each lettered/numbered item under a serial is its own
-     complete question. Judge by the content itself: a subpart that can be
-     asked and answered on its own (its own MCQ with options, its own
-     fill-in, its own prompt) is an independent question. Subparts that share
-     one stem's data or build on each other stay together — do not partition
-     such tasks at all.
+   - Boards differ, and this is exactly why you decide it: in some books
+     "1. (a) (b)" is one question with dependent subparts; in others the
+     serial is just a group number and each lettered/numbered item under it
+     is its own complete question. Judge by the content itself, never by the
+     numbering style: a subpart that can be asked and answered on its own
+     (its own MCQ with options, its own fill-in, its own prompt about its own
+     material) is an independent question. Subparts that share one stem's
+     data, passage, or figure, or that build on each other's answers, stay
+     together — do not partition such tasks at all.
    - Each part: label = the printed item marker ("(i)", "2)", "b."); text =
      the part's complete wording COPIED VERBATIM from the task block; stem =
      any shared instruction that the part needs to stand alone (for example
