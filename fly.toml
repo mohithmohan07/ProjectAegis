@@ -15,6 +15,15 @@ primary_region = 'ams'
   AEGIS_DATA_DIR = '/data'
   AEGIS_DB_URL = 'sqlite:////data/aegis.db'
   AEGIS_PUBLIC_BASE_URL = 'https://projectaegis.fly.dev'
+  # The rewritten Phase 3 is the production pipeline; without this flag the
+  # deleted-era legacy path runs and the webpage output diverges from
+  # everything validated in staging.
+  AEGIS_PHASE3_REWRITE = '1'
+  # Multi-creator sizing: concurrent runs x decision workers <= the shared
+  # OpenAI concurrency gate.
+  AEGIS_OPENAI_MAX_CONCURRENCY = '9'
+  AEGIS_PHASE3_DECISION_WORKERS = '3'
+  AEGIS_GPT_PDF_ACSD_PARALLEL_BATCHES = '3'
   PORT = '8000'
 
 [[mounts]]
