@@ -38,7 +38,7 @@ from . import progress
 # Part of every transcription cache key: bump on any material change to the
 # extraction/verification contract so sealed pages re-derive under the new
 # rules instead of replaying stale judgments.
-FALLBACK_VERSION = "2.3.0"
+FALLBACK_VERSION = "2.3.1"
 FALLBACK_COMPILER = "gpt-pdf-to-acsd-2"
 FALLBACK_ORIGIN = "gpt_pdf_acsd_fallback"
 # Version stamped on the extracted page bundle. Phase 3's page-evidence cache
