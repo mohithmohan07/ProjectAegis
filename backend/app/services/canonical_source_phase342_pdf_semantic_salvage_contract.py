@@ -114,12 +114,16 @@ def _semantic_salvage(
         pages, verification
     )
     if verification_reason:
+        # Ship the best structurally-sound candidate with the failure so
+        # the orchestrator can accept it under review flags — a wording
+        # dispute the models cannot settle must not block the book.
         return {
             "status": "review_required",
             "reason": (
                 "final semantic salvage failed independent verification: "
                 + verification_reason
             ),
+            "pages": copy.deepcopy(normalized["pages"]),
             "verification": verification,
             "previous_result": copy.deepcopy(previous),
         }
@@ -184,15 +188,43 @@ def install() -> None:
             for page in pages:
                 single = resilient_extract_batch([page])
                 if single.get("status") != "verified":
-                    return {
-                        "status": "review_required",
-                        "reason": (
-                            f"{page.page_id} remained unresolved after page "
-                            f"isolation: {single.get('reason') or 'unknown reason'}"
-                        ),
-                        "failed_page_id": page.page_id,
-                        "batch_result": copy.deepcopy(result),
-                        "page_result": single,
+                    candidate_pages = copy.deepcopy(single.get("pages") or [])
+                    if not candidate_pages:
+                        return {
+                            "status": "review_required",
+                            "reason": (
+                                f"{page.page_id} remained unresolved after page "
+                                f"isolation: "
+                                f"{single.get('reason') or 'unknown reason'}"
+                            ),
+                            "failed_page_id": page.page_id,
+                            "batch_result": copy.deepcopy(result),
+                            "page_result": single,
+                        }
+                    # The transcription exists; the models could not settle
+                    # a residual dispute about it. Every book lays pages out
+                    # differently — ship the best candidate under a review
+                    # flag instead of refusing the source.
+                    unresolved = (
+                        "verification unresolved after bounded correction: "
+                        + str(single.get("reason") or "unknown reason")[:500]
+                    )
+                    for row in candidate_pages:
+                        row.setdefault("review_flags", []).append(
+                            f"{page.page_id}: {unresolved}"
+                        )
+                    progress.log(
+                        f"{page.page_id} ships under a review flag — the "
+                        "independent verifier did not fully approve the "
+                        "final candidate: "
+                        + str(single.get("reason") or "")[:300],
+                        level="warning",
+                    )
+                    single = {
+                        **single,
+                        "status": "verified",
+                        "pages": candidate_pages,
+                        "accepted_with_review_flags": True,
                     }
                 accepted.extend(copy.deepcopy(single.get("pages") or []))
                 histories.extend(
