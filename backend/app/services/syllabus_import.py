@@ -371,8 +371,13 @@ def upsert_chapters(db: Session, rows: list[SyllabusRow]) -> dict[str, int]:
             ),
             unit=row.unit,
             chapter_title=row.chapter,
-            chapter_display_name=directory.chapter_titled_cell(
-                row.chapter, row.board, row.grade, row.subject, book="NCERT"),
+            # Display names are the human-readable half of every band: the
+            # *_title columns carry the code tag, the *_display_name columns
+            # stay clean (the same rule the workbook writer follows for
+            # topics and concepts). This was storing the tagged form, so the
+            # directory API served "Determiners (06_English_Language_CBSE)"
+            # wherever a display name was shown.
+            chapter_display_name=row.chapter,
         )
         db.add(chapter)
         existing_codes.add(code)

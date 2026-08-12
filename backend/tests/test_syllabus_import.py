@@ -113,3 +113,27 @@ def test_bootstrap_syllabus_only_when_empty(db, cbse_xlsx, monkeypatch):
     # Restore shared session fixture data for downstream tests.
     from tests.conftest import _load_test_fixtures
     _load_test_fixtures()
+
+
+def test_imported_chapter_display_names_carry_no_codes(db, cbse_xlsx):
+    """Display names are the human-readable half of each band.
+
+    The *_title columns carry the code tag; the *_display_name columns stay
+    clean, the same rule the workbook writer follows for topics and concepts.
+    Chapters were storing the tagged form, so the directory API served
+    "Determiners (06_English_Language_CBSE)" wherever a display name showed.
+    """
+    import re
+
+    rows = svc.parse_workbook(cbse_xlsx, default_board="CBSE")
+    svc.upsert_chapters(db, rows)
+
+    chapter = db.query(models.Chapter).filter_by(
+        chapter_title="Knowing Our Numbers").one()
+    assert chapter.chapter_display_name == "Knowing Our Numbers"
+    tagged = [
+        c for c in db.query(models.Chapter).all()
+        if re.search(r"\([A-Za-z0-9]+(?:_[A-Za-z0-9]+)+\)",
+                     c.chapter_display_name or "")
+    ]
+    assert tagged == []
