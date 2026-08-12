@@ -44,6 +44,17 @@ _CANONICAL = {
     "sanskrit": "Sanskrit",
     "computer science": "Computer Science",
     "information technology": "Information Technology",
+    # The Karnataka sheets spell this both ways across grades, which listed
+    # the same subject twice in the directory.
+    "rythmic activities": "Rhythmic Activities",
+    "rhythmic activities": "Rhythmic Activities",
+    "physical education": "Physical Education",
+    "health education": "Health Education",
+    "national integration": "National Integration",
+    "group games": "Group Games",
+    "team games": "Team Games",
+    "athletics": "Athletics",
+    "yogasana": "Yogasana",
 }
 
 # Acronyms that should stay fully uppercased when detected as a token.
