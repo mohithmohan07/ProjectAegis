@@ -596,7 +596,63 @@ def audit_type_cases(
             phase="type_case_release",
             qids=[qid],
         ))
+    issues.extend(_repeated_question_issues(output))
     return output, issues, routes
+
+
+_QUESTION_TEXT_NOISE_RE = re.compile(r"[^0-9a-z ]+")
+# Only a LEADING item marker — "(2)", "3.", "b)", "(iv)". Digits inside the
+# question are part of it ("What is 2 + 3?") and must survive.
+_QUESTION_ITEM_MARKER_RE = re.compile(
+    r"^\(?\s*(?:[0-9]{1,3}|[a-z]|[ivxl]{1,5})\s*[\).:]\s+"
+)
+
+
+def _question_text_key(value: object) -> str:
+    """Compare questions by their words, not their punctuation or numbering."""
+    text = _QUESTION_ITEM_MARKER_RE.sub("", _normal(value))
+    text = _QUESTION_TEXT_NOISE_RE.sub(" ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _repeated_question_issues(
+    rows: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Flag one question reaching the learner twice under different QIDs.
+
+    ``duplicate_qid_assignment`` catches the same QID placed twice. This
+    catches the other half: two distinct source questions whose wording is the
+    same, which a reviewer reads as the deck simply repeating itself.
+    """
+    qids_by_text: dict[str, list[str]] = {}
+    for row in rows:
+        if str(row.get("row_kind") or "") != "example":
+            continue
+        key = _question_text_key(row.get("example_prompt"))
+        qid = _normal(row.get("example_qid"))
+        if len(key) < 25 or not qid:
+            # Very short prompts ("Why?", "Explain.") legitimately recur as
+            # the tail of different questions; they are not a repeat.
+            continue
+        seen = qids_by_text.setdefault(key, [])
+        if qid not in seen:
+            seen.append(qid)
+    issues: list[dict[str, Any]] = []
+    for key, qids in sorted(qids_by_text.items()):
+        if len(qids) < 2:
+            continue
+        issues.append(_issue(
+            code="repeated_question_text",
+            message=(
+                f"{', '.join(qids)} carry the same question wording; the "
+                "learner would meet this question more than once."
+            ),
+            severity="warning",
+            phase="type_case_release",
+            qids=list(qids),
+            details={"question_text": key[:400]},
+        ))
+    return issues
 
 
 def _issue_matches_record(issue: Mapping[str, Any], record: Mapping[str, Any]) -> bool:

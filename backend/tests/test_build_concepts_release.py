@@ -829,3 +829,74 @@ def test_boundaries_without_topics_are_reported_as_a_single_topic_risk(db):
     assert issues["chapter_outline_topics_unusable"]["severity"] == "warning"
     assert issues["chapter_outline_review_flags"]["severity"] == "info"
     assert "no usable content topic" in _manifest_rows(job)["Outline normalization flags"]
+
+
+def _repeated_wording_types():
+    """Two distinct source questions that reach the learner with one wording."""
+    repeated = (
+        "Explain how a plant responds to sunlight reaching it from one side."
+    )
+    types = _mined_types()
+    cases = types["types"][0]["case_prompts"]
+    cases[0]["examples"][0]["prompt"] = repeated
+    cases[1]["examples"][0]["prompt"] = repeated
+    return types
+
+
+def test_one_question_reaching_the_learner_twice_is_flagged():
+    _rows, issues, _routes = release.audit_type_cases(
+        _repeated_wording_types(), _inventory()
+    )
+
+    repeats = [
+        issue for issue in issues
+        if issue["code"] == "repeated_question_text"
+    ]
+    assert len(repeats) == 1
+    assert repeats[0]["qids"] == ["QINV-0001", "QINV-0002"]
+    assert repeats[0]["severity"] == "warning"
+
+
+def test_distinct_questions_are_not_reported_as_repeats():
+    _rows, issues, _routes = release.audit_type_cases(
+        _mined_types(), _inventory()
+    )
+
+    assert not [
+        issue for issue in issues
+        if issue["code"] == "repeated_question_text"
+    ]
+
+
+def test_a_short_shared_tail_is_not_a_repeated_question():
+    # "Why?" and "Explain." close many different questions; treating those as
+    # repeats would bury the real ones.
+    types = _mined_types()
+    cases = types["types"][0]["case_prompts"]
+    cases[0]["examples"][0]["prompt"] = "Why?"
+    cases[1]["examples"][0]["prompt"] = "Why?"
+
+    _rows, issues, _routes = release.audit_type_cases(types, _inventory())
+
+    assert not [
+        issue for issue in issues
+        if issue["code"] == "repeated_question_text"
+    ]
+
+
+def test_punctuation_and_numbering_do_not_hide_a_repeat():
+    types = _mined_types()
+    cases = types["types"][0]["case_prompts"]
+    cases[0]["examples"][0]["prompt"] = (
+        "(2) Explain how a plant responds to sunlight from one side."
+    )
+    cases[1]["examples"][0]["prompt"] = (
+        "Explain how a plant responds to sunlight from one side!"
+    )
+
+    _rows, issues, _routes = release.audit_type_cases(types, _inventory())
+
+    assert [
+        issue["code"] for issue in issues
+        if issue["code"] == "repeated_question_text"
+    ] == ["repeated_question_text"]
