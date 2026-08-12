@@ -92,7 +92,15 @@ def test_upsert_skips_duplicates(db, cbse_xlsx):
     assert again["skipped"] == 3
 
 
-def test_bootstrap_syllabus_only_when_empty(db, cbse_xlsx, monkeypatch):
+def test_bootstrap_syllabus_mirrors_the_workbooks_every_start(
+    db, cbse_xlsx, monkeypatch,
+):
+    """Startup mirrors the bundled workbooks instead of seeding once.
+
+    Loading only into an EMPTY database meant a deploy shipping re-issued
+    workbooks never applied them — the app kept serving the old directory.
+    Bootstrap now refreshes on every start and is idempotent.
+    """
     import app.config as cfg
 
     db.query(models.Chapter).delete()
@@ -102,11 +110,18 @@ def test_bootstrap_syllabus_only_when_empty(db, cbse_xlsx, monkeypatch):
     monkeypatch.setattr(cfg, "BUNDLED_SYLLABUS_DIR", syllabus_dir)
     monkeypatch.setattr(cfg, "SYLLABUS_DIR", syllabus_dir)
     monkeypatch.setattr(svc, "_discover_workbooks", lambda: [cbse_xlsx])
+    monkeypatch.setattr(svc, "_missing_expected_files", lambda: [])
 
     result = svc.bootstrap_syllabus(db)
     assert result is not None
     assert result["created"] == 3
-    assert svc.bootstrap_syllabus(db) is None
+
+    # A second start changes nothing.
+    again = svc.bootstrap_syllabus(db)
+    assert again is not None
+    assert again["created"] == 0
+    assert again["pruned"] == 0
+    assert db.query(models.Chapter).count() == 3
 
     db.query(models.Chapter).delete()
     db.commit()
@@ -177,3 +192,139 @@ def test_bundled_syllabus_filenames_all_route_to_a_real_parser(tmp_path):
             assert options.get("universal_boards"), filename
         else:
             assert options.get("default_board"), filename
+
+
+@pytest.fixture()
+def isolated_db(tmp_path):
+    """A private database for refresh tests.
+
+    ``refresh_syllabus`` deletes superseded chapters, so it must never run
+    against the shared fixture database other tests depend on.
+    """
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app import models as app_models
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'iso.db'}")
+    app_models.Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    try:
+        yield session
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def _seed_superseded_chapter(db, **overrides):
+    from app.services import directory
+
+    fields = {
+        "board": "CBSE", "grade": "06", "subject": "Civics",
+        "unit": "Governance", "chapter_title": "Retired Chapter",
+        **overrides,
+    }
+    chapter = models.Chapter(
+        chapter_code=directory.make_chapter_code(
+            fields["board"], fields["grade"], fields["subject"],
+            fields["chapter_title"],
+        ),
+        chapter_display_name=fields["chapter_title"],
+        **fields,
+    )
+    db.add(chapter)
+    db.commit()
+    return chapter
+
+
+def test_refresh_retires_superseded_empty_chapters(
+    isolated_db, cbse_xlsx, monkeypatch,
+):
+    """A re-issued syllabus must not leave the same chapter listed twice.
+
+    load_all_syllabus_files only ADDS. A chapter that changes subject gets a
+    new code, so the add-only path kept the old row too — on the live
+    database that produced 96 duplicate board+grade+title pairs.
+    """
+    monkeypatch.setattr(svc, "_discover_workbooks", lambda: [cbse_xlsx])
+    monkeypatch.setattr(svc, "_missing_expected_files", lambda: [])
+    stale_id = _seed_superseded_chapter(isolated_db).id
+
+    result = svc.refresh_syllabus(isolated_db)
+
+    assert result["pruned"] == 1
+    assert isolated_db.get(models.Chapter, stale_id) is None
+    assert isolated_db.query(models.Chapter).filter_by(
+        chapter_title="Knowing Our Numbers").count() == 1
+
+
+def test_refresh_never_deletes_a_chapter_with_authored_work(
+    isolated_db, cbse_xlsx, monkeypatch,
+):
+    monkeypatch.setattr(svc, "_discover_workbooks", lambda: [cbse_xlsx])
+    monkeypatch.setattr(svc, "_missing_expected_files", lambda: [])
+    kept = _seed_superseded_chapter(
+        isolated_db, chapter_title="Chapter With Work")
+    kept.topics.append(
+        models.Topic(topic_title="Authored Topic", pre_post_learning="Post"))
+    isolated_db.commit()
+    kept_id = kept.id
+
+    result = svc.refresh_syllabus(isolated_db)
+
+    assert isolated_db.get(models.Chapter, kept_id) is not None
+    assert result["pruned"] == 0
+    assert any(
+        "Chapter With Work" in entry
+        for entry in result["retained_with_content"]
+    )
+
+
+def test_refresh_is_idempotent(isolated_db, cbse_xlsx, monkeypatch):
+    monkeypatch.setattr(svc, "_discover_workbooks", lambda: [cbse_xlsx])
+    monkeypatch.setattr(svc, "_missing_expected_files", lambda: [])
+
+    first = svc.refresh_syllabus(isolated_db)
+    total = isolated_db.query(models.Chapter).count()
+    second = svc.refresh_syllabus(isolated_db)
+
+    assert first["created"] > 0
+    assert second["created"] == 0
+    assert second["pruned"] == 0
+    assert isolated_db.query(models.Chapter).count() == total
+
+
+def test_refresh_never_prunes_when_a_workbook_is_missing(
+    isolated_db, cbse_xlsx, monkeypatch,
+):
+    """A partial or broken deploy must not empty the directory."""
+    monkeypatch.setattr(svc, "_discover_workbooks", lambda: [cbse_xlsx])
+    monkeypatch.setattr(
+        svc, "_missing_expected_files", lambda: ["UnitChapter_List__ICSE.xlsx"])
+    stale_id = _seed_superseded_chapter(isolated_db).id
+
+    result = svc.refresh_syllabus(isolated_db)
+
+    assert result["pruned"] == 0
+    assert isolated_db.get(models.Chapter, stale_id) is not None
+
+
+def test_bootstrap_applies_reissued_workbooks_to_a_populated_database(
+    isolated_db, cbse_xlsx, monkeypatch,
+):
+    """Startup used to load only into an EMPTY database.
+
+    A deploy shipping re-issued workbooks therefore never applied them: the
+    app kept serving the previous directory (2508 chapters) and none of the
+    new chapters appeared in the frontend.
+    """
+    monkeypatch.setattr(svc, "_discover_workbooks", lambda: [cbse_xlsx])
+    monkeypatch.setattr(svc, "_missing_expected_files", lambda: [])
+    _seed_superseded_chapter(isolated_db)
+
+    result = svc.bootstrap_syllabus(isolated_db)
+
+    assert result is not None
+    assert result["created"] > 0
+    assert isolated_db.query(models.Chapter).filter_by(
+        chapter_title="Knowing Our Numbers").count() == 1

@@ -467,11 +467,87 @@ def load_all_syllabus_files(db: Session) -> dict:
     return result
 
 
-def bootstrap_syllabus(db: Session) -> dict | None:
-    """Load syllabus structure when the database has no chapters yet."""
-    if db.query(models.Chapter).count() > 0:
-        return None
+def _chapter_has_content(chapter: models.Chapter) -> bool:
+    """Whether a chapter carries authored work (topics/concepts/questions)."""
+    return bool(chapter.topics)
+
+
+def refresh_syllabus(db: Session, *, prune: bool = True) -> dict:
+    """Make the stored directory mirror the bundled workbooks.
+
+    ``load_all_syllabus_files`` only ever ADDS: it skips a chapter code it
+    already has. That is wrong for a re-issued syllabus, because a chapter
+    that moves subject gets a NEW code (Karnataka History -> Social Science),
+    so the add-only path leaves the superseded row in place and the directory
+    shows the same chapter twice. On a live database this produced 96
+    duplicate board+grade+title pairs and 115 stale rows.
+
+    Refresh therefore also retires chapters the workbooks no longer list —
+    but ONLY empty ones. A chapter carrying authored topics or concepts is
+    never deleted; it is reported so a human can decide. Pruning is skipped
+    entirely unless every expected workbook was found, so a bad or partial
+    deploy can never empty the directory.
+    """
     paths = _discover_workbooks()
+    missing = _missing_expected_files()
     if not paths:
+        return {
+            "created": 0, "skipped": 0, "total_rows": 0, "loaded_files": [],
+            "missing_files": missing, "pruned": 0, "retained_with_content": [],
+        }
+
+    all_rows: list[SyllabusRow] = []
+    loaded: list[str] = []
+    for path in paths:
+        opts = _infer_file_options(path.name)
+        universal = opts.pop("universal_boards", None)
+        all_rows.extend(parse_workbook(path, universal_boards=universal, **opts))
+        loaded.append(path.name)
+
+    counts = upsert_chapters(db, all_rows) if all_rows else {
+        "created": 0, "skipped": 0, "total_rows": 0,
+    }
+
+    pruned = 0
+    retained: list[str] = []
+    if prune and all_rows and not missing:
+        # Must match upsert_chapters exactly, or a code-shape difference
+        # makes every stored chapter look superseded.
+        desired = {
+            directory.make_chapter_code(
+                row.board, row.grade, row.subject, row.chapter,
+            )
+            for row in all_rows
+        }
+        for chapter in db.query(models.Chapter).all():
+            if chapter.chapter_code in desired:
+                continue
+            if _chapter_has_content(chapter):
+                retained.append(
+                    f"{chapter.board} {chapter.grade} {chapter.subject}: "
+                    f"{chapter.chapter_title}"
+                )
+                continue
+            db.delete(chapter)
+            pruned += 1
+        db.commit()
+
+    return {
+        "loaded_files": loaded,
+        **counts,
+        "missing_files": missing,
+        "pruned": pruned,
+        "retained_with_content": retained,
+    }
+
+
+def bootstrap_syllabus(db: Session) -> dict | None:
+    """Mirror the bundled syllabus workbooks into the database on startup.
+
+    This used to load only into an EMPTY database, so a deploy shipping
+    re-issued workbooks never applied them: the app kept serving the
+    previous directory and the new chapters simply never appeared.
+    """
+    if not _discover_workbooks():
         return None
-    return import_syllabus_paths(db, paths)
+    return refresh_syllabus(db)
