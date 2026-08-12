@@ -283,6 +283,20 @@ def _extraction_provenance_issues(
             ),
             details=dict(provenance),
         ))
+    unruled = int(provenance.get("chapter_outline_unruled_tasks") or 0)
+    if unruled:
+        issues.append(_issue(
+            code="task_blocks_left_unruled",
+            severity="warning",
+            phase="source-conversion",
+            message=(
+                f"{unruled} task block(s) were never ruled on by the chapter "
+                "outline, even after a follow-up pass. They shipped whole, so "
+                "any independent questions inside them are not in this "
+                "release."
+            ),
+            details=dict(provenance),
+        ))
     flags = [str(flag) for flag in provenance.get("chapter_outline_review_flags") or []]
     if flags:
         issues.append(_issue(

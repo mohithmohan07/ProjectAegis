@@ -742,7 +742,7 @@ def _tokens(value: str) -> set[str]:
 # decide the chapter title, the topic outline, and per-task question
 # boundaries; deterministic code only validates references and compiles.
 
-OUTLINE_VERSION = "chapter-outline-5"
+OUTLINE_VERSION = "chapter-outline-6"
 
 
 def _outline_cache_key(pdf_sha256: str) -> str:
@@ -779,16 +779,44 @@ def _outline_block_line(block: dict[str, Any]) -> str:
     return f"  {order} {kind}: " + " ".join(words[:30])[:400]
 
 
-def _outline_digest(page_acsd: dict[str, Any]) -> str:
+def _task_block_refs(page_acsd: dict[str, Any]) -> list[tuple[str, int]]:
+    """Every task block in the transcription, in reading order."""
+    refs: list[tuple[str, int]] = []
+    for page in page_acsd.get("pages") or []:
+        if not isinstance(page, dict):
+            continue
+        page_id = str(page.get("page_id") or "")
+        for block in sorted(
+            [b for b in page.get("blocks") or [] if isinstance(b, dict)],
+            key=lambda b: int(b.get("reading_order") or 0),
+        ):
+            if str(block.get("kind") or "") == "task":
+                refs.append((page_id, int(block.get("reading_order") or 0)))
+    return refs
+
+
+def _outline_digest(
+    page_acsd: dict[str, Any],
+    *,
+    only_refs: set[tuple[str, int]] | None = None,
+) -> str:
     lines: list[str] = []
     for page in page_acsd.get("pages") or []:
         if not isinstance(page, dict):
             continue
-        lines.append(str(page.get("page_id") or ""))
+        page_id = str(page.get("page_id") or "")
         blocks = sorted(
             [b for b in page.get("blocks") or [] if isinstance(b, dict)],
             key=lambda b: int(b.get("reading_order") or 0),
         )
+        if only_refs is not None:
+            blocks = [
+                b for b in blocks
+                if (page_id, int(b.get("reading_order") or 0)) in only_refs
+            ]
+            if not blocks:
+                continue
+        lines.append(page_id)
         for block in blocks:
             lines.append(_outline_block_line(block))
     digest = "\n".join(lines)
@@ -857,10 +885,23 @@ def _outline_schema() -> dict[str, Any]:
                         "additionalProperties": False,
                     },
                 },
+                "whole_tasks": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "page_id": {"type": "string"},
+                            "reading_order": {"type": "integer"},
+                        },
+                        "required": ["page_id", "reading_order"],
+                        "additionalProperties": False,
+                    },
+                },
                 "notes": {"type": "array", "items": {"type": "string"}},
             },
             "required": [
-                "chapter_title", "topics", "task_partitions", "notes",
+                "chapter_title", "topics", "task_partitions", "whole_tasks",
+                "notes",
             ],
             "additionalProperties": False,
         },
@@ -927,6 +968,14 @@ your judgment IS the structure.
    - Do not partition a task that is a single question, an activity's
      numbered steps (steps are one procedure, not questions), or a table to
      complete.
+
+4. whole_tasks — EVERY task block you did NOT partition, by page_id and
+   reading_order. This is not optional bookkeeping: between task_partitions
+   and whole_tasks you must account for every single block the digest marks
+   as `task`, exactly once. A task block you leave out of both lists is a
+   question the chapter silently loses, so walk the digest and rule on each
+   one. A task that is a single question, an activity, or a table to
+   complete belongs here.
 
 Return JSON per the schema. notes: anything you judged worth flagging.
 """.strip()
@@ -1157,6 +1206,26 @@ def _normalize_chapter_outline(
                 f"dropped a partition of task {ref}: fewer than 2 verbatim parts"
             )
 
+    # Between the two lists the model must account for every task block. One
+    # it mentions in neither is not "left whole" — it is a block nobody ruled
+    # on, and the questions inside it vanish without a trace. Name them.
+    ruled: set[tuple[str, int]] = set(resolved_refs)
+    for whole in candidate.get("whole_tasks") or []:
+        if not isinstance(whole, dict):
+            continue
+        whole_ref = (
+            str(whole.get("page_id") or ""),
+            int(whole.get("reading_order") or 0),
+        )
+        block = blocks_by_ref.get(whole_ref)
+        if block is None or str(block.get("kind") or "") != "task":
+            flags.append(
+                f"ignored a whole-task ruling: {whole_ref} is not a task block"
+            )
+            continue
+        ruled.add(whole_ref)
+    unruled = [ref for ref in _task_block_refs(page_acsd) if ref not in ruled]
+
     if not topics and not partitions:
         # Nothing of the model's reading survived validation. Claiming a
         # model-judged outline here would suppress the deterministic
@@ -1168,11 +1237,94 @@ def _normalize_chapter_outline(
         "chapter_title": title,
         "topics": topics,
         "task_partitions": partitions,
+        "unruled_task_refs": [list(ref) for ref in unruled],
         "notes": [
             str(note) for note in candidate.get("notes") or [] if str(note).strip()
         ],
         "review_flags": flags,
     }, flags
+
+
+def _rule_on_omitted_tasks(
+    page_acsd: dict[str, Any],
+    candidate: dict[str, Any],
+    outline: dict[str, Any],
+) -> dict[str, Any]:
+    """Ask once more about task blocks the first reading never ruled on.
+
+    A partition list the model volunteers makes an omission invisible: a task
+    it simply does not mention looks exactly like a task it judged whole, and
+    any independent questions inside it are lost silently. The blocks are
+    known, so they get put back in front of the model — scoped to just those
+    blocks — rather than being assumed whole.
+    """
+    unruled = [
+        (str(ref[0]), int(ref[1]))
+        for ref in outline.get("unruled_task_refs") or []
+        if isinstance(ref, (list, tuple)) and len(ref) == 2
+    ]
+    if not unruled:
+        return outline
+    progress.log(
+        f"Chapter outline: {len(unruled)} task block(s) were left unruled; "
+        "asking the model to rule on those blocks specifically.",
+        level="warning",
+    )
+    try:
+        follow_up = phase22._openai_multimodal_json(
+            system=_outline_system_prompt(),
+            prompt=(
+                "You previously read this chapter but did not rule on every "
+                "task block. Below are ONLY the blocks you left out, in "
+                "context. For each one decide whether it is a single question "
+                "(whole_tasks) or several independent questions "
+                "(task_partitions), under the same rules. Repeat the chapter "
+                "title and topics you already decided.\n\n"
+                + _outline_digest(page_acsd, only_refs=set(unruled))
+            ),
+            pages=[],
+            response_schema=_outline_schema(),
+            purpose="chapter_outline",
+            max_tokens=_max_output_tokens(),
+        )
+    except ValueError:
+        raise
+    except Exception as exc:  # the first reading still stands
+        progress.log(
+            f"Chapter outline: the follow-up ruling failed ({exc}); the "
+            f"{len(unruled)} unruled task(s) stay whole.",
+            level="warning",
+        )
+        return outline
+
+    # Merge into the ORIGINAL candidate and re-validate the whole thing, so
+    # the follow-up's partitions go through exactly the same grounding checks
+    # as the first reading's — including verbatim parts and re-aiming.
+    merged = copy.deepcopy(candidate)
+    merged["task_partitions"] = list(merged.get("task_partitions") or []) + [
+        row for row in follow_up.get("task_partitions") or []
+        if isinstance(row, dict)
+    ]
+    merged["whole_tasks"] = list(merged.get("whole_tasks") or []) + [
+        row for row in follow_up.get("whole_tasks") or []
+        if isinstance(row, dict)
+    ]
+    repaired, flags = _normalize_chapter_outline(page_acsd, merged)
+    if repaired is None:
+        return outline
+    for flag in flags:
+        progress.log(f"Chapter outline: {flag}", level="warning")
+    recovered = (
+        len(repaired.get("task_partitions") or [])
+        - len(outline.get("task_partitions") or [])
+    )
+    still_unruled = len(repaired.get("unruled_task_refs") or [])
+    progress.log(
+        f"Chapter outline: the follow-up ruling recovered {recovered} "
+        f"partition(s); {still_unruled} task(s) remain unruled and stay whole.",
+        level="success" if not still_unruled else "warning",
+    )
+    return repaired
 
 
 def derive_chapter_outline(page_acsd: dict[str, Any]) -> dict[str, Any] | None:
@@ -1232,6 +1384,7 @@ def derive_chapter_outline(page_acsd: dict[str, Any]) -> dict[str, Any] | None:
         )
     if outline is None:
         return None
+    outline = _rule_on_omitted_tasks(page_acsd, candidate, outline)
     content_topics = [t["title"] for t in outline["topics"] if t["kind"] == "content"]
     progress.log(
         f"Chapter outline: {outline['chapter_title']!r}; "

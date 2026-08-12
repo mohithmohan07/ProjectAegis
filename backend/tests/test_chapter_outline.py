@@ -919,3 +919,194 @@ def test_re_aiming_prefers_the_nearest_qualifying_block():
     partition = outline["task_partitions"][0]
     assert partition["page_id"] == "PDF-PAGE-0008"
     assert partition["reading_order"] == 7
+
+
+def _two_task_pages() -> dict:
+    """Two task blocks: one the model rules on, one it can forget."""
+    return {
+        "pdf_sha256": "abc123",
+        "pages": [{
+            "page_id": "PDF-PAGE-0001",
+            "page_number": 1,
+            "blocks": [
+                {"reading_order": 1, "kind": "heading", "heading_level": 1,
+                 "text": "Shapes"},
+                {"reading_order": 2, "kind": "task", "source_label": "",
+                 "text": "Name one solid with a curved surface."},
+                {"reading_order": 3, "kind": "task", "source_label": "",
+                 "text": (
+                     "(a) How many faces does a cube have? "
+                     "(b) How many edges does a cube have?"
+                 )},
+            ],
+        }],
+    }
+
+
+def _two_task_candidate(**overrides) -> dict:
+    candidate = {
+        "chapter_title": "Shapes",
+        "topics": [{"title": "Shapes", "kind": "content",
+                    "start_page_id": "PDF-PAGE-0001", "start_reading_order": 1}],
+        "task_partitions": [],
+        "whole_tasks": [],
+        "notes": [],
+    }
+    candidate.update(overrides)
+    return candidate
+
+
+def test_a_task_ruled_in_neither_list_is_named_as_unruled():
+    # The silent failure: a task the model never mentions looks exactly like
+    # one it judged whole, and its questions vanish without a flag.
+    outline, _flags = fallback._normalize_chapter_outline(
+        _two_task_pages(),
+        _two_task_candidate(whole_tasks=[
+            {"page_id": "PDF-PAGE-0001", "reading_order": 2},
+        ]),
+    )
+
+    assert outline["unruled_task_refs"] == [["PDF-PAGE-0001", 3]]
+
+
+def test_ruling_on_every_task_leaves_nothing_unruled():
+    outline, _flags = fallback._normalize_chapter_outline(
+        _two_task_pages(),
+        _two_task_candidate(whole_tasks=[
+            {"page_id": "PDF-PAGE-0001", "reading_order": 2},
+            {"page_id": "PDF-PAGE-0001", "reading_order": 3},
+        ]),
+    )
+
+    assert outline["unruled_task_refs"] == []
+
+
+def test_a_partitioned_task_counts_as_ruled():
+    outline, _flags = fallback._normalize_chapter_outline(
+        _two_task_pages(),
+        _two_task_candidate(
+            whole_tasks=[{"page_id": "PDF-PAGE-0001", "reading_order": 2}],
+            task_partitions=[{
+                "page_id": "PDF-PAGE-0001", "reading_order": 3,
+                "independent_parts": [
+                    {"label": "(a)", "stem": "",
+                     "text": "How many faces does a cube have?"},
+                    {"label": "(b)", "stem": "",
+                     "text": "How many edges does a cube have?"},
+                ],
+            }],
+        ),
+    )
+
+    assert outline["unruled_task_refs"] == []
+    assert len(outline["task_partitions"]) == 1
+
+
+def test_a_whole_task_ruling_on_a_non_task_is_ignored_and_flagged():
+    outline, flags = fallback._normalize_chapter_outline(
+        _two_task_pages(),
+        _two_task_candidate(whole_tasks=[
+            {"page_id": "PDF-PAGE-0001", "reading_order": 1},
+        ]),
+    )
+
+    assert any("is not a task block" in flag for flag in flags)
+    assert sorted(outline["unruled_task_refs"]) == [
+        ["PDF-PAGE-0001", 2], ["PDF-PAGE-0001", 3],
+    ]
+
+
+def test_omitted_tasks_go_back_to_the_model_and_their_splits_are_recovered(
+    monkeypatch, tmp_path,
+):
+    from app.services import canonical_source_phase22 as phase22
+
+    calls: list[str] = []
+
+    def _respond(*, prompt, **_kwargs):
+        calls.append(prompt)
+        if len(calls) == 1:
+            # First reading forgets the multi-part task entirely.
+            return _two_task_candidate(whole_tasks=[
+                {"page_id": "PDF-PAGE-0001", "reading_order": 2},
+            ])
+        # The follow-up sees only the forgotten block and splits it.
+        return _two_task_candidate(task_partitions=[{
+            "page_id": "PDF-PAGE-0001", "reading_order": 3,
+            "independent_parts": [
+                {"label": "(a)", "stem": "",
+                 "text": "How many faces does a cube have?"},
+                {"label": "(b)", "stem": "",
+                 "text": "How many edges does a cube have?"},
+            ],
+        }])
+
+    monkeypatch.setattr(phase22, "_openai_multimodal_json", _respond)
+    monkeypatch.setattr(fallback, "_CACHE_DIR", tmp_path / "cache")
+
+    outline = fallback.derive_chapter_outline(_two_task_pages())
+
+    assert len(calls) == 2
+    # The follow-up prompt is scoped to the forgotten block only.
+    assert "How many faces does a cube have?" in calls[1]
+    assert "Name one solid with a curved surface." not in calls[1]
+    assert outline["unruled_task_refs"] == []
+    assert len(outline["task_partitions"]) == 1
+    assert len(outline["task_partitions"][0]["independent_parts"]) == 2
+
+
+def test_a_complete_first_reading_never_triggers_a_follow_up(
+    monkeypatch, tmp_path,
+):
+    from app.services import canonical_source_phase22 as phase22
+
+    calls = {"n": 0}
+
+    def _respond(**_kwargs):
+        calls["n"] += 1
+        return _two_task_candidate(whole_tasks=[
+            {"page_id": "PDF-PAGE-0001", "reading_order": 2},
+            {"page_id": "PDF-PAGE-0001", "reading_order": 3},
+        ])
+
+    monkeypatch.setattr(phase22, "_openai_multimodal_json", _respond)
+    monkeypatch.setattr(fallback, "_CACHE_DIR", tmp_path / "cache")
+
+    outline = fallback.derive_chapter_outline(_two_task_pages())
+
+    assert calls["n"] == 1
+    assert outline["unruled_task_refs"] == []
+
+
+def test_a_failed_follow_up_leaves_the_first_reading_standing(
+    monkeypatch, tmp_path,
+):
+    from app.services import canonical_source_phase22 as phase22
+
+    calls = {"n": 0}
+
+    def _respond(**_kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return _two_task_candidate(whole_tasks=[
+                {"page_id": "PDF-PAGE-0001", "reading_order": 2},
+            ])
+        raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(phase22, "_openai_multimodal_json", _respond)
+    monkeypatch.setattr(fallback, "_CACHE_DIR", tmp_path / "cache")
+
+    outline = fallback.derive_chapter_outline(_two_task_pages())
+
+    assert calls["n"] == 2
+    assert outline is not None
+    assert outline["chapter_title"] == "Shapes"
+    # Still reported, so the release can say the chapter was not read whole.
+    assert outline["unruled_task_refs"] == [["PDF-PAGE-0001", 3]]
+
+
+def test_the_prompt_requires_a_ruling_on_every_task_block():
+    system = fallback._outline_system_prompt()
+
+    assert "whole_tasks" in system
+    assert "exactly once" in system
