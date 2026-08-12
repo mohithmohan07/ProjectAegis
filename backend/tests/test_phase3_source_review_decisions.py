@@ -14,6 +14,7 @@ from app.services import (
     auth,
     build_concepts,
     canonical_source_phase22 as phase22,
+    canonical_source_phase221_fallback as fallback,
     canonical_source_phase2 as phase2,
     canonical_source_phase3 as phase3,
     checkpoints,
@@ -121,8 +122,11 @@ def _diagnostic(payload: dict, *, source_path: Path | None) -> dict:
 
 
 def _legacy_metadata_source_review() -> tuple[str, dict, dict, dict, dict]:
-    source = """<!-- source_origin: gpt-pdf-to-acsd -->
+    # A converted source carries the reader stamp a real conversion writes;
+    # it is machine metadata and is stripped from the semantic source.
+    source = f"""<!-- source_origin: gpt-pdf-to-acsd -->
 <!-- compiler_version: gpt-pdf-to-acsd-2 -->
+<!-- source_reader: {fallback.source_reader_version()} -->
 
 # Review Chapter
 

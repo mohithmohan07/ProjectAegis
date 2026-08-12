@@ -41,6 +41,9 @@ from . import progress
 FALLBACK_VERSION = "2.3.2"
 FALLBACK_COMPILER = "gpt-pdf-to-acsd-2"
 FALLBACK_ORIGIN = "gpt_pdf_acsd_fallback"
+# The marker written into the rendered MMD header. Deliberately distinct
+# from FALLBACK_ORIGIN, which labels the job-level conversion source.
+MMD_SOURCE_ORIGIN = "gpt-pdf-to-acsd"
 # Version stamped on the extracted page bundle. Phase 3's page-evidence cache
 # validates against this exact constant, so producer and consumer can never
 # drift apart again (a hardcoded mismatch previously made that cache dead and
@@ -743,6 +746,47 @@ def _tokens(value: str) -> set[str]:
 # boundaries; deterministic code only validates references and compiles.
 
 OUTLINE_VERSION = "chapter-outline-6"
+
+
+_SOURCE_READER_RE = re.compile(r"<!--\s*source_reader:\s*([^>]*?)\s*-->")
+_SOURCE_ORIGIN_RE = re.compile(r"<!--\s*source_origin:\s*([^>]*?)\s*-->")
+
+
+def source_reader_version() -> str:
+    """Identifies everything that decides the SHAPE of the rendered MMD.
+
+    The compiler renders blocks; the outline decides which of them open a
+    topic and where questions divide. A change to either produces different
+    MMD from the same PDF, so both belong in the stamp.
+    """
+    return f"{FALLBACK_COMPILER}+{OUTLINE_VERSION}"
+
+
+def mmd_reader_version(mmd_text: object) -> str:
+    """The reader version stamped into an MMD, or "" when it carries none."""
+    match = _SOURCE_READER_RE.search(str(mmd_text or ""))
+    return match.group(1).strip() if match else ""
+
+
+def mmd_is_gpt_reconstructed(mmd_text: object) -> bool:
+    # Note this is the marker written into the MMD header, which is not the
+    # same string as FALLBACK_ORIGIN (the job-level conversion-source label).
+    match = _SOURCE_ORIGIN_RE.search(str(mmd_text or ""))
+    return bool(match) and match.group(1).strip() == MMD_SOURCE_ORIGIN
+
+
+def stale_mmd_reader(mmd_text: object) -> str:
+    """The superseded reader version behind this MMD, or "" when current.
+
+    Only MMD this module produced can be judged: a Mathpix conversion carries
+    no stamp of ours and must not be called stale on our versioning.
+    """
+    if not mmd_is_gpt_reconstructed(mmd_text):
+        return ""
+    stamped = mmd_reader_version(mmd_text)
+    if stamped == source_reader_version():
+        return ""
+    return stamped or "unstamped (pre-dates source reader versioning)"
 
 
 def _outline_cache_key(pdf_sha256: str) -> str:
@@ -2345,8 +2389,13 @@ def render_page_acsd_to_mmd(page_acsd: dict[str, Any]) -> str:
         topic.get("kind") == "content" for topic in topic_by_start.values()
     )
     parts = [
-        "<!-- source_origin: gpt-pdf-to-acsd -->",
+        f"<!-- source_origin: {MMD_SOURCE_ORIGIN} -->",
         f"<!-- compiler_version: {FALLBACK_COMPILER} -->",
+        # The MMD is written once, at conversion, and every later phase reads
+        # it rather than the PDF. Without a stamp, improving the reader left
+        # already-converted jobs silently on the old structure — the same
+        # chapter kept yielding 4 topics while a fresh conversion gave 10.
+        f"<!-- source_reader: {source_reader_version()} -->",
         "",
     ]
     for page in page_acsd.get("pages") or []:

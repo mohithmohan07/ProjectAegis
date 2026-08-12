@@ -23,7 +23,7 @@ CORPUS = {
             "f7a1d03c61977077a7d37a08528caac780bc61700778ba53565fb2bb07c20c59"
         ),
         "source_contract_hash": (
-            "dab217e3aae76d47c7f0cc23f7740512bfb7f2e084facc6e1b7bb57d4012ddf5"
+            "6ee17db639ef680984215487f0e74ee2a335da08c836eae9e5f8489312dc1891"
         ),
         "metadata": {
             "subject": "History",
@@ -40,7 +40,7 @@ CORPUS = {
             "0f5b7f6498607a9e54206c17f0eaeceff00033ee0038e6ab48fb91430e4e0349"
         ),
         "source_contract_hash": (
-            "bb917fbea5b7d8e096a3c2f6d3ee88d36d20c28bd8b2fee3c8f10b86ab09aef9"
+            "c5b183dc002ecf2e5ae916d8fcb86ddb530e88e114e8300282bce633525154b6"
         ),
         "metadata": {
             "subject": "Mathematics",
@@ -57,7 +57,7 @@ CORPUS = {
             "86e6c6a0c42932d01c51d8fcad82974d4b1c8440ad4d6853b53fe09e0aaacdcc"
         ),
         "source_contract_hash": (
-            "8329a81e92acee45d7d49e92cd6fa7702132083c20e7acef9abe28b9337e8030"
+            "7dca8efa19fec340abcb9a7768cc5aede233af96dbdd1f6f1552dbbac4b64b20"
         ),
         "metadata": {
             "subject": "Science",

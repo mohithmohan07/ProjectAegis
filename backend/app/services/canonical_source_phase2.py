@@ -32,7 +32,7 @@ from . import canonical_source
 PHASE = "phase-2-source-critical"
 SOURCE_CONTRACT_MODE = "acsd-phase2-source-critical"
 SCHEMA_VERSION = "1.1.0"
-COMPILER_VERSION = "phase-2-source-critical-1"
+COMPILER_VERSION = "phase-2-source-critical-2"
 
 _ACTIVE_CANONICAL: ContextVar[dict[str, Any] | None] = ContextVar(
     "aegis_phase2_active_canonical_source",
@@ -95,6 +95,12 @@ def partition_gate_issues(
         else:
             fatal.append(issue)
     return fatal, advisory
+
+
+def _reader_stamp(source: str) -> str:
+    from . import canonical_source_phase221_fallback as fallback
+
+    return fallback.mmd_reader_version(source)
 
 
 def _sha256_text(value: str) -> str:
@@ -480,6 +486,9 @@ def compile_phase2_source(
         "mode": SOURCE_CONTRACT_MODE,
         "schema_version": SCHEMA_VERSION,
         "compiler_version": COMPILER_VERSION,
+        # Carried from the MMD header so the reader survives into artifacts
+        # that no longer hold the raw source text.
+        "source_reader": _reader_stamp(source),
         "source_sha256": canonical.get("document", {}).get("source_sha256") or _sha256_text(source),
         "section_sequence": list(canonical.get("section_sequence") or []),
         "task_count": len(tasks),
@@ -585,6 +594,21 @@ def _load_or_refresh_for_job(job: Any) -> tuple[dict[str, Any], dict[str, Any]]:
     """Load a source-matching Phase 2 ACSD, rebuilding stale Phase 1 files."""
     from . import uploads
 
+    # Every route into the canonical source funnels through here, including
+    # the compat and turnover layers that replace prepare_job_context at
+    # install time. The reader check belongs at this chokepoint so no variant
+    # can skip it.
+    stale_reader = _stale_source_reader(job)
+    if stale_reader:
+        raise ValueError(
+            "this upload's source was read by a superseded chapter reader "
+            f"({stale_reader}; current is {_current_source_reader()}). The MMD "
+            "is written once at conversion and every later phase reads it, so "
+            "regenerating would rebuild concepts from the old topic and "
+            "question structure. Convert this PDF again as a new upload to "
+            "read it with the current reader."
+        )
+
     directory = uploads.source_artifact_directory(int(job.id))
     canonical_path = directory / canonical_source.ARTIFACT_SPECS["canonical_json"]["filename"]
     report_path = directory / canonical_source.ARTIFACT_SPECS["report"]["filename"]
@@ -644,6 +668,13 @@ def _never_split_questions() -> bool:
     return _phase3_runner.rewrite_enabled()
 
 
+def _mmd_source_reader(canonical: dict[str, Any]) -> str:
+    contract = canonical.get("source_contract")
+    if isinstance(contract, Mapping):
+        return str(contract.get("source_reader") or "")
+    return ""
+
+
 def extraction_provenance(
     canonical: dict[str, Any],
     items: Sequence[Mapping[str, Any]],
@@ -677,6 +708,10 @@ def extraction_provenance(
         "chapter_outline_unruled_tasks": len(
             outline.get("unruled_task_refs") or []
         ),
+        # Which reader produced the MMD every later phase read. A release
+        # that looks thin can be checked against the current reader without
+        # re-running anything.
+        "source_reader": _mmd_source_reader(canonical),
         "source_task_blocks": len(tasks),
         "inventory_items": len(items),
         "model_split_items": model_split_items,
@@ -887,6 +922,24 @@ def prune_legacy_inventory_checkpoints(db: Any, job: Any) -> bool:
         level="warning",
     )
     return True
+
+
+def _current_source_reader() -> str:
+    from . import canonical_source_phase221_fallback as fallback
+
+    return fallback.source_reader_version()
+
+
+def _stale_source_reader(job: Any) -> str:
+    """The superseded reader behind this job's MMD, or "" when it is current.
+
+    ``job.mmd_text`` is produced once, by conversion, and every later phase
+    reads it instead of the PDF. Nothing else invalidates it, so an improved
+    chapter reader would otherwise never reach an already-converted upload.
+    """
+    from . import canonical_source_phase221_fallback as fallback
+
+    return fallback.stale_mmd_reader(getattr(job, "mmd_text", ""))
 
 
 def prepare_job_context(db: Any, job: Any) -> dict[str, Any]:
