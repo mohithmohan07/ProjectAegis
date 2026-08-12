@@ -671,6 +671,12 @@ def extraction_provenance(
         "chapter_outline_review_flags": [
             str(flag) for flag in outline.get("review_flags") or []
         ],
+        # A task the outline never ruled on is not a task judged whole: it is
+        # a block nobody read, and any independent questions inside it were
+        # lost without a flag. The count belongs next to the others.
+        "chapter_outline_unruled_tasks": len(
+            outline.get("unruled_task_refs") or []
+        ),
         "source_task_blocks": len(tasks),
         "inventory_items": len(items),
         "model_split_items": model_split_items,

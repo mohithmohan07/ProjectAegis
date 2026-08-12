@@ -231,6 +231,7 @@ def _provenance_manifest_rows(payload: Mapping[str, Any]) -> dict[str, Any]:
     for label, key in (
         ("Outline topics decided", "chapter_outline_topics"),
         ("Outline question partitions", "chapter_outline_partitions"),
+        ("Task blocks the outline never ruled on", "chapter_outline_unruled_tasks"),
         ("Source task blocks", "source_task_blocks"),
         ("Questions extracted", "inventory_items"),
         ("Questions from a model-decided split", "model_split_items"),
