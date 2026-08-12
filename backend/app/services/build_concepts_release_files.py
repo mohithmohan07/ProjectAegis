@@ -217,6 +217,7 @@ def _provenance_manifest_rows(payload: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(provenance, Mapping) or not provenance:
         return {}
     applied = bool(provenance.get("chapter_outline_applied"))
+    reader = str(provenance.get("source_reader") or "")
     flags = [str(flag) for flag in provenance.get("chapter_outline_review_flags") or []]
     rows: dict[str, Any] = {
         "Chapter outline": (
@@ -226,6 +227,8 @@ def _provenance_manifest_rows(payload: Mapping[str, Any]) -> dict[str, Any]:
                  "deterministic reading"
         ),
     }
+    if reader:
+        rows["Source reader"] = reader
     # A zero here is the diagnosis, not an absence — render the counts as text
     # so they survive the blank-for-falsy cell rendering.
     for label, key in (

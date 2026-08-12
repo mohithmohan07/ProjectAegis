@@ -1110,3 +1110,106 @@ def test_the_prompt_requires_a_ruling_on_every_task_block():
 
     assert "whole_tasks" in system
     assert "exactly once" in system
+
+
+def test_the_rendered_mmd_stamps_the_reader_that_produced_it():
+    page_acsd = _page_acsd()
+    outline, _flags = fallback._normalize_chapter_outline(page_acsd, _candidate())
+    page_acsd["chapter_outline"] = outline
+
+    rendered = fallback.render_page_acsd_to_mmd(page_acsd)
+
+    assert f"source_reader: {fallback.source_reader_version()}" in rendered
+    assert fallback.mmd_reader_version(rendered) == (
+        fallback.source_reader_version()
+    )
+
+
+def test_the_reader_version_covers_compiler_and_outline():
+    # Both decide the SHAPE of the MMD, so a change to either has to
+    # invalidate an already-converted source.
+    version = fallback.source_reader_version()
+
+    assert fallback.FALLBACK_COMPILER in version
+    assert fallback.OUTLINE_VERSION in version
+
+
+def test_a_current_mmd_is_not_stale():
+    rendered = fallback.render_page_acsd_to_mmd(_page_acsd())
+
+    assert fallback.stale_mmd_reader(rendered) == ""
+
+
+def test_an_unstamped_gpt_mmd_is_stale():
+    # Every MMD converted before this stamp existed reads the old structure.
+    legacy = (
+        "<!-- source_origin: gpt-pdf-to-acsd -->\n"
+        "<!-- compiler_version: gpt-pdf-to-acsd-2 -->\n\n# Dimensions\n"
+    )
+
+    assert "pre-dates" in fallback.stale_mmd_reader(legacy)
+
+
+def test_an_mmd_from_a_superseded_reader_is_stale():
+    superseded = (
+        "<!-- source_origin: gpt-pdf-to-acsd -->\n"
+        "<!-- source_reader: gpt-pdf-to-acsd-2+chapter-outline-1 -->\n"
+    )
+
+    assert fallback.stale_mmd_reader(superseded) == (
+        "gpt-pdf-to-acsd-2+chapter-outline-1"
+    )
+
+
+def test_a_mathpix_source_is_never_called_stale():
+    # It carries no stamp of ours, so our versioning says nothing about it.
+    assert fallback.stale_mmd_reader("# Chapter\n\nMathpix output.\n") == ""
+    assert fallback.stale_mmd_reader("") == ""
+
+
+def test_generation_refuses_a_source_read_by_a_superseded_reader():
+    from app.services import canonical_source_phase2 as phase2
+
+    class _Job:
+        id = 1
+        mmd_text = (
+            "<!-- source_origin: gpt-pdf-to-acsd -->\n"
+            "<!-- source_reader: gpt-pdf-to-acsd-2+chapter-outline-1 -->\n"
+        )
+
+    try:
+        phase2.prepare_job_context(None, _Job())
+    except ValueError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("a superseded source must not reach generation")
+
+    assert "superseded chapter reader" in message
+    assert "chapter-outline-1" in message
+    # The message has to say what to actually do about it.
+    assert "new upload" in message
+
+
+def test_a_current_source_passes_the_reader_gate():
+    from app.services import canonical_source_phase2 as phase2
+
+    class _Job:
+        id = 1
+        mmd_text = (
+            "<!-- source_origin: gpt-pdf-to-acsd -->\n"
+            f"<!-- source_reader: {fallback.source_reader_version()} -->\n"
+        )
+
+    # It gets past the reader gate and fails later, on real artifacts.
+    try:
+        phase2.prepare_job_context(None, _Job())
+    except Exception as exc:
+        assert "superseded chapter reader" not in str(exc)
+
+
+def test_the_reader_stamp_never_reaches_the_semantic_source():
+    # It is machine metadata like source_origin and compiler_version; leaking
+    # it would put a version string in front of the concept model.
+    from app.services import canonical_source_phase3 as phase3
+
+    assert "source_reader" in phase3._MACHINE_METADATA_KEYS

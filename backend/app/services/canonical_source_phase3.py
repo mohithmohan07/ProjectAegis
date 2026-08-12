@@ -156,6 +156,7 @@ _MACHINE_METADATA_KEYS = {
     "compiler_version",
     "schema_version",
     "source_origin",
+    "source_reader",
     "source_sha256",
     "used_for_generation",
 }

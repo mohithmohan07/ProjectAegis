@@ -97,8 +97,10 @@ def test_phase2_rne_inventory_is_source_ordered_and_byte_deterministic():
     assert first.canonical["phase2_inventory_ready"] is True
     assert first.report["phase2_issues"] == []
     assert "<!-- schema_version: 1.1.0 -->" in first.aegis_mmd
+    # Pinned to the constant, not a literal: bumping the compiler is a
+    # deliberate act that must invalidate artifacts, not edit a test.
     assert (
-        "<!-- compiler_version: phase-2-source-critical-1 -->"
+        f"<!-- compiler_version: {phase2.COMPILER_VERSION} -->"
         in first.aegis_mmd
     )
 
