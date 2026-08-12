@@ -515,11 +515,17 @@ Block rules:
   preserve the visible task cue (Activity, Discuss, Project, etc.) in source_label.
   A task with no visible cue leaves source_label empty — never invent one.
 - Every item the learner is asked to complete is a task, in any subject:
-  a fill-in-the-blanks statement with empty boxes or ruled lines (transcribe
-  each empty box as ▯), a table the learner must complete, a match-the-pairs
-  or true/false set, a discussion or think-about prompt, and a
-  write/draw/observe instruction. Lower-grade books carry many such small
+  a fill-in-the-blanks statement whose blanks sit in the sentence itself, a
+  match-the-pairs or true/false set, a discussion or think-about prompt, and
+  a write/draw/observe instruction. Lower-grade books carry many such small
   items rather than long exercises; capture every one of them.
+- A table the learner must complete is NOT itself a task. Emit the printed
+  instruction ("Complete the table below.") as the task and the grid as one
+  kind=table block that the task names in linked_context_orders. Never emit
+  the same table as both a task and a table.
+- Transcribe an empty answer box or ruled blank as ▯ — but only where the
+  page is actually blank. A cell that prints a figure, a word, or a number
+  keeps its printed content; a drawn figure inside a cell stays a figure.
 - A task block's text is never just its cue: a bare banner word ("Do it.",
   "Activity", "Discuss.") is not a task — attach the cue to the instruction
   that follows it in source_label, or emit no task at all.
@@ -571,9 +577,12 @@ kind=source and retain its exact cue in source_label. A worked example's
 problem statement (a cue like "Example 3 :" with its solution printed after
 it) must be a kind=task block carrying the exact cue in source_label, with
 the printed solution left as ordinary blocks. Fill-in-the-blanks statements
-with empty boxes, tables the learner must complete, and discussion/think-about
-prompts are learner tasks: their presence as kind=task blocks (with ▯ marking
-each empty box) is required by the contract, not invented content. A task
+and discussion/think-about prompts are learner tasks: their presence as
+kind=task blocks (with ▯ marking a genuinely blank answer box) is required by
+the contract, not invented content. A table the learner completes is the
+instruction as kind=task PLUS one kind=table grid it links through
+linked_context_orders — never the same table twice, and a cell that prints a
+figure, word, or number keeps that content rather than becoming ▯. A task
 whose text is only its bare cue ("Do it.") is a defect. An activity's numbered
 steps must stay one task block. Do not rewrite or repair
 the candidate. Return needs_correction or ambiguous when any material defect
