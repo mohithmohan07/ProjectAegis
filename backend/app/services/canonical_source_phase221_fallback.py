@@ -19,6 +19,7 @@ import os
 import re
 import shutil
 import tempfile
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -1076,12 +1077,35 @@ def extract_pdf_to_page_acsd(
                 level="info",
             )
             return bundle
-    progress.step("Canonical source — GPT PDF-to-ACSD fallback", value=0.01)
+    # The transcription is the longest stage of a conversion; the bar walks
+    # through its own band batch by batch instead of freezing until the end.
+    band_start = progress.current_value()
+    band_end = (
+        0.92 if band_start >= 0.25 else max(band_start + 0.02, 0.26)
+    )
+    progress.step(
+        "Canonical source — GPT PDF-to-ACSD fallback",
+        value=max(0.01, band_start),
+    )
     progress.log(
         f"GPT PDF-to-ACSD fallback will inspect {page_count} original page(s) "
         f"in {batch_count} verified batch(es).",
         level="warning",
     )
+    batch_progress_lock = threading.Lock()
+    batches_done = [0]
+
+    def _advance_batch_progress() -> None:
+        with batch_progress_lock:
+            batches_done[0] += 1
+            done = batches_done[0]
+        progress.set_progress(
+            band_start + (band_end - band_start) * done / max(1, batch_count),
+            label=(
+                f"PDF transcription: {done}/{batch_count} page batch(es) "
+                "verified"
+            ),
+        )
     def _one_batch(batch_index: int, start_page: int) -> dict[str, Any]:
         batch = collect_pdf_pages(
             path,
@@ -1115,6 +1139,7 @@ def extract_pdf_to_page_acsd(
                 f"({', '.join(page_ids)}; cache {cache_state}).",
                 level="success",
             )
+        _advance_batch_progress()
         return {
             "batch_index": batch_index,
             "page_ids": page_ids,

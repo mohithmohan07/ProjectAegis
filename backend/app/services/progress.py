@@ -24,6 +24,12 @@ _sink: contextvars.ContextVar[Callable[[dict], None] | None] = contextvars.Conte
 _history: contextvars.ContextVar[list[dict] | None] = contextvars.ContextVar(
     "aegis_progress_history", default=None,
 )
+# Progress samples [(ts, value), ...] for the active run — one shared list
+# object per stream, so worker threads under copied contexts feed the same
+# ETA estimate.
+_track: contextvars.ContextVar[list | None] = contextvars.ContextVar(
+    "aegis_progress_track", default=None,
+)
 
 _SENTINEL = object()
 
@@ -56,10 +62,66 @@ def step(label: str, *, value: float | None = None) -> None:
         set_progress(value, label=label)
 
 
+def _eta_seconds(value: float) -> int | None:
+    """Remaining-time estimate from the run's observed progress rate.
+
+    Blends the overall rate with the recent five-minute rate so long model
+    stages that slow down late do not keep promising an optimistic finish.
+    Returns None until there is enough signal to be honest about.
+    """
+    track = _track.get()
+    if track is None:
+        return None
+    now = time.time()
+    if track and value + 0.05 < track[-1][1]:
+        # A restarted/rewound bar invalidates earlier samples.
+        del track[:]
+    track.append((now, value))
+    if len(track) < 2 or value >= 0.999:
+        return None
+    t0, v0 = track[0]
+    if value <= v0 + 0.01 or now - t0 < 15:
+        return None
+    overall = (value - v0) / (now - t0)
+    rate = overall
+    window = [sample for sample in track if now - sample[0] <= 300]
+    if len(window) >= 2 and window[-1][1] > window[0][1] + 0.005:
+        recent = (
+            (window[-1][1] - window[0][1]) / max(1e-6, window[-1][0] - window[0][0])
+        )
+        rate = 0.5 * overall + 0.5 * recent
+    if rate <= 0:
+        return None
+    return max(1, int(round((1.0 - value) / rate)))
+
+
+def _eta_label(seconds: int) -> str:
+    if seconds < 90:
+        return f"~{max(5, (seconds // 5) * 5)} s left"
+    minutes = (seconds + 30) // 60
+    if minutes < 90:
+        return f"~{minutes} min left"
+    return f"~{minutes / 60:.1f} h left"
+
+
 def set_progress(value: float, *, label: str = "") -> None:
-    """Set the progress bar fraction (clamped to 0..1)."""
+    """Set the progress bar fraction (clamped to 0..1) with a live ETA."""
     v = max(0.0, min(1.0, float(value)))
-    _emit({"type": "progress", "value": v, "label": str(label)})
+    event: dict = {"type": "progress", "value": v, "label": str(label)}
+    with _emit_lock:
+        eta = _eta_seconds(v)
+    if eta is not None:
+        event["eta_seconds"] = eta
+        event["eta_label"] = _eta_label(eta)
+    _emit(event)
+
+
+def current_value() -> float:
+    """The last progress fraction emitted by the active run (0.0 if none)."""
+    track = _track.get()
+    if track:
+        return float(track[-1][1])
+    return 0.0
 
 
 def usage(data: dict) -> None:
@@ -101,6 +163,7 @@ def stream(
     def worker() -> None:
         token = _sink.set(sink)
         history_token = _history.set([])
+        track_token = _track.set([])
         from . import openai_usage
 
         usage_token = openai_usage.start_tracking()
@@ -126,6 +189,7 @@ def stream(
             })
         finally:
             openai_usage.stop_tracking(usage_token)
+            _track.reset(track_token)
             _history.reset(history_token)
             _sink.reset(token)
             events.put(_SENTINEL)

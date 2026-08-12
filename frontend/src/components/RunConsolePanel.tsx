@@ -67,7 +67,11 @@ export default function RunConsolePanel() {
           </div>
           <div className="console-progress-label">
             <span>{state.progressLabel}</span>
-            <span className="mono">{pct}%</span>
+            <span className="mono">
+              {state.status === "running" && state.etaLabel
+                ? `${pct}% · ${state.etaLabel}`
+                : `${pct}%`}
+            </span>
           </div>
         </div>
       )}
