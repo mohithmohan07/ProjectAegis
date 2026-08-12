@@ -708,19 +708,56 @@ def test_unlabelled_bullet_parts_partition_like_lettered_ones():
     assert parts[0]["stem"] == "What Will Happen, if…"
 
 
-def test_task_cues_stop_minting_a_section_each_under_an_outline():
+def test_task_cues_stop_minting_a_topic_under_an_outline():
     # Every task block used to emit "# Discuss", so a 24-task chapter derived
-    # 24 sections nobody asked for around the outline's real topics.
+    # 24 sections nobody asked for around the outline's real topics. The cue
+    # drops to a sub-level heading rather than losing its heading entirely.
     page_acsd = _page_acsd()
     outline, _flags = fallback._normalize_chapter_outline(page_acsd, _candidate())
     page_acsd["chapter_outline"] = outline
 
     rendered = fallback.render_page_acsd_to_mmd(page_acsd)
 
-    assert "# Discuss" not in rendered
-    assert "**Discuss**" in rendered
+    assert "\n# Discuss" not in rendered
+    assert "### Discuss" in rendered
     # The outline's own topic keeps its heading weight.
     assert "# Dimensions" in rendered
+
+
+def test_the_rendered_mmd_still_yields_its_tasks_when_recompiled():
+    """The regression PR 208 shipped: bold cues hid every task.
+
+    Conversion builds the canonical from the page ACSD, so it still reported
+    the tasks; only generation recompiles from the MMD, where they had
+    vanished. Compile the rendered MMD here, the way generation does.
+    """
+    from app.services import canonical_source_phase2 as phase2
+
+    page_acsd = _page_acsd()
+    outline, _flags = fallback._normalize_chapter_outline(page_acsd, _candidate())
+    page_acsd["chapter_outline"] = outline
+    rendered = fallback.render_page_acsd_to_mmd(page_acsd)
+
+    canonical = phase2.compile_phase2_source(
+        rendered,
+        source_filename="outline.mmd",
+        consumer_module="build_concepts",
+    ).canonical
+
+    task_blocks = [
+        block for page in page_acsd["pages"]
+        for block in page["blocks"]
+        if block.get("kind") == "task"
+    ]
+    assert task_blocks, "fixture must contain a task to be meaningful"
+    assert len(canonical["tasks"]) == len(task_blocks)
+
+    # And the topics are still only the outline's, not one per task cue.
+    level_one = [
+        row for row in canonical["sections"]
+        if int(row.get("level") or 0) == 1
+    ]
+    assert len(level_one) <= 2
 
 
 def test_task_cues_stay_headings_when_no_outline_decided_the_structure():

@@ -745,7 +745,11 @@ def _tokens(value: str) -> set[str]:
 # decide the chapter title, the topic outline, and per-task question
 # boundaries; deterministic code only validates references and compiles.
 
-OUTLINE_VERSION = "chapter-outline-6"
+OUTLINE_VERSION = "chapter-outline-7"
+# Task cues render as a sub-level heading under an active outline: deep
+# enough not to be read as a chapter topic, still a heading so the
+# deterministic task parser can find the block.
+_TASK_CUE_HEADING_LEVEL = 3
 
 
 _SOURCE_READER_RE = re.compile(r"<!--\s*source_reader:\s*([^>]*?)\s*-->")
@@ -2460,11 +2464,16 @@ def render_page_acsd_to_mmd(page_acsd: dict[str, Any]) -> str:
                 # chapter topic during semantic extraction.
                 cue = _canonical_task_heading(block.get("source_label"))
                 if outline_active:
-                    # Same reasoning as the banner demotion above: the outline
-                    # already decided the topics, so an activity cue must not
-                    # mint a section of its own. A chapter with 24 task blocks
-                    # was minting 24 "Discuss" sections around them.
-                    parts.append(f"**{cue}**")
+                    # The cue must stay a HEADING: it is how the deterministic
+                    # task parser finds task blocks when the canonical source
+                    # is recompiled from this MMD. Demoting it to bold hid
+                    # every task (24 -> 0 on one chapter) while the conversion
+                    # still reported them, because conversion reads the page
+                    # ACSD and only generation recompiles from the MMD.
+                    # A sub-level heading keeps tasks discoverable without
+                    # minting a topic: topics come from level-1 sections, and
+                    # the outline already decided those.
+                    parts.append(_markdown_heading(_TASK_CUE_HEADING_LEVEL, cue))
                 else:
                     parts.append(_markdown_heading(1, cue))
                 parts.append(text)
