@@ -25,7 +25,7 @@ def test_upload_syllabus_populates_tree(client, db):
     ])
     r = client.post(
         "/data/syllabus/upload",
-        files={"files": ("Unit-Chapter List_ CBSE.xlsx", data, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        files={"files": ("UnitChapter_List__CBSE.xlsx", data, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
     )
     assert r.status_code == 200
     body = r.json()

@@ -137,3 +137,43 @@ def test_imported_chapter_display_names_carry_no_codes(db, cbse_xlsx):
                      c.chapter_display_name or "")
     ]
     assert tagged == []
+
+
+def test_english_workbook_routes_regardless_of_name_separators(tmp_path):
+    """A separator change in the filename must not reroute a workbook.
+
+    The English Language sheet carries only Unit + Chapter and is replicated
+    across every board and grade by a dedicated parser. Routing matched the
+    literal "english language", so re-exporting the file as
+    "English_Language_Units_and_Chapters.xlsx" sent it to the generic parser,
+    which found no board or grade and silently dropped all 580 chapters.
+    """
+    rows = [
+        ["Unit", "Chapter Name"],
+        ["Grammar", "Determiners"],
+        ["Grammar", "Modals"],
+    ]
+    for name in (
+        "English Language Units and Chapters.xlsx",
+        "English_Language_Units_and_Chapters.xlsx",
+        "English-Language-Units-and-Chapters.xlsx",
+    ):
+        path = tmp_path / name
+        _write_xlsx(path, rows)
+        parsed = svc.parse_workbook(path)
+        assert parsed, f"{name} produced no rows"
+        # Replicated across every board and grade.
+        assert {r.board for r in parsed} == set(svc.ALL_SYLLABUS_BOARDS)
+        assert {r.grade for r in parsed} == set(svc.ENGLISH_LANGUAGE_GRADES)
+        assert {r.subject for r in parsed} == {"English Language"}
+        assert {r.chapter for r in parsed} == {"Determiners", "Modals"}
+
+
+def test_bundled_syllabus_filenames_all_route_to_a_real_parser(tmp_path):
+    """Every shipped workbook name resolves to board-tagged rows."""
+    for key, filename in svc.SYLLABUS_FILES.items():
+        options = svc._infer_file_options(filename)
+        if key == "english_language":
+            assert options.get("universal_boards"), filename
+        else:
+            assert options.get("default_board"), filename

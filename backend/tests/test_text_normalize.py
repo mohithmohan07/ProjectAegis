@@ -29,6 +29,6 @@ def test_normalize_chapter_strips_enumeration():
 
 def test_normalize_unit_and_board():
     assert normalize_unit("  number  systems  ") == "Number Systems"
-    assert normalize_board("", filename="Unit-Chapter List_ CBSE.xlsx") == "CBSE"
-    assert normalize_board("", filename="Kstate Syllabus Grade 6-10.xlsx") == "Karnataka"
-    assert normalize_board("", filename="Maharashtra Board Chapter List.xlsx") == "Maharashtra"
+    assert normalize_board("", filename="UnitChapter_List__CBSE.xlsx") == "CBSE"
+    assert normalize_board("", filename="UnitChapter_List__KSTATE.xlsx") == "Karnataka"
+    assert normalize_board("", filename="UnitChapter_List__Maharashtra_Board.xlsx") == "Maharashtra"
