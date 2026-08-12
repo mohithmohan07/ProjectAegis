@@ -226,3 +226,41 @@ def test_literal_escape_artifacts_are_scrubbed_from_transcribed_text():
         "literal escape artifact" in flag
         for flag in page.get("review_flags") or []
     )
+
+
+def test_cached_page_acsd_replay_is_scrubbed_at_consume_time():
+    # The content-addressed batch cache replays earlier accepted pages
+    # verbatim, bypassing extraction-time validation — so the consumers must
+    # normalize again (run 3 replayed run 2's "Pyramid /\nPrism" untouched).
+    page_acsd = {
+        "pages": [{
+            "page_id": "PDF-PAGE-0025",
+            "blocks": [{
+                "reading_order": 1,
+                "kind": "table",
+                "bbox": [100, 100, 900, 400],
+                "text": "",
+                "heading_level": 0,
+                "source_label": "",
+                "latex": "",
+                "table_rows": [["Pyramid /\\nPrism", "Triangular"]],
+                "linked_visual_orders": [],
+                "linked_context_orders": [],
+                "caption": "",
+                "confidence": 0.999,
+            }],
+        }],
+    }
+
+    rendered = fallback.render_page_acsd_to_mmd(page_acsd)
+
+    assert "\\nPrism" not in rendered
+    assert "Pyramid / Prism" in rendered
+
+    # The ledger path normalizes the same replayed object before building
+    # shared contexts from its table cells.
+    fallback._scrub_page_acsd_escape_artifacts(page_acsd)
+    cell = page_acsd["pages"][0]["blocks"][0]["table_rows"][0][0]
+    assert cell == "Pyramid / Prism"
+    assert fallback._page_context_text(
+        page_acsd["pages"][0]["blocks"][0]) == "Pyramid / Prism | Triangular"

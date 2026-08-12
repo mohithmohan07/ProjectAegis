@@ -700,6 +700,37 @@ def _scrub_literal_escape_artifacts(value: str) -> str:
     return _LITERAL_ESCAPE_ARTIFACT_RE.sub(" ", value)
 
 
+def _scrub_page_acsd_escape_artifacts(page_acsd: dict[str, Any]) -> None:
+    """Scrub escape artifacts from every text field of a page-ACSD object.
+
+    Fresh transcriptions are scrubbed during page validation, but a
+    content-addressed cache replays earlier accepted pages verbatim — so the
+    consumers (MMD rendering, ledger building) normalize again in place.
+    A math block's ``latex`` field keeps its backslashes untouched.
+    """
+    for page in page_acsd.get("pages") or []:
+        if not isinstance(page, dict):
+            continue
+        for block in page.get("blocks") or []:
+            if not isinstance(block, dict):
+                continue
+            for field in ("text", "source_label", "caption"):
+                value = block.get(field)
+                if isinstance(value, str) and value:
+                    block[field] = _scrub_literal_escape_artifacts(value)
+            rows_value = block.get("table_rows")
+            if isinstance(rows_value, list):
+                block["table_rows"] = [
+                    [
+                        _scrub_literal_escape_artifacts(cell)
+                        if isinstance(cell, str) else cell
+                        for cell in table_row
+                    ]
+                    if isinstance(table_row, list) else table_row
+                    for table_row in rows_value
+                ]
+
+
 def _canonicalize_source_cue_block(raw: dict[str, Any]) -> dict[str, Any]:
     """Normalize the model's historical-source cue into an explicit source block.
 
@@ -1397,6 +1428,7 @@ def render_page_acsd_to_mmd(page_acsd: dict[str, Any]) -> str:
     :func:`apply_page_acsd_relationships`; the renderer never moves a Figure to
     make a parser heuristic happy.
     """
+    _scrub_page_acsd_escape_artifacts(page_acsd)
     parts = [
         "<!-- source_origin: gpt-pdf-to-acsd -->",
         f"<!-- compiler_version: {FALLBACK_COMPILER} -->",
@@ -1604,6 +1636,7 @@ def apply_page_acsd_relationships(
     restores its exact source block location, preserves explicit cross-page
     Figure/context references, and applies page-local ownership links.
     """
+    _scrub_page_acsd_escape_artifacts(page_acsd)
     figure_payload = _figure_payload_from_canonical(canonical)
     figures_by_id = {
         str(figure.get("figure_id") or ""): figure
