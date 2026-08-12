@@ -702,3 +702,98 @@ def test_unlabelled_bullet_parts_partition_like_lettered_ones():
     assert len(parts) == 2
     assert parts[0]["label"] == ""
     assert parts[0]["stem"] == "What Will Happen, if…"
+
+
+def test_task_cues_stop_minting_a_section_each_under_an_outline():
+    # Every task block used to emit "# Discuss", so a 24-task chapter derived
+    # 24 sections nobody asked for around the outline's real topics.
+    page_acsd = _page_acsd()
+    outline, _flags = fallback._normalize_chapter_outline(page_acsd, _candidate())
+    page_acsd["chapter_outline"] = outline
+
+    rendered = fallback.render_page_acsd_to_mmd(page_acsd)
+
+    assert "# Discuss" not in rendered
+    assert "**Discuss**" in rendered
+    # The outline's own topic keeps its heading weight.
+    assert "# Dimensions" in rendered
+
+
+def test_task_cues_stay_headings_when_no_outline_decided_the_structure():
+    rendered = fallback.render_page_acsd_to_mmd(_page_acsd())
+
+    assert "# Discuss" in rendered
+
+
+def test_the_bold_task_cue_is_still_stripped_when_matching_tasks():
+    assert fallback._task_match_key("**Discuss**\nName two solids.") == (
+        fallback._task_match_key("# Discuss\nName two solids.")
+    )
+    assert fallback._task_match_key("**Discuss**\nName two solids.") == (
+        "name two solids."
+    )
+
+
+def test_a_stem_printed_as_the_block_cue_is_verbatim_enough():
+    # Balbharati prints "What Will Happen, if…" as the cue over seven
+    # scenarios, and the transcription captures it as the block's
+    # source_label rather than as part of the block text.
+    page_acsd = {
+        "pdf_sha256": "abc123",
+        "pages": [{
+            "page_id": "PDF-PAGE-0001",
+            "page_number": 1,
+            "blocks": [
+                {"reading_order": 1, "kind": "heading", "heading_level": 1,
+                 "text": "Growth"},
+                {"reading_order": 3, "kind": "task",
+                 "source_label": "What Will Happen, if…",
+                 "text": (
+                     "There is a large beehive on a tree branch. Some children "
+                     "light a fire under that tree. "
+                     "A small baby in a cradle feels hungry or its clothes get wet."
+                 )},
+            ],
+        }],
+    }
+    candidate = {
+        "chapter_title": "Characteristics of Living Organisms",
+        "topics": [{"title": "Growth", "kind": "content",
+                    "start_page_id": "PDF-PAGE-0001", "start_reading_order": 1}],
+        "task_partitions": [{
+            "page_id": "PDF-PAGE-0001", "reading_order": 3,
+            "independent_parts": [
+                {"label": "", "stem": "What Will Happen, if…",
+                 "text": (
+                     "There is a large beehive on a tree branch. Some children "
+                     "light a fire under that tree."
+                 )},
+                {"label": "", "stem": "What Will Happen, if…",
+                 "text": (
+                     "A small baby in a cradle feels hungry or its clothes get wet."
+                 )},
+            ],
+        }],
+        "notes": [],
+    }
+
+    outline, flags = fallback._normalize_chapter_outline(page_acsd, candidate)
+
+    assert flags == []
+    parts = outline["task_partitions"][0]["independent_parts"]
+    assert [part["stem"] for part in parts] == [
+        "What Will Happen, if…", "What Will Happen, if…",
+    ]
+
+
+def test_a_stem_from_nowhere_in_the_source_is_still_cleared():
+    page_acsd = _page_acsd()
+    candidate = _candidate()
+    candidate["task_partitions"][0]["independent_parts"][0]["stem"] = (
+        "Answer in your own words."
+    )
+
+    outline, flags = fallback._normalize_chapter_outline(page_acsd, candidate)
+
+    assert any("not verbatim" in flag for flag in flags)
+    assert outline["task_partitions"][0]["independent_parts"][0]["stem"] == ""

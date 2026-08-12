@@ -742,7 +742,7 @@ def _tokens(value: str) -> set[str]:
 # decide the chapter title, the topic outline, and per-task question
 # boundaries; deterministic code only validates references and compiles.
 
-OUTLINE_VERSION = "chapter-outline-2"
+OUTLINE_VERSION = "chapter-outline-4"
 
 
 def _outline_cache_key(pdf_sha256: str) -> str:
@@ -1032,6 +1032,12 @@ def _normalize_chapter_outline(
             flags.append(f"dropped a partition: {ref} is not a task block")
             continue
         task_key = _normal(str(block.get("text") or ""))
+        # A shared instruction is normally printed as the cue ABOVE the list it
+        # governs — "What Will Happen, if…" over seven scenarios, "(1) Suggest
+        # the appropriate word for the blanks." over four fill-ins — and the
+        # transcription captures that cue as the block's source_label, not as
+        # part of its text. Checking the text alone cleared every real stem.
+        stem_key = task_key + " ␟ " + _normal(block.get("source_label"))
         parts: list[dict[str, str]] = []
         seen_texts: set[str] = set()
         for part in partition.get("independent_parts") or []:
@@ -1047,7 +1053,7 @@ def _normalize_chapter_outline(
                     f"dropped a part of task {ref}: not verbatim in the block"
                 )
                 continue
-            if stem and _normal(stem) not in task_key:
+            if stem and _normal(stem) not in stem_key:
                 flags.append(
                     f"part stem of task {ref} is not verbatim; cleared it"
                 )
@@ -2168,9 +2174,15 @@ def render_page_acsd_to_mmd(page_acsd: dict[str, Any]) -> str:
                 # restored on the canonical task. The derived MMD uses a stable
                 # structural cue so an arbitrary label cannot masquerade as a
                 # chapter topic during semantic extraction.
-                parts.append(_markdown_heading(
-                    1, _canonical_task_heading(block.get("source_label"))
-                ))
+                cue = _canonical_task_heading(block.get("source_label"))
+                if outline_active:
+                    # Same reasoning as the banner demotion above: the outline
+                    # already decided the topics, so an activity cue must not
+                    # mint a section of its own. A chapter with 24 task blocks
+                    # was minting 24 "Discuss" sections around them.
+                    parts.append(f"**{cue}**")
+                else:
+                    parts.append(_markdown_heading(1, cue))
                 parts.append(text)
             elif kind == "table":
                 parts.append(_render_table(list(block.get("table_rows") or [])))
@@ -2185,9 +2197,10 @@ def render_page_acsd_to_mmd(page_acsd: dict[str, Any]) -> str:
 
 
 _TASK_MARKDOWN_CUE_RE = re.compile(
-    r"^#{1,6}\s+(?:activity|discuss|project|write\s+in\s+brief|"
+    r"^(?:#{1,6}\s+|\*\*)"
+    r"(?:activity|discuss|project|write\s+in\s+brief|"
     r"think\s+about\s+it|let['’]?s\s+discuss|questions?|exercises?)"
-    r"\b[\s:—-]*",
+    r"\b[\s:—-]*\*{0,2}[\s:—-]*",
     re.IGNORECASE,
 )
 
