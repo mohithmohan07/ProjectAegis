@@ -1709,8 +1709,11 @@ def test_cross_topic_synthesis_can_use_only_a_later_topic_culmination(
         )
         for prefix, number in labels:
             (miscellaneous if prefix else regular).append(number)
-    assert regular == ["01", "02"]
-    assert miscellaneous == ["01", "02"]
+    # One continuous chapter sequence in row order: the two ordinary concepts
+    # and the two culminations share it, and nothing carries the old
+    # "Miscellaneous Type NN" prefix.
+    assert regular == ["01", "02", "03", "04"]
+    assert miscellaneous == []
 
 
 def test_pipeline_builds_culminations_before_types(monkeypatch):
@@ -1733,15 +1736,20 @@ def test_pipeline_builds_culminations_before_types(monkeypatch):
     monkeypatch.setattr(
         g, "_mine_types_from_inventory_via_api", lambda **kw: {"types": []})
 
+    culmination_output: list[str] = []
+
     def fake_culminations(records, **kw):
         order.append("culmination")
-        return g._ensure_culmination_rows(records)
+        built = g._ensure_culmination_rows(records)
+        culmination_output[:] = [r["concept_title"] for r in built]
+        return built
 
     def fake_types(records, **kw):
         order.append("types")
-        # Culminations must already exist when the Types pass runs.
-        assert any(
-            r["concept_title"].startswith("Culmination -") for r in records)
+        # The Types pass must observe the culmination pass's exact output.
+        # (This topic teaches one concept, so that output carries no
+        # culmination row — a culmination consolidates several concepts.)
+        assert [r["concept_title"] for r in records] == culmination_output
         return records
 
     monkeypatch.setattr(g, "_build_culminations_via_api", fake_culminations)
@@ -1779,10 +1787,11 @@ def test_pipeline_builds_culminations_before_types(monkeypatch):
         for checkpoint in checkpoints
         if checkpoint["stage"] == "pre_type_assignment"
     )
-    assert any(
-        row["concept_title"].startswith("Culmination -")
-        for row in pre_type_checkpoint["records"]
-    )
+    # The checkpoint captured after the culmination pass carries exactly what
+    # that pass produced.
+    assert [
+        row["concept_title"] for row in pre_type_checkpoint["records"]
+    ] == culmination_output
 
 
 def test_pipeline_resume_checkpoint_skips_expensive_gpt_stages(monkeypatch):
@@ -1999,7 +2008,8 @@ def test_post_type_checkpoint_reallocates_on_final_topology(
     )
 
     assert records
-    assert allocations == [["C", "Culmination - T"]]
+    # Topic T teaches one concept, so it ships without a culmination row.
+    assert allocations == [["C"]]
     assert [item["stage"] for item in callbacks] == [
         "final_content_ready",
     ]
@@ -2358,7 +2368,11 @@ def test_concepts_pipeline_runs_types_assign(monkeypatch):
     assert "preserving equality" in records[0]["concept_details"]
     assert "altered by model" not in records[0]["concept_details"]
     assert g._has_meaningful_types(records[0]["concept_details"])
-    assert sum(r["concept_title"].startswith("Culmination -") for r in records) == 1
+    # A single-concept topic carries no culmination: a recap of one concept
+    # would only restate it.
+    assert sum(
+        r["concept_title"].startswith("Culmination -") for r in records
+    ) == 0
 
 
 def test_pre_learning_excludes_exact_current_concepts():

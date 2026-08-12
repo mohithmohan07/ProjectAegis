@@ -221,24 +221,40 @@ def test_culminations_are_enforced_mechanically():
                 "concept_details": "Description: x", "keywords": ""}
 
     records = [
-        # Topic A: two culminations (model duplicated) and one out of order.
+        # Topic A: two culminations (model duplicated) and one out of order,
+        # over two taught concepts.
         row("A", "Culmination - First"),
         row("A", "Concept A1"),
+        row("A", "Concept A2"),
         row("A", "Culmination - Second"),
-        # Topic B: no culmination at all.
+        # Topic B: two concepts and no culmination at all.
         row("B", "Concept B1"),
+        row("B", "Concept B2"),
+        # Topic C: a single concept — nothing to consolidate.
+        row("C", "Concept C1"),
+        # Topic D: a single concept carrying a stray culmination.
+        row("D", "Concept D1"),
+        row("D", "Culmination - D"),
     ]
     out = g._enforce_culminations(records)
     a_rows = [r for r in out if r["topic"] == "A"]
     b_rows = [r for r in out if r["topic"] == "B"]
+    c_rows = [r for r in out if r["topic"] == "C"]
+    d_rows = [r for r in out if r["topic"] == "D"]
     a_culms = [r for r in a_rows if r["concept_title"].startswith("Culmination")]
     b_culms = [r for r in b_rows if r["concept_title"].startswith("Culmination")]
     assert len(a_culms) == 1 and a_rows[-1] is a_culms[0]
     assert a_culms[0]["concept_title"] == "Culmination - A"
     assert len(b_culms) == 1 and b_rows[-1] is b_culms[0]
+    # A topic teaching one concept gets no culmination, and a stray one is
+    # dropped rather than kept.
+    assert [r["concept_title"] for r in c_rows] == ["Concept C1"]
+    assert [r["concept_title"] for r in d_rows] == ["Concept D1"]
     # Normal rows all survive.
-    assert [r["concept_title"] for r in a_rows[:-1]] == ["Concept A1"]
-    assert [r["concept_title"] for r in b_rows[:-1]] == ["Concept B1"]
+    assert [r["concept_title"] for r in a_rows[:-1]] == [
+        "Concept A1", "Concept A2"]
+    assert [r["concept_title"] for r in b_rows[:-1]] == [
+        "Concept B1", "Concept B2"]
 
 
 def test_source_artifacts_are_neutralized_even_in_types():
