@@ -153,7 +153,8 @@ def test_append_concepts_refreshes_complete_band_after_normalized_title_change(
         assert writer._cell_str(
             row, writer._IDX_CONCEPT_TITLE + 1) == concept.concept_title
         assert writer._cell_str(row, details_col) == concept.concept_details
-        assert writer._cell_str(row, parent_col) == concept.parent_concept
+        # Parent Concept ships empty; the refresh must not repopulate it.
+        assert writer._cell_str(row, parent_col) == ""
         assert writer._cell_str(row, source_col) == (
             "Original Book, Current Book")
         title_cells_by_topic[topic_key] = expected_title
@@ -478,8 +479,9 @@ def test_append_concepts_refreshes_legacy_fields_on_catalog_and_question_rows(
     for _, row in rows:
         assert writer._cell_str(row, details_col) == concept.concept_details
         assert writer._cell_str(row, keywords_col) == concept.keywords
-        assert writer._cell_str(row, related_col) == (
-            "parent: Corrected Legacy Parent, Current Legacy Relation")
+        # The legacy "parent: X" marker is gone with the column itself, so
+        # related_concepts carries only genuine relations now.
+        assert writer._cell_str(row, related_col) == "Current Legacy Relation"
         if writer._cell_str(row, writer._q_start("objective")):
             assert writer._cell_str(row, basic_col) == "Legacy Basic Updated"
         else:

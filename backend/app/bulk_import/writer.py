@@ -608,7 +608,11 @@ def _concept_field_value(
     cp_tag = directory.concept_tag(
         chapter.board, chapter.grade, chapter.subject,
         chapter.chapter_title, topic.topic_title)
-    parent = (getattr(concept, "parent_concept", "") or "").strip()
+    # Parent Concept ships empty by team decision: concepts sit flat under
+    # their topic. Blanking it here covers both the canonical column and the
+    # legacy "parent: X" marker that older workbooks carried inside
+    # related_concepts, so the grouping cannot leak out through either.
+    parent = ""
     if field == "concept_title":
         return f"{concept.concept_title} ({cp_tag})"
     if field == "concept_display_name":

@@ -1153,7 +1153,9 @@ def _add(errors: list[dict], row_index: int, field: str, code: str,
 
 def validate_concept_rows(
     rows: list[dict[str, Any]], *,
-    require_parent: bool = True,
+    # Parent Concept ships empty: concepts sit flat under their topic, so its
+    # absence is the expected shape rather than a missing field.
+    require_parent: bool = False,
     allow_types: bool = True,
     require_culmination: bool = False,
     allow_culmination: bool = True,
