@@ -2,6 +2,7 @@
 import io
 
 import openpyxl
+import pytest
 
 from app import models
 from app.bulk_import import SHEET_OBJECTIVE, strip_title_tag, writer
@@ -82,10 +83,30 @@ def test_placement_aware_dedupe_skips_exact_repeat(client, db, first_chapter, tm
     assert second["skipped"] == 2
 
 
-def test_concept_tag_emits_repeated_concept_row(client, db, first_chapter, tmp_path):
-    detail = client.get(f"/directory/chapters/{first_chapter['id']}").json()
-    topics = detail["topics"]
-    assert len(topics) >= 2, "seed chapter needs >= 2 topics"
+def _chapter_with_two_topics(client):
+    """A seeded chapter that has two topics, the first carrying a concept.
+
+    Which chapter sorts first in the directory tree depends on the syllabus
+    vocabulary, so this scans for one that fits instead of assuming.
+    """
+    tree = client.get("/directory/tree").json()
+    for board in tree:
+        for grade in board["grades"]:
+            for subject in grade["subjects"]:
+                for unit in subject["units"]:
+                    for ch in unit["chapters"]:
+                        if ch.get("concept_count", 0) <= 0:
+                            continue
+                        detail = client.get(
+                            f"/directory/chapters/{ch['id']}").json()
+                        topics = detail["topics"]
+                        if len(topics) >= 2 and topics[0]["concepts"]:
+                            return topics
+    pytest.fail("no seeded chapter with two topics and a concept")
+
+
+def test_concept_tag_emits_repeated_concept_row(client, db, tmp_path):
+    topics = _chapter_with_two_topics(client)
     concept = topics[0]["concepts"][0]
     other_topic = topics[1]
 

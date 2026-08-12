@@ -5,11 +5,11 @@ ship with the app and preload automatically on every deploy.
 
 | File | Board |
 |------|-------|
-| `Unit-Chapter List_ CBSE.xlsx` | CBSE |
-| `Unit-Chapter List_ ICSE.xlsx` | ICSE |
-| `Maharashtra Board Chapter List.xlsx` | Maharashtra |
-| `Kstate Syllabus Grade 6-10.xlsx` | Karnataka |
-| `English Language Units and Chapters.xlsx` | All boards (universal) |
+| `UnitChapter_List__CBSE.xlsx` | CBSE |
+| `UnitChapter_List__ICSE.xlsx` | ICSE |
+| `UnitChapter_List__Maharashtra_Board.xlsx` | Maharashtra |
+| `UnitChapter_List__KSTATE.xlsx` | Karnataka |
+| `English_Language_Units_and_Chapters.xlsx` | All boards (universal) |
 
 ## From Windows (OneDrive)
 

@@ -40,6 +40,8 @@ def test_vocab_exposes_book_sources(client):
     v = client.get("/directory/vocab").json()
     assert "NCERT" in v["book_sources"]
     assert "RD Sharma" in v["book_sources"]
+    # Maharashtra State Board's own textbook imprint.
+    assert "Balbharati" in v["book_sources"]
 
 
 def test_legacy_workbook_without_concept_source_still_imports(client, db, tmp_path):

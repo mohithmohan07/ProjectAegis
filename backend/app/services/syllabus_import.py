@@ -43,11 +43,11 @@ ALL_SYLLABUS_BOARDS = list(bi.BOARDS)
 
 # Known syllabus files (place under ``data/syllabus/``).
 SYLLABUS_FILES = {
-    "english_language": "English Language Units and Chapters.xlsx",
-    "karnataka": "Kstate Syllabus Grade 6-10.xlsx",
-    "maharashtra": "Maharashtra Board Chapter List.xlsx",
-    "cbse": "Unit-Chapter List_ CBSE.xlsx",
-    "icse": "Unit-Chapter List_ ICSE.xlsx",
+    "english_language": "English_Language_Units_and_Chapters.xlsx",
+    "karnataka": "UnitChapter_List__KSTATE.xlsx",
+    "maharashtra": "UnitChapter_List__Maharashtra_Board.xlsx",
+    "cbse": "UnitChapter_List__CBSE.xlsx",
+    "icse": "UnitChapter_List__ICSE.xlsx",
 }
 
 # Column header aliases (lowercase).
@@ -298,7 +298,12 @@ def parse_workbook(
     universal_boards: list[str] | None = None,
 ) -> list[SyllabusRow]:
     """Parse one syllabus Excel file into normalized rows."""
-    lower = path.name.lower()
+    # Underscores and hyphens read as spaces: the workbooks are re-exported
+    # under varying names ("English Language Units and Chapters.xlsx",
+    # "English_Language_Units_and_Chapters.xlsx"), and a separator change
+    # must not silently route a file to the generic parser — that dropped
+    # the whole replicated English Language syllabus (580 chapters).
+    lower = re.sub(r"[_\-]+", " ", path.name.lower())
     if "english language" in lower:
         return _parse_english_language_workbook(path)
     if "maharashtra" in lower:
@@ -371,8 +376,13 @@ def upsert_chapters(db: Session, rows: list[SyllabusRow]) -> dict[str, int]:
             ),
             unit=row.unit,
             chapter_title=row.chapter,
-            chapter_display_name=directory.chapter_titled_cell(
-                row.chapter, row.board, row.grade, row.subject, book="NCERT"),
+            # Display names are the human-readable half of every band: the
+            # *_title columns carry the code tag, the *_display_name columns
+            # stay clean (the same rule the workbook writer follows for
+            # topics and concepts). This was storing the tagged form, so the
+            # directory API served "Determiners (06_English_Language_CBSE)"
+            # wherever a display name was shown.
+            chapter_display_name=row.chapter,
         )
         db.add(chapter)
         existing_codes.add(code)

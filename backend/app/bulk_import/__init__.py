@@ -212,7 +212,7 @@ GROUP_TYPE_CODE = {"Basic": "BG", "Intermediate": "IG", "Advanced": "AG"}
 
 # Common book sources for multi-source tagging (free text is also allowed).
 BOOK_SOURCES = [
-    "NCERT", "RD Sharma", "RS Aggarwal", "S Chand", "Arihant",
+    "NCERT", "Balbharati", "RD Sharma", "RS Aggarwal", "S Chand", "Arihant",
     "Selina", "Frank", "Together With", "Oswaal", "Xam Idea",
 ]
 
