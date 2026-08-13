@@ -8,8 +8,6 @@ from app.services import generation, mmd, workbooks
 def test_live_required_when_dry_disabled(monkeypatch, tmp_path):
     monkeypatch.delenv("AEGIS_ALLOW_DRY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.delenv("MATHPIX_APP_ID", raising=False)
-    monkeypatch.delenv("MATHPIX_APP_KEY", raising=False)
 
     with pytest.raises(config.LiveRequiredError, match="OPENAI"):
         generation.generate_questions_for_concept(
@@ -34,9 +32,11 @@ def test_live_required_when_dry_disabled(monkeypatch, tmp_path):
             count=1,
         )
 
+    # A PDF here has no converter behind it at all, credentials or not, so
+    # this is a flat refusal rather than a "set a key" error.
     pdf = tmp_path / "chapter.pdf"
     pdf.write_bytes(b"%PDF-1.4 stub")
-    with pytest.raises(config.LiveRequiredError, match="Mathpix"):
+    with pytest.raises(mmd.ConversionError, match="Build Concepts"):
         mmd.to_mmd(pdf)
 
     with pytest.raises(config.LiveRequiredError, match="Workbooks"):

@@ -43,7 +43,7 @@ export default function Workbooks() {
       <h1>Create Workbooks</h1>
       <div className="subtitle">
         Generate a student revision-workbook PDF from an NCERT chapter source PDF
-        (Mathpix → GPT → A4 render). Outputs publish subject-wise:
+        (PDF text → GPT → A4 render). Outputs publish subject-wise:
         Class NN → Subject → chapter.
         {meta.data && (
           <>

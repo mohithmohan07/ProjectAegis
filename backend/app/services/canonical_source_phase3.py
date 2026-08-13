@@ -4,8 +4,8 @@ Phase 2 made the ACSD task ledger authoritative while semantic concept writing
 still consumed flat MMD.  Phase 3 introduces one stable graph between source
 conversion and generation:
 
-* the original PDF, Mathpix MMD, PDF text layer, and verified GPT page ACSD are
-  evidence channels rather than competing sources of truth;
+* the original PDF, converted MMD, PDF text layer, and verified GPT page ACSD
+  are evidence channels rather than competing sources of truth;
 * textbook structure is represented by stable topic, subtopic, block, task,
   Figure, and math IDs;
 * API calls interpret hierarchy and concept grounding only within deterministic
@@ -2296,7 +2296,7 @@ def _select_source_anomaly_via_openai(
     ]
     system = (
         "You are the Aegis source-fusion selector. Compare the suspicious "
-        "Mathpix/ACSD block with the supplied original-PDF pages and the "
+        "ACSD block with the supplied original-PDF pages and the "
         "already independently verified page-block ledger. Select only one "
         "opaque block_key from the ledger. Never transcribe, repair, or invent "
         "text, LaTeX, table cells, captions, or URLs. Return review_required "

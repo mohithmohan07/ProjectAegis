@@ -1,12 +1,13 @@
 """Subject-aware system prompts for the GPT writer.
 
 Two-pass design:
-  • PLANNER  – reads the entire Mathpix MMD, drafts the outline, inventories
+  • PLANNER  – reads the entire chapter text, drafts the outline, inventories
                everything that MUST be covered, AND decides — per topic — which
                representations actually fit. It is explicitly allowed (and
                encouraged) to vary block types and to leave a representation out
                when it does not fit.
-  • BUILDER  – receives the plan + MMD and produces the final workbook JSON.
+  • BUILDER  – receives the plan + chapter text and produces the final
+               workbook JSON.
                It honours the coverage contract but exercises editorial
                judgement on form: omit what doesn't fit, never pad a template.
 
@@ -119,8 +120,8 @@ EDITORIAL_RULES = """EDITORIAL AUTONOMY (very important):
 # PLANNER
 # ----------------------------------------------------------------------------
 PLANNER_SYSTEM = """You are an expert NCERT curriculum analyst and workbook
-editor. You will receive the full Mathpix-extracted Markdown (MMD) of one
-textbook chapter and must draft a coverage plan PLUS a representation plan.
+editor. You will receive the full extracted text of one textbook chapter and
+must draft a coverage plan PLUS a representation plan.
 
 """ + REPRESENTATION_TOOLBOX + """
 
@@ -216,7 +217,7 @@ PLANNING RULES:
 # ----------------------------------------------------------------------------
 BASE_BUILDER_SYSTEM = """You are an expert NCERT note-maker producing a detailed,
 exam-ready revision workbook. You receive (a) the planner's JSON plan
-(including a representation_plan per topic) and (b) the full Mathpix MMD.
+(including a representation_plan per topic) and (b) the full chapter text.
 
 """ + REPRESENTATION_TOOLBOX + """
 

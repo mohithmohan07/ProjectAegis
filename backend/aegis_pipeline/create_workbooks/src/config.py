@@ -61,7 +61,7 @@ def _ensure_env(name: str) -> str | None:
 
 # Eagerly pull credentials from the User scope on Windows so downstream code
 # can just use os.getenv.
-for _name in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "MATHPIX_APP_ID", "MATHPIX_APP_KEY"):
+for _name in ("OPENAI_API_KEY", "OPENAI_BASE_URL"):
     _ensure_env(_name)
 
 
@@ -69,8 +69,6 @@ DEFAULT_CONFIG: dict = {
     "openai_model": configured_openai_model(),
     "openai_api_key_env": "OPENAI_API_KEY",
     "openai_base_url": os.getenv("OPENAI_BASE_URL"),
-    "mathpix_app_id_env": "MATHPIX_APP_ID",
-    "mathpix_app_key_env": "MATHPIX_APP_KEY",
     "margin_mm": 18,
     "content_width_mm": 174,
     "min_topics": 6,

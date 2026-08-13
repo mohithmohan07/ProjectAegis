@@ -102,8 +102,8 @@ from .question_polishing_contract import (
 # deterministic task ledger; Phase 2.1 hardens source structure and ownership;
 # Phase 2.1.1 normalizes task-list display and improves diagnostics; Phase 2.2
 # then adjudicates only unresolved original-document evidence before generation.
-# Phase 2.2.1 hardens evidence addressing and adds a verified GPT PDF-to-ACSD
-# fallback only for hard or objectively unusable Mathpix conversions. Phase 2.2.2
+# Phase 2.2.1 hardens evidence addressing and owns the verified GPT PDF-to-ACSD
+# reader that every PDF conversion goes through. Phase 2.2.2
 # classifies repeated running navigation without polluting semantic MMD. Phase 3
 # unifies every source channel into stable semantic IDs. Phase 3.1 narrows and
 # caches exact concept-to-block grounding. Phase 3.2 source-verifies, moves,

@@ -2,8 +2,7 @@
 
 These scripts are operator tools, not part of the FastAPI app, so nothing else
 in the suite imports them — which is exactly how ``bulk_upload_ultimate.py``
-shipped with an IndentationError that made it unimportable, and how
-``bulk_upload_mathpix.py`` kept calling an SDK surface removed in openai 1.x.
+shipped with an IndentationError that made it unimportable.
 
 They also depend on packages the backend does not install (pandas, requests).
 The structural checks therefore parse the source rather than importing it; the
@@ -27,7 +26,6 @@ PIPELINE_DIR = Path(openai_policy.__file__).resolve().parent
 
 # The CLI entry points that talk to OpenAI directly.
 MODEL_SCRIPTS = (
-    "bulk_upload_mathpix.py",
     "bulk_upload_ultimate.py",
     "concept_mapping_to_prelearning.py",
     "excel_to_concepts_prelearning.py",
@@ -214,8 +212,6 @@ def _load_script(monkeypatch, module_name: str, recorder: list[dict]):
             monkeypatch.setitem(sys.modules, name, stub)
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setenv("MATHPIX_APP_ID", "test-id")
-    monkeypatch.setenv("MATHPIX_APP_KEY", "test-key")
 
     import openai
 
@@ -233,7 +229,6 @@ def _load_script(monkeypatch, module_name: str, recorder: list[dict]):
 @pytest.mark.parametrize(
     "module_name",
     [
-        "aegis_pipeline.bulk_upload_mathpix",
         "aegis_pipeline.bulk_upload_ultimate",
     ],
 )
@@ -284,7 +279,7 @@ def test_call_gpt_json_negotiates_effort_like_the_web_app(monkeypatch):
             return super().create(**kwargs)
 
     module = _load_script(
-        monkeypatch, "aegis_pipeline.bulk_upload_mathpix", calls
+        monkeypatch, "aegis_pipeline.bulk_upload_ultimate", calls
     )
     module.client.chat.completions = _RejectingCompletions(calls)
 

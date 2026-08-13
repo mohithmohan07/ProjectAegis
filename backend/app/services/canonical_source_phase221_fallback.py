@@ -1,11 +1,19 @@
-"""Phase 2.2.1 GPT PDF-to-ACSD fallback and source-asset contract.
+"""Phase 2.2.1 GPT PDF-to-ACSD reader and source-asset contract.
 
-Mathpix remains the preferred converter.  This module is used only when a PDF
-conversion hard-fails or an objective quality gate classifies the result as
-unusable.  GPT never writes free-form MMD: it returns strict page/block JSON,
-that JSON is independently verified against the same original PDF pages, and
-Aegis deterministically renders the accepted structure into MMD before the
-normal ACSD compiler and source gates run.
+This is the PDF conversion path — not a fallback behind one. It began as the
+recovery lane behind a third-party OCR converter; that converter has been
+removed, and this reader is now the only way a PDF becomes canonical source.
+Only this reader applies the chapter outline, which is what gives a chapter its
+topics and its questions.
+
+GPT never writes free-form MMD: it returns strict page/block JSON, that JSON is
+independently verified against the same original PDF pages, and Aegis
+deterministically renders the accepted structure into MMD before the normal
+ACSD compiler and source gates run.
+
+The ``fallback`` in this module's name is kept only because the artifact
+filenames, cache keys, and the ``fallback_reason`` ledger written into published
+bundles are on-disk contracts that existing runs depend on.
 """
 from __future__ import annotations
 
@@ -50,18 +58,17 @@ MMD_SOURCE_ORIGIN = "gpt-pdf-to-acsd"
 # re-entered this lane on every Phase 3 rebuild).
 PAGE_ACSD_SCHEMA_VERSION = "1.1.0"
 GPT_PAGE_ACSD_FILENAME = "source.gpt-page-acsd.json"
-MATHPIX_RAW_FILENAME = "source.mathpix.raw.mmd"
 ASSET_DIRNAME = "assets"
+# Artifacts this module used to publish and no longer does. They stay in the
+# managed set so the rollback-safe publish transaction sweeps whatever an
+# older run already wrote into an artifact directory, instead of leaving a
+# retired file to be served forever.
+LEGACY_ARTIFACT_NAMES = frozenset({"source.mathpix.raw.mmd"})
 OPTIONAL_ARTIFACT_SPECS: dict[str, dict[str, str]] = {
     "gpt_page_acsd": {
         "filename": GPT_PAGE_ACSD_FILENAME,
         "media_type": "application/json; charset=utf-8",
         "label": "GPT page-level ACSD extraction",
-    },
-    "mathpix_raw": {
-        "filename": MATHPIX_RAW_FILENAME,
-        "media_type": "text/markdown; charset=utf-8",
-        "label": "Preserved Mathpix MMD",
     },
 }
 
@@ -100,18 +107,6 @@ def _enabled() -> bool:
     return os.environ.get(
         "AEGIS_GPT_PDF_ACSD_FALLBACK_ENABLED", "1"
     ).strip().lower() not in {"0", "false", "no", "off"}
-
-
-def _forced() -> bool:
-    """Whether the GPT reader is the conversion path rather than a fallback.
-
-    Defaults on: only this reader applies the chapter outline, so a Mathpix
-    conversion arrives with no topics and almost no tasks. Set the variable
-    to "0" to put Mathpix back in front.
-    """
-    return os.environ.get(
-        "AEGIS_GPT_PDF_ACSD_FALLBACK_FORCE", "1"
-    ).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _batch_size() -> int:
@@ -247,115 +242,6 @@ def _pdf_page_count(path: Path) -> int:
         return len(document)
     finally:
         document.close()
-
-
-def _semantic_char_count(mmd_text: str) -> int:
-    text = re.sub(r"https://\S+", " ", str(mmd_text or ""))
-    text = re.sub(r"\\[A-Za-z]+(?:\[[^\]]*\])?", " ", text)
-    text = re.sub(r"[{}$#*_`|<>]", " ", text)
-    return len(_SPACE_RE.sub(" ", text).strip())
-
-
-def _source_token_counter(value: object) -> Counter[str]:
-    text = re.sub(r"https://\S+", " ", str(value or ""))
-    text = re.sub(r"\\[A-Za-z]+(?:\[[^\]]*\])?", " ", text)
-    return Counter(token.casefold() for token in _WORD_RE.findall(text))
-
-
-def _pdf_text_coverage(path: Path, mmd_text: str) -> tuple[int, float | None]:
-    """Return usable PDF text-layer token count and MMD coverage when available."""
-    import fitz
-
-    document = fitz.open(path)
-    try:
-        pdf_tokens: Counter[str] = Counter()
-        for page in document:
-            pdf_tokens.update(_source_token_counter(page.get_text("text") or ""))
-    finally:
-        document.close()
-    total = sum(pdf_tokens.values())
-    if total < 200:
-        return total, None
-    mmd_tokens = _source_token_counter(mmd_text)
-    overlap = sum(
-        min(count, mmd_tokens.get(token, 0))
-        for token, count in pdf_tokens.items()
-    )
-    return total, overlap / max(1, total)
-
-
-def _minimum_text_coverage() -> float:
-    return max(0.0, min(1.0, float(os.environ.get(
-        "AEGIS_GPT_PDF_ACSD_MIN_TEXT_COVERAGE", "0.45"
-    ))))
-
-
-def assess_mathpix_quality(
-    mmd_text: str,
-    source_path: Path,
-    *,
-    report: dict[str, Any] | None = None,
-    hard_failure: str = "",
-) -> dict[str, Any]:
-    """Return an objective, conservative fallback decision.
-
-    Isolated Phase 2.1/2.2 source gaps are not a full-conversion failure and are
-    intentionally left to bounded adjudication.  The fallback is reserved for
-    empty/truncated output or a broad failure surface.
-    """
-    reasons: list[str] = []
-    suffix = source_path.suffix.lower()
-    if suffix != ".pdf":
-        return {"eligible": False, "use_fallback": False, "reasons": []}
-    if hard_failure:
-        reasons.append(f"mathpix_hard_failure:{hard_failure[:500]}")
-    try:
-        pages = _pdf_page_count(source_path)
-    except Exception:
-        pages = 0
-    chars = len(str(mmd_text or "").strip())
-    semantic_chars = _semantic_char_count(mmd_text)
-    if _forced():
-        reasons.append("forced_by_configuration")
-    pdf_text_tokens = 0
-    pdf_text_coverage: float | None = None
-    if not hard_failure:
-        if chars < max(800, pages * 70):
-            reasons.append("mmd_too_short_for_pdf")
-        if pages and semantic_chars / pages < 55:
-            reasons.append("semantic_text_density_too_low")
-        try:
-            pdf_text_tokens, pdf_text_coverage = _pdf_text_coverage(
-                source_path, mmd_text
-            )
-        except Exception:
-            pdf_text_tokens, pdf_text_coverage = 0, None
-        if (
-            pdf_text_coverage is not None
-            and pdf_text_coverage < _minimum_text_coverage()
-        ):
-            reasons.append(
-                f"pdf_text_coverage_too_low:{pdf_text_coverage:.3f}"
-            )
-        phase2_issues = list((report or {}).get("phase2_issues") or [])
-        issue_codes = {str(item.get("code") or "") for item in phase2_issues if isinstance(item, dict)}
-        bounded = issue_codes and issue_codes.issubset(phase22.ELIGIBLE_ISSUE_CODES)
-        broad_threshold = max(8, pages // 2) if pages else 8
-        if len(phase2_issues) >= broad_threshold and not bounded:
-            reasons.append("broad_canonical_source_failure")
-        if "(no text detected" in str(mmd_text or "").casefold():
-            reasons.append("no_text_detected")
-    use_fallback = bool(reasons) and _enabled()
-    return {
-        "eligible": True,
-        "use_fallback": use_fallback,
-        "reasons": reasons,
-        "page_count": pages,
-        "mmd_chars": chars,
-        "semantic_chars": semantic_chars,
-        "pdf_text_tokens": pdf_text_tokens,
-        "pdf_text_coverage": pdf_text_coverage,
-    }
 
 
 def collect_pdf_pages(
@@ -788,8 +674,8 @@ def mmd_is_gpt_reconstructed(mmd_text: object) -> bool:
 def stale_mmd_reader(mmd_text: object) -> str:
     """The superseded reader version behind this MMD, or "" when current.
 
-    Only MMD this module produced can be judged: a Mathpix conversion carries
-    no stamp of ours and must not be called stale on our versioning.
+    Only MMD this module produced can be judged: a directly uploaded .mmd
+    carries no stamp of ours and must not be called stale on our versioning.
     """
     if not mmd_is_gpt_reconstructed(mmd_text):
         return ""
@@ -3129,7 +3015,6 @@ def _persist_bundle(
     mmd_text: str,
     compiled: canonical_source.CompiledSource,
     page_acsd: dict[str, Any],
-    mathpix_mmd: str,
 ) -> None:
     artifact_dir.mkdir(parents=True, exist_ok=True)
     payloads: dict[str, str] = {
@@ -3143,8 +3028,6 @@ def _persist_bundle(
         ),
         GPT_PAGE_ACSD_FILENAME: canonical_source._json_text(page_acsd),
     }
-    if mathpix_mmd:
-        payloads[MATHPIX_RAW_FILENAME] = mathpix_mmd
     for filename, content in payloads.items():
         canonical_source._atomic_write(artifact_dir / filename, content)
 
@@ -3161,11 +3044,11 @@ def _commit_staged_bundle(staging: Path, artifact_dir: Path) -> None:
             spec["filename"] for spec in canonical_source.ARTIFACT_SPECS.values()
         } | {
             spec["filename"] for spec in OPTIONAL_ARTIFACT_SPECS.values()
-        } | {ASSET_DIRNAME}
+        } | {ASSET_DIRNAME} | set(LEGACY_ARTIFACT_NAMES)
         staged_names = {child.name for child in staging.iterdir()}
         # Remove stale managed artifacts only as part of the same rollback-safe
-        # transaction. This matters when a later hard failure has no partial
-        # Mathpix MMD but an earlier fallback left ``source.mathpix.raw.mmd``.
+        # transaction. This also retires artifacts that older runs published
+        # and this module no longer writes at all.
         for name in sorted(managed_names - staged_names):
             target = artifact_dir / name
             if not target.exists():
@@ -3233,9 +3116,6 @@ def _reconstruction_manifest(
         "batch_count": len(page_acsd.get("batches") or []),
         "asset_count": asset_count,
         "verified_task_visual_relationships": relationship_count,
-        "mathpix_raw_preserved": (
-            Path(artifact_dir) / MATHPIX_RAW_FILENAME
-        ).exists(),
         "raw_pdf_changed": False,
         "page_acsd_sha256": _sha256_text(
             canonical_source._json_text(page_acsd)
@@ -3363,7 +3243,6 @@ def reconstruct_pdf_to_acsd(
     job_id: int,
     artifact_dir: Path,
     fallback_reason: list[str],
-    mathpix_mmd: str = "",
     provider: BatchProvider | None = None,
 ) -> dict[str, Any]:
     artifact_dir = Path(artifact_dir)
@@ -3397,7 +3276,6 @@ def reconstruct_pdf_to_acsd(
             relationship_count=relationship_count,
             fallback_reason=fallback_reason,
         )
-        reconstruction["mathpix_raw_preserved"] = bool(mathpix_mmd)
         reconstruction["derived_mmd_sha256"] = _sha256_text(mmd_text)
         _attach_reconstruction_metadata(
             canonical,
@@ -3426,7 +3304,6 @@ def reconstruct_pdf_to_acsd(
             mmd_text=mmd_text,
             compiled=final,
             page_acsd=page_acsd,
-            mathpix_mmd=mathpix_mmd,
         )
         _commit_staged_bundle(staging, artifact_dir)
         return {
@@ -3439,84 +3316,6 @@ def reconstruct_pdf_to_acsd(
     except Exception:
         shutil.rmtree(staging, ignore_errors=True)
         raise
-
-
-def mark_fallback_review_required(
-    artifact_dir: Path,
-    *,
-    fallback_reason: Iterable[str],
-    error: Exception,
-) -> None:
-    """Persist a blocking source issue when unusable Mathpix cannot be replaced."""
-    artifact_dir = Path(artifact_dir)
-    canonical_path = (
-        artifact_dir
-        / canonical_source.ARTIFACT_SPECS["canonical_json"]["filename"]
-    )
-    report_path = (
-        artifact_dir / canonical_source.ARTIFACT_SPECS["report"]["filename"]
-    )
-    if not canonical_path.exists() or not report_path.exists():
-        return
-    try:
-        canonical = json.loads(canonical_path.read_text(encoding="utf-8"))
-        report = json.loads(report_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return
-    if not isinstance(canonical, dict) or not isinstance(report, dict):
-        return
-    reasons = [str(value) for value in fallback_reason if str(value)]
-    issue = {
-        "severity": "error",
-        "code": "phase221_gpt_pdf_acsd_fallback_failed",
-        "message": (
-            "Mathpix failed the objective source-quality gate and the verified "
-            "GPT PDF-to-ACSD fallback could not produce an accepted replacement."
-        ),
-        "fallback_reason": reasons,
-        "fallback_error": str(error)[:1000],
-    }
-    report_issues = [
-        item for item in report.get("issues") or [] if isinstance(item, dict)
-    ]
-    report_issues = [
-        item for item in report_issues
-        if item.get("code") != issue["code"]
-    ]
-    report["issues"] = [*report_issues, issue]
-    report["phase2_inventory_ready"] = False
-    report["status"] = "failed"
-    report.setdefault("summary", {})["phase2_blocking_issues"] = max(
-        1, int((report.get("summary") or {}).get("phase2_blocking_issues") or 0)
-    )
-    reconstruction = {
-        "version": FALLBACK_VERSION,
-        "compiler": FALLBACK_COMPILER,
-        "status": "review_required",
-        "source_origin": FALLBACK_ORIGIN,
-        "fallback_reason": reasons,
-        "failure_reason": str(error)[:1000],
-        "raw_pdf_changed": False,
-    }
-    report["source_reconstruction"] = copy.deepcopy(reconstruction)
-    canonical["source_reconstruction"] = copy.deepcopy(reconstruction)
-    canonical["phase2_inventory_ready"] = False
-    canonical.setdefault("shadow_validation", {})["phase2_inventory_ready"] = False
-    canonical["shadow_validation"]["phase2_blocking_issues"] = max(
-        1,
-        int(
-            (canonical.get("shadow_validation") or {}).get(
-                "phase2_blocking_issues"
-            )
-            or 0
-        ),
-    )
-    canonical_source._atomic_write(
-        canonical_path, canonical_source._json_text(canonical)
-    )
-    canonical_source._atomic_write(
-        report_path, canonical_source._json_text(report)
-    )
 
 
 def optional_artifact_manifest(directory: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -3557,15 +3356,18 @@ def optional_artifact_path(directory: Path, kind: str) -> tuple[Path, dict[str, 
 
 
 # ---------------------------------------------------------------------------
-# Applying the chapter outline to a converter-produced MMD (Mathpix path).
+# Applying the chapter outline to MMD this module did not render.
 #
-# Mathpix wins the source-quality gate on most books, and its MMD is what
-# every later phase reads. The outline shapes the MMD only in the renderer
-# above, so a Mathpix source arrives with no topics and almost no tasks. The
-# measurement in docs/mathpix-outline-transfer.md rules out merging figures:
-# only 23% of ACSD figures are covered by a Mathpix crop. So the source and
-# ALL of its image URLs are left exactly as Mathpix produced them, and only
-# the two structural decisions move across, each anchored on verbatim text.
+# The outline shapes the MMD only in the renderer above, so source that
+# arrives from anywhere else has no topics and almost no tasks. Nothing
+# currently calls this: the GPT reader is the only converter, and it applies
+# the outline as it renders. It is kept, unwired and covered by tests, for a
+# future converter that produces the source without applying the outline —
+# see docs/mathpix-outline-transfer.md, which measured the approach against
+# the converter this once existed for.
+#
+# The source and ALL of its image URLs are left exactly as produced. Only the
+# two structural decisions move across, each anchored on verbatim text.
 # ---------------------------------------------------------------------------
 
 MMD_OUTLINE_APPLIED = "outline-transferred"

@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from .. import bulk_import as bi
 from .. import models, schemas
-from ..config import use_live_generation, use_live_mmd, use_live_workbooks
+from ..config import use_live_generation, use_live_workbooks
 from ..db import get_db
 from ..services import directory, mmd
 
@@ -64,5 +64,4 @@ def get_stats(db: Session = Depends(get_db)):
         sessions=db.query(models.AssessmentSession).count(),
         upload_jobs=db.query(models.UploadJob).count(),
         openai_live=use_live_generation(),
-        mathpix_live=use_live_mmd(),
     )

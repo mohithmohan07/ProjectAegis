@@ -45,14 +45,11 @@ export default function Home() {
             <span className={`badge ${stats.data.openai_live ? "green" : "yellow"}`}>
               OpenAI {stats.data.openai_live ? "live" : "keys missing"}
             </span>
-            <span className={`badge ${stats.data.mathpix_live ? "green" : "yellow"}`}>
-              Mathpix {stats.data.mathpix_live ? "live" : "keys missing"}
-            </span>
-            {stats.data.openai_live && stats.data.mathpix_live ? (
+            {stats.data.openai_live ? (
               <span className="muted">All generation runs live — no dry stubs.</span>
             ) : (
               <span className="muted">
-                Set API keys to enable live generation. Dry mode is disabled.
+                Set the API key to enable live generation. Dry mode is disabled.
               </span>
             )}
           </div>

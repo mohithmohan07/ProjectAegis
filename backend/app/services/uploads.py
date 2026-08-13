@@ -1,7 +1,7 @@
 """Shared upload-job helpers: stage a file, replace it, convert it to MMD.
 
 Uploading now ONLY saves the file (status ``uploaded``) — it never auto-runs
-Mathpix/MMD. The user can replace the file (e.g. wrong PDF) before an explicit
+the conversion. The user can replace the file (e.g. wrong PDF) before an explicit
 ``convert`` step, which is where the (slower) MMD conversion happens with live
 progress logs.
 """
@@ -221,11 +221,7 @@ def convert_job(
 
         progress.log(f"Reading {job.filename} ({path.stat().st_size:,} bytes).")
         progress.set_progress(0.1, label="Reading file")
-        live = config.use_live_mmd()
-        progress.log(
-            "Converting to MMD via Mathpix…" if live and path.suffix.lower() in
-            {".pdf", ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
-            else "Normalizing document to MMD…")
+        progress.log("Normalizing document to MMD…")
         progress.set_progress(0.3, label="Converting to MMD")
         mmd_text = mmd.to_mmd(path)
         job.mmd_text = mmd_text

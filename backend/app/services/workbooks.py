@@ -1,7 +1,7 @@
 """Create Workbooks — the vendored revision-workbook PDF generator, embedded.
 
 "Workbook" here means the **student revision-workbook PDF** produced by the
-team's Create Workbooks tool (Mathpix MMD -> GPT plan/build -> refine ->
+team's Create Workbooks tool (PDF text -> GPT plan/build -> refine ->
 ReportLab A4 render -> validate) — NOT the Bulk Import Excel workbook.
 
 Outputs publish subject-wise into the same library layout the original tool
@@ -12,8 +12,8 @@ Dry vs live:
   * dry  — vendored PyMuPDF extractor + the REAL vendored ReportLab renderer
            with deterministic content derived from the source PDF text. No
            API keys needed; layout/styling matches the original tool.
-  * live — the full vendored pipeline (GPT plan/build + Mathpix MMD).
-           Requires OPENAI_API_KEY and MATHPIX_APP_ID/MATHPIX_APP_KEY.
+  * live — the full vendored pipeline (GPT plan/build over the PDF text
+           layer). Requires OPENAI_API_KEY.
 """
 from __future__ import annotations
 
@@ -45,7 +45,7 @@ def _vendor():
 
 
 def use_live() -> bool:
-    """Live by default whenever both OpenAI and Mathpix keys are present."""
+    """Live by default whenever a model-provider key is present."""
     return config.use_live_workbooks()
 
 
@@ -134,8 +134,8 @@ def _dry_chapter(meta: dict, source_pdf: Path):
                 Block("paragraph", data={"text": _first_sentences(tb.text, 700)}),
                 Block("callout", title="Dry-run note", data={
                     "text": ("Content shown is extracted verbatim from the source "
-                             "chapter. Run with OPENAI_API_KEY + Mathpix keys for "
-                             "the full GPT-authored workbook."),
+                             "chapter. Run with OPENAI_API_KEY for the full "
+                             "GPT-authored workbook."),
                 }),
             ],
         ))
@@ -187,7 +187,7 @@ def generate(source_pdf: Path, subject: str = "", live: bool | None = None) -> d
     if go_live:
         from pipeline import run as pipeline_run  # vendored (needs keys)
         run_cache.mkdir(parents=True, exist_ok=True)
-        progress.step("Mathpix → MMD, GPT plan/build, render PDF…", value=0.1)
+        progress.step("Reading PDF text, GPT plan/build, render PDF…", value=0.1)
         result = pipeline_run({
             "source_pdf": str(source_pdf),
             "subject": meta["subject"],
@@ -229,7 +229,7 @@ def generate(source_pdf: Path, subject: str = "", live: bool | None = None) -> d
         f"Title: {meta['chapter_title']}",
         f"Topics: {len(chapter.topics)} · glossary: {len(chapter.glossary)}",
         f"PDF: {out_pdf}",
-        "Live mode (GPT + Mathpix) requires OPENAI_API_KEY and MATHPIX_APP_ID/KEY.",
+        "Live mode (GPT) requires OPENAI_API_KEY.",
     ]
     validator.write_log(str(build_log), messages, issues)
     result = {

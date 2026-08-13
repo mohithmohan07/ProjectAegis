@@ -110,10 +110,6 @@ def has_openai() -> bool:
     )
 
 
-def has_mathpix() -> bool:
-    return bool(os.environ.get("MATHPIX_APP_ID") and os.environ.get("MATHPIX_APP_KEY"))
-
-
 def allow_dry() -> bool:
     """Dry/stub generation is opt-in (tests/CI only). Production runs live-only."""
     return os.environ.get("AEGIS_ALLOW_DRY", "").strip().lower() in {"1", "true", "yes", "on"}
@@ -132,13 +128,9 @@ MSG_OPENAI = (
     "Live OpenAI generation is required (dry mode is disabled). "
     "Set OPENAI_API_KEY in your environment."
 )
-MSG_MATHPIX = (
-    "Live Mathpix conversion is required (dry mode is disabled). "
-    "Set MATHPIX_APP_ID and MATHPIX_APP_KEY in your environment."
-)
 MSG_WORKBOOKS = (
     "Live Create Workbooks is required (dry mode is disabled). "
-    "Set OPENAI_API_KEY, MATHPIX_APP_ID, and MATHPIX_APP_KEY."
+    "Set OPENAI_API_KEY in your environment."
 )
 
 
@@ -147,26 +139,19 @@ def use_live_generation() -> bool:
     return has_openai() and not _live_disabled()
 
 
-def use_live_mmd() -> bool:
-    """Live Mathpix MMD conversion when keys are present and live is not disabled."""
-    return has_mathpix() and not _live_disabled()
-
-
 def use_live_workbooks() -> bool:
-    """Live revision-workbook pipeline (OpenAI + Mathpix)."""
-    return use_live_generation() and use_live_mmd()
+    """Live revision-workbook pipeline.
+
+    The pipeline used to need a second credential for PDF -> MMD conversion.
+    That converter is gone, so a model-provider key is the whole requirement.
+    """
+    return use_live_generation()
 
 
 def require_generation_live() -> None:
     if use_live_generation() or allow_dry():
         return
     raise LiveRequiredError(MSG_OPENAI)
-
-
-def require_mmd_live(*, pdf_or_image: bool = False) -> None:
-    if not pdf_or_image or use_live_mmd() or allow_dry():
-        return
-    raise LiveRequiredError(MSG_MATHPIX)
 
 
 def require_workbooks_live() -> None:

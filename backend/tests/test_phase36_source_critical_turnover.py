@@ -72,64 +72,12 @@ def _job() -> SimpleNamespace:
     return SimpleNamespace(
         id=77,
         filename="Electricity.pdf",
-        mmd_text="defective Mathpix MMD",
+        mmd_text="defective canonical MMD",
         question_inventory={"items": [{"qid": "QINV-0001"}]},
         generation_checkpoint={"stage": "pre_type_assignment"},
         status="converted",
         detail="previous detail",
     )
-
-
-def test_electricity_source_errors_trigger_full_pdf_fallback_at_conversion(tmp_path: Path):
-    pdf = tmp_path / "Electricity.pdf"
-    pdf.write_bytes(b"%PDF-1.7\n")
-
-    def original(*_args, **_kwargs):
-        return {
-            "eligible": True,
-            "use_fallback": False,
-            "reasons": [],
-            "page_count": 20,
-        }
-
-    result = phase36._assess_quality_with_source_turnover(
-        original,
-        "substantial healthy-length MMD",
-        pdf,
-        report={"phase2_issues": ELECTRICITY_ISSUES},
-    )
-
-    assert result["use_fallback"] is True
-    assert result["source_critical_turnover"] is True
-    assert result["source_critical_issue_codes"] == sorted({
-        row["code"] for row in ELECTRICITY_ISSUES
-    })
-    assert any(
-        reason.startswith("phase36_source_critical_turnover:")
-        for reason in result["reasons"]
-    )
-
-
-def test_bounded_phase22_only_issues_still_use_targeted_adjudication_first(tmp_path: Path):
-    pdf = tmp_path / "source.pdf"
-    pdf.write_bytes(b"%PDF-1.7\n")
-    eligible = [
-        {"severity": "error", "code": code, "message": code}
-        for code in sorted(phase22.ELIGIBLE_ISSUE_CODES)
-    ]
-
-    def original(*_args, **_kwargs):
-        return {"eligible": True, "use_fallback": False, "reasons": []}
-
-    result = phase36._assess_quality_with_source_turnover(
-        original,
-        "healthy MMD",
-        pdf,
-        report={"phase2_issues": eligible},
-    )
-
-    assert result["use_fallback"] is False
-    assert "source_critical_turnover" not in result
 
 
 def test_resume_rebuilds_source_clears_stale_state_and_continues(
@@ -161,7 +109,7 @@ def test_resume_rebuilds_source_clears_stale_state_and_continues(
     def original_prepare(_db, current):
         nonlocal prepare_calls
         prepare_calls += 1
-        if current.mmd_text == "defective Mathpix MMD":
+        if current.mmd_text == "defective canonical MMD":
             raise ValueError(
                 "Phase 2.2 canonical source adjudication could not verify every "
                 "source-critical issue"
@@ -185,7 +133,6 @@ def test_resume_rebuilds_source_clears_stale_state_and_continues(
 
     def reconstruct(path, **kwargs):
         assert path == pdf
-        assert kwargs["mathpix_mmd"] == "defective Mathpix MMD"
         assert kwargs["fallback_reason"][0].startswith(
             "phase36_source_critical_turnover:"
         )
@@ -269,7 +216,7 @@ def test_failed_turnover_preserves_existing_job_state(tmp_path: Path, monkeypatc
     with pytest.raises(ValueError, match="Automatic GPT PDF source turnover failed"):
         phase36._prepare_job_context_with_turnover(original_prepare, db, job)
 
-    assert job.mmd_text == "defective Mathpix MMD"
+    assert job.mmd_text == "defective canonical MMD"
     assert job.question_inventory == {"items": [{"qid": "QINV-0001"}]}
     assert job.generation_checkpoint == {"stage": "pre_type_assignment"}
     assert job.status == "converted"

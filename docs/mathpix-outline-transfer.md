@@ -89,12 +89,38 @@ front. It is not the route taken. Aegis-hosted image URLs
 accepted as the deliverable, which removes the only thing the GPT reader
 cost, so the reader becomes the conversion path and Mathpix is retired.
 
-`AEGIS_GPT_PDF_ACSD_FALLBACK_FORCE` now defaults to `1`, and the Mathpix
-call is skipped rather than made, billed, and discarded. Setting the
-variable to `0` puts Mathpix back in front, which is how the quality-gate
-branch is still exercised in tests.
+`AEGIS_GPT_PDF_ACSD_FALLBACK_FORCE` defaulted to `1`, and the Mathpix call
+was skipped rather than made, billed, and discarded. Setting the variable to
+`0` put Mathpix back in front, which is how the quality-gate branch stayed
+exercised in tests.
+
+## Removal: the switch and the gate are gone
+
+Archiving left the code in place behind a default. It has since been
+deleted outright — the vendored client, the credentials, the
+`source.mathpix.raw.mmd` artifact, the `AEGIS_GPT_PDF_ACSD_FALLBACK_FORCE`
+switch, and the `assess_mathpix_quality` gate that chose between two
+converters. There is one converter now, so there is nothing to choose.
+
+Two capabilities went with it, deliberately:
+
+* **Image OCR.** `/v3/text` was the only path from an uploaded image to
+  MMD. Image uploads to Build Assessments and Build Concepts now fail with
+  an error naming the supported formats instead of being OCR'd.
+* **PDF upload to Build Assessments.** That lane is not served by the GPT
+  reader, which only intercepts Build Concepts, so its PDFs now fail the
+  same way. Build Concepts is the route for a PDF.
+
+Live **Create Workbooks** kept working: its PDF → MMD step became the
+vendored PyMuPDF text extractor the dry path already used, so maths-heavy
+chapters reach the planner as plainer text than MMD gave it.
 
 `transfer_outline_to_mmd` stays on the branch, unwired and covered by tests,
 for the day a converter other than the reader has to produce the source.
 Its task-cue half is verified (4 -> 25 tasks with every image URL
 preserved); its topic half is not.
+
+Artifact directories written before the removal may still hold
+`source.mathpix.raw.mmd`. It is listed in `LEGACY_ARTIFACT_NAMES`, so the
+next publish for that upload sweeps it inside the same rollback-safe
+transaction rather than serving a file no current run produces.

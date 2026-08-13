@@ -71,12 +71,15 @@ frontend/             React + Vite + TypeScript UI (the two modules + Database)
 Every generation step has a **dry** path (deterministic, realistic stub content,
 no API keys — used for the MVP and tests) and a **live** hook that delegates to
 the vendored scripts. Live mode activates when the relevant environment
-variables are set:
+variable is set:
 
 ```bash
-export OPENAI_API_KEY=...                 # question / concept generation
-export MATHPIX_APP_ID=... MATHPIX_APP_KEY=...   # PDF/image → MMD
+export OPENAI_API_KEY=...                 # question / concept generation,
+                                          # and PDF → canonical source
 ```
+
+PDFs are read by the GPT PDF-to-ACSD reader, so `OPENAI_API_KEY` is the only
+credential a conversion needs. There is no separate OCR service.
 
 The `_live_*` hooks in the service layer mark exactly where inputs must be wired.
 
@@ -266,4 +269,4 @@ else needs to change.
 
 ## Canonical source recovery
 
-Build Concepts prefers Mathpix MMD, uses evidence-backed PDF adjudication for bounded omissions, and can fall back to verified GPT PDF-to-ACSD extraction when Mathpix hard-fails or produces objectively unusable output. The fallback preserves page order, exact source wording, mathematical structure and source-owned visual crops before compiling through the same deterministic ACSD gates. See `docs/aegis-canonical-source-phase-2-2-1.md`.
+Build Concepts reads PDFs with verified GPT PDF-to-ACSD extraction and uses evidence-backed PDF adjudication for bounded omissions. The reader preserves page order, exact source wording, mathematical structure and source-owned visual crops before compiling through the same deterministic ACSD gates. See `docs/aegis-canonical-source-phase-2-2-1.md`.
