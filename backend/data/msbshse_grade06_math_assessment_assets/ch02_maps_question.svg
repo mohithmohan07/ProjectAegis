@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760">
+<rect width="100%" height="100%" fill="white"/>
+<title>Chapter 2 maps - questions</title>
+<style>
+text { font-family: Arial, Helvetica, sans-serif; fill:#111; }
+.panel-title { font-size:28px; font-weight:bold; }
+.label { font-size:22px; }
+.small { font-size:18px; }
+.tiny { font-size:15px; }
+.shape { fill:none; stroke:#111; stroke-width:4; }
+.thin { fill:none; stroke:#111; stroke-width:2.5; }
+.dash { fill:none; stroke:#555; stroke-width:2.5; stroke-dasharray:8 6; }
+.point { fill:#111; }
+.grid { stroke:#777; stroke-width:1.2; }
+</style>
+<rect x="20" y="20" width="560" height="52" rx="8" fill="#edf2f7" stroke="#aab7c4"/><text class="panel-title" x="34" y="55">CH2-Q01: Outline map for locating six Maharashtra cities</text><polygon class="shape" points="160,110 300,90 420,130 500,210 470,300 515,380 450,455 410,560 310,650 215,625 165,530 120,450 150,360 95,280 130,200"/><text class="small" x="120" y="710">Mark and label: Mumbai, Pune, Nashik, Nagpur, Kolhapur and Satara.</text><rect x="620" y="20" width="560" height="52" rx="8" fill="#edf2f7" stroke="#aab7c4"/><text class="panel-title" x="634" y="55">CH2-Q05: Connect every pair of the four marked cities</text><polygon class="shape" points="820,100 875,125 900,185 950,220 930,280 980,330 945,390 900,415 875,520 835,650 790,560 770,470 735,420 750,350 710,300 745,245 735,180 780,145"/><circle class="point" cx="815" cy="220" r="6"/><text class="small" x="825" y="212">Delhi</text><circle class="point" cx="920" cy="330" r="6"/><text class="small" x="930" y="322">Calcutta</text><circle class="point" cx="850" cy="560" r="6"/><text class="small" x="860" y="552">Chennai</text><circle class="point" cx="770" cy="390" r="6"/><text class="small" x="780" y="382">Mumbai</text><text class="small" x="690" y="710">Draw every possible line segment joining the four marked points.</text></svg>
