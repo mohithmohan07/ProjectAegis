@@ -21,6 +21,7 @@ from __future__ import annotations
 from types import ModuleType
 
 from .. import config
+from . import canonical_source_phase2 as phase2
 from . import canonical_source_phase22 as phase22
 from . import chapter_reading, progress
 
@@ -69,12 +70,47 @@ def install(generation: ModuleType | None = None) -> None:
         original_active_semantic_source = phase22.active_semantic_source
 
         def active_semantic_source(raw_source: str) -> str:
+            # Same key generation used, or deposit validation and semantic
+            # recovery would resolve to a different source than the run
+            # compiled from.
             return original_active_semantic_source(
-                chapter_reading.normalized_for(raw_source)
+                chapter_reading.normalized_for(
+                    raw_source, _assessment_sections()
+                )
             )
 
         active_semantic_source._chapter_reading_installed = True
         phase22.active_semantic_source = active_semantic_source
+
+
+def _assessment_sections() -> tuple[str, ...]:
+    """Titles the chapter outline ruled question collections, not topics.
+
+    The outline already decided which sections are practice sets, exercises
+    and question banks, and the renderer deliberately leaves their banners
+    un-promoted. Chapter reading is a separate model pass that never saw that
+    decision, so it read a bold banner as a section title and rewrote it into
+    a heading — which downstream turns into a source topic demanding concept
+    coverage, and into a task row with no prompt.
+
+    ``phase2.activate`` wraps the whole generation run, so the compiled
+    canonical — which carries the outline — is already in context here. No
+    outline (an uploaded .mmd, a chapter converted before outlines existed)
+    simply yields no titles and the pass behaves exactly as before.
+    """
+    canonical = phase2.active_canonical()
+    if not isinstance(canonical, dict):
+        return ()
+    outline = canonical.get("chapter_outline")
+    if not isinstance(outline, dict):
+        return ()
+    titles = [
+        str(topic.get("title") or "").strip()
+        for topic in outline.get("topics") or []
+        if isinstance(topic, dict)
+        and str(topic.get("kind") or "") == "assessment"
+    ]
+    return tuple(dict.fromkeys(title for title in titles if title))
 
 
 def _reading_for_run(
@@ -88,7 +124,8 @@ def _reading_for_run(
         )
     except Exception:  # noqa: BLE001 — an unreadable envelope is no prior
         prior = None
-    if prior and chapter_reading.cached_reading(raw) is None:
+    sections = _assessment_sections()
+    if prior and chapter_reading.cached_reading(raw, sections) is None:
         progress.log(
             "This run's checkpoints were compiled before chapter reading "
             "was deployed; keeping the raw source so they stay coherent. "
@@ -99,4 +136,5 @@ def _reading_for_run(
     return chapter_reading.read_chapter(
         raw,
         source_filename=str(kwargs.get("chapter_title") or ""),
+        assessment_sections=sections,
     )

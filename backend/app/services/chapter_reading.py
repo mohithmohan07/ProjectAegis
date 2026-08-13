@@ -93,6 +93,16 @@ NORMALIZE_SYSTEM = prompts.register(
         "4. Rewrite headings as Markdown '#' headings whose depth is "
         "consistent with the outline of headings seen so far (provided in "
         "the input). Keep any section number in the heading text.\n"
+        "4a. The input may carry assessment_sections: titles a prior pass "
+        "already judged to be question collections rather than teaching "
+        "sections — an end-of-topic practice set, an end-of-chapter exercise, "
+        "a question bank. Those titles are NOT headings. Leave such a line "
+        "exactly as the chunk presents it (bold, plain, however it appears) "
+        "and never rewrite it into a '#' heading. Its questions still belong "
+        "to the chapter and keep their own blocks and numbering; only the "
+        "banner itself stays un-promoted. Classify the banner as furniture "
+        "ONLY if it would already have been furniture — never drop it merely "
+        "because it is listed here.\n"
         "5. Remove furniture blocks from normalized_mmd, and list every "
         "removed line verbatim in dropped_furniture. Remove nothing else.\n"
         "6. Keep question numbering exactly as printed.\n"
@@ -135,12 +145,18 @@ def _chunks(text: str, *, max_chars: int = _MAX_CHUNK_CHARS) -> list[str]:
     return chunks
 
 
-def _cache_key(mmd_text: str) -> str:
+def _cache_key(
+    mmd_text: str, assessment_sections: tuple[str, ...] = (),
+) -> str:
     payload = "\0".join((
         f"chapter-reading-v{READING_VERSION}",
         config.OPENAI_MODEL,
         _sha256_text(prompts.get_text("chapter_reading.normalize.system")),
         _sha256_text(mmd_text),
+        # Part of the key, not just the prompt: the same chapter read with and
+        # without its outline produces different MMD, and the older reading
+        # would otherwise be replayed for every later run.
+        _sha256_text("\n".join(assessment_sections)),
     ))
     return _sha256_text(payload)[:32]
 
@@ -216,6 +232,7 @@ def _read_chunk(
     source_filename: str,
     outline: list[str],
     previous_tail: str,
+    assessment_sections: tuple[str, ...] = (),
 ) -> tuple[str, list[dict[str, Any]], list[str], bool]:
     """Return (normalized_text, census_rows, dropped_furniture, fell_back)."""
     payload = {
@@ -226,6 +243,8 @@ def _read_chunk(
         "previous_chunk_normalized_tail": previous_tail,
         "chunk_mmd": chunk,
     }
+    if assessment_sections:
+        payload["assessment_sections"] = list(assessment_sections)
     try:
         decision = api_call(
             prompts.get_text("chapter_reading.normalize.system"),
@@ -278,15 +297,28 @@ def _fallback_census(chunk_index: int, reason: str) -> list[dict[str, Any]]:
     }]
 
 
-def cached_reading(raw_source: str) -> dict[str, Any] | None:
-    """The stored reading for this exact raw text — never a model call."""
+def cached_reading(
+    raw_source: str, assessment_sections: tuple[str, ...] = (),
+) -> dict[str, Any] | None:
+    """The stored reading for this exact raw text — never a model call.
+
+    Falls back to the pre-outline key so a run that read its chapter before
+    the outline was passed through keeps replaying that same reading. Its
+    saved stages were compiled from that text; switching sources mid-run
+    would invalidate every one of them.
+    """
     raw = str(raw_source or "")
     if not raw:
         return None
-    return _load_cached(_cache_key(raw))
+    hit = _load_cached(_cache_key(raw, assessment_sections))
+    if hit is None and assessment_sections:
+        hit = _load_cached(_cache_key(raw))
+    return hit
 
 
-def normalized_for(raw_source: str) -> str:
+def normalized_for(
+    raw_source: str, assessment_sections: tuple[str, ...] = (),
+) -> str:
     """The cached reading for this exact raw text, else the text unchanged.
 
     Cache-lookup only — never a model call. Deposit validation and semantic
@@ -297,7 +329,7 @@ def normalized_for(raw_source: str) -> str:
     raw = str(raw_source or "")
     if not raw:
         return raw
-    cached = cached_reading(raw)
+    cached = cached_reading(raw, assessment_sections)
     if cached is None:
         return raw
     return str(cached.get("normalized_mmd") or "") or raw
@@ -307,6 +339,7 @@ def read_chapter(
     mmd_text: str,
     *,
     source_filename: str = "",
+    assessment_sections: tuple[str, ...] = (),
     api_call: Callable[..., dict] | None = None,
 ) -> dict[str, Any]:
     """Read one chapter: classify every block and normalize the MMD.
@@ -331,10 +364,16 @@ def read_chapter(
             },
         }
 
-    key = _cache_key(raw)
-    cached = _load_cached(key)
+    key = _cache_key(raw, assessment_sections)
+    cached = cached_reading(raw, assessment_sections)
     if cached is not None:
         return cached
+    if assessment_sections:
+        progress.log(
+            "Chapter reading knows this chapter's question collections and "
+            "will leave their banners un-promoted: "
+            + ", ".join(assessment_sections),
+        )
 
     if api_call is None:
         from . import generation
@@ -359,6 +398,7 @@ def read_chapter(
             chunk_total=len(chunks),
             source_filename=source_filename,
             outline=outline,
+            assessment_sections=assessment_sections,
             previous_tail=(
                 normalized_parts[-1][-_PREVIOUS_TAIL_CHARS:]
                 if normalized_parts else ""
