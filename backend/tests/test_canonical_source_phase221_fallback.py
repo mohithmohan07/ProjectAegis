@@ -152,7 +152,12 @@ def test_reconstruct_pdf_to_acsd_materializes_verified_source(tmp_path: Path, mo
     assert report["source_reconstruction"]["source_origin"] == fallback.FALLBACK_ORIGIN
 
 
-def test_quality_gate_keeps_bounded_phase22_source_for_adjudication(tmp_path: Path):
+def test_quality_gate_keeps_bounded_phase22_source_for_adjudication(
+    tmp_path: Path, monkeypatch,
+):
+    # Mathpix is archived by default; this test covers the branch where
+    # it is still in front, so put it back explicitly.
+    monkeypatch.setenv("AEGIS_GPT_PDF_ACSD_FALLBACK_FORCE", "0")
     pdf = tmp_path / "source.pdf"
     _make_pdf(pdf)
     mmd = "A substantial source paragraph. " * 500
@@ -364,6 +369,9 @@ def test_failed_gpt_fallback_persists_billable_openai_usage(
     tmp_path: Path,
     monkeypatch,
 ):
+    # Mathpix is archived by default; this test covers the branch where
+    # it is still in front, so put it back explicitly.
+    monkeypatch.setenv("AEGIS_GPT_PDF_ACSD_FALLBACK_FORCE", "0")
     from app import config
     from app.services import mmd, openai_usage
     from tests.conftest import stream_error_message
@@ -409,6 +417,9 @@ def test_unusable_mathpix_and_failed_fallback_persist_a_blocking_source_issue(
     tmp_path: Path,
     monkeypatch,
 ):
+    # Mathpix is archived by default; this test covers the branch where
+    # it is still in front, so put it back explicitly.
+    monkeypatch.setenv("AEGIS_GPT_PDF_ACSD_FALLBACK_FORCE", "0")
     from app import config
     from app.services import mmd
     from tests.conftest import stream_error_message

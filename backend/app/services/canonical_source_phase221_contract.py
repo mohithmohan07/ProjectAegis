@@ -157,6 +157,26 @@ def install() -> None:
         if path.suffix.lower() != ".pdf" or not fallback._enabled():
             return original_convert(*args, **kwargs)
 
+        if fallback._forced():
+            # Mathpix is archived: the GPT reader is the conversion path, so
+            # the Mathpix call is skipped rather than made, billed, and then
+            # discarded. Only this reader applies the chapter outline, which
+            # is what gives a chapter its topics and its questions.
+            progress.log(
+                "Mathpix is archived for this deployment; converting through "
+                "the GPT PDF-to-ACSD reader, which applies the chapter "
+                "outline.",
+                level="info",
+            )
+            with uploads.exclusive_job_operation(int(job_id)):
+                current = uploads.get_job(
+                    db, int(job_id), owner_sub=owner_sub,
+                    module="build_concepts",
+                )
+                return _run_fallback(
+                    db, current, reason=["mathpix_archived"], mathpix_mmd="",
+                )
+
         try:
             result = original_convert(*args, **kwargs)
         except (mmd.ConversionError, config.LiveRequiredError) as exc:

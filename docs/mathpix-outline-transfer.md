@@ -79,3 +79,22 @@ source is never rewritten on a guess.
 * the outline's topics and question splits
 * one structural contract across both converters, so staging and a
   Mathpix-configured deployment agree
+
+
+## Resolution: Mathpix is archived
+
+The transfer above was designed for a deployment that keeps Mathpix in
+front. It is not the route taken. Aegis-hosted image URLs
+(`/source-assets/{job}/{sha}.jpg?sig=…`, served from `AEGIS_DATA_DIR`) were
+accepted as the deliverable, which removes the only thing the GPT reader
+cost, so the reader becomes the conversion path and Mathpix is retired.
+
+`AEGIS_GPT_PDF_ACSD_FALLBACK_FORCE` now defaults to `1`, and the Mathpix
+call is skipped rather than made, billed, and discarded. Setting the
+variable to `0` puts Mathpix back in front, which is how the quality-gate
+branch is still exercised in tests.
+
+`transfer_outline_to_mmd` stays on the branch, unwired and covered by tests,
+for the day a converter other than the reader has to produce the source.
+Its task-cue half is verified (4 -> 25 tasks with every image URL
+preserved); its topic half is not.

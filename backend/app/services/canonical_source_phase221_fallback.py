@@ -103,8 +103,14 @@ def _enabled() -> bool:
 
 
 def _forced() -> bool:
+    """Whether the GPT reader is the conversion path rather than a fallback.
+
+    Defaults on: only this reader applies the chapter outline, so a Mathpix
+    conversion arrives with no topics and almost no tasks. Set the variable
+    to "0" to put Mathpix back in front.
+    """
     return os.environ.get(
-        "AEGIS_GPT_PDF_ACSD_FALLBACK_FORCE", "0"
+        "AEGIS_GPT_PDF_ACSD_FALLBACK_FORCE", "1"
     ).strip().lower() in {"1", "true", "yes", "on"}
 
 

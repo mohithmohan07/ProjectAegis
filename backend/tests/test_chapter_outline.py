@@ -1319,3 +1319,25 @@ def test_outline_transfer_flags_what_it_could_not_locate():
         _mathpix_style_mmd(), outline, page_acsd)
 
     assert any("not found verbatim" in flag for flag in flags)
+
+
+def test_the_gpt_reader_is_the_default_conversion_path():
+    """Mathpix is archived: only this reader applies the chapter outline.
+
+    A Mathpix conversion arrives with no topics and almost no tasks, so the
+    reader has to be the default rather than a fallback.
+    """
+    import os
+
+    previous = os.environ.pop("AEGIS_GPT_PDF_ACSD_FALLBACK_FORCE", None)
+    try:
+        assert fallback._forced() is True
+    finally:
+        if previous is not None:
+            os.environ["AEGIS_GPT_PDF_ACSD_FALLBACK_FORCE"] = previous
+
+
+def test_mathpix_can_be_put_back_in_front(monkeypatch):
+    monkeypatch.setenv("AEGIS_GPT_PDF_ACSD_FALLBACK_FORCE", "0")
+
+    assert fallback._forced() is False
