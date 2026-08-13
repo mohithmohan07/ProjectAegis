@@ -103,8 +103,14 @@ def _enabled() -> bool:
 
 
 def _forced() -> bool:
+    """Whether the GPT reader is the conversion path rather than a fallback.
+
+    Defaults on: only this reader applies the chapter outline, so a Mathpix
+    conversion arrives with no topics and almost no tasks. Set the variable
+    to "0" to put Mathpix back in front.
+    """
     return os.environ.get(
-        "AEGIS_GPT_PDF_ACSD_FALLBACK_FORCE", "0"
+        "AEGIS_GPT_PDF_ACSD_FALLBACK_FORCE", "1"
     ).strip().lower() in {"1", "true", "yes", "on"}
 
 
@@ -3548,3 +3554,164 @@ def optional_artifact_path(directory: Path, kind: str) -> tuple[Path, dict[str, 
     if not path.exists() or not path.is_file():
         raise ValueError("source artifact is not available for this upload")
     return path, spec
+
+
+# ---------------------------------------------------------------------------
+# Applying the chapter outline to a converter-produced MMD (Mathpix path).
+#
+# Mathpix wins the source-quality gate on most books, and its MMD is what
+# every later phase reads. The outline shapes the MMD only in the renderer
+# above, so a Mathpix source arrives with no topics and almost no tasks. The
+# measurement in docs/mathpix-outline-transfer.md rules out merging figures:
+# only 23% of ACSD figures are covered by a Mathpix crop. So the source and
+# ALL of its image URLs are left exactly as Mathpix produced them, and only
+# the two structural decisions move across, each anchored on verbatim text.
+# ---------------------------------------------------------------------------
+
+MMD_OUTLINE_APPLIED = "outline-transferred"
+
+
+_MMD_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+")
+
+
+def _line_index_of(
+    lines: list[str],
+    needle: str,
+    *,
+    used: set[int],
+    start: int = 0,
+    headings_only: bool = False,
+    whole_line: bool = False,
+    opens_line: bool = False,
+) -> int:
+    """Locate ``needle`` verbatim, searching forward from ``start``.
+
+    Topics are anchored on heading lines only and in document order: a
+    chapter title repeated in the opening prose must not capture the topic
+    that appears pages later.
+    """
+    key = _normal(needle)
+    if not key:
+        return -1
+    for index in range(max(0, start), len(lines)):
+        if index in used:
+            continue
+        line = lines[index]
+        if headings_only and not _MMD_HEADING_RE.match(line):
+            continue
+        body = _normal(_MMD_HEADING_RE.sub("", line).strip(" *"))
+        if whole_line:
+            if body == key:
+                return index
+        elif opens_line:
+            if body.startswith(key):
+                return index
+        elif key in body:
+            return index
+    return -1
+
+
+def transfer_outline_to_mmd(
+    mmd_text: str,
+    outline: dict[str, Any] | None,
+    page_acsd: dict[str, Any] | None = None,
+) -> tuple[str, list[str]]:
+    """Give a converter's MMD the outline's topics and task cues.
+
+    Returns the restructured MMD and the review flags for anything the
+    outline claimed that could not be located verbatim. Content, tables,
+    LaTeX and every image URL are untouched — only heading weight changes and
+    task cues are inserted.
+    """
+    text = str(mmd_text or "")
+    if not isinstance(outline, dict) or not outline.get("version"):
+        return text, []
+    flags: list[str] = []
+    lines = text.splitlines()
+    used: set[int] = set()
+
+    # 1. Topics. The outline names a heading the book prints; that line
+    #    becomes the level-1 heading a topic derives from.
+    topic_lines: dict[int, str] = {}
+    topic_above: dict[int, str] = {}
+    cursor = 0
+    for topic in outline.get("topics") or []:
+        if not isinstance(topic, dict) or topic.get("kind") != "content":
+            continue
+        title = str(topic.get("title") or "").strip()
+        index, promote = -1, True
+        for headings_only, whole_line in ((True, True), (True, False)):
+            index = _line_index_of(
+                lines, title, used=used, start=cursor,
+                headings_only=headings_only, whole_line=whole_line,
+            )
+            if index >= 0:
+                break
+        if index < 0:
+            # Balbharati prints most topics as a run-in bold lead-in rather
+            # than a heading, so the words open a body line instead. Anchor
+            # there and insert the heading above it, leaving the line intact.
+            index = _line_index_of(
+                lines, title, used=used, start=cursor, opens_line=True,
+            )
+            promote = False
+        if index < 0:
+            flags.append(f"topic {title!r} was not found verbatim in the source")
+            continue
+        used.add(index)
+        if promote:
+            topic_lines[index] = title
+        else:
+            topic_above[index] = title
+        cursor = index + 1
+
+    # 2. Every other level-1 heading keeps its words without the structural
+    #    weight, so it cannot open a topic the outline did not decide.
+    for index, line in enumerate(lines):
+        if index in topic_lines:
+            lines[index] = _markdown_heading(1, topic_lines[index])
+            continue
+        stripped = line.strip()
+        if _MMD_HEADING_RE.match(stripped):
+            words = _MMD_HEADING_RE.sub("", stripped).strip()
+            lines[index] = f"**{words}**" if words else ""
+
+    # 3. Task cues. A task block carries no marker in a converter's MMD, and
+    #    the deterministic parser finds tasks by their cue heading, so each
+    #    task the reader identified gets one at the sub-level that does not
+    #    mint a topic.
+    blocks = [
+        block
+        for page in (page_acsd or {}).get("pages") or []
+        if isinstance(page, dict)
+        for block in page.get("blocks") or []
+        if isinstance(block, dict) and block.get("kind") == "task"
+    ]
+    insertions: dict[int, str] = {}
+    cue_used: set[int] = set()
+    for block in blocks:
+        body = str(block.get("text") or "").strip()
+        first = next((part for part in body.splitlines() if part.strip()), "")
+        index = _line_index_of(lines, first[:120], used=cue_used)
+        if index < 0:
+            flags.append("a task block was not found verbatim in the source")
+            continue
+        cue_used.add(index)
+        insertions[index] = _markdown_heading(
+            _TASK_CUE_HEADING_LEVEL,
+            _canonical_task_heading(block.get("source_label")),
+        )
+
+    out: list[str] = []
+    for index, line in enumerate(lines):
+        if index in topic_above:
+            out.append(_markdown_heading(1, topic_above[index]))
+            out.append("")
+        if index in insertions:
+            out.append(insertions[index])
+            out.append("")
+        out.append(line)
+    rendered = "\n".join(out)
+    if not rendered.endswith("\n"):
+        rendered += "\n"
+    return rendered, flags

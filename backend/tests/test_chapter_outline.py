@@ -1250,3 +1250,94 @@ def test_the_reader_stamp_never_reaches_the_semantic_source():
     from app.services import canonical_source_phase3 as phase3
 
     assert "source_reader" in phase3._MACHINE_METADATA_KEYS
+
+
+def _mathpix_style_mmd() -> str:
+    """A converter MMD: images as links, no task cues, run-in topic leads."""
+    return (
+        "# 1 Three-Dimensional Shapes\n\n"
+        "![](https://cdn.mathpix.com/cropped/abc-1.jpg?width=379)\n\n"
+        "# Understand\n\n"
+        "Dimensions A point has no dimension at all.\n\n"
+        "![](https://cdn.mathpix.com/cropped/abc-1.jpg?width=500)\n\n"
+        "(1) Select the correct option. "
+        "(i) What shape will be formed if carrom pieces are "
+        "placed one on top of the other? A) Cuboid B) Cylinder "
+        "C) Cone D) Cube "
+        "(ii) Which of the following shapes is not "
+        "three-dimensional? A) square B) Sphere C) Cylinder D) Cone\n"
+    )
+
+
+def test_outline_transfer_never_touches_the_converter_images():
+    """The whole point: Mathpix's cropped URLs stay exactly where they are."""
+    page_acsd = _page_acsd()
+    outline, _flags = fallback._normalize_chapter_outline(page_acsd, _candidate())
+    source = _mathpix_style_mmd()
+
+    out, _flags2 = fallback.transfer_outline_to_mmd(source, outline, page_acsd)
+
+    assert out.count("cdn.mathpix") == source.count("cdn.mathpix")
+    for url in ("abc-1.jpg?width=379", "abc-1.jpg?width=500"):
+        assert url in out
+
+
+def test_outline_transfer_gives_a_converter_source_its_task_cues():
+    # Without a cue the deterministic parser finds no task at all; that is
+    # how a Mathpix chapter arrives with four questions instead of thirty.
+    from app.services import canonical_source_phase2 as phase2
+
+    page_acsd = _page_acsd()
+    outline, _flags = fallback._normalize_chapter_outline(page_acsd, _candidate())
+    source = _mathpix_style_mmd()
+
+    before = phase2.compile_phase2_source(
+        source, source_filename="m.mmd", consumer_module="build_concepts",
+    ).canonical
+    out, _flags2 = fallback.transfer_outline_to_mmd(source, outline, page_acsd)
+    after = phase2.compile_phase2_source(
+        out, source_filename="m.mmd", consumer_module="build_concepts",
+    ).canonical
+
+    assert len(after["tasks"]) > len(before["tasks"])
+
+
+def test_outline_transfer_is_a_no_op_without_an_outline():
+    source = _mathpix_style_mmd()
+
+    assert fallback.transfer_outline_to_mmd(source, None) == (source, [])
+    assert fallback.transfer_outline_to_mmd(source, {}) == (source, [])
+
+
+def test_outline_transfer_flags_what_it_could_not_locate():
+    page_acsd = _page_acsd()
+    candidate = _candidate()
+    candidate["topics"][0]["title"] = "A Topic This Source Never Prints"
+    outline, _flags = fallback._normalize_chapter_outline(page_acsd, candidate)
+
+    _out, flags = fallback.transfer_outline_to_mmd(
+        _mathpix_style_mmd(), outline, page_acsd)
+
+    assert any("not found verbatim" in flag for flag in flags)
+
+
+def test_the_gpt_reader_is_the_default_conversion_path():
+    """Mathpix is archived: only this reader applies the chapter outline.
+
+    A Mathpix conversion arrives with no topics and almost no tasks, so the
+    reader has to be the default rather than a fallback.
+    """
+    import os
+
+    previous = os.environ.pop("AEGIS_GPT_PDF_ACSD_FALLBACK_FORCE", None)
+    try:
+        assert fallback._forced() is True
+    finally:
+        if previous is not None:
+            os.environ["AEGIS_GPT_PDF_ACSD_FALLBACK_FORCE"] = previous
+
+
+def test_mathpix_can_be_put_back_in_front(monkeypatch):
+    monkeypatch.setenv("AEGIS_GPT_PDF_ACSD_FALLBACK_FORCE", "0")
+
+    assert fallback._forced() is False
