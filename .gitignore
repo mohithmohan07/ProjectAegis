@@ -57,3 +57,8 @@ backend/aegis_pipeline/create_workbooks/plan_cache/
 # data/bulk_import_database.xlsx IS committed — it is the database fixture.
 # Syllabus structure workbooks under backend/data/syllabus/*.xlsx SHOULD be
 # committed so units/chapters preload on deploy (not runtime-generated).
+
+# Chapter-reading cache (hash-named model output). The one fixture committed
+# by #203 is already tracked, and tracked files are never affected by ignore
+# rules, so it stays in the repo.
+backend/data/chapter_reading/
