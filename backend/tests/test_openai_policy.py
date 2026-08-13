@@ -394,7 +394,11 @@ def test_all_active_runtime_calls_declare_a_known_purpose():
     # 43 until the canonicalization compaction retry was removed: it merged
     # concepts to hit a row count rather than because the source said they
     # were one idea.
-    assert len(generation_calls) == 42
+    # 44 with the invalid-inventory-row adjudicator and its independent
+    # critic: deciding whether a rejected row is a mangled question or a
+    # section banner is a judgment about the source, so it is made by the
+    # model rather than by a rule about the row's shape.
+    assert len(generation_calls) == 44
     generation_purposes = [
         ast.literal_eval(keyword.value)
         for node in generation_calls

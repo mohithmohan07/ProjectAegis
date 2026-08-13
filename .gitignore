@@ -54,3 +54,10 @@ backend/aegis_pipeline/create_workbooks/plan_cache/
 # data/bulk_import_database.xlsx IS committed — it is the database fixture.
 # Syllabus structure workbooks under backend/data/syllabus/*.xlsx SHOULD be
 # committed so units/chapters preload on deploy (not runtime-generated).
+
+# Runtime artifacts a live generation writes (derived state, never source).
+# The committed chapter-reading fixture from #203 stays tracked: ignore rules
+# never apply to already-tracked files.
+backend/aegis.db-*
+backend/data/pdf-acsd-cache/
+backend/data/chapter_reading/
