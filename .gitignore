@@ -32,6 +32,7 @@ google-drive-credentials.json
 
 # Aegis runtime
 backend/aegis.db
+backend/aegis.db-*
 backend/aegis_test.db
 backend/aegis_test.db-*
 aegis_test_data_*/
@@ -40,6 +41,8 @@ pytest-of-root/
 backend/pytest-of-root/
 backend/data/aegis.db*
 backend/data/uploads/
+# Verified page batches from the GPT PDF-to-ACSD reader, keyed by content.
+backend/data/pdf-acsd-cache/
 # The append-only generation output is runtime state, not source.
 backend/data/bulk_import_output.xlsx
 *.aegis-checkpoint.json
