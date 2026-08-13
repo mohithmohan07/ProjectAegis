@@ -61,3 +61,4 @@ backend/aegis_pipeline/create_workbooks/plan_cache/
 backend/aegis.db-*
 backend/data/pdf-acsd-cache/
 backend/data/chapter_reading/
+backend/data/question_polishing/
