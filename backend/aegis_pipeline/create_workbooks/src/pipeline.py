@@ -1,4 +1,4 @@
-"""End-to-end pipeline: Mathpix MMD → GPT plan → GPT build → refine → render → validate."""
+"""End-to-end pipeline: PDF text → GPT plan → GPT build → refine → render → validate."""
 from __future__ import annotations
 
 import sys
@@ -13,8 +13,8 @@ if str(_SRC) not in sys.path:
 from config import DEFAULT_CONFIG, MMD_CACHE_DIR, PLAN_CACHE_DIR, OUTPUT_DIR
 from coverage import audit_plan_vs_build
 from document import WorkbookDocument
+from extract import PDFExtractor
 from gpt_writer import GPTWriter, TokenBudgetExceeded
-from mathpix import MathpixClient
 from refiner import Refiner
 from validate import WorkbookValidator
 
@@ -29,10 +29,13 @@ def run(config: dict) -> dict:
     messages.append(f"Title: {cfg['chapter_title']}")
     messages.append(f"Model: {cfg['openai_model']}")
 
-    # --- Mathpix: PDF → MMD (cached) ----------------------------------
-    mathpix = MathpixClient(cache_dir=cfg["mmd_cache_dir"])
-    mmd = mathpix.convert_to_mmd(cfg["source_pdf"])
-    messages.append(f"MMD: {len(mmd):,} chars (cached at {cfg['mmd_cache_dir']})")
+    # --- Source text: PDF → text ---------------------------------------
+    # This used to be a third-party OCR conversion to MMD, which preserved
+    # equations and tables better than a text layer does. That converter is
+    # gone; the GPT pass now reads the same PyMuPDF text layer the dry path
+    # has always used, so maths-heavy chapters land with plainer source.
+    source_text = PDFExtractor().extract(str(cfg["source_pdf"])).full_text
+    messages.append(f"Source text: {len(source_text):,} chars (PDF text layer)")
 
     # --- GPT two-pass ---------------------------------------------------
     writer = GPTWriter(cfg)
@@ -43,7 +46,7 @@ def run(config: dict) -> dict:
     raw_dump_path = Path(cfg["plan_cache_dir"]) / f"{Path(cfg['source_pdf']).stem}.build.raw.json"
     try:
         chapter, gpt_msg = writer.write(
-            mmd,
+            source_text,
             {
                 "chapter_number": cfg["chapter_number"],
                 "chapter_title": cfg["chapter_title"],

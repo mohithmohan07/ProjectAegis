@@ -1,22 +1,23 @@
 """Phase 3.6 automatic source-critical turnover to verified GPT PDF ACSD.
 
 A live Electricity acceptance run exposed a gap between two otherwise strict
-source lanes.  Phase 2 correctly blocked generation when Mathpix-derived ACSD
-contained duplicate task identities, malformed public KaTeX, or unresolved
-Figure references.  Phase 2.2, however, only adjudicated three bounded heading /
-local-ownership issue codes, while the full GPT PDF-to-ACSD fallback was invoked
-only after a broad conversion-quality failure.  A PDF with a small number of
-serious source defects could therefore be too broken to generate but not broken
-enough to enter the repair lane.
+source lanes.  Phase 2 correctly blocked generation when compiled ACSD contained
+duplicate task identities, malformed public KaTeX, or unresolved Figure
+references, but Phase 2.2 only adjudicated three bounded heading /
+local-ownership issue codes.  A PDF with a small number of serious source
+defects could therefore be too broken to generate but not broken enough to
+enter the repair lane.
 
-This contract closes that gap in two places:
+This contract closes that gap at generation/resume-time: if bounded Phase 2.2
+adjudication still leaves any source-critical issue, Aegis rebuilds the
+canonical source from the original PDF, clears only source-dependent generation
+state, validates the replacement, and continues the same run without requiring
+re-upload or manual restart.
 
-* conversion-time: any non-Phase-2.2-adjudicable source-critical issue promotes
-  the PDF to the existing full, independently verified GPT PDF-to-ACSD fallback;
-* generation/resume-time: if bounded Phase 2.2 adjudication still leaves any
-  source-critical issue, Aegis rebuilds the canonical source from the original
-  PDF, clears only source-dependent generation state, validates the replacement,
-  and continues the same run without requiring re-upload or manual restart.
+It once closed the same gap a second time at conversion-time, by promoting a
+defective conversion into this lane.  That half is gone with the converter it
+judged: the GPT reader is the only converter now, so conversion-time has one
+path and nothing to promote.
 
 The replacement remains evidence-bound.  GPT may reconstruct content visible on
 the original pages and repair structure/ownership, but the existing deterministic
@@ -36,7 +37,6 @@ from typing import Any, Callable
 
 from . import canonical_source
 from . import canonical_source_phase2 as phase2
-from . import canonical_source_phase22 as phase22
 from . import canonical_source_phase221_fallback as fallback
 from . import progress
 
@@ -47,7 +47,6 @@ _ENABLED_ENV = "AEGIS_SOURCE_CRITICAL_TURNOVER_ENABLED"
 
 
 PrepareProvider = Callable[[Any, Any], dict[str, Any]]
-QualityProvider = Callable[..., dict[str, Any]]
 
 
 def _enabled() -> bool:
@@ -57,15 +56,6 @@ def _enabled() -> bool:
         "no",
         "off",
     }
-
-
-def _issue_rows(report: dict[str, Any] | None) -> list[dict[str, Any]]:
-    """Return the Phase 2 blocking issue ledger from one source report."""
-    report = report if isinstance(report, dict) else {}
-    rows = report.get("phase2_issues")
-    if not isinstance(rows, list):
-        rows = []
-    return [copy.deepcopy(row) for row in rows if isinstance(row, dict)]
 
 
 def _issue_codes(issues: list[dict[str, Any]]) -> list[str]:
@@ -82,62 +72,6 @@ def _issue_codes(issues: list[dict[str, Any]]) -> list[str]:
 def _turnover_reason(issues: list[dict[str, Any]]) -> str:
     codes = _issue_codes(issues)
     return "phase36_source_critical_turnover:" + ",".join(codes)
-
-
-def _non_adjudicable_issues(
-    report: dict[str, Any] | None,
-) -> list[dict[str, Any]]:
-    """Issues that bounded Phase 2.2 cannot currently repair by packet."""
-    return [
-        row
-        for row in _issue_rows(report)
-        if str(row.get("code") or "") not in phase22.ELIGIBLE_ISSUE_CODES
-    ]
-
-
-def _assess_quality_with_source_turnover(
-    original: QualityProvider,
-    mmd_text: str,
-    source_path: Path,
-    *,
-    report: dict[str, Any] | None = None,
-    hard_failure: str = "",
-) -> dict[str, Any]:
-    """Promote any non-adjudicable PDF source defect to full reconstruction."""
-    result = original(
-        mmd_text,
-        source_path,
-        report=report,
-        hard_failure=hard_failure,
-    )
-    result = copy.deepcopy(result if isinstance(result, dict) else {})
-    path = Path(source_path)
-    if (
-        not _enabled()
-        or not fallback._enabled()
-        or path.suffix.lower() != ".pdf"
-        or not isinstance(report, dict)
-    ):
-        return result
-
-    unresolved = _non_adjudicable_issues(report)
-    if not unresolved:
-        return result
-
-    reason = _turnover_reason(unresolved)
-    reasons = [str(value) for value in result.get("reasons") or [] if str(value)]
-    if reason not in reasons:
-        reasons.append(reason)
-    result.update(
-        {
-            "eligible": True,
-            "use_fallback": True,
-            "reasons": reasons,
-            "source_critical_turnover": True,
-            "source_critical_issue_codes": _issue_codes(unresolved),
-        }
-    )
-    return result
 
 
 def _load_source_state(job: Any) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
@@ -265,7 +199,6 @@ def _replace_job_source_from_pdf(
         job_id=int(job.id),
         artifact_dir=artifact_dir,
         fallback_reason=[_turnover_reason(issues)],
-        mathpix_mmd=previous_mmd,
     )
     replacement_mmd = str((bundle or {}).get("mmd_text") or "")
     canonical = (bundle or {}).get("canonical")
@@ -281,7 +214,7 @@ def _replace_job_source_from_pdf(
     job.generation_checkpoint = {}
     job.status = "converted"
     job.detail = (
-        "Automatically replaced the defective Mathpix canonical source with a "
+        "Automatically replaced the defective canonical source with a "
         "verified GPT PDF-to-ACSD reconstruction; generation continues from the "
         "new source contract."
     )
@@ -388,28 +321,10 @@ def install() -> None:
     if getattr(phase2, "_PHASE36_SOURCE_TURNOVER_VERSION", 0) >= _CONTRACT_VERSION:
         return
 
-    original_quality = fallback.assess_mathpix_quality
     original_prepare = phase2.prepare_job_context
     original_manifest = phase2.artifact_manifest
-    fallback._PHASE36_ORIGINAL_ASSESS_MATHPIX_QUALITY = original_quality
     phase2._PHASE36_ORIGINAL_PREPARE_JOB_CONTEXT = original_prepare
     phase2._PHASE36_ORIGINAL_ARTIFACT_MANIFEST = original_manifest
-
-    @wraps(original_quality)
-    def assess_mathpix_quality(
-        mmd_text: str,
-        source_path: Path,
-        *,
-        report: dict[str, Any] | None = None,
-        hard_failure: str = "",
-    ) -> dict[str, Any]:
-        return _assess_quality_with_source_turnover(
-            fallback._PHASE36_ORIGINAL_ASSESS_MATHPIX_QUALITY,
-            mmd_text,
-            source_path,
-            report=report,
-            hard_failure=hard_failure,
-        )
 
     @wraps(original_prepare)
     def prepare_job_context(db: Any, job: Any) -> dict[str, Any]:
@@ -427,7 +342,6 @@ def install() -> None:
             manifest["source_critical_turnover"] = marker
         return manifest
 
-    fallback.assess_mathpix_quality = assess_mathpix_quality
     phase2.prepare_job_context = prepare_job_context
     phase2.artifact_manifest = artifact_manifest
     phase2._PHASE36_SOURCE_TURNOVER_VERSION = _CONTRACT_VERSION

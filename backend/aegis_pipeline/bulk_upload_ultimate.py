@@ -2,16 +2,13 @@
 Bulk Upload – GPT-first Backend (Option C: PDF or TXT)
 
 Command-line usage:
-    python BulkUploadUltimate.py questions.pdf solutions.pdf
     python BulkUploadUltimate.py questions.txt solutions.txt
-    python BulkUploadUltimate.py questions.pdf solutions.txt
 
 - Accepts:
-    questions file  (PDF or TXT)
-    solutions file  (PDF or TXT)
+    questions file  (TXT)
+    solutions file  (TXT)
 
-- If PDF: uses Mathpix → text
-- If TXT: reads text directly
+- If TXT: reads text directly (PDF input is no longer supported)
 - Uses the configured Aegis model (AEGIS_OPENAI_MODEL) to:
     - Parse & pair questions and solutions
     - Extract marks
@@ -28,14 +25,10 @@ Command-line usage:
 import os
 import sys
 import json
-import time
 from typing import List, Dict, Any, Optional
 
-import requests
 import pandas as pd
 import re
-import io
-import zipfile
 
 from openai import OpenAI
 
@@ -44,8 +37,6 @@ from openai import OpenAI
 # --------------------------------------------------------------------------
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-MATHPIX_APP_ID = os.getenv("MATHPIX_APP_ID")
-MATHPIX_APP_KEY = os.getenv("MATHPIX_APP_KEY")
 
 if not OPENAI_API_KEY:
     raise RuntimeError("OPENAI_API_KEY not set in environment")
@@ -251,165 +242,13 @@ def strip_katex_delimiters(text: Any) -> Any:
     text = text.replace("\\[", "").replace("\\]", "")
     return text
 
-# --------------------------------------------------------------------------
-# Mathpix OCR Helpers (original, for file-like objects – UNUSED IN CLI)
-# --------------------------------------------------------------------------
-
-def poll_mathpix_pdf_status(pdf_id: str, headers: Dict[str, str],
-                            poll_interval: int = 10,
-                            max_polls: int = 30) -> Optional[Dict[str, Any]]:
-    """
-    Poll Mathpix for PDF conversion status.
-    Returns status JSON when completed, or None if stuck/timed out.
-    """
-    url = f"https://api.mathpix.com/v3/pdf/{pdf_id}.json"
-    last_completed = 0
-    stuck_count = 0
-
-    for attempt in range(1, max_polls + 1):
-        resp = requests.get(url, headers=headers)
-        data = resp.json()
-
-        status = data.get("status")
-        if status == "completed":
-            return data
-
-        current_completed = data.get("num_pages_completed", 0)
-        if current_completed == last_completed:
-            stuck_count += 1
-            if stuck_count > 5:
-                # no progress for 5 polls → treat as stuck
-                return None
-        else:
-            stuck_count = 0
-            last_completed = current_completed
-
-        time.sleep(poll_interval)
-
-    return None
-
-
-def mathpix_pdf_to_text_filelike(file_storage) -> Optional[str]:
-    """
-    (Legacy) Uploads a PDF-like object to Mathpix and returns plaintext.
-    Not used in CLI; kept for future integration if needed.
-    """
-    if not MATHPIX_APP_ID or not MATHPIX_APP_KEY:
-        raise RuntimeError("Mathpix credentials not set in environment")
-
-    options = {
-        "conversion_formats": {"text": True},
-        "math_inline_delimiters": ["$", "$"],
-        "rm_spaces": True,
-    }
-
-    r = requests.post(
-        "https://api.mathpix.com/v3/pdf",
-        headers={
-            "app_id": MATHPIX_APP_ID,
-            "app_key": MATHPIX_APP_KEY,
-        },
-        data={"options_json": json.dumps(options)},
-        files={"file": (file_storage.filename, file_storage.stream,
-                        file_storage.mimetype)},
-    )
-
-    api_resp = r.json()
-    pdf_id = api_resp.get("pdf_id")
-    if not pdf_id:
-        return None
-
-    headers = {"app_id": MATHPIX_APP_ID, "app_key": MATHPIX_APP_KEY}
-    status_data = poll_mathpix_pdf_status(pdf_id, headers)
-    if not status_data:
-        return None
-
-    url = f"https://api.mathpix.com/v3/pdf/{pdf_id}.text"
-    response = requests.get(url, headers=headers)
-    mmd_text = response.text or ""
-
-    plain_text = mmd_text.replace("$$", "\n")
-    return plain_text.strip()
-
-
-# --------------------------------------------------------------------------
-# Mathpix OCR for CLI (path-based)
-# --------------------------------------------------------------------------
-
-def mathpix_pdf_to_text_path(path: str) -> str:
-    """
-    CLI version: PDF path → OCR via Mathpix → plain text.
-
-    We request 'tex.zip' (which your account supports), download the zip,
-    extract all .tex files, and concatenate them into a single text string.
-    """
-    if not MATHPIX_APP_ID or not MATHPIX_APP_KEY:
-        raise RuntimeError("Mathpix credentials not set in environment")
-
-    # Use tex.zip as conversion format (supported on your account)
-    options = {
-        "conversion_formats": {"tex.zip": True},
-        "rm_spaces": True,
-    }
-
-    with open(path, "rb") as f:
-        files = {
-            "file": (os.path.basename(path), f, "application/pdf")
-        }
-        r = requests.post(
-            "https://api.mathpix.com/v3/pdf",
-            headers={
-                "app_id": MATHPIX_APP_ID,
-                "app_key": MATHPIX_APP_KEY,
-            },
-            data={"options_json": json.dumps(options)},
-            files=files,
-        )
-
-    api_resp = r.json()
-    pdf_id = api_resp.get("pdf_id")
-    if not pdf_id:
-        raise RuntimeError(f"Mathpix did not return pdf_id. Response: {api_resp}")
-
-    headers = {"app_id": MATHPIX_APP_ID, "app_key": MATHPIX_APP_KEY}
-    status_data = poll_mathpix_pdf_status(pdf_id, headers)
-    if not status_data:
-        raise RuntimeError("Mathpix processing stuck or timed out")
-
-    # Fetch tex.zip and extract .tex files
-    url = f"https://api.mathpix.com/v3/pdf/{pdf_id}.tex.zip"
-    response = requests.get(url, headers=headers)
-    if response.status_code != 200:
-        raise RuntimeError(
-            f"Failed to download tex.zip from Mathpix: {response.status_code}, {response.text}"
-        )
-
-    # Read zip from bytes in memory
-    zip_bytes = io.BytesIO(response.content)
-    all_text_parts: List[str] = []
-
-    with zipfile.ZipFile(zip_bytes, "r") as zf:
-        for name in zf.namelist():
-            if name.lower().endswith(".tex"):
-                with zf.open(name) as tex_file:
-                    try:
-                        tex_content = tex_file.read().decode("utf-8", errors="ignore")
-                    except Exception:
-                        tex_content = tex_file.read().decode(errors="ignore")
-                    all_text_parts.append(tex_content)
-
-    if not all_text_parts:
-        raise RuntimeError("No .tex files found inside tex.zip from Mathpix")
-
-    # Join all .tex content into one string for GPT
-    plain_text = "\n\n".join(all_text_parts)
-    return plain_text.strip()
-
 def extract_text_from_path(path: str) -> str:
     """
-    Option C core for CLI:
-    - If PDF → Mathpix → text
-    - Else → assume text file, read directly
+    Option C core for CLI: read a text file directly.
+
+    PDF input used to be OCR'd by a third-party service. That service is gone
+    and this tool has no OCR of its own, so a PDF is rejected with the route
+    that still works rather than silently producing nothing.
     """
     if not path:
         raise ValueError("Empty path provided")
@@ -417,11 +256,10 @@ def extract_text_from_path(path: str) -> str:
     ext = os.path.splitext(path)[1].lower()
 
     if ext == ".pdf":
-        print(f"📘 OCR via Mathpix: {path}")
-        text = mathpix_pdf_to_text_path(path)
-        if not text:
-            raise RuntimeError(f"Failed to OCR PDF via Mathpix: {path}")
-        return text
+        raise RuntimeError(
+            f"PDF input is no longer supported ({path}). This tool has no OCR: "
+            "extract the text first and pass a .txt file."
+        )
 
     print(f"📄 Reading text directly: {path}")
     with open(path, "r", encoding="utf-8", errors="ignore") as f:
@@ -919,7 +757,7 @@ def build_excel_from_parsed(parsed: Dict[str, Any],
 def main():
     if len(sys.argv) != 3:
         print("Usage:")
-        print("  python BulkUploadUltimate.py <questions.pdf/txt> <solutions.pdf/txt>")
+        print("  python BulkUploadUltimate.py <questions.txt> <solutions.txt>")
         sys.exit(1)
 
     questions_path = sys.argv[1]

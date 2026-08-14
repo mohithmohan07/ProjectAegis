@@ -416,7 +416,6 @@ class Stats(BaseModel):
     sessions: int
     upload_jobs: int
     openai_live: bool
-    mathpix_live: bool
 
 
 # --------------------------------------------------------------------------- #

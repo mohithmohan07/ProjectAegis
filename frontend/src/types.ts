@@ -74,7 +74,6 @@ export interface Stats {
   sessions: number;
   upload_jobs: number;
   openai_live: boolean;
-  mathpix_live: boolean;
 }
 
 /**
@@ -328,7 +327,6 @@ export interface SourceArtifactManifest {
     batch_count?: number;
     asset_count?: number;
     verified_task_visual_relationships?: number;
-    mathpix_raw_preserved?: boolean;
   };
   status: "passed" | "passed_with_warnings" | "failed" | "unavailable" | string;
   ready_for_future_cutover: boolean;

@@ -1198,9 +1198,9 @@ def test_an_mmd_from_a_superseded_reader_is_stale():
     )
 
 
-def test_a_mathpix_source_is_never_called_stale():
+def test_a_source_we_did_not_render_is_never_called_stale():
     # It carries no stamp of ours, so our versioning says nothing about it.
-    assert fallback.stale_mmd_reader("# Chapter\n\nMathpix output.\n") == ""
+    assert fallback.stale_mmd_reader("# Chapter\n\nUploaded MMD.\n") == ""
     assert fallback.stale_mmd_reader("") == ""
 
 
@@ -1252,14 +1252,14 @@ def test_the_reader_stamp_never_reaches_the_semantic_source():
     assert "source_reader" in phase3._MACHINE_METADATA_KEYS
 
 
-def _mathpix_style_mmd() -> str:
+def _converter_style_mmd() -> str:
     """A converter MMD: images as links, no task cues, run-in topic leads."""
     return (
         "# 1 Three-Dimensional Shapes\n\n"
-        "![](https://cdn.mathpix.com/cropped/abc-1.jpg?width=379)\n\n"
+        "![](https://cdn.example.com/cropped/abc-1.jpg?width=379)\n\n"
         "# Understand\n\n"
         "Dimensions A point has no dimension at all.\n\n"
-        "![](https://cdn.mathpix.com/cropped/abc-1.jpg?width=500)\n\n"
+        "![](https://cdn.example.com/cropped/abc-1.jpg?width=500)\n\n"
         "(1) Select the correct option. "
         "(i) What shape will be formed if carrom pieces are "
         "placed one on top of the other? A) Cuboid B) Cylinder "
@@ -1270,26 +1270,26 @@ def _mathpix_style_mmd() -> str:
 
 
 def test_outline_transfer_never_touches_the_converter_images():
-    """The whole point: Mathpix's cropped URLs stay exactly where they are."""
+    """The whole point: the converter's cropped URLs stay exactly where they are."""
     page_acsd = _page_acsd()
     outline, _flags = fallback._normalize_chapter_outline(page_acsd, _candidate())
-    source = _mathpix_style_mmd()
+    source = _converter_style_mmd()
 
     out, _flags2 = fallback.transfer_outline_to_mmd(source, outline, page_acsd)
 
-    assert out.count("cdn.mathpix") == source.count("cdn.mathpix")
+    assert out.count("cdn.example") == source.count("cdn.example")
     for url in ("abc-1.jpg?width=379", "abc-1.jpg?width=500"):
         assert url in out
 
 
 def test_outline_transfer_gives_a_converter_source_its_task_cues():
     # Without a cue the deterministic parser finds no task at all; that is
-    # how a Mathpix chapter arrives with four questions instead of thirty.
+    # how such a chapter arrives with four questions instead of thirty.
     from app.services import canonical_source_phase2 as phase2
 
     page_acsd = _page_acsd()
     outline, _flags = fallback._normalize_chapter_outline(page_acsd, _candidate())
-    source = _mathpix_style_mmd()
+    source = _converter_style_mmd()
 
     before = phase2.compile_phase2_source(
         source, source_filename="m.mmd", consumer_module="build_concepts",
@@ -1303,7 +1303,7 @@ def test_outline_transfer_gives_a_converter_source_its_task_cues():
 
 
 def test_outline_transfer_is_a_no_op_without_an_outline():
-    source = _mathpix_style_mmd()
+    source = _converter_style_mmd()
 
     assert fallback.transfer_outline_to_mmd(source, None) == (source, [])
     assert fallback.transfer_outline_to_mmd(source, {}) == (source, [])
@@ -1316,28 +1316,17 @@ def test_outline_transfer_flags_what_it_could_not_locate():
     outline, _flags = fallback._normalize_chapter_outline(page_acsd, candidate)
 
     _out, flags = fallback.transfer_outline_to_mmd(
-        _mathpix_style_mmd(), outline, page_acsd)
+        _converter_style_mmd(), outline, page_acsd)
 
     assert any("not found verbatim" in flag for flag in flags)
 
 
-def test_the_gpt_reader_is_the_default_conversion_path():
-    """Mathpix is archived: only this reader applies the chapter outline.
+def test_the_gpt_reader_is_the_only_conversion_path():
+    """There is no switch left to put another converter in front.
 
-    A Mathpix conversion arrives with no topics and almost no tasks, so the
-    reader has to be the default rather than a fallback.
+    Only this reader applies the chapter outline, which is what gives a
+    chapter its topics and its questions, so a second converter could not be
+    reinstated without losing them.
     """
-    import os
-
-    previous = os.environ.pop("AEGIS_GPT_PDF_ACSD_FALLBACK_FORCE", None)
-    try:
-        assert fallback._forced() is True
-    finally:
-        if previous is not None:
-            os.environ["AEGIS_GPT_PDF_ACSD_FALLBACK_FORCE"] = previous
-
-
-def test_mathpix_can_be_put_back_in_front(monkeypatch):
-    monkeypatch.setenv("AEGIS_GPT_PDF_ACSD_FALLBACK_FORCE", "0")
-
-    assert fallback._forced() is False
+    assert not hasattr(fallback, "_forced")
+    assert not hasattr(fallback, "assess_mathpix_quality")

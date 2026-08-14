@@ -50,7 +50,7 @@ _CONCISE_TOPIC_NOTE = (
 
 class GPTWriter:
     # Input/output budgets — use model maximum so textbook content is not truncated.
-    MAX_MMD_CHARS = 500_000          # full Mathpix MMD sent to planner + builder
+    MAX_MMD_CHARS = 500_000          # full chapter text sent to planner + builder
     _MAX_OUT = int(os.getenv("AEGIS_OPENAI_MAX_OUTPUT_TOKENS", "128000"))
     MAX_PLANNER_OUTPUT_TOKENS = _MAX_OUT
     MAX_BUILDER_OUTPUT_TOKENS = _MAX_OUT

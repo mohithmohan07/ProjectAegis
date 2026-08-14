@@ -467,7 +467,7 @@ export default function DocumentUpload({
           <button disabled={controlsDisabled} onClick={convert}>
             Convert to MMD
           </button>
-          <span className="muted">Runs Mathpix/normalization — watch the Console for progress.</span>
+          <span className="muted">Runs conversion/normalization — watch the Console for progress.</span>
         </div>
       )}
 
@@ -616,20 +616,20 @@ function SourceArtifactsCard({
         ? "source review required"
         : "";
   const reconstructionBadge = reconstructionVerified
-    ? "GPT PDF-to-ACSD fallback"
+    ? "GPT PDF-to-ACSD"
     : reconstructionReviewRequired
       ? "GPT PDF-to-ACSD review required"
       : "";
   const description = reconstructionVerified
-    ? `Mathpix was unavailable or objectively unusable, so Aegis extracted ${
+    ? `Aegis read ${
       reconstruction?.page_count ?? 0
     } PDF page(s) into strict page/block JSON, independently verified the batches, `
       + "materialized source-owned visual crops, and compiled the result through the "
       + "same deterministic ACSD gates. The original PDF remains the audit authority."
     : reconstructionReviewRequired
-      ? "Mathpix failed the objective source-quality gate, and GPT PDF-to-ACSD "
-        + "could not verify a complete replacement. The original PDF and Mathpix "
-        + "audit artifacts remain preserved, and concept generation is blocked."
+      ? "GPT PDF-to-ACSD could not verify a complete reading of this PDF. The "
+        + "original PDF and its audit artifacts remain preserved, and concept "
+        + "generation is blocked."
       : phase22 && adjudicationStatus === "pending"
       ? "The deterministic ACSD gate found bounded source gaps. Generate will inspect "
         + "only the relevant original-document pages, accept verbatim visible evidence, "

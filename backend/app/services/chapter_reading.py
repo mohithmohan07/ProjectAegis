@@ -2,7 +2,7 @@
 
 Step 1 of ``docs/build-concepts-manual-process.md``. Textbooks vary too much
 across boards, subjects and grades for pattern-matching to read them, so the
-raw Mathpix MMD is handed to the model first: it classifies every block
+raw converted MMD is handed to the model first: it classifies every block
 (prose / heading / figure / activity / info hub / question / furniture),
 strips layout furniture, and returns a normalized MMD the deterministic
 compiler can trust. Page position survives only as provenance (Rule 4a).
@@ -109,8 +109,8 @@ def _sha256_text(value: str) -> str:
 def _image_tags(text: str) -> list[str]:
     """Every ``![...](...)`` occurrence — the tags the reading must preserve.
 
-    Bookkeeping, not parsing: the tags were minted by Mathpix with an exact
-    shape, and the census check only asks that each one survives verbatim.
+    Bookkeeping, not parsing: the tags were minted by the converter with an
+    exact shape, and the census check only asks that each survives verbatim.
     """
     return re.findall(r"!\[[^\]]*\]\([^)]*\)", str(text or ""))
 

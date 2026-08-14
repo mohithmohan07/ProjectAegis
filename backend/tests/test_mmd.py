@@ -1,8 +1,9 @@
-"""MMD conversion: image vs PDF routing + graceful conversion errors.
+"""MMD normalization: text decoding + refusal of formats with no converter.
 
-Live Mathpix is never hit in tests; the conversion functions are monkeypatched.
-These tests pin the routing (images -> /v3/text path, PDFs -> vendored client)
-and that a conversion failure surfaces as a clean 400, not a 500.
+Aegis has no OCR service any more. PDFs reach canonical source through the GPT
+PDF-to-ACSD reader, which intercepts ``uploads.convert_job`` and never calls
+this module; images have no converter at all. Both must fail as a clean 400
+naming the route that still works, not as a 500 or a silent empty document.
 """
 import io
 
@@ -11,7 +12,7 @@ from pathlib import Path
 from app.services import generation as g, mmd
 
 
-def test_direct_parser_normalizes_non_lf_mathpix_headings():
+def test_direct_parser_normalizes_non_lf_latex_headings():
     lines = [
         r"\section*{5.1 Arithmetic Progressions}",
         "",
@@ -47,7 +48,7 @@ def test_text_upload_decodes_utf8_independently_of_windows_locale(
         )
     )
 
-    out = mmd.to_mmd(source, live=False)
+    out = mmd.to_mmd(source)
 
     assert "Frédéric Sorrieu’s vision — ₹500" in out
     assert "FrÃ" not in out
@@ -60,10 +61,10 @@ def test_markdown_upload_accepts_utf8_bom(tmp_path: Path):
         b"\xef\xbb\xbf" + "Électricité — circuits".encode("utf-8")
     )
 
-    out = mmd.to_mmd(source, live=False)
+    out = mmd.to_mmd(source)
 
     assert "Électricité — circuits" in out
-    assert "\ufeff" not in out
+    assert "﻿" not in out
 
 
 def test_markdown_upload_rejects_mixed_or_invalid_utf8(tmp_path: Path):
@@ -71,7 +72,7 @@ def test_markdown_upload_rejects_mixed_or_invalid_utf8(tmp_path: Path):
     source.write_bytes("Mostly valid Frédéric ".encode("utf-8") + b"\xff")
 
     try:
-        mmd.to_mmd(source, live=False)
+        mmd.to_mmd(source)
         assert False, "expected ConversionError"
     except mmd.ConversionError as exc:
         assert "not valid UTF-8" in str(exc)
@@ -82,107 +83,62 @@ def test_text_upload_falls_back_to_legacy_cp1252(tmp_path: Path):
     source = tmp_path / "legacy.txt"
     source.write_bytes("Café costs £5.".encode("cp1252"))
 
-    out = mmd.to_mmd(source, live=False)
+    out = mmd.to_mmd(source)
 
     assert "Café costs £5." in out
 
 
-def test_dry_image_does_not_call_mathpix(tmp_path: Path):
-    img = tmp_path / "scan.jpg"
-    img.write_bytes(b"\xff\xd8\xff\xe0not-a-real-jpeg")
-    # Dry mode: returns the placeholder stub, never touches Mathpix.
-    out = mmd.to_mmd(img, live=False)
-    assert out.startswith("# scan")
-    assert "binary" in out.lower()
+def test_pdf_here_names_the_reader_instead_of_stubbing_the_chapter(
+    tmp_path: Path,
+):
+    """A PDF this module sees belongs to a lane the reader does not serve.
 
-
-def test_live_routes_image_to_text_endpoint(tmp_path: Path, monkeypatch):
-    img = tmp_path / "hand.png"
-    img.write_bytes(b"\x89PNGfake")
-    called = {}
-
-    def fake_image(path: Path) -> str:
-        called["image"] = path
-        return "# hand\n\nWhat is $2+2$ ?\n"
-
-    def fake_pdf(path: Path) -> str:  # must NOT be called for an image
-        called["pdf"] = path
-        return "nope"
-
-    monkeypatch.setattr(mmd, "_mathpix_image_to_mmd", fake_image)
-    monkeypatch.setattr(mmd, "_live_pdf_to_mmd", fake_pdf)
-
-    out = mmd.to_mmd(img, live=True)
-    assert out == "# hand\n\nWhat is $2+2$ ?\n"
-    assert "image" in called and "pdf" not in called
-
-
-def test_live_routes_pdf_to_vendored_client(tmp_path: Path, monkeypatch):
+    Returning a placeholder body would look like a successful conversion and
+    poison a checkpoint, so it has to be an error that names Build Concepts.
+    """
     pdf = tmp_path / "chapter.pdf"
     pdf.write_bytes(b"%PDF-1.4 fake")
-    called = {}
 
-    def fake_image(path: Path) -> str:
-        called["image"] = path
-        return "img"
-
-    def fake_pdf(path: Path) -> str:
-        called["pdf"] = path
-        return "# pdf\n\nbody\n"
-
-    monkeypatch.setattr(mmd, "_mathpix_image_to_mmd", fake_image)
-    monkeypatch.setattr(mmd, "_live_pdf_to_mmd", fake_pdf)
-
-    out = mmd.to_mmd(pdf, live=True)
-    assert out == "# pdf\n\nbody\n"
-    assert "pdf" in called and "image" not in called
-
-
-def test_live_conversion_failure_becomes_conversion_error(tmp_path: Path, monkeypatch):
-    img = tmp_path / "bad.jpg"
-    img.write_bytes(b"\xff\xd8\xff\xe0")
-
-    def boom(path: Path) -> str:
-        raise RuntimeError("Invalid content type: image/jpeg")
-
-    monkeypatch.setattr(mmd, "_mathpix_image_to_mmd", boom)
     try:
-        mmd.to_mmd(img, live=True)
+        mmd.to_mmd(pdf)
         assert False, "expected ConversionError"
-    except mmd.ConversionError as e:
-        assert isinstance(e, ValueError)  # so the API returns 400
-        assert "bad.jpg" in str(e)
+    except mmd.ConversionError as exc:
+        assert isinstance(exc, ValueError)  # so the API returns 400
+        assert "chapter.pdf" in str(exc)
+        assert "Build Concepts" in str(exc)
 
 
-def _force_live_image_failure(monkeypatch):
-    monkeypatch.setattr(mmd.config, "use_live_mmd", lambda: True)
+def test_image_upload_is_refused_because_there_is_no_ocr(tmp_path: Path):
+    img = tmp_path / "scan.jpg"
+    img.write_bytes(b"\xff\xd8\xff\xe0not-a-real-jpeg")
 
-    def boom(path: Path) -> str:
-        raise mmd.ConversionError("Mathpix image OCR failed: unreadable")
+    try:
+        mmd.to_mmd(img)
+        assert False, "expected ConversionError"
+    except mmd.ConversionError as exc:
+        assert isinstance(exc, ValueError)
+        assert "scan.jpg" in str(exc)
+        assert "OCR" in str(exc)
 
-    monkeypatch.setattr(mmd, "_mathpix_image_to_mmd", boom)
 
-
-def test_build_assessments_image_convert_failure_streams_error(client, monkeypatch):
+def test_build_assessments_image_convert_failure_streams_error(client):
     from tests.conftest import stream_error_message
-    _force_live_image_failure(monkeypatch)
     files = {"file": ("images.jpg", io.BytesIO(b"\xff\xd8\xff\xe0"), "image/jpeg")}
     # Upload only stages the file (no conversion, so no failure yet).
     job = client.post(
         "/build-assessments/uploads?upload_type=handwritten", files=files).json()
     assert job["status"] == "uploaded"
-    # Conversion is the explicit step where Mathpix is hit; the error streams back.
+    # Conversion is the explicit step that has no converter; it streams back.
     msg = stream_error_message(
         client.post(f"/build-assessments/uploads/{job['id']}/convert"))
-    assert msg and "Mathpix" in msg
+    assert msg and "OCR" in msg
 
 
-def test_build_concepts_image_convert_failure_streams_error(client, monkeypatch):
+def test_build_concepts_image_convert_failure_streams_error(client):
     from tests.conftest import stream_error_message
-    _force_live_image_failure(monkeypatch)
     files = {"file": ("notes.png", io.BytesIO(b"\x89PNG"), "image/png")}
     job = client.post("/build-concepts/post-learning/uploads", files=files).json()
     assert job["status"] == "uploaded"
     msg = stream_error_message(
         client.post(f"/build-concepts/uploads/{job['id']}/convert"))
-    assert msg and "Mathpix" in msg
+    assert msg and "OCR" in msg

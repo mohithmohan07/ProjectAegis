@@ -1,4 +1,4 @@
-"""Install Phase 2.2.1 protocol hardening and GPT PDF-to-ACSD fallback."""
+"""Install Phase 2.2.1 protocol hardening and the GPT PDF-to-ACSD reader."""
 from __future__ import annotations
 
 import copy
@@ -36,24 +36,23 @@ def install() -> None:
                 )
         return manifest
 
-    def _run_fallback(
+    def _run_reader(
         db: Any,
         job: Any,
         *,
         reason: list[str],
-        mathpix_mmd: str,
     ) -> dict[str, Any]:
         if not config.use_live_generation():
             raise mmd.ConversionError(
-                "GPT PDF-to-ACSD fallback requires OPENAI_API_KEY"
+                "GPT PDF-to-ACSD conversion requires OPENAI_API_KEY"
             )
         path = uploads.upload_file_path(job)
         artifact_dir = uploads.source_artifact_directory(int(job.id))
         progress.log(
-            "Switching to the GPT PDF-to-ACSD fallback: OpenAI will return "
-            "strict page/block JSON, an independent pass will verify it, and "
-            "Aegis will render the accepted structure deterministically.",
-            level="warning",
+            "Reading the PDF with GPT PDF-to-ACSD: OpenAI will return strict "
+            "page/block JSON, an independent pass will verify it, and Aegis "
+            "will render the accepted structure deterministically.",
+            level="info",
         )
         persistence_key = f"upload-job:{int(job.id)}"
         persisted = (
@@ -70,7 +69,6 @@ def install() -> None:
                         job_id=int(job.id),
                         artifact_dir=artifact_dir,
                         fallback_reason=reason,
-                        mathpix_mmd=mathpix_mmd,
                     )
                 finally:
                     summary = openai_usage.cumulative_summary(
@@ -87,7 +85,6 @@ def install() -> None:
                             job_id=int(job.id),
                             artifact_dir=artifact_dir,
                             fallback_reason=reason,
-                            mathpix_mmd=mathpix_mmd,
                         )
                     finally:
                         summary = openai_usage.cumulative_summary(
@@ -103,7 +100,7 @@ def install() -> None:
             progress.usage(summary)
             raise
         if bundle is None:  # pragma: no cover - defensive contract guard
-            raise RuntimeError("GPT PDF-to-ACSD fallback returned no source bundle")
+            raise RuntimeError("GPT PDF-to-ACSD returned no source bundle")
         job.mmd_text = str(bundle["mmd_text"])
         job.question_inventory = {}
         job.generation_checkpoint = {}
@@ -112,7 +109,7 @@ def install() -> None:
         job.status = "converted"
         reconstruction = bundle["reconstruction"]
         job.detail = (
-            "Converted through verified GPT PDF-to-ACSD fallback "
+            "Converted through verified GPT PDF-to-ACSD "
             f"({reconstruction['page_count']} pages, "
             f"{reconstruction['asset_count']} visual assets)."
         )
@@ -121,7 +118,7 @@ def install() -> None:
         progress.usage(summary)
         progress.set_progress(1.0, label="Converted through GPT PDF-to-ACSD")
         progress.log(
-            "GPT PDF-to-ACSD fallback verified "
+            "GPT PDF-to-ACSD verified "
             f"{reconstruction['page_count']} page(s), materialized "
             f"{reconstruction['asset_count']} source visual(s), and compiled the "
             "result through every canonical-source gate.",
@@ -157,118 +154,17 @@ def install() -> None:
         if path.suffix.lower() != ".pdf" or not fallback._enabled():
             return original_convert(*args, **kwargs)
 
-        if fallback._forced():
-            # Mathpix is archived: the GPT reader is the conversion path, so
-            # the Mathpix call is skipped rather than made, billed, and then
-            # discarded. Only this reader applies the chapter outline, which
-            # is what gives a chapter its topics and its questions.
-            progress.log(
-                "Mathpix is archived for this deployment; converting through "
-                "the GPT PDF-to-ACSD reader, which applies the chapter "
-                "outline.",
-                level="info",
-            )
-            with uploads.exclusive_job_operation(int(job_id)):
-                current = uploads.get_job(
-                    db, int(job_id), owner_sub=owner_sub,
-                    module="build_concepts",
-                )
-                return _run_fallback(
-                    db, current, reason=["mathpix_archived"], mathpix_mmd="",
-                )
-
-        try:
-            result = original_convert(*args, **kwargs)
-        except (mmd.ConversionError, config.LiveRequiredError) as exc:
+        # The GPT reader is the only PDF converter. There is no second
+        # converter to try first, nothing to compare it against, and so no
+        # quality gate to choose between them. Only this reader applies the
+        # chapter outline, which is what gives a chapter its topics and its
+        # questions.
+        with uploads.exclusive_job_operation(int(job_id)):
             current = uploads.get_job(
-                db,
-                int(job_id),
-                owner_sub=owner_sub,
+                db, int(job_id), owner_sub=owner_sub,
                 module="build_concepts",
             )
-            quality = fallback.assess_mathpix_quality(
-                "", path, hard_failure=str(exc)
-            )
-            if not quality["use_fallback"]:
-                raise
-            try:
-                with uploads.exclusive_job_operation(int(job_id)):
-                    db.refresh(current)
-                    return _run_fallback(
-                        db,
-                        current,
-                        reason=list(quality["reasons"]),
-                        mathpix_mmd="",
-                    )
-            except Exception as fallback_exc:
-                raise mmd.ConversionError(
-                    f"Mathpix conversion failed ({exc}); GPT PDF-to-ACSD fallback "
-                    f"also failed ({fallback_exc})"
-                ) from fallback_exc
-
-        current = uploads.get_job(
-            db,
-            int(job_id),
-            owner_sub=owner_sub,
-            module="build_concepts",
-        )
-        report: dict[str, Any] = {}
-        report_path = (
-            uploads.source_artifact_directory(int(job_id))
-            / "source.source-report.json"
-        )
-        if report_path.exists():
-            try:
-                report = phase2._read_json(report_path)
-            except ValueError:
-                report = {}
-        quality = fallback.assess_mathpix_quality(
-            str(current.mmd_text or ""),
-            path,
-            report=report,
-        )
-        if not quality["use_fallback"]:
-            if isinstance(result, dict):
-                return {**result, "conversion_source": "mathpix"}
-            return result
-
-        mathpix_mmd = str(current.mmd_text or "")
-        progress.log(
-            "Mathpix returned MMD, but the objective source-quality gate marked "
-            "it unusable (" + ", ".join(quality["reasons"]) + ").",
-            level="warning",
-        )
-        try:
-            with uploads.exclusive_job_operation(int(job_id)):
-                db.refresh(current)
-                return _run_fallback(
-                    db,
-                    current,
-                    reason=list(quality["reasons"]),
-                    mathpix_mmd=mathpix_mmd,
-                )
-        except Exception as exc:
-            fallback.mark_fallback_review_required(
-                uploads.source_artifact_directory(int(job_id)),
-                fallback_reason=list(quality["reasons"]),
-                error=exc,
-            )
-            current.detail = (
-                "Mathpix failed the objective source-quality gate and GPT "
-                f"PDF-to-ACSD fallback requires review: {str(exc)[:1200]}"
-            )
-            db.commit()
-            db.refresh(current)
-            progress.log(
-                "GPT PDF-to-ACSD fallback could not replace the unusable Mathpix "
-                f"source ({exc}); the source has been marked review-required and "
-                "generation remains blocked.",
-                level="warning",
-            )
-            raise mmd.ConversionError(
-                "Mathpix output failed the source-quality gate and the verified "
-                f"GPT PDF-to-ACSD fallback also failed: {exc}"
-            ) from exc
+            return _run_reader(db, current, reason=["pdf_source"])
 
     @wraps(original_load_or_refresh)
     def load_or_refresh_for_job(job: Any):
@@ -292,7 +188,7 @@ def install() -> None:
             copy.deepcopy(reconstruction) if reconstruction else {
                 "version": fallback.FALLBACK_VERSION,
                 "status": "not_used",
-                "source_origin": "mathpix_or_uploaded_mmd",
+                "source_origin": "uploaded_mmd",
             }
         )
         if reconstruction.get("status") == "verified":

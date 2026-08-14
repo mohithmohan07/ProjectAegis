@@ -195,7 +195,7 @@ test("shows verified Phase 2.2 overlays without calling them raw-MMD edits", () 
 });
 
 
-test("shows verified GPT PDF-to-ACSD fallback provenance and artifacts", () => {
+test("shows verified GPT PDF-to-ACSD provenance and artifacts", () => {
   const job = convertedJob();
   if (!job.source_artifacts) throw new Error("fixture missing artifacts");
   job.source_artifacts.phase = "phase-2.2-source-adjudicated";
@@ -206,7 +206,6 @@ test("shows verified GPT PDF-to-ACSD fallback provenance and artifacts", () => {
     page_count: 12,
     batch_count: 4,
     asset_count: 7,
-    mathpix_raw_preserved: true,
   };
   job.source_artifacts.files.push({
     kind: "gpt_page_acsd",
@@ -230,8 +229,8 @@ test("shows verified GPT PDF-to-ACSD fallback provenance and artifacts", () => {
 
   expect(screen.getByText("Phase 2.2.1 GPT-reconstructed canonical source"))
     .toBeDefined();
-  expect(screen.getByText("GPT PDF-to-ACSD fallback")).toBeDefined();
-  expect(screen.getByText(/extracted 12 PDF page\(s\)/i)).toBeDefined();
+  expect(screen.getByText("GPT PDF-to-ACSD")).toBeDefined();
+  expect(screen.getByText(/read 12 PDF page\(s\)/i)).toBeDefined();
   expect(screen.getByRole("link", { name: "GPT page-level ACSD extraction" }))
     .toBeDefined();
 });

@@ -121,7 +121,7 @@ def test_reconstruct_pdf_to_acsd_materializes_verified_source(tmp_path: Path, mo
         pdf,
         job_id=42,
         artifact_dir=artifact_dir,
-        fallback_reason=["mathpix_hard_failure:test"],
+        fallback_reason=["pdf_source"],
         provider=_verified_provider,
     )
 
@@ -150,61 +150,6 @@ def test_reconstruct_pdf_to_acsd_materializes_verified_source(tmp_path: Path, mo
         (artifact_dir / "source.source-report.json").read_text(encoding="utf-8")
     )
     assert report["source_reconstruction"]["source_origin"] == fallback.FALLBACK_ORIGIN
-
-
-def test_quality_gate_keeps_bounded_phase22_source_for_adjudication(
-    tmp_path: Path, monkeypatch,
-):
-    # Mathpix is archived by default; this test covers the branch where
-    # it is still in front, so put it back explicitly.
-    monkeypatch.setenv("AEGIS_GPT_PDF_ACSD_FALLBACK_FORCE", "0")
-    pdf = tmp_path / "source.pdf"
-    _make_pdf(pdf)
-    mmd = "A substantial source paragraph. " * 500
-    report = {
-        "phase2_issues": [
-            {"code": "phase21_missing_numbered_parent_section"},
-            {"code": "phase21_numbered_section_gap"},
-            {"code": "phase21_orphan_task_figure"},
-        ]
-    }
-
-    quality = fallback.assess_mathpix_quality(mmd, pdf, report=report)
-
-    assert quality["use_fallback"] is False
-    assert quality["reasons"] == []
-
-
-def test_quality_gate_falls_back_for_empty_or_hard_failed_pdf(tmp_path: Path):
-    pdf = tmp_path / "source.pdf"
-    _make_pdf(pdf)
-
-    empty = fallback.assess_mathpix_quality("", pdf)
-    failed = fallback.assess_mathpix_quality(
-        "", pdf, hard_failure="Mathpix timeout"
-    )
-
-    assert empty["use_fallback"] is True
-    assert "mmd_too_short_for_pdf" in empty["reasons"]
-    assert failed["use_fallback"] is True
-    assert any(reason.startswith("mathpix_hard_failure:") for reason in failed["reasons"])
-
-
-def test_quality_gate_falls_back_when_mathpix_misses_most_pdf_text(
-    tmp_path: Path, monkeypatch,
-):
-    pdf = tmp_path / "source.pdf"
-    _make_pdf(pdf)
-    monkeypatch.setattr(
-        fallback, "_pdf_text_coverage", lambda _path, _mmd: (1200, 0.18)
-    )
-    substantial_but_wrong = "Unrelated conversion content. " * 500
-
-    quality = fallback.assess_mathpix_quality(substantial_but_wrong, pdf)
-
-    assert quality["use_fallback"] is True
-    assert "pdf_text_coverage_too_low:0.180" in quality["reasons"]
-    assert quality["pdf_text_tokens"] == 1200
 
 
 def test_source_asset_signature_is_unforgeable(monkeypatch):
@@ -307,13 +252,13 @@ def test_page_batches_extract_in_parallel_and_assemble_in_order(
     assert all(entry["status"] == "verified" for entry in bundle["batches"])
 
 
-def test_build_concepts_conversion_uses_fallback_after_mathpix_hard_failure(
+def test_build_concepts_pdf_converts_through_the_gpt_reader(
     client,
     tmp_path: Path,
     monkeypatch,
 ):
+    """A PDF upload reaches canonical source through the reader, end to end."""
     from app import config
-    from app.services import mmd
     from tests.conftest import convert_concept_upload
 
     pdf = tmp_path / "source.pdf"
@@ -323,10 +268,6 @@ def test_build_concepts_conversion_uses_fallback_after_mathpix_hard_failure(
     monkeypatch.setattr(fallback, "_CACHE_DIR", tmp_path / "cache")
     monkeypatch.setattr(config, "use_live_generation", lambda: True)
 
-    def failed_mathpix(_path):
-        raise mmd.ConversionError("synthetic Mathpix outage")
-
-    monkeypatch.setattr(mmd, "to_mmd", failed_mathpix)
     real_reconstruct = fallback.reconstruct_pdf_to_acsd
 
     def verified_reconstruct(path, **kwargs):
@@ -364,28 +305,19 @@ def test_build_concepts_conversion_uses_fallback_after_mathpix_hard_failure(
 
 
 
-def test_failed_gpt_fallback_persists_billable_openai_usage(
+def test_failed_gpt_reader_persists_billable_openai_usage(
     client,
     tmp_path: Path,
     monkeypatch,
 ):
-    # Mathpix is archived by default; this test covers the branch where
-    # it is still in front, so put it back explicitly.
-    monkeypatch.setenv("AEGIS_GPT_PDF_ACSD_FALLBACK_FORCE", "0")
+    """A rejected reading still cost tokens; the job must keep that record."""
     from app import config
-    from app.services import mmd, openai_usage
+    from app.services import openai_usage
     from tests.conftest import stream_error_message
 
     pdf = tmp_path / "source.pdf"
     _make_pdf(pdf)
     monkeypatch.setattr(config, "use_live_generation", lambda: True)
-    monkeypatch.setattr(
-        mmd,
-        "to_mmd",
-        lambda _path: (_ for _ in ()).throw(
-            mmd.ConversionError("synthetic Mathpix outage")
-        ),
-    )
 
     def billed_failure(_path, **_kwargs):
         openai_usage.record_response({
@@ -406,65 +338,12 @@ def test_failed_gpt_fallback_persists_billable_openai_usage(
 
     response = client.post(f"/build-concepts/uploads/{job['id']}/convert")
 
-    assert "GPT PDF-to-ACSD fallback also failed" in (stream_error_message(response) or "")
+    assert "synthetic verified-source rejection" in (
+        stream_error_message(response) or ""
+    )
     reloaded = client.get(f"/build-concepts/uploads/{job['id']}").json()
     assert reloaded["openai_usage"]["request_count"] == 1
     assert reloaded["openai_usage"]["total_tokens"] == 150
-
-
-def test_unusable_mathpix_and_failed_fallback_persist_a_blocking_source_issue(
-    client,
-    tmp_path: Path,
-    monkeypatch,
-):
-    # Mathpix is archived by default; this test covers the branch where
-    # it is still in front, so put it back explicitly.
-    monkeypatch.setenv("AEGIS_GPT_PDF_ACSD_FALLBACK_FORCE", "0")
-    from app import config
-    from app.services import mmd
-    from tests.conftest import stream_error_message
-
-    pdf = tmp_path / "source.pdf"
-    _make_pdf(pdf)
-    monkeypatch.setattr(config, "use_live_generation", lambda: True)
-    monkeypatch.setattr(
-        mmd,
-        "to_mmd",
-        lambda _path: "# Number Patterns\n\nA substantial but corrupted source.\n" * 80,
-    )
-    monkeypatch.setattr(
-        fallback,
-        "assess_mathpix_quality",
-        lambda *_args, **_kwargs: {
-            "eligible": True,
-            "use_fallback": True,
-            "reasons": ["pdf_text_coverage_too_low:0.120"],
-        },
-    )
-    monkeypatch.setattr(
-        fallback,
-        "reconstruct_pdf_to_acsd",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            ValueError("verification remained ambiguous")
-        ),
-    )
-    job = client.post(
-        "/build-concepts/post-learning/uploads",
-        files={"file": ("source.pdf", pdf.read_bytes(), "application/pdf")},
-    ).json()
-
-    response = client.post(f"/build-concepts/uploads/{job['id']}/convert")
-
-    assert "source-quality gate" in (stream_error_message(response) or "")
-    report = client.get(
-        f"/source-artifacts/uploads/{job['id']}/report"
-    ).json()
-    assert report["phase2_inventory_ready"] is False
-    assert report["source_reconstruction"]["status"] == "review_required"
-    assert any(
-        issue.get("code") == "phase221_gpt_pdf_acsd_fallback_failed"
-        for issue in report["issues"]
-    )
 
 
 def test_renderer_preserves_figure_before_task_order_and_restores_ownership(
@@ -493,7 +372,7 @@ def test_renderer_preserves_figure_before_task_order_and_restores_ownership(
         pdf,
         job_id=43,
         artifact_dir=artifact_dir,
-        fallback_reason=["mathpix_hard_failure:test"],
+        fallback_reason=["pdf_source"],
         provider=provider,
     )
 
@@ -555,7 +434,7 @@ def test_unlinked_decorative_figure_is_not_inherited_by_nearby_task(
         pdf,
         job_id=44,
         artifact_dir=artifact_dir,
-        fallback_reason=["mathpix_hard_failure:test"],
+        fallback_reason=["pdf_source"],
         provider=provider,
     )
 
@@ -581,7 +460,7 @@ def test_failed_fallback_does_not_replace_existing_source_bundle(
             pdf,
             job_id=45,
             artifact_dir=artifact_dir,
-            fallback_reason=["mathpix_hard_failure:test"],
+            fallback_reason=["pdf_source"],
             provider=lambda _pages: {
                 "status": "review_required",
                 "reason": "uncertain page",
@@ -592,15 +471,19 @@ def test_failed_fallback_does_not_replace_existing_source_bundle(
     assert not list(artifact_dir.glob(".phase221-staging-*"))
 
 
-def test_successful_hard_failure_fallback_removes_stale_partial_mathpix_artifact(
+def test_publishing_sweeps_a_retired_artifact_an_older_run_left_behind(
     tmp_path: Path, monkeypatch,
 ):
+    """An artifact directory written before the converter was removed still
+    holds ``source.mathpix.raw.mmd``. Publishing must retire it rather than
+    serve a file no current run produces."""
     pdf = tmp_path / "source.pdf"
     _make_pdf(pdf)
     artifact_dir = tmp_path / "source-shadow"
     artifact_dir.mkdir()
-    stale = artifact_dir / fallback.MATHPIX_RAW_FILENAME
-    stale.write_text("stale partial mmd", encoding="utf-8")
+    legacy_name, = fallback.LEGACY_ARTIFACT_NAMES
+    stale = artifact_dir / legacy_name
+    stale.write_text("mmd from a retired converter", encoding="utf-8")
     monkeypatch.setenv("AEGIS_PUBLIC_BASE_URL", "https://aegis.example")
     monkeypatch.setenv("AEGIS_SOURCE_ASSET_SECRET", "test-secret")
     monkeypatch.setattr(fallback, "_CACHE_DIR", tmp_path / "cache")
@@ -609,8 +492,7 @@ def test_successful_hard_failure_fallback_removes_stale_partial_mathpix_artifact
         pdf,
         job_id=46,
         artifact_dir=artifact_dir,
-        fallback_reason=["mathpix_hard_failure:test"],
-        mathpix_mmd="",
+        fallback_reason=["pdf_source"],
         provider=_verified_provider,
     )
 
@@ -658,7 +540,7 @@ def test_required_table_context_is_linked_without_moving_source_blocks(
         pdf,
         job_id=47,
         artifact_dir=artifact_dir,
-        fallback_reason=["mathpix_hard_failure:test"],
+        fallback_reason=["pdf_source"],
         provider=provider,
     )
 
@@ -701,7 +583,7 @@ def test_explicit_cross_page_figure_reference_survives_page_local_relationships(
         pdf,
         job_id=48,
         artifact_dir=artifact_dir,
-        fallback_reason=["mathpix_hard_failure:test"],
+        fallback_reason=["pdf_source"],
         provider=provider,
     )
 
@@ -739,7 +621,7 @@ def test_verified_nonstandard_task_cue_bypasses_legacy_regex_vocabulary(
         pdf,
         job_id=49,
         artifact_dir=artifact_dir,
-        fallback_reason=["mathpix_hard_failure:test"],
+        fallback_reason=["pdf_source"],
         provider=provider,
     )
 
@@ -770,7 +652,7 @@ def test_verified_page_acsd_rehydrates_after_future_core_recompile(
         pdf,
         job_id=50,
         artifact_dir=artifact_dir,
-        fallback_reason=["mathpix_hard_failure:test"],
+        fallback_reason=["pdf_source"],
         provider=_verified_provider,
     )
     fresh = phase2.compile_phase2_source(
@@ -828,7 +710,7 @@ def test_worked_example_task_block_classifies_as_worked_example(
         pdf,
         job_id=51,
         artifact_dir=artifact_dir,
-        fallback_reason=["mathpix_hard_failure:test"],
+        fallback_reason=["pdf_source"],
         provider=provider,
     )
 
