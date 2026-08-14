@@ -58,7 +58,8 @@ backend/aegis_pipeline/create_workbooks/plan_cache/
 # Syllabus structure workbooks under backend/data/syllabus/*.xlsx SHOULD be
 # committed so units/chapters preload on deploy (not runtime-generated).
 
-# Chapter-reading cache (hash-named model output). The one fixture committed
-# by #203 is already tracked, and tracked files are never affected by ignore
-# rules, so it stays in the repo.
+# Runtime caches of hash-named model output (derived state, never source).
+# The committed chapter-reading fixture from #203 stays tracked: ignore rules
+# never apply to already-tracked files.
 backend/data/chapter_reading/
+backend/data/question_polishing/

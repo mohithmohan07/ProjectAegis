@@ -7206,6 +7206,173 @@ def _unowned_inventory_row_is_non_task(item: dict) -> bool:
     )
 
 
+_INVALID_ROW_ADJUDICATION_SYSTEM = (
+    "You are the Aegis inventory-row adjudicator. Deterministic validation "
+    "rejected some rows of a textbook question inventory because their task "
+    "text is empty or too short to be answerable. Each rejected row is one of "
+    "two things, and you decide which against the supplied source excerpt:\n"
+    "  real_task  — the source really asks this, and extraction mangled or "
+    "truncated it. The run MUST stop; a learner question would otherwise be "
+    "silently lost.\n"
+    "  artifact   — the row is not a question at all. A section banner "
+    "captured as a task ('Practice Set 1.1', 'Exercise 1'), a heading, a "
+    "label, or a caption. Its real questions arrive as their own rows.\n"
+    "Judge only by whether the row's own text asks a learner to do something. "
+    "A heading that merely names a collection of questions asks nothing and "
+    "is an artifact. When the excerpt does not settle it, answer real_task: "
+    "stopping the run is recoverable, dropping a question is not.\n"
+    'Return JSON of the form {"verdicts": [{"qid": "...", '
+    '"verdict": "real_task" | "artifact", "reason": "..."}]} with exactly one '
+    "entry per supplied qid."
+)
+
+_INVALID_ROW_CRITIC_SYSTEM = (
+    "You are the independent Aegis inventory-row critic. Verify the proposed "
+    "verdicts against the same source excerpts. Reject the proposal if any "
+    "row judged 'artifact' is in fact a learner question, however short, or "
+    "if a verdict relies on the row being inconvenient rather than on the "
+    "source. Do not rewrite or re-judge anything; approve or reject.\n"
+    'Return JSON of the form {"verdict": "verified" | "rejected", '
+    '"issues": ["..."]}.'
+)
+
+
+def _adjudicate_invalid_inventory_rows(
+    items: list[dict],
+    invalid: list[dict],
+    *,
+    sections: list[dict],
+    provider: Callable[..., dict] | None = None,
+    critic: Callable[..., dict] | None = None,
+) -> tuple[list[dict], list[dict]]:
+    """Let the model rule on rows deterministic validation rejected.
+
+    Validation is deliberately strict: a row whose task text is empty or too
+    short cannot render as a public Example. But "too short to answer" and
+    "not a question at all" are different failures with opposite remedies —
+    the first must stop the run, the second is an extraction artifact the run
+    should drop and continue past. Which one a given row is depends on what
+    the book actually prints around it, so the model decides against that
+    source rather than a rule guessing from shape.
+
+    Fail-closed at every turn: any row the model does not positively call an
+    artifact is kept, a critic must approve the proposal before anything is
+    dropped, and any provider failure keeps every row. The caller re-validates
+    afterwards, so keeping a row still stops the run exactly as before.
+    """
+    by_index = {int(issue.get("index") or 0): issue for issue in invalid}
+    rows: list[dict] = []
+    for index, issue in sorted(by_index.items()):
+        if not (0 <= index < len(items)):
+            continue
+        item = items[index]
+        qid = str(item.get("qid") or "").strip()
+        if not qid:
+            continue
+        section_index = item.get("_source_section_index")
+        excerpt = ""
+        if isinstance(section_index, int) and 0 <= section_index < len(sections):
+            section = sections[section_index] or {}
+            excerpt = _trim(
+                f"## {section.get('heading') or ''}\n"
+                f"{section.get('body') or ''}",
+                4_000,
+            )
+        rows.append({
+            "qid": qid,
+            "rejected_because": str(issue.get("reason") or ""),
+            "source_label": str(item.get("source_label") or ""),
+            "source_kind": str(item.get("source_kind") or ""),
+            "task_text": _trim(str(
+                item.get("raw_task") or item.get("normalized_task") or ""
+            ), 2_000),
+            "source_excerpt": excerpt,
+        })
+    if not rows:
+        return items, []
+
+    payload = {"rejected_rows": rows}
+    user_prompt = json.dumps(payload, ensure_ascii=False, indent=2)
+    try:
+        if provider is not None:
+            data = provider(
+                system=_INVALID_ROW_ADJUDICATION_SYSTEM, user=user_prompt,
+            )
+        else:
+            data = _openai_json(
+                _INVALID_ROW_ADJUDICATION_SYSTEM,
+                user_prompt,
+                purpose="concept_validation",
+            )
+    except Exception as exc:  # noqa: BLE001 — never drop a row on an error
+        progress.log(
+            f"Inventory-row adjudication unavailable ({exc}); every rejected "
+            "row is kept and the run stops as usual.",
+            level="warning",
+        )
+        return items, []
+
+    verdicts = {
+        str(row.get("qid") or ""): row
+        for row in (data or {}).get("verdicts") or []
+        if isinstance(row, dict)
+    }
+    dropped = [
+        row for row in rows
+        if str(verdicts.get(row["qid"], {}).get("verdict") or "") == "artifact"
+    ]
+    if not dropped:
+        return items, []
+
+    critic_prompt = json.dumps(
+        {
+            "rejected_rows": rows,
+            "proposed_verdicts": [verdicts[row["qid"]] for row in dropped],
+        },
+        ensure_ascii=False, indent=2,
+    )
+    try:
+        if critic is not None:
+            review = critic(
+                system=_INVALID_ROW_CRITIC_SYSTEM, user=critic_prompt,
+            )
+        else:
+            review = _openai_json(
+                _INVALID_ROW_CRITIC_SYSTEM,
+                critic_prompt,
+                purpose="concept_validation",
+            )
+    except Exception as exc:  # noqa: BLE001
+        progress.log(
+            f"Inventory-row adjudication critic unavailable ({exc}); every "
+            "rejected row is kept and the run stops as usual.",
+            level="warning",
+        )
+        return items, []
+    if str((review or {}).get("verdict") or "").strip().lower() != "verified":
+        progress.log(
+            "Inventory-row adjudication rejected by the critic "
+            f"({str((review or {}).get('issues') or '')[:300]}); every "
+            "rejected row is kept.",
+            level="warning",
+        )
+        return items, []
+
+    drop_qids = {row["qid"] for row in dropped}
+    kept = [
+        item for item in items
+        if str(item.get("qid") or "").strip() not in drop_qids
+    ]
+    for row in dropped:
+        progress.log(
+            "Inventory row judged an extraction artifact and dropped: "
+            f"qid={row['qid']}; label={row['source_label']!r}; "
+            f"reason={str(verdicts[row['qid']].get('reason') or '')[:200]}.",
+            level="warning",
+        )
+    return kept, dropped
+
+
 def _prune_unowned_stub_inventory_rows(
     items: list[dict], anchors: list[dict],
 ) -> tuple[list[dict], int]:
@@ -7603,6 +7770,20 @@ def _extract_question_task_inventory_via_api(
         item.pop("_topic_scope", None)
     inventory["stats"] = _inventory_stats(inventory["items"])
     invalid_inventory = _invalid_inventory_items(inventory)
+    if invalid_inventory:
+        # Deterministic validation can say a row is unusable; it cannot say
+        # whether that is a mangled question (stop the run) or a section
+        # banner the extractor mistook for one (drop it and continue). The
+        # model rules on that against the source, with an independent critic,
+        # and anything it does not positively call an artifact is kept.
+        inventory["items"], adjudicated = _adjudicate_invalid_inventory_rows(
+            inventory["items"], invalid_inventory, sections=sections,
+        )
+        if adjudicated:
+            for item_index, item in enumerate(inventory["items"]):
+                item["order_index"] = item_index
+            inventory["stats"] = _inventory_stats(inventory["items"])
+            invalid_inventory = _invalid_inventory_items(inventory)
     if invalid_inventory:
         for issue in invalid_inventory[:8]:
             index = int(issue.get("index") or 0)
