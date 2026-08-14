@@ -2484,6 +2484,39 @@ def verify_final_certificate(
             )
             if evidence_change:
                 raise GroundingCertificateError(evidence_change)
+            # The per-row identity hash can only say "changed", not what
+            # changed; the certificate's readable material can. Diff it
+            # field-by-field so a drifted deposit payload names the exact
+            # field and both values instead of only the recomputed side.
+            sealed_identity = sealed.get("row_identity")
+            if isinstance(sealed_identity, Mapping):
+                current_identity = row_identity_material(record)
+                drifted = [
+                    field
+                    for field in sorted(
+                        set(sealed_identity) | set(current_identity), key=str,
+                    )
+                    if _json_safe(sealed_identity.get(field))
+                    != _json_safe(current_identity.get(field))
+                ]
+                if drifted:
+                    detail = "; ".join(
+                        f"{field}: attested "
+                        + json.dumps(
+                            _json_safe(sealed_identity.get(field)),
+                            ensure_ascii=False,
+                        )[:300]
+                        + " -> current "
+                        + json.dumps(
+                            _json_safe(current_identity.get(field)),
+                            ensure_ascii=False,
+                        )[:300]
+                        for field in drifted
+                    )
+                    raise GroundingCertificateError(
+                        "grounding certificate identity/topology drift for "
+                        f"{concept_id}: {detail}"
+                    )
     expected = (
         build_final_certificate(
             records,

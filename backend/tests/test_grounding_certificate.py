@@ -362,6 +362,58 @@ def test_final_certificate_rejects_description_mutation():
     assert "source-facing Description changed after grounding" in message
 
 
+@pytest.mark.parametrize(
+    ("field", "material_key", "attested", "replacement"),
+    [
+        (
+            "topic",
+            "topic",
+            "The Age of Revolutions: 1830-1848",
+            "A Different Main Topic",
+        ),
+        (
+            "parent_concept",
+            "parent_concept",
+            "Economic Hardship and Popular Revolt",
+            "A Different Parent",
+        ),
+        (
+            "concept_title",
+            "concept_title",
+            "Insecure Home-Based Textile Work 01",
+            "A Renamed Concept",
+        ),
+        ("_semantic_topic_id", "semantic_topic_id", "TOPIC-0007", "TOPIC-9999"),
+    ],
+)
+def test_final_certificate_names_the_exact_drifted_identity_field(
+    field, material_key, attested, replacement,
+):
+    """The consume boundary names what drifted, with both values.
+
+    A live deposit failure (CONCEPT-GROUND-0002) only printed the recomputed
+    identity, so the drifted field had to be reverse-engineered from code.
+    The certificate carries the sealed material; the error must use it.
+    """
+    records = _sealed_records()
+    final = certificate.build_final_certificate(records)
+    changed = copy.deepcopy(records)
+    changed[0][field] = replacement
+
+    with pytest.raises(
+        certificate.GroundingCertificateError,
+        match="identity/topology drift for CONCEPT-GROUND-0001",
+    ) as caught:
+        certificate.verify_final_certificate(changed, final)
+
+    message = str(caught.value)
+    assert f'{material_key}: attested "{attested}" -> current "{replacement}"' in message
+    for untouched in {
+        "topic", "parent_concept", "concept_title", "semantic_topic_id",
+    } - {material_key}:
+        assert f"{untouched}: attested" not in message
+
+
 def test_final_certificate_exposes_readable_hashed_row_identity():
     records = _sealed_records()
 
