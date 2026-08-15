@@ -292,3 +292,128 @@ def generate_from_upload(
         finally:
             worker_db.close()
     return progress.stream(work, title="Build Assessments — generating from upload")
+
+
+# --------------------------------------------------------------------------- #
+# MES releases: dual downloads, issues, explicit database upload (spec §16)
+# --------------------------------------------------------------------------- #
+
+_XLSX_MEDIA = (
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+def _release_summary(release) -> dict:
+    diagnostics = release.diagnostics or {}
+    return {
+        "id": release.id,
+        "release_uid": release.release_uid,
+        "version": release.version,
+        "state": release.state,
+        "readiness": diagnostics.get("readiness", ""),
+        "concept_snapshot_sha256": release.concept_snapshot_sha256,
+        "workbook_sha256s": release.workbook_hashes or {},
+        "published": bool((release.publication or {}).get("manifest")),
+        "uploaded": bool((release.publication or {}).get("uploaded_key")),
+        "created_at": release.created_at.isoformat(),
+    }
+
+
+@router.get("/releases/{release_id}")
+def get_assessment_release(
+    release_id: int,
+    db: Session = Depends(get_db),
+    user: auth.Principal = Depends(auth.require_user),
+):
+    from ..services import assessment_release_service as release_svc
+
+    try:
+        release = release_svc.get_release(db, release_id, owner_sub=user.sub)
+    except release_svc.ReleaseNotFound as e:
+        raise HTTPException(404, str(e))
+    return _release_summary(release)
+
+
+@router.get("/releases/{release_id}/issues")
+def get_assessment_release_issues(
+    release_id: int,
+    db: Session = Depends(get_db),
+    user: auth.Principal = Depends(auth.require_user),
+):
+    from ..services import assessment_release_service as release_svc
+
+    try:
+        release = release_svc.get_release(db, release_id, owner_sub=user.sub)
+    except release_svc.ReleaseNotFound as e:
+        raise HTTPException(404, str(e))
+    diagnostics = release.diagnostics or {}
+    return {
+        "readiness": diagnostics.get("readiness", ""),
+        "payload_errors": diagnostics.get("payload_errors", []),
+        "read_back": diagnostics.get("read_back", {}),
+        "issues": diagnostics.get("issues", {}),
+    }
+
+
+def _release_artifact(release_id, db, user, filename: str, label: str):
+    from fastapi import Response
+
+    from ..services import assessment_release_service as release_svc
+
+    try:
+        release = release_svc.get_release(db, release_id, owner_sub=user.sub)
+        data = release_svc.published_artifact(release, filename)
+    except release_svc.ReleaseNotFound as e:
+        raise HTTPException(404, str(e))
+    name = f"aegis_{label}_{release.release_uid}_v{release.version}.xlsx"
+    return Response(
+        content=data,
+        media_type=_XLSX_MEDIA,
+        headers={
+            "Content-Disposition": f'attachment; filename="{name}"'},
+    )
+
+
+@router.get("/releases/{release_id}/concepts.xlsx")
+def download_release_concepts(
+    release_id: int,
+    db: Session = Depends(get_db),
+    user: auth.Principal = Depends(auth.require_user),
+):
+    from ..services import assessment_release_service as release_svc
+
+    return _release_artifact(
+        release_id, db, user, release_svc.CONCEPTS_FILENAME, "concepts")
+
+
+@router.get("/releases/{release_id}/master.xlsx")
+def download_release_master(
+    release_id: int,
+    db: Session = Depends(get_db),
+    user: auth.Principal = Depends(auth.require_user),
+):
+    from ..services import assessment_release_service as release_svc
+
+    return _release_artifact(
+        release_id, db, user, release_svc.MASTER_FILENAME, "master")
+
+
+@router.post("/releases/{release_id}/upload-to-database")
+def upload_release_master_to_database(
+    release_id: int,
+    db: Session = Depends(get_db),
+    user: auth.Principal = Depends(auth.require_user),
+):
+    """Upload Master to Database — the explicit, idempotent action (§13.4).
+
+    Generation never calls this; only a person does.
+    """
+    from ..services import assessment_release_service as release_svc
+
+    try:
+        release = release_svc.get_release(db, release_id, owner_sub=user.sub)
+        return release_svc.upload_master_to_database(
+            db, release, owner_sub=user.sub)
+    except release_svc.ReleaseNotFound as e:
+        raise HTTPException(404, str(e))
+    except release_svc.UploadRefused as e:
+        raise HTTPException(409, str(e))

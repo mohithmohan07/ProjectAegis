@@ -161,12 +161,12 @@ def test_blueprint_validation_names_defects():
         bp.validate_cells(cells)
 
 
-def test_mes_profile_rejects_subjective_cells():
+def test_strict_profile_rejects_subjective_cells():
     cells = bp.compile_cells_from_batches(
         [_Batch(question_type="subjective")], concepts=[_Concept(1)],
-        default_marks={"subjective": 3.0}, mes_profile=True)
+        default_marks={"subjective": 3.0}, strict_profile=True)
     with pytest.raises(bp.BlueprintError, match="sheet_kind"):
-        bp.validate_cells(cells, mes_profile=True)
+        bp.validate_cells(cells, strict_profile=True)
     # The same cells are legal for the legacy concept-mapping path.
     bp.validate_cells(cells)
 
