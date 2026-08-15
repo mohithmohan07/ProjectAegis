@@ -398,7 +398,10 @@ def test_all_active_runtime_calls_declare_a_known_purpose():
     # critic: deciding whether a rejected row is a mangled question or a
     # section banner is a judgment about the source, so it is made by the
     # model rather than by a rule about the row's shape.
-    assert len(generation_calls) == 44
+    # 45 with the topic-segregation verdict: whether a skeleton's topics
+    # mirror the source is a judgment about the source, so it replaced the
+    # heading-count threshold and the collapse-shape heuristic.
+    assert len(generation_calls) == 45
     generation_purposes = [
         ast.literal_eval(keyword.value)
         for node in generation_calls

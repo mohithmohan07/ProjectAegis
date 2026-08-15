@@ -2403,6 +2403,35 @@ Rules:
 """)
 
 prompts.register(
+    "concepts.topic_segregation_verdict.system", category=_CONCEPTS_CAT,
+    label="Topic segregation verdict system prompt",
+    default="""\
+Judge whether a chapter concept map's topic segregation faithfully mirrors
+the source's own section structure. You are the only judge of this: no
+heading count, size ratio, or other arithmetic makes the call.
+Return ONLY strict JSON:
+{"verdict":"faithful","reason":""} or {"verdict":"restructure","reason":""}.
+
+Rules:
+- You are given the source's MAIN section headings in reading order, a
+  trimmed excerpt of what each section teaches, and every concept row with
+  its current topic.
+- "faithful" means the rows are filed under the source headings that
+  actually teach them: each section that teaches concepts appears as a
+  topic, and rows are not piled under an umbrella topic or a neighbouring
+  section's heading.
+- "restructure" means the map must be re-segregated against the source:
+  rows sit collapsed under one umbrella topic, or under headings that do
+  not teach them, or sections that clearly teach concepts have no rows
+  filed under them.
+- A thin chapter with two headings can be perfectly faithful; a large map
+  can be unfaithful under six. Judge only by whether each row's topic is
+  where the source actually teaches that content — never by how many
+  headings, rows, or topics there are.
+- reason: one sentence naming the decisive evidence.
+""")
+
+prompts.register(
     "concepts.chapter_meta.system", category=_CONCEPTS_CAT,
     label="Chapter/topic metadata writer system prompt",
     default="""\
@@ -19640,18 +19669,6 @@ def _snap_topics_to_headings(
     return records
 
 
-def _topics_look_collapsed(records: list[dict], headings: list[str]) -> bool:
-    """True when the map filed (nearly) everything under one umbrella topic
-    although the source clearly has several section headings."""
-    if not records or len(headings) < 2:
-        return False
-    topics = {_topic_comparison_key(r.get("topic") or "") for r in records}
-    topics.discard("")
-    if len(topics) <= 1:
-        return True
-    return len(records) >= 12 and len(topics) <= 2 and len(headings) >= 4
-
-
 def _missing_source_topic_excerpts(
     records: list[dict], source_topic_excerpts: list[dict],
 ) -> list[dict]:
@@ -20090,6 +20107,63 @@ def _recover_chapter_opening_concepts_via_api(
         level="success",
     )
     return out
+
+
+def _topic_segregation_verdict_via_api(
+    records: list[dict], *, meta: dict,
+    source_topic_excerpts: list[dict] | None = None,
+    headings: list[str] | None = None,
+) -> dict:
+    """Model verdict: does the map's topic segregation mirror the source?
+
+    Whether a skeleton needs re-segregation is a judgment about what the
+    source means, so the model makes it from the source evidence — never a
+    heading count or a collapse-shape test. The verdict only routes the
+    alignment passes; it cannot add, drop, or rewrite a row. A response
+    that does not positively decide stops the run (fail closed).
+    """
+    import json as _json
+
+    headings = [h.strip() for h in (headings or []) if h.strip()]
+    source_topic_excerpts = [
+        group for group in (source_topic_excerpts or [])
+        if (group.get("topic") or "").strip()
+    ]
+    excerpt_budget = max(
+        2_000, 60_000 // max(1, len(source_topic_excerpts)))
+    prompt_excerpts = [
+        {
+            "topic": (group.get("topic") or "").strip(),
+            "excerpt": _trim(group.get("excerpt") or "", excerpt_budget),
+        }
+        for group in source_topic_excerpts
+    ]
+    rows = [
+        {
+            "concept": rec.get("concept_title", ""),
+            "topic": rec.get("topic", ""),
+        }
+        for rec in records
+    ]
+    system = prompts.get_text("concepts.topic_segregation_verdict.system")
+    user = (
+        _metadata_block(meta)
+        + "\nSECTION HEADINGS (reading order):\n- "
+        + "\n- ".join(headings)
+        + "\n\nSOURCE TOPIC EXCERPTS (trimmed):\n"
+        + _json.dumps({"source_topics": prompt_excerpts}, ensure_ascii=False)
+        + f"\n\nCURRENT CONCEPT MAP ({len(rows)} rows):\n"
+        + _json.dumps({"rows": rows}, ensure_ascii=False)
+    )
+    data = _openai_json(system, user, purpose="concept_validation")
+    verdict = str((data or {}).get("verdict") or "").strip().lower()
+    reason = str((data or {}).get("reason") or "").strip()
+    if verdict not in {"faithful", "restructure"}:
+        raise RuntimeError(
+            "topic segregation verdict did not positively decide "
+            f"(got {verdict!r}); stopping instead of guessing"
+        )
+    return {"restructure": verdict == "restructure", "reason": reason}
 
 
 def _restructure_topics_via_api(
@@ -21378,22 +21452,37 @@ def _run_live_concept_pre_final_stages(
         out = _consolidate_concepts_via_api(
             out, subject=subject, mmd_text=mmd_text, meta=meta)
         progress.step("Concept extraction — aligning source topics", value=0.35)
-        if _topics_look_collapsed(out, headings):
-            progress.log(
-                f"Topic segregation collapsed: {len(out)} concepts share "
-                f"almost one topic while the source has {len(headings)} "
-                "section headings — re-segregating topics via API.",
-                level="warning",
-            )
-        if len(headings) >= 3 or (
-            headings and _topics_look_collapsed(out, headings)
-        ):
-            out = _restructure_topics_via_api(
-                out, meta=meta,
-                source_topic_excerpts=source_topic_excerpts)
-        else:
+        if len([h for h in headings if h.strip()]) < 2:
+            # A single heading (or none) leaves nothing to re-segregate
+            # against — the decision space has one option, so no judgment
+            # exists to make. Exact source evidence still assigns what it
+            # can prove.
             out = _assign_topics_from_source_evidence(
                 out, source_topic_excerpts)
+        else:
+            segregation = _topic_segregation_verdict_via_api(
+                out, meta=meta,
+                source_topic_excerpts=source_topic_excerpts,
+                headings=headings,
+            )
+            reason_suffix = (
+                f": {segregation['reason']}" if segregation["reason"] else "."
+            )
+            if segregation["restructure"]:
+                progress.log(
+                    "Topic segregation judged unfaithful to the source"
+                    + reason_suffix + " Re-segregating topics via API.",
+                    level="warning",
+                )
+                out = _restructure_topics_via_api(
+                    out, meta=meta,
+                    source_topic_excerpts=source_topic_excerpts)
+            else:
+                progress.log(
+                    "Topic segregation judged faithful to the source"
+                    + reason_suffix)
+                out = _assign_topics_from_source_evidence(
+                    out, source_topic_excerpts)
         out = _snap_topics_to_headings(
             out, headings, chapter_title=chapter_title,
             allow_chapter_title_topic=allow_chapter_title_topic)

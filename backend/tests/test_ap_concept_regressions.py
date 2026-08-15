@@ -939,6 +939,9 @@ def test_pipeline_restores_skeleton_method_rows_before_description_and_cleanup(
         g, "_consolidate_concepts_via_api",
         drop_two_rows_during_canonicalization)
     monkeypatch.setattr(
+        g, "_topic_segregation_verdict_via_api",
+        lambda records, **kwargs: {"restructure": True, "reason": "test"})
+    monkeypatch.setattr(
         g, "_restructure_topics_via_api",
         lambda records, **kwargs: records)
     monkeypatch.setattr(
@@ -1134,6 +1137,9 @@ def test_final_pipeline_restores_post_description_method_snapshot(monkeypatch):
     monkeypatch.setattr(
         g, "_consolidate_concepts_via_api",
         lambda records, **kwargs: records)
+    monkeypatch.setattr(
+        g, "_topic_segregation_verdict_via_api",
+        lambda records, **kwargs: {"restructure": True, "reason": "test"})
     monkeypatch.setattr(
         g, "_restructure_topics_via_api",
         lambda records, **kwargs: records)

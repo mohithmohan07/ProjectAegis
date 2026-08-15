@@ -468,6 +468,9 @@ def test_concepts_live_processes_every_chunk(monkeypatch):
     monkeypatch.setattr(
         g, "_consolidate_concepts_via_api",
         lambda records, **kw: records)
+    monkeypatch.setattr(
+        g, "_topic_segregation_verdict_via_api",
+        lambda records, **kw: {"restructure": False, "reason": ""})
 
     def refine_with_specific_analysis(records, **kw):
         refined = []

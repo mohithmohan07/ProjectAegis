@@ -1,5 +1,7 @@
 """Chapter/topic metadata quality, topic segregation, mastery statement
 formatting, detailed culmination recaps, and the dropped workbook columns."""
+import pytest
+
 from app import models
 from app.services import build_concepts
 from app.services import concept_refiner as cr
@@ -127,21 +129,61 @@ def test_skeleton_prompt_forbids_umbrella_topics():
     assert "NEVER a topic" in text
 
 
-def test_topics_look_collapsed_detection():
-    headings = ["Introduction to Similarity", "Similar Triangles",
-                "Criteria for Similarity", "Pythagoras Theorem"]
-    one_topic = [_rec(f"C{i}", "Description: d", topic="Triangles") for i in range(8)]
-    assert g._topics_look_collapsed(one_topic, headings)
-    two_topics = [
-        _rec(f"C{i}", "Description: d", topic="T1" if i < 6 else "T2")
-        for i in range(14)
+def test_topic_segregation_verdict_carries_the_evidence(monkeypatch):
+    """The model, not arithmetic, judges segregation — from source evidence."""
+    records = [
+        _rec("Meaning of Similarity", "Description: a", topic="Triangles"),
+        _rec("AAA Criterion", "Description: b", topic="Triangles"),
     ]
-    assert g._topics_look_collapsed(two_topics, headings)
-    healthy = [
-        _rec(f"C{i}", "Description: d", topic=headings[i % 4]) for i in range(12)
-    ]
-    assert not g._topics_look_collapsed(healthy, headings)
-    assert not g._topics_look_collapsed(one_topic, ["Only Heading"])
+    captured = {}
+
+    def fake_openai(system, user, **kw):
+        captured["system"] = system
+        captured["user"] = user
+        return {"verdict": "restructure", "reason": "rows collapsed"}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    verdict = g._topic_segregation_verdict_via_api(
+        records, meta=g._metadata(subject="Math"),
+        source_topic_excerpts=[
+            {"topic": "Similarity of Figures",
+             "excerpt": "Ratios teach similarity of figures."},
+            {"topic": "Criteria for Similarity",
+             "excerpt": "Angle criteria teach similar triangles."},
+        ],
+        headings=["Similarity of Figures", "Criteria for Similarity"],
+    )
+    assert verdict == {"restructure": True, "reason": "rows collapsed"}
+    assert "SECTION HEADINGS" in captured["user"]
+    assert "Ratios teach similarity of figures." in captured["user"]
+    assert "Meaning of Similarity" in captured["user"]
+    assert "never" in captured["system"]  # arithmetic never decides
+
+
+def test_topic_segregation_verdict_accepts_faithful(monkeypatch):
+    monkeypatch.setattr(
+        g, "_openai_json",
+        lambda *a, **kw: {"verdict": "Faithful", "reason": "rows match"})
+    verdict = g._topic_segregation_verdict_via_api(
+        [_rec("C", "Description: d", topic="T")],
+        meta=g._metadata(subject="Math"),
+        source_topic_excerpts=[{"topic": "T", "excerpt": "teaches C"}],
+        headings=["T", "U"],
+    )
+    assert verdict == {"restructure": False, "reason": "rows match"}
+
+
+def test_topic_segregation_verdict_fails_closed_on_no_decision(monkeypatch):
+    """No positive verdict → the run stops; nothing is guessed."""
+    monkeypatch.setattr(
+        g, "_openai_json", lambda *a, **kw: {"verdict": "maybe"})
+    with pytest.raises(RuntimeError, match="did not positively decide"):
+        g._topic_segregation_verdict_via_api(
+            [_rec("C", "Description: d", topic="T")],
+            meta=g._metadata(subject="Math"),
+            source_topic_excerpts=[{"topic": "T", "excerpt": "teaches C"}],
+            headings=["T", "U"],
+        )
 
 
 def test_topic_headings_skip_exercises_parts_and_general():
