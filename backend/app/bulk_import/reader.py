@@ -7,6 +7,7 @@ created only when the Question band carries text or a label.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import openpyxl
@@ -135,6 +136,26 @@ def _parse_answers(row: tuple, kind: str, q_start: int) -> tuple[list[dict], lis
 
 _MAX_ISSUES = 200
 
+# Group-band fields that carry meaningful Group identity. The linkage columns
+# (``concept_question_labels`` and Descriptive's linkage ``question_label``)
+# belong to neighbouring bands and never establish a group by themselves.
+_GROUP_IDENTITY_FIELDS = (
+    "group_name", "group_display_name", "group_type",
+    "group_description", "group_question_labels",
+)
+
+_GROUP_SEQUENCE_RE = re.compile(r"(\d+)\s*\)?\s*$")
+
+
+def _group_sequence(machine_name: str) -> int:
+    """Tier sequence from a machine Group ID tail (``... BG02`` -> 2).
+
+    Mechanical ID parsing only — it never decides which group a question
+    belongs to.
+    """
+    match = _GROUP_SEQUENCE_RE.search(str(machine_name or "").strip())
+    return int(match.group(1)) if match else 0
+
 
 def _format_issues(label: str, *texts: str) -> list[str]:
     """Content-format validation: katex/img/link rules (allowed CMS formats)."""
@@ -187,7 +208,7 @@ def import_workbook(db: Session, path: Path) -> dict:
     """Import every content sheet; returns counts of created nodes + issues."""
     wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
     counts: dict = {"chapters": 0, "topics": 0, "concepts": 0, "groups": 0,
-                    "questions": 0, "issues": []}
+                    "questions": 0, "question_tags": 0, "issues": []}
 
     def _flag(msg: str) -> None:
         if len(counts["issues"]) < _MAX_ISSUES:
@@ -201,6 +222,9 @@ def import_workbook(db: Session, path: Path) -> dict:
     seen_labels: set[str] = {
         q.question_label for q in db.query(models.Question).all() if q.question_label
     }
+    # Questions created or matched during THIS import, by label, so repeated
+    # rows reconstruct placements against the right entity.
+    label_questions: dict[str, models.Question] = {}
 
     # Cache of existing question texts per chapter, for cross-book dedupe.
     qtext_cache: dict[int, dict[str, models.Question]] = {}
@@ -335,7 +359,26 @@ def import_workbook(db: Session, path: Path) -> dict:
                 concept.parent_concept = con.get("parent_concept", "")
             concepts[c_key] = concept
 
+            # ---- Question band (parsed before the Group so a pure Concept
+            # row can be recognized without minting a default group) ----
+            q_values = list(row[q_start:])
+            qd = {
+                q_band_fields[i]: ("" if q_values[i] is None else str(q_values[i]).strip())
+                for i in range(min(len(q_band_fields), len(q_values)))
+            }
+            label = qd.get("question_label", "")
+            has_question = bool(label or qd.get("question"))
+
             # ---- Group ----
+            # A Group exists only when the row carries meaningful Group
+            # identity or a populated Question band (spec §9): a pure Concept
+            # row must not mint a default Basic group.
+            has_group_identity = any(
+                grp.get(field, "").strip()
+                for field in _GROUP_IDENTITY_FIELDS
+            )
+            if not (has_group_identity or has_question):
+                continue  # hierarchy-only row: chapter/topic/concept created
             g_type = grp.get("group_type") or "Basic"
             g_name = grp.get("group_name") or grp.get("group_display_name") or f"{g_type} Group"
             g_key = (concept.id, g_type, g_name)
@@ -350,23 +393,48 @@ def import_workbook(db: Session, path: Path) -> dict:
                     group_description=grp.get("group_description", ""),
                     group_status=grp.get("group_status", "Active"),
                     related_digicards=grp.get("related_digicards", ""),
+                    group_key=g_name,
+                    group_sequence=_group_sequence(g_name),
                 )
                 db.add(group)
                 db.flush()
                 counts["groups"] += 1
+            elif not group.group_key:
+                group.group_key = g_name
+                group.group_sequence = _group_sequence(g_name)
             groups[g_key] = group
 
             # ---- Question ----
-            q_values = list(row[q_start:])
-            qd = {
-                q_band_fields[i]: ("" if q_values[i] is None else str(q_values[i]).strip())
-                for i in range(min(len(q_band_fields), len(q_values)))
-            }
-            label = qd.get("question_label", "")
-            if not (label or qd.get("question")):
+            if not has_question:
                 continue
             if label and label in seen_labels:
-                continue  # append-only: never re-import an existing label
+                # One label = one Question, many placements. A repeated label
+                # reconstructs a placement edge instead of being dropped, so
+                # an export re-imported into an empty DB rebuilds every
+                # QuestionTag (spec §7.5).
+                existing_q = label_questions.get(label)
+                if existing_q is None:
+                    existing_q = db.query(models.Question).filter_by(
+                        question_label=label).first()
+                if existing_q is None:
+                    _flag(f"{label}: repeated label has no importable "
+                          "original question — row skipped")
+                    continue
+                repeat_norm = normalize_question_text(qd.get("question", ""))
+                if repeat_norm and repeat_norm != normalize_question_text(
+                        existing_q.question):
+                    _flag(f"{label}: conflicting question content under one "
+                          "label — row rejected")
+                    continue
+                if existing_q.group_id == group.id:
+                    continue  # exact duplicate of the home placement
+                tag_exists = db.query(models.QuestionTag).filter_by(
+                    question_id=existing_q.id, group_id=group.id).first()
+                if tag_exists is None:
+                    db.add(models.QuestionTag(
+                        question_id=existing_q.id, group_id=group.id))
+                    counts["question_tags"] += 1
+                continue
             # Cross-book duplicate check: same question text under the same
             # chapter (any label) is not re-added — its sources merge instead.
             norm = normalize_question_text(qd.get("question", ""))
@@ -378,6 +446,8 @@ def import_workbook(db: Session, path: Path) -> dict:
                     counts["question_sources_merged"] = counts.get(
                         "question_sources_merged", 0) + 1
                     seen_labels.add(label)
+                    if label:
+                        label_questions[label] = existing_q
                     continue
             seen_labels.add(label)
 
@@ -443,8 +513,11 @@ def import_workbook(db: Session, path: Path) -> dict:
                 answers=answers, sub_questions=sub_questions, origin="seed",
             )
             db.add(new_q)
+            db.flush()
             if norm:
                 _chapter_qtexts(chapter.id)[norm] = new_q
+            if label:
+                label_questions[label] = new_q
             counts["questions"] += 1
 
     db.commit()

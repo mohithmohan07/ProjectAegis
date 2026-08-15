@@ -59,6 +59,23 @@ def _ensure_columns() -> None:
         ("upload_jobs", "openai_usage", "TEXT DEFAULT '{}'"),
         ("questions", "question_text", "TEXT DEFAULT ''"),
         ("blueprint_batches", "appears_in", "TEXT DEFAULT '[]'"),
+        # MES release identity (spec §5.7); model-level only — the workbook's
+        # positional columns are unchanged until the authoritative MES
+        # template is inspected (spec §12/§23).
+        ("questions", "answer_restriction", "VARCHAR(16) DEFAULT ''"),
+        ("questions", "source_qid", "VARCHAR(64) DEFAULT ''"),
+        ("questions", "blueprint_cell_id", "VARCHAR(128) DEFAULT ''"),
+        ("questions", "source_paper_number", "VARCHAR(128) DEFAULT ''"),
+        ("questions", "alternative_set_id", "VARCHAR(128) DEFAULT ''"),
+        ("questions", "parent_question_id", "INTEGER DEFAULT NULL"),
+        ("questions", "image_manifest", "TEXT DEFAULT '[]'"),
+        ("questions", "source_evidence", "TEXT DEFAULT ''"),
+        ("questions", "assessment_gist", "TEXT DEFAULT ''"),
+        ("questions", "route_audit", "TEXT DEFAULT '{}'"),
+        ("questions", "validation_status", "VARCHAR(32) DEFAULT ''"),
+        ("questions", "validation_errors", "TEXT DEFAULT '[]'"),
+        ("groups", "group_key", "VARCHAR(255) DEFAULT ''"),
+        ("groups", "group_sequence", "INTEGER DEFAULT 0"),
     ]
     with engine.connect() as conn:
         for table, column, ddl in additions:

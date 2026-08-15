@@ -99,6 +99,13 @@ class Group(Base):
     group_description: Mapped[str] = mapped_column(Text, default="")
     group_status: Mapped[str] = mapped_column(String(16), default="Active")
     related_digicards: Mapped[str] = mapped_column(Text, default="")
+    # Stable group identity (MES: the exact machine Group ID). Placement keys
+    # and tagging round-trips include it so multiple groups of one tier under
+    # one concept never collapse. Defaults to group_name on import.
+    group_key: Mapped[str] = mapped_column(String(255), default="", index=True)
+    # Tier sequence parsed from the machine ID (BG01 -> 1). Mechanical ID
+    # bookkeeping only; it never decides which group a question belongs to.
+    group_sequence: Mapped[int] = mapped_column(Integer, default=0)
 
     concept = relationship("Concept", back_populates="groups")
     questions = relationship("Question", back_populates="group", cascade="all, delete-orphan")
@@ -135,6 +142,27 @@ class Question(Base):
     # sub_questions: descriptive only; list of {text, marks, keywords:[{answer_type,weightage,keyword}]}
     sub_questions: Mapped[list] = mapped_column(JSON, default=list)
     origin: Mapped[str] = mapped_column(String(32), default="seed")  # seed|concept_mapping|upload
+    # --- MES release identity (spec §5.7). Model-level only for now: the
+    # workbook's positional columns stay untouched until the authoritative MES
+    # Bulk Import Format template is inspected (spec §12/§23). ---
+    # Open|Specific; first-class field, never inferred from answer type/marks.
+    answer_restriction: Mapped[str] = mapped_column(String(16), default="")
+    source_qid: Mapped[str] = mapped_column(String(64), default="", index=True)
+    blueprint_cell_id: Mapped[str] = mapped_column(String(128), default="")
+    source_paper_number: Mapped[str] = mapped_column(String(128), default="")
+    # OR alternatives share an alternative_set_id; each branch is its own row.
+    alternative_set_id: Mapped[str] = mapped_column(String(128), default="")
+    parent_question_id: Mapped[int | None] = mapped_column(
+        ForeignKey("questions.id"), nullable=True, default=None)
+    # Ordered image manifest: [{"url", "alt", "sha256", "order", ...}].
+    image_manifest: Mapped[list] = mapped_column(JSON, default=list)
+    source_evidence: Mapped[str] = mapped_column(Text, default="")
+    assessment_gist: Mapped[str] = mapped_column(Text, default="")
+    # Routing/grouping audit written by the release pipeline (author/critic
+    # identities, evidence, confidence, flags).
+    route_audit: Mapped[dict] = mapped_column(JSON, default=dict)
+    validation_status: Mapped[str] = mapped_column(String(32), default="")
+    validation_errors: Mapped[list] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     group = relationship("Group", back_populates="questions")
@@ -349,6 +377,63 @@ class UploadJob(Base):
         from .services import uploads
 
         return uploads.is_job_running(self.id)
+
+
+class AssessmentRelease(Base):
+    """One immutable MES assessment release: the source of both workbooks.
+
+    The Concept File and the Master File are projections of one release
+    object (spec §1/§5.6/§13). Nothing here is ever assembled from mutable
+    database rows: the concept snapshot, source inventory, blueprint,
+    candidates, groups, and placements are frozen into the release payload
+    with content hashes, and both workbook artifacts carry those hashes in
+    their manifest. A release is append-only — corrections produce a new
+    version that supersedes this one, never an in-place edit.
+    """
+
+    __tablename__ = "assessment_releases"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # Stable external identity; versions of one logical release share it.
+    release_uid: Mapped[str] = mapped_column(String(64), index=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    owner_sub: Mapped[str] = mapped_column(
+        String(255), default="local:default", index=True)
+    job_id: Mapped[int | None] = mapped_column(
+        ForeignKey("upload_jobs.id"), nullable=True, default=None, index=True)
+    session_id: Mapped[int | None] = mapped_column(
+        ForeignKey("assessment_sessions.id"), nullable=True, default=None)
+    # draft|materialized|validated_with_flags|ready_for_upload|
+    # publication_pending|uploaded|superseded (spec §5.6).
+    state: Mapped[str] = mapped_column(String(32), default="draft")
+    # Immutable inputs, frozen at Stage 1 with their hashes.
+    concept_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)
+    concept_snapshot_sha256: Mapped[str] = mapped_column(
+        String(64), default="")
+    source_inventory_sha256: Mapped[str] = mapped_column(
+        String(64), default="")
+    blueprint_sha256: Mapped[str] = mapped_column(String(64), default="")
+    # Release-scoped domain records (spec §5): {"source_atoms": [...],
+    # "blueprint_cells": [...], "candidates": [...], "groups": [...],
+    # "placements": [...], "authority_ledgers": {...}}.
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Issue ledger, readiness, and validation diagnostics.
+    diagnostics: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Provider/model/prompt/schema identity pinned for the whole run.
+    provider_identity: Mapped[dict] = mapped_column(JSON, default=dict)
+    # {"concepts_xlsx": sha256, "master_xlsx": sha256, "manifest": sha256}.
+    workbook_hashes: Mapped[dict] = mapped_column(JSON, default=dict)
+    publication: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow)
+    uploaded_at: Mapped[datetime | None] = mapped_column(
+        DateTime, default=None, nullable=True)
+    superseded_at: Mapped[datetime | None] = mapped_column(
+        DateTime, default=None, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("release_uid", "version", name="uq_release_version"),
+    )
 
 
 class ConceptRevision(Base):

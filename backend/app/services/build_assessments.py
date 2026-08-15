@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import threading
 from contextlib import contextmanager
-from itertools import product
 from pathlib import Path
 
 from sqlalchemy.orm import Session
@@ -26,7 +25,10 @@ from sqlalchemy.orm import Session
 from .. import bulk_import as bi
 from .. import config, models
 from ..bulk_import import workbook_sync
-from . import auth, directory, generation, mmd, post_generation, progress, uploads
+from . import (
+    assessment_blueprint, auth, directory, generation, mmd, post_generation,
+    progress, uploads,
+)
 
 # A blueprint's difficulty selects which concept group a question lands in.
 DIFFICULTY_TO_GROUP = {"Less": "Basic", "Moderate": "Intermediate", "High": "Advanced"}
@@ -196,40 +198,53 @@ def _generate_session(
         raise ValueError("add at least one blueprint batch before generating")
 
     concepts = directory.resolve_scope_concepts(db, session.scope_type, session.scope_ids)
+    # Compile the stacked batches into explicit, validated blueprint cells
+    # BEFORE any generation spend (spec Stage 3). The complete obligation
+    # list exists up front, its totals are exact, and every created question
+    # is stamped with the cell it fulfills — the old implicit Cartesian
+    # product resolved inside this loop is retired.
+    cells = assessment_blueprint.compile_cells_from_batches(
+        session.batches,
+        concepts=concepts,
+        default_marks={
+            kind: generation._default_marks(kind)
+            for kind in ("objective", "subjective", "descriptive")
+        },
+    )
+    assessment_blueprint.validate_cells(cells)
+    cell_totals = assessment_blueprint.totals(cells)
+    progress.log(
+        f"Compiled {cell_totals['cells']} explicit blueprint cell(s): "
+        f"{cell_totals['total_questions']} question obligation(s), "
+        f"{cell_totals['total_marks']:g} total marks across "
+        f"{len(concepts)} concept(s).")
+
     # Generation can call an external model and therefore stays outside the
     # process-wide workbook lock. These indices are prompt seeds only; final
     # labels are reserved from freshly loaded database state under the shared
     # finalization lock below.
     prompt_indices: dict[int, int] = {c.id: 1 for c in concepts}
-    generated_batches: list[tuple[int, str, list[dict]]] = []
-
-    total_cells = sum(
-        len(batch.cognitive_skills) * len(batch.difficulty_levels) * len(batch.categories)
-        for batch in session.batches
-    ) * max(len(concepts), 1)
-    progress.log(
-        f"Generating questions for {len(concepts)} concept(s) × "
-        f"{len(session.batches)} batch(es) = {total_cells} blueprint cell(s).")
-    done = 0
-    for concept in concepts:
-        for batch in session.batches:
-            for skill, difficulty, category in product(
-                batch.cognitive_skills, batch.difficulty_levels, batch.categories
-            ):
-                progress.step(
-                    f"{concept.concept_title}: {difficulty}/{skill}/{category}",
-                    value=done / max(total_cells, 1))
-                records = generation.generate_questions_for_concept(
-                    concept,
-                    question_type=batch.question_type,
-                    cognitive_skill=skill, difficulty=difficulty, category=category,
-                    count=batch.num_questions,
-                    start_index=prompt_indices[concept.id],
-                    appears_in=", ".join(batch.appears_in or []),
-                )
-                prompt_indices[concept.id] += len(records)
-                generated_batches.append((concept.id, difficulty, records))
-                done += 1
+    generated_batches: list[tuple[int, str, str, list[dict]]] = []
+    prompt_concepts_by_id = {c.id: c for c in concepts}
+    for done, cell in enumerate(cells):
+        concept = prompt_concepts_by_id[cell["concept_id"]]
+        progress.step(
+            f"{concept.concept_title}: {cell['difficulty']}/"
+            f"{cell['cognitive_skill']}/{cell['question_category']}",
+            value=done / max(len(cells), 1))
+        records = generation.generate_questions_for_concept(
+            concept,
+            question_type=cell["sheet_kind"],
+            cognitive_skill=cell["cognitive_skill"],
+            difficulty=cell["difficulty"],
+            category=cell["question_category"],
+            count=cell["count"],
+            start_index=prompt_indices[concept.id],
+            appears_in=", ".join(cell["appears_in"]),
+        )
+        prompt_indices[concept.id] += len(records)
+        generated_batches.append(
+            (cell["concept_id"], cell["difficulty"], cell["cell_id"], records))
 
     progress.step("Tagging & column mapping", value=0.9)
     # Refresh counter state and reserve final labels while holding the same
@@ -253,7 +268,7 @@ def _generate_session(
         concepts_by_id = {concept.id: concept for concept in refreshed_concepts}
         if any(
             concept_id not in concepts_by_id
-            for concept_id, _difficulty, _records in generated_batches
+            for concept_id, _difficulty, _cell_id, _records in generated_batches
         ):
             raise ValueError(
                 "scope selection changed while questions were generated"
@@ -267,7 +282,7 @@ def _generate_session(
             for concept in refreshed_concepts
         }
         created_ids: list[int] = []
-        for concept_id, difficulty, records in generated_batches:
+        for concept_id, difficulty, cell_id, records in generated_batches:
             concept = concepts_by_id[concept_id]
             group = _group_for(db, concept, difficulty)
             for generated_record in records:
@@ -277,7 +292,9 @@ def _generate_session(
                 )
                 counters[concept_id] += 1
                 question = models.Question(
-                    group_id=group.id, **_question_kwargs(record)
+                    group_id=group.id,
+                    blueprint_cell_id=cell_id,
+                    **_question_kwargs(record)
                 )
                 db.add(question)
                 db.flush()
@@ -338,6 +355,81 @@ def _question_kwargs(rec: dict) -> dict:
 # --------------------------------------------------------------------------- #
 # Path B — From Upload
 # --------------------------------------------------------------------------- #
+
+def _route_uploaded_questions(
+    records: list[dict], concepts: list[models.Concept],
+) -> tuple[list[int], str]:
+    """Home-concept position for every identified question.
+
+    Returns (indices into ``concepts``, routing basis). A sole-concept scope
+    is mechanical — one candidate is not a decision. Live multi-concept
+    routing is a model judgment against each concept's teaching content:
+    never round-robin, never the first concept, never title overlap. The
+    full release router with its independent critic and Type/Case evidence
+    lands with the release pipeline; this bounded call already removes
+    arithmetic placement from the live path. Dry (non-live) runs keep a
+    deterministic fixture spread, labeled as such — a test harness, not a
+    pedagogical decision.
+    """
+    if not records:
+        return [], "empty"
+    if len(concepts) == 1:
+        return [0] * len(records), "sole_scope_concept"
+    if not config.use_live_generation():
+        return [i % len(concepts) for i in range(len(records))], "dry_fixture"
+
+    import json as _json
+
+    payload = {
+        "questions": [
+            {
+                "index": i,
+                "question": rec.get("question", ""),
+                "display_answer": rec.get("display_answer", ""),
+            }
+            for i, rec in enumerate(records)
+        ],
+        "concepts": [
+            {
+                "concept_id": c.id,
+                "concept_title": c.concept_title,
+                "teaching_description": (c.concept_details or "")[:2_000],
+            }
+            for c in concepts
+        ],
+    }
+    system = (
+        "Route each uploaded assessment question to the ONE concept whose "
+        "teaching content it assesses. Judge by the question and its answer "
+        "against each concept's description — never by position, title "
+        "overlap, or spreading questions evenly across concepts.\n"
+        'Return ONLY strict JSON: {"placements":[{"index":0,'
+        '"concept_id":0}]} with every question index exactly once.'
+    )
+    data = generation._openai_json(
+        system, _json.dumps(payload, ensure_ascii=False),
+        purpose="concept_mapping")
+    position_by_concept_id = {c.id: pos for pos, c in enumerate(concepts)}
+    routed: dict[int, int] = {}
+    for placement in (data or {}).get("placements") or []:
+        if not isinstance(placement, dict):
+            continue
+        index = placement.get("index")
+        concept_id = placement.get("concept_id")
+        if (
+            isinstance(index, int)
+            and 0 <= index < len(records)
+            and concept_id in position_by_concept_id
+            and index not in routed
+        ):
+            routed[index] = position_by_concept_id[concept_id]
+    if len(routed) != len(records):
+        raise RuntimeError(
+            "upload routing did not positively place every question "
+            f"({len(routed)}/{len(records)}); stopping instead of guessing"
+        )
+    return [routed[i] for i in range(len(records))], "api_router_v0"
+
 
 def create_upload_job(
     db: Session, *, upload_type: str, filename: str, raw_bytes: bytes,
@@ -442,6 +534,10 @@ def generate_from_upload(
         job.mmd_text, upload_type=job.upload_type, question_type=question_type,
         textbook_mode=job.textbook_mode,
     )
+    # Routing happens outside the workbook lock (it may call the model) and
+    # binds by concept id, so a scope change is detected after the lock.
+    route_positions, route_basis = _route_uploaded_questions(records, concepts)
+    routed_concept_ids = [concepts[pos].id for pos in route_positions]
     progress.step("Depositing & tagging questions", value=0.85)
 
     # The duplicate query, database writes, and workbook publication are one
@@ -460,6 +556,10 @@ def generate_from_upload(
         )
         if not concepts:
             raise ValueError("deposit selection resolves to no concepts")
+        concepts_by_id = {c.id: c for c in concepts}
+        if any(cid not in concepts_by_id for cid in routed_concept_ids):
+            raise ValueError(
+                "deposit selection changed while questions were generated")
 
         # Cross-book duplicate check: existing question texts in the deposit
         # chapters. A duplicate is not re-added; its sources are merged instead.
@@ -479,7 +579,9 @@ def generate_from_upload(
         counters: dict[int, int] = {
             c.id: sum(len(g.questions) for g in c.groups) + 1 for c in concepts
         }
-        # Round-robin the identified questions across the deposit concepts.
+        # Deposit each question into its routed home concept. Placement was
+        # decided above (model judgment in live mode; mechanical only for a
+        # sole-concept scope) — never round-robin arithmetic on a live path.
         for i, rec in enumerate(records):
             if job.source_book:
                 rec["question_source"] = job.source_book
@@ -491,7 +593,7 @@ def generate_from_upload(
                 )
                 merged_ids.append(dup.id)
                 continue
-            concept = concepts[i % len(concepts)]
+            concept = concepts_by_id[routed_concept_ids[i]]
             rec.setdefault(
                 "question_label",
                 generation.question_label(concept, counters[concept.id]),
@@ -500,7 +602,11 @@ def generate_from_upload(
             group = _group_for(
                 db, concept, rec.get("level_of_difficulty", "Moderate")
             )
-            q = models.Question(group_id=group.id, **_question_kwargs(rec))
+            q = models.Question(
+                group_id=group.id,
+                route_audit={"basis": route_basis},
+                **_question_kwargs(rec),
+            )
             db.add(q)
             db.flush()
             if norm:
