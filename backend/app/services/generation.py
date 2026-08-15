@@ -1556,7 +1556,7 @@ This is subject-agnostic and board-agnostic: Mathematics, Science, Social Scienc
 languages, literature, Computer Science, practical work, and any school subject.
 
 Return ONLY strict JSON:
-{"items":[{"qid":"QINV-0001","source_kind":"worked_example|solved_example|exercise|intext_question|checkpoint_question|activity|mcq|fill_blank|true_false|match|assertion_reason|diagram_task|map_task|table_task|graph_task|source_task|case_task|passage_task|grammar_task|writing_task|experiment_task|coding_task|long_answer|short_answer|other","source_label":"","parent_source_label":"","topic_hint":"","page_hint":"","block_ids":[],"raw_task":"","raw_solution_or_answer":"","normalized_task":"","shared_context":"","subpart_label":"","options":[],"image_urls":[],"content_objects":{"numbers":[],"variables":[],"equations":[],"coordinates":[],"ratios":[],"diagrams":[],"graphs":[],"tables":[],"maps":[],"passages":[],"sources":[],"experiments":[],"observations":[],"characters":[],"events":[],"dates":[],"places":[],"terms":[],"definitions":[],"processes":[],"comparisons":[],"causes":[],"effects":[],"code_snippets":[],"grammar_items":[],"unknowns":[],"given_values":[],"conditions":[]},"requires_visual":false,"requires_context":false,"order_index":1}],"stats":{"worked_examples":0,"solved_examples":0,"exercise_questions":0,"checkpoint_questions":0,"activities":0,"objective_items":0,"subjective_items":0,"descriptive_items":0,"subparts":0,"visual_tasks":0,"table_or_graph_tasks":0,"source_or_passage_tasks":0,"total_inventory_items":0}}.
+{"items":[{"qid":"QINV-0001","source_kind":"worked_example|solved_example|exercise|intext_question|checkpoint_question|activity|info_hub|mcq|fill_blank|true_false|match|assertion_reason|diagram_task|map_task|table_task|graph_task|source_task|case_task|passage_task|grammar_task|writing_task|experiment_task|coding_task|long_answer|short_answer|other","source_label":"","parent_source_label":"","topic_hint":"","page_hint":"","block_ids":[],"raw_task":"","raw_solution_or_answer":"","normalized_task":"","shared_context":"","subpart_label":"","options":[],"image_urls":[],"content_objects":{"numbers":[],"variables":[],"equations":[],"coordinates":[],"ratios":[],"diagrams":[],"graphs":[],"tables":[],"maps":[],"passages":[],"sources":[],"experiments":[],"observations":[],"characters":[],"events":[],"dates":[],"places":[],"terms":[],"definitions":[],"processes":[],"comparisons":[],"causes":[],"effects":[],"code_snippets":[],"grammar_items":[],"unknowns":[],"given_values":[],"conditions":[]},"requires_visual":false,"requires_context":false,"order_index":1}],"stats":{"worked_examples":0,"solved_examples":0,"exercise_questions":0,"checkpoint_questions":0,"activities":0,"objective_items":0,"subjective_items":0,"descriptive_items":0,"subparts":0,"visual_tasks":0,"table_or_graph_tasks":0,"source_or_passage_tasks":0,"total_inventory_items":0}}.
 
 COVERAGE IS MANDATORY (most important rule):
 - Extract EVERY assessable question/task from the first line to the last,
@@ -1583,6 +1583,12 @@ COVERAGE IS MANDATORY (most important rule):
 - Textbook ACTIVITY / experiment / classroom-discussion blocks are inventory
   items with source_kind "activity" or "experiment_task" as appropriate — they
   later feed Activity/Info Hub on the related teaching concept, never Culmination.
+- INFO HUB blocks — boxed asides, "do you know?" panels, biography boxes,
+  source excerpts, and similar enrichment boxes that carry no student ask —
+  are inventory items with source_kind "info_hub". raw_task carries the
+  complete hub content verbatim. They later feed Activity/Info Hub on the
+  concept whose material they enrich; never treat them as questions and
+  never skip them as decoration.
 - A missed question is a defect; an extra item is not.
 - Skip only purely rhetorical prompts that do not expect a student answer or
   action (e.g. "Look at the picture" with no ask). If the text asks the student
@@ -2132,10 +2138,12 @@ prompts.register(
     "concepts.activity_hub.system", category=_CONCEPTS_CAT,
     label="Activity/Info Hub host proposal system prompt",
     default="""\
-Propose hosts for textbook activities, experiments, and classroom discussion
-cases.  This is a first-pass semantic proposal, not a certification.  A
-separate independent critic receives the source task and the complete allowed
-candidate set before any ambiguous proposal can be certified.
+Propose hosts for textbook activities, experiments, classroom discussion
+cases, and info hubs (boxed asides, "do you know?" panels, biography boxes,
+source excerpts).  This is a first-pass semantic proposal, not a
+certification.  A separate independent critic receives the source task and
+the complete allowed candidate set before any ambiguous proposal can be
+certified.
 
 These rules are UNIVERSAL for every upload (any board, subject, or chapter).
 Infer placement from THIS chapter's concept map and inventory — never invent
@@ -2147,12 +2155,15 @@ Return ONLY strict JSON:
 Rules:
 - Activity/Info Hub holds excess classroom material that is NOT the core
   teachable idea: numbered Activity / experiment / lab procedures, discussion
-  dilemmas, think-and-discuss prompts, and similar excess tasks.
+  dilemmas, think-and-discuss prompts, info hubs / enrichment boxes, and
+  similar excess material.
 - Never place that material on Culmination rows (is_culmination true).
 - Never turn Activity titles or discussion-case titles into Topics, concept
   names, Types, or Cases.
 - Choose the NORMAL concept whose teaching content the activity or discussion
-  practices or illustrates. Prefer topic_hint alignment when it is reliable.
+  practices or illustrates. An info hub belongs with the concept whose
+  material it enriches, no matter where the box was printed. Prefer
+  topic_hint alignment when it is reliable.
 - Every supplied pending inventory qid MUST appear in exactly one placement.
 - hub_note is a compact teacher-facing note: at most two short sentences and
   55 words, retaining only the activity's purpose, essential setup/action, and
@@ -3530,7 +3541,10 @@ def _append_activity_hub(details: str, hub_text: str) -> str:
 
 # Inventory kinds that belong in Activity/Info Hub. Assessable prompts originating
 # in an Activity also appear in Types, while reusing the same inventory identity.
-_HUB_INVENTORY_KINDS = frozenset({"activity", "experiment_task"})
+# info_hub covers enrichment boxes (asides, "do you know?", biography boxes,
+# source excerpts): pooled and placed with the material they enrich (Step 3),
+# never treated as questions.
+_HUB_INVENTORY_KINDS = frozenset({"activity", "experiment_task", "info_hub"})
 _PLACEMENT_CERTIFICATION_VERSION = 1
 _PLACEMENT_CERTIFICATIONS_KEY = "placement_certifications"
 

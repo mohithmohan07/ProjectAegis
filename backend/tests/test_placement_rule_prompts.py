@@ -323,6 +323,18 @@ def test_activity_hub_prompts_carry_the_shared_rules():
     assert source.count("+ placement_policy.PLACEMENT_RULES") == 2
 
 
+def test_info_hub_items_enter_the_hub_pool():
+    """Step 3 of the manual process pools info hubs exactly like activities."""
+    from app.services import generation
+
+    pool = generation._hub_inventory_items({"items": [
+        {"qid": "QINV-0001", "source_kind": "exercise", "raw_task": "Q"},
+        {"qid": "QINV-0002", "source_kind": "activity", "raw_task": "A"},
+        {"qid": "QINV-0003", "source_kind": "info_hub", "raw_task": "H"},
+    ]})
+    assert [item["qid"] for item in pool] == ["QINV-0002", "QINV-0003"]
+
+
 def test_type_mining_prompts_carry_the_polished_wording_note():
     """Mining classifies by polished wording and never breaks a question."""
     from app.services import generation, question_polishing

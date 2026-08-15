@@ -23,7 +23,9 @@ from typing import Any, Mapping
 LEDGER_VERSION = 1
 
 _TYPE_CASE_LEDGER_KEY = "_type_case_qid_placement_ledger"
-_HUB_KINDS = frozenset({"activity", "experiment_task"})
+# Kept in lockstep with ``generation._HUB_INVENTORY_KINDS``: every pooled hub
+# kind — activities, experiment tasks, and info hubs — is accounted here.
+_HUB_KINDS = frozenset({"activity", "experiment_task", "info_hub"})
 _MASTERY_MARK = "Achieving Mastery:"
 _ANALYSIS_MARK = "Misconception/ Error Analysis"
 _CULMINATION_MARK = "culmination"

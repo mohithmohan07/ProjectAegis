@@ -41,10 +41,11 @@ FLAG_POLISHED = "polished_for_review"
 FLAG_SPLIT = "split_for_review"
 FLAG_KEPT = "kept_original"
 
-# Hub rows (Activities / experiment tasks) are placed as hub notes, not test
-# questions, and Phase 3.9 compares their wire text exactly — never polished.
+# Hub rows (Activities / experiment tasks / info hubs) are placed as hub
+# notes, not test questions, and Phase 3.9 compares their wire text exactly —
+# never polished.
 # Kept in lockstep with ``generation._HUB_INVENTORY_KINDS`` by a drift test.
-SKIP_KINDS = frozenset({"activity", "experiment_task"})
+SKIP_KINDS = frozenset({"activity", "experiment_task", "info_hub"})
 
 _BATCH_SIZE = 12
 

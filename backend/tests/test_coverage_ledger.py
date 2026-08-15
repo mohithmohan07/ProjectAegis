@@ -67,6 +67,41 @@ def test_ledger_accounts_for_every_channel():
     assert unaccounted[0]["parent_qid"] == "QINV-0002"
 
 
+def test_info_hubs_are_pooled_hub_rows():
+    """Step 3 pools info hubs with activities; the ledger accounts for both."""
+    inventory = {
+        "items": [
+            {"qid": "QINV-0001", "source_kind": "activity",
+             "raw_task": "A1", "image_urls": []},
+            {"qid": "QINV-0002", "source_kind": "info_hub",
+             "raw_task": "Do you know? The metre was defined in 1799.",
+             "image_urls": []},
+        ],
+        "_type_case_qid_placement_ledger": {"placements": {}},
+    }
+    record = {
+        "concept_title": "The Concept",
+        "concept_details": (
+            "Teaching. // Misconception/ Error Analysis: Misconceptions: x; "
+            "Error Analysis: y // Achieving Mastery: does the thing."
+        ),
+        "activity_hub": "Try it. [[QINV-0001]] [[QINV-0002]]",
+        "types": "",
+    }
+    ledger = coverage_ledger.build_coverage_ledger(
+        question_inventory=inventory, records=[record])
+    assert ledger["summary"]["hubs"] == {
+        "total": 2, "placed": 2, "unaccounted": 0}
+
+    # An info hub that reached no output row is named, never silently complete.
+    ledger = coverage_ledger.build_coverage_ledger(
+        question_inventory=inventory,
+        records=[{**record, "activity_hub": "Try it. [[QINV-0001]]"}])
+    assert ledger["summary"]["hubs"] == {
+        "total": 2, "placed": 1, "unaccounted": 1}
+    assert ledger["complete"] is False
+
+
 def test_a_parent_qid_never_matches_inside_its_fragment():
     """QINV-0002 in a row means the parent, not QINV-0002.1."""
     assert coverage_ledger._qid_present("QINV-0002.1", "x QINV-0002.1 y")
