@@ -142,13 +142,16 @@ def question_placement_key(label: str, group: models.Group) -> tuple:
     """Identity + ancestor path for one assessment placement.
 
     Matches the CMS dedupe unit: a repeat of this exact tuple is a duplicate
-    (skip), the same ``label`` under a different tuple is a tag.
+    (skip), the same ``label`` under a different tuple is a tag. Stable group
+    identity is part of the key (spec §7.5): without it, two groups of the
+    same tier under one concept collapse into one placement.
     """
     concept = group.concept
     topic = concept.topic
     chapter = topic.chapter
     return (label, chapter.chapter_title, topic.topic_title,
-            concept.concept_title, group.group_type)
+            concept.concept_title, group.group_type,
+            group.group_key or group.group_name)
 
 
 def concept_placement_key(concept: models.Concept, topic: models.Topic) -> tuple:
@@ -174,13 +177,16 @@ def _row_question_placement_key(row: tuple, kind: str, concept_len: int) -> tupl
     label = _cell_str(row, qs)
     if not label:
         return None
-    g_type = _IDX_CONCEPT_TITLE + concept_len + 5
+    group_fields = _group_fields(kind)
+    g_type = _IDX_CONCEPT_TITLE + concept_len + group_fields.index("group_type")
+    g_name = _IDX_CONCEPT_TITLE + concept_len + group_fields.index("group_name")
     # Strip the title-column tags so keys match the clean DB-derived keys.
     return (label,
             strip_title_tag(_cell_str(row, _IDX_CHAPTER_TITLE)),
             strip_topic_title(_cell_str(row, _IDX_TOPIC_TITLE)),
             strip_title_tag(_cell_str(row, _IDX_CONCEPT_TITLE)),
-            _cell_str(row, g_type))
+            _cell_str(row, g_type),
+            _cell_str(row, g_name))
 
 
 def _row_concept_placement_key(row: tuple) -> tuple | None:
