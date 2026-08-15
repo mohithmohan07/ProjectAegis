@@ -464,7 +464,7 @@ export const api = {
       body: JSON.stringify({ question_ids, concept_ids }),
     }),
 
-  // MES releases: dual projections of one immutable snapshot (spec §16).
+  // Assessment releases: dual projections of one immutable snapshot (spec §16).
   getAssessmentRelease: (id: number) =>
     http<AssessmentRelease>(`/build-assessments/releases/${id}`),
   getAssessmentReleaseIssues: (id: number) =>

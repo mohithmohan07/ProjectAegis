@@ -41,9 +41,9 @@ export default function BuildAssessments() {
             </div>
           </button>
           <button className="module-card" onClick={() => setPath("release")}>
-            <div className="module-title">c · MES Release review</div>
+            <div className="module-title">c · Assessment Release review</div>
             <div className="module-desc">
-              Review a generated MES release: readiness and issues, the Concept
+              Review a generated assessment release: readiness and issues, the Concept
               File and Master File downloads, and the explicit Upload Master to
               Database action. Nothing publishes to the database automatically.
             </div>
@@ -439,7 +439,7 @@ function ResultCard({
   );
 }
 
-/* --------------------------- MES release review -------------------------- */
+/* ----------------------- Assessment release review ----------------------- */
 
 function ReleaseReviewFlow() {
   const [releaseId, setReleaseId] = useState("");
@@ -481,7 +481,7 @@ function ReleaseReviewFlow() {
 
   return (
     <div className="card">
-      <h2>MES Release</h2>
+      <h2>Assessment Release</h2>
       <div className="row" style={{ gap: 8 }}>
         <input
           placeholder="Release id"
