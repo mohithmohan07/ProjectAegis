@@ -79,13 +79,15 @@ Polishing rules:
 * The polished question is a **derived artifact**. The original wording is
   preserved beside it, and the polished form carries the source QID as
   provenance.
-* A question that genuinely spans more than one concept or topic may be
-  **split semantically**: `QID009` becomes `QID009#a`, `QID009#b`, … — each
-  fragment a self-contained question placed independently, every fragment
-  carrying the parent QID. The fragments together must cover everything the
-  original asked. (Wire format: fragments mint a dotted numeric suffix on
-  the parent QID — `QINV-0009.1`, `QINV-0009.2` — the id shape the
-  pipeline's tooling already parses for sub-questions.)
+* A question is **never split**. A multi-part question (sub-parts a), b),
+  c) …) is one question and stays one question — every part kept, in
+  order, inside the polished form. A question whose parts genuinely span
+  more than one concept or topic is a **culmination-level** question: it is
+  classified and placed whole, at the level that teaches everything it
+  asks, never broken into fragments. (Legacy note: inventories persisted by
+  earlier versions may carry dotted fragment ids — `QINV-0009.1`,
+  `QINV-0009.2` — from the retired splitting pass. The pipeline continues
+  to honour their provenance, but no new split is ever made.)
 * Polished wording ships **flagged for review**, the same way as every other
   best-judgement output (Rule 1, amended). The reviewer corrects wording in
   the delivered workbook; the run never waits on it.
@@ -108,7 +110,17 @@ With the polished inventory in hand, and **only** in this order (Rule 5):
 ## The completion test: coverage, not certainty
 
 The manual worker's definition of done is simple: **everything is covered
-well**. That is the run's only blocking check.
+well**. Two mechanisms enforce it, with distinct jobs:
+
+* **Blocking** is deterministic accounting: the exact-once inventory
+  coverage contract and the grounding certificates. A run cannot deposit a
+  payload that misses a question, duplicates one, or drifts a sealed row's
+  identity — those stop it, naming what failed.
+* **Reporting** is the coverage ledger. Built as a pure function of durable
+  job state and shipped in the diagnostics beside every release, it names
+  every item as Placed or Flagged and every concept missing its learner
+  analysis. It never blocks; what it makes impossible is *silent*
+  incompleteness.
 
 At the end of a run, every item in the source is accounted for, exactly once,
 in one of two states:
@@ -119,8 +131,8 @@ in one of two states:
 |**Flagged**|It is in the output, placed by best judgement, with a note saying what was uncertain|
 
 The accounting covers: every non-furniture block, every figure, every
-activity and info hub, every QID and every QID fragment. Furniture is listed
-as dropped, with what it said.
+activity and info hub, every QID (including legacy fragments from the
+retired splitting pass). Furniture is listed as dropped, with what it said.
 
 It also covers the per-concept learner analysis: **every shipped concept has
 its Achieving Mastery line and a Misconception/ Error Analysis section with
@@ -134,19 +146,24 @@ A placement or host decision is made **exactly once**, by one judgment
 applying the written rules. A second opinion — an independent critic's
 rejection, a "needs review" request, a directive from an earlier round —
 is **recorded on the row as a review flag and never blocks, escalates, or
-replays**. Ownership questions are only ever asked about single-claim
-units: a compound question is split into fragments first, so "who solely
-owns a thing that is two things?" cannot be asked. No human resolves
+replays**. Ownership questions are only ever asked about whole units: a
+compound question is one culmination-level unit owned as a whole, so "who
+solely owns a thing that is two things?" is answered at the level that
+teaches everything it asks. No human resolves
 anything mid-run; uniformity comes from one decision procedure, fixed
 tie-breaks, and cached decisions — not from repeated adjudication, whose
 outcome depends on loop accidents.
 
 What the completion test is **not**: a mid-run adversarial gate. A placement
 another pass disagrees with is a *flag*, not a *rejection*. Nothing argues an
-item out of the output; nothing loops until two models agree; nothing stops
-the run because a single placement could not be proven beyond doubt. A run
-fails only when it genuinely cannot proceed (source unreadable, provider
-down, quota exhausted) — and then it says so. It never waits (Rule 1).
+item out of the output, and nothing loops until two models agree: certifying
+a placement costs a bounded, fixed budget (one verdict plus one correction),
+never an open-ended argument. But fail closed comes first (working rule 1):
+when that budget ends with no positive decision, the run keeps the content
+and **stops** — stopping is recoverable; a guessed or silently dropped
+placement is not. A run otherwise fails only when it genuinely cannot
+proceed (source unreadable, provider down, quota exhausted) — and then it
+says so. It never waits on a human mid-run (Rule 1).
 
 ---
 
@@ -157,7 +174,7 @@ down, quota exhausted) — and then it says so. It never waits (Rule 1).
 |1 (read + break down)|**Pass 1 — Chapter Reading**: a model pass classifies and normalises every block before any compiler touches the text|New|
 |1 (topics/concepts)|Phase 3 hierarchy provider|Exists; keeps|
 |2–3 (pooled placement)|Pooled placement over the full inventory, under the shared placement rules block|Partially existed; rebuilt as pooled|
-|4 (polish + split)|Question polishing pass, QID`#a` splitting|Did not exist|
+|4 (polish)|Question polishing pass — never splits; multi-concept questions ship whole as culmination-level items|Did not exist|
 |5 (classify → allot)|Type mining + Case allotment under Rule 5|Existed; consumes the polished inventory|
 |Completion|Coverage ledger, replacing mid-run adversarial blocking|Replaces the committee layer|
 

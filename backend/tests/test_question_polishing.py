@@ -309,6 +309,14 @@ def test_skip_kinds_match_generations_hub_kinds():
     assert question_polishing.SKIP_KINDS == generation._HUB_INVENTORY_KINDS
 
 
+def test_info_hubs_are_never_polished():
+    """Info hubs are enrichment, not test items; polishing skips them."""
+    assert not question_polishing._eligible({
+        "qid": "QINV-0009", "source_kind": "info_hub",
+        "raw_task": "Do you know? The metre was defined in 1799.",
+    })
+
+
 def test_batch_failure_keeps_originals_flagged_and_continues():
     def failing(system, user, **kwargs):
         raise RuntimeError("OpenAI unavailable after 12 transient retries")

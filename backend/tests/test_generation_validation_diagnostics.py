@@ -2051,7 +2051,9 @@ def test_inventory_extraction_retries_empty_or_stub_rows_before_checkpoint(
     ])
     calls = []
 
-    def extract(*_args, **_kwargs):
+    def extract(system, *_args, **_kwargs):
+        if "inventory-completeness reviewer" in system:
+            return {"verdict": "complete", "reason": ""}
         calls.append(True)
         return next(responses)
 
@@ -2081,12 +2083,24 @@ def test_inventory_extraction_rejects_empty_correction_retry(monkeypatch):
         }]},
         {"items": []},
     ])
-    monkeypatch.setattr(
-        g, "_openai_json", lambda *_args, **_kwargs: next(responses))
+    reviews = iter([
+        {"verdict": "complete", "reason": ""},
+        {
+            "verdict": "under_extracted",
+            "reason": "the chunk prints an exercise but nothing was returned",
+        },
+    ])
+
+    def gpt(system, *_args, **_kwargs):
+        if "inventory-completeness reviewer" in system:
+            return next(reviews)
+        return next(responses)
+
+    monkeypatch.setattr(g, "_openai_json", gpt)
 
     with pytest.raises(
         RuntimeError,
-        match=r"0 substantive row\(s\) after retry",
+        match=r"still under-extracted after retry",
     ):
         g._extract_question_task_inventory_via_api(
             meta={},
@@ -2124,14 +2138,78 @@ def test_inventory_extraction_rejects_correction_retry_that_drops_valid_rows(
             ),
         }]},
     ])
-    monkeypatch.setattr(
-        g, "_openai_json", lambda *_args, **_kwargs: next(responses))
+    reviews = iter([
+        {"verdict": "complete", "reason": ""},
+        {
+            "verdict": "under_extracted",
+            "reason": "the correction dropped nine of the ten source cases",
+        },
+    ])
 
-    with pytest.raises(RuntimeError, match=r"below the required 9"):
+    def gpt(system, *_args, **_kwargs):
+        if "inventory-completeness reviewer" in system:
+            return next(reviews)
+        return next(responses)
+
+    monkeypatch.setattr(g, "_openai_json", gpt)
+
+    with pytest.raises(RuntimeError, match=r"still under-extracted"):
         g._extract_question_task_inventory_via_api(
             meta={},
             sections=[{"heading": "Electric Current", "text": "body"}],
         )
+
+
+def test_unowned_non_task_row_is_dropped_only_by_adjudication(monkeypatch):
+    """A shape-nominated stub is dropped only on an artifact verdict the
+    independent critic verified — never by the shape rule itself."""
+    chunk = {
+        "text": "Observe the picture of farmers at work, then answer Q1.",
+        "source_topic": "Agriculture",
+        "chapter_wide_tasks": False,
+    }
+    monkeypatch.setattr(
+        g, "_inventory_chunks_by_topic", lambda _sections: [chunk])
+    monkeypatch.setattr(g, "_source_task_anchors", lambda _sections: [])
+    monkeypatch.setattr(
+        g,
+        "_attach_explicit_figure_images",
+        lambda items, _sections: items,
+    )
+    described = (
+        "The picture shows farmers working in the field during the "
+        "monsoon season in Maharashtra."
+    )
+
+    def gpt(system, user, **_kwargs):
+        if "inventory-completeness reviewer" in system:
+            return {"verdict": "complete", "reason": ""}
+        if "inventory-row adjudicator" in system:
+            return {"verdicts": [{
+                "qid": "QINV-0002",
+                "verdict": "artifact",
+                "reason": "describes the picture; its real ask is QINV-0001",
+            }]}
+        if "inventory-row critic" in system:
+            return {"verdict": "verified", "issues": []}
+        return {"items": [
+            {
+                "source_kind": "exercise",
+                "raw_task": (
+                    "Describe how the monsoon affects the farming cycle "
+                    "shown in the picture."
+                ),
+            },
+            {"source_kind": "source_task", "raw_task": described},
+        ]}
+
+    monkeypatch.setattr(g, "_openai_json", gpt)
+
+    inventory = g._extract_question_task_inventory_via_api(
+        meta={}, sections=[{"heading": "Agriculture", "text": "body"}])
+
+    assert [item["qid"] for item in inventory["items"]] == ["QINV-0001"]
+    assert g._invalid_inventory_items(inventory) == []
 
 
 def test_rejected_saved_final_falls_back_to_preceding_checkpoint(monkeypatch):

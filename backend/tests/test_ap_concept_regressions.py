@@ -384,6 +384,10 @@ def test_ap_gpt_first_inventory_backfills_missed_examples_and_exercises(
     calls = {"count": 0}
 
     def empty_gpt_inventory(system, user, **kwargs):
+        if "inventory-completeness reviewer" in system:
+            # This test isolates deterministic anchor backfill; the
+            # reviewer's own contract has dedicated coverage.
+            return {"verdict": "complete", "reason": ""}
         calls["count"] += 1
         return {"items": []}
 
@@ -462,11 +466,18 @@ def test_ap_inventory_merges_numbered_gpt_rows_with_source_anchors():
     assert all(item["requires_visual"] for item in merged)
 
 
-def test_inventory_does_not_density_retry_markerless_heading_chunks(monkeypatch):
-    calls = {"count": 0}
+def test_inventory_does_not_retry_when_reviewer_rules_complete(monkeypatch):
+    """The reviewer's verdict, not a marker regex, decides whether to retry."""
+    calls = {"extract": 0, "review": 0}
 
-    def empty_gpt_inventory(system, user, **kwargs):
-        calls["count"] += 1
+    def gpt(system, user, **kwargs):
+        if "inventory-completeness reviewer" in system:
+            calls["review"] += 1
+            return {
+                "verdict": "complete",
+                "reason": "the chunk prints no assessable task",
+            }
+        calls["extract"] += 1
         return {"items": []}
 
     sections = g.parse_mmd_sections(
@@ -476,13 +487,14 @@ def test_inventory_does_not_density_retry_markerless_heading_chunks(monkeypatch)
     chunks = g._inventory_chunks_by_topic(sections)
     assert len(chunks) == 1
 
-    monkeypatch.setattr(g, "_openai_json", empty_gpt_inventory)
+    monkeypatch.setattr(g, "_openai_json", gpt)
     inventory = g._extract_question_task_inventory_via_api(
         meta=g._metadata(subject="Mathematics"),
         sections=sections,
     )
 
-    assert calls["count"] == len(chunks)
+    assert calls["extract"] == len(chunks)
+    assert calls["review"] == len(chunks)
     assert inventory["items"] == []
 
 
@@ -939,6 +951,9 @@ def test_pipeline_restores_skeleton_method_rows_before_description_and_cleanup(
         g, "_consolidate_concepts_via_api",
         drop_two_rows_during_canonicalization)
     monkeypatch.setattr(
+        g, "_topic_segregation_verdict_via_api",
+        lambda records, **kwargs: {"restructure": True, "reason": "test"})
+    monkeypatch.setattr(
         g, "_restructure_topics_via_api",
         lambda records, **kwargs: records)
     monkeypatch.setattr(
@@ -1134,6 +1149,9 @@ def test_final_pipeline_restores_post_description_method_snapshot(monkeypatch):
     monkeypatch.setattr(
         g, "_consolidate_concepts_via_api",
         lambda records, **kwargs: records)
+    monkeypatch.setattr(
+        g, "_topic_segregation_verdict_via_api",
+        lambda records, **kwargs: {"restructure": True, "reason": "test"})
     monkeypatch.setattr(
         g, "_restructure_topics_via_api",
         lambda records, **kwargs: records)

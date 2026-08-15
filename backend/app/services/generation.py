@@ -1556,7 +1556,7 @@ This is subject-agnostic and board-agnostic: Mathematics, Science, Social Scienc
 languages, literature, Computer Science, practical work, and any school subject.
 
 Return ONLY strict JSON:
-{"items":[{"qid":"QINV-0001","source_kind":"worked_example|solved_example|exercise|intext_question|checkpoint_question|activity|mcq|fill_blank|true_false|match|assertion_reason|diagram_task|map_task|table_task|graph_task|source_task|case_task|passage_task|grammar_task|writing_task|experiment_task|coding_task|long_answer|short_answer|other","source_label":"","parent_source_label":"","topic_hint":"","page_hint":"","block_ids":[],"raw_task":"","raw_solution_or_answer":"","normalized_task":"","shared_context":"","subpart_label":"","options":[],"image_urls":[],"content_objects":{"numbers":[],"variables":[],"equations":[],"coordinates":[],"ratios":[],"diagrams":[],"graphs":[],"tables":[],"maps":[],"passages":[],"sources":[],"experiments":[],"observations":[],"characters":[],"events":[],"dates":[],"places":[],"terms":[],"definitions":[],"processes":[],"comparisons":[],"causes":[],"effects":[],"code_snippets":[],"grammar_items":[],"unknowns":[],"given_values":[],"conditions":[]},"requires_visual":false,"requires_context":false,"order_index":1}],"stats":{"worked_examples":0,"solved_examples":0,"exercise_questions":0,"checkpoint_questions":0,"activities":0,"objective_items":0,"subjective_items":0,"descriptive_items":0,"subparts":0,"visual_tasks":0,"table_or_graph_tasks":0,"source_or_passage_tasks":0,"total_inventory_items":0}}.
+{"items":[{"qid":"QINV-0001","source_kind":"worked_example|solved_example|exercise|intext_question|checkpoint_question|activity|info_hub|mcq|fill_blank|true_false|match|assertion_reason|diagram_task|map_task|table_task|graph_task|source_task|case_task|passage_task|grammar_task|writing_task|experiment_task|coding_task|long_answer|short_answer|other","source_label":"","parent_source_label":"","topic_hint":"","page_hint":"","block_ids":[],"raw_task":"","raw_solution_or_answer":"","normalized_task":"","shared_context":"","subpart_label":"","options":[],"image_urls":[],"content_objects":{"numbers":[],"variables":[],"equations":[],"coordinates":[],"ratios":[],"diagrams":[],"graphs":[],"tables":[],"maps":[],"passages":[],"sources":[],"experiments":[],"observations":[],"characters":[],"events":[],"dates":[],"places":[],"terms":[],"definitions":[],"processes":[],"comparisons":[],"causes":[],"effects":[],"code_snippets":[],"grammar_items":[],"unknowns":[],"given_values":[],"conditions":[]},"requires_visual":false,"requires_context":false,"order_index":1}],"stats":{"worked_examples":0,"solved_examples":0,"exercise_questions":0,"checkpoint_questions":0,"activities":0,"objective_items":0,"subjective_items":0,"descriptive_items":0,"subparts":0,"visual_tasks":0,"table_or_graph_tasks":0,"source_or_passage_tasks":0,"total_inventory_items":0}}.
 
 COVERAGE IS MANDATORY (most important rule):
 - Extract EVERY assessable question/task from the first line to the last,
@@ -1583,6 +1583,12 @@ COVERAGE IS MANDATORY (most important rule):
 - Textbook ACTIVITY / experiment / classroom-discussion blocks are inventory
   items with source_kind "activity" or "experiment_task" as appropriate — they
   later feed Activity/Info Hub on the related teaching concept, never Culmination.
+- INFO HUB blocks — boxed asides, "do you know?" panels, biography boxes,
+  source excerpts, and similar enrichment boxes that carry no student ask —
+  are inventory items with source_kind "info_hub". raw_task carries the
+  complete hub content verbatim. They later feed Activity/Info Hub on the
+  concept whose material they enrich; never treat them as questions and
+  never skip them as decoration.
 - A missed question is a defect; an extra item is not.
 - Skip only purely rhetorical prompts that do not expect a student answer or
   action (e.g. "Look at the picture" with no ask). If the text asks the student
@@ -1608,7 +1614,7 @@ Rules:
   source-based, procedural, practical, and real-life task as its own item,
   including assessable prompts embedded in explanatory prose. Capture complete
   givens, context, quotations, representations, and asks, but never solutions.
-- When the question depends on a figure/diagram/table image, copy the Mathpix
+- When the question depends on a figure/diagram/table image, copy the
   image URL(s) from the source
   into image_urls AND keep the figure reference in raw_task.
 - Set topic_hint to the nearest MAIN section heading (or "[Chapter opening]"
@@ -2132,10 +2138,12 @@ prompts.register(
     "concepts.activity_hub.system", category=_CONCEPTS_CAT,
     label="Activity/Info Hub host proposal system prompt",
     default="""\
-Propose hosts for textbook activities, experiments, and classroom discussion
-cases.  This is a first-pass semantic proposal, not a certification.  A
-separate independent critic receives the source task and the complete allowed
-candidate set before any ambiguous proposal can be certified.
+Propose hosts for textbook activities, experiments, classroom discussion
+cases, and info hubs (boxed asides, "do you know?" panels, biography boxes,
+source excerpts).  This is a first-pass semantic proposal, not a
+certification.  A separate independent critic receives the source task and
+the complete allowed candidate set before any ambiguous proposal can be
+certified.
 
 These rules are UNIVERSAL for every upload (any board, subject, or chapter).
 Infer placement from THIS chapter's concept map and inventory — never invent
@@ -2147,12 +2155,15 @@ Return ONLY strict JSON:
 Rules:
 - Activity/Info Hub holds excess classroom material that is NOT the core
   teachable idea: numbered Activity / experiment / lab procedures, discussion
-  dilemmas, think-and-discuss prompts, and similar excess tasks.
+  dilemmas, think-and-discuss prompts, info hubs / enrichment boxes, and
+  similar excess material.
 - Never place that material on Culmination rows (is_culmination true).
 - Never turn Activity titles or discussion-case titles into Topics, concept
   names, Types, or Cases.
 - Choose the NORMAL concept whose teaching content the activity or discussion
-  practices or illustrates. Prefer topic_hint alignment when it is reliable.
+  practices or illustrates. An info hub belongs with the concept whose
+  material it enriches, no matter where the box was printed. Prefer
+  topic_hint alignment when it is reliable.
 - Every supplied pending inventory qid MUST appear in exactly one placement.
 - hub_note is a compact teacher-facing note: at most two short sentences and
   55 words, retaining only the activity's purpose, essential setup/action, and
@@ -2250,7 +2261,8 @@ Rules:
   ``\\(...\\)``/``\\[...\\]`` delimiters, TeX commands, subscripts, or
   superscripts outside a canonical Katex span.
 - For short_case_example issues: replace the truncated Example with the FULL
-  source question wording (and Mathpix URL when the question is visual).
+  source question wording (and the source image URL when the question is
+  visual).
 """)
 
 prompts.register(
@@ -2400,6 +2412,35 @@ Rules:
   when a numbered MAIN section intentionally has the same title as the chapter,
   that numbered section is a valid topic and must remain available for rows
   taught there.
+""")
+
+prompts.register(
+    "concepts.topic_segregation_verdict.system", category=_CONCEPTS_CAT,
+    label="Topic segregation verdict system prompt",
+    default="""\
+Judge whether a chapter concept map's topic segregation faithfully mirrors
+the source's own section structure. You are the only judge of this: no
+heading count, size ratio, or other arithmetic makes the call.
+Return ONLY strict JSON:
+{"verdict":"faithful","reason":""} or {"verdict":"restructure","reason":""}.
+
+Rules:
+- You are given the source's MAIN section headings in reading order, a
+  trimmed excerpt of what each section teaches, and every concept row with
+  its current topic.
+- "faithful" means the rows are filed under the source headings that
+  actually teach them: each section that teaches concepts appears as a
+  topic, and rows are not piled under an umbrella topic or a neighbouring
+  section's heading.
+- "restructure" means the map must be re-segregated against the source:
+  rows sit collapsed under one umbrella topic, or under headings that do
+  not teach them, or sections that clearly teach concepts have no rows
+  filed under them.
+- A thin chapter with two headings can be perfectly faithful; a large map
+  can be unfaithful under six. Judge only by whether each row's topic is
+  where the source actually teaches that content — never by how many
+  headings, rows, or topics there are.
+- reason: one sentence naming the decisive evidence.
 """)
 
 prompts.register(
@@ -3501,7 +3542,10 @@ def _append_activity_hub(details: str, hub_text: str) -> str:
 
 # Inventory kinds that belong in Activity/Info Hub. Assessable prompts originating
 # in an Activity also appear in Types, while reusing the same inventory identity.
-_HUB_INVENTORY_KINDS = frozenset({"activity", "experiment_task"})
+# info_hub covers enrichment boxes (asides, "do you know?", biography boxes,
+# source excerpts): pooled and placed with the material they enrich (Step 3),
+# never treated as questions.
+_HUB_INVENTORY_KINDS = frozenset({"activity", "experiment_task", "info_hub"})
 _PLACEMENT_CERTIFICATION_VERSION = 1
 _PLACEMENT_CERTIFICATIONS_KEY = "placement_certifications"
 
@@ -4793,17 +4837,6 @@ _LEADING_SOURCE_TASK_LABEL_RE = re.compile(
     r"q(?:uestion)?\s*\d+)\s*[:：.)-]\s*",
     re.IGNORECASE,
 )
-_INVENTORY_TASK_MARKER_RE = re.compile(
-    r"(?im)(?:"
-    r"^\s*(?:worked\s+)?example\s+[A-Za-z0-9]+\s*[:：.)-]|"
-    r"^\s*\d{1,3}[.)]\s+|"
-    r"^\s*(?:questions?|checkpoint|activity|do\s+this|try\s+these|"
-    r"let['’]s\s+recall)\b|"
-    r"^\s*(?:find|calculate|determine|solve|show|prove|choose|write|state|"
-    r"explain|identify|check|fill|match|draw|compare|discuss|analy[sz]e)\b|"
-    r"\?"
-    r")",
-)
 _STANDALONE_CHECKPOINT_DIRECTIVE_RE = re.compile(
     r"^(?:summari[sz]e|describe|discuss|explain|compare|comment|"
     r"analy[sz]e|interpret|identify|write|list|state|trace|justify|"
@@ -5621,25 +5654,6 @@ def _callout_task_from_match(text: str, match: re.Match) -> str:
         break
     return _inventory_task_without_solution(
         "\n".join(parts), aggressive=True)
-
-
-def _inventory_chunk_has_task_markers(chunk: dict) -> bool:
-    """Whether source text explicitly signals an assessable inventory item."""
-    for section in chunk.get("sections") or []:
-        body = str(section.get("body") or "").strip()
-        if not body:
-            continue
-        heading = str(section.get("heading") or "")
-        if (
-            _EXERCISE_RE.search(heading)
-            or _is_question_list_heading(heading)
-            or _CHAPTER_WIDE_TASK_HEADING_RE.match(
-                _normalized_inventory_heading(heading))
-        ):
-            return True
-        if _INVENTORY_TASK_MARKER_RE.search(body):
-            return True
-    return False
 
 
 def _source_task_anchors(sections: list[dict]) -> list[dict]:
@@ -7209,8 +7223,10 @@ def _unowned_inventory_row_is_non_task(item: dict) -> bool:
 _INVALID_ROW_ADJUDICATION_SYSTEM = (
     "You are the Aegis inventory-row adjudicator. Deterministic validation "
     "rejected some rows of a textbook question inventory because their task "
-    "text is empty or too short to be answerable. Each rejected row is one of "
-    "two things, and you decide which against the supplied source excerpt:\n"
+    "text is empty or too short to be answerable, or nominated them because "
+    "their text describes content without asking anything. Each such row is "
+    "one of two things, and you decide which against the supplied source "
+    "excerpt:\n"
     "  real_task  — the source really asks this, and extraction mangled or "
     "truncated it. The run MUST stop; a learner question would otherwise be "
     "silently lost.\n"
@@ -7235,6 +7251,72 @@ _INVALID_ROW_CRITIC_SYSTEM = (
     'Return JSON of the form {"verdict": "verified" | "rejected", '
     '"issues": ["..."]}.'
 )
+
+_INVENTORY_COMPLETENESS_SYSTEM = (
+    "You are the Aegis inventory-completeness reviewer. You receive one "
+    "chunk of a textbook chapter and the Question / Task Inventory items an "
+    "extractor returned for it. Judge ONE thing by re-reading the chunk: "
+    "did the extraction itemize EVERY assessable question/task the chunk "
+    "prints — every numbered exercise, in-text checkpoint / boxed '?' "
+    "prompt, picture- or source-based ask, activity, worked example, and "
+    "info hub — or did it summarize, merge, or skip some? No item count, "
+    "text length, or keyword rule plays any part; only the chunk text "
+    "decides.\n"
+    "A multi-part question correctly stays ONE item. An extra item is not "
+    "under-extraction. Judge coverage, not wording quality. When the chunk "
+    "prints no assessable task at all, an empty extraction is complete.\n"
+    'Return JSON of the form {"verdict": "complete" | "under_extracted", '
+    '"reason": "...", "missed": ["<short name of each missed ask>", ...]}.'
+)
+
+
+def _inventory_chunk_completeness_verdict_via_api(
+    chunk: dict, items: list[dict], *, meta: dict,
+) -> dict:
+    """Model verdict: did extraction itemize every assessable task?
+
+    Whether a chunk was under-extracted is a judgment about what the source
+    prints, so the model makes it by re-reading the chunk — never an
+    expected-count formula scaled from character length, and never a
+    task-marker keyword regex. A response that does not positively decide
+    stops the run (fail closed).
+    """
+    import json as _json
+
+    payload = {
+        "extracted_items": [
+            {
+                "source_kind": str(item.get("source_kind") or ""),
+                "source_label": str(item.get("source_label") or ""),
+                "task_text": _trim(_inventory_task_text(item), 500),
+            }
+            for item in items
+        ],
+    }
+    user = (
+        _metadata_block(meta)
+        + "\nCHUNK TEXT:\n"
+        + chunk["text"]
+        + "\n\nEXTRACTED INVENTORY ITEMS:\n"
+        + _json.dumps(payload, ensure_ascii=False)
+    )
+    data = _openai_json(
+        _INVENTORY_COMPLETENESS_SYSTEM, user, purpose="concept_validation")
+    verdict = str((data or {}).get("verdict") or "").strip().lower()
+    if verdict not in {"complete", "under_extracted"}:
+        raise RuntimeError(
+            "inventory completeness verdict did not positively decide "
+            f"(got {verdict!r}); stopping instead of guessing"
+        )
+    return {
+        "complete": verdict == "complete",
+        "reason": str((data or {}).get("reason") or "").strip(),
+        "missed": [
+            str(entry).strip()
+            for entry in (data or {}).get("missed") or []
+            if str(entry).strip()
+        ],
+    }
 
 
 def _adjudicate_invalid_inventory_rows(
@@ -7373,19 +7455,20 @@ def _adjudicate_invalid_inventory_rows(
     return kept, dropped
 
 
-def _prune_unowned_stub_inventory_rows(
+def _unowned_stub_inventory_candidates(
     items: list[dict], anchors: list[dict],
-) -> tuple[list[dict], int]:
-    """Remove only unusable model fragments with no exact source owner.
+) -> list[dict]:
+    """Detect model-only stub/non-task rows with no exact source owner.
 
-    Deterministic anchors are the source-of-truth safety net. A model-only
-    empty or stub row cannot become a valid public Example and should not block
-    an otherwise exact inventory, but an exact source-owned short task remains
-    protected and must pass the normal terminal validation.
+    Detection only, never a decision: shape can nominate a row for review,
+    but whether an unowned stub is a mangled learner question (kept; the
+    terminal gate stops the run) or an extraction artifact (dropped) is
+    ruled by the inventory-row adjudicator and its independent critic
+    against the source. An exact source-owned short task is never
+    nominated — deterministic anchors are the source-of-truth safety net.
     """
-    kept: list[dict] = []
-    removed = 0
-    for item in items:
+    candidates: list[dict] = []
+    for index, item in enumerate(items):
         text = _inventory_task_text(item)
         key = _inventory_coverage_key(text)
         source_kind = (item.get("source_kind") or "").strip().lower()
@@ -7416,10 +7499,15 @@ def _prune_unowned_stub_inventory_rows(
             unusable
             or _unowned_inventory_row_is_non_task(item)
         ) and not source_owned:
-            removed += 1
-            continue
-        kept.append(item)
-    return kept, removed
+            candidates.append({
+                "index": index,
+                "qid": str(item.get("qid") or "").strip(),
+                "reason": (
+                    "empty_or_stub_task" if unusable
+                    else "describes_content_but_asks_nothing"
+                ),
+            })
+    return candidates
 
 
 def _inventory_stats(items: list[dict]) -> dict:
@@ -7682,20 +7770,31 @@ def _extract_question_task_inventory_via_api(
         data = _openai_json(system, user, purpose="source_extraction")
         items = sanitized_items(data, chunk)
         invalid_indexes = invalid_task_indexes(items)
-        # A chapter-scale chunk yielding a handful of items means the model
-        # summarized question lists instead of itemizing them — retry once.
-        expected_min = max(2, min(40, len(chunk["text"]) // 2_000))
-        density_retry = (
-            len(items) < expected_min
-            and _inventory_chunk_has_task_markers(chunk)
-        )
-        if invalid_indexes or density_retry:
+        # Whether this extraction covered the chunk is the model's judgment,
+        # made by re-reading the chunk — never an expected-count formula or
+        # a task-marker regex. Stub detection below is detection only: it
+        # can nominate a correction, and the terminal inventory-row
+        # adjudicator rules on any row that persists.
+        completeness = _inventory_chunk_completeness_verdict_via_api(
+            chunk, items, meta=meta)
+        if invalid_indexes or not completeness["complete"]:
+            reviewer_note = (
+                "reviewer ruled under-extraction"
+                + (f" ({completeness['reason']})"
+                   if completeness["reason"] else "")
+                if not completeness["complete"]
+                else "stub rows only"
+            )
             progress.log(
                 f"  inventory chunk {i}/{len(chunks)} needs correction: "
                 f"{len(items)} item(s), {len(invalid_indexes)} empty/stub "
-                f"row(s), expected at least {expected_min} item(s) for "
-                f"{len(chunk['text']):,} chars — retrying once.",
+                f"row(s), {reviewer_note} — retrying once.",
                 level="warning",
+            )
+            missed_block = (
+                "\nThe completeness reviewer named these missed asks:\n- "
+                + "\n- ".join(completeness["missed"])
+                if completeness["missed"] else ""
             )
             retry_user = (
                 user
@@ -7710,33 +7809,23 @@ def _extract_question_task_inventory_via_api(
                 "the full stem + all subparts. Every returned raw_task must be "
                 "complete and substantive. Never merge a question list into one "
                 "item, and never skip a checkpoint."
+                + missed_block
             )
             retry_data = _openai_json(
                 system, retry_user, purpose="source_extraction")
             retry_items = sanitized_items(retry_data, chunk)
-            retry_invalid_indexes = invalid_task_indexes(retry_items)
-            if invalid_indexes:
-                original_substantive_count = (
-                    len(items) - len(invalid_indexes))
-                minimum_retry_count = max(1, original_substantive_count)
-                if (
-                    retry_invalid_indexes
-                    or len(retry_items) < minimum_retry_count
-                ):
-                    raise RuntimeError(
-                        "question inventory extraction returned "
-                        f"{len(retry_invalid_indexes)} empty/stub task row(s) "
-                        f"and {len(retry_items)} substantive row(s) after retry "
-                        f"for chunk {i}, below the required "
-                        f"{minimum_retry_count}; refusing to checkpoint an "
-                        "inventory that cannot satisfy exact coverage"
-                    )
-                items = retry_items
-            elif (
-                not retry_invalid_indexes
-                and len(retry_items) > len(items)
-            ):
-                items = retry_items
+            retry_completeness = _inventory_chunk_completeness_verdict_via_api(
+                chunk, retry_items, meta=meta)
+            if not retry_completeness["complete"]:
+                raise RuntimeError(
+                    "question inventory extraction is still under-extracted "
+                    f"after retry for chunk {i}"
+                    + (f" ({retry_completeness['reason']})"
+                       if retry_completeness["reason"] else "")
+                    + "; refusing to checkpoint an inventory that cannot "
+                    "satisfy exact coverage"
+                )
+            items = retry_items
         for item in items:
             inventory["items"].append(item)
 
@@ -7745,15 +7834,6 @@ def _extract_question_task_inventory_via_api(
         inventory["items"], anchors)
     inventory["items"] = _attach_explicit_figure_images(
         inventory["items"], sections)
-    inventory["items"], pruned_stubs = _prune_unowned_stub_inventory_rows(
-        inventory["items"], anchors)
-    if pruned_stubs:
-        progress.log(
-            "Pruned "
-            f"{pruned_stubs} model-only empty/stub inventory row(s) with no "
-            "exact deterministic source owner.",
-            level="warning",
-        )
     for i, item in enumerate(inventory["items"], start=1):
         item["qid"] = f"QINV-{i:04d}"
         item["order_index"] = i
@@ -7770,20 +7850,30 @@ def _extract_question_task_inventory_via_api(
         item.pop("_topic_scope", None)
     inventory["stats"] = _inventory_stats(inventory["items"])
     invalid_inventory = _invalid_inventory_items(inventory)
-    if invalid_inventory:
-        # Deterministic validation can say a row is unusable; it cannot say
-        # whether that is a mangled question (stop the run) or a section
-        # banner the extractor mistook for one (drop it and continue). The
-        # model rules on that against the source, with an independent critic,
-        # and anything it does not positively call an artifact is kept.
+    flagged_indexes = {
+        int(issue.get("index") or 0) for issue in invalid_inventory
+    }
+    review_rows = invalid_inventory + [
+        candidate
+        for candidate in _unowned_stub_inventory_candidates(
+            inventory["items"], anchors)
+        if candidate["index"] not in flagged_indexes
+    ]
+    if review_rows:
+        # Deterministic validation can say a row is unusable, and shape can
+        # nominate an unowned stub for review; neither can say whether that
+        # is a mangled question (stop the run) or a section banner the
+        # extractor mistook for one (drop it and continue). The model rules
+        # on that against the source, with an independent critic, and
+        # anything it does not positively call an artifact is kept.
         inventory["items"], adjudicated = _adjudicate_invalid_inventory_rows(
-            inventory["items"], invalid_inventory, sections=sections,
+            inventory["items"], review_rows, sections=sections,
         )
         if adjudicated:
             for item_index, item in enumerate(inventory["items"]):
                 item["order_index"] = item_index
             inventory["stats"] = _inventory_stats(inventory["items"])
-            invalid_inventory = _invalid_inventory_items(inventory)
+        invalid_inventory = _invalid_inventory_items(inventory)
     if invalid_inventory:
         for issue in invalid_inventory[:8]:
             index = int(issue.get("index") or 0)
@@ -19640,18 +19730,6 @@ def _snap_topics_to_headings(
     return records
 
 
-def _topics_look_collapsed(records: list[dict], headings: list[str]) -> bool:
-    """True when the map filed (nearly) everything under one umbrella topic
-    although the source clearly has several section headings."""
-    if not records or len(headings) < 2:
-        return False
-    topics = {_topic_comparison_key(r.get("topic") or "") for r in records}
-    topics.discard("")
-    if len(topics) <= 1:
-        return True
-    return len(records) >= 12 and len(topics) <= 2 and len(headings) >= 4
-
-
 def _missing_source_topic_excerpts(
     records: list[dict], source_topic_excerpts: list[dict],
 ) -> list[dict]:
@@ -20090,6 +20168,63 @@ def _recover_chapter_opening_concepts_via_api(
         level="success",
     )
     return out
+
+
+def _topic_segregation_verdict_via_api(
+    records: list[dict], *, meta: dict,
+    source_topic_excerpts: list[dict] | None = None,
+    headings: list[str] | None = None,
+) -> dict:
+    """Model verdict: does the map's topic segregation mirror the source?
+
+    Whether a skeleton needs re-segregation is a judgment about what the
+    source means, so the model makes it from the source evidence — never a
+    heading count or a collapse-shape test. The verdict only routes the
+    alignment passes; it cannot add, drop, or rewrite a row. A response
+    that does not positively decide stops the run (fail closed).
+    """
+    import json as _json
+
+    headings = [h.strip() for h in (headings or []) if h.strip()]
+    source_topic_excerpts = [
+        group for group in (source_topic_excerpts or [])
+        if (group.get("topic") or "").strip()
+    ]
+    excerpt_budget = max(
+        2_000, 60_000 // max(1, len(source_topic_excerpts)))
+    prompt_excerpts = [
+        {
+            "topic": (group.get("topic") or "").strip(),
+            "excerpt": _trim(group.get("excerpt") or "", excerpt_budget),
+        }
+        for group in source_topic_excerpts
+    ]
+    rows = [
+        {
+            "concept": rec.get("concept_title", ""),
+            "topic": rec.get("topic", ""),
+        }
+        for rec in records
+    ]
+    system = prompts.get_text("concepts.topic_segregation_verdict.system")
+    user = (
+        _metadata_block(meta)
+        + "\nSECTION HEADINGS (reading order):\n- "
+        + "\n- ".join(headings)
+        + "\n\nSOURCE TOPIC EXCERPTS (trimmed):\n"
+        + _json.dumps({"source_topics": prompt_excerpts}, ensure_ascii=False)
+        + f"\n\nCURRENT CONCEPT MAP ({len(rows)} rows):\n"
+        + _json.dumps({"rows": rows}, ensure_ascii=False)
+    )
+    data = _openai_json(system, user, purpose="concept_validation")
+    verdict = str((data or {}).get("verdict") or "").strip().lower()
+    reason = str((data or {}).get("reason") or "").strip()
+    if verdict not in {"faithful", "restructure"}:
+        raise RuntimeError(
+            "topic segregation verdict did not positively decide "
+            f"(got {verdict!r}); stopping instead of guessing"
+        )
+    return {"restructure": verdict == "restructure", "reason": reason}
 
 
 def _restructure_topics_via_api(
@@ -21378,22 +21513,37 @@ def _run_live_concept_pre_final_stages(
         out = _consolidate_concepts_via_api(
             out, subject=subject, mmd_text=mmd_text, meta=meta)
         progress.step("Concept extraction — aligning source topics", value=0.35)
-        if _topics_look_collapsed(out, headings):
-            progress.log(
-                f"Topic segregation collapsed: {len(out)} concepts share "
-                f"almost one topic while the source has {len(headings)} "
-                "section headings — re-segregating topics via API.",
-                level="warning",
-            )
-        if len(headings) >= 3 or (
-            headings and _topics_look_collapsed(out, headings)
-        ):
-            out = _restructure_topics_via_api(
-                out, meta=meta,
-                source_topic_excerpts=source_topic_excerpts)
-        else:
+        if len([h for h in headings if h.strip()]) < 2:
+            # A single heading (or none) leaves nothing to re-segregate
+            # against — the decision space has one option, so no judgment
+            # exists to make. Exact source evidence still assigns what it
+            # can prove.
             out = _assign_topics_from_source_evidence(
                 out, source_topic_excerpts)
+        else:
+            segregation = _topic_segregation_verdict_via_api(
+                out, meta=meta,
+                source_topic_excerpts=source_topic_excerpts,
+                headings=headings,
+            )
+            reason_suffix = (
+                f": {segregation['reason']}" if segregation["reason"] else "."
+            )
+            if segregation["restructure"]:
+                progress.log(
+                    "Topic segregation judged unfaithful to the source"
+                    + reason_suffix + " Re-segregating topics via API.",
+                    level="warning",
+                )
+                out = _restructure_topics_via_api(
+                    out, meta=meta,
+                    source_topic_excerpts=source_topic_excerpts)
+            else:
+                progress.log(
+                    "Topic segregation judged faithful to the source"
+                    + reason_suffix)
+                out = _assign_topics_from_source_evidence(
+                    out, source_topic_excerpts)
         out = _snap_topics_to_headings(
             out, headings, chapter_title=chapter_title,
             allow_chapter_title_topic=allow_chapter_title_topic)

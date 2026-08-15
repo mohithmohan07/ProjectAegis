@@ -4748,7 +4748,8 @@ def test_fill_table_below_does_not_claim_table_after_intervening_prose():
     }]
 
 
-def test_inventory_prunes_only_model_stub_without_exact_source_owner():
+def test_only_unowned_model_stub_is_nominated_for_adjudication():
+    """Shape nominates; the adjudicator decides. Nothing is dropped here."""
     source_task = "Is 9 a cube?"
     anchors = [{
         "source_kind": "checkpoint_question",
@@ -4766,11 +4767,13 @@ def test_inventory_prunes_only_model_stub_without_exact_source_owner():
         },
     ]
 
-    cleaned, removed = g._prune_unowned_stub_inventory_rows(
-        model_items, anchors)
+    candidates = g._unowned_stub_inventory_candidates(model_items, anchors)
 
-    assert removed == 1
-    assert [item["raw_task"] for item in cleaned] == [source_task]
+    assert [c["index"] for c in candidates] == [1]
+    assert candidates[0]["reason"] == "empty_or_stub_task"
+    # Detection never removes: both rows are still present for the
+    # inventory-row adjudicator and its critic to rule on.
+    assert len(model_items) == 2
 
 
 def test_visual_anchor_does_not_protect_duplicate_that_lost_its_image():
@@ -4794,11 +4797,12 @@ def test_visual_anchor_does_not_protect_duplicate_that_lost_its_image():
         "image_urls": [],
     }
 
-    cleaned, removed = g._prune_unowned_stub_inventory_rows(
+    candidates = g._unowned_stub_inventory_candidates(
         [complete, incomplete], anchors)
 
-    assert removed == 1
-    assert cleaned == [complete]
+    # The anchor's visual contract protects only the row that kept its
+    # image; the duplicate that lost it is nominated for adjudication.
+    assert [c["index"] for c in candidates] == [1]
 
 
 def test_source_owned_markdown_visual_survives_attachment_resolution():

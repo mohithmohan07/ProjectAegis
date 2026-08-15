@@ -1,5 +1,15 @@
 # Applying the chapter outline to a Mathpix-converted source
 
+> **Historical (superseded by PR #213, "Scrap Mathpix: one converter, no
+> switch, no gate").** The two-converter architecture this document
+> describes no longer exists: the Mathpix converter, its credentials, and
+> the source-quality gate were removed, and the **GPT PDF-to-ACSD reader is
+> the only conversion path**, so every conversion now receives the outline
+> restructure via `render_page_acsd_to_mmd`. The measurements below are why
+> the Mathpix path lost. Kept for the record; nothing here describes
+> current behaviour, except that MMD from old Mathpix conversions remains
+> readable (legacy-format cleanup in `generation.py`).
+
 ## The problem
 
 `job.mmd_text` is written once by conversion and every later phase reads it.

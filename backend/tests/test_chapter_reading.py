@@ -284,7 +284,8 @@ def test_the_process_document_states_the_five_steps():
 
     for phrase in (
         "Step 1", "Step 2", "Step 3", "Step 4", "Step 5",
-        "QID009#a",
+        "never split",
+        "culmination-level",
         "coverage, not certainty",
         "Nothing here is deterministic parsing",
     ):
