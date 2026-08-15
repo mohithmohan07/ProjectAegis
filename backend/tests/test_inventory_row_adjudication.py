@@ -146,6 +146,44 @@ def test_a_provider_failure_keeps_every_row(failing: str):
     assert dropped == []
 
 
+def test_completeness_verdict_fails_closed_on_no_decision(monkeypatch):
+    """No positive verdict → the run stops; nothing is guessed."""
+    monkeypatch.setattr(
+        g, "_openai_json", lambda *a, **kw: {"verdict": "maybe"})
+    with pytest.raises(RuntimeError, match="did not positively decide"):
+        g._inventory_chunk_completeness_verdict_via_api(
+            {"text": "chunk"}, [], meta={})
+
+
+def test_completeness_verdict_carries_chunk_and_items(monkeypatch):
+    captured = {}
+
+    def fake(system, user, **kw):
+        captured["system"] = system
+        captured["user"] = user
+        return {
+            "verdict": "under_extracted",
+            "reason": "checkpoint skipped",
+            "missed": ["boxed '?' checkpoint", ""],
+        }
+
+    monkeypatch.setattr(g, "_openai_json", fake)
+    verdict = g._inventory_chunk_completeness_verdict_via_api(
+        {"text": "1. Solve for x."},
+        [{"source_kind": "exercise", "raw_task": "Solve for x."}],
+        meta={},
+    )
+    assert verdict == {
+        "complete": False,
+        "reason": "checkpoint skipped",
+        "missed": ["boxed '?' checkpoint"],
+    }
+    assert "1. Solve for x." in captured["user"]
+    assert "Solve for x." in captured["user"]
+    # The prompt itself forbids count/length/keyword rules from deciding.
+    assert "No item count" in captured["system"]
+
+
 def test_both_prompts_satisfy_json_mode():
     """``_openai_json`` runs in JSON mode, which rejects a request whose
     messages never say "json". A live run lost ten minutes to a 400 here, and
@@ -153,6 +191,7 @@ def test_both_prompts_satisfy_json_mode():
     for prompt in (
         g._INVALID_ROW_ADJUDICATION_SYSTEM,
         g._INVALID_ROW_CRITIC_SYSTEM,
+        g._INVENTORY_COMPLETENESS_SYSTEM,
     ):
         assert "json" in prompt.lower()
 

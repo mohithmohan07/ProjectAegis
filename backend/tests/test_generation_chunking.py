@@ -333,13 +333,22 @@ def test_culmination_pass_cannot_drop_normal_rows(monkeypatch):
     assert culms[1]["topic"] == "Topic B"
 
 
-def test_inventory_extraction_retries_sparse_chunks(monkeypatch):
-    """A chapter-scale chunk yielding a couple of inventory items is retried."""
-    calls = {"n": 0}
+def test_inventory_extraction_retries_underextracted_chunks(monkeypatch):
+    """The completeness reviewer, not a count formula, triggers the retry."""
+    calls = {"extract": 0, "review": 0}
 
     def fake_openai(system, user, **kw):
-        calls["n"] += 1
-        if calls["n"] == 1:
+        if "inventory-completeness reviewer" in system:
+            calls["review"] += 1
+            if calls["review"] == 1:
+                return {
+                    "verdict": "under_extracted",
+                    "reason": "the numbered exercise list was summarized",
+                    "missed": ["numbered exercise items"],
+                }
+            return {"verdict": "complete", "reason": ""}
+        calls["extract"] += 1
+        if calls["extract"] == 1:
             return {"items": [
                 {
                     "raw_task": (
@@ -350,6 +359,7 @@ def test_inventory_extraction_retries_sparse_chunks(monkeypatch):
                 for i in range(1, 3)
             ]}
         assert "under-extraction" in user
+        assert "numbered exercise items" in user
         return {"items": [
             {
                 "raw_task": (
@@ -361,14 +371,15 @@ def test_inventory_extraction_retries_sparse_chunks(monkeypatch):
         ]}
 
     monkeypatch.setattr(g, "_openai_json", fake_openai)
-    # This test isolates density retry behavior; deterministic source anchors
+    # This test isolates the retry behavior; deterministic source anchors
     # have their own coverage regressions.
     monkeypatch.setattr(g, "_source_task_anchors", lambda sections: [])
     body = "1. Solve for x in the equation shown below. " * 400  # ~18k chars
     sections = g.parse_mmd_sections("# Exercises\n\n" + body)
     inventory = g._extract_question_task_inventory_via_api(
         meta=g._metadata(subject="Math"), sections=sections)
-    assert calls["n"] == 2
+    assert calls["extract"] == 2
+    assert calls["review"] == 2
     assert len(inventory["items"]) == 12
     assert inventory["items"][0]["qid"] == "QINV-0001"
 
@@ -450,6 +461,8 @@ def test_concepts_live_processes_every_chunk(monkeypatch):
     calls = {"n": 0, "skeleton": 0}
 
     def fake_openai_json(system, user, **kw):
+        if "inventory-completeness reviewer" in system:
+            return {"verdict": "complete", "reason": ""}
         calls["n"] += 1
         if "clean teachable concept skeleton" in system:
             calls["skeleton"] += 1
