@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 import re
 
 from .. import config, models
-from ..bulk_import import mes_profile
+from ..bulk_import import assessment_workbook
 from . import assessment_grouping as grouping
 from . import assessment_release as rel
 
@@ -161,7 +161,7 @@ def create_release(
         job_id=job_id,
         state=rel.advance_state("draft", "materialized"),
         concept_snapshot=snapshot,
-        concept_snapshot_sha256=mes_profile.snapshot_sha256(snapshot),
+        concept_snapshot_sha256=assessment_workbook.snapshot_sha256(snapshot),
         source_inventory_sha256=frozen["hashes"]["source_atoms"],
         blueprint_sha256=frozen["hashes"]["blueprint_cells"],
         payload=dict(payload),
@@ -218,7 +218,7 @@ def publish_release(
     served, so a release with only one successfully published file cannot
     exist (spec §13.2 step 7).
     """
-    output = mes_profile.build_dual_output(release.concept_snapshot)
+    output = assessment_workbook.build_dual_output(release.concept_snapshot)
     target = _version_dir(release)
     staging = target.with_name(target.name + ".staging")
     staging_parent = staging.parent
@@ -367,7 +367,7 @@ def upload_master_to_database(
                 f"{filename} on disk no longer matches the release hash")
     if manifest.get("concept_snapshot_sha256") != (
         release.concept_snapshot_sha256
-    ) or mes_profile.snapshot_sha256(release.concept_snapshot) != (
+    ) or assessment_workbook.snapshot_sha256(release.concept_snapshot) != (
         release.concept_snapshot_sha256
     ):
         raise UploadRefused("release snapshot drifted since publication")

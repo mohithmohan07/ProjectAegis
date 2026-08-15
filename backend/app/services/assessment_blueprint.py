@@ -17,9 +17,10 @@ from typing import Iterable, Mapping
 
 from . import assessment_release as rel
 
-# Legacy Build-Assessments sheet kinds; the MES profile itself never emits
-# Subjective rows (spec §3.1) — that restriction binds MES blueprint cells,
-# not legacy concept-mapping sessions, which may still author all three.
+# Legacy Build-Assessments sheet kinds. A strict assessment profile (e.g.
+# the reference school's) may forbid Subjective rows — that restriction
+# binds its blueprint cells, not legacy concept-mapping sessions, which may
+# still author all three.
 LEGACY_SHEET_KINDS = ("objective", "subjective", "descriptive")
 
 
@@ -36,7 +37,7 @@ def compile_cells_from_batches(
     *,
     concepts: Iterable | None = None,
     default_marks: Mapping[str, float] | None = None,
-    mes_profile: bool = False,
+    strict_profile: bool = False,
 ) -> list[dict]:
     """Compile stacked legacy BlueprintBatch rows into explicit cells.
 
@@ -78,12 +79,12 @@ def compile_cells_from_batches(
                                 getattr(batch, "appears_in", None) or []),
                             "concept_id": concept_id,
                             "source_policy": "generate",
-                            "mes_profile": bool(mes_profile),
+                            "strict_profile": bool(strict_profile),
                         })
     return cells
 
 
-def validate_cells(cells: list[dict], *, mes_profile: bool = False) -> None:
+def validate_cells(cells: list[dict], *, strict_profile: bool = False) -> None:
     """Stage-3 validation before any generation spend (spec §6 Stage 3).
 
     Exact counts, totals, and structural rules. Raises with every defect
@@ -91,7 +92,7 @@ def validate_cells(cells: list[dict], *, mes_profile: bool = False) -> None:
     """
     errors: list[str] = []
     seen_ids: set[str] = set()
-    allowed_kinds = rel.SHEET_KINDS if mes_profile else LEGACY_SHEET_KINDS
+    allowed_kinds = rel.SHEET_KINDS if strict_profile else LEGACY_SHEET_KINDS
     for cell in cells:
         cell_id = str(cell.get("cell_id") or "")
         if not cell_id:

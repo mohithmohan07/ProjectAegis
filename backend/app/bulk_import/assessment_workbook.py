@@ -1,8 +1,8 @@
-"""MES workbook profile: dual projections of one immutable release snapshot.
+"""Assessment workbook: dual projections of one immutable release snapshot.
 
 The positional authority for everything here is the Grade-6 MES Bulk Import
 FINAL template set (spec §0 item 2, §23), captured verbatim in
-``mes_template_manifest.json``: three sheets (Objective, Descriptive,
+``assessment_workbook_template.json``: three sheets (Objective, Descriptive,
 Subjective — no Doc Link, no trailing spaces in sheet names), the exact
 two-row headers, the row-1 merged bands with their sheet-specific labels,
 ``answer_restriction`` between ``question_appears_in`` and
@@ -37,11 +37,12 @@ from typing import Any, Mapping
 import openpyxl
 from openpyxl.styles import Alignment, Font
 
+from ..services import assessment_profile
 from ..services import assessment_release as rel
 
 CELL_LIMIT = 32_767
 
-_MANIFEST_PATH = Path(__file__).with_name("mes_template_manifest.json")
+_MANIFEST_PATH = Path(__file__).with_name("assessment_workbook_template.json")
 MANIFEST: dict = json.loads(_MANIFEST_PATH.read_text(encoding="utf-8"))
 SHEET_ORDER: list[str] = list(MANIFEST["sheet_order"])
 FIELDS: dict[str, list[str]] = {
@@ -64,7 +65,7 @@ MAX_SUBQUESTIONS = 15
 MAX_SUBQUESTION_KEYWORDS = 6
 
 
-class MesRenderError(ValueError):
+class WorkbookRenderError(ValueError):
     """A workbook cannot be rendered without violating a mechanical rule."""
 
 
@@ -75,7 +76,7 @@ def _cell_value(value: Any, *, context: str) -> Any:
         return value
     text = str(value)
     if len(text) > CELL_LIMIT:
-        raise MesRenderError(
+        raise WorkbookRenderError(
             f"{context}: cell exceeds {CELL_LIMIT} characters "
             f"({len(text)})")
     if text[:1] in {"=", "+", "-", "@"}:
@@ -213,7 +214,7 @@ def _question_record(candidate: Mapping, sheet: str) -> dict:
     ]
     if sheet == "Objective":
         if len(answers) > MAX_OBJECTIVE_OPTIONS:
-            raise MesRenderError(
+            raise WorkbookRenderError(
                 f"{record['question_label']}: more than "
                 f"{MAX_OBJECTIVE_OPTIONS} options")
         for n, answer in enumerate(answers, start=1):
@@ -226,7 +227,7 @@ def _question_record(candidate: Mapping, sheet: str) -> dict:
         record["math_keyboard"] = candidate.get("math_keyboard", "")
         record["display_answer"] = candidate.get("display_answer", "")
         if len(answers) > MAX_DESCRIPTIVE_ANSWERS:
-            raise MesRenderError(
+            raise WorkbookRenderError(
                 f"{record['question_label']}: more than "
                 f"{MAX_DESCRIPTIVE_ANSWERS} answer blocks")
         for n, answer in enumerate(answers, start=1):
@@ -239,7 +240,7 @@ def _question_record(candidate: Mapping, sheet: str) -> dict:
             if isinstance(s, Mapping)
         ]
         if len(sub_questions) > MAX_SUBQUESTIONS:
-            raise MesRenderError(
+            raise WorkbookRenderError(
                 f"{record['question_label']}: more than "
                 f"{MAX_SUBQUESTIONS} subquestions")
         for n, sub in enumerate(sub_questions, start=1):
@@ -249,7 +250,7 @@ def _question_record(candidate: Mapping, sheet: str) -> dict:
                 k for k in sub.get("keywords") or [] if isinstance(k, Mapping)
             ]
             if len(keywords) > MAX_SUBQUESTION_KEYWORDS:
-                raise MesRenderError(
+                raise WorkbookRenderError(
                     f"{record['question_label']}: subquestion {n} has more "
                     f"than {MAX_SUBQUESTION_KEYWORDS} keyword slots")
             for m, keyword in enumerate(keywords, start=1):
@@ -334,7 +335,7 @@ def render_master_file(snapshot: Mapping) -> tuple[bytes, dict]:
         kind = str(candidate.get("sheet_kind") or "")
         sheet = sheet_for_kind.get(kind)
         if sheet is None:
-            # MES never emits Subjective data rows (spec §3.1).
+            # The reference profile emits no Subjective data rows.
             unplaced.append({
                 "candidate_id": str(candidate.get("candidate_id") or ""),
                 "question_label": str(candidate.get("question_label") or ""),
@@ -456,12 +457,18 @@ def validate_concept_file(parsed: Mapping, snapshot: Mapping) -> list[str]:
     return errors
 
 
-def validate_master_file(parsed: Mapping, snapshot: Mapping) -> list[str]:
+def validate_master_file(
+    parsed: Mapping, snapshot: Mapping, profile: Mapping | str | None = None,
+) -> list[str]:
+    profile = assessment_profile.resolve(profile)
     errors = _header_errors(parsed)
     if errors:
         return errors
-    if parsed["sheets"]["Subjective"]["rows"]:
-        errors.append("Subjective: MES must contain no data rows")
+    if not profile["allow_subjective_rows"] and (
+        parsed["sheets"]["Subjective"]["rows"]
+    ):
+        errors.append(
+            f"Subjective: profile {profile['name']!r} allows no data rows")
 
     groups = [dict(g) for g in snapshot.get("groups") or []]
     expected_group_keys = {str(g.get("group_key") or "") for g in groups}
@@ -487,10 +494,10 @@ def validate_master_file(parsed: Mapping, snapshot: Mapping) -> list[str]:
                 continue
             question_rows += 1
             appears = str(row.get("question_appears_in") or "")
-            if appears != "Pre/Post-Worksheet/Test":
+            if appears != profile["appears_in"]:
                 errors.append(
                     f"{label}: question_appears_in {appears!r} is not the "
-                    "MES wire value")
+                    f"profile wire value {profile['appears_in']!r}")
             restriction = str(row.get("answer_restriction") or "")
             if restriction not in rel.ANSWER_RESTRICTIONS:
                 errors.append(
@@ -542,18 +549,21 @@ def validate_master_file(parsed: Mapping, snapshot: Mapping) -> list[str]:
 # Dual projection (spec §13.1–§13.2)
 # --------------------------------------------------------------------------- #
 
-def build_dual_output(snapshot: Mapping) -> dict:
+def build_dual_output(
+    snapshot: Mapping, profile: Mapping | str | None = None,
+) -> dict:
     """Render, read back, validate, and hash both projections of one
     snapshot. Returns concepts/master bytes plus the shared manifest."""
+    profile = assessment_profile.resolve(profile)
     snapshot_hash = snapshot_sha256(snapshot)
     concepts_bytes = render_concept_file(snapshot)
     master_bytes, issues = render_master_file(snapshot)
     concept_errors = validate_concept_file(
         parse_workbook(concepts_bytes), snapshot)
     master_errors = validate_master_file(
-        parse_workbook(master_bytes), snapshot)
+        parse_workbook(master_bytes), snapshot, profile)
     manifest = {
-        "profile": "mes-1",
+        "profile": profile["name"],
         "template_source": MANIFEST.get("source", ""),
         "concept_snapshot_sha256": snapshot_hash,
         "workbook_sha256s": {

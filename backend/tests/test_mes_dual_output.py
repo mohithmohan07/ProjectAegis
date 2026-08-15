@@ -1,7 +1,7 @@
 """MES PR 5 — Concept and Master renderers from one release snapshot.
 
 The uploaded Grade-6 MES FINAL templates are the positional authority;
-``mes_template_manifest.json`` captures them verbatim and these tests pin
+``assessment_workbook_template.json`` captures them verbatim and these tests pin
 both renderers to it (spec §0 item 2, §1, §9, §10, §13).
 """
 from __future__ import annotations
@@ -10,7 +10,7 @@ import copy
 
 import pytest
 
-from app.bulk_import import mes_profile as mp
+from app.bulk_import import assessment_workbook as mp
 from app.services import assessment_grouping as ag
 
 
@@ -235,7 +235,7 @@ def test_master_validation_names_wire_value_and_arithmetic_defects():
     snapshot["candidates"][0]["answers"][0]["answer_weightage"] = "3"
     master, _ = mp.render_master_file(snapshot)
     errors = mp.validate_master_file(mp.parse_workbook(master), snapshot)
-    assert any("not the MES wire value" in e for e in errors)
+    assert any("not the profile wire value" in e for e in errors)
     assert any("correct weightage 3 != marks 1" in e for e in errors)
 
 
@@ -250,12 +250,12 @@ def test_formula_injection_and_cell_limit_guards():
 
     oversized = copy.deepcopy(_snapshot())
     oversized["candidates"][0]["question"] = "x" * (mp.CELL_LIMIT + 1)
-    with pytest.raises(mp.MesRenderError, match="exceeds"):
+    with pytest.raises(mp.WorkbookRenderError, match="exceeds"):
         mp.render_master_file(oversized)
 
 
 def test_capacity_overflow_is_refused_with_the_label_named():
     snapshot = copy.deepcopy(_snapshot())
     snapshot["candidates"][0]["answers"] *= 4  # 8 options
-    with pytest.raises(mp.MesRenderError, match="Q01"):
+    with pytest.raises(mp.WorkbookRenderError, match="Q01"):
         mp.render_master_file(snapshot)
