@@ -1,5 +1,10 @@
 import { useState } from "react";
 import { api } from "../api/client";
+import type {
+  AssessmentRelease,
+  AssessmentReleaseIssues,
+  AssessmentReleaseUploadResult,
+} from "../api/client";
 import { useAsync } from "../hooks";
 import { useRunConsole } from "../RunConsole";
 import DirectoryPicker from "../components/DirectoryPicker";
@@ -7,7 +12,7 @@ import DocumentUpload from "../components/DocumentUpload";
 import ApiUsageSummary from "../components/ApiUsageSummary";
 import type { BlueprintBatch, OpenAIUsage, Scope, Session, UploadJob, Vocab } from "../types";
 
-type Path = null | "concept_mapping" | "upload";
+type Path = null | "concept_mapping" | "upload" | "release";
 
 export default function BuildAssessments() {
   const [path, setPath] = useState<Path>(null);
@@ -35,6 +40,14 @@ export default function BuildAssessments() {
               upload type, pick where to deposit, then identify & generate.
             </div>
           </button>
+          <button className="module-card" onClick={() => setPath("release")}>
+            <div className="module-title">c · MES Release review</div>
+            <div className="module-desc">
+              Review a generated MES release: readiness and issues, the Concept
+              File and Master File downloads, and the explicit Upload Master to
+              Database action. Nothing publishes to the database automatically.
+            </div>
+          </button>
         </div>
       )}
 
@@ -45,6 +58,7 @@ export default function BuildAssessments() {
       )}
       {path === "concept_mapping" && vocab.data && <ConceptMappingFlow vocab={vocab.data} />}
       {path === "upload" && vocab.data && <UploadFlow vocab={vocab.data} />}
+      {path === "release" && <ReleaseReviewFlow />}
     </>
   );
 }
@@ -421,6 +435,122 @@ function ResultCard({
             : "Rows were appended to the Bulk Import output workbook — download it from the Database tab."}
         </span>
       </div>
+    </div>
+  );
+}
+
+/* --------------------------- MES release review -------------------------- */
+
+function ReleaseReviewFlow() {
+  const [releaseId, setReleaseId] = useState("");
+  const [release, setRelease] = useState<AssessmentRelease | null>(null);
+  const [issues, setIssues] = useState<AssessmentReleaseIssues | null>(null);
+  const [uploadResult, setUploadResult] =
+    useState<AssessmentReleaseUploadResult | null>(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const load = async () => {
+    setError(""); setUploadResult(null); setRelease(null); setIssues(null);
+    const id = Number(releaseId);
+    if (!id) { setError("Enter a release id."); return; }
+    try {
+      setRelease(await api.getAssessmentRelease(id));
+      setIssues(await api.getAssessmentReleaseIssues(id));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const upload = async () => {
+    if (!release) return;
+    setBusy(true); setError("");
+    try {
+      setUploadResult(await api.uploadReleaseMaster(release.id));
+      setRelease(await api.getAssessmentRelease(release.id));
+    } catch (e) {
+      // A refusal is a refusal: show the exact reason, never a fake success.
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const blocked = release?.readiness === "blocked_for_database_upload";
+  const unplaced = issues?.issues?.unplaced ?? [];
+
+  return (
+    <div className="card">
+      <h2>MES Release</h2>
+      <div className="row" style={{ gap: 8 }}>
+        <input
+          placeholder="Release id"
+          value={releaseId}
+          onChange={(e) => setReleaseId(e.target.value)}
+          style={{ width: 120 }}
+        />
+        <button onClick={load}>Load</button>
+      </div>
+      {error && <div className="error" style={{ marginTop: 8 }}>{error}</div>}
+      {release && (
+        <div style={{ marginTop: 12 }}>
+          <div>
+            <strong>{release.release_uid}</strong> v{release.version} — state{" "}
+            <code>{release.state}</code>, readiness{" "}
+            <code>{release.readiness || "unpublished"}</code>
+          </div>
+          {release.published ? (
+            <div className="row" style={{ gap: 12, marginTop: 8 }}>
+              <a href={api.releaseConceptsUrl(release.id)}>
+                Download Concept File
+              </a>
+              <a href={api.releaseMasterUrl(release.id)}>
+                Download Master File
+              </a>
+            </div>
+          ) : (
+            <div style={{ marginTop: 8 }}>
+              This release has no published artifacts yet.
+            </div>
+          )}
+          {(issues?.payload_errors?.length ?? 0) > 0 && (
+            <div className="error" style={{ marginTop: 8 }}>
+              {issues!.payload_errors.map((e, i) => <div key={i}>{e}</div>)}
+            </div>
+          )}
+          {unplaced.length > 0 && (
+            <div className="error" style={{ marginTop: 8 }}>
+              {unplaced.map((u, i) => (
+                <div key={i}>
+                  Unplaced: {u.question_label || u.candidate_id} — {u.reason}
+                </div>
+              ))}
+            </div>
+          )}
+          <div style={{ marginTop: 12 }}>
+            <button
+              disabled={busy || blocked || !release.published || release.uploaded}
+              onClick={upload}
+              title={blocked
+                ? "Blocked for database upload — resolve the named issues and publish a new version"
+                : undefined}
+            >
+              {release.uploaded
+                ? "Already uploaded"
+                : blocked
+                  ? "Blocked for database upload"
+                  : "Upload Master to Database"}
+            </button>
+          </div>
+          {uploadResult && (
+            <div style={{ marginTop: 8 }}>
+              Uploaded {uploadResult.release_uid} v{uploadResult.version}:{" "}
+              {uploadResult.questions_created} question(s),{" "}
+              {uploadResult.groups_created} group(s) created.
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

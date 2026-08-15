@@ -463,4 +463,46 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ question_ids, concept_ids }),
     }),
+
+  // MES releases: dual projections of one immutable snapshot (spec §16).
+  getAssessmentRelease: (id: number) =>
+    http<AssessmentRelease>(`/build-assessments/releases/${id}`),
+  getAssessmentReleaseIssues: (id: number) =>
+    http<AssessmentReleaseIssues>(`/build-assessments/releases/${id}/issues`),
+  releaseConceptsUrl: (id: number) =>
+    `${BASE}/build-assessments/releases/${id}/concepts.xlsx`,
+  releaseMasterUrl: (id: number) =>
+    `${BASE}/build-assessments/releases/${id}/master.xlsx`,
+  uploadReleaseMaster: (id: number) =>
+    http<AssessmentReleaseUploadResult>(
+      `/build-assessments/releases/${id}/upload-to-database`,
+      { method: "POST" },
+    ),
 };
+
+export interface AssessmentRelease {
+  id: number;
+  release_uid: string;
+  version: number;
+  state: string;
+  readiness: string;
+  concept_snapshot_sha256: string;
+  workbook_sha256s: Record<string, string>;
+  published: boolean;
+  uploaded: boolean;
+  created_at: string;
+}
+
+export interface AssessmentReleaseIssues {
+  readiness: string;
+  payload_errors: string[];
+  read_back: { concepts_errors?: string[]; master_errors?: string[] };
+  issues: { unplaced?: { candidate_id: string; question_label: string; reason: string }[] };
+}
+
+export interface AssessmentReleaseUploadResult {
+  release_uid: string;
+  version: number;
+  groups_created: number;
+  questions_created: number;
+}

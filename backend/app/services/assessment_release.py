@@ -37,8 +37,10 @@ _ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
     "draft": frozenset({"materialized", "superseded"}),
     "materialized": frozenset(
         {"validated_with_flags", "ready_for_upload", "superseded"}),
+    # Released-with-warnings stays uploadable: only a BLOCKED readiness
+    # refuses the database (spec §13.3); flags ride along visibly.
     "validated_with_flags": frozenset(
-        {"ready_for_upload", "superseded"}),
+        {"ready_for_upload", "publication_pending", "superseded"}),
     "ready_for_upload": frozenset({"publication_pending", "superseded"}),
     "publication_pending": frozenset(
         {"uploaded", "ready_for_upload", "superseded"}),
