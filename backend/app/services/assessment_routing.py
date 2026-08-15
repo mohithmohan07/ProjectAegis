@@ -62,8 +62,7 @@ def routing_answer_evidence(candidate: Mapping) -> dict:
             str(a.get("answer_content") or "")
             for a in candidate.get("answers") or []
             if isinstance(a, Mapping)
-            and str(a.get("correct_answer") or "").strip()
-            in {"1", "true", "True"}
+            and rel.is_correct_option(a.get("correct_answer"))
         ]
         return {"correct_answer": [c for c in correct if c]}
     return {

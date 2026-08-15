@@ -151,7 +151,7 @@ def proposal_defects(proposal: Mapping, cell: Mapping) -> list[str]:
                 f"(got {len(answers)})")
         correct = [
             a for a in answers
-            if str(a.get("correct_answer") or "").strip() in {"1", "true", "True"}
+            if rel.is_correct_option(a.get("correct_answer"))
         ]
         if len(correct) != 1:
             defects.append(

@@ -89,6 +89,15 @@ def new_release_uid() -> str:
 # --------------------------------------------------------------------------- #
 
 GROUP_TYPES = ("Basic", "Intermediate", "Advanced")
+
+# The reference workbooks mark the correct Objective option "Yes" (wrong
+# options "No"); older internal data used "1"/"true". All are accepted as
+# the correct-option marker; nothing else is.
+_CORRECT_OPTION_MARKERS = frozenset({"1", "true", "yes"})
+
+
+def is_correct_option(value) -> bool:
+    return str(value or "").strip().lower() in _CORRECT_OPTION_MARKERS
 SHEET_KINDS = ("objective", "descriptive")
 ANSWER_RESTRICTIONS = ("Open", "Specific")
 

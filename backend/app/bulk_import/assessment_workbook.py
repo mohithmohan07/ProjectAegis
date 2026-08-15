@@ -507,9 +507,7 @@ def validate_master_file(
                 correct_weight = 0.0
                 correct_count = 0
                 for n in range(1, MAX_OBJECTIVE_OPTIONS + 1):
-                    if str(row.get(f"correct_answer_{n}") or "").strip() in {
-                        "1", "true", "True",
-                    }:
+                    if rel.is_correct_option(row.get(f"correct_answer_{n}")):
                         correct_count += 1
                         try:
                             correct_weight = float(
