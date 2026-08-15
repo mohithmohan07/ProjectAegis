@@ -1614,8 +1614,8 @@ Rules:
   source-based, procedural, practical, and real-life task as its own item,
   including assessable prompts embedded in explanatory prose. Capture complete
   givens, context, quotations, representations, and asks, but never solutions.
-- When the question depends on a figure/diagram/table image, copy the Mathpix
-  image URL(s) from the source
+- When the question depends on a figure/diagram/table image, copy the image
+  URL(s) from the source
   into image_urls AND keep the figure reference in raw_task.
 - Set topic_hint to the nearest MAIN section heading (or "[Chapter opening]"
   for pre-section items) so later placement stays in reading order.
@@ -2261,7 +2261,8 @@ Rules:
   ``\\(...\\)``/``\\[...\\]`` delimiters, TeX commands, subscripts, or
   superscripts outside a canonical Katex span.
 - For short_case_example issues: replace the truncated Example with the FULL
-  source question wording (and Mathpix URL when the question is visual).
+  source question wording (and the source image URL when the question is
+  visual).
 """)
 
 prompts.register(
