@@ -71,8 +71,8 @@ POLISH_SYSTEM = prompts.register(
     label="Question polishing — standalone test wording",
     category="Question polishing (Pass 4)",
     description=(
-        "Rewrites textbook questions into self-contained test items and "
-        "splits questions that genuinely span more than one concept."
+        "Rewrites textbook questions into self-contained test items; never "
+        "splits — a multi-part question stays one question."
     ),
     default=(
         "You are an assessment editor. You receive a batch of questions "
