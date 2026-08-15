@@ -386,6 +386,10 @@ def _assemble(
         "difficulty": str(cell.get("difficulty") or ""),
         "marks": cell.get("marks"),
         "appears_in": list(cell.get("appears_in") or []),
+        # The workbook wire field: the blueprint's appears-in value(s),
+        # emitted verbatim — the writer never expands or normalizes it.
+        "question_appears_in": ", ".join(
+            str(v) for v in cell.get("appears_in") or []),
         "answer_restriction": str(proposal.get("answer_restriction") or ""),
         "restriction_reason": str(proposal.get("restriction_reason") or ""),
         "display_answer": str(proposal.get("display_answer") or ""),

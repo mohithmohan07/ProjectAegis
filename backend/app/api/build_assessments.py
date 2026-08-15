@@ -417,3 +417,27 @@ def upload_release_master_to_database(
         raise HTTPException(404, str(e))
     except release_svc.UploadRefused as e:
         raise HTTPException(409, str(e))
+
+
+@router.post("/releases/from-job/{job_id}")
+def run_release_from_job(
+    job_id: int,
+    db: Session = Depends(get_db),
+    user: auth.Principal = Depends(auth.require_user),
+):
+    """Run the complete assessment pipeline for one generated Build Concepts
+    job and publish the dual output. Generation stops at downloadable files;
+    database upload stays a separate explicit action."""
+    from ..services import assessment_release_run
+    from ..services import assessment_release_service as release_svc
+
+    try:
+        release = assessment_release_run.run_release_for_job(
+            db, job_id, owner_sub=user.sub)
+    except assessment_release_run.ReleaseRunError as e:
+        raise HTTPException(400, str(e))
+    except uploads.UploadJobNotFound as e:
+        raise HTTPException(404, str(e))
+    except release_svc.UploadRefused as e:
+        raise HTTPException(409, str(e))
+    return _release_summary(release)
