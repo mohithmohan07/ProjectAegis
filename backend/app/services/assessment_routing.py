@@ -178,6 +178,7 @@ def route_candidate(
             return _placement(
                 candidate, concept_id=constrained,
                 basis="blueprint_constraint",
+                evidence="the blueprint cell names this concept",
                 candidate_routes=route_ids)
         return _placement(
             candidate, concept_id=None, basis="blueprint_constraint",
@@ -186,6 +187,7 @@ def route_candidate(
     if len(concepts) == 1:
         return _placement(
             candidate, concept_id=route_ids[0], basis="sole_candidate",
+            evidence="the scope contains exactly one candidate concept",
             candidate_routes=route_ids)
     if not concepts:
         return _placement(
