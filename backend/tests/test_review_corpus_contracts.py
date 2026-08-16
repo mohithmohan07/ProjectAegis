@@ -23,8 +23,14 @@ DATA = Path(__file__).parents[1] / "data" / "Testing"
                 "Arithmetic Progressions",
                 "nth Term of an AP",
                 "Sum of First n Terms of an AP",
+                # The numbered 5.5 Summary section is real chapter structure;
+                # whether it contributes concepts is the model's judgment, so
+                # the deterministic fallback no longer censors it (§3 purge).
+                "Summary",
             ],
-            {"worked_example": 16, "exercise": 49},
+            # List-item kinds are the neutral default at parse time; the
+            # exercise-vs-intext verdict belongs to the outline/page passes.
+            {"worked_example": 16, "intext_question": 49},
         ),
         (
             "Class 10 Chapter 5 Electricity.mmd",
@@ -40,9 +46,8 @@ DATA = Path(__file__).parents[1] / "data" / "Testing"
             ],
             {
                 "worked_example": 13,
-                "intext_question": 23,
+                "intext_question": 41,
                 "checkpoint_question": 6,
-                "exercise": 18,
             },
         ),
         (
@@ -58,7 +63,7 @@ DATA = Path(__file__).parents[1] / "data" / "Testing"
             {
                 "checkpoint_question": 14,
                 "activity": 2,
-                "exercise": 10,
+                "intext_question": 10,
             },
         ),
     ],
@@ -100,7 +105,7 @@ def test_rne_chapter_final_review_units_remain_grouped_and_complete():
     assert Counter(
         str(anchor.get("source_kind") or "")
         for anchor in chapter_final
-    ) == {"exercise": 10, "activity": 1}
+    ) == {"intext_question": 10, "activity": 1}
     assert len(chapter_final) == 11
     assert all(
         not (anchor.get("subpart_label") or "").strip()

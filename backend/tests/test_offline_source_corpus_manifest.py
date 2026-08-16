@@ -40,13 +40,13 @@ CORPUS = {
             "0f5b7f6498607a9e54206c17f0eaeceff00033ee0038e6ab48fb91430e4e0349"
         ),
         "source_contract_hash": (
-            "c5b183dc002ecf2e5ae916d8fcb86ddb530e88e114e8300282bce633525154b6"
+            "46d6f2a57a9700003963ef676182a8aeb5a00ccf7484a5b06eff83b04f6ce36b"
         ),
         "metadata": {
             "subject": "Mathematics",
             "chapter_title": "Arithmetic Progressions",
         },
-        "topics": 4,
+        "topics": 5,
         "tasks": 65,
         "blocks": 331,
         "status": "ready",
@@ -57,7 +57,7 @@ CORPUS = {
             "86e6c6a0c42932d01c51d8fcad82974d4b1c8440ad4d6853b53fe09e0aaacdcc"
         ),
         "source_contract_hash": (
-            "7dca8efa19fec340abcb9a7768cc5aede233af96dbdd1f6f1552dbbac4b64b20"
+            "15df36c6f3ef4d3cab3b0bf155e300af18cdaf5d7cfc86c748344cdd5b2e2188"
         ),
         "metadata": {
             "subject": "Science",

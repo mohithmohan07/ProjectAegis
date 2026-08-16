@@ -173,6 +173,40 @@ def test_correction_loop_is_bounded_when_candidate_never_becomes_valid(monkeypat
     assert calls == 3
 
 
+def test_sub_floor_verification_confidence_flags_instead_of_blocking(monkeypatch):
+    """6E: the verifier APPROVED every page; its numeric confidence being
+    below the floor is a review flag on the shipped pages — like the sibling
+    page-transcription confidence flag — never a blocking rejection that
+    burns corrections."""
+    pages = [_page("Describe the visible transformation")]
+    candidate = _candidate(_block(
+        kind="task", text="Describe the visible transformation", source_label="Activity"
+    ))
+    calls = {"extract": 0, "verify": 0}
+
+    def fake_openai(*, response_schema, **_kwargs):
+        if response_schema["name"] == "aegis_pdf_page_acsd_extract":
+            calls["extract"] += 1
+            return candidate
+        calls["verify"] += 1
+        verification = _verified()
+        verification["confidence"] = 0.42
+        return verification
+
+    monkeypatch.setenv("AEGIS_GPT_PDF_ACSD_MAX_CORRECTIONS", "2")
+    monkeypatch.setattr(fallback.phase22, "_openai_multimodal_json", fake_openai)
+    monkeypatch.setattr(fallback.progress, "log", lambda *_args, **_kwargs: None)
+
+    result = fallback.extract_batch_via_openai(pages)
+
+    assert result["status"] == "verified"
+    assert calls == {"extract": 1, "verify": 1}
+    flags = result["pages"][0]["review_flags"]
+    assert any("confidence 0.420 is below" in flag for flag in flags)
+    # The task itself shipped — nothing was silently rejected.
+    assert result["pages"][0]["blocks"][0]["source_label"] == "Activity"
+
+
 def test_verifier_rejection_gets_one_bounded_repair(monkeypatch):
     pages = [_page("Describe the visible transformation")]
     candidate = _candidate(_block(

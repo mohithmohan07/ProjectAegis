@@ -123,16 +123,23 @@ def test_phase2_rne_inventory_is_source_ordered_and_byte_deterministic():
     assert [item["qid"] for item in inventory["items"]] == expected_inventory_qids
     assert inventory["source_contract"]["task_count"] == 26
     assert inventory["source_contract"]["parent_task_count"] == 26
-    # The sealed count still tallies the ledger's leaf routes (the ledger
-    # keeps its leaf cases even though the inventory ships parents whole).
-    assert inventory["source_contract"]["inventory_item_count"] == 31
+    # The sealed count still tallies the ledger's leaf routes: only QINV-0011
+    # keeps leaves (its recovered follow-up prompt from a separate source
+    # block). The retired deterministic enumeration split (QINV-0016 a–e)
+    # no longer mints leaves — the whole item carries those parts verbatim.
+    assert inventory["source_contract"]["inventory_item_count"] == 27
     assert inventory["source_contract"]["mode"] == (
         phase2.SOURCE_CONTRACT_MODE
     )
     assert not generation._invalid_inventory_items(inventory)
 
 
-def test_rne_independent_subparts_are_leaf_cases_but_dependent_parts_stay_atomic():
+def test_rne_lettered_note_list_stays_one_whole_task_with_every_part():
+    """§3 purge, item 4D: no deterministic enumeration split exists any more.
+
+    The a)–e) note list the retired splitter used to decompose stays ONE
+    atomic task; every lettered part still ships, verbatim, inside the whole
+    parent prompt (never lose a learner question)."""
     source = (DATA / "RNE.mmd").read_text(encoding="utf-8")
     compiled = phase2.compile_phase2_source(
         source,
@@ -143,22 +150,15 @@ def test_rne_independent_subparts_are_leaf_cases_but_dependent_parts_stay_atomic
     parents = {task["qid"]: task for task in canonical["tasks"]}
 
     note_parent = parents["QINV-0016"]
-    note_leaves = note_parent["leaf_cases"]
-    assert [leaf["qid"] for leaf in note_leaves] == [
-        f"QINV-0016.{index}" for index in range(1, 6)
-    ]
-    assert {leaf["parent_qid"] for leaf in note_leaves} == {"QINV-0016"}
-    assert [leaf["subpart_label"] for leaf in note_leaves] == [
-        "a)", "b)", "c)", "d)", "e)",
-    ]
-    assert len({leaf["identity_key"] for leaf in note_leaves}) == 5
-    assert [leaf["raw_prompt"] for leaf in note_leaves] == [
+    assert not note_parent.get("leaf_cases")
+    for part in (
         "a) Guiseppe Mazzini",
         "b) Count Camillo de Cavour",
         "c) The Greek war of independence",
         "d) Frankfurt parliament",
         "e) The role of women in nationalist struggles",
-    ]
+    ):
+        assert part in note_parent["raw_prompt"]
 
     # These two role perspectives depend on one shared counterfactual and one
     # shared Germania banner. They must remain one canonical answer unit.

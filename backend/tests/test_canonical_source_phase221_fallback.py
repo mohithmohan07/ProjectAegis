@@ -630,8 +630,55 @@ def test_verified_nonstandard_task_cue_bypasses_legacy_regex_vocabulary(
     assert task["source_label"] == "Explore"
     assert task["raw_prompt"] == "Describe the pattern shown in Fig. 1."
     assert task["source_location_confidence"] == "gpt_pdf_acsd_verified_block"
-    assert "# Discuss" in result["mmd_text"]
-    assert "# Explore" not in result["mmd_text"]
+    # §3 purge, item 4D: the visible cue renders VERBATIM — the retired
+    # vocabulary used to collapse every unknown cue to "Discuss".
+    assert "# Explore" in result["mmd_text"]
+    assert "# Discuss" not in result["mmd_text"]
+    # A cue outside every legacy vocabulary ships with the neutral kind and
+    # a not-model-ruled scope marker — never a keyword-derived semantic.
+    assert task["source_kind"] == "checkpoint_question"
+    assert task["chapter_wide"] is False
+    assert task["scope_ruling"] == "not_model_ruled_flagged"
+    # The verified visual link still ships with the flagged task.
+    assert len(task["figure_refs"]) == 1
+
+
+def test_exercise_style_label_no_longer_makes_a_ledger_task_chapter_wide(
+    tmp_path: Path, monkeypatch,
+):
+    """§3 purge, item 4D (~:2739): the three-word label list used to set
+    chapter_wide=True. Scope is the outline's assessment-span verdict; with
+    no outline the task ships topic-scoped with a not-model-ruled marker."""
+    pdf = tmp_path / "source.pdf"
+    _make_pdf(pdf)
+    artifact_dir = tmp_path / "canonical-source"
+    monkeypatch.setenv("AEGIS_PUBLIC_BASE_URL", "https://aegis.example")
+    monkeypatch.setenv("AEGIS_SOURCE_ASSET_SECRET", "test-secret")
+    monkeypatch.setattr(fallback, "_CACHE_DIR", tmp_path / "cache")
+
+    def provider(pages: list[fallback.PdfPage]) -> dict:
+        result = _verified_provider(pages)
+        for page in result["pages"]:
+            if page["page_number"] != 2:
+                continue
+            task = page["blocks"][0]
+            task["source_label"] = "Questions"
+        return result
+
+    result = fallback.reconstruct_pdf_to_acsd(
+        pdf,
+        job_id=52,
+        artifact_dir=artifact_dir,
+        fallback_reason=["pdf_source"],
+        provider=provider,
+    )
+
+    task = result["canonical"]["tasks"][0]
+    assert task["source_label"] == "Questions"
+    assert task["chapter_wide"] is False
+    assert task["scope_ruling"] == "not_model_ruled_flagged"
+    # The verbatim label is also the rendered heading.
+    assert "# Questions" in result["mmd_text"]
 
 
 def test_verified_page_acsd_rehydrates_after_future_core_recompile(

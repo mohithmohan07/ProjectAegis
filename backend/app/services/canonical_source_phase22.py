@@ -31,7 +31,6 @@ from . import canonical_source
 from . import canonical_source_phase2 as phase2
 from . import canonical_source_phase21 as phase21
 from . import canonical_source_phase21_structure as structure
-from . import canonical_source_phase21_visuals as visuals
 from . import katex_rules as kr
 from . import progress
 
@@ -94,14 +93,6 @@ def _notify_openai_transport_started() -> None:
     if callable(callback):
         callback()
 _MATHPIX_PAGE_RE = re.compile(r"-(?P<page>\d{1,4})\.jpg(?:\?|$)", re.IGNORECASE)
-_SOURCE_LABELS = {
-    "activity": "Activity",
-    "discuss": "Discuss",
-    "project": "Project",
-    "write in brief": "Write in brief",
-    "think about it": "Think about it",
-    "let's discuss": "Let's discuss",
-}
 
 
 @dataclass(frozen=True)
@@ -297,7 +288,15 @@ def _orphan_figure_packet(
         "search_terms": [caption.split(".", 1)[0], "Club of Thinkers"],
         "expected_output": {
             "recovered_text": "exact source task visibly printed with the Figure",
-            "source_label": "visible task cue such as Discuss or Activity",
+            "source_label": (
+                "the visible task cue transcribed verbatim, whatever the book "
+                "prints; empty when none is printed"
+            ),
+            "task_kind": (
+                "your judgment of what the printed task IS: 'activity' for a "
+                "hands-on/do-something task, 'checkpoint_question' for a "
+                "question to answer"
+            ),
             "insert_before_block_id": "one allowed block id",
         },
     }
@@ -518,6 +517,12 @@ def _extraction_schema(packet: dict[str, Any], pages: list[EvidencePage]) -> dic
                 },
                 "recovered_text": {"type": "string"},
                 "source_label": {"type": "string", "maxLength": 120},
+                "task_kind": {
+                    "type": "string",
+                    "enum": [
+                        "activity", "checkpoint_question", "not_applicable",
+                    ],
+                },
                 "insert_before_block_id": {
                     "type": "string",
                     "enum": anchors or ["NO-INSERTION-ANCHOR"],
@@ -530,7 +535,8 @@ def _extraction_schema(packet: dict[str, Any], pages: list[EvidencePage]) -> dic
             },
             "required": [
                 "verdict", "evidence_id", "recovered_text", "source_label",
-                "insert_before_block_id", "confidence", "evidence",
+                "task_kind", "insert_before_block_id", "confidence",
+                "evidence",
             ],
             "additionalProperties": False,
         },
@@ -550,6 +556,7 @@ def _verification_schema() -> dict[str, Any]:
                 },
                 "recovered_text": {"type": "string"},
                 "source_label_matches": {"type": "boolean"},
+                "task_kind_matches": {"type": "boolean"},
                 "confidence": {"type": "number"},
                 "evidence": {
                     "type": "array",
@@ -558,7 +565,7 @@ def _verification_schema() -> dict[str, Any]:
             },
             "required": [
                 "verdict", "recovered_text", "source_label_matches",
-                "confidence", "evidence",
+                "task_kind_matches", "confidence", "evidence",
             ],
             "additionalProperties": False,
         },
@@ -587,6 +594,7 @@ def _packet_prompt(
         body["candidate_to_verify"] = {
             "recovered_text": verification_candidate.get("recovered_text") or "",
             "source_label": verification_candidate.get("source_label") or "",
+            "task_kind": verification_candidate.get("task_kind") or "",
         }
         body["instruction"] = (
             "Independently verify the exact candidate transcription on this single "
@@ -744,14 +752,14 @@ def _confidence(value: object) -> float:
         return 0.0
 
 
-def _normalize_source_label(value: object, *, issue_type: str) -> str:
-    visible = re.sub(r"\s+", " ", str(value or "")).strip()[:120]
-    raw = _normal(visible)
-    if raw in _SOURCE_LABELS:
-        return _SOURCE_LABELS[raw]
-    if issue_type == "orphan_figure_task":
-        return visible or "Task"
-    return ""
+def _normalize_source_label(value: object) -> str:
+    """Whitespace-normalize the model-transcribed visible label — MECHANICS.
+
+    §3 purge, item 4D: the retired ``_SOURCE_LABELS`` vocabulary canonicalized
+    known cues and BLANKED unknown ones. The visible label is now preserved
+    verbatim for every branch; an empty label stays empty.
+    """
+    return re.sub(r"\s+", " ", str(value or "")).strip()[:120]
 
 
 def _text_layer_contains(page: EvidencePage, recovered: str) -> bool:
@@ -789,22 +797,40 @@ def _validated_candidate(
             f"extractor selected unsupported insertion anchor {anchor!r}",
             True,
         )
+    review_flags: list[str] = []
     confidence = _confidence(candidate.get("confidence"))
     if confidence < _MIN_CONFIDENCE:
-        return None, f"extractor confidence {confidence:.3f} is below threshold", False
+        # R2/6E: a numeric floor never rejects a positive author verdict.
+        # The best judgment ships, flagged for review.
+        review_flags.append(
+            f"extractor confidence {confidence:.3f} is below the "
+            f"{_MIN_CONFIDENCE:.3f} evidence floor; shipped flagged for review"
+        )
 
     issue_type = str(packet.get("issue_type") or "")
+    task_kind = ""
     if issue_type == "missing_parent_section":
         number = int(packet.get("section_number") or 0)
         if not re.match(rf"^\s*{number}(?:\s|[.)-])", recovered):
             return None, "recovered heading does not preserve the expected section number", False
     elif issue_type == "orphan_figure_task":
-        if not structure.is_task_like(recovered):
-            return None, "recovered text is not a question or instructional task", False
+        # The retired `is_task_like` keyword veto is gone (§3 purge, item
+        # 4C): the independent page verification IS the check on whether the
+        # recovered text is a real task.
         caption_key = _comparison_key(packet.get("figure_caption") or "")
         recovered_key = _comparison_key(recovered)
         if recovered_key and recovered_key == caption_key:
             return None, "recovered text merely repeats the Figure caption", False
+        task_kind = str(candidate.get("task_kind") or "").strip().lower()
+        if task_kind not in {"activity", "checkpoint_question"}:
+            # Undecided kind ships flagged with the neutral kind — never
+            # defaulted from label wording.
+            task_kind = "checkpoint_question"
+            review_flags.append(
+                "the adjudicator did not rule the recovered task's kind; "
+                "shipped with the neutral checkpoint_question kind, flagged "
+                "for review"
+            )
     else:
         return None, "unsupported adjudication packet", False
 
@@ -814,12 +840,12 @@ def _validated_candidate(
         "evidence_id": evidence_id,
         "page_number": page.page_number,
         "recovered_text": recovered,
-        "source_label": _normalize_source_label(
-            candidate.get("source_label"), issue_type=issue_type
-        ),
+        "source_label": _normalize_source_label(candidate.get("source_label")),
+        "task_kind": task_kind,
         "insert_before_block_id": anchor,
         "confidence": confidence,
         "text_layer_match": _text_layer_contains(page, recovered),
+        "review_flags": review_flags,
     })
     return normalized, "", False
 
@@ -829,6 +855,14 @@ def _verify_candidate(
     candidate: dict[str, Any],
     pages: list[EvidencePage],
 ) -> tuple[dict[str, Any] | None, str]:
+    """Independent second-pass check on a positively authored candidate.
+
+    R2 (the critic is an auditor, never a judge) + 6E: the verifier's dissent
+    and every sub-floor confidence become review flags on the shipped
+    decision — the author's best judgment is applied, never silently
+    rejected. Only a protocol failure (the candidate's evidence page is not
+    available to verify against) stays fail-closed.
+    """
     page = _page_by_evidence_id(pages, str(candidate.get("evidence_id") or ""))
     if page is None:
         return None, "candidate evidence page is unavailable"
@@ -842,21 +876,46 @@ def _verify_candidate(
         pages=[page],
         response_schema=_verification_schema(),
     )
+    review_flags = list(candidate.get("review_flags") or [])
     verdict = str(verification.get("verdict") or "").strip().lower()
     if verdict != "matches_exactly":
-        return None, f"verification verdict was {verdict or 'missing'}"
+        review_flags.append(
+            f"the independent verifier's verdict was "
+            f"{verdict or 'missing'}; the author's transcription shipped "
+            "flagged for review"
+        )
     if not bool(verification.get("source_label_matches")):
-        return None, "verification rejected the visible source label"
+        review_flags.append(
+            "the independent verifier disputed the visible source label; "
+            "shipped flagged for review"
+        )
+    if str(candidate.get("task_kind") or "") and not bool(
+        verification.get("task_kind_matches")
+    ):
+        review_flags.append(
+            "the independent verifier did not confirm the adjudicated task "
+            "kind; shipped flagged for review"
+        )
     verified_text = str(verification.get("recovered_text") or "").strip()
     if _comparison_key(verified_text) != _comparison_key(candidate["recovered_text"]):
-        return None, "extractor and verifier transcriptions disagree"
+        review_flags.append(
+            "extractor and verifier transcriptions disagree; the author's "
+            "transcription shipped flagged for review"
+        )
     verified_confidence = _confidence(verification.get("confidence"))
     text_layer = bool(candidate.get("text_layer_match"))
     minimum = _MIN_CONFIDENCE if text_layer else _NO_TEXT_LAYER_MIN_CONFIDENCE
     if min(candidate["confidence"], verified_confidence) < minimum:
-        return None, "verified confidence is below the evidence threshold"
+        review_flags.append(
+            f"verified confidence "
+            f"{min(candidate['confidence'], verified_confidence):.3f} is "
+            f"below the {minimum:.3f} evidence floor; shipped flagged for "
+            "review"
+        )
     accepted = copy.deepcopy(candidate)
+    accepted["review_flags"] = review_flags
     accepted["verification"] = {
+        "verdict": verdict,
         "confidence": verified_confidence,
         "page_number": page.page_number,
         "evidence_id": page.evidence_id,
@@ -1138,6 +1197,13 @@ def apply_missing_heading(
             section["parent_section_id"] = virtual_id
             section["depth"] = max(2, int(section.get("depth") or 1))
 
+    heading_flags = [str(flag) for flag in decision.get("review_flags") or []]
+    if heading_flags:
+        flag_ledger = canonical.setdefault("source_review_flags", [])
+        if isinstance(flag_ledger, list):
+            flag_ledger.extend(
+                f"{provenance['repair_id']}: {flag}" for flag in heading_flags
+            )
     canonical["sections"] = sections
     canonical.setdefault("adjudicated_main_sections", {})[str(number)] = virtual_id
     _record_overlay(
@@ -1170,29 +1236,6 @@ def _figure_payload(
     return urls, captions
 
 
-def _remove_figure_from_task(
-    task: dict[str, Any],
-    *,
-    figure_id: str,
-    urls: list[str],
-    figure_start: int,
-) -> None:
-    for field in ("figure_refs", "display_figure_refs", "raw_figure_refs"):
-        task[field] = [value for value in task.get(field) or [] if str(value) != figure_id]
-    for field in ("image_urls", "display_image_urls", "raw_image_urls"):
-        task[field] = [value for value in task.get(field) or [] if str(value) not in set(urls)]
-    for field in ("_image_captions", "display_image_captions", "raw_image_captions"):
-        captions = task.get(field)
-        if isinstance(captions, dict):
-            task[field] = {url: caption for url, caption in captions.items() if url not in set(urls)}
-    task["requires_visual"] = bool(
-        task.get("display_image_urls")
-        or task.get("display_figure_reference_ids")
-        or task.get("figure_refs")
-    )
-    task["source_end"] = min(int(task.get("source_end") or figure_start), figure_start)
-
-
 def apply_orphan_figure_task(
     canonical: dict[str, Any],
     packet: dict[str, Any],
@@ -1212,28 +1255,26 @@ def apply_orphan_figure_task(
     figure_start = int(figure.get("source_start") or 0)
     urls, captions = _figure_payload(canonical, figure_id)
     recovered = str(decision.get("recovered_text") or "").strip()
-    label = str(decision.get("source_label") or "Discuss").strip() or "Discuss"
+    # §3 purge, item 4D: the visible label ships VERBATIM — the retired
+    # collapse-to-"Discuss" default assigned a cue the book never printed.
+    # "Task" is a neutral structural placeholder used only when the page
+    # prints no cue at all, and that absence is flagged below.
+    review_flags = [str(flag) for flag in decision.get("review_flags") or []]
+    label = str(decision.get("source_label") or "").strip()
+    if not label:
+        label = "Task"
+        review_flags.append(
+            "the page prints no visible task cue; a neutral 'Task' heading "
+            "was used for structure only"
+        )
 
     prior_ids = [str(value) for value in figure_block.get("task_ids") or [] if value]
     if prior_ids:
         figure_block.setdefault("source_task_ids", prior_ids)
     figure_block["task_ids"] = []
-    for task in canonical.get("tasks") or []:
-        if not isinstance(task, dict):
-            continue
-        if (
-            figure_id in {str(value) for value in task.get("figure_refs") or []}
-            or str(task.get("task_id") or "") in prior_ids
-            or int(task.get("source_end") or 0) > figure_start
-            and int(task.get("source_start") or 0) < figure_start
-        ):
-            if not visuals.visuals_compatible(
-                str(task.get("raw_prompt") or task.get("display_prompt") or ""),
-                str(figure.get("caption_raw") or ""),
-            ):
-                _remove_figure_from_task(
-                    task, figure_id=figure_id, urls=urls, figure_start=figure_start
-                )
+    # §3 purge, item 4D: the `_VISUAL_WORDS` compatibility veto is deleted —
+    # the independent page verifier already judged the figure↔task link, and
+    # prior tasks' recorded ownership is provenance that stays untouched.
 
     tags = []
     for index, url in enumerate(urls):
@@ -1251,13 +1292,25 @@ def apply_orphan_figure_task(
         if isinstance(section, dict)
     }
     section = sections.get(section_id, {})
-    activity = _normal(label) in {"activity", "project"}
+    # The KIND is the model's adjudicated verdict (task_kind, confirmed by
+    # the independent verifier) — never derived from the label wording. An
+    # unruled kind arrives already neutralized and flagged by
+    # _validated_candidate; a direct decision without the field ships the
+    # neutral kind here, flagged the same way.
+    task_kind = str(decision.get("task_kind") or "").strip().lower()
+    if task_kind not in {"activity", "checkpoint_question"}:
+        task_kind = "checkpoint_question"
+        review_flags.append(
+            "no model verdict ruled the recovered task's kind; shipped with "
+            "the neutral checkpoint_question kind, flagged for review"
+        )
+    activity = task_kind == "activity"
     task = {
         "task_id": f"TASK-ADJ-{provenance['repair_id'][-12:]}",
         "qid": "",
         "order": 0,
         "order_index": 0,
-        "source_kind": "activity" if activity else "checkpoint_question",
+        "source_kind": task_kind,
         "source_label": label,
         "parent_source_label": label,
         "topic_hint": structure.topic_for_position(canonical, figure_start),
@@ -1291,6 +1344,14 @@ def apply_orphan_figure_task(
         "display_overrides": [],
         "phase22_recovery": copy.deepcopy(provenance),
     }
+    if review_flags:
+        task["review_flags"] = list(review_flags)
+        provenance["review_flags"] = list(review_flags)
+        flag_ledger = canonical.setdefault("source_review_flags", [])
+        if isinstance(flag_ledger, list):
+            flag_ledger.extend(
+                f"{provenance['repair_id']}: {flag}" for flag in review_flags
+            )
     canonical.setdefault("tasks", []).append(task)
     _record_overlay(
         canonical,
@@ -1325,6 +1386,9 @@ def apply_verified_decision(
         "source_file_sha256": _pdf_sha256(source_path),
         "raw_mmd_changed": False,
         "recovered_text": str(decision.get("recovered_text") or ""),
+        "review_flags": [
+            str(flag) for flag in decision.get("review_flags") or []
+        ],
     }
     if packet["issue_type"] == "missing_parent_section":
         apply_missing_heading(canonical, packet, decision, provenance)

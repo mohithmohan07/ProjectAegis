@@ -919,11 +919,17 @@ def test_arithmetic_progressions_uses_pedagogical_topics_not_tex_layout():
     )
 
     assert graph["status"] == "ready"
+    # "Summary" stays: the offline structural fallback no longer carries a
+    # deterministic non-topic-heading vocabulary — ruling a section banner
+    # out of the topic list is the chapter-outline judge's call, and without
+    # that verdict the section ships as a topic rather than being guessed
+    # away (§3 purge, item 3).
     assert [row["title"] for row in graph["topics"]] == [
         "Introduction",
         "Arithmetic Progressions",
         "nth Term of an AP",
         "Sum of First n Terms of an AP",
+        "Summary",
     ]
     assert len(graph["tasks"]) == 65
     assert all("\\boldsymbol" not in row["title"] for row in graph["topics"])
