@@ -8,8 +8,9 @@ deck's four steps:
   3. Column mapping        (fill remaining Bulk Import columns with defaults)
   4. Append to sheet       (append-only write to the Bulk Import output workbook)
 
-The vendored ``assessment_tagging`` Apps Script is the live reference for step 2;
-the dry implementation here clusters by concept + cognitive skill.
+The MES grouping engine (``assessment_grouping.py``) is the reference for step 2
+(the vendored ``assessment_tagging`` Apps Script tool is retired); the dry
+implementation here clusters by concept + cognitive skill.
 """
 from __future__ import annotations
 

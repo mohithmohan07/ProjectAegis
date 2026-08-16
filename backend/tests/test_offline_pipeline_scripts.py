@@ -78,6 +78,38 @@ def test_cli_tools_take_their_model_from_policy_not_a_pinned_slug(name: str):
         )
 
 
+def test_prelearning_tool_carries_no_similarity_threshold_or_count_quota():
+    """concept_mapping_to_prelearning must not re-grow deterministic judgment.
+
+    The 0.95 SequenceMatcher similarity report and the 4-6 topics / 5-7
+    concepts-per-topic validator were purged: near-duplicate detection and
+    "how many concepts does this chapter warrant" are model decisions, not
+    arithmetic. The prompts now carry the no-quota doctrine instead.
+    """
+
+    source = (PIPELINE_DIR / "concept_mapping_to_prelearning.py").read_text(
+        encoding="utf-8"
+    )
+
+    # The similarity machinery (threshold, ratio, report) is gone.
+    assert "SequenceMatcher" not in source
+    assert "SIMILARITY_THRESHOLD" not in source
+    assert "similarity" not in source.lower()
+
+    # The topic/concept count quota (constants, validator, prompt text) is gone.
+    for quota_token in (
+        "MIN_TOPICS",
+        "MAX_TOPICS",
+        "MIN_CONCEPTS_PER_TOPIC",
+        "MAX_CONCEPTS_PER_TOPIC",
+        "topic count",
+    ):
+        assert quota_token not in source, quota_token
+
+    # And the prompts carry the no-quota doctrine in its place.
+    assert "there is no quota" in source
+
+
 def test_mcq_and_fill_blank_rows_are_siblings_of_one_branch():
     """Guards the exact defect: a branch dedented out of its enclosing loop.
 
