@@ -4,7 +4,6 @@ import io
 import re
 
 import openpyxl
-import pytest
 
 from app import bulk_import as bi
 from app import models
@@ -223,7 +222,12 @@ def test_tagged_secondary_concept_is_not_required_in_that_topics_recap(db):
     assert data.startswith(b"PK")
 
 
-def test_readback_blocks_one_type_number_on_two_real_hosts(db):
+def test_readback_accepts_one_type_number_on_two_real_hosts(db):
+    """Under the rewritten Phase 3 the Host pass routes each question to the
+    concept it belongs to, so two Cases of one chapter-wide Type may
+    legitimately live on different concept hosts; the read-back gate must not
+    reject that as a split Type (the single-host expectation belonged to the
+    legacy allocator)."""
     chapter = models.Chapter(
         chapter_code="10CBSS_SplitType",
         board="CBSE",
@@ -265,11 +269,8 @@ def test_readback_blocks_one_type_number_on_two_real_hosts(db):
     db.add(chapter)
     db.commit()
 
-    with pytest.raises(
-        writer.ConceptWorkbookValidationError,
-        match="span multiple concept hosts",
-    ):
-        writer.write_concepts_workbook(db, [first.id, second.id])
+    data = writer.write_concepts_workbook(db, [first.id, second.id])
+    assert data.startswith(b"PK")
 
 
 def test_deposit_removes_stale_same_chapter_secondary_topic(db):

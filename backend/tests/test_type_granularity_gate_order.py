@@ -129,7 +129,6 @@ def test_fragmentation_pause_precedes_sufficiency_mastery_and_culmination(
         "_add_missing_type_method_concepts_via_api",
         "_ensure_mastery_lines_via_api",
         "_build_culminations_via_api",
-        "_assign_types_via_api",
     ):
         monkeypatch.setattr(g, name, unexpected)
 
@@ -368,13 +367,6 @@ def test_consolidation_resume_feeds_only_accepted_taxonomy_downstream(
         g, "_add_missing_type_method_concepts_via_api", sufficiency)
     monkeypatch.setattr(
         g, "_build_culminations_via_api", lambda records, **_kwargs: records)
-    monkeypatch.setattr(
-        g, "_assign_types_via_api", lambda records, **_kwargs: records)
-    monkeypatch.setattr(
-        g,
-        "_populate_activity_hubs_via_api",
-        lambda records, *_args, **_kwargs: records,
-    )
     monkeypatch.setattr(
         g, "_placement_certification_contract_complete", lambda *_args: True)
 

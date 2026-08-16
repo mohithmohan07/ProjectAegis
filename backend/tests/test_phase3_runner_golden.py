@@ -144,8 +144,7 @@ def test_settled_rows_snapshot_lands_beside_the_store(
     ]
 
 
-def test_the_flag_defaults_off(monkeypatch):
-    monkeypatch.delenv("AEGIS_PHASE3_REWRITE", raising=False)
-    assert runner.rewrite_enabled() is False
-    monkeypatch.setenv("AEGIS_PHASE3_REWRITE", "1")
-    assert runner.rewrite_enabled() is True
+def test_the_migration_flag_is_retired():
+    # PR 4: the rewritten Phase 3 is the only post-81% path; the
+    # AEGIS_PHASE3_REWRITE flag no longer exists anywhere.
+    assert not hasattr(runner, "rewrite_enabled")

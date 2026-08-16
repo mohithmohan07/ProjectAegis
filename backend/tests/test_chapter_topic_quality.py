@@ -604,6 +604,9 @@ def test_sync_chapter_topic_summary_falls_back_without_meta(db):
 
 
 def test_mastery_line_pass_completes_missing_rows(monkeypatch):
+    """Settle authors mastery under the rewritten Phase 3: this pass never
+    calls the API — it only normalizes format and backfills a deterministic
+    line on rows still missing one."""
     records = [
         _rec(
             "Has One",
@@ -614,20 +617,17 @@ def test_mastery_line_pass_completes_missing_rows(monkeypatch):
         _rec("Culmination - T", "Description: Recap", parent="Culmination"),
     ]
 
-    def fake_openai(system, user, **kw):
-        assert "Missing One" in user and "Has One" not in user
-        return {"rows": [{
-            "topic": "Topic A", "parent_concept": "P", "concept": "Missing One",
-            "concept_description": ("Description: body only.\nAchieving Mastery: "
-                                    "applying the rule to fresh problems."),
-            "keywords": "",
-        }]}
+    def forbidden_openai(*_args, **_kwargs):
+        pytest.fail("the mastery-line pass must not call the API")
 
-    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    monkeypatch.setattr(g, "_openai_json", forbidden_openai)
     out = g._ensure_mastery_lines_via_api(records, meta=g._metadata(subject="Math"))
-    assert ("\nAchieving Mastery: applying the rule to fresh problems."
-            in out[1]["concept_details"])
-    # Types are untouched; culminations are never targeted.
+    assert ("\nAchieving Mastery: Applying Missing One correctly in new "
+            "problems." in out[1]["concept_details"])
+    # The existing line is preserved; Types are untouched; culminations are
+    # never targeted.
+    assert ("Achieving Mastery: Applying the relationship accurately to "
+            "unfamiliar problems." in out[0]["concept_details"])
     assert "Types: Type 01: X Case 01: q" in out[1]["concept_details"]
     assert out[2]["concept_details"] == "Description: Recap"
 

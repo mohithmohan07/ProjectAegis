@@ -98,7 +98,11 @@ def test_validator_rejects_only_high_confidence_truncated_description_clause():
     assert "description_truncated_clause" not in _codes(complete)
 
 
-def test_ensure_valid_learner_analysis_reclassifies_preserves_and_exempts_culmination():
+def test_ensure_valid_learner_analysis_preserves_authored_content_and_exempts_culmination():
+    """API-authored analysis is authoritative: the final boundary only
+    canonicalizes formatting into one combined section — it never drops a
+    statement, rewrites one, or backfills a missing sibling with filler.
+    Culminations keep no analysis section."""
     valid_misconception = (
         "Students may misunderstand multiplication as an operation that "
         "always makes a number larger."
@@ -133,25 +137,23 @@ def test_ensure_valid_learner_analysis_reclassifies_preserves_and_exempts_culmin
 
     out = cv.ensure_valid_learner_analysis(records)
 
-    repaired = _analysis_sections(out[0]["concept_details"])
-    assert [label for label, _ in repaired] == [
-        "Misconceptions",
+    # Legacy cross-filed statements are re-labelled by normalization without
+    # losing a word: the mistake filed under Misconceptions joins the authored
+    # Error Analysis text verbatim.
+    assert _analysis_sections(out[0]["concept_details"]) == [(
         "Error Analysis",
+        "Students may believe that every negative input produces a negative "
+        "result. Students may omit the negative sign during substitution.",
+    )]
+
+    # A single authored section stays alone: no deterministic filler is
+    # inserted for the missing sibling.
+    assert _analysis_sections(out[1]["concept_details"]) == [
+        ("Misconceptions", valid_misconception),
     ]
-    assert cv.is_valid_misconception(repaired[0][1])
-    assert cv.is_valid_error_analysis(repaired[1][1])
-    assert "believe that every negative input" in repaired[0][1]
-    assert "omit the negative sign" in repaired[1][1]
-
-    scale_analysis = _analysis_sections(out[1]["concept_details"])
-    assert scale_analysis[0] == ("Misconceptions", valid_misconception)
-    assert scale_analysis[1][0] == "Error Analysis"
-    assert cv.is_valid_error_analysis(scale_analysis[1][1])
-
-    signed_analysis = _analysis_sections(out[2]["concept_details"])
-    assert signed_analysis[0][0] == "Misconceptions"
-    assert cv.is_valid_misconception(signed_analysis[0][1])
-    assert signed_analysis[1] == ("Error Analysis", valid_error)
+    assert _analysis_sections(out[2]["concept_details"]) == [
+        ("Error Analysis", valid_error),
+    ]
     assert _analysis_sections(out[3]["concept_details"]) == []
 
 
@@ -283,7 +285,7 @@ def test_concise_numeric_yes_no_question_is_not_a_stub():
     assert cv._example_too_short("Is this correct?")
 
 
-def test_belief_adverbs_remain_misconceptions_and_are_reclassified():
+def test_belief_adverbs_classify_as_misconceptions_but_authored_placement_wins():
     beliefs = (
         "Students may incorrectly assume that multiplication always makes a "
         "number larger.",
@@ -301,9 +303,10 @@ def test_belief_adverbs_remain_misconceptions_and_are_reclassified():
     sections = _analysis_sections(
         cv.ensure_valid_learner_analysis([record])[0]["concept_details"]
     )
-    assert sections[0] == ("Misconceptions", beliefs[0])
-    assert sections[1][0] == "Error Analysis"
-    assert cv.is_valid_error_analysis(sections[1][1])
+    # The API filed this belief under Error Analysis; authored placement is
+    # authoritative, so it stays there verbatim and no Misconceptions sibling
+    # is fabricated.
+    assert sections == [("Error Analysis", beliefs[0])]
 
 
 def test_misconceptions_reject_generic_objects_and_mixed_action_statements():
@@ -325,12 +328,11 @@ def test_misconceptions_reject_generic_objects_and_mixed_action_statements():
         "Description: Scaling depends on the factor and signed inputs. // "
         f"Misconceptions: {mixed}",
     )
+    # Authored analysis is preserved verbatim: the mixed statement is not
+    # split into belief + mistake and stays under its authored label.
     assert _analysis_sections(
         cv.ensure_valid_learner_analysis([record])[0]["concept_details"]
-    ) == [
-        ("Misconceptions", belief),
-        ("Error Analysis", mistake),
-    ]
+    ) == [("Misconceptions", mixed)]
 
 
 def test_analysis_splitter_does_not_split_learner_words_inside_a_belief():
@@ -347,9 +349,9 @@ def test_analysis_splitter_does_not_split_learner_words_inside_a_belief():
         sections = _analysis_sections(
             cv.ensure_valid_learner_analysis([record])[0]["concept_details"]
         )
-        assert sections[0] == ("Misconceptions", belief)
-        assert sections[1][0] == "Error Analysis"
-        assert cv.is_valid_error_analysis(sections[1][1])
+        # The belief survives whole under its authored label; no fallback
+        # Error Analysis sibling is inserted.
+        assert sections == [("Misconceptions", belief)]
 
     assert not cv.is_valid_misconception("Students may believe.")
 
@@ -382,13 +384,14 @@ def test_misconceptions_reject_correction_prose_after_the_false_belief():
     sections = _analysis_sections(
         cv.ensure_valid_learner_analysis([record])[0]["concept_details"]
     )
-    assert sections[0] == (
-        "Misconceptions", "Students may believe denominators are added.")
-    assert sections[1][0] == "Error Analysis"
-    assert cv.is_valid_error_analysis(sections[1][1])
+    # The correction tail is authored content and is kept verbatim (the text
+    # fails the misconception predicate, so normalization files the whole
+    # statement under Error Analysis) — it is never trimmed down to the
+    # bare belief.
+    assert sections == [("Error Analysis", corrected)]
 
 
-def test_overlap_removal_keeps_distinct_error_analysis_items():
+def test_overlapping_authored_error_analysis_items_are_all_preserved():
     misconception = "Students may believe signs can be omitted."
     overlapping_error = "Students may omit signs during substitution."
     distinct_error = (
@@ -405,9 +408,12 @@ def test_overlap_removal_keeps_distinct_error_analysis_items():
         cv.ensure_valid_learner_analysis([record])[0]["concept_details"]
     )
 
+    # The overlap filter no longer drops authored statements: every error
+    # item the model wrote survives verbatim; overlap quality is the terminal
+    # gate's judgment, not a deterministic filter's.
     assert sections == [
         ("Misconceptions", misconception),
-        ("Error Analysis", distinct_error),
+        ("Error Analysis", f"{overlapping_error} {distinct_error}"),
     ]
 
 

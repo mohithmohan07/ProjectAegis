@@ -136,7 +136,9 @@ def test_folded_distinct_visual_prompts_are_two_cases_with_all_questions():
         )
 
         assert compiled.canonical["phase2_inventory_ready"] is True
-        assert len(inventory["items"]) == 31
+        # Never-split: the inventory materializes 26 whole parents; the two
+        # distinct-visual cases live on in the ledger's leaf_cases below.
+        assert len(inventory["items"]) == 26
         assert [leaf["qid"] for leaf in parent["leaf_cases"]] == [
             "QINV-0011.1", "QINV-0011.2",
         ]
@@ -285,7 +287,9 @@ def test_phase21_loader_rebuilds_a_self_consistent_but_incomplete_leaf_artifact(
     ))
 
     assert phase21.hardening_artifact_valid(loaded, loaded_report)
-    assert len(phase2.inventory_from_canonical(loaded)["items"]) == 31
+    # Never-split: whole parents only — the rebuild is visible in the
+    # ledger's restored leaf_cases, not as extra inventory items.
+    assert len(phase2.inventory_from_canonical(loaded)["items"]) == 26
     loaded_parent = next(
         task for task in loaded["tasks"] if task["qid"] == "QINV-0011"
     )
@@ -520,7 +524,7 @@ def test_taxonomy_restore_replaces_question_fragment_titles_losslessly():
     assert first in details and second in details
 
 
-def test_final_normalization_preserves_global_type_and_case_numbers_across_hosts():
+def test_final_normalization_keeps_authored_types_and_renumbers_cases_per_host():
     first = "Write a short note on Giuseppe Mazzini."
     second = "Write a short note on Count Camillo de Cavour."
     inventory = {"items": [
@@ -592,15 +596,17 @@ def test_final_normalization_preserves_global_type_and_case_numbers_across_hosts
         generation, records, inventory, mined
     )
 
+    # Under the rewrite, normalize_final_records never rebuilds Types from
+    # the mined taxonomy: the Assemble pass's per-question rendering is
+    # authoritative, so the authored Type text (global Type numbers and
+    # Case titles included) survives verbatim; only Case numbering is
+    # renumbered continuously within each host, plus cleanup.
     assert "Type 01:" in normalized[0]["concept_details"]
-    assert "Case 01: Revolutionary organiser" in normalized[0][
-        "concept_details"
-    ]
-    assert "Type 01:" in normalized[1]["concept_details"]
-    assert "Case 02: Diplomatic architect" in normalized[1][
-        "concept_details"
-    ]
-    assert "Type 02:" not in normalized[1]["concept_details"]
+    assert "Case 01: Mazzini" in normalized[0]["concept_details"]
+    assert "Revolutionary organiser" not in normalized[0]["concept_details"]
+    assert "Type 02:" in normalized[1]["concept_details"]
+    assert "Case 01: Cavour" in normalized[1]["concept_details"]
+    assert "Case 02:" not in normalized[1]["concept_details"]
     assert all("_origin_type_id" not in record for record in normalized)
 
 

@@ -270,68 +270,6 @@ def test_final_repair_renormalizes_api_returned_newline_analysis(monkeypatch):
     ]
 
 
-def test_final_validation_rejects_unowned_extra_example():
-    source_question = (
-        "Calculate the current when 12 coulombs of charge pass a point in "
-        "three seconds."
-    )
-    invented = (
-        "Invent a different circuit problem that does not appear in the "
-        "uploaded source."
-    )
-    row = _strict_normal_row(question=source_question)
-    row["concept_details"] = row["concept_details"].replace(
-        " // Misconception/ Error Analysis:",
-        " Example 02: " + invented + " // Misconception/ Error Analysis:",
-    )
-    inventory = {"items": [{
-        "qid": "QINV-0001",
-        "source_kind": "exercise",
-        "topic_hint": "Electric Current",
-        "raw_task": source_question,
-    }]}
-
-    with pytest.raises(
-        RuntimeError,
-        match=r"source_inventory_semantics; unexpected_examples=1",
-    ):
-        g._validate_final_or_raise(
-            [row, _strict_culmination()],
-            inventory=inventory,
-        )
-
-
-def test_final_validation_rejects_extra_truncated_inventory_substring():
-    source_question = (
-        "Calculate the current when 12 coulombs of charge pass a point in "
-        "three seconds and explain each transformation."
-    )
-    shortened = (
-        "when 12 coulombs of charge pass a point in three seconds and explain "
-        "each transformation"
-    )
-    row = _strict_normal_row(question=source_question)
-    row["concept_details"] = row["concept_details"].replace(
-        " // Misconception/ Error Analysis:",
-        " Example 02: " + shortened + " // Misconception/ Error Analysis:",
-    )
-    inventory = {"items": [{
-        "qid": "QINV-0001",
-        "source_kind": "exercise",
-        "topic_hint": "Electric Current",
-        "raw_task": source_question,
-    }]}
-
-    with pytest.raises(
-        RuntimeError,
-        match=r"source_inventory_semantics; unexpected_examples=1",
-    ):
-        g._validate_final_or_raise(
-            [row, _strict_culmination()],
-            inventory=inventory,
-        )
-
-
 def test_closed_inventory_allows_exact_fragments_from_inner_example_marker():
     source_question = (
         "Analyze this worked demonstration. Example: Calculate the current "
@@ -399,72 +337,6 @@ def test_closed_inventory_rejects_extra_duplicate_inner_example_fragment():
 
     assert len(unexpected) == 1
     assert unexpected[0]["reason"] == "not_in_inventory"
-
-
-def test_final_validation_rejects_normal_scope_type_on_culmination():
-    question = (
-        "Calculate the current when 12 coulombs of charge pass a point in "
-        "three seconds."
-    )
-    inventory = {"items": [{
-        "qid": "QINV-0001",
-        "source_kind": "exercise",
-        "topic_hint": "Electric Current",
-        "raw_task": question,
-    }]}
-    mined = {"types": [{
-        "type_id": "TYPE-0001",
-        "type_title": "Applying the current relationship",
-        "topic_match_hint": "Electric Current",
-        "concept_match_hint": "Electric Current Relationship",
-        "placement_scope": "normal",
-        "source_question_ids": ["QINV-0001"],
-        "case_prompts": [{
-            "case_id": "CASE-0001",
-            "case_title": (
-                "Given current and resistance, determine the requested "
-                "quantity"
-            ),
-            "placement_scope": "normal",
-            "examples": [{
-                "source_question_id": "QINV-0001",
-                "example_prompt": question,
-            }],
-        }],
-    }]}
-
-    with pytest.raises(
-        RuntimeError,
-        match=r"source_inventory_semantics; .*type_hosts=1",
-    ):
-        g._validate_final_or_raise(
-            [_strict_normal_row(), _strict_culmination(question=question)],
-            inventory=inventory,
-            mined_types=mined,
-        )
-
-
-def test_final_validation_infers_normal_scope_without_mined_taxonomy():
-    question = (
-        "Calculate the current when 12 coulombs of charge pass a point in "
-        "three seconds."
-    )
-    inventory = {"items": [{
-        "qid": "QINV-0001",
-        "source_kind": "exercise",
-        "topic_hint": "Electric Current",
-        "raw_task": question,
-    }]}
-
-    with pytest.raises(
-        RuntimeError,
-        match=r"source_inventory_semantics; .*type_hosts=1",
-    ):
-        g._validate_final_or_raise(
-            [_strict_normal_row(), _strict_culmination(question=question)],
-            inventory=inventory,
-            mined_types={"types": []},
-        )
 
 
 def test_final_validation_infers_same_topic_synthesis_without_mined_taxonomy():
@@ -621,152 +493,7 @@ def test_explicit_mixed_scope_requires_actual_synthesis_evidence():
     )
 
 
-def test_final_validation_keeps_single_concept_comparison_off_culmination():
-    question = (
-        "Compare the resistance between different sections of the same "
-        "conductor and explain the result."
-    )
-    inventory = {"items": [{
-        "qid": "QINV-0001",
-        "source_kind": "exercise",
-        "topic_hint": "Electric Current",
-        "raw_task": question,
-    }]}
-
-    with pytest.raises(
-        RuntimeError,
-        match=r"source_inventory_semantics; .*type_hosts=1",
-    ):
-        g._validate_final_or_raise(
-            [_strict_normal_row(), _strict_culmination(question=question)],
-            inventory=inventory,
-            mined_types={"types": []},
-        )
-
-
-def test_terminal_host_gate_overrides_a_self_consistent_wrong_mined_hint():
-    question = "Find the arithmetic mean between 4 and 10."
-    records = [
-        _row(
-            "Constructing Arithmetic Progressions",
-            "Description: Build a progression from its first term and common "
-            "difference. // Types: Type 01: Finding an arithmetic mean "
-            "Case 01: Two endpoint terms are supplied "
-            f"Example 01: {question}",
-            topic="Arithmetic Progressions",
-            parent="Construction",
-        ),
-        _row(
-            "Identifying the Arithmetic Mean of Two AP Terms",
-            "Description: The middle term lies equally far from two adjacent "
-            "terms in an arithmetic progression.",
-            topic="Arithmetic Progressions",
-            parent="Properties of AP Terms",
-        ),
-    ]
-    inventory = {"items": [{
-        "qid": "QINV-0001",
-        "source_kind": "exercise",
-        "topic_hint": "Arithmetic Progressions",
-        "raw_task": question,
-    }]}
-    mined = {"types": [{
-        "type_id": "TYPE-0001",
-        "type_title": "Finding an Arithmetic Mean",
-        "topic_match_hint": "Arithmetic Progressions",
-        # Deliberately self-consistent but wrong: terminal evidence must not
-        # allow this model-authored hint to certify itself.
-        "concept_match_hint": "Constructing Arithmetic Progressions",
-        "placement_scope": "normal",
-        "source_question_ids": ["QINV-0001"],
-        "case_prompts": [{
-            "case_id": "CASE-0001",
-            "case_title": "Two endpoint terms are supplied",
-            "placement_scope": "normal",
-            "examples": [{
-                "source_question_id": "QINV-0001",
-                "example_prompt": question,
-            }],
-        }],
-    }]}
-
-    violations = g._rendered_type_placement_violations(
-        records, inventory, mined)
-
-    assert violations == [{
-        "qid": "QINV-0001",
-        "type_id": "TYPE-0001",
-        "reason": "high_confidence_wrong_host",
-        "expected_concept": "Identifying the Arithmetic Mean of Two AP Terms",
-        "actual_concept": "Constructing Arithmetic Progressions",
-    }]
-
-
-def test_reviewed_host_certification_replaces_legacy_raw_task_host_guess():
-    question = "Find the arithmetic mean between 4 and 10."
-    records = [
-        _row(
-            "Constructing Arithmetic Progressions",
-            "Description: Build a progression from its first term and common "
-            "difference. // Types: Type 01: Finding an arithmetic mean "
-            "Case 01: Two endpoint terms are supplied "
-            f"Example 01: {question}",
-            topic="Arithmetic Progressions",
-            parent="Construction",
-        ),
-        _row(
-            "Identifying the Arithmetic Mean of Two AP Terms",
-            "Description: The middle term lies equally far from two adjacent "
-            "terms in an arithmetic progression.",
-            topic="Arithmetic Progressions",
-            parent="Properties of AP Terms",
-        ),
-    ]
-    inventory = {"items": [{
-        "qid": "QINV-0001",
-        "source_kind": "exercise",
-        "topic_hint": "Arithmetic Progressions",
-        "raw_task": question,
-    }]}
-    mined = {"types": [{
-        "type_id": "TYPE-0001",
-        "type_title": "Finding an Arithmetic Mean",
-        "topic_match_hint": "Arithmetic Progressions",
-        "concept_match_hint": "Constructing Arithmetic Progressions",
-        "placement_scope": "normal",
-        "source_question_ids": ["QINV-0001"],
-        "case_prompts": [{
-            "case_id": "CASE-0001",
-            "case_title": "Two endpoint terms are supplied",
-            "placement_scope": "normal",
-            "examples": [{
-                "source_question_id": "QINV-0001",
-                "example_prompt": question,
-            }],
-        }],
-    }]}
-    g._reset_placement_certifications(mined)
-    g._certify_inventory_host(
-        mined,
-        "QINV-0001",
-        records[0],
-        basis="type_host_review",
-    )
-
-    assert g._placement_certification_violations(
-        records, inventory, mined) == []
-    # The pre-review heuristic would prefer the second concept from raw task
-    # wording. Once semantic review certifies the first host, terminal and
-    # deposit validation must not run that heuristic as a second certifier.
-    assert g._rendered_type_placement_violations(
-        records, inventory, mined) == []
-    assert g._normal_concept_type_coverage_violations(
-        records, inventory, mined) == []
-
-
-def test_certified_ambiguous_host_cannot_drift_during_review_or_final_gate(
-    monkeypatch,
-):
+def test_certified_ambiguous_host_cannot_drift_during_review_or_final_gate():
     question = "Perform the supplied procedure and report the requested value."
     type_body = (
         " // Types: Type 01: Applying a Supplied Procedure "
@@ -852,34 +579,34 @@ def test_certified_ambiguous_host_cannot_drift_during_review_or_final_gate(
     # entry; only the moved source item is rejected.
     assert not g._has_meaningful_types(original[2]["concept_details"])
 
-    monkeypatch.setattr(
-        g.cv,
-        "validate_concept_rows",
-        lambda *_args, **_kwargs: {
-            "errors": [],
-            "summary": {"warnings": 0},
-        },
-    )
+    # The final boundary fails closed on the drifted payload: the certified
+    # host no longer resolves, so hub normalization refuses to proceed.
     with pytest.raises(
         RuntimeError,
-        match=r"source_inventory_semantics; .*certified_hosts=1",
+        match=r"unresolved certified inventory hosts",
     ):
-        g._validate_final_or_raise(
+        g._normalize_activity_hubs_at_final_boundary(
             candidate,
-            inventory=inventory,
-            mined_types=mined,
+            inventory,
+            mined,
         )
 
 
-def test_final_hub_normalization_rebuilds_a_renamed_certified_host(
-    monkeypatch,
-):
+def test_final_hub_normalization_rejects_a_renamed_certified_host():
+    """The legacy meta-driven Type rebuild is retired: when late cleanup
+    renames a certified host so its exact placement no longer resolves, the
+    final hub boundary fails closed instead of re-deriving the placement."""
     original_host = _row(
         "Original Activity Host",
         "Description: Interpret observations from a supported investigation.",
         topic="Methods",
         parent="Investigations",
     )
+    # A saved final payload carries both the Host pass's routing
+    # (_aegis_release_qids, the hub's sole binding authority) and the
+    # rendered placement marker from its earlier hub normalization.
+    original_host["_aegis_release_qids"] = ["QINV-ACT-0001"]
+    original_host["_activity_hub_qids"] = ["QINV-ACT-0001"]
     renamed_host = {
         **original_host,
         "concept_title": "Refined Activity Host",
@@ -902,245 +629,27 @@ def test_final_hub_normalization_rebuilds_a_renamed_certified_host(
         original_host,
         basis="activity_host_review",
     )
-    rebuilds: list[dict] = []
 
-    def rebuild(records, current_inventory, current_mined, *, meta):
-        rebuilds.append(meta)
-        assert current_inventory is inventory
-        assert current_mined is mined
-        g._reset_placement_certifications(current_mined)
-        g._certify_inventory_host(
-            current_mined,
-            "QINV-ACT-0001",
-            records[0],
-            basis="activity_host_review",
+    with pytest.raises(
+        RuntimeError,
+        match=r"unresolved certified inventory hosts",
+    ):
+        g._normalize_activity_hubs_at_final_boundary(
+            [renamed_host],
+            inventory,
+            mined,
         )
-        return records
-
-    monkeypatch.setattr(
-        g, "_rebuild_types_after_final_placement_drift", rebuild)
 
     out = g._normalize_activity_hubs_at_final_boundary(
-        [renamed_host],
+        [original_host],
         inventory,
         mined,
-        meta={"subject": "Science"},
     )
 
-    assert rebuilds == [{"subject": "Science"}]
     assert out[0]["_activity_hub_qids"] == ["QINV-ACT-0001"]
     assert "Activity/Info Hub:" in out[0]["concept_details"]
     assert g._placement_certification_violations(
         out, inventory, mined) == []
-
-
-def _electricity_type_fixture(
-    qid: str, question: str, *, concept_hint: str,
-) -> dict:
-    return {
-        "type_id": f"TYPE-{qid[-4:]}",
-        "type_title": "Calculating Electric Current from Charge and Time",
-        "type_description": (
-            "Use charge flow and elapsed time to calculate current."
-        ),
-        "task_pattern": "Calculate electric current from charge and time.",
-        "topic_match_hint": "Electricity",
-        "concept_match_hint": concept_hint,
-        "placement_scope": "normal",
-        "source_question_ids": [qid],
-        "case_prompts": [{
-            "case_id": f"CASE-{qid[-4:]}",
-            "case_title": "Charge and elapsed time are supplied",
-            "placement_scope": "normal",
-            "examples": [{
-                "source_question_id": qid,
-                "example_prompt": question,
-            }],
-        }],
-    }
-
-
-def _electricity_concept_rows(
-    *, current_types: str = "", potential_types: str = "",
-) -> list[dict]:
-    return [
-        _row(
-            "Electric Current from Charge and Time",
-            "Description: Current measures charge flow per unit time."
-            + current_types,
-            topic="Electricity",
-            parent="Circuit Quantities",
-        ),
-        _row(
-            "Potential Difference between Two Points",
-            "Description: Potential difference measures work per unit charge."
-            + potential_types,
-            topic="Electricity",
-            parent="Circuit Quantities",
-        ),
-        _row(
-            "Culmination - Electricity",
-            "Description: Recap of Electric Current from Charge and Time and "
-            "Potential Difference between Two Points.",
-            topic="Electricity",
-            parent="Culmination",
-        ),
-    ]
-
-
-def test_applicable_type_coverage_accepts_source_backed_host_and_theory_sibling():
-    question = (
-        "Calculate electric current when 24 coulombs pass in 6 seconds."
-    )
-    inventory = {"items": [{
-        "qid": "QINV-0001",
-        "source_kind": "exercise",
-        "topic_hint": "Electricity",
-        "raw_task": question,
-    }]}
-    types = (
-        " // Types: Type 01: Calculating current from charge and time "
-        "Case 01: Charge and elapsed time are supplied "
-        f"Example 01: {question}"
-    )
-    records = _electricity_concept_rows(current_types=types)
-    mined = {"types": [
-        _electricity_type_fixture(
-            "QINV-0001",
-            question,
-            concept_hint="Electric Current from Charge and Time",
-        ),
-    ]}
-
-    assert not g._normal_concept_type_coverage_violations(
-        records, inventory, mined)
-    # Potential Difference is intentionally theory-only in this fixture. The
-    # per-concept gate does not require a Types block without a source task.
-    assert not g._has_meaningful_types(records[1]["concept_details"])
-
-
-def test_applicable_type_coverage_rejects_missing_types_despite_wrong_hint(
-    monkeypatch,
-):
-    question = (
-        "Calculate electric current when 24 coulombs pass in 6 seconds."
-    )
-    inventory = {"items": [{
-        "qid": "QINV-0001",
-        "source_kind": "exercise",
-        "topic_hint": "Electricity",
-        "raw_task": question,
-    }]}
-    wrong_host_types = (
-        " // Types: Type 01: Calculating current from charge and time "
-        "Case 01: Charge and elapsed time are supplied "
-        f"Example 01: {question}"
-    )
-    records = _electricity_concept_rows(
-        potential_types=wrong_host_types)
-    mined = {"types": [
-        _electricity_type_fixture(
-            "QINV-0001",
-            question,
-            # The source/task semantics identify Current; this self-consistent
-            # wrong destination hint must not certify Potential Difference.
-            concept_hint="Potential Difference between Two Points",
-        ),
-    ]}
-
-    assert g._normal_concept_type_coverage_violations(
-        records, inventory, mined
-    ) == [{
-        "qid": "QINV-0001",
-        "type_id": "TYPE-0001",
-        "reason": "missing_meaningful_types",
-        "expected_concept": "Electric Current from Charge and Time",
-        "actual_concepts": ["Potential Difference between Two Points"],
-    }]
-
-    monkeypatch.setattr(
-        g.cv,
-        "validate_concept_rows",
-        lambda *_args, **_kwargs: {
-            "errors": [],
-            "summary": {"warnings": 0},
-        },
-    )
-    with pytest.raises(
-        RuntimeError,
-        match=r"source_inventory_semantics; .*concept_type_coverage=1",
-    ):
-        g._validate_final_or_raise(
-            records, inventory=inventory, mined_types=mined)
-
-
-def test_applicable_type_coverage_requires_qid_on_proven_typed_host():
-    question = (
-        "Calculate electric current when 24 coulombs pass in 6 seconds."
-    )
-    other_question = (
-        "Calculate electric current when 12 volts act across 4 ohms."
-    )
-    inventory = {"items": [{
-        "qid": "QINV-0001",
-        "source_kind": "exercise",
-        "topic_hint": "Electricity",
-        "raw_task": question,
-    }]}
-    current_types = (
-        " // Types: Type 01: Calculating current from voltage and resistance "
-        "Case 01: Voltage and resistance are supplied "
-        f"Example 01: {other_question}"
-    )
-    wrong_host_types = (
-        " // Types: Type 01: Calculating current from charge and time "
-        "Case 01: Charge and elapsed time are supplied "
-        f"Example 01: {question}"
-    )
-    records = _electricity_concept_rows(
-        current_types=current_types,
-        potential_types=wrong_host_types,
-    )
-    mined = {"types": [
-        _electricity_type_fixture(
-            "QINV-0001",
-            question,
-            concept_hint="Potential Difference between Two Points",
-        ),
-    ]}
-
-    assert g._normal_concept_type_coverage_violations(
-        records, inventory, mined
-    ) == [{
-        "qid": "QINV-0001",
-        "type_id": "TYPE-0001",
-        "reason": "source_qid_not_on_expected_host",
-        "expected_concept": "Electric Current from Charge and Time",
-        "actual_concepts": ["Potential Difference between Two Points"],
-    }]
-
-
-def test_final_validation_requires_every_pure_activity_in_a_hub():
-    activity = (
-        "Connect the circuit, vary the resistance, and record the current for "
-        "each setting."
-    )
-    inventory = {"items": [{
-        "qid": "QINV-ACT-01",
-        "source_kind": "activity",
-        "source_label": "Activity 12.1",
-        "topic_hint": "Electric Current",
-        "raw_task": activity,
-    }]}
-
-    with pytest.raises(
-        RuntimeError,
-        match=r"source_inventory_semantics; hub_contract=1",
-    ):
-        g._validate_final_or_raise(
-            [_strict_normal_row(), _strict_culmination()],
-            inventory=inventory,
-        )
 
 
 def test_activity_hub_normalization_removes_answer_and_stale_image():
@@ -1167,7 +676,10 @@ def test_activity_hub_normalization_removes_answer_and_stale_image():
         f'[img src="{wrong_image}" alt="Fig. 12.2 - voltmeter"].'
     )
     row = _strict_normal_row(hub=stale_hub)
+    # Stale checkpoint marker; the rebuilt note re-derives it from the
+    # Host pass's routing (_aegis_release_qids), the hub's sole authority.
     row["_activity_hub_qids"] = ["QINV-ACT-01"]
+    row["_aegis_release_qids"] = ["QINV-ACT-01"]
 
     normalized = g._normalize_activity_hubs_from_inventory(
         [row, _strict_culmination()], inventory)
@@ -1272,15 +784,6 @@ def test_generic_mined_type_title_is_replaced_from_its_source_example():
     assert "Assessment pattern" not in body
     assert "Type 01: Calculating Current from the Supplied Charge" in body
     assert source_question in body
-    row = _strict_normal_row()
-    row["concept_details"] = row["concept_details"].replace(
-        " // Misconception/ Error Analysis:",
-        f" // Types: {body} // Misconception/ Error Analysis:",
-    )
-    assert not g._mined_type_topic_violations(
-        [row, _strict_culmination()],
-        {"types": [mined_type]},
-    )
 
 
 def test_generic_mined_type_title_supports_legacy_string_case_prompt():

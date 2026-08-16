@@ -162,8 +162,11 @@ def test_verified_pdf_decisions_restore_six_sections_and_26_tasks(
         f"QINV-{index:04d}" for index in range(1, 27)
     ]
     inventory = phase2.inventory_from_canonical(canonical)
-    assert len(inventory["items"]) == 31
-    assert any(item["qid"] == "QINV-0011.2" for item in inventory["items"])
+    # Never-split: 26 whole parent items; the sealed counts below still
+    # tally the ledger's leaf routes (31).
+    assert len(inventory["items"]) == 26
+    assert not any("." in item["qid"] for item in inventory["items"])
+    assert any(item["qid"] == "QINV-0011" for item in inventory["items"])
     assert canonical["phase21_hardening"]["parent_task_count"] == 26
     assert canonical["phase21_hardening"]["inventory_item_count"] == 31
     assert canonical["source_contract"]["inventory_item_count"] == 31
@@ -244,9 +247,17 @@ def test_phase22_rebuilds_stale_missing_leaf_derivations_unconditionally(
     by_qid = {item["qid"]: item for item in inventory["items"]}
     assert ready is True
     assert len(canonical["tasks"]) == 26
-    assert len(inventory["items"]) == 31
-    assert "QINV-0011.2" in by_qid
-    assert "Examine Fig. 14(b)." in by_qid["QINV-0011.2"]["raw_task"]
+    # Never-split: whole parents only in the inventory; the rebuilt leaf
+    # derivations are visible in the ledger and its sealed counts.
+    assert len(inventory["items"]) == 26
+    assert "QINV-0011" in by_qid
+    rebuilt = next(
+        task for task in canonical["tasks"] if task["qid"] == "QINV-0011"
+    )
+    assert [leaf["qid"] for leaf in rebuilt["leaf_cases"]] == [
+        "QINV-0011.1", "QINV-0011.2",
+    ]
+    assert "Examine Fig. 14(b)." in rebuilt["leaf_cases"][1]["raw_prompt"]
     assert canonical["phase21_hardening"]["inventory_item_count"] == 31
     assert canonical["statistics"]["inventory_leaf_tasks"] == 31
     assert canonical["source_contract"]["inventory_item_count"] == 31

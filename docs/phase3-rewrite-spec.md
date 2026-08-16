@@ -1,9 +1,15 @@
 # Phase 3 rewrite: four passes from the 81% boundary
 
-**Status: approved direction, pre-implementation.** This document is the
-contract for rewriting everything that runs after the `pre_type_assignment`
-(81%) checkpoint. It replaces the Phase 3.1–3.11 sub-phase architecture
-entirely. Nothing before 81% changes.
+**Status: migration complete (PR 4 landed).** The rewritten Phase 3 is the
+only post-81% path: the `AEGIS_PHASE3_REWRITE` flag is retired and the
+legacy 3.1–3.11 lane, its semantic-recovery replay machinery, and the
+post-81% human-pause channel are deleted. Modules that carried phase-3.x
+*names* but serve pre-81% or cross-product transport (3.4/3.4.1/3.4.2
+structured-output and PDF-salvage, 3.5/3.5.1/3.5.2 provider/workbook
+capacity, 3.6 source-critical turnover) are retained — §2's "nothing
+before 81% changes" governs over the name list. This document remains the
+contract for everything that runs after the `pre_type_assignment` (81%)
+checkpoint.
 
 Companion documents: `build-concepts-manual-process.md` (the five-pass manual
 mirror and the "Decide once" doctrine), `concept-placement-rules.md` (the

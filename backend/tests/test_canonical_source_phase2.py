@@ -115,17 +115,16 @@ def test_phase2_rne_inventory_is_source_ordered_and_byte_deterministic():
     assert len({task["identity_key"] for task in tasks}) == 26
 
     inventory = phase2.inventory_from_canonical(first.canonical)
+    # Never-split: multi-part questions materialize whole — one inventory
+    # item per parent task, no dotted leaf fragments.
     expected_inventory_qids = [
-        *[f"QINV-{index:04d}" for index in range(1, 11)],
-        "QINV-0011.1",
-        "QINV-0011.2",
-        *[f"QINV-{index:04d}" for index in range(12, 16)],
-        *[f"QINV-0016.{index}" for index in range(1, 6)],
-        *[f"QINV-{index:04d}" for index in range(17, 27)],
+        f"QINV-{index:04d}" for index in range(1, 27)
     ]
     assert [item["qid"] for item in inventory["items"]] == expected_inventory_qids
     assert inventory["source_contract"]["task_count"] == 26
     assert inventory["source_contract"]["parent_task_count"] == 26
+    # The sealed count still tallies the ledger's leaf routes (the ledger
+    # keeps its leaf cases even though the inventory ships parents whole).
     assert inventory["source_contract"]["inventory_item_count"] == 31
     assert inventory["source_contract"]["mode"] == (
         phase2.SOURCE_CONTRACT_MODE
@@ -169,7 +168,7 @@ def test_rne_independent_subparts_are_leaf_cases_but_dependent_parts_stay_atomic
     assert not dependent.get("leaf_cases")
 
 
-def test_never_split_inventory_keeps_multi_part_questions_whole(monkeypatch):
+def test_never_split_inventory_keeps_multi_part_questions_whole():
     """Reviewer rule under the rewrite: sub-questions stay with their
     question. The ledger keeps its leaf cases, but the inventory
     materializes the parent task as ONE item carrying the full wording."""
@@ -181,7 +180,6 @@ def test_never_split_inventory_keeps_multi_part_questions_whole(monkeypatch):
     )
     canonical = compiled.canonical
 
-    monkeypatch.setenv("AEGIS_PHASE3_REWRITE", "1")
     inventory = phase2.inventory_from_canonical(canonical)
     by_qid = {
         str(item.get("qid")): item for item in inventory["items"]
@@ -195,119 +193,17 @@ def test_never_split_inventory_keeps_multi_part_questions_whole(monkeypatch):
     ):
         assert part in whole["raw_task"]
 
-    monkeypatch.delenv("AEGIS_PHASE3_REWRITE", raising=False)
-    legacy = phase2.inventory_from_canonical(canonical)
-    legacy_qids = {str(item.get("qid")) for item in legacy["items"]}
-    assert "QINV-0016.1" in legacy_qids and "QINV-0016" not in legacy_qids
-
-
-def test_rne_reference_taxonomy_is_11_reusable_types_and_31_routable_cases():
-    """Lock the intended method taxonomy without pinning Cases to one host.
-
-    The same reusable method may occur under unrelated chapter concepts.  In
-    particular all five short-note leaves share one Type identity, while each
-    leaf retains an independent route for its own historical subject.
-    """
-    source = (DATA / "RNE.mmd").read_text(encoding="utf-8")
-    compiled = phase2.compile_phase2_source(
-        source,
-        source_filename="RNE.mmd",
-        consumer_module="build_concepts",
-    )
-    inventory = phase2.inventory_from_canonical(compiled.canonical)
-    inventory_qids = [item["qid"] for item in inventory["items"]]
-
-    reusable_groups = [
-        # Visual-source interpretation.
-        ["QINV-0001", "QINV-0005", "QINV-0010", "QINV-0012", "QINV-0013", "QINV-0014"],
-        # Written-source argument/viewpoint interpretation.
-        ["QINV-0002", "QINV-0003", "QINV-0007", "QINV-0009"],
-        # Historical map interpretation, including both Fig. 14 leaves.
-        ["QINV-0004", "QINV-0011.1", "QINV-0011.2"],
-        # Historical role/perspective writing.
-        ["QINV-0008", "QINV-0015"],
-        # Cultural or symbolic contribution/significance.
-        ["QINV-0006", "QINV-0018", "QINV-0022"],
-        # Measures/reforms, purpose and effects.
-        ["QINV-0017", "QINV-0020"],
-        # Concise note on a person, event, institution or social role.
-        [f"QINV-0016.{index}" for index in range(1, 6)],
-        # Nation-building pathways.
-        ["QINV-0019", "QINV-0023", "QINV-0024"],
-        # Multidimensional movement/ideology explanation.
-        ["QINV-0021"],
-        # Interacting causes of nationalist conflict.
-        ["QINV-0025"],
-        # Comparative evidence project.
-        ["QINV-0026"],
-    ]
-    assert len(reusable_groups) == 11
-    assert sorted(qid for group in reusable_groups for qid in group) == sorted(
-        inventory_qids
-    )
-
-    short_note_routes = {
-        "QINV-0016.1": ("The Revolutionaries", "Giuseppe Mazzini"),
-        "QINV-0016.2": ("Italy Unified", "Count Camillo de Cavour"),
-        "QINV-0016.3": ("The Age of Revolutions: 1830–1848", "Greek independence"),
-        "QINV-0016.4": ("The Revolution of the Liberals", "Frankfurt Parliament"),
-        "QINV-0016.5": ("The Revolution of the Liberals", "Women in nationalist struggles"),
-    }
-    types = []
-    for type_index, group in enumerate(reusable_groups, start=1):
-        cases = []
-        for case_index, qid in enumerate(group, start=1):
-            topic, concept = short_note_routes.get(
-                qid,
-                (f"Verified route for {qid}", f"Verified concept for {qid}"),
-            )
-            cases.append({
-                "case_id": f"CASE-{type_index:02d}-{case_index:02d}",
-                "case_title": concept,
-                "topic_match_hint": topic,
-                "concept_match_hint": concept,
-                "is_activity": qid == "QINV-0026",
-                "examples": [{
-                    "source_question_id": qid,
-                    "example_prompt": next(
-                        generation._inventory_task_text(item)
-                        for item in inventory["items"]
-                        if item["qid"] == qid
-                    ),
-                }],
-            })
-        types.append({
-            "type_id": f"TYPE-{type_index:04d}",
-            "type_title": f"Reusable method {type_index}",
-            "type_description": f"Reference reusable method {type_index}.",
-            "task_pattern": f"Apply reusable method {type_index}.",
-            "source_question_ids": list(group),
-            "case_prompts": cases,
-        })
-
-    units = generation._expand_mined_types_to_assignment_units(types)
-    assert len(units) == 31
-    assert len({unit["_origin_type_id"] for unit in units}) == 11
-    assert {
-        qid
-        for unit in units
-        for qid in unit["source_question_ids"]
-    } == set(inventory_qids)
-    assert any(unit["source_question_ids"] == ["QINV-0011.2"] for unit in units)
-
-    short_note_units = [
-        unit for unit in units
-        if unit["source_question_ids"][0].startswith("QINV-0016.")
-    ]
-    assert len(short_note_units) == 5
-    assert {unit["_origin_type_id"] for unit in short_note_units} == {"TYPE-0007"}
-    assert len({unit["type_id"] for unit in short_note_units}) == 5
-    assert {
-        unit["topic_match_hint"] for unit in short_note_units
-    } == {topic for topic, _concept in short_note_routes.values()}
-
 
 def test_rne_second_fig14_activity_prompt_is_a_visual_leaf_of_qinv_0011():
+    """The ledger keeps both distinct-visual leaf cases, and the whole
+    inventory item must still carry every part of the question.
+
+    Never-split (the rewrite's reviewer rule) means QINV-0011 materializes
+    as ONE inventory item — but "one question" is the doctrine's "every
+    part kept, in order": the second prompt's wording and its map visual
+    belong inside the whole item, exactly as QINV-0016 keeps its a)–e)
+    subparts.
+    """
     source = (DATA / "RNE.mmd").read_text(encoding="utf-8")
     compiled = phase2.compile_phase2_source(
         source,
@@ -330,10 +226,16 @@ def test_rne_second_fig14_activity_prompt_is_a_visual_leaf_of_qinv_0011():
     ]
 
     inventory = phase2.inventory_from_canonical(compiled.canonical)
-    item = next(row for row in inventory["items"] if row["qid"] == second["qid"])
-    assert item["parent_qid"] == "QINV-0011"
-    assert "Examine Fig. 14(b)." in generation._inventory_task_text(item)
-    assert second["image_urls"][0] in generation._inventory_task_text(item)
+    item = next(row for row in inventory["items"] if row["qid"] == "QINV-0011")
+    text = generation._inventory_task_text(item)
+    assert "Look at Fig. 14(a)." in text
+    # The follow-up prompt recovered into `source_followup_prompts` — the
+    # learner's "Examine Fig. 14(b)…" questions and their map visual —
+    # lives outside the parent's own source span, so the whole-item
+    # materialization appends its wording and embeds its visual (R4:
+    # nothing lost). The retired leaf split used to carry this part.
+    assert "Examine Fig. 14(b)." in text
+    assert second["image_urls"][0] in text
 
 
 def test_phase2_inventory_preserves_display_math_and_source_identity():

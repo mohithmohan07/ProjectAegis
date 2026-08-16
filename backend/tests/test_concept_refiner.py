@@ -265,20 +265,23 @@ def test_records_without_types_are_normalized_to_one_analysis_section():
     misconception, error_analysis = cr.analysis_components(
         out[0]["concept_details"])
     assert misconception == "none"
-    assert error_analysis
+    # The authored section alone is complete: the missing Error Analysis
+    # sibling is never backfilled with deterministic filler.
+    assert error_analysis == ""
 
 
-def test_refine_chapter_adds_missing_learner_analysis_to_normal_concepts():
+def test_refine_chapter_leaves_missing_learner_analysis_for_model_repair():
     records = [
         _rec("Basic Proportionality Theorem", "Description: relates side ratios."),
         _rec("Culmination - Topic 01", "Description: Recap"),
     ]
     out = cr.refine_chapter(records)
+    # A wholly missing analysis stays missing: authoring it is the Polish
+    # pass's model work, and the deterministic filler is exactly what the
+    # terminal gate forbids.
     normal_details = out[0]["concept_details"]
-    assert "Misconception/ Error Analysis:" in normal_details
-    misconception, error_analysis = cr.analysis_components(normal_details)
-    assert misconception and error_analysis
-    assert "Basic Proportionality Theorem" in out[0]["concept_details"]
+    assert "Misconception/ Error Analysis:" not in normal_details
+    assert cr.analysis_components(normal_details) == ("", "")
     assert "Misconception/ Error Analysis:" not in out[1]["concept_details"]
 
 
@@ -304,15 +307,26 @@ def test_refine_chapter_accepts_either_analysis_section_or_both():
 
     out = cr.refine_chapter(records)
 
-    for record in out:
+    # Either authored section alone is complete; a missing sibling is never
+    # backfilled with deterministic filler, and authored text survives
+    # verbatim inside the one canonical combined section.
+    expected = [
+        ("Students may believe that scaling always enlarges a figure.", ""),
+        ("", "Students may omit a negative sign while substituting."),
+        (
+            "Students may think different denominators always mean "
+            "different values.",
+            "Students may multiply only the numerator.",
+        ),
+    ]
+    for record, components in zip(out, expected):
         details = record["concept_details"]
         sections = cr.split_sections(details)
         assert [
             label for label, _ in sections
             if cr.is_learner_analysis_label(label)
         ] == ["Misconception/ Error Analysis"]
-        misconception, error_analysis = cr.analysis_components(details)
-        assert misconception and error_analysis
+        assert cr.analysis_components(details) == components
 
 
 def test_normalization_collapses_duplicate_cross_category_analysis():

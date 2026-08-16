@@ -13,7 +13,6 @@ the caller's failure release ships them.
 """
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -23,14 +22,6 @@ from . import host as host_mod
 from . import kernel
 from . import polish as polish_mod
 from . import settle as settle_mod
-
-
-def rewrite_enabled() -> bool:
-    """The production flag for routing post-81% work through this package."""
-
-    return os.environ.get(
-        "AEGIS_PHASE3_REWRITE", ""
-    ).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _snapshot_settled_rows(

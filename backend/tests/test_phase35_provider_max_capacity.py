@@ -4,9 +4,6 @@ from __future__ import annotations
 from app import config
 from app.services import canonical_source_phase22 as phase22
 from app.services import canonical_source_phase3 as phase3
-from app.services import canonical_source_phase31_grounding_contract as phase31
-from app.services import canonical_source_phase32_topology_adjudication_contract as phase32
-from app.services import canonical_source_phase33_preflight_contract as phase33
 from app.services import canonical_source_phase34_structured_output_contract as phase34
 from app.services import generation, workbooks
 from aegis_pipeline import openai_policy
@@ -143,50 +140,6 @@ def test_live_source_views_stay_bounded_while_mmd_batching_is_lossless(monkeypat
     )
     assert len(excerpt) <= 20
     assert "TRIMMED" not in excerpt
-
-
-def test_grounding_topology_and_host_packets_bound_bodies_not_source(monkeypatch):
-    _activate(monkeypatch)
-    long_text = (
-        "SOURCE_OPENING_SENTINEL "
-        + ("Source evidence detail " * 400)
-        + "SOURCE_ENDING_SENTINEL"
-    )
-    graph = {
-        "topics": [{"topic_id": "TOPIC-1", "order": 1, "title": "Topic"}],
-        "blocks": [
-            {
-                "block_id": "BLK-1",
-                "topic_id": "TOPIC-1",
-                "subtopic_id": "SUB-1",
-                "kind": "paragraph",
-            }
-        ],
-    }
-    canonical = {
-        "blocks": [
-            {
-                "block_id": "BLK-1",
-                "display_text": long_text,
-                "kind": "paragraph",
-            }
-        ]
-    }
-
-    _usable, grounding = phase31._candidate_blocks(graph, canonical, "TOPIC-1")
-    topics, _order = phase32._topic_evidence(graph, canonical)
-    hosts, _subtopics = phase33._topic_source_blocks(graph, canonical)
-
-    assert len(grounding[0]["text"]) <= 3_000
-    assert "SOURCE_OPENING_SENTINEL" in grounding[0]["text"]
-    assert "SOURCE_ENDING_SENTINEL" in grounding[0]["text"]
-    assert len(topics[0]["evidence"]) <= 3_200
-    assert "SOURCE_OPENING_SENTINEL" in topics[0]["evidence"]
-    assert "SOURCE_ENDING_SENTINEL" in topics[0]["evidence"]
-    assert len(hosts["TOPIC-1"][0]["text"]) <= 3_000
-    assert "SOURCE_OPENING_SENTINEL" in hosts["TOPIC-1"][0]["text"]
-    assert "SOURCE_ENDING_SENTINEL" in hosts["TOPIC-1"][0]["text"]
-    assert canonical["blocks"][0]["display_text"] == long_text
 
 
 def test_workbook_writer_receives_same_provider_capacity(monkeypatch):

@@ -893,11 +893,7 @@ def _preserve_authored_analysis() -> bool:
     filler is forbidden at the gate, so a silent substitution turns valid
     API content into a guaranteed failure.
     """
-    try:
-        from .phase3 import runner as _phase3_runner
-    except ImportError:  # pragma: no cover - defensive import ordering
-        return False
-    return _phase3_runner.rewrite_enabled()
+    return True
 
 
 def ensure_valid_learner_analysis(records: list[dict]) -> list[dict]:

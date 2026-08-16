@@ -661,11 +661,7 @@ def _never_split_questions() -> bool:
     # Reviewer rule under the rewritten pipeline: a question with
     # sub-questions stays ONE question, placed whole by the routing rules.
     # The ledger's leaf cases remain available to the legacy path.
-    try:
-        from .phase3 import runner as _phase3_runner
-    except ImportError:  # pragma: no cover - defensive ordering
-        return False
-    return _phase3_runner.rewrite_enabled()
+    return True
 
 
 def _mmd_source_reader(canonical: dict[str, Any]) -> str:
@@ -738,12 +734,77 @@ def inventory_from_canonical(canonical: dict[str, Any]) -> dict[str, Any]:
             for leaf in leaf_cases
         )
         if leaf_cases and _never_split_questions() and not gpt_decided_split:
-            # The parent task's display prompt carries the complete
-            # multi-part wording; the whole question is one inventory item.
-            # The exception is a split the chapter-outline judge decided:
-            # subparts it deemed independent are separate questions (board
-            # conventions differ, and the model judged the content itself).
-            rows = [task]
+            # The whole question is one inventory item. The parent task's
+            # display prompt carries every part printed inside the task's
+            # own source span; a part recovered from a separate source
+            # block (the phase-2.1 follow-up recovery) is appended in leaf
+            # order so the one item really carries the question's entirety
+            # — a part only the retired leaf split used to materialize
+            # must never silently vanish from the closed-world inventory
+            # (R4: exact-once, nothing lost). The span comparison is pure
+            # provenance bookkeeping: the leaves were identified upstream;
+            # this only assembles the recorded wording and its visuals.
+            # The exception stays: a split the chapter-outline judge
+            # decided keeps its independent subparts as separate questions
+            # (board conventions differ, and the model judged the content
+            # itself).
+            merged = copy.deepcopy(task)
+            parent_start = int(task.get("source_start") or 0)
+            parent_end = int(task.get("source_end") or 0)
+            display = str(merged.get("display_prompt") or "").strip()
+            raw = str(merged.get("raw_prompt") or display).strip()
+            figure_refs = [
+                str(value) for value in merged.get("figure_refs") or []
+                if str(value or "").strip()
+            ]
+            image_urls = [
+                str(value) for value in merged.get("image_urls") or []
+                if str(value or "").strip()
+            ]
+            appended_visuals = False
+            for leaf in leaf_cases:
+                leaf_start = int(leaf.get("source_start") or 0)
+                if parent_start <= leaf_start < max(
+                    parent_end, parent_start + 1
+                ):
+                    # Wording carved from the parent's own block is already
+                    # inside the parent's complete prompt.
+                    continue
+                leaf_display = str(leaf.get("display_prompt") or "").strip()
+                leaf_raw = str(
+                    leaf.get("raw_prompt") or leaf_display
+                ).strip()
+                if leaf_display and leaf_display not in display:
+                    display = f"{display}\n{leaf_display}".strip()
+                if leaf_raw and leaf_raw not in raw:
+                    raw = f"{raw}\n{leaf_raw}".strip()
+                for figure_id in leaf.get("figure_refs") or []:
+                    value = str(figure_id or "").strip()
+                    if value and value not in figure_refs:
+                        figure_refs.append(value)
+                leaf_urls, leaf_captions = _task_visual_payload(
+                    leaf, figures, images
+                )
+                for url in leaf_urls:
+                    if url in image_urls:
+                        continue
+                    image_urls.append(url)
+                    appended_visuals = True
+                    if url not in display:
+                        # The whole item's display prompt is the canonical
+                        # public wording (`_acsd_display_prompt`); embed the
+                        # follow-up part's visual exactly as the parent's own
+                        # visuals were embedded at compile time.
+                        caption = str(leaf_captions.get(url) or "").strip()
+                        alt = caption or f"Source visual {len(image_urls)}"
+                        display = f"{display} {kr.image(url, alt)}".strip()
+            merged["display_prompt"] = display
+            merged["raw_prompt"] = raw
+            merged["figure_refs"] = figure_refs
+            merged["image_urls"] = image_urls
+            if appended_visuals:
+                merged["requires_visual"] = True
+            rows = [merged]
         for leaf in rows:
             row = copy.deepcopy(task)
             row.update(copy.deepcopy(leaf))

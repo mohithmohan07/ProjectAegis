@@ -7,12 +7,12 @@ from app import models
 from app.services import (
     build_concepts,
     canonical_source_phase2 as phase2,
-    canonical_source_phase31_grounding_contract as phase31,
     canonical_source_phase3 as phase3,
     grounding_certificate,
     openai_usage,
     placement_policy,
 )
+from app.services.phase3 import reground as p3_reground
 from tests.conftest import convert_concept_upload, stream_events, stream_result
 
 
@@ -682,9 +682,9 @@ def test_post_learning_api_discards_invalid_final_and_completes_retry_without_ap
     # re-ground whenever deterministic final formatting changes its sealed
     # claim; emulate that independently verified pass without a provider call.
     monkeypatch.setattr(
-        phase31,
-        "ground_concepts",
-        lambda current, **_kwargs: prepare_grounded(current),
+        p3_reground,
+        "reground_rows",
+        lambda current, _drifted, **_kwargs: prepare_grounded(current),
     )
     validations = []
 

@@ -1227,11 +1227,7 @@ def _authored_analysis_is_authoritative() -> bool:
     # the terminal gate rejects, and a wholly missing analysis is the Polish
     # pass's to author with a real model call. The legacy path keeps its
     # historical backfill.
-    try:
-        from .phase3 import runner as _phase3_runner
-    except ImportError:  # pragma: no cover - defensive ordering
-        return False
-    return _phase3_runner.rewrite_enabled()
+    return True
 
 
 def ensure_analysis_sections(records: list[dict]) -> list[dict]:

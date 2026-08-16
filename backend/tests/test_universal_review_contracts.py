@@ -1791,33 +1791,6 @@ def test_activity_hub_matching_avoids_label_prefix_and_generic_collisions():
     assert g._activity_hub_locations(tracked, same_prefix_second) == [1]
 
 
-def test_activity_only_topic_does_not_require_an_artificial_type():
-    records = [{
-        "topic": "Classroom Investigation",
-        "concept_title": "Observing Change",
-        "concept_details": (
-            "Description: Observe the change. // Activity/Info Hub: "
-            "Activity — Activity 1: Record the observation."
-        ),
-    }]
-    activity = _item(
-        "QINV-0001", "Record the observation.",
-        topic="Classroom Investigation",
-        source_kind="activity", source_label="Activity 1",
-    )
-    assert not g._inventory_topic_type_coverage_violations(
-        records, _inventory(activity))
-
-    assessable = _item(
-        "QINV-0002", "Explain the observation.",
-        topic="Classroom Investigation",
-        source_kind="checkpoint_question",
-        _activity_origin=True,
-    )
-    assert g._inventory_topic_type_coverage_violations(
-        records, _inventory(assessable))
-
-
 def test_checkpoint_fallback_uses_task_semantics_not_source_category():
     item = _item(
         "QINV-0001",

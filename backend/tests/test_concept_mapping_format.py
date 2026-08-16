@@ -244,7 +244,11 @@ def test_post_deposit_rejects_cases_without_numbered_examples(db):
             db, chapter, records, "Post", "")
 
 
-def test_post_deposit_treats_explicit_empty_inventory_as_closed_world(db):
+def test_post_deposit_ships_extra_examples_with_explicit_empty_inventory(db):
+    """The closed-world unexpected-examples gate is retired with the phase-3
+    rewrite: an explicit empty inventory no longer blocks a deposit whose
+    Types carry examples the inventory does not own — exact rendered
+    inventory coverage (trivially satisfied here) is the surviving gate."""
     from app.services import build_concepts
 
     chapter = models.Chapter(
@@ -285,20 +289,27 @@ def test_post_deposit_treats_explicit_empty_inventory_as_closed_world(db):
         },
     ]
 
-    with pytest.raises(
-        ValueError,
-        match=r"source_inventory_semantics; unexpected_examples=1",
-    ):
-        build_concepts._deposit_concepts(
-            db,
-            chapter,
-            records,
-            "Post",
-            "",
-            inventory={"items": [], "stats": {}},
-        )
+    created, _merged = build_concepts._deposit_concepts(
+        db,
+        chapter,
+        records,
+        "Post",
+        "",
+        inventory={"items": [], "stats": {}},
+    )
+    db.flush()
 
-    assert not chapter.topics
+    assert chapter.topics
+    deposited = next(
+        concept
+        for concept in (db.get(models.Concept, cid) for cid in created)
+        if concept.parent_concept != "Culmination"
+    )
+    # The extra example ships (math canonicalized into Katex wrappers).
+    assert "Type 01: Solving linear balance equations" in (
+        deposited.concept_details)
+    assert "Solve 3x +" in deposited.concept_details
+    assert "explain each balancing step" in deposited.concept_details
 
 
 def test_post_deposit_without_inventory_uses_generation_fatal_policy(db):

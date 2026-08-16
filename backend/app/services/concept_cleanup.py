@@ -333,11 +333,7 @@ def _ellipsis_spacing_is_source_exact() -> bool:
     fixpoint correctly refuses. Under the rewritten pipeline the
     source-exact form wins; the legacy path keeps the tightened style.
     """
-    try:
-        from .phase3 import runner as _phase3_runner
-    except ImportError:  # pragma: no cover - defensive import ordering
-        return False
-    return _phase3_runner.rewrite_enabled()
+    return True
 
 
 def _tidy(text: str) -> str:

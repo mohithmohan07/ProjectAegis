@@ -216,84 +216,6 @@ def test_canonicalize_uses_compact_skeleton_not_mmd(monkeypatch):
     assert "Exercise problems here" not in captured["user"]
 
 
-def test_refine_descriptions_via_api_strips_existing_types(monkeypatch):
-    captured = {}
-
-    def fake_openai(system, user, **kw):
-        captured["system"] = system
-        captured["user"] = user
-        return {"rows": [{
-            "topic": "T", "concept": "C",
-            "concept_description": (
-                "Description: A clear source-grounded description for lesson planning. "
-                "It states what the concept means and when it is used. // "
-                "Error Analysis: Students may reverse the operation."
-            ),
-            "keywords": "k",
-        }]}
-
-    monkeypatch.setattr(g, "_openai_json", fake_openai)
-    records = [{
-        "topic": "T", "concept_title": "C",
-        "concept_details": (
-            "Description: weak // Types: Type 01: Evaluation Case 01: Find x Case 02: Find y "
-            "// Error Analysis: Students may reverse the operation."
-        ),
-        "keywords": "k",
-    }]
-    out = g._refine_descriptions_via_api(records, subject="Math", mmd_text="# Chapter\nConcept source.")
-    assert "description-only editor" in captured["system"]
-    assert "RELEVANT SOURCE TEXT" in captured["user"]
-    assert "clear source-grounded description" in out[0]["concept_details"]
-    # The description pass is not allowed to carry Types in the staged architecture.
-    assert "Types:" not in out[0]["concept_details"]
-
-
-def test_assign_types_uses_pure_api_id_assignment(monkeypatch):
-    captured = {"systems": [], "users": []}
-
-    def fake_openai(system, user, **kw):
-        captured["systems"].append(system)
-        captured["users"].append(user)
-        # Pure-API assignment: map every type_id to a concept_id (exact IDs only).
-        return {"assignments": [
-            {"concept_id": "CONCEPT-0001", "type_ids": ["TYPE-0001"]},
-            {"concept_id": "CONCEPT-0002", "type_ids": ["TYPE-0002"]},
-        ]}
-
-    monkeypatch.setattr(g, "_openai_json", fake_openai)
-    # Types run after the culmination pass, so the records include a
-    # culmination row (last within its topic).
-    records = [
-        {"topic": "T", "parent_concept": "P", "concept_title": "Adding Numbers",
-         "concept_details": "Description: add // Misconception: m", "keywords": ""},
-        {"topic": "T", "parent_concept": "P", "concept_title": "Dividing Powers",
-         "concept_details": "Description: divide", "keywords": ""},
-        {"topic": "T", "parent_concept": "Culmination",
-         "concept_title": "Culmination - Adding Numbers and Dividing Powers",
-         "concept_details": "Description: Recap", "keywords": ""},
-    ]
-    mined = {"types": [
-        {"type_id": "TYPE-0001", "type_title": "Adding Given Numbers",
-         "case_prompts": [{"case_prompt": "Find the sum of 2 and 3 using addition."}]},
-        {"type_id": "TYPE-0002", "type_title": "Dividing Powers with the Same Base",
-         "case_prompts": [{"case_prompt": "Simplify p^9 divided by p^3 using exponent laws."}]},
-    ]}
-    out = g._assign_types_via_api(
-        records, subject="Math", mmd_text="# Chapter\nsrc",
-        question_task_inventory={"items": []}, mined_types=mined)
-    assert any("Assign every mined Type" in system for system in captured["systems"])
-    assert any(
-        "CONCEPT-0001" in user and "TYPE-0002" in user
-        for user in captured["users"]
-    )
-    # Every mined Type landed on its assigned concept (joined by exact IDs).
-    assert g._has_meaningful_types(out[0]["concept_details"])
-    assert "Adding Given Numbers" in out[0]["concept_details"]
-    assert g._has_meaningful_types(out[1]["concept_details"])
-    assert "Dividing Powers with the Same Base" in out[1]["concept_details"]
-
-
 def test_assign_mined_types_retries_until_all_covered(monkeypatch):
     calls = {"n": 0}
 
@@ -437,7 +359,6 @@ def test_case_scoped_embedding_splits_formula_and_real_life_cases(monkeypatch):
     assert flower_example in real_life_details
     assert direct_example not in real_life_details
     assert "Types:" not in out[2]["concept_details"]
-    assert not g._mined_type_topic_violations(out, mined)
 
 
 def test_case_scoped_activity_units_defer_to_inventory_hub_pass(monkeypatch):
@@ -1686,7 +1607,6 @@ def test_cross_topic_synthesis_can_use_only_a_later_topic_culmination(
     ]
     assert prompt in out[3]["concept_details"]
     assert prompt not in out[0]["concept_details"]
-    assert not g._mined_type_topic_violations(out, mined)
 
     inventory = {"items": [{
         "qid": "Q-CROSS",
@@ -1725,7 +1645,6 @@ def test_pipeline_builds_culminations_before_types(monkeypatch):
          "concept_details": "Description: d", "keywords": ""},
     ])
     monkeypatch.setattr(g, "_consolidate_concepts_via_api", lambda records, **kw: records)
-    monkeypatch.setattr(g, "_refine_descriptions_via_api", lambda records, **kw: records)
     monkeypatch.setattr(g, "_ensure_mastery_lines_via_api", lambda records, **kw: records)
     monkeypatch.setattr(
         g, "_ensure_misconceptions_via_api", lambda records, **kw: records)
@@ -1744,16 +1663,18 @@ def test_pipeline_builds_culminations_before_types(monkeypatch):
         culmination_output[:] = [r["concept_title"] for r in built]
         return built
 
-    def fake_types(records, **kw):
+    def fake_final_content(records, **kw):
+        # Type allocation now happens entirely inside the rewritten Phase 3
+        # behind this seam, after the 81% boundary.
         order.append("types")
-        # The Types pass must observe the culmination pass's exact output.
-        # (This topic teaches one concept, so that output carries no
+        # The Phase 3 finalizer must observe the culmination pass's exact
+        # output. (This topic teaches one concept, so that output carries no
         # culmination row — a culmination consolidates several concepts.)
         assert [r["concept_title"] for r in records] == culmination_output
         return records
 
     monkeypatch.setattr(g, "_build_culminations_via_api", fake_culminations)
-    monkeypatch.setattr(g, "_assign_types_via_api", fake_types)
+    monkeypatch.setattr(g, "_prepare_final_concept_content", fake_final_content)
     monkeypatch.setattr(g, "_repair_records_via_api", lambda records, **kw: records)
     monkeypatch.setattr(
         g, "_ensure_mastery_lines_via_api", lambda records, **kw: records)
@@ -1810,11 +1731,13 @@ def test_pipeline_resume_checkpoint_skips_expensive_gpt_stages(monkeypatch):
     )
     assigned = []
 
-    def fake_types(records, **kw):
+    def fake_final_content(records, **kw):
+        # The rewritten Phase 3 owns everything after the 81% boundary; the
+        # resume must reach it without replaying any pre-81% GPT stage.
         assigned.append([dict(row) for row in records])
         return records
 
-    monkeypatch.setattr(g, "_assign_types_via_api", fake_types)
+    monkeypatch.setattr(g, "_prepare_final_concept_content", fake_final_content)
     monkeypatch.setattr(g, "_repair_records_via_api", lambda records, **kw: records)
     monkeypatch.setattr(
         g, "_validate_final_or_raise",
@@ -1929,21 +1852,18 @@ def test_post_type_checkpoint_reallocates_on_final_topology(
     monkeypatch.setattr(g.config, "use_live_generation", lambda: True)
     allocations: list[list[str]] = []
 
-    def assign_after_freeze(records, **_kwargs):
+    def finalize_after_freeze(records, **_kwargs):
+        # Allocation lives in the rewritten Phase 3 behind this seam. It
+        # re-decides Types from the sealed envelope (Assemble re-renders
+        # allocation from Host decisions), so the stale saved "Types:" text
+        # in the resumed rows is input evidence only and never ships as-is.
         allocations.append([
             record["concept_title"] for record in records
         ])
-        assert all(
-            "Types:" not in record["concept_details"]
-            for record in records
-        )
         return records
 
-    monkeypatch.setattr(g, "_assign_types_via_api", assign_after_freeze)
     monkeypatch.setattr(
-        g, "_populate_activity_hubs_via_api",
-        lambda records, *_args, **_kwargs: records,
-    )
+        g, "_prepare_final_concept_content", finalize_after_freeze)
     monkeypatch.setattr(
         g, "_repair_records_via_api", lambda records, **kwargs: records)
     monkeypatch.setattr(
@@ -2008,8 +1928,10 @@ def test_post_type_checkpoint_reallocates_on_final_topology(
     )
 
     assert records
-    # Topic T teaches one concept, so it ships without a culmination row.
-    assert allocations == [["C"]]
+    # A resumed 91% artifact cannot skip reallocation: the Phase 3 finalizer
+    # runs exactly once over the saved topology (only a final_content_ready
+    # checkpoint bypasses it), and the next durable artifact is the 98% map.
+    assert allocations == [["C", "Culmination - C"]]
     assert [item["stage"] for item in callbacks] == [
         "final_content_ready",
     ]
@@ -2063,25 +1985,10 @@ def test_post_type_checkpoint_reassigns_when_anchor_refresh_adds_uncertified_qid
         lambda *_args, **_kwargs: reconciled_mined,
     )
     assignments: list[bool] = []
-
-    def assign(current, **kwargs):
-        assignments.append(True)
-        assert "Stale saved Type" not in current[0]["concept_details"]
-        owner = kwargs["mined_types"]
-        g._reset_placement_certifications(owner)
-        g._certify_inventory_host(
-            owner,
-            "QINV-0001",
-            current[0],
-            basis="type_host_review",
-        )
-        return current
-
-    monkeypatch.setattr(g, "_assign_types_via_api", assign)
     monkeypatch.setattr(
         g,
-        "_populate_activity_hubs_via_api",
-        lambda current, *_args, **_kwargs: current,
+        "_prepare_final_concept_content",
+        lambda current, **kwargs: assignments.append(True) or current,
     )
     emitted: list[dict] = []
 
@@ -2253,126 +2160,6 @@ def test_pre_learning_resume_after_audit_skips_draft_and_auditor(monkeypatch):
     assert [item["stage"] for item in resumed_callbacks] == [
         "pre_learner_analysis",
     ]
-
-
-def test_concepts_pipeline_runs_types_assign(monkeypatch):
-    monkeypatch.setattr(g.config, "use_live_generation", lambda: True)
-    calls = []
-    source_question = (
-        "Solve 3x + 2 = 14 and justify each inverse operation used to isolate x."
-    )
-    inventory = {"items": [{
-        "qid": "QINV-0001",
-        "source_kind": "exercise",
-        "topic_hint": "Algebra",
-        "raw_task": source_question,
-    }], "stats": {"total_inventory_items": 1}}
-    mined_types = {"types": [{
-        "type_id": "TYPE-0001",
-        "type_title": "Solving linear equations with inverse operations",
-        "topic_match_hint": "Algebra",
-        "concept_match_hint": "Linear equations",
-        "placement_scope": "normal",
-        "source_question_ids": ["QINV-0001"],
-        "case_prompts": [{
-            "case_id": "CASE-0001",
-            "case_title": (
-                "Given a linear equation, isolate its unknown with inverse "
-                "operations"
-            ),
-            "placement_scope": "normal",
-            "examples": [{
-                "source_question_id": "QINV-0001",
-                "example_prompt": source_question,
-            }],
-        }],
-    }]}
-
-    def fake_openai(system, user, **kw):
-        calls.append(system[:40])
-        if "Rows missing usable Misconceptions" in user:
-            return {"rows": [{
-                "topic": "Algebra",
-                "concept": "Linear equations",
-                "concept_description": (
-                    "Description: Linear equations preserve equality while "
-                    "isolating the variable. // Misconception/ Error Analysis: "
-                    "Misconceptions: Students may believe an inverse operation "
-                    "changes the equality itself.; Error Analysis: Students "
-                    "may reverse an operation on only one side of the equation."
-                ),
-                "keywords": "linear",
-            }]}
-        if "Assign every mined Type assignment unit" in system:
-            return {"assignments": [{
-                "concept_id": "CONCEPT-0001",
-                "type_ids": ["TYPE-0001"],
-            }]}
-        if "description-only" in system.lower():
-            return {"rows": [{
-                "topic": "Algebra", "concept": "Linear equations",
-                "concept_description": (
-                    "Description: Linear equations use inverse operations to isolate the variable "
-                    "while preserving equality. This supports solving one-step and two-step forms "
-                    "from the source material."
-                ),
-                "keywords": "linear",
-            }]}
-        if "Types-only" in system:
-            return {"rows": [{
-                "topic": "Algebra", "concept": "Linear equations",
-                "concept_description": (
-                    "Description: altered by model // "
-                    "Types: Type 01: Solving linear equations with inverse "
-                    "operations Case 01: Given a linear equation, isolate its "
-                    "unknown with inverse operations Example 01: "
-                    + source_question
-                    + " "
-                    "// Misconception: wrong inverse op"
-                ),
-                "keywords": "linear",
-            }]}
-        if "Build culmination" in system:
-            return {"rows": []}
-        return {"rows": [{
-            "topic": "Algebra", "concept": "Linear equations",
-            "concept_description": (
-                "Description: solve [Katex] ax+b=c [/Katex] // "
-                "Misconception: wrong inverse op"
-            ),
-            "keywords": "linear",
-        }]}
-
-    monkeypatch.setattr(g, "_openai_json", fake_openai)
-    monkeypatch.setattr(
-        g,
-        "_repair_records_via_api",
-        lambda records, **kwargs: records,
-    )
-    monkeypatch.setattr(
-        g,
-        "_extract_question_task_inventory_via_api",
-        lambda **kwargs: inventory,
-    )
-    monkeypatch.setattr(
-        g,
-        "_mine_types_from_inventory_via_api",
-        lambda **kwargs: mined_types,
-    )
-    records = g.concepts_from_mmd(
-        "## Algebra\nExercise 1: " + source_question,
-        subject="Mathematics",
-    )
-    assert any("description-only" in c.lower() for c in calls)
-    assert any("Assign every mined Type" in c for c in calls)
-    assert "preserving equality" in records[0]["concept_details"]
-    assert "altered by model" not in records[0]["concept_details"]
-    assert g._has_meaningful_types(records[0]["concept_details"])
-    # A single-concept topic carries no culmination: a recap of one concept
-    # would only restate it.
-    assert sum(
-        r["concept_title"].startswith("Culmination -") for r in records
-    ) == 0
 
 
 def test_pre_learning_excludes_exact_current_concepts():

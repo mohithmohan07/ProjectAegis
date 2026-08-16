@@ -369,11 +369,7 @@ _HUB_PREFIX_RE = re.compile(
 
 def _api_question_placement_active() -> bool:
     """Whether the rewritten Phase 3's routing rules own question placement."""
-    try:
-        from app.services.phase3 import runner as _phase3_runner
-    except ImportError:  # pragma: no cover - defensive import ordering
-        return False
-    return _phase3_runner.rewrite_enabled()
+    return True
 
 
 def _validate_concepts_workbook_bytes(

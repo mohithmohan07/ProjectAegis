@@ -404,7 +404,11 @@ def test_all_active_runtime_calls_declare_a_known_purpose():
     # 46 with the inventory-completeness reviewer: whether a chunk was
     # under-extracted is a judgment about the source, so it replaced the
     # chars-per-item expected-count formula and the task-marker regex.
-    assert len(generation_calls) == 46
+    # 41 after the phase-3 rewrite migration deleted the legacy post-81%
+    # lane (Type assignment, hub population, alignment review, and
+    # description refinement now live in app/services/phase3, which has its
+    # own purpose-labelled call sites).
+    assert len(generation_calls) == 41
     generation_purposes = [
         ast.literal_eval(keyword.value)
         for node in generation_calls

@@ -1822,6 +1822,9 @@ def test_learner_analysis_action_only_retry_recovers_stubborn_error(
 
 
 def test_terminal_validation_rejects_both_title_substitution_fallbacks():
+    """The refine pass never authors the title-substitution filler anymore
+    (a missing analysis stays missing), and the terminal gate still rejects
+    both filler shapes wherever they appear."""
     records = cr.ensure_analysis_sections([{
         "topic": "Inquiry",
         "parent_concept": "Scientific Method",
@@ -1831,15 +1834,29 @@ def test_terminal_validation_rejects_both_title_substitution_fallbacks():
         ),
         "keywords": "",
     }])
-    misconception, error_analysis = cr.analysis_components(
-        records[0]["concept_details"])
+    assert cr.analysis_components(records[0]["concept_details"]) == ("", "")
+    assert "Misconception" not in records[0]["concept_details"]
 
+    title = "Science as Evolving Inquiry"
+    misconception = cr._fallback_misconception(title)
+    error_analysis = cr._fallback_error_analysis(title)
     assert concept_validator.is_terminal_generic_analysis_filler(
         misconception)
     assert concept_validator.is_terminal_generic_analysis_filler(
         error_analysis)
     report = concept_validator.validate_concept_rows(
-        records,
+        [{
+            "topic": "Inquiry",
+            "parent_concept": "Scientific Method",
+            "concept_title": title,
+            "concept_details": (
+                "Description: Scientific explanations change when evidence "
+                "changes. // Misconception/ Error Analysis: "
+                f"Misconceptions: {misconception}; "
+                f"Error Analysis: {error_analysis}"
+            ),
+            "keywords": "",
+        }],
         strict_analysis_section=True,
     )
     assert {
@@ -1850,11 +1867,10 @@ def test_terminal_validation_rejects_both_title_substitution_fallbacks():
     })
 
 
-def test_authored_one_sided_analysis_gets_no_deterministic_filler(monkeypatch):
+def test_authored_one_sided_analysis_gets_no_deterministic_filler():
     """Under the rewrite, either authored section alone is complete: the
     refine pass must never pad the other side with templated filler (the
     exact text the terminal gate rejects)."""
-    monkeypatch.setenv("AEGIS_PHASE3_REWRITE", "1")
     ea_only = {
         "topic": "Electric Current",
         "parent_concept": "Circuits",
@@ -2163,7 +2179,6 @@ def test_activity_types_defer_to_compact_inventory_hub_not_culmination(monkeypat
     assert "Type 01:" not in ohms["concept_details"]
     assert "Type 01:" not in culm["concept_details"]
     assert "Miscellaneous Type" not in culm["concept_details"]
-    assert not g._mined_type_topic_violations(out, mined)
 
 
 def test_activity_types_do_not_dump_procedures_with_multiple_topic_concepts(
@@ -2235,7 +2250,6 @@ def test_activity_types_do_not_dump_procedures_with_multiple_topic_concepts(
     assert not cr.activity_hub_body(out[1]["concept_details"])
     assert not cr.activity_hub_body(out[2]["concept_details"])
     assert "Complete the classroom investigation." not in str(out)
-    assert not g._mined_type_topic_violations(out, mined)
 
 
 def test_activity_inventory_excluded_from_types_coverage_and_placed_in_hub():
@@ -2282,83 +2296,6 @@ def test_activity_inventory_excluded_from_types_coverage_and_placed_in_hub():
     out = g._place_activity_inventory_into_hubs(records, inventory)
     assert "Activity 11.1" in cr.activity_hub_body(out[0]["concept_details"])
     assert "nichrome" in cr.activity_hub_body(out[0]["concept_details"])
-
-
-def test_gpt_selected_activity_hub_relocates_exact_assessable_example(monkeypatch):
-    prompt = "Record the current while increasing the number of cells."
-    inventory = {"items": [{
-        "qid": "QINV-0001",
-        "source_kind": "checkpoint_question",
-        "source_label": "Activity 11.1 question",
-        "raw_task": prompt,
-        "topic_hint": "Ohm's Law",
-        "_activity_origin": True,
-    }]}
-    records = [
-        {
-            "topic": "Ohm's Law",
-            "parent_concept": "Resistance",
-            "concept_title": "General Resistance",
-            "concept_details": (
-                "Description: Resistance opposes current. // Types: "
-                "Type 01: Experimental questions Case 01: Observe current "
-                f"Example: {prompt}"
-            ),
-            "keywords": "",
-        },
-        {
-            "topic": "Ohm's Law",
-            "parent_concept": "Experiments",
-            "concept_title": "Testing the Voltage-current Relationship",
-            "concept_details": (
-                "Description: Compare measured V and I. // Types: "
-                "Type 01: Conceptual checks Case 01: Proportionality "
-                "Example: Explain why voltage and current are proportional. "
-                "Type 02: Reading graphs Case 01: Slope "
-                "Example: Interpret the slope of a voltage-current graph."
-            ),
-            "keywords": "",
-        },
-    ]
-    def activity_host_provider_and_critic(*_args, **kwargs):
-        if kwargs.get("purpose") == "concept_validation":
-            return {"reviews": [{
-                "qid": "QINV-0001",
-                "concept_id": "CONCEPT-0002",
-                "verdict": "accept",
-                "confidence": 0.97,
-                "reason": (
-                    "This concept directly teaches comparison of measured "
-                    "voltage and current."
-                ),
-            }]}
-        return {"placements": [{
-            "qid": "QINV-0001",
-            "concept_id": "CONCEPT-0002",
-            "hub_note": f"Activity: Measure V and I. {prompt}",
-        }]}
-
-    monkeypatch.setattr(
-        g, "_openai_json", activity_host_provider_and_critic,
-    )
-
-    out = g._populate_activity_hubs_via_api(
-        records, inventory, meta=g._metadata(subject="Physics"))
-
-    assert prompt not in g._types_body(out[0]["concept_details"])
-    assert prompt in g._types_body(out[1]["concept_details"])
-    assert prompt in cr.activity_hub_body(out[1]["concept_details"])
-    assert re.findall(
-        r"\bType\s+(\d{2}):", g._types_body(out[1]["concept_details"])
-    ) == ["01", "02", "03"]
-    assert g._rendered_inventory_example_locations(
-        out, inventory["items"][0]) == [1]
-    assert g._rendered_inventory_coverage_defects(out, inventory) == {
-        "missing": [],
-        "duplicate": [],
-    }
-    assert not g._rendered_inventory_topic_violations(out, inventory)
-    assert not g._activity_example_hub_alignment_violations(out, inventory)
 
 
 def test_activity_alignment_keeps_hub_copy_when_exact_example_is_duplicated():
@@ -2416,76 +2353,6 @@ def test_activity_alignment_keeps_hub_copy_when_exact_example_is_duplicated():
     ) == ["02"]
 
 
-def test_preexisting_activity_hub_requires_review_when_owner_has_multiple_hosts(
-    monkeypatch,
-):
-    prompt = "Record the current while increasing the number of cells."
-    inventory = {"items": [{
-        "qid": "QINV-0001",
-        "source_kind": "checkpoint_question",
-        "source_label": "Activity 11.1 question",
-        "raw_task": prompt,
-        "topic_hint": "Ohm's Law",
-        "_activity_origin": True,
-    }]}
-    records = [
-        {
-            "topic": "Ohm's Law",
-            "parent_concept": "Resistance",
-            "concept_title": "General Resistance",
-            "concept_details": (
-                "Description: Resistance opposes current. // Types: "
-                "Type 01: Experimental questions Case 01: Observe current "
-                f"Example: {prompt}"
-            ),
-            "keywords": "",
-        },
-        {
-            "topic": "Ohm's Law",
-            "parent_concept": "Experiments",
-            "concept_title": "Testing the Voltage-current Relationship",
-            "concept_details": (
-                "Description: Compare measured V and I. // Activity/Info Hub: "
-                f"Activity: Measure V and I. {prompt}"
-            ),
-            "keywords": "",
-        },
-    ]
-
-    calls: list[str] = []
-
-    def provider_and_critic(*_args, **kwargs):
-        calls.append(kwargs["purpose"])
-        if kwargs["purpose"] == "concept_validation":
-            return {"reviews": [{
-                "qid": "QINV-0001",
-                "concept_id": "CONCEPT-0002",
-                "verdict": "accept",
-                "confidence": 0.99,
-                "reason": (
-                    "The experiment concept directly teaches the changing-"
-                    "cell current investigation."
-                ),
-            }]}
-        return {"placements": [{
-            "qid": "QINV-0001",
-            "concept_id": "CONCEPT-0002",
-        }]}
-
-    monkeypatch.setattr(g, "_openai_json", provider_and_critic)
-    out = g._populate_activity_hubs_via_api(
-        records, inventory, meta=g._metadata(subject="Physics"))
-
-    assert calls == ["concept_detailing", "concept_validation"]
-    assert g._rendered_inventory_example_locations(
-        out, inventory["items"][0]) == [1]
-    assert g._rendered_inventory_coverage_defects(out, inventory) == {
-        "missing": [],
-        "duplicate": [],
-    }
-    assert not g._activity_example_hub_alignment_violations(out, inventory)
-
-
 def test_terminal_coverage_repair_realigns_an_exact_activity_example():
     prompt = "Record the current while increasing the number of cells."
     item = {
@@ -2531,9 +2398,7 @@ def test_terminal_coverage_repair_realigns_an_exact_activity_example():
     assert not g._activity_example_hub_alignment_violations(out, inventory)
 
 
-def test_certified_split_type_cases_are_qualified_without_moving_examples(
-    monkeypatch,
-):
+def test_certified_split_type_cases_are_qualified_without_moving_examples():
     assert g._safe_type_case_qualifier(
         "Social Case 01: Type 02: comparison // Worked Example: powers, "
         "Example 100: reading and Examples: recap"
@@ -2711,7 +2576,6 @@ def test_certified_split_type_cases_are_qualified_without_moving_examples(
     }
     assert not g._placement_certification_violations(
         out, inventory, mined_types)
-    assert not g._mined_type_topic_violations(out, mined_types)
     assert mined_types == mined_before
     assert records[1]["concept_details"] != out[1]["concept_details"]
     assert g._disambiguate_certified_split_type_cases(
@@ -2788,191 +2652,6 @@ def test_certified_split_type_cases_are_qualified_without_moving_examples(
         "Interpreting powers of ten as time scales"
         in second_body
     )
-
-    assignment_calls = []
-
-    def fake_assign(candidate, *, meta, mined_types):
-        assignment_calls.append((meta, mined_types))
-        assert all(
-            not g._types_body(row["concept_details"])
-            for row in candidate
-        )
-        for index, body in enumerate(body_before):
-            candidate[index]["concept_details"] = g._inject_types(
-                candidate[index]["concept_details"], body)
-        return candidate
-
-    monkeypatch.setattr(g, "_assign_mined_types_via_api", fake_assign)
-    monkeypatch.setattr(
-        g,
-        "_populate_activity_hubs_via_api",
-        lambda candidate, *_args, **_kwargs: candidate,
-    )
-    monkeypatch.setattr(
-        g,
-        "_salvage_short_case_examples",
-        lambda candidate, **_kwargs: candidate,
-    )
-    monkeypatch.setattr(
-        g,
-        "_neutralize_unrepaired_rows",
-        lambda candidate, **_kwargs: candidate,
-    )
-    monkeypatch.setattr(
-        g,
-        "_enforce_rendered_inventory_coverage",
-        lambda candidate, *_args, **_kwargs: candidate,
-    )
-
-    rebuilt = g._rebuild_types_after_final_placement_drift(
-        records,
-        inventory,
-        mined_types,
-        meta=g._metadata(subject="Mathematics"),
-    )
-
-    assert len(assignment_calls) == 1
-    rebuilt_report = concept_validator.validate_concept_rows(
-        rebuilt, **validation_args)
-    assert not {
-        "missing_type_definition",
-        "generic_type_definition",
-        "duplicate_type_definition",
-    } & {
-        error["code"] for error in rebuilt_report["errors"]
-        if error["severity"] == "error"
-    }
-    assert g._rendered_type_examples(rebuilt) == g._rendered_type_examples(
-        records)
-    assert not g._placement_certification_violations(
-        rebuilt, inventory, mined_types)
-
-
-def test_final_placement_rebuild_reuses_gpt_assignment_on_final_rows(monkeypatch):
-    prompt = "Calculate the heat produced by a resistor carrying current."
-    inventory = {"items": [{
-        "qid": "QINV-0001",
-        "source_kind": "exercise",
-        "raw_task": prompt,
-        "topic_hint": "Heating Effect",
-    }]}
-    mined = {"types": [{
-        "type_id": "TYPE-0001",
-        "type_title": "Calculating Electrical Heating",
-        "topic_match_hint": "Heating Effect",
-        "source_question_ids": ["QINV-0001"],
-    }]}
-    records = [
-        {
-            "topic": "Electric Current",
-            "parent_concept": "Current",
-            "concept_title": "Current in a Conductor",
-            "concept_details": (
-                "Description: Current is charge flow. // Types: "
-                "Type 01: Calculating Electrical Heating "
-                f"Case 01: Find heat Example: {prompt}"
-            ),
-            "keywords": "",
-        },
-        {
-            "topic": "Heating Effect",
-            "parent_concept": "Heating",
-            "concept_title": "Joule Heating",
-            "concept_details": "Description: Electrical energy becomes heat.",
-            "keywords": "",
-        },
-    ]
-    calls = []
-    cleanup_calls = []
-
-    def fake_assign(candidate, *, meta, mined_types):
-        calls.append((meta, mined_types))
-        assert all(not g._types_body(row["concept_details"]) for row in candidate)
-        candidate[1] = dict(candidate[1])
-        candidate[1]["concept_details"] = g._inject_types(
-            candidate[1]["concept_details"],
-            "Type 01: Calculating Electrical Heating "
-            f"Case 01: Find heat Example: {prompt}",
-        )
-        return candidate
-
-    monkeypatch.setattr(g, "_assign_mined_types_via_api", fake_assign)
-    monkeypatch.setattr(
-        g, "_populate_activity_hubs_via_api",
-        lambda candidate, inventory, *, meta, mined_types=None: candidate,
-    )
-    original_salvage = g._salvage_short_case_examples
-    original_neutralize = g._neutralize_unrepaired_rows
-
-    def track_salvage(candidate, *, inventory):
-        cleanup_calls.append("salvage")
-        return original_salvage(candidate, inventory=inventory)
-
-    def track_neutralize(candidate, *, inventory):
-        cleanup_calls.append("neutralize")
-        return original_neutralize(candidate, inventory=inventory)
-
-    monkeypatch.setattr(g, "_salvage_short_case_examples", track_salvage)
-    monkeypatch.setattr(g, "_neutralize_unrepaired_rows", track_neutralize)
-
-    out = g._rebuild_types_after_final_placement_drift(
-        records, inventory, mined, meta=g._metadata(subject="Physics"))
-
-    assert len(calls) == 1
-    assert cleanup_calls == ["salvage", "neutralize"]
-    assert g._rendered_inventory_example_locations(
-        out, inventory["items"][0]) == [1]
-    assert not g._rendered_inventory_topic_violations(out, inventory, mined)
-
-
-def test_cross_topic_gpt_hub_choice_falls_back_to_exact_example_row(monkeypatch):
-    prompt = "Compare the current through the wire for each applied voltage."
-    item = {
-        "qid": "QINV-0001",
-        "source_kind": "checkpoint_question",
-        "source_label": "Activity 11.2 question",
-        "raw_task": prompt,
-        "topic_hint": "Ohm's Law",
-        "_activity_origin": True,
-    }
-    inventory = {"items": [item]}
-    records = [
-        {
-            "topic": "Ohm's Law",
-            "parent_concept": "Current",
-            "concept_title": "Ohm's Law Measurements",
-            "concept_details": (
-                "Description: Voltage and current are proportional. // Types: "
-                "Type 01: Experimental questions Case 01: Compare readings "
-                f"Example: {prompt}"
-            ),
-            "keywords": "",
-        },
-        {
-            "topic": "Resistance Factors",
-            "parent_concept": "Materials",
-            "concept_title": "Conductor Material",
-            "concept_details": "Description: Materials have different resistivity.",
-            "keywords": "",
-        },
-    ]
-    monkeypatch.setattr(
-        g, "_openai_json",
-        lambda *args, **kwargs: {"placements": [{
-            "qid": "QINV-0001",
-            "concept_id": "CONCEPT-0002",
-            "hub_note": f"Activity: Compare conductor materials. {prompt}",
-        }]},
-    )
-
-    out = g._populate_activity_hubs_via_api(
-        records, inventory, meta=g._metadata(subject="Physics"))
-
-    assert prompt in cr.activity_hub_body(out[0]["concept_details"])
-    assert not cr.activity_hub_body(out[1]["concept_details"])
-    assert g._rendered_inventory_example_locations(out, item) == [0]
-    assert not g._rendered_inventory_topic_violations(out, inventory)
-    assert not g._activity_example_hub_alignment_violations(out, inventory)
 
 
 def test_activity_hub_fallback_never_crosses_topics_without_normal_host():
@@ -3074,180 +2753,13 @@ def test_type_review_rejects_activity_inventory_in_types_examples():
         types_only, inventory) == types_only
 
 
-def test_activity_hub_populated_via_api_not_chapter_filters(monkeypatch):
-    """GPT places activity inventory; chapter-named dilemma headings are not
-    hard-coded as filler topics."""
-    activity = "Observe how current changes when another cell is added."
-    inventory = {"items": [{
-        "qid": "QINV-0001",
-        "source_kind": "activity",
-        "source_label": "Lab activity",
-        "raw_task": activity,
-        "topic_hint": "Electric Current",
-    }]}
-    records = [
-        {
-            "topic": "Electric Current",
-            "parent_concept": "Current",
-            "concept_title": "Relationship Between V And I",
-            "concept_details": (
-                "Description: V and I are proportional for ohmic conductors.\n"
-                "Achieving Mastery: Relating V and I from readings. "
-                "// Misconceptions: Students treat all conductors as ohmic."
-            ),
-            "keywords": "",
-        },
-        {
-            "topic": "Electric Current",
-            "parent_concept": "Culmination",
-            "concept_title": "Culmination - Electric Current",
-            "concept_details": "Description: Recap",
-            "keywords": "",
-        },
-    ]
-    monkeypatch.setattr(
-        g, "_openai_json",
-        lambda *a, **kw: {
-            "placements": [{
-                "concept_id": "CONCEPT-0001",
-                "qid": "QINV-0001",
-                "hub_note": f"Activity: Lab activity. {activity}",
-            }],
-        },
-    )
-    out = g._populate_activity_hubs_via_api(
-        records, inventory, meta=g._metadata(subject="Physics"))
-    hub = cr.activity_hub_body(out[0]["concept_details"])
-    assert "Lab activity" in hub
-    assert "current changes" in hub
-    assert not cr.activity_hub_body(out[1]["concept_details"])
-    # Discussion-case chapter titles are not deterministic filler keys.
+def test_chapter_named_dilemma_headings_are_not_filler_topics():
+    """Discussion-case chapter titles are not deterministic filler keys."""
     assert not g._is_filler_source_topic("Khalil's Dilemma")
     assert not g._is_filler_source_topic(
         "Can You Help Poor Vikram in Answering Vetal?")
     assert g._is_filler_source_topic("Overview")
     assert g._is_filler_source_topic("Summary")
-
-
-@pytest.mark.parametrize(
-    "response",
-    [
-        {"placements": []},
-        {"placements": [{
-            "qid": "QINV-0001",
-            "concept_id": "CONCEPT-9999",
-        }]},
-    ],
-    ids=["missing-verdict", "invalid-concept"],
-)
-def test_ambiguous_activity_hub_review_fails_closed(
-    monkeypatch, response,
-):
-    item = {
-        "qid": "QINV-0001",
-        "source_kind": "activity",
-        "source_label": "Classroom investigation",
-        "raw_task": (
-            "Complete the classroom investigation and record the results."
-        ),
-        "topic_hint": "Methods",
-    }
-    records = [
-        {
-            "topic": "Methods",
-            "parent_concept": "Approaches",
-            "concept_title": "Method Alpha",
-            "concept_details": "Description: Apply the first approach.",
-            "keywords": "",
-        },
-        {
-            "topic": "Methods",
-            "parent_concept": "Approaches",
-            "concept_title": "Method Beta",
-            "concept_details": "Description: Apply the second approach.",
-            "keywords": "",
-        },
-    ]
-    calls = []
-    monkeypatch.setattr(
-        g,
-        "_openai_json",
-        lambda *_args, **_kwargs: calls.append(True) or response,
-    )
-    mined = {"types": []}
-
-    with pytest.raises(
-        RuntimeError,
-        match="did not certify every inventory item",
-    ):
-        g._populate_activity_hubs_via_api(
-            records,
-            {"items": [item]},
-            meta=g._metadata(subject="General"),
-            mined_types=mined,
-            max_attempts=2,
-        )
-
-    assert len(calls) == 2
-    assert not any(
-        cr.activity_hub_body(record["concept_details"])
-        for record in records
-    )
-    assert mined[g._PLACEMENT_CERTIFICATIONS_KEY]["hosts"] == {}
-
-
-def test_activity_hub_sole_exact_topic_host_is_certified_without_api(
-    monkeypatch,
-):
-    item = {
-        "qid": "QINV-0001",
-        "source_kind": "activity",
-        "source_label": "Activity 1",
-        "raw_task": "Observe the setup and record each result.",
-        "topic_hint": "Observation",
-    }
-    records = [
-        {
-            "topic": "Observation",
-            "parent_concept": "Investigation",
-            "concept_title": "Recording Experimental Results",
-            "concept_details": "Description: Record observations consistently.",
-            "keywords": "",
-        },
-        {
-            "topic": "Observation",
-            "parent_concept": "Culmination",
-            "concept_title": "Culmination - Observation",
-            "concept_details": "Description: Recap of the investigation.",
-            "keywords": "",
-        },
-    ]
-    monkeypatch.setattr(
-        g,
-        "_openai_json",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("a sole exact-topic host needs no API verdict")
-        ),
-    )
-    mined = {"types": []}
-
-    out = g._populate_activity_hubs_via_api(
-        records,
-        {"items": [item]},
-        meta=g._metadata(subject="General"),
-        mined_types=mined,
-    )
-
-    certification = mined[g._PLACEMENT_CERTIFICATIONS_KEY]["hosts"][
-        "QINV-0001"
-    ]
-    assert certification["concept"] == "Recording Experimental Results"
-    assert certification["basis"] == "sole_exact_topic_host"
-    assert "record each result" in cr.activity_hub_body(
-        out[0]["concept_details"])
-    assert not cr.activity_hub_body(out[1]["concept_details"])
-    assert not g._placement_certification_violations(
-        out, {"items": [item]}, mined)
 
 
 def test_duplicate_inventory_assignments_are_reported():
@@ -3301,46 +2813,6 @@ def test_type_mining_retries_duplicate_assignments_with_complete_list(monkeypatc
         meta=g._metadata(subject="History"), inventory=inventory, max_coverage_attempts=2)
     assert calls["n"] == 2
     assert not g._duplicate_inventory_assignments(inventory, mined["types"])
-
-
-def test_type_alignment_review_preserves_non_type_sections(monkeypatch):
-    def fake_openai(system, user, **kw):
-        assert "exactly once" in system
-        return {"rows": [{
-            "topic": "Wrong",
-            "parent_concept": "Wrong",
-            "concept": "Wrong",
-            "concept_description": (
-                "Description: changed // Types: Type 01: Correct Pattern "
-                "Case 01: Defined sub-type Example: Why did nationalist "
-                "tensions emerge in the Balkans? // Misconceptions: changed"
-            ),
-            "keywords": "wrong",
-        }]}
-
-    monkeypatch.setattr(g, "_openai_json", fake_openai)
-    rows = [{
-        "topic": "Nationalism and Imperialism",
-        "parent_concept": "Balkan Nationalism",
-        "concept_title": "Late Nineteenth-century Nationalism Became More Aggressive",
-        "concept_details": (
-            "Description: Original description.\n"
-            "Achieving Mastery: Original mastery. // "
-            "Misconceptions: Original misconception."
-        ),
-        "keywords": "nationalism",
-    }]
-    out = g._review_type_concept_alignment_via_api(
-        rows,
-        meta=g._metadata(subject="History"),
-        question_task_inventory={"items": [{"qid": "QINV-0001", "raw_task": "Why did nationalist tensions emerge in the Balkans?"}]},
-        mined_types={"types": []},
-        source_context="",
-    )
-    assert out[0]["topic"] == rows[0]["topic"]
-    assert "Original description" in out[0]["concept_details"]
-    assert "Correct Pattern" in out[0]["concept_details"]
-    assert "changed" not in out[0]["concept_details"].split("Types:", 1)[0]
 
 
 def test_uploaded_duration_lookup_for_reviewed_chapters():
@@ -5924,50 +5396,6 @@ def test_chapter_wide_tasks_are_semantically_distributed(monkeypatch):
     ]
 
 
-def test_chapter_wide_question_moves_from_culmination_to_its_normal_topic():
-    prompt = "Explain how Marianne represented the French nation."
-    inventory = {"items": [{
-        "qid": "QINV-0001",
-        "raw_task": prompt,
-        "source_kind": "exercise",
-        "topic_hint": "Visualising the Nation",
-        "_chapter_wide_task": True,
-    }]}
-    records = [
-        {
-            "topic": "The French Revolution",
-            "parent_concept": "The French Revolution",
-            "concept_title": "Popular Sovereignty",
-            "concept_details": "Description: Sovereignty shifted to citizens.",
-            "keywords": "sovereignty",
-        },
-        {
-            "topic": "The French Revolution",
-            "parent_concept": "Culmination",
-            "concept_title": "Culmination - Popular Sovereignty",
-            "concept_details": (
-                "Description: Recap // Types: Type 01: Interpreting "
-                "national allegory Case 01: Reading a national symbol "
-                f"Example 01: {prompt}"
-            ),
-            "keywords": "",
-        },
-        {
-            "topic": "Visualising the Nation",
-            "parent_concept": "Visualising the Nation",
-            "concept_title": "National Allegory",
-            "concept_details": "Description: Nations were personified in art.",
-            "keywords": "allegory",
-        },
-    ]
-
-    out = g._relocate_chapter_wide_examples_from_culminations(
-        records, inventory)
-
-    assert g._rendered_inventory_example_locations(out, inventory["items"][0]) == [2]
-    assert prompt not in out[1]["concept_details"]
-
-
 def test_chapter_wide_task_placement_retries_invalid_topic(monkeypatch):
     calls = {"count": 0}
     records = [{
@@ -6086,25 +5514,6 @@ def test_public_examples_strip_textbook_example_labels():
     assert "Example 11" not in body
     assert body.count("Example 01:") == 1
     assert "Example 01: Find the sum of the first ten terms." in body
-
-
-def test_inventory_topic_with_tasks_requires_rendered_types():
-    records = [{
-        "topic": "Sum of First n Terms",
-        "parent_concept": "Finite Sums",
-        "concept_title": "Applying the Sum Formula",
-        "concept_details": "Description: Apply the finite-sum rule.",
-        "keywords": "",
-    }]
-    inventory = {"items": [{
-        "qid": "QINV-0001",
-        "topic_hint": "Sum of First n Terms",
-        "raw_task": "Find the sum of the first ten terms.",
-    }]}
-    assert g._inventory_topic_type_coverage_violations(records, inventory) == [{
-        "topic": "Sum of First n Terms",
-        "inventory_items": 1,
-    }]
 
 
 def test_type_review_cannot_drop_or_duplicate_inventory_examples():

@@ -50,8 +50,9 @@ the hard way:
   performs `phase2.activate`; calling the service directly skips it and the
   chapter outline silently never reaches chapter reading.
 * pipeline env comes from `fly.toml`'s `[env]` block (deploy-only keys
-  skipped); without `AEGIS_PHASE3_REWRITE` the deleted-era legacy path runs
-  and output diverges from everything validated in staging.
+  skipped); the rewritten Phase 3 is the only post-81% path, so no
+  routing flag is needed — concurrency sizing and similar knobs still
+  apply.
 
 `resume_chapter.py` re-enters `generate_post_learning` from the newest saved
 checkpoint, skipping conversion and chapter reading.

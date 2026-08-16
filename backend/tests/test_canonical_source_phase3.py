@@ -1050,8 +1050,16 @@ def test_electricity_blocks_converter_markup_until_verified_pdf_repair():
             "issues": ["the visual ownership is still uncertain"],
         },
     )
-    assert rejected["status"] == "review_required"
+    # Under the rewrite a rejected adjudication never blocks the chapter:
+    # the block keeps its verbatim extracted text and ships flagged.
+    assert rejected["status"] == "ready"
     assert rejected.get("source_fusion_repairs") == []
+    assert any(
+        issue["code"]
+        == "converter_semantic_markup_requires_pdf_reconciliation"
+        and issue["severity"] == "warning"
+        for issue in rejected["issues"]
+    )
 
 
 def test_stale_markup_review_checkpoint_re_reconciles_on_resume(
@@ -1071,7 +1079,6 @@ def test_stale_markup_review_checkpoint_re_reconciles_on_resume(
     assert graph["status"] == "review_required"
     graph["classification_mode"] = "api_classified_and_verified"
 
-    monkeypatch.setenv("AEGIS_PHASE3_REWRITE", "1")
     monkeypatch.setattr(phase3, "semantic_api_enabled", lambda: True)
     pages = _electricity_page_bundle()
     monkeypatch.setattr(
@@ -1585,9 +1592,12 @@ def test_concept_source_grounding_requires_high_confidence_and_critic():
             "reason": "uncertain",
         }]}
 
+    # Under the rewrite the replay machinery is gone: an uncertain provider
+    # answer fails closed on the first call, with no retries.
     with pytest.raises(
-        phase3.semantic_recovery.ProviderResponseContractError
-    ) as failed:
+        ValueError,
+        match="invalid or uncertain source block",
+    ):
         phase3.ground_concepts(
             records,
             graph=graph,
@@ -1595,8 +1605,7 @@ def test_concept_source_grounding_requires_high_confidence_and_critic():
             provider=uncertain_provider,
             critic=critic,
         )
-    assert uncertain_calls == 3
-    assert "confidence 0.500 is below 0.920" in str(failed.value)
+    assert uncertain_calls == 1
 
 
 def test_missing_type_host_preflight_adds_only_source_grounded_topic_two_host():

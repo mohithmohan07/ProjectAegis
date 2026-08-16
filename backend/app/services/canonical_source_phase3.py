@@ -3032,19 +3032,11 @@ def reconcile_source_anomalies(
         })
     out["source_fusion_repairs"] = repairs
     if unresolved:
-        def _unresolved_markup_ships_for_review() -> bool:
-            # Under the rewritten pipeline a block whose adjudication fell
-            # below the source-critical floor keeps its VERBATIM canonical
-            # text (already produced and dual-verified by the page
-            # extraction) and ships flagged for review; only the legacy
-            # path turns the heuristic into a chapter-blocking decision.
-            try:
-                from .phase3 import runner as _phase3_runner
-            except ImportError:  # pragma: no cover - defensive ordering
-                return False
-            return _phase3_runner.rewrite_enabled()
-
-        review_only = _unresolved_markup_ships_for_review()
+        # A block whose adjudication fell below the source-critical
+        # floor keeps its VERBATIM canonical text (already produced and
+        # dual-verified by the page extraction) and ships flagged for
+        # review; it never blocks the chapter.
+        review_only = True
         out["status"] = "ready" if review_only else "review_required"
         out["issues"] = [
             issue for issue in out.get("issues") or []
@@ -6053,6 +6045,136 @@ def graph_topic_headings(graph: dict[str, Any] | None = None) -> list[str]:
     return [str(row.get("title") or "") for row in graph.get("topics") or [] if str(row.get("title") or "")]
 
 
+def _balanced_command_bodies(value: object, command: str) -> list[str]:
+    """Return every balanced braced body for one LaTeX command."""
+    text = str(value or "")
+    pattern = re.compile(
+        rf"\\{re.escape(command)}(?:\[[^\]]*\])?\s*\{{",
+        re.IGNORECASE,
+    )
+    bodies: list[str] = []
+    cursor = 0
+    while True:
+        match = pattern.search(text, cursor)
+        if match is None:
+            break
+        brace = text.find("{", match.start(), match.end())
+        if brace < 0:
+            break
+        depth = 0
+        index = brace
+        end: int | None = None
+        while index < len(text):
+            character = text[index]
+            if character == "\\":
+                index += 2
+                continue
+            if character == "{":
+                depth += 1
+            elif character == "}":
+                depth -= 1
+                if depth == 0:
+                    end = index + 1
+                    break
+            index += 1
+        if end is None:
+            break
+        bodies.append(text[brace + 1 : end - 1])
+        cursor = end
+    return bodies
+
+
+def _append_labelled_evidence(
+    parts: list[str], label: str, value: object
+) -> None:
+    cleaned = _clean_public_text(value)
+    if not cleaned:
+        return
+    key = " ".join(str(cleaned).split()).casefold()
+    if any(
+        key and key in " ".join(str(existing).split()).casefold()
+        for existing in parts
+    ):
+        return
+    parts.append(f"[{label}] {cleaned}")
+
+
+def _block_excerpt_text(
+    graph_block: dict[str, Any],
+    canonical_block: dict[str, Any],
+    canonical: dict[str, Any],
+) -> str:
+    """Return learner-visible block evidence, including source-owned captions.
+
+    Visual captions, Figure registry references, and image alt text travel
+    with the source text so downstream topic packets can see what the page
+    actually shows. The leading "[Source text] " label is stripped so exact
+    plain-text comparisons on non-visual blocks keep matching the shipped
+    source wording (the retired Phase 3.7/3.7.1 pair pinned both behaviors;
+    the excerpts feed pre-81% consumers and stay unchanged).
+    """
+    raw = _graph_block_text(graph_block, canonical_block)
+    parts: list[str] = []
+    _append_labelled_evidence(parts, "Source text", raw)
+
+    # A raw Figure/Table block can carry a caption even when no registry row
+    # was materialized. Preserve the balanced source body before layout
+    # commands are stripped by the ordinary public-text cleaner.
+    for caption in _balanced_command_bodies(raw, "caption"):
+        _append_labelled_evidence(parts, "Source caption", caption)
+
+    figure_id = str(
+        graph_block.get("figure_id")
+        or canonical_block.get("figure_id")
+        or ""
+    )
+    figures = {
+        str(row.get("figure_id") or ""): row
+        for row in canonical.get("figures") or []
+        if isinstance(row, dict) and str(row.get("figure_id") or "")
+    }
+    images = {
+        str(row.get("image_id") or ""): row
+        for row in canonical.get("images") or []
+        if isinstance(row, dict) and str(row.get("image_id") or "")
+    }
+    figure = figures.get(figure_id, {})
+    if figure:
+        _append_labelled_evidence(
+            parts, "Verified Figure caption", figure.get("caption_raw")
+        )
+        references = [
+            str(value).strip()
+            for value in figure.get("reference_ids") or []
+            if str(value).strip()
+        ]
+        if references:
+            _append_labelled_evidence(
+                parts,
+                "Canonical Figure reference",
+                ", ".join(references),
+            )
+        for image_id in figure.get("image_ids") or []:
+            image = images.get(str(image_id), {})
+            _append_labelled_evidence(
+                parts, "Source image alt text", image.get("alt_raw")
+            )
+
+    # Verified GPT page ACSD and deterministic ACSD can attach a caption
+    # directly to the canonical block in addition to the Figure registry.
+    _append_labelled_evidence(
+        parts, "Verified visual caption", canonical_block.get("caption")
+    )
+    _append_labelled_evidence(
+        parts, "Verified visual caption", graph_block.get("caption")
+    )
+    value = "\n".join(parts).strip()
+    prefix = "[Source text] "
+    if value.startswith(prefix):
+        return value[len(prefix):]
+    return value
+
+
 def graph_topic_excerpts(
     graph: dict[str, Any] | None = None,
     canonical: dict[str, Any] | None = None,
@@ -6067,13 +6189,23 @@ def graph_topic_excerpts(
     }
     out: list[dict[str, str]] = []
     for topic in graph.get("topics") or []:
+        if not isinstance(topic, dict):
+            continue
         topic_id = str(topic.get("topic_id") or "")
         pieces: list[str] = []
         for block in graph.get("blocks") or []:
-            if not isinstance(block, dict) or block.get("topic_id") != topic_id:
+            if (
+                not isinstance(block, dict)
+                or str(block.get("topic_id") or "") != topic_id
+                or str(block.get("kind") or "") in {
+                    "layout",
+                    "heading",
+                    "navigation",
+                }
+            ):
                 continue
             source = blocks.get(str(block.get("block_id") or ""), {})
-            text = _clean_public_text(_graph_block_text(block, source))
+            text = _block_excerpt_text(block, source, canonical)
             if text:
                 pieces.append(text)
         out.append({"topic": str(topic.get("title") or ""), "excerpt": "\n\n".join(pieces)})
@@ -6815,16 +6947,11 @@ def prepare_generation_graph(
         )
 
     def _automatic_reconciliation_allowed() -> bool:
-        # Under the rewritten pipeline the converter-markup anomaly is
-        # adjudicated automatically: the provider decides against the
-        # verified original-PDF page evidence (the same material a human
-        # reviewer would be shown) and its verdict ships in the audit.
-        # The legacy path keeps the explicit human decision.
-        try:
-            from .phase3 import runner as _phase3_runner
-        except ImportError:  # pragma: no cover - defensive ordering
-            return False
-        return _phase3_runner.rewrite_enabled()
+        # The converter-markup anomaly is adjudicated automatically: the
+        # provider decides against the verified original-PDF page evidence
+        # (the same material a human reviewer would be shown) and its
+        # verdict ships in the audit.
+        return True
 
     if verify_semantics:
         artifact_graph = load_graph(artifact_dir, canonical)

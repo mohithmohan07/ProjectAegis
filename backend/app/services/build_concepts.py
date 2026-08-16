@@ -36,7 +36,6 @@ from ..bulk_import import workbook_sync, writer
 from . import (
     autonomous_resolution,
     canonical_source_phase22,
-    canonical_source_phase38_boundary_grounding_turnover_contract as phase38,
     chapter_durations,
     concept_cleanup,
     concept_refiner,
@@ -81,12 +80,6 @@ _HUMAN_DECISION_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 _MAX_HUMAN_DECISIONS = 5_000
 _MAX_DEFERRED_HUMAN_DECISIONS = 5_000
 _MAX_AGENT_REVIEW_HISTORY = 100
-_SEMANTIC_RECOVERY_DISPATCHES_KEY = "semantic_recovery_dispatches"
-_SEMANTIC_RECOVERY_DISPATCHES_VERSION = 1
-_SEMANTIC_RECOVERY_ISSUE_KEY_VERSION = 1
-_MAX_SEMANTIC_RECOVERY_DISPATCHES = 100
-_PHASE38_CONVERGENCE_KEY = "phase38_convergence"
-_PHASE38_CONTROL_ONLY_KEY = "phase38_control_only"
 _DEPOSITED_GROUNDING_CERTIFICATE_KEY = "deposited_grounding_certificate"
 _ACTIVE_AGENT_RESOLUTION_IDS: ContextVar[frozenset[str]] = ContextVar(
     "aegis_active_agent_resolution_ids",
@@ -232,102 +225,10 @@ def _human_decision_ledger(checkpoint: dict | None) -> dict:
     return copy.deepcopy(value) if isinstance(value, dict) else {}
 
 
-def _semantic_recovery_dispatch_ledger(
-    checkpoint: dict | None,
-) -> dict:
-    if not isinstance(checkpoint, dict):
-        return {}
-    value = checkpoint.get(_SEMANTIC_RECOVERY_DISPATCHES_KEY)
-    return copy.deepcopy(value) if isinstance(value, dict) else {}
 
 
-def _phase38_convergence_ledger(checkpoint: dict | None) -> dict:
-    """Return the JSON-safe per-job Phase 3.8 convergence namespace."""
-
-    if not isinstance(checkpoint, dict):
-        return {}
-    value = checkpoint.get(_PHASE38_CONVERGENCE_KEY)
-    return copy.deepcopy(value) if isinstance(value, dict) else {}
 
 
-def _copy_phase38_convergence_ledger(
-    target: dict,
-    source: dict | None,
-) -> dict:
-    result = copy.deepcopy(target)
-    ledger = _phase38_convergence_ledger(source)
-    if ledger:
-        result[_PHASE38_CONVERGENCE_KEY] = ledger
-    return result
-
-
-def _phase38_control_only_envelope(
-    source: dict | None,
-    *,
-    fingerprint: str,
-    target_identity: dict[str, str],
-    target_chapter_id: int,
-) -> dict:
-    """Preserve a live Phase 3.8 budget when no stage remains resumable."""
-
-    ledger = _phase38_convergence_ledger(source)
-    if not ledger:
-        return {}
-    return {
-        "schema_version": generation._CONCEPT_CHECKPOINT_SCHEMA,
-        "checkpoint_format": generation._CONCEPT_CHECKPOINT_FORMAT,
-        "fingerprint": fingerprint,
-        "target_identity": copy.deepcopy(target_identity),
-        "target_chapter_id": target_chapter_id,
-        _PHASE38_CONTROL_ONLY_KEY: True,
-        "checkpoints": [],
-        _PHASE38_CONVERGENCE_KEY: ledger,
-    }
-
-
-def _copy_semantic_recovery_dispatch_ledger(
-    target: dict,
-    source: dict | None,
-) -> dict:
-    result = copy.deepcopy(target)
-    ledger = _semantic_recovery_dispatch_ledger(source)
-    if ledger:
-        result[_SEMANTIC_RECOVERY_DISPATCHES_KEY] = ledger
-    return result
-
-
-def _prune_semantic_recovery_dispatches_after_checkpoint_fallback(
-    envelope: dict,
-    *,
-    retained_stage: str,
-) -> dict:
-    """Drop paid-repair seals belonging only to discarded later stages."""
-
-    result = copy.deepcopy(envelope)
-    ledger = _semantic_recovery_dispatch_ledger(result)
-    if not ledger:
-        return result
-    retained_order = generation._checkpoint_order(retained_stage)
-    attempts = []
-    changed = False
-    for raw in ledger.get("attempts") or []:
-        if not isinstance(raw, dict):
-            continue
-        attempt_order = generation._checkpoint_order(
-            str(raw.get("stage") or "")
-        )
-        if (
-            retained_order >= 0
-            and attempt_order >= 0
-            and attempt_order > retained_order
-        ):
-            changed = True
-            continue
-        attempts.append(copy.deepcopy(raw))
-    if changed:
-        ledger["attempts"] = attempts
-        result[_SEMANTIC_RECOVERY_DISPATCHES_KEY] = ledger
-    return result
 
 
 def _pending_human_decision(checkpoint: dict | None) -> dict | None:
@@ -525,92 +426,6 @@ def _prune_human_decisions_after_checkpoint_fallback(
     return result
 
 
-def _retire_repaired_row_decisions(
-    envelope: dict,
-    *,
-    changed_row_indexes: tuple[int, ...],
-    repair_signature: str,
-) -> dict:
-    """Supersede saved semantic directions bound to rows a repair rewrote.
-
-    A saved grounding/topology direction is an identity of the exact candidate
-    payload it was recorded against; the positional CONCEPT-GROUND-style unit
-    IDs keep pointing at the row after its content changes.  Replaying such a
-    stale direction against the repaired row would re-assert the old evidence
-    mapping, so the same durable write that persists the repair retires the
-    ledger entries for every changed unit.
-    """
-
-    if not changed_row_indexes:
-        return envelope
-    result = copy.deepcopy(envelope)
-    ledger = _human_decision_ledger(result)
-    if not ledger:
-        return result
-    changed = {int(value) for value in changed_row_indexes}
-
-    def bound_to_changed_row(raw_pending: object) -> bool:
-        if not isinstance(raw_pending, dict):
-            return False
-        item = raw_pending.get("item")
-        unit_id = (
-            str(item.get("unit_id") or "").strip()
-            if isinstance(item, dict)
-            else ""
-        )
-        match = semantic_recovery._CONCEPT_ID_RE.fullmatch(unit_id)
-        if match is None:
-            return False
-        return (int(match.group("number")) - 1) in changed
-
-    retired_issue_keys: set[str] = set()
-
-    def remember_review_issue(raw_pending: object) -> None:
-        if not isinstance(raw_pending, dict):
-            return
-        review = raw_pending.get("agent_review")
-        issue_key = (
-            str(review.get("issue_key") or "")
-            if isinstance(review, dict) else ""
-        )
-        if issue_key:
-            retired_issue_keys.add(issue_key)
-
-    mutated = False
-    pending = ledger.get("pending")
-    if bound_to_changed_row(pending):
-        remember_review_issue(pending)
-        ledger["pending"] = None
-        mutated = True
-    resolutions: list[dict] = []
-    for raw in ledger.get("resolutions") or []:
-        entry = copy.deepcopy(raw)
-        if (
-            isinstance(entry, dict)
-            and str(entry.get("status") or "") in {"ready", "consumed"}
-            and bound_to_changed_row(entry.get("pending_decision"))
-        ):
-            remember_review_issue(entry.get("pending_decision"))
-            entry["status"] = "superseded"
-            entry["superseded_by_repair_signature"] = repair_signature
-            mutated = True
-        resolutions.append(entry)
-    if mutated:
-        ledger["resolutions"] = resolutions
-        # Review attempts for the retired units are identities of the
-        # pre-repair candidate. Keeping them would suppress the regenerated
-        # issue as an already-reviewed duplicate.
-        ledger["agent_review_history"] = [
-            copy.deepcopy(row)
-            for row in ledger.get("agent_review_history") or []
-            if not (
-                isinstance(row, dict)
-                and str(row.get("issue_key") or "") in retired_issue_keys
-            )
-        ]
-        result[_HUMAN_DECISIONS_KEY] = ledger
-    return result
-
 
 def _applied_human_decision_ids(checkpoint: dict | None) -> set[str]:
     """Decision IDs whose bounded action is durably represented here."""
@@ -695,28 +510,10 @@ def _consume_applied_human_decisions(
 def _human_decision_resolution_context(checkpoint: dict | None):
     durable_resolutions = _human_decisions_with_status(
         checkpoint, statuses={"ready", "consumed"})
-    ready_phase33_contexts = {
-        str(row.get("context_hash") or "")
-        for row in durable_resolutions
-        if row.get("status") == "ready"
-        and row.get("kind") == "phase33_type_host_semantic_conflict"
-        and str(row.get("context_hash") or "")
-    }
     active_agent_ids = _ACTIVE_AGENT_RESOLUTION_IDS.get()
     # A settled decision stays settled — across replays AND across resumes.
-    # Reactivation used to cover only the current request's decision ids
-    # plus phase-3.3 context hashes, so a client-driven resume (a network
-    # drop re-POSTing the run) forgot every consumed 3.1/3.2 agent
-    # resolution and re-litigated it, one full replay per decision, with
-    # the identical issue id each time. Every agent-settled semantic
-    # resolution is now re-exposed to every attempt; application remains
-    # identity-guarded (context hash / unit ids), so a stale row that no
-    # longer matches the workspace simply directs nothing.
-    _REACTIVATED_AGENT_KINDS = {
-        "phase31_source_grounding_semantic_conflict",
-        "phase32_concept_blueprint_semantic_conflict",
-        "phase33_type_host_semantic_conflict",
-    }
+    # Application remains identity-guarded (context hash / unit ids), so a
+    # stale row that no longer matches the workspace simply directs nothing.
     resolutions: list[dict] = []
     effective_durable: list[dict] = []
     for raw in durable_resolutions:
@@ -724,16 +521,7 @@ def _human_decision_resolution_context(checkpoint: dict | None):
         reactivate_agent = (
             row.get("status") == "consumed"
             and row.get("resolved_by") == "agent"
-            and (
-                str(row.get("decision_id") or "") in active_agent_ids
-                or str(row.get("kind") or "") in _REACTIVATED_AGENT_KINDS
-                or (
-                    row.get("kind")
-                    == "phase33_type_host_semantic_conflict"
-                    and str(row.get("context_hash") or "")
-                    in ready_phase33_contexts
-                )
-            )
+            and str(row.get("decision_id") or "") in active_agent_ids
         )
         if reactivate_agent:
             row["status"] = "ready"
@@ -745,18 +533,16 @@ def _human_decision_resolution_context(checkpoint: dict | None):
         yield
         return
     from . import canonical_source_phase3 as phase3
-    from . import canonical_source_phase33_preflight_contract as phase33
     with phase3.human_source_resolution_context(
         copy.deepcopy(resolutions)
     ):
-        with phase33.human_resolution_context(copy.deepcopy(resolutions)):
-            with source_topic_decision.human_resolution_context(
+        with source_topic_decision.human_resolution_context(
+            copy.deepcopy(durable_resolutions)
+        ):
+            with type_granularity_decision.human_resolution_context(
                 copy.deepcopy(durable_resolutions)
             ):
-                with type_granularity_decision.human_resolution_context(
-                    copy.deepcopy(durable_resolutions)
-                ):
-                    yield
+                yield
 
 
 def _find_concept_in_chapter(
@@ -950,10 +736,9 @@ def _deposit_concepts(
                     else None
                 ),
                 require_semantic_graph=config.use_live_generation(),
-                require_placement_contracts=(
-                    config.use_live_generation()
-                    and not generation._rewrite_placement_authority_active()
-                ),
+                # The rewritten Phase 3 never mints per-row placement
+                # contracts; its sealed row certificates are verified above.
+                require_placement_contracts=False,
                 type_case_qid_placement_ledger=(
                     type_case_qid_placement_ledger
                 ),
@@ -1040,31 +825,10 @@ def _deposit_concepts(
                 "question/task inventory coverage failed before deposit: "
                 + "; ".join(defect_parts)
             )
-        # Topic locality is a legacy-placement expectation: under the
+        # Topic locality was a legacy-placement expectation: under the
         # rewritten Phase 3 the house routing rules deliberately move a
         # multi-concept question to a later topic (or its culmination), so
-        # the API placement is the authority and this check is legacy-only.
-        topic_violations = (
-            generation._rendered_inventory_topic_violations(
-                records, inventory, mined_types)
-            if not generation._rewrite_placement_authority_active()
-            else []
-        )
-        if topic_violations:
-            qids = sorted({
-                str(item.get("qid") or "").strip()
-                for item in topic_violations
-                if str(item.get("qid") or "").strip()
-            })
-            progress.log(
-                "Deposit inventory topic validation failed for "
-                f"{len(topic_violations)} question/task placement(s).",
-                level="error",
-            )
-            raise DepositValidationError(
-                "question/task inventory topic placement failed before "
-                "deposit: " + ",".join(qids)
-            )
+        # the API placement is the authority and no locality check runs.
         try:
             generation._validate_final_or_raise(
                 records,
@@ -1141,10 +905,9 @@ def _deposit_concepts(
                     else None
                 ),
                 require_semantic_graph=config.use_live_generation(),
-                require_placement_contracts=(
-                    config.use_live_generation()
-                    and not generation._rewrite_placement_authority_active()
-                ),
+                # The rewritten Phase 3 never mints per-row placement
+                # contracts; its sealed row certificates are verified above.
+                require_placement_contracts=False,
                 type_case_qid_placement_ledger=(
                     type_case_qid_placement_ledger
                 ),
@@ -1627,12 +1390,7 @@ def _merge_generation_checkpoint_history(
             if str(entry.get("stage") or "") != stage
         ]
         if not history:
-            return _phase38_control_only_envelope(
-                stored,
-                fingerprint=fingerprint,
-                target_identity=target_identity,
-                target_chapter_id=target_chapter_id,
-            )
+            return {}
         # A discard control event is not itself a checkpoint. Mirror the
         # furthest remaining durable stage so API/UI consumers immediately see
         # the checkpoint that the next retry will actually resume from.
@@ -1711,8 +1469,6 @@ def _merge_generation_checkpoint_history(
         "checkpoints": history,
     }
     merged = _copy_human_decision_ledger(merged, stored)
-    merged = _copy_semantic_recovery_dispatch_ledger(merged, stored)
-    merged = _copy_phase38_convergence_ledger(merged, stored)
     return _consume_applied_human_decisions(merged, checkpoint)
 
 
@@ -1736,12 +1492,7 @@ def _compatible_generation_checkpoint_envelope(
         )
     ]
     if not history:
-        return _phase38_control_only_envelope(
-            stored,
-            fingerprint=fingerprint,
-            target_identity=target_identity,
-            target_chapter_id=target_chapter_id,
-        )
+        return {}
     candidate = {
         "schema_version": generation._CONCEPT_CHECKPOINT_SCHEMA,
         "checkpoint_format": generation._CONCEPT_CHECKPOINT_FORMAT,
@@ -1749,12 +1500,7 @@ def _compatible_generation_checkpoint_envelope(
     }
     newest = generation._newest_compatible_concept_checkpoint(candidate)
     if newest is None:
-        return _phase38_control_only_envelope(
-            stored,
-            fingerprint=fingerprint,
-            target_identity=target_identity,
-            target_chapter_id=target_chapter_id,
-        )
+        return {}
     stage = str(newest.get("stage") or "")
     normalized = {
         "schema_version": generation._CONCEPT_CHECKPOINT_SCHEMA,
@@ -1772,16 +1518,10 @@ def _compatible_generation_checkpoint_envelope(
         "checkpoints": history,
     }
     normalized = _copy_human_decision_ledger(normalized, stored)
-    normalized = _prune_human_decisions_after_checkpoint_fallback(
+    return _prune_human_decisions_after_checkpoint_fallback(
         normalized,
         retained_stage=stage,
     )
-    normalized = _copy_semantic_recovery_dispatch_ledger(normalized, stored)
-    normalized = _prune_semantic_recovery_dispatches_after_checkpoint_fallback(
-        normalized,
-        retained_stage=stage,
-    )
-    return _copy_phase38_convergence_ledger(normalized, stored)
 
 
 def _persist_compatible_generation_checkpoint_mirror(
@@ -1853,84 +1593,6 @@ def _checkpoint_mismatch_message(
     )
 
 
-def _persist_phase38_convergence_state(
-    db: Session,
-    job: models.UploadJob,
-    expected_state: dict | None,
-    replacement: dict | None,
-) -> None:
-    """CAS one Phase 3.8 transition into this job's durable checkpoint."""
-
-    db.refresh(job)
-    original = copy.deepcopy(job.generation_checkpoint or {})
-    expected = (
-        copy.deepcopy(expected_state)
-        if isinstance(expected_state, dict)
-        else {}
-    )
-    current = _phase38_convergence_ledger(original)
-    if current != expected:
-        db.rollback()
-        db.refresh(job)
-        raise phase38.Phase38ConvergenceExhausted(
-            "Phase 3.8 stopped because another worker advanced this job's "
-            "convergence checkpoint; no stale or duplicate candidate was "
-            "dispatched"
-        )
-    durable = copy.deepcopy(original)
-    if replacement is None:
-        durable.pop(_PHASE38_CONVERGENCE_KEY, None)
-    else:
-        if not isinstance(replacement, dict):
-            raise TypeError("Phase 3.8 convergence state must be an object")
-        durable[_PHASE38_CONVERGENCE_KEY] = copy.deepcopy(replacement)
-    if durable == original:
-        return
-    claimed = db.execute(
-        update(models.UploadJob)
-        .where(
-            models.UploadJob.id == job.id,
-            models.UploadJob.generation_checkpoint == original,
-        )
-        .values(generation_checkpoint=copy.deepcopy(durable))
-        .execution_options(synchronize_session=False)
-    )
-    if claimed.rowcount != 1:
-        db.rollback()
-        db.refresh(job)
-        raise phase38.Phase38ConvergenceExhausted(
-            "Phase 3.8 stopped because another worker changed this job's "
-            "convergence checkpoint; no duplicate candidate was dispatched"
-        )
-    db.commit()
-    db.refresh(job)
-    drive_checkpoints.schedule_checkpoint_backup(job.id)
-
-
-def _semantic_recovery_topic_ids() -> dict[str, str]:
-    """Return current source-graph topic identity without requiring Phase 3."""
-    try:
-        from . import canonical_source_phase3 as phase3
-
-        graph = phase3.active_graph()
-        if not isinstance(graph, dict):
-            session = phase3.active_session()
-            graph = (
-                session.get("graph")
-                if isinstance(session, dict)
-                else None
-            )
-    except Exception:
-        graph = None
-    if not isinstance(graph, dict):
-        return {}
-    return {
-        str(topic.get("title") or "").strip():
-        str(topic.get("topic_id") or "").strip()
-        for topic in graph.get("topics") or []
-        if isinstance(topic, dict)
-        and str(topic.get("title") or "").strip()
-    }
 
 
 def _semantic_recovery_source_text(raw_source: str) -> str:
@@ -1976,257 +1638,9 @@ def _semantic_recovery_source_text(raw_source: str) -> str:
     return str(raw_source or "")
 
 
-def _semantic_recovery_validation_errors(
-    records: list[dict],
-) -> list[dict]:
-    """Expose row-local validator diagnostics to the recovery scope resolver."""
-    try:
-        report = concept_validator.validate_concept_rows(
-            records,
-            allow_types=True,
-            require_culmination=False,
-            allow_culmination=True,
-        )
-    except Exception:
-        return []
-    return [
-        error for error in report.get("errors") or []
-        if isinstance(error, dict) and error.get("severity") == "error"
-    ]
 
 
-def _semantic_recovery_issue_key(
-    checkpoint: dict,
-    context: semantic_recovery.RecoveryContext,
-) -> tuple[str, str]:
-    selected = semantic_recovery.select_recovery_checkpoint(checkpoint) or {}
-    stage = str(selected.get("stage") or "")
-    material = {
-        # Keep paid-attempt identity independent of future ledger migrations.
-        "issue_key_version": _SEMANTIC_RECOVERY_ISSUE_KEY_VERSION,
-        "failure_signature": context.failure_signature,
-        "failure_type": type(context.failure).__name__,
-        "failure_kind": context.assessment.kind.value,
-        "stage": stage,
-        "fingerprint": str(checkpoint.get("fingerprint") or ""),
-    }
-    digest = hashlib.sha256(json.dumps(
-        material,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")).hexdigest()
-    return digest, stage
 
-
-def _persist_semantic_recovery_dispatch_started(
-    db: Session,
-    job: models.UploadJob,
-    checkpoint: dict,
-    context: semantic_recovery.RecoveryContext,
-) -> str:
-    """Seal one generic semantic-repair request before provider dispatch."""
-
-    issue_key, stage = _semantic_recovery_issue_key(checkpoint, context)
-    db.refresh(job)
-    original_checkpoint = copy.deepcopy(job.generation_checkpoint or {})
-    durable = copy.deepcopy(original_checkpoint)
-    ledger = _semantic_recovery_dispatch_ledger(durable)
-    attempts = [
-        copy.deepcopy(row)
-        for row in ledger.get("attempts") or []
-        if isinstance(row, dict)
-    ]
-    if any(str(row.get("issue_key") or "") == issue_key for row in attempts):
-        raise semantic_recovery.SemanticRecoveryExhausted(
-            "semantic recovery already dispatched one paid repair for this "
-            "exact failure and checkpoint stage; the unknown or rejected "
-            "outcome will not be billed again"
-        ) from context.failure
-    if len(attempts) >= _MAX_SEMANTIC_RECOVERY_DISPATCHES:
-        raise semantic_recovery.SemanticRecoveryExhausted(
-            "semantic recovery dispatch history reached its safety limit"
-        ) from context.failure
-    attempts.append({
-        "issue_key": issue_key,
-        "failure_signature": context.failure_signature,
-        "status": "request_started",
-        "started_at": _agent_review_timestamp(),
-        "completed_at": "",
-        "failure_type": type(context.failure).__name__,
-        "stage": stage,
-    })
-    durable[_SEMANTIC_RECOVERY_DISPATCHES_KEY] = {
-        "version": _SEMANTIC_RECOVERY_DISPATCHES_VERSION,
-        "attempts": attempts,
-    }
-    claimed = db.execute(
-        update(models.UploadJob)
-        .where(
-            models.UploadJob.id == job.id,
-            models.UploadJob.generation_checkpoint == original_checkpoint,
-        )
-        .values(
-            generation_checkpoint=copy.deepcopy(durable),
-            detail=(
-                "Aegis saved a one-shot semantic repair dispatch before "
-                "contacting the model."
-            ),
-        )
-        .execution_options(synchronize_session=False)
-    )
-    if claimed.rowcount != 1:
-        db.rollback()
-        db.refresh(job)
-        raise semantic_recovery.SemanticRecoveryExhausted(
-            "another worker already claimed this one-shot semantic repair; "
-            "this worker will not start a provider request"
-        ) from context.failure
-    db.commit()
-    db.refresh(job)
-    drive_checkpoints.schedule_checkpoint_backup(job.id)
-    return issue_key
-
-
-def _persist_semantic_recovery_checkpoint(
-    db: Session,
-    job: models.UploadJob,
-    result: semantic_recovery.RepairResult,
-    *,
-    fingerprint: str,
-    target_identity: dict[str, str],
-    target_chapter_id: int,
-    owner_sub: str | None,
-    dispatch_issue_key: str = "",
-) -> None:
-    """Replace one repaired stage and discard only its dependent later stages."""
-    repaired = copy.deepcopy(result.checkpoint)
-    repaired["saved_at"] = datetime.now(timezone.utc).isoformat()
-    if not generation._compatible_concept_checkpoint_entry(repaired):
-        raise RuntimeError(
-            "semantic recovery refused to persist an incompatible checkpoint"
-        )
-    base_order = generation._checkpoint_order(result.base_stage)
-    retained = [
-        copy.deepcopy(entry)
-        for entry in generation._concept_checkpoint_entries(
-            job.generation_checkpoint)
-        if (
-            generation._compatible_concept_checkpoint_entry(entry)
-            and generation._checkpoint_order(
-                str(entry.get("stage") or "")) < base_order
-        )
-    ]
-    durable: dict = {}
-    for entry in [*retained, repaired]:
-        durable = _merge_generation_checkpoint_history(
-            durable,
-            entry,
-            fingerprint=fingerprint,
-            target_identity=target_identity,
-            target_chapter_id=target_chapter_id,
-        )
-    source_checkpoint = copy.deepcopy(job.generation_checkpoint or {})
-    durable = _copy_human_decision_ledger(durable, source_checkpoint)
-    # Transactional reduction: the same durable write that installs the
-    # repaired stage retires every dependent decision-ledger entry — both
-    # entries derived from the discarded later stages and entries bound to the
-    # exact rows this repair rewrote. Copying the old ledger unpruned is what
-    # allowed a stale rejection to survive a reported repair.
-    durable = _prune_human_decisions_after_checkpoint_fallback(
-        durable,
-        retained_stage=result.base_stage,
-    )
-    durable = _retire_repaired_row_decisions(
-        durable,
-        changed_row_indexes=result.changed_row_indexes,
-        repair_signature=result.repair_signature,
-    )
-    durable = _copy_semantic_recovery_dispatch_ledger(
-        durable, source_checkpoint
-    )
-    durable = _copy_phase38_convergence_ledger(
-        durable, source_checkpoint
-    )
-    if dispatch_issue_key:
-        ledger = _semantic_recovery_dispatch_ledger(durable)
-        attempts = []
-        matched = False
-        for raw in ledger.get("attempts") or []:
-            row = copy.deepcopy(raw)
-            if (
-                isinstance(row, dict)
-                and str(row.get("issue_key") or "") == dispatch_issue_key
-            ):
-                # Postcondition-first: the repair is only "applied" here. It
-                # becomes "succeeded" when the rerun passes final grounding
-                # without this issue recurring.
-                row["status"] = "applied"
-                row["completed_at"] = _agent_review_timestamp()
-                row["candidate_payload_hash"] = result.repair_signature
-                matched = True
-            attempts.append(row)
-        if not matched:
-            raise RuntimeError(
-                "semantic recovery repair result has no durable dispatch seal"
-            )
-        durable[_SEMANTIC_RECOVERY_DISPATCHES_KEY] = {
-            "version": _SEMANTIC_RECOVERY_DISPATCHES_VERSION,
-            "attempts": attempts,
-        }
-    job.generation_checkpoint = durable
-    job.detail = (
-        f"Semantic recovery applied a bounded repair to "
-        f"{result.changed_count} unit(s) at '{result.base_stage}'; dependent "
-        "later stages will be replayed and the repair re-verified."
-    )
-    # Checkpoint and current provider usage are committed together. A database
-    # or filesystem failure propagates and is never converted into GPT repair.
-    uploads.persist_current_openai_usage(
-        db, job.id, owner_sub=owner_sub)
-    drive_checkpoints.schedule_checkpoint_backup(job.id)
-
-
-def _persist_semantic_recovery_dispatch_verified(
-    db: Session,
-    job: models.UploadJob,
-    issue_keys: list[str],
-) -> None:
-    """Certify applied repairs after the rerun passed without recurrence.
-
-    This is the only place an attempt becomes ``succeeded``: the postcondition
-    (the run completed and the old rejection signature did not return) has
-    held, so the durable ledger can record the verified terminal outcome.
-    """
-
-    issue_key_set = {key for key in issue_keys if key}
-    if not issue_key_set:
-        return
-    db.refresh(job)
-    durable = copy.deepcopy(job.generation_checkpoint or {})
-    ledger = _semantic_recovery_dispatch_ledger(durable)
-    attempts = []
-    changed = False
-    for raw in ledger.get("attempts") or []:
-        row = copy.deepcopy(raw)
-        if (
-            isinstance(row, dict)
-            and str(row.get("issue_key") or "") in issue_key_set
-            and str(row.get("status") or "") == "applied"
-        ):
-            row["status"] = "succeeded"
-            row["verified_at"] = _agent_review_timestamp()
-            changed = True
-        attempts.append(row)
-    if not changed:
-        return
-    durable[_SEMANTIC_RECOVERY_DISPATCHES_KEY] = {
-        "version": _SEMANTIC_RECOVERY_DISPATCHES_VERSION,
-        "attempts": attempts,
-    }
-    job.generation_checkpoint = durable
-    db.commit()
-    drive_checkpoints.schedule_checkpoint_backup(job.id)
 
 
 def _stage_concept_workbook(
@@ -3754,8 +3168,6 @@ def _source_replacement_required(checkpoint: dict | None) -> bool:
         str(row.get("choice") or "") == "replace_source"
         and str(row.get("kind") or "") in {
             "phase3_source_graph_review",
-            "phase31_source_grounding_semantic_conflict",
-            "phase32_concept_blueprint_semantic_conflict",
             "source_topic_coverage_review",
         }
         for row in _ready_human_decisions(checkpoint)
@@ -3772,41 +3184,6 @@ def _raise_if_source_replacement_required(
             "Replace or correct the uploaded file and convert it again; Aegis "
             "will not mutate the source automatically."
         )
-
-
-def _reconcile_phase38_decision_returned_claim(
-    checkpoint: dict,
-    pending: dict,
-) -> tuple[dict, bool]:
-    """Clear a Phase 3.8 decision claim only beside its durable pause."""
-
-    result = copy.deepcopy(checkpoint)
-    ledger = _phase38_convergence_ledger(result)
-    if not ledger:
-        return result, False
-    status = str(ledger.get("dispatch_status") or "idle")
-    if status == "request_started":
-        raise phase38.Phase38ConvergenceExhausted(
-            "Phase 3.8 returned a decision without first sealing its provider "
-            "outcome; the unresolved request claim will not be replayed"
-        )
-    if status != "decision_returned":
-        return result, False
-    expected_id = str(ledger.get("dispatch_decision_id") or "")
-    expected_context = str(
-        ledger.get("dispatch_decision_context_hash") or ""
-    )
-    if (
-        expected_id != str(pending.get("decision_id") or "")
-        or expected_context != str(pending.get("context_hash") or "")
-    ):
-        raise phase38.Phase38ConvergenceExhausted(
-            "Phase 3.8 refused to clear a decision-returned claim because "
-            "the durable pause identity did not match the provider outcome"
-        )
-    phase38._clear_dispatch_claim(ledger)
-    result[_PHASE38_CONVERGENCE_KEY] = ledger
-    return result, True
 
 
 def _persist_pending_human_decision(
@@ -3838,9 +3215,6 @@ def _persist_pending_human_decision(
         pending_payload,
         cumulative_usage=openai_usage.visible_summary(),
     )
-    checkpoint, reconciled_phase38_claim = (
-        _reconcile_phase38_decision_returned_claim(checkpoint, pending)
-    )
     ledger = _human_decision_ledger(checkpoint)
     existing_pending = ledger.get("pending")
     if isinstance(existing_pending, dict):
@@ -3858,15 +3232,8 @@ def _persist_pending_human_decision(
             raise RuntimeError(
                 "the repeated semantic decision identity has different context"
             )
-        # Idempotent concurrent replay: never replace a durable dispatch claim,
-        # result, usage snapshot, or escalation with the raw exception packet.
-        # The caller will observe the saved review and cannot start a duplicate
-        # provider request.
-        if reconciled_phase38_claim:
-            job.generation_checkpoint = checkpoint
-            db.commit()
-            db.refresh(job)
-            drive_checkpoints.schedule_checkpoint_backup(job.id)
+        # Idempotent concurrent replay: the caller observes the saved review
+        # and cannot start a duplicate provider request.
         return copy.deepcopy(existing_pending)
     resolutions = [
         copy.deepcopy(entry)
@@ -4009,8 +3376,6 @@ def _run_with_human_decision_pause(
     actually retire a scope.
     """
 
-    from . import canonical_source_phase33_preflight_contract as phase33
-
     active_ids = set(initial_agent_resolution_ids or set())
     local_attempts: dict[str, int] = {}
     issue_attempts: dict[str, int] = {}
@@ -4134,27 +3499,10 @@ def _run_with_human_decision_pause(
             "generation reached a pause that no longer exists"
         )
 
-    def _settle_in_place(raw_pending: dict) -> list[dict]:
-        """Settle one Phase 3.3 conflict mid-run; return its ready rows."""
-        settled_id = _settle_pending(
-            raw_pending,
-            checkpoint_before_pause=copy.deepcopy(
-                job.generation_checkpoint or {}
-            ),
-        )
-        return [
-            copy.deepcopy(row)
-            for row in _human_decisions_with_status(
-                job.generation_checkpoint, statuses={"ready"},
-            )
-            if str(row.get("decision_id") or "") == settled_id
-        ]
-
     while True:
         token = _ACTIVE_AGENT_RESOLUTION_IDS.set(frozenset(active_ids))
         try:
-            with phase33.inline_decision_settler(_settle_in_place):
-                return None, operation()
+            return None, operation()
         except semantic_recovery.HumanDecisionRequired as exc:
             checkpoint_before_pause = copy.deepcopy(
                 job.generation_checkpoint or {}
@@ -4611,11 +3959,8 @@ def generate_post_learning(
         "chapter_code": chapter.chapter_code,
         "learning_kind": "Post",
     }
-    recovery_policy = semantic_recovery.RecoveryPolicy.from_environment()
-    recovery_dispatch_keys: dict[str, str] = {}
-
     def generation_attempt() -> list[dict]:
-        # Every automatic checkpoint is durable. On recovery, obtain the
+        # Every automatic checkpoint is durable. On retry, obtain the
         # current envelope rather than retaining the entry captured before the
         # first attempt, and clear only non-durable in-memory artifacts.
         artifacts.clear()
@@ -4628,66 +3973,14 @@ def generate_post_learning(
             )
             else resume_checkpoint
         )
-        with phase38.convergence_checkpoint_context(
-            scope=f"upload-job:{job.id}:{fingerprint}",
-            state=_phase38_convergence_ledger(current_resume),
-            persist=lambda expected, replacement: (
-                _persist_phase38_convergence_state(
-                    db, job, expected, replacement
-                )
-            ),
-        ):
-            with _human_decision_resolution_context(current_resume):
-                return generation.concepts_from_mmd(
-                    job.mmd_text,
-                    **recovery_metadata,
-                    artifacts=artifacts,
-                    resume_checkpoint=current_resume,
-                    checkpoint_callback=save_checkpoint,
-                )
-
-    def repair_checkpoint(
-        checkpoint: dict,
-        context: semantic_recovery.RecoveryContext,
-    ) -> semantic_recovery.RepairResult | None:
-        return semantic_recovery.repair_concept_checkpoint_via_gpt(
-            checkpoint,
-            context,
-            api_call=generation._openai_json,
-            metadata=recovery_metadata,
-            source_text=_semantic_recovery_source_text(job.mmd_text),
-            topic_id_by_title=_semantic_recovery_topic_ids(),
-            validation_errors=_semantic_recovery_validation_errors,
-            max_rows=recovery_policy.max_rows_per_attempt,
-            max_source_chars=recovery_policy.max_source_chars,
-        )
-
-    def before_repair(
-        checkpoint: dict,
-        context: semantic_recovery.RecoveryContext,
-    ) -> None:
-        recovery_dispatch_keys[context.failure_signature] = (
-            _persist_semantic_recovery_dispatch_started(
-                db, job, checkpoint, context
+        with _human_decision_resolution_context(current_resume):
+            return generation.concepts_from_mmd(
+                job.mmd_text,
+                **recovery_metadata,
+                artifacts=artifacts,
+                resume_checkpoint=current_resume,
+                checkpoint_callback=save_checkpoint,
             )
-        )
-
-    def persist_repair(
-        result: semantic_recovery.RepairResult,
-        _context: semantic_recovery.RecoveryContext,
-    ) -> None:
-        _persist_semantic_recovery_checkpoint(
-            db,
-            job,
-            result,
-            fingerprint=fingerprint,
-            target_identity=target_identity,
-            target_chapter_id=target_chapter_id,
-            owner_sub=owner_sub,
-            dispatch_issue_key=recovery_dispatch_keys.get(
-                _context.failure_signature, ""
-            ),
-        )
 
     def generation_and_deposit_attempt() -> tuple[
         list[dict], list[int], list[int], dict
@@ -4742,36 +4035,8 @@ def generate_post_learning(
             raise
         return records, created_ids, merged_ids, written
 
-    def on_recovery_verified(
-        contexts: tuple[semantic_recovery.RecoveryContext, ...],
-    ) -> None:
-        _persist_semantic_recovery_dispatch_verified(
-            db,
-            job,
-            [
-                recovery_dispatch_keys.get(context.failure_signature, "")
-                for context in contexts
-            ],
-        )
-
-    def run_pipeline():
-        if config.use_live_generation():
-            return semantic_recovery.run_with_semantic_recovery(
-                generation_and_deposit_attempt,
-                checkpoint_snapshot=lambda: copy.deepcopy(
-                    job.generation_checkpoint or {}),
-                repair_checkpoint=repair_checkpoint,
-                persist_repair=persist_repair,
-                before_repair=before_repair,
-                on_recovery_verified=on_recovery_verified,
-                policy=recovery_policy,
-                log=progress.log,
-            )
-        # Dry mode is test/development-only and has no GPT repair provider.
-        return generation_and_deposit_attempt()
-
     paused, pipeline_result = _run_with_human_decision_pause(
-        run_pipeline,
+        generation_and_deposit_attempt,
         db=db,
         job=job,
         fingerprint=fingerprint,
@@ -4999,22 +4264,7 @@ def generate_pre_learning_from_upload(
             level="success",
         )
 
-    recovery_metadata = {
-        "subject": chapter.subject,
-        "board": chapter.board,
-        "grade": chapter.grade,
-        "unit": chapter.unit,
-        "chapter_title": chapter.chapter_title,
-        "chapter_id": chapter.id,
-        "chapter_code": chapter.chapter_code,
-        "learning_kind": "Pre",
-    }
-    recovery_policy = semantic_recovery.RecoveryPolicy.from_environment()
-    recovery_dispatch_keys: dict[str, str] = {}
-    recovery_scope = "post_generation"
-
     def generation_attempt() -> list[dict]:
-        nonlocal recovery_scope
         artifacts.clear()
         current_resume = (
             copy.deepcopy(job.generation_checkpoint)
@@ -5025,32 +4275,22 @@ def generate_pre_learning_from_upload(
             )
             else resume_checkpoint
         )
-        recovery_scope = "post_generation"
-        with phase38.convergence_checkpoint_context(
-            scope=f"upload-job:{job.id}:{fingerprint}",
-            state=_phase38_convergence_ledger(current_resume),
-            persist=lambda expected, replacement: (
-                _persist_phase38_convergence_state(
-                    db, job, expected, replacement
-                )
-            ),
-        ):
-            with _human_decision_resolution_context(current_resume):
-                base = generation.concepts_from_mmd(
-                    job.mmd_text,
-                    subject=chapter.subject,
-                    board=chapter.board,
-                    grade=chapter.grade,
-                    unit=chapter.unit,
-                    chapter_title=chapter.chapter_title,
-                    chapter_id=chapter.id,
-                    chapter_code=chapter.chapter_code,
-                    learning_kind="Post",
-                    artifacts=artifacts,
-                    resume_checkpoint=current_resume,
-                    checkpoint_callback=save_checkpoint,
-                    completion_progress=0.98,
-                )
+        with _human_decision_resolution_context(current_resume):
+            base = generation.concepts_from_mmd(
+                job.mmd_text,
+                subject=chapter.subject,
+                board=chapter.board,
+                grade=chapter.grade,
+                unit=chapter.unit,
+                chapter_title=chapter.chapter_title,
+                chapter_id=chapter.id,
+                chapter_code=chapter.chapter_code,
+                learning_kind="Post",
+                artifacts=artifacts,
+                resume_checkpoint=current_resume,
+                checkpoint_callback=save_checkpoint,
+                completion_progress=0.98,
+            )
         _store_inventory(job, artifacts)
         # The target concept map may have advanced its checkpoint during this
         # attempt. Pre-learning must resume from that current durable envelope,
@@ -5064,7 +4304,6 @@ def generate_pre_learning_from_upload(
             )
             else current_resume
         )
-        recovery_scope = "pre_generation"
         return generation.pre_learning_from_rows(
             base,
             subject=chapter.subject,
@@ -5076,56 +4315,10 @@ def generate_pre_learning_from_upload(
             checkpoint_callback=save_checkpoint,
         )
 
-    def repair_checkpoint(
-        checkpoint: dict,
-        context: semantic_recovery.RecoveryContext,
-    ) -> semantic_recovery.RepairResult | None:
-        return semantic_recovery.repair_pre_learning_checkpoint_via_gpt(
-            checkpoint,
-            context,
-            api_call=generation._openai_json,
-            metadata=recovery_metadata,
-            source_text=_semantic_recovery_source_text(job.mmd_text),
-            topic_id_by_title=_semantic_recovery_topic_ids(),
-            validation_errors=_semantic_recovery_validation_errors,
-            max_rows=recovery_policy.max_rows_per_attempt,
-            max_source_chars=recovery_policy.max_source_chars,
-            failure_scope=recovery_scope,
-        )
-
-    def before_repair(
-        checkpoint: dict,
-        context: semantic_recovery.RecoveryContext,
-    ) -> None:
-        recovery_dispatch_keys[context.failure_signature] = (
-            _persist_semantic_recovery_dispatch_started(
-                db, job, checkpoint, context
-            )
-        )
-
-    def persist_repair(
-        result: semantic_recovery.RepairResult,
-        _context: semantic_recovery.RecoveryContext,
-    ) -> None:
-        _persist_semantic_recovery_checkpoint(
-            db,
-            job,
-            result,
-            fingerprint=fingerprint,
-            target_identity=target_identity,
-            target_chapter_id=target_chapter_id,
-            owner_sub=owner_sub,
-            dispatch_issue_key=recovery_dispatch_keys.get(
-                _context.failure_signature, ""
-            ),
-        )
-
     def generation_and_deposit_attempt() -> tuple[
         list[dict], list[int], list[int], dict
     ]:
-        nonlocal recovery_scope
         pre_records = generation_attempt()
-        recovery_scope = "pre_deposit"
         try:
             created_ids, merged_ids, written = _deposit_and_publish_concepts(
                 db,
@@ -5142,35 +4335,8 @@ def generate_pre_learning_from_upload(
             raise
         return pre_records, created_ids, merged_ids, written
 
-    def on_recovery_verified(
-        contexts: tuple[semantic_recovery.RecoveryContext, ...],
-    ) -> None:
-        _persist_semantic_recovery_dispatch_verified(
-            db,
-            job,
-            [
-                recovery_dispatch_keys.get(context.failure_signature, "")
-                for context in contexts
-            ],
-        )
-
-    def run_pipeline():
-        if config.use_live_generation():
-            return semantic_recovery.run_with_semantic_recovery(
-                generation_and_deposit_attempt,
-                checkpoint_snapshot=lambda: copy.deepcopy(
-                    job.generation_checkpoint or {}),
-                repair_checkpoint=repair_checkpoint,
-                persist_repair=persist_repair,
-                before_repair=before_repair,
-                on_recovery_verified=on_recovery_verified,
-                policy=recovery_policy,
-                log=progress.log,
-            )
-        return generation_and_deposit_attempt()
-
     paused, pipeline_result = _run_with_human_decision_pause(
-        run_pipeline,
+        generation_and_deposit_attempt,
         db=db,
         job=job,
         fingerprint=fingerprint,

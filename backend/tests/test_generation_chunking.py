@@ -485,27 +485,10 @@ def test_concepts_live_processes_every_chunk(monkeypatch):
         g, "_topic_segregation_verdict_via_api",
         lambda records, **kw: {"restructure": False, "reason": ""})
 
-    def refine_with_specific_analysis(records, **kw):
-        refined = []
-        for record in records:
-            current = dict(record)
-            title = current["concept_title"]
-            description = current["concept_details"].split(" // ", 1)[0]
-            current["concept_details"] = (
-                f"{description} // Misconception/ Error Analysis: "
-                f"Misconceptions: Students may believe {title} is "
-                "interchangeable with every other concept in Topic A.; Error "
-                f"Analysis: Students may omit the source evidence when "
-                f"distinguishing {title}."
-            )
-            refined.append(current)
-        return refined
-
+    # Everything after the 81% boundary runs through the rewritten Phase 3;
+    # this test is about chunked extraction, so pass its output through.
     monkeypatch.setattr(
-        g, "_refine_descriptions_via_api",
-        refine_with_specific_analysis)
-    monkeypatch.setattr(
-        g, "_assign_types_via_api",
+        g, "_prepare_final_concept_content",
         lambda records, **kw: records)
     monkeypatch.setattr(
         g, "_build_culminations_via_api",

@@ -24,8 +24,6 @@ from pathlib import Path
 import pytest
 
 from app.services import (
-    canonical_source_phase32_topology_adjudication_contract as phase32,
-    canonical_source_phase38_boundary_grounding_turnover_contract as phase38,
     placement_policy,
     prompts,
 )
@@ -57,56 +55,6 @@ def test_the_rules_document_is_present():
     """The prompts below encode it; a missing file makes them unverifiable."""
 
     assert RULES_DOC.is_file(), f"{RULES_DOC} is the stated authority"
-
-
-def test_provider_and_critic_agree_about_necessity():
-    """The exact contradiction that cost job 8 its run.
-
-    The provider assigns ``necessity=false`` to three relationship types by
-    instruction. If the critic then rejects any relationship whose
-    ``necessity_supported`` is false, those three can never be accepted, and
-    every concept carrying one is rejected forever.
-    """
-
-    provider = phase32.PLACEMENT_PROVIDER_INSTRUCTIONS
-    critic = phase32.PLACEMENT_CRITIC_INSTRUCTIONS
-
-    # The provider still restricts necessity to the three bearing types.
-    assert "Set necessity=true only for" in provider
-    for kind in NECESSARY_TYPES:
-        assert kind in provider, kind
-
-    # The critic must scope necessity_supported to those same three, and must
-    # name the non-necessary types as exempt.
-    assert "necessity_supported is judged ONLY for" in critic
-    for kind in NECESSARY_TYPES:
-        assert kind in critic, kind
-    for kind in NON_NECESSARY_TYPES:
-        assert kind in critic, f"{kind} must be exempted by name"
-
-
-def test_critic_is_told_not_to_reject_a_correct_illustration():
-    """Rule 4: a later topic that refers back does not own the material."""
-
-    critic = _squash(phase32.PLACEMENT_CRITIC_INSTRUCTIONS)
-
-    assert "never reject a concept because a correctly-labelled" in critic
-    assert "stays in the topic" in critic
-    # The later topic is not left empty-handed: it gains its own concept.
-    assert "gains its own concept" in critic
-
-
-def test_provider_is_told_print_position_is_not_placement():
-    """Rule 4a: layout decides where a figure prints, not what it is about."""
-
-    provider = _squash(phase32.PLACEMENT_PROVIDER_INSTRUCTIONS)
-
-    for phrase in (
-        "page layout",
-        "whose content it depicts",
-        "never by the topic it was printed under",
-    ):
-        assert phrase in provider, phrase
 
 
 def test_type_mining_prompt_states_rule_5_and_its_exception():
@@ -142,30 +90,6 @@ def test_rules_document_carries_the_rules_the_prompts_encode(rule):
     text = RULES_DOC.read_text(encoding="utf-8")
 
     assert rule in text, f"{rule} must be stated in the authority document"
-
-
-def test_split_is_never_the_answer_to_a_back_reference():
-    """Rule 4, Reading B: the later topic gets its own concept, not a child.
-
-    Job 8's single split minted TOPOLOGY-CONCEPT-0020#1, whose claim text no
-    longer matched the certificate issued against the parent. Three semantic
-    recovery attempts later the run was dead at 81%. Splitting to satisfy a
-    back-reference is therefore not a quality preference — it is the failure.
-    """
-
-    provider = _squash(phase32.PLACEMENT_PROVIDER_INSTRUCTIONS)
-    critic = _squash(phase32.PLACEMENT_CRITIC_INSTRUCTIONS)
-
-    # Split is scoped to dividing one claim, over shared evidence.
-    assert "grounded in the same blocks" in provider  # noqa: E501
-    assert "split is for dividing one claim" in provider
-    # And the back-reference case is spelled out as the alternative.
-    assert "keep this concept exactly as it is" in provider
-    assert "its own separate concept grounded in its own blocks" in provider
-
-    # The critic enforces the same boundary from the other side.
-    assert "a back-reference is never grounds for a split" in critic
-    assert "different source blocks" in critic
 
 
 def test_rules_document_states_the_split_versus_new_concept_test():
@@ -206,25 +130,6 @@ def test_shared_placement_critic_exempts_every_non_necessary_edge():
     assert "never be used to move the claim, and never to reject it" in critic
     # Rule 4, Reading B: the later topic earns a claim of its own instead.
     assert "earns its own separate claim" in critic
-
-
-def test_phase38_splits_only_within_one_claim():
-    """Rule 3 vs Rule 4 at the boundary-grounding turnover.
-
-    Phase 3.8 is told to *prefer* split, which is right for a claim that
-    genuinely teaches two topics from shared evidence and wrong for a
-    back-reference. The preference is now scoped to the same-blocks case.
-    """
-
-    # Read the module source: the instruction is assembled inside a function.
-    # Assertions stay inside single string literals, because adjacent literals
-    # keep their quotes when the source is squashed.
-    text = _squash(Path(phase38.__file__).read_text(encoding="utf-8"))
-
-    assert "teaches both from the same blocks" in text
-    assert "there is one claim in each" in text
-    assert "leave the row alone" in text
-    assert "splitting there rewrites a claim" in text
 
 
 def test_provider_is_told_which_topic_evidence_must_come_from():
@@ -279,48 +184,6 @@ def test_placement_rules_state_every_product_rule():
     assert "physical location is provenance, not evidence" in rules
     # Rule 5 -- tasks follow the latest topic in teaching order.
     assert "latest of them in teaching order" in rules
-
-
-def test_every_placement_prompt_carries_the_shared_rules():
-    """The drift guard.
-
-    Three runs died on one idea -- a cross-topic citation treated as a defect
-    -- at three sites, each holding its own partial copy of the rule. Every
-    prompt that decides or audits placement now appends the same block, so a
-    rule can only be changed in one place.
-    """
-
-    carriers = {
-        "3.3 provider (placement_policy)": placement_policy.PROVIDER_SYSTEM,
-        "3.3 critic (placement_policy)": placement_policy.CRITIC_SYSTEM,
-        "3.2/3.7 provider": phase32.PLACEMENT_PROVIDER_INSTRUCTIONS,
-        "3.2/3.7 critic": phase32.PLACEMENT_CRITIC_INSTRUCTIONS,
-    }
-    for label, text in carriers.items():
-        assert placement_policy.PLACEMENT_RULES in text, label
-
-
-def test_phase38_grounding_prompts_carry_the_shared_rules():
-    """3.8 builds its prompts inside functions, so check the module source."""
-
-    source = Path(phase38.__file__).read_text(encoding="utf-8")
-
-    # Both the mapper and the independent critic append the block.
-    assert source.count("+ placement_policy.PLACEMENT_RULES") == 2
-
-
-def test_activity_hub_prompts_carry_the_shared_rules():
-    """Step 3 of the manual process: hubs place by what they exercise.
-
-    The hub provider/critic prompts are registered defaults fetched at the
-    call site, so the shared block is appended there — an admin prompt
-    override can rewrite the hub instructions but never strip the rules.
-    """
-    from app.services import generation
-
-    source = Path(generation.__file__).read_text(encoding="utf-8")
-
-    assert source.count("+ placement_policy.PLACEMENT_RULES") == 2
 
 
 def test_info_hub_items_enter_the_hub_pool():

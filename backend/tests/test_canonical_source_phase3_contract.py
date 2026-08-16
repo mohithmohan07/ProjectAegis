@@ -62,8 +62,10 @@ def test_installed_inventory_wrapper_attaches_graph_ids(monkeypatch):
             meta=_metadata(), sections=[], records=[]
         )
 
-    assert len(inventory["items"]) == 31
+    # Never-split: 26 whole parent items, no dotted leaf fragments.
+    assert len(inventory["items"]) == 26
     assert inventory["source_contract"]["parent_task_count"] == 26
+    assert not any("." in str(item["qid"]) for item in inventory["items"])
     assert all(item.get("_semantic_topic_id") for item in inventory["items"])
     assert all(
         item.get("_semantic_source_task_id") for item in inventory["items"]
@@ -77,12 +79,8 @@ def test_installed_inventory_wrapper_attaches_graph_ids(monkeypatch):
     assert all(item.get("_semantic_graph_contract") == graph["source_contract_hash"] for item in section_two)
 
     by_qid = {item["qid"]: item for item in inventory["items"]}
-    assert by_qid["QINV-0011.1"]["_semantic_source_task_id"] == "TASK-00011"
-    assert by_qid["QINV-0011.2"]["_semantic_source_task_id"] == "TASK-00011"
-    assert {
-        by_qid[f"QINV-0016.{index}"]["_semantic_source_task_id"]
-        for index in range(1, 6)
-    } == {"TASK-00016"}
+    assert by_qid["QINV-0011"]["_semantic_source_task_id"] == "TASK-00011"
+    assert by_qid["QINV-0016"]["_semantic_source_task_id"] == "TASK-00016"
 
 
 def test_leaf_routes_override_parent_topic_without_mutating_shared_graph():

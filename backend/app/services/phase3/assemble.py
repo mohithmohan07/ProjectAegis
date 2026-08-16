@@ -18,6 +18,13 @@ _ANALYSIS_SPLIT = re.compile(
     r"\s*//\s*Misconception/?\s*Error Analysis:\s*", re.IGNORECASE
 )
 
+# Stamped into every sealed row's ``_source_grounding_version``. The value
+# is kept byte-identical to the one the retired legacy grounding stack
+# stamped so resumed checkpoints and recorded artifacts keep verifying;
+# certificates recompute from the record, so the string is provenance,
+# never a gate.
+GROUNDING_VERSION = "phase3.8-certified-required-grounding-5"
+
 
 class AssemblyError(RuntimeError):
     """Deterministic assembly hit an internal inconsistency."""
@@ -386,7 +393,6 @@ def assemble(
     # Host may have created new concepts; the deposit chain verifies the
     # certificate lineage against the FINAL payload, so re-stamp and
     # re-seal the complete row set (attempt 7: attested 63, payload 68).
-    from .. import canonical_source_phase31_grounding_contract as phase31
     from .. import grounding_certificate
 
     known_blocks = {
@@ -396,7 +402,7 @@ def assemble(
     }
     for number, row in enumerate(rows, start=1):
         row["_source_grounding_concept_id"] = f"CONCEPT-GROUND-{number:04d}"
-        row["_source_grounding_version"] = phase31._GROUNDING_VERSION
+        row["_source_grounding_version"] = GROUNDING_VERSION
     grounding_certificate.seal_records(
         rows,
         source_contract_hash=str(env.get("source_contract_hash") or ""),
