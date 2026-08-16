@@ -95,33 +95,60 @@ def test_split_merged_description_blocks():
     assert "Second concept" not in out
 
 
-def test_dedupe_similar_titles_drops_bpt_echo():
+def test_alias_related_titles_both_survive_the_cleanup_chain():
+    """No deterministic similarity judgment: BPT and Basic Proportionality
+    Theorem may genuinely be two concepts or one — that call belongs to the
+    model (Settle topology) and the reviewer, never to an alias table or
+    token-similarity keys. The deterministic cleanup chain keeps BOTH rows."""
     records = [
-        {"topic": "Similarity", "concept_title": "Basic Proportionality Theorem",
-         "concept_details": "Description: a", "keywords": ""},
-        {"topic": "Criteria", "concept_title": "The Basic Proportionality Theorem",
-         "concept_details": "Description: b", "keywords": ""},
+        {"topic": "Similarity", "parent_concept": "Similarity",
+         "concept_title": "Basic Proportionality Theorem",
+         "concept_details": (
+             "Description: A line parallel to one side of a triangle divides "
+             "the other two sides in the same ratio."
+         ),
+         "keywords": "bpt"},
+        {"topic": "Criteria", "parent_concept": "Criteria",
+         "concept_title": "BPT",
+         "concept_details": (
+             "Description: Applying the proportionality result while proving "
+             "similarity criteria."
+         ),
+         "keywords": "bpt"},
+        {"topic": "Criteria", "parent_concept": "Criteria",
+         "concept_title": "Converse Basic Proportionality Theorem",
+         "concept_details": (
+             "Description: A line dividing two sides of a triangle in the "
+             "same ratio is parallel to the third side."
+         ),
+         "keywords": "converse"},
     ]
-    out = concept_cleanup.dedupe_similar_titles_chapter_wide(records)
-    assert len(out) == 1
 
+    out = [concept_cleanup.clean_concept_record(dict(r)) for r in records]
+    out = concept_cleanup.filter_review_violations(
+        out, subject="Mathematics", board="CBSE", chapter_title="Triangles",
+    )
+    out = cr.refine_chapter(out)
 
-def test_dedupe_similar_titles_handles_bpt_abbreviation():
-    records = [
-        {"topic": "Similarity", "concept_title": "Basic Proportionality Theorem",
-         "concept_details": "Description: a", "keywords": ""},
-        {"topic": "Criteria", "concept_title": "BPT",
-         "concept_details": "Description: b", "keywords": ""},
-        {"topic": "Criteria", "concept_title": "Converse Basic Proportionality Theorem",
-         "concept_details": "Description: c", "keywords": ""},
-        {"topic": "Practice", "concept_title": "CBPT",
-         "concept_details": "Description: d", "keywords": ""},
-    ]
-    out = concept_cleanup.dedupe_similar_titles_chapter_wide(records)
     assert [r["concept_title"] for r in out] == [
         "Basic Proportionality Theorem",
+        "BPT",
         "Converse Basic Proportionality Theorem",
     ]
+    # The deterministic similarity machinery is gone from the codebase.
+    assert not hasattr(concept_cleanup, "dedupe_similar_titles_chapter_wide")
+    assert not hasattr(concept_cleanup, "titles_look_similar")
+    assert not hasattr(concept_cleanup, "find_similar_title_groups")
+    assert not hasattr(concept_cleanup, "_KNOWN_CONCEPT_ALIASES")
+
+    # An undecided EXACT duplicate is flagged by the validator (a blocking
+    # duplicate-label report at deposit), never silently dropped.
+    duplicated = out + [dict(out[0])]
+    report = concept_validator.validate_concept_rows(duplicated)
+    assert any(
+        e["code"] == "duplicate_title" for e in report["errors"]
+    )
+    assert len(duplicated) == 4  # validation never mutates or drops rows
 
 
 def test_filter_drops_pedagogy_concepts_without_subject_branch():
@@ -162,11 +189,14 @@ def test_overview_topic_is_dropped_not_reassigned():
     assert [r["concept_title"] for r in out] == ["A"]
 
 
-def test_overview_and_summary_content_is_omitted_not_merged():
-    """Filler Overview/Summary bodies must not be attached to neighboring topics."""
-    assert g._is_non_topic_heading("Overview")
-    assert g._is_filler_source_topic("Overview")
-    assert g._is_filler_source_topic("Summary")
+def test_overview_and_summary_content_reaches_excerpts_and_rows_survive():
+    """Overview/Summary bodies reach the model with everything else.
+
+    The old ``_is_filler_source_topic``/``_is_non_topic_heading`` vocabulary
+    is purged (§3): no heading keyword decides that a section teaches
+    nothing, and no concept row is deterministically deleted for its topic
+    name. What a preview or recap means is the model's judgment.
+    """
     sections = [
         {
             "heading": "Overview",
@@ -215,21 +245,30 @@ def test_overview_and_summary_content_is_omitted_not_merged():
         },
     ]
     headings = g._topic_headings(sections)
+    # The numbered sections remain the structural main topics; the unnumbered
+    # Overview/Summary umbrellas attach to them instead of standing alone.
     assert "Overview" not in headings
     assert "Summary" not in headings
     paired = g._sections_with_source_topics(sections)
-    assert not any(
-        g._is_filler_source_topic(section.get("heading") or "")
-        for _, section in paired
-    )
+    paired_headings = {
+        (section.get("heading") or "") for _, section in paired
+    }
+    assert {"Overview", "Summary"} <= paired_headings
     excerpts = g._group_source_topic_excerpts(sections)
     joined = " ".join(group["excerpt"] for group in excerpts)
-    assert "UNIQUE_OVERVIEW_PREVIEW" not in joined
-    assert "UNIQUE_SUMMARY_RECAP" not in joined
-    assert not any(
-        g._topic_comparison_key(group["topic"]) in {"overview", "summary"}
-        for group in excerpts
-    )
+    # Overview/Summary prose REACHES the model inside its owning topic's
+    # excerpt — nothing is withheld by a heading vocabulary.
+    assert "UNIQUE_OVERVIEW_PREVIEW" in joined
+    assert "UNIQUE_SUMMARY_RECAP" in joined
+    # Chunking likewise carries every section to the model.
+    chunk_sections = [
+        section
+        for chunk in g._pack_section_chunks(sections)
+        for section in chunk["sections"]
+    ]
+    assert {
+        (section.get("heading") or "") for section in chunk_sections
+    } >= {"Overview", "Summary"}
     records = [
         {
             "topic": "Belgium and Sri Lanka",
@@ -255,18 +294,22 @@ def test_overview_and_summary_content_is_omitted_not_merged():
         {
             "topic": "Overview",
             "parent_concept": "Preview",
-            "concept_title": "Should Be Dropped",
+            "concept_title": "Survives The Scrub",
             "concept_details": "Description: preview only.",
             "keywords": "",
         },
     ]
     assert g._missing_source_topic_excerpts(records, excerpts) == []
+    # The model's rows stand: no concept row is deterministically deleted
+    # for carrying an Overview/Summary topic ("Dropped ... filler" is gone).
     scrubbed = g._scrub_section_numbers([dict(r) for r in records])
     assert [r["concept_title"] for r in scrubbed] == [
         "Belgian Accommodation",
         "Prudential Reasons for Power Sharing",
         "Horizontal Power Sharing",
+        "Survives The Scrub",
     ]
+    assert scrubbed[3]["topic"] == "Overview"
 
 
 def test_cleanup_does_not_invent_subject_specific_topics():
@@ -626,7 +669,7 @@ def test_deposit_topology_guard_rejects_five_of_six_nationalism_topics(
         )
 
 
-def test_deposit_restores_validated_snapshot_when_dedupe_drops_only_topic_row(
+def test_deposit_restores_validated_snapshot_when_cleanup_drops_only_topic_row(
     db, first_chapter, monkeypatch,
 ):
     source = (
@@ -649,11 +692,11 @@ def test_deposit_restores_validated_snapshot_when_dedupe_drops_only_topic_row(
         }
         for topic in topics
     ]
-    dedupe_called = False
+    cleanup_called = False
 
-    def drop_only_row(rows):
-        nonlocal dedupe_called
-        dedupe_called = True
+    def drop_only_row(rows, **_kwargs):
+        nonlocal cleanup_called
+        cleanup_called = True
         return [
             row for row in rows
             if g._topic_comparison_key(row.get("topic", ""))
@@ -662,7 +705,7 @@ def test_deposit_restores_validated_snapshot_when_dedupe_drops_only_topic_row(
 
     monkeypatch.setattr(
         build_concepts.concept_cleanup,
-        "dedupe_similar_titles_chapter_wide",
+        "filter_review_violations",
         drop_only_row,
     )
     class InventoryValidationReached(Exception):
@@ -701,7 +744,7 @@ def test_deposit_restores_validated_snapshot_when_dedupe_drops_only_topic_row(
             source_text=source,
         )
 
-    assert dedupe_called
+    assert cleanup_called
 
 
 def test_uploaded_nationalism_fixture_inventories_all_chapter_final_tasks():
@@ -720,10 +763,14 @@ def test_uploaded_nationalism_fixture_inventories_all_chapter_final_tasks():
     ]
 
     assert len(chapter_final) == 11
-    assert sum(item["source_kind"] == "exercise" for item in chapter_final) == 10
+    # List-item kinds carry the neutral parse-time default; the real
+    # exercise-vs-intext verdict is owned by the outline/page-verification
+    # model passes (§3 purge).
+    assert sum(
+        item["source_kind"] == "intext_question" for item in chapter_final
+    ) == 10
     stats = g._inventory_stats(anchors)
     assert stats["chapter_final_tasks"] == 11
-    assert stats["chapter_final_exercises"] == 10
     project = next(
         item for item in chapter_final
         if item["parent_source_label"] == "Project"
@@ -1085,8 +1132,10 @@ def test_uploaded_ap_fixture_keeps_parent_questions_and_own_mcq_options():
         for section in chunk["sections"]
     ]
     anchors = g._source_task_anchors(sections)
+    # Parse-time list items carry the neutral kind; the outline/page model
+    # verdict owns the real exercise-vs-intext classification (§3 purge).
     exercise_anchors = [
-        item for item in anchors if item["source_kind"] == "exercise"
+        item for item in anchors if item["source_kind"] == "intext_question"
     ]
     assert len(exercise_anchors) == 49
     assert len({
@@ -1263,8 +1312,9 @@ def test_tracked_electricity_inventory_counts_and_activity_figure_sets():
     }
     assert counts == {
         "worked_example": 13,
-        "intext_question": 23,
-        "exercise": 18,
+        # In-text Questions blocks and final Exercises both carry the neutral
+        # parse-time kind; the outline/page model verdict owns the split.
+        "intext_question": 41,
         "checkpoint_question": 6,
     }
     assert [
@@ -1838,8 +1888,19 @@ def test_terminal_validation_rejects_both_title_substitution_fallbacks():
     assert "Misconception" not in records[0]["concept_details"]
 
     title = "Science as Evolving Inquiry"
-    misconception = cr._fallback_misconception(title)
-    error_analysis = cr._fallback_error_analysis(title)
+    # The deterministic filler generators are deleted from the codebase;
+    # the terminal gate still rejects their historical output shapes when a
+    # legacy row carries them.
+    assert not hasattr(cr, "_fallback_misconception")
+    assert not hasattr(cr, "_fallback_error_analysis")
+    misconception = (
+        f"Students may assume {title} is a rule that always applies "
+        "without checking its conditions, context, or representation."
+    )
+    error_analysis = (
+        f"Students may apply {title} as a memorized rule without checking "
+        "the conditions, context, or representation given in the problem."
+    )
     assert concept_validator.is_terminal_generic_analysis_filler(
         misconception)
     assert concept_validator.is_terminal_generic_analysis_filler(
@@ -1922,76 +1983,6 @@ def test_validator_flags_merged_description_blocks():
     }]
     report = concept_validator.validate_concept_rows(rows, allow_types=True)
     assert any(e["code"] == "merged_description" for e in report["errors"])
-
-
-def test_find_similar_title_groups_detects_without_dropping():
-    records = [
-        {"topic": "Similarity", "concept_title": "Basic Proportionality Theorem",
-         "concept_details": "Description: a", "keywords": ""},
-        {"topic": "Criteria", "concept_title": "BPT",
-         "concept_details": "Description: b", "keywords": ""},
-        {"topic": "Criteria", "concept_title": "Unrelated Concept",
-         "concept_details": "Description: c", "keywords": ""},
-    ]
-    groups = concept_cleanup.find_similar_title_groups(records)
-    assert groups == [[0, 1]]
-    assert len(records) == 3  # detector never mutates
-
-
-def test_merge_similar_concepts_via_api_merges_content(monkeypatch):
-    def fake_openai(system, user, **kw):
-        assert "merge into ONE row" in user
-        return {"rows": [{
-            "topic": "Similarity", "parent_concept": "Similarity",
-            "concept": "Basic Proportionality Theorem",
-            "concept_description": "Description: merged body from both rows.",
-            "keywords": "bpt",
-        }]}
-
-    monkeypatch.setattr(g, "_openai_json", fake_openai)
-    records = [
-        {"topic": "Similarity", "parent_concept": "Similarity",
-         "concept_title": "Basic Proportionality Theorem",
-         "concept_details": "Description: a", "keywords": ""},
-        {"topic": "Criteria", "parent_concept": "Criteria",
-         "concept_title": "BPT", "concept_details": "Description: b",
-         "keywords": ""},
-        {"topic": "Criteria", "parent_concept": "Criteria",
-         "concept_title": "Unrelated Concept",
-         "concept_details": "Description: c", "keywords": ""},
-    ]
-    out = g._merge_similar_concepts_via_api(records, meta=g._metadata(subject="Math"))
-    assert len(out) == 2
-    assert out[0]["concept_details"] == "Description: merged body from both rows."
-    assert out[1]["concept_title"] == "Unrelated Concept"
-
-
-def test_unassigned_mined_types_fail_instead_of_guessing(monkeypatch):
-    import pytest
-
-    monkeypatch.setattr(g, "_openai_json", lambda *a, **kw: {"assignments": []})
-    records = [
-        {"topic": "Electricity", "parent_concept": "P",
-         "concept_title": "Resistance", "concept_details": "Description: d",
-         "keywords": ""},
-        {"topic": "Electricity", "parent_concept": "Culmination",
-         "concept_title": "Culmination - Electricity",
-         "concept_details": "Description: Recap", "keywords": ""},
-    ]
-    mined = {"types": [{
-        "type_id": "TYPE-0001", "type_title": "Activity-based observation",
-        "topic_match_hint": "Electricity",
-        "case_prompts": [{
-            "case_title": "Observe current variation in a test circuit",
-            "examples": [{"example_prompt": (
-                "Set up the circuit with a nichrome wire and record the "
-                "ammeter reading for each cell added.")}],
-        }],
-    }]}
-    with pytest.raises(RuntimeError, match="unassigned mined Types"):
-        g._assign_mined_types_via_api(
-            records, meta=g._metadata(subject="Physics"), mined_types=mined,
-            max_attempts=1)
 
 
 def test_mined_activity_role_is_case_scoped_by_authoritative_inventory_qids():
@@ -2125,131 +2116,6 @@ def test_diagram_interpretation_hint_requires_an_owned_visual_item():
         ]
         == puri_prompt
     )
-
-
-def test_activity_types_defer_to_compact_inventory_hub_not_culmination(monkeypatch):
-    """is_activity Types never render full procedures or Culmination Types."""
-    monkeypatch.setattr(
-        g, "_openai_json",
-        lambda *a, **kw: {
-            "assignments": [{
-                "concept_id": "CONCEPT-0001",
-                "type_ids": ["TYPE-0001"],
-            }],
-        },
-    )
-    records = [
-        {
-            "topic": "Electricity",
-            "parent_concept": "Current",
-            "concept_title": "Ohm's Law",
-            "concept_details": (
-                "Description: V = IR.\nAchieving Mastery: Applying Ohm's law. "
-                "// Misconceptions: Students confuse R and resistivity."
-            ),
-            "keywords": "",
-        },
-        {
-            "topic": "Electricity",
-            "parent_concept": "Culmination",
-            "concept_title": "Culmination - Electricity",
-            "concept_details": "Description: Recap",
-            "keywords": "",
-        },
-    ]
-    mined = {"types": [{
-        "type_id": "TYPE-0001",
-        "type_title": "Ohm's law experiment",
-        "topic_match_hint": "Electricity",
-        "is_activity": True,
-        "case_prompts": [{
-            "case_title": "Activity 11.1",
-            "examples": [{"example_prompt": (
-                "Set up the circuit with a nichrome wire and record the "
-                "ammeter reading for each cell added.")}],
-        }],
-    }]}
-    out = g._assign_mined_types_via_api(
-        records, meta=g._metadata(subject="Physics"), mined_types=mined,
-        max_attempts=1)
-    ohms = next(r for r in out if r["concept_title"] == "Ohm's Law")
-    culm = next(r for r in out if cr.is_culmination(r["concept_title"]))
-    hub = cr.activity_hub_body(ohms["concept_details"])
-    assert not hub
-    assert "Type 01:" not in ohms["concept_details"]
-    assert "Type 01:" not in culm["concept_details"]
-    assert "Miscellaneous Type" not in culm["concept_details"]
-
-
-def test_activity_types_do_not_dump_procedures_with_multiple_topic_concepts(
-    monkeypatch,
-):
-    """Activity units defer entirely to the inventory-aware compact Hub pass."""
-    def fake_openai(system, user, **kw):
-        return {"assignments": [{
-            "concept_id": "CONCEPT-0003",
-            "type_ids": ["TYPE-CURRENT", "TYPE-AMBIGUOUS"],
-        }]}
-
-    monkeypatch.setattr(g, "_openai_json", fake_openai)
-    records = [
-        {
-            "topic": "Electricity",
-            "parent_concept": "Current",
-            "concept_title": "Measuring Current in a Circuit",
-            "concept_details": "Description: Current is measured in series.",
-            "keywords": "",
-        },
-        {
-            "topic": "Electricity",
-            "parent_concept": "Resistance",
-            "concept_title": "Testing Wire Resistance",
-            "concept_details": "Description: Resistance depends on the wire.",
-            "keywords": "",
-        },
-        {
-            "topic": "Electricity",
-            "parent_concept": "Culmination",
-            "concept_title": "Culmination - Electricity",
-            "concept_details": "Description: Recap",
-            "keywords": "",
-        },
-    ]
-    mined = {"types": [
-        {
-            "type_id": "TYPE-CURRENT",
-            "type_title": "Measuring Current in a Circuit Activity",
-            "topic_match_hint": "Electricity",
-            "is_activity": True,
-            "case_prompts": [{
-                "case_title": "Observe current",
-                "examples": [{
-                    "example_prompt": "Measure current as cells are added.",
-                }],
-            }],
-        },
-        {
-            "type_id": "TYPE-AMBIGUOUS",
-            "type_title": "Classroom Investigation",
-            "topic_match_hint": "Electricity",
-            "is_activity": True,
-            "case_prompts": [{
-                "case_title": "Record observations",
-                "examples": [{
-                    "example_prompt": "Complete the classroom investigation.",
-                }],
-            }],
-        },
-    ]}
-
-    out = g._assign_mined_types_via_api(
-        records, meta=g._metadata(subject="Physics"), mined_types=mined,
-        max_attempts=1)
-
-    assert not cr.activity_hub_body(out[0]["concept_details"])
-    assert not cr.activity_hub_body(out[1]["concept_details"])
-    assert not cr.activity_hub_body(out[2]["concept_details"])
-    assert "Complete the classroom investigation." not in str(out)
 
 
 def test_activity_inventory_excluded_from_types_coverage_and_placed_in_hub():
@@ -2753,15 +2619,6 @@ def test_type_review_rejects_activity_inventory_in_types_examples():
         types_only, inventory) == types_only
 
 
-def test_chapter_named_dilemma_headings_are_not_filler_topics():
-    """Discussion-case chapter titles are not deterministic filler keys."""
-    assert not g._is_filler_source_topic("Khalil's Dilemma")
-    assert not g._is_filler_source_topic(
-        "Can You Help Poor Vikram in Answering Vetal?")
-    assert g._is_filler_source_topic("Overview")
-    assert g._is_filler_source_topic("Summary")
-
-
 def test_duplicate_inventory_assignments_are_reported():
     inventory = {"items": [{"qid": "QINV-0001", "raw_task": "Why did tensions emerge?"}]}
     types = {"types": [
@@ -2828,88 +2685,6 @@ def test_uploaded_duration_lookup_for_reviewed_chapters():
         subject="Physics",
         chapter_title="Electricity",
     ) == 561
-
-
-def test_neutralize_unrepaired_rows_keeps_clean_rows_verbatim():
-    clean = {
-        "topic": "Electricity", "parent_concept": "Ohm's Law",
-        "concept_title": "Resistance",
-        "concept_details": (
-            "Description: Ohm's law relates V, I and R. // "
-            "Misconceptions: Students may invert the V/I ratio."
-        ),
-        "keywords": "",
-    }
-    failing = {
-        "topic": "Electricity", "parent_concept": "Ohm's Law",
-        "concept_title": "Heating Effect",
-        "concept_details": (
-            "Description: See Example 11 for the heating computation. // "
-            "Misconceptions: Students may confuse power with energy."
-        ),
-        "keywords": "",
-    }
-    out = g._neutralize_unrepaired_rows([dict(clean), dict(failing)])
-    assert out[0]["concept_details"] == clean["concept_details"]
-    assert "Example 11" not in out[1]["concept_details"]
-
-
-def test_neutralize_preserves_exact_inventory_owned_figure_prompt():
-    task = (
-        "Look at Fig. 14(a). Do you think that the people living in any of "
-        "these regions thought of themselves as Italians? Examine Fig. 14(b). "
-        "Which was the first region to become a part of unified Italy? Which "
-        "was the last region to join? In which year did the largest number "
-        "of states join?"
-    )
-    inventory = {"items": [{"qid": "QINV-0031", "raw_task": task}]}
-    rows = [{
-        "topic": "Italian Unification",
-        "parent_concept": "National Unification",
-        "concept_title": "Regions of Unified Italy",
-        "concept_details": (
-            "Description: See Example 11 for the regional sequence. // "
-            "Types: Type 01: Interpreting territorial change over time "
-            f"Case 01: Compare mapped stages Example: {task} // "
-            "Misconceptions: Students may treat unification as simultaneous."
-        ),
-        "keywords": "",
-    }]
-
-    out = g._neutralize_unrepaired_rows(
-        rows, inventory=inventory)
-
-    assert "Example 11" not in out[0]["concept_details"]
-    assert task in out[0]["concept_details"]
-    assert g._rendered_inventory_coverage_defects(out, inventory) == {
-        "missing": [],
-        "duplicate": [],
-    }
-    report = concept_validator.validate_concept_rows(
-        out,
-        allow_types=True,
-        allowed_source_examples=g._inventory_source_examples(inventory),
-    )
-    assert not any(
-        error["code"] == "source_artifact"
-        for error in report["errors"]
-    )
-
-    unowned = [dict(out[0])]
-    unowned[0]["concept_details"] = unowned[0]["concept_details"].replace(
-        "Fig. 14(a)", "Fig. 15(a)")
-    hard_gate = concept_validator.validate_concept_rows(
-        unowned,
-        allow_types=True,
-        allowed_source_examples=g._inventory_source_examples(inventory),
-    )
-    assert not any(
-        error["code"] == "source_artifact"
-        for error in hard_gate["errors"]
-    )
-    assert g._rendered_inventory_coverage_defects(unowned, inventory)["missing"] == [
-        "QINV-0031",
-    ]
 
 
 def test_chapter_meta_summary_retries_before_deterministic_fallback(monkeypatch, db):
@@ -3075,15 +2850,6 @@ def test_validator_warns_on_mathpix_in_description():
     assert any(e["code"] == "description_image_url" for e in report["errors"])
 
 
-def test_expected_min_skeleton_rows_only_guards_failed_extraction():
-    # Reviewers found char-density floors bred thin micro-concepts. The
-    # floor now only catches a substantial chunk collapsing to 1-2 rows;
-    # concept count is otherwise the model's judgment.
-    assert g._expected_min_skeleton_rows("x" * 1_000) == 1
-    assert g._expected_min_skeleton_rows("x" * 10_000) == 2
-    assert g._expected_min_skeleton_rows("x" * 40_000) == 3
-
-
 def test_history_descriptive_examples_are_not_short_case_errors():
     rows = [{
         "topic": "The Making of Germany and Italy",
@@ -3099,242 +2865,6 @@ def test_history_descriptive_examples_are_not_short_case_errors():
     }]
     report = concept_validator.validate_concept_rows(rows, allow_types=True)
     assert not any(e["code"] == "short_case_example" for e in report["errors"])
-
-
-def test_salvage_short_case_examples_expands_from_inventory():
-    records = [
-        {
-            "topic": "The Making of Germany and Italy",
-            "parent_concept": "German Unification",
-            "concept_title": "German Unification Under Prussian Leadership",
-            "concept_details": (
-                "Description: Prussia led German unification. "
-                "Achieving Mastery: Explaining Bismarck's role.\n"
-                " // Types: Type 01: Cause-effect "
-                "Case 01: Prussian leadership Example: q "
-                "Case 02: Wars "
-                "Example: Explain how the three wars of unification "
-                "strengthened Prussia. "
-                "// Misconceptions: Students may credit liberalism alone."
-            ),
-            "keywords": "",
-        },
-        {
-            "topic": "Visualising the Nation",
-            "parent_concept": "Allegory",
-            "concept_title": "National Allegory and the Visual Language of Nationalism",
-            "concept_details": (
-                "Description: Nations were personified as female figures. "
-                "Achieving Mastery: Reading nationalist allegory.\n"
-                " // Types: Type 01: Source interpretation "
-                "Case 01: Germania symbols Example: Describe the print. "
-                "// Misconceptions: Students treat allegory as literal history."
-            ),
-            "keywords": "",
-        },
-    ]
-    inventory = {"items": [
-        {
-            "qid": "QINV-0001",
-            "raw_task": (
-                "Explain how Prussian leadership under Bismarck used wars and "
-                "diplomacy to unify Germany."
-            ),
-        },
-        {
-            "qid": "QINV-0002",
-            "raw_task": (
-                "Describe the painting of Germania and identify the symbols "
-                "used to represent the German nation."
-            ),
-            "image_urls": ["https://cdn.mathpix.com/cropped/germania.jpg"],
-        },
-    ]}
-    out = g._salvage_short_case_examples(records, inventory=inventory)
-    out = g._neutralize_unrepaired_rows(out)
-    assert "Prussian leadership under Bismarck" in out[0]["concept_details"]
-    assert "Example: q" not in out[0]["concept_details"]
-    assert "Germania" in out[1]["concept_details"]
-    assert "cdn.mathpix.com" in out[1]["concept_details"]
-    for row in out:
-        report = concept_validator.validate_concept_rows(
-            [row], allow_types=True, require_culmination=False)
-        assert not any(
-            e["code"] in {"short_case_example", "source_artifact"}
-            and e["severity"] == "error"
-            for e in report["errors"]
-        )
-
-
-def test_short_example_salvage_never_borrows_from_another_source_topic():
-    own_topic_task = (
-        "Describe the symbols used in the national allegory print and explain "
-        "what each symbol represents."
-    )
-    other_topic_task = (
-        "Describe the print and explain how it portrays imperial rivalry."
-    )
-    records = [{
-        "topic": "Visualising the Nation",
-        "parent_concept": "Allegory",
-        "concept_title": "National Allegory",
-        "concept_details": (
-            "Description: Nations were represented as female figures. // "
-            "Types: Type 01: Visual source interpretation "
-            "Case 01: Allegorical symbols Example: Describe the print. // "
-            "Misconceptions: Students may treat allegory as literal history."
-        ),
-        "keywords": "",
-    }]
-    inventory = {"items": [
-        {
-            "qid": "QINV-0001",
-            "raw_task": own_topic_task,
-            "topic_hint": "Visualising the Nation",
-        },
-        {
-            "qid": "QINV-0002",
-            "raw_task": other_topic_task,
-            "topic_hint": "Nationalism and Imperialism",
-        },
-    ]}
-
-    out = g._salvage_short_case_examples(records, inventory=inventory)
-
-    assert own_topic_task in out[0]["concept_details"]
-    assert other_topic_task not in out[0]["concept_details"]
-
-
-def test_final_scrub_clears_nonvisual_artifacts_but_keeps_figure_ids():
-    """Figure IDs remain for strict same-Example image validation."""
-    rows = [
-        {
-            "topic": "Electric Current And Circuit",
-            "parent_concept": "Resistance",
-            "concept_title": "What Determines Resistance in a Conductor",
-            "concept_details": (
-                "Description: Resistance depends on three factors as shown in "
-                "Fig.12.1 and Table 12.2 on page14. "
-                "Achieving Mastery: Predicting how R changes.\n"
-                " // Types: Type 01: Geometry Case 01: Length "
-                "Example: Find R when the wire in fig.12.5 is doubled. "
-                "// Misconceptions: Students confuse R and resistivity."
-            ),
-            "keywords": "",
-        },
-        {
-            "topic": "Electric Current And Circuit",
-            "parent_concept": "Resistivity",
-            "concept_title": "Resistivity and Material Comparison",
-            "concept_details": (
-                "Description: Resistivity is intrinsic; see Example11 and p14. "
-                "Achieving Mastery: Comparing materials by resistivity.\n"
-                " // Types: Type 01: Material comparison Case 01: Table "
-                "Example: Compare the resistivities listed in Table12.2. "
-                "// Misconceptions: Students confuse resistance with resistivity."
-            ),
-            "keywords": "",
-        },
-    ]
-    out = g._neutralize_unrepaired_rows([dict(r) for r in rows])
-    # Simulate a later mastery GPT pass reintroducing an artifact.
-    out[0]["concept_details"] = out[0]["concept_details"].replace(
-        "Predicting how R changes.",
-        "Predicting how R changes as in Example 12 on page 20.",
-    )
-    out = g._neutralize_unrepaired_rows(out)
-    report = concept_validator.validate_concept_rows(
-        out, allow_types=True, require_culmination=False)
-    assert not any(
-        e["code"] == "source_artifact" and e["severity"] == "error"
-        for e in report["errors"]
-    )
-    combined = " ".join(r["concept_details"] for r in out)
-    assert "page14" not in combined.lower()
-    assert "example 12" not in combined.lower()
-    assert "fig.12.5" in combined.lower()
-
-
-def test_salvage_replaces_artifact_examples_from_inventory():
-    records = [{
-        "topic": "The Age of Revolutions",
-        "parent_concept": "Liberal Nationalism",
-        "concept_title": "From Liberal Nationalism to Imperial Power Politics",
-        "concept_details": (
-            "Description: Liberal nationalism shifted toward imperial politics. "
-            "Achieving Mastery: Tracing the shift.\n"
-            " // Types: Type 01: Chronology Case 01: Balkan tension "
-            "Example: See Example 3 on page 14 for the Balkan conflict. "
-            "// Misconceptions: Students may treat 1848 as the end."
-        ),
-        "keywords": "",
-    }]
-    inventory = {"items": [{
-        "qid": "QINV-0003",
-        "raw_task": (
-            "Trace how the Balkans became a source of nationalist tension "
-            "in Europe after 1871."
-        ),
-    }]}
-    out = g._salvage_short_case_examples(records, inventory=inventory)
-    out = g._neutralize_unrepaired_rows(out)
-    assert "Balkans became a source" in out[0]["concept_details"]
-    assert "Example 3" not in out[0]["concept_details"]
-    report = concept_validator.validate_concept_rows(
-        out, allow_types=True, require_culmination=False)
-    assert not any(e["severity"] == "error" for e in report["errors"])
-
-
-def test_salvage_short_case_examples_is_idempotent_and_preserves_valid_types():
-    full_case_based = (
-        "Compare two source situations and justify which one forms an "
-        "arithmetic progression."
-    )
-    full_formula = (
-        "Find the twentieth term when the first term and common difference "
-        "are given."
-    )
-    records = [{
-        "topic": "Arithmetic Progressions",
-        "parent_concept": "Recognising Progressions",
-        "concept_title": "Recognise Arithmetic Progression Patterns",
-        "concept_details": (
-            "Description: Arithmetic progressions model patterns with a fixed "
-            "change between consecutive terms. "
-            "Achieving Mastery: Distinguishing constant-change patterns. // "
-            "Types: Type 07: Case-based source classification "
-            "Case 01: Truncated source task Example: q "
-            f"Case 02: Compare source situations Example: {full_case_based} "
-            "Type 08: Formula application "
-            f"Case 01: Requested term Example: {full_formula} "
-            "Type 09: Empty stub "
-            "Case 01: Missing source task Example: x // "
-            "Misconceptions: Students may compare terms instead of differences."
-        ),
-        "keywords": "arithmetic progression, common difference",
-    }]
-
-    short_only_inventory = {"items": [{"raw_task": "q"}]}
-    once = g._salvage_short_case_examples(
-        records, inventory=short_only_inventory)
-    twice = g._salvage_short_case_examples(
-        once, inventory=short_only_inventory)
-
-    assert twice == once
-    details = once[0]["concept_details"]
-    assert "Type 07: Case-based source classification" in details
-    assert "Type 08: Formula application" in details
-    assert "Type 09: Empty stub" not in details
-    assert full_case_based in details
-    assert full_formula in details
-    assert "Example: q" not in details
-    assert "Example: x" not in details
-    report = concept_validator.validate_concept_rows(
-        once, allow_types=True, require_culmination=False)
-    assert not any(
-        e["code"] == "short_case_example" and e["severity"] == "error"
-        for e in report["errors"]
-    )
 
 
 def _reviewed_history_structure_mmd() -> str:
@@ -3388,7 +2918,8 @@ def test_history_structure_audit_captures_all_checkpoints_and_exercises():
         if item["source_kind"] == "checkpoint_question"
     ]
     exercises = [
-        item for item in anchors if item["source_kind"] == "exercise"
+        item for item in anchors
+        if item["source_kind"] == "intext_question"
     ]
     assert len(checkpoints) == 14
     assert len(exercises) == 11
@@ -3400,7 +2931,6 @@ def test_headingless_intro_chapter_uses_selected_chapter_as_its_topic():
     chapter_title = "Exploring the Investigative World of Science"
     sections = g.parse_mmd_sections(
         "Science begins with careful questions and systematic investigation.\n"
-        "\\section*{Happy investigating!}\n"
         "Continue observing, measuring, and revising explanations.\n"
     )
 
@@ -3411,6 +2941,22 @@ def test_headingless_intro_chapter_uses_selected_chapter_as_its_topic():
     assert {
         topic for topic, _section in g._sections_with_source_topics(sections)
     } == {chapter_title}
+
+
+def test_closing_slogan_heading_is_structure_not_vocabulary_filtered():
+    """A chapter whose only heading is a closing slogan keeps that structural
+    heading: no keyword vocabulary judges it a non-topic, so the headingless
+    fallback does not fire and any renaming is a model/outline decision."""
+    chapter_title = "Exploring the Investigative World of Science"
+    sections = g.parse_mmd_sections(
+        "Science begins with careful questions and systematic investigation.\n"
+        "\\section*{Happy investigating!}\n"
+        "Continue observing, measuring, and revising explanations.\n"
+    )
+
+    assert g._topic_headings(sections) == ["Happy investigating!"]
+    assert not g._apply_headingless_chapter_topic_fallback(
+        sections, chapter_title)
 
 
 def test_headingless_scientific_investigation_prose_has_exact_method_anchors():
@@ -3900,7 +3446,11 @@ def test_grade8_math_callouts_exercises_and_answer_key_boundary():
 
     assert all(
         not g._is_answer_key_source_section(section) for section in sections)
-    assert [item["source_kind"] for item in anchors].count("exercise") == 2
+    # Neutral parse-time kind for Figure-it-Out list items (§3 purge): the
+    # outline/page verdict owns the real classification.
+    assert [
+        item["source_kind"] for item in anchors
+    ].count("intext_question") == 2
     locker = next(
         item for item in anchors if "Khoisnam" in item["raw_task"])
     square_root = next(
@@ -4452,7 +4002,8 @@ def test_grade8_science_final_blocks_inventory_nine_questions_and_four_projects(
     anchors = g._attach_explicit_figure_images(
         g._source_task_anchors(sections), sections)
     questions = [
-        item for item in anchors if item["source_kind"] == "exercise"
+        item for item in anchors
+        if item["source_kind"] == "intext_question"
     ]
     projects = [
         item for item in anchors if item["source_kind"] == "activity"
@@ -4820,7 +4371,8 @@ e) The role of women in nationalist struggles
 """
     anchors = g._source_task_anchors(g.parse_mmd_sections(source))
     exercises = [
-        item for item in anchors if item["source_kind"] == "exercise"
+        item for item in anchors
+        if item["source_kind"] == "intext_question"
     ]
     assert len(exercises) == 2
     assert exercises[0]["source_label"] == "Write in brief Q1"
@@ -5137,7 +4689,9 @@ def test_saved_final_checkpoint_reconciles_wrong_figure_tag_without_api(
             "concept_title": "Marianne and Germania",
             "concept_details": (
                 "Description: National allegories make an abstract nation "
-                "visible through a named symbolic figure. // "
+                "visible through a named symbolic figure.\n"
+                "Achieving Mastery: Reading a national allegory and naming "
+                "the nation it personifies. // "
                 "Types: Type 01: Interpret a named national allegory. "
                 "Case 01: Read a symbol in its stated historical setting. "
                 "Example 01: Refer to Fig. 18 and identify the national "
@@ -5187,10 +4741,14 @@ def test_saved_final_checkpoint_reconciles_wrong_figure_tag_without_api(
         records[0],
         basis="type_host_review",
     )
+    # The chapter-wide task is rendered on (and certified to) the authored
+    # culmination row. Under the purge the culmination survives verbatim —
+    # it is no longer deleted by the recap re-stamp — so its certification
+    # names the row it actually lives on.
     g._certify_inventory_host(
         mined_types,
         "QINV-0002",
-        records[0],
+        records[1],
         basis="type_host_review",
     )
     checkpoint = g._make_concept_checkpoint(
@@ -5253,7 +4811,9 @@ def test_saved_final_checkpoint_restores_missing_inventory_example_without_api(
             "concept_title": "Popular Sovereignty",
             "concept_details": (
                 "Description: Popular sovereignty shifts political authority "
-                "from rulers to citizens. // " + analysis
+                "from rulers to citizens.\nAchieving Mastery: Explaining how "
+                "civic authority replaces hereditary rule in a nation-state. "
+                "// " + analysis
             ),
             "keywords": "sovereignty, citizens",
         },
@@ -5657,86 +5217,6 @@ def test_inventory_coverage_survives_cosmetic_cleanup_punctuation():
         "missing": [],
         "duplicate": [],
     }
-
-
-def test_salvage_does_not_duplicate_already_rendered_inventory_examples():
-    """Short stubs must not steal inventory prompts already placed elsewhere."""
-    germania = (
-        "Describe the painting of Germania and identify the symbols used to "
-        "represent the German nation."
-    )
-    prussia = (
-        "Explain how Prussian leadership under Bismarck used wars and "
-        "diplomacy to unify Germany."
-    )
-    liberal = (
-        "Explain what the ideas of liberal nationalists meant in the early "
-        "nineteenth century."
-    )
-    records = [
-        {
-            "topic": "Visualising the Nation",
-            "parent_concept": "Allegory",
-            "concept_title": "Culmination - Romantic Culture, Women's Exclusion",
-            "concept_details": (
-                "Description: Culmination of visual nationalism. "
-                "Achieving Mastery: Reading allegory. // Types: "
-                "Type 01: Source Case 01: Germania print "
-                "Example: Describe the print. "
-                "Case 02: Another Example: q // "
-                "Misconceptions: Allegory is not literal history."
-            ),
-            "keywords": "",
-        },
-        {
-            "topic": "Visualising the Nation",
-            "parent_concept": "Allegory",
-            "concept_title": "National Allegory Germania",
-            "concept_details": (
-                "Description: Nations were personified. "
-                "Achieving Mastery: Reading symbols. // Types: "
-                f"Type 01: Source Case 01: Germania Example: {germania} // "
-                "Misconceptions: Symbols are not decorative extras."
-            ),
-            "keywords": "",
-        },
-        {
-            "topic": "The French Revolution and the Idea of the Nation",
-            "parent_concept": "Liberalism",
-            "concept_title": "Liberal Nationalism",
-            "concept_details": (
-                "Description: Liberal ideas shaped early nationalism. "
-                "Achieving Mastery: Explaining liberal nationalism. // Types: "
-                f"Type 01: Ideas Case 01: Meaning Example: {prussia} // "
-                "Misconceptions: Liberalism is not only economic freedom."
-            ),
-            "keywords": "",
-        },
-    ]
-    inventory = {"items": [
-        {"qid": "QINV-0001", "raw_task": germania,
-         "topic_hint": "Visualising the Nation"},
-        {"qid": "QINV-0002", "raw_task": prussia,
-         "topic_hint": "The Making of Germany and Italy"},
-        {"qid": "QINV-0003", "raw_task": liberal,
-         "topic_hint": "The French Revolution and the Idea of the Nation"},
-    ]}
-
-    salvaged = g._salvage_short_case_examples(
-        [dict(row) for row in records], inventory=inventory)
-    # Germania must remain exactly once; stub must not duplicate it.
-    assert g._rendered_inventory_coverage_defects(salvaged, inventory)[
-        "duplicate"
-    ] == []
-    assert "Describe the print." not in salvaged[0]["concept_details"]
-    assert salvaged[0]["concept_details"].count(germania) == 0
-
-    repaired = g._repair_rendered_inventory_coverage(salvaged, inventory)
-    assert g._rendered_inventory_coverage_defects(repaired, inventory) == {
-        "missing": [],
-        "duplicate": [],
-    }
-    assert liberal in repaired[2]["concept_details"]
 
 
 def test_repair_rendered_inventory_coverage_removes_duplicates_and_fills_gaps():

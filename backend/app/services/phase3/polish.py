@@ -40,6 +40,11 @@ CONTENT_CODES = {
     # neither insight is missing content.
     "analysis_section_format",
     "missing_learner_analysis",
+    # A row can reach the boundary with no mastery statement: the old
+    # path backfilled a template line the gate forbids; authoring the
+    # real capability statement is model work.
+    "missing_mastery_statement",
+    "mastery_statement_not_substantive",
 }
 
 
@@ -57,10 +62,24 @@ def _failures(
     # changes the verdict (4 failing rows raw vs 34 normalized, dress
     # rehearsals 5-6). Normalize first, then apply the gate's strict
     # analysis yardstick.
+    from .. import concept_refiner as _cr
+
+    normalized_rows = cv.ensure_valid_learner_analysis(
+        [dict(row) for row in rows]
+    )
+    for row in normalized_rows:
+        # The terminal boundary normalizes mastery-line FORMAT before it
+        # validates; measure the same shape so only genuinely missing or
+        # non-substantive mastery (model work) reaches the repair pass.
+        if not _cr.is_culmination(str(row.get("concept_title") or "")):
+            row["concept_details"] = _cr.format_mastery_statement(
+                str(row.get("concept_details") or "")
+            )
     report = cv.validate_concept_rows(
-        cv.ensure_valid_learner_analysis([dict(row) for row in rows]),
+        normalized_rows,
         allow_culmination=True,
         strict_analysis_section=True,
+        strict_mastery_statement=True,
         source_text=source_text,
     )
     failures: dict[int, list[dict[str, str]]] = {}
@@ -106,6 +125,18 @@ def _failures(
                         "this concept, DELETE the Misconceptions part "
                         "and keep only the Error Analysis sentence; "
                         "either section alone satisfies the gate."
+                    )
+                elif entry["code"] in (
+                    "missing_mastery_statement",
+                    "mastery_statement_not_substantive",
+                ):
+                    entry["example_repair"] = (
+                        "End the Description with one line-broken "
+                        "'Achieving Mastery: <ONE substantive sentence "
+                        "naming what a learner can DO once "
+                        f"{title} is mastered>' — specific to this "
+                        "concept, never a generic applying-it-correctly "
+                        "template."
                     )
                 elif entry["code"] in (
                     "analysis_section_format",

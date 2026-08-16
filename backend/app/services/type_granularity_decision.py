@@ -1,11 +1,11 @@
 """Durable human gate for anomalously fragmented mined Type taxonomies.
 
-The gate is deliberately deterministic: it spends no model call deciding
-whether to pause. A high Type-to-parent-task ratio after ordinary consolidation
-is evidence that the model may have created one assessment Type per source
-task instead of reusable patterns. Independently routed leaf Cases remain in
-the exact-coverage inventory but do not dilute that comparison. The operator
-can keep that taxonomy,
+Whether a taxonomy is "one Type per question" fragmentation or a faithful
+set of reusable assessment methods is a judgment about what the Types mean,
+so the model makes it (docs/aegis-restructure.md §3): an author verdict with
+an independent advisory critic decides whether to pause — never a ratio or
+count threshold. A non-decision fails closed into the pause, which keeps
+all content and asks the operator. The operator can keep the taxonomy,
 request one bounded consolidation proposal plus critic, or provide a custom
 grouping instruction.
 
@@ -27,10 +27,7 @@ from . import semantic_confidence_policy as confidence_policy
 from .semantic_recovery import HumanDecisionRequired
 
 
-_GATE_VERSION = "type-granularity-human-gate-4"
-_MIN_INVENTORY_ITEMS = 12
-_MIN_TYPE_COUNT = 10
-_HIGH_TYPE_QID_RATIO = 0.80
+_GATE_VERSION = "type-granularity-human-gate-5"
 
 _HUMAN_RESOLUTIONS: ContextVar[Any] = ContextVar(
     "aegis_type_granularity_human_resolutions",
@@ -69,46 +66,6 @@ def _sha256_json(value: Any) -> str:
 
 def _normal(value: object) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip().casefold()
-
-
-def inventory_parent_task_count(
-    inventory: Mapping[str, Any] | None,
-) -> int:
-    """Return the stable parent-task denominator for fragmentation review.
-
-    Independently answerable source subparts are deliberately materialized as
-    leaf QIDs so each Case can be routed to its own concept.  Those extra leaf
-    rows must not make a one-Type-per-parent taxonomy look healthy merely by
-    enlarging the denominator.  Prefer the sealed Phase-2 source contract and
-    otherwise derive parents from ``parent_qid`` with ordinary QIDs counting as
-    their own parents.  Legacy inventories therefore retain their old count.
-    """
-
-    inventory = inventory or {}
-    items = [
-        item for item in inventory.get("items") or []
-        if isinstance(item, Mapping)
-    ]
-    leaf_count = len(items)
-    source_contract = inventory.get("source_contract")
-    if isinstance(source_contract, Mapping):
-        try:
-            sealed_count = int(
-                source_contract.get("parent_task_count") or 0
-            )
-        except (TypeError, ValueError):
-            sealed_count = 0
-        if sealed_count > 0 and (
-            not leaf_count or sealed_count <= leaf_count
-        ):
-            return sealed_count
-
-    parent_ids: set[str] = set()
-    for index, item in enumerate(items, start=1):
-        qid = str(item.get("qid") or "").strip()
-        parent_qid = str(item.get("parent_qid") or "").strip()
-        parent_ids.add(parent_qid or qid or f"__inventory_row_{index}")
-    return len(parent_ids)
 
 
 def _inventory_identity(inventory: Mapping[str, Any] | None) -> list[dict]:
@@ -250,18 +207,16 @@ def build_review(
     consolidated_type_count: int,
     inventory_count: int,
     sufficiency_added_concepts: int,
-    parent_task_count: int | None = None,
     sufficiency_audit_complete: bool = True,
 ) -> dict[str, Any]:
-    """Return the deterministic metrics saved beside the mined taxonomy."""
+    """Return the raw counts saved beside the mined taxonomy.
+
+    Counts only — no ratios, no derived denominators. Whether the taxonomy
+    is fragmented is the model's judgment (:func:`fragmentation_verdict`),
+    never arithmetic on these numbers.
+    """
 
     inventory_count = max(0, int(inventory_count or 0))
-    if parent_task_count is None:
-        parent_task_count = inventory_count
-    parent_task_count = max(0, int(parent_task_count or 0))
-    if not parent_task_count:
-        parent_task_count = inventory_count
-    type_comparison_count = parent_task_count or inventory_count
     consolidated_type_count = max(0, int(consolidated_type_count or 0))
     raw_type_count = max(0, int(raw_type_count or 0))
     return {
@@ -269,48 +224,150 @@ def build_review(
         "raw_type_count": raw_type_count,
         "type_count": consolidated_type_count,
         "inventory_count": inventory_count,
-        "parent_task_count": parent_task_count,
-        "type_comparison_count": type_comparison_count,
         "consolidation_merged_count": max(
             0, raw_type_count - consolidated_type_count),
         "sufficiency_added_concepts": max(
             0, int(sufficiency_added_concepts or 0)),
         "sufficiency_audit_complete": bool(sufficiency_audit_complete),
-        "type_qid_ratio": (
-            consolidated_type_count / inventory_count
-            if inventory_count else 0.0
-        ),
-        "type_comparison_ratio": (
-            consolidated_type_count / type_comparison_count
-            if type_comparison_count else 0.0
-        ),
     }
 
 
-def is_anomalously_fragmented(review: Mapping[str, Any] | None) -> bool:
-    """Detect only a strong, size-bounded fragmentation signal."""
+_FRAGMENTATION_AUTHOR_SYSTEM = (
+    "You audit a mined assessment-Type taxonomy for one textbook chapter. "
+    "Each Type should be a reusable assessment METHOD that recurs across "
+    "source questions; its Cases are variations of that method. Judge from "
+    "the Type titles, descriptions, task patterns and per-Type question "
+    "counts whether these Types are genuinely reusable methods, or whether "
+    "the mining pass carved one Type per source question (near-duplicate "
+    "methods split by surface wording). Judge the taxonomy's meaning — do "
+    "not decide from the counts alone; small chapters can legitimately have "
+    "one question per Type. Return STRICT JSON only: "
+    '{"verdict": "fragmented" | "healthy", "rationale": "<one or two '
+    'sentences>"}'
+)
+_FRAGMENTATION_CRITIC_SYSTEM = (
+    "You independently review another auditor's verdict on whether a mined "
+    "assessment-Type taxonomy is fragmented (one Type per source question) "
+    "or healthy (reusable methods). Judge from the same evidence. Return "
+    'STRICT JSON only: {"verdict": "confirmed" | "not_confirmed", '
+    '"rationale": "<one sentence>"}'
+)
 
-    review = review or {}
+
+def _fragmentation_evidence(
+    review: Mapping[str, Any],
+    mined_types: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Bounded evidence payload shared by the author and critic calls."""
+
+    types_summary: list[dict[str, Any]] = []
+    for mtype in list((mined_types or {}).get("types") or [])[:120]:
+        if not isinstance(mtype, Mapping):
+            continue
+        qids = [str(qid) for qid in mtype.get("source_question_ids") or []]
+        types_summary.append({
+            "type_title": str(mtype.get("type_title") or "")[:300],
+            "type_description": str(mtype.get("type_description") or "")[:500],
+            "task_pattern": str(mtype.get("task_pattern") or "")[:500],
+            "qid_count": len(qids),
+        })
+    return {
+        "types": types_summary,
+        "counts": {
+            key: review.get(key)
+            for key in (
+                "raw_type_count",
+                "type_count",
+                "inventory_count",
+                "consolidation_merged_count",
+            )
+        },
+    }
+
+
+def fragmentation_verdict(
+    review: Mapping[str, Any],
+    *,
+    mined_types: Mapping[str, Any] | None,
+    inventory: Mapping[str, Any] | None,
+    api_call: Any,
+) -> dict[str, Any]:
+    """Model verdict on whether the mined taxonomy is fragmented.
+
+    The author call decides; an independent critic call is advisory only —
+    dissent is recorded in ``review_flags`` and NEVER overrides the author.
+    An author non-decision (unparseable/exception) fails closed: the run
+    treats the taxonomy as fragmented and pauses for the human, which keeps
+    all content and asks instead of guessing (CLAUDE.md Rule 1).
+    """
+
+    del inventory  # identity/coverage are sealed elsewhere; evidence is Types
+    evidence = _fragmentation_evidence(review, mined_types)
+    if not evidence["types"]:
+        # Structural vacuity, not a content judgment: with no mined Types
+        # there is no taxonomy whose granularity could be judged.
+        return {
+            "fragmented": False,
+            "rationale": "No mined Types exist to judge.",
+            "review_flags": [],
+        }
+    payload = json.dumps(evidence, ensure_ascii=False)
+    review_flags: list[str] = []
+    fragmented = True
+    rationale = ""
     try:
-        inventory_count = int(review.get("inventory_count") or 0)
-        comparison_count = int(
-            review.get("type_comparison_count")
-            or review.get("parent_task_count")
-            or inventory_count
+        data = api_call(
+            _FRAGMENTATION_AUTHOR_SYSTEM,
+            payload,
+            purpose="concept_validation",
         )
-        type_count = int(review.get("type_count") or 0)
-        ratio = float(
-            review.get("type_comparison_ratio")
-            if review.get("type_comparison_ratio") is not None
-            else review.get("type_qid_ratio") or 0.0
+        author_verdict = _normal((data or {}).get("verdict"))
+        rationale = str((data or {}).get("rationale") or "").strip()
+        if author_verdict == "healthy":
+            fragmented = False
+        elif author_verdict != "fragmented":
+            fragmented = True
+            rationale = (
+                "The fragmentation author returned no positive verdict; "
+                "failing closed to a human review."
+            )
+            review_flags.append("fragmentation_author_non_decision")
+    except Exception as exc:  # noqa: BLE001 - fail closed into the pause
+        fragmented = True
+        rationale = (
+            "The fragmentation author call failed "
+            f"({type(exc).__name__}); failing closed to a human review."
         )
-    except (TypeError, ValueError):
-        return False
-    return bool(
-        comparison_count >= _MIN_INVENTORY_ITEMS
-        and type_count >= _MIN_TYPE_COUNT
-        and ratio >= _HIGH_TYPE_QID_RATIO
-    )
+        review_flags.append("fragmentation_author_unavailable")
+    else:
+        try:
+            critic = api_call(
+                _FRAGMENTATION_CRITIC_SYSTEM,
+                json.dumps({
+                    "evidence": evidence,
+                    "author_verdict": (
+                        "fragmented" if fragmented else "healthy"
+                    ),
+                    "author_rationale": rationale,
+                }, ensure_ascii=False),
+                purpose="concept_validation",
+            )
+            critic_verdict = _normal((critic or {}).get("verdict"))
+            if critic_verdict != "confirmed":
+                review_flags.append(
+                    "fragmentation_critic_dissent: "
+                    + (str((critic or {}).get("rationale") or "").strip()
+                       or "verdict not confirmed")
+                )
+        except Exception as exc:  # noqa: BLE001 - the critic is advisory
+            review_flags.append(
+                f"fragmentation_critic_unavailable: {type(exc).__name__}"
+            )
+    return {
+        "fragmented": bool(fragmented),
+        "rationale": rationale,
+        "review_flags": review_flags,
+    }
 
 
 def _resolution_candidates(value: Any) -> list[dict[str, Any]]:
@@ -398,6 +455,23 @@ def _was_consumed(identity: Mapping[str, str]) -> bool:
     return False
 
 
+_STABLE_REVIEW_KEYS = (
+    "version",
+    "raw_type_count",
+    "type_count",
+    "inventory_count",
+    "consolidation_merged_count",
+    "sufficiency_added_concepts",
+    "sufficiency_audit_complete",
+)
+
+
+def _stable_review(review: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        key: copy.deepcopy(review.get(key)) for key in _STABLE_REVIEW_KEYS
+    }
+
+
 def _identity(
     *,
     review: Mapping[str, Any],
@@ -417,7 +491,11 @@ def _identity(
                 "chapter_code", "learning_kind",
             )
         },
-        "review": dict(review),
+        # Stable raw counts only: the model's fragmentation verdict (and its
+        # prose rationale) may be recomputed on resume, and human/attempt
+        # bookkeeping changes between calls — neither may shift the decision
+        # identity the operator's answer is bound to.
+        "review": _stable_review(review),
         "inventory": _inventory_identity(inventory),
         "types": _type_identity(mined_types),
         "prior_decision_id": str(prior_decision_id or ""),
@@ -447,24 +525,9 @@ def applied_result_context_hash(
     excluded; policy, source-task semantics, and Type semantics are not.
     """
 
-    stable_review = {
-        key: copy.deepcopy(review.get(key))
-        for key in (
-            "version",
-            "raw_type_count",
-            "type_count",
-            "inventory_count",
-            "parent_task_count",
-            "type_comparison_count",
-            "consolidation_merged_count",
-            "sufficiency_added_concepts",
-            "sufficiency_audit_complete",
-            "type_qid_ratio",
-            "type_comparison_ratio",
-        )
-    }
+    stable_review = _stable_review(review)
     return _sha256_json({
-        "version": "type-granularity-applied-result-3",
+        "version": "type-granularity-applied-result-4",
         "semantic_confidence_policy": confidence_policy.cache_identity(),
         "metadata": {
             key: str((meta or {}).get(key) or "")
@@ -494,7 +557,7 @@ def applied_result_semantic_hash(
     """
 
     return _sha256_json({
-        "version": "type-granularity-applied-semantics-2",
+        "version": "type-granularity-applied-semantics-3",
         "semantic_confidence_policy": confidence_policy.cache_identity(),
         "inventory": _inventory_identity(inventory),
         "types": _type_identity(mined_types),
@@ -507,23 +570,20 @@ def _pending_decision(
     review: Mapping[str, Any],
     inventory: Mapping[str, Any] | None,
     failure: str = "",
+    verdict: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     type_count = int(review.get("type_count") or 0)
     inventory_count = int(review.get("inventory_count") or 0)
-    comparison_count = int(
-        review.get("type_comparison_count")
-        or review.get("parent_task_count")
-        or inventory_count
-    )
-    ratio = float(
-        review.get("type_comparison_ratio")
-        if review.get("type_comparison_ratio") is not None
-        else review.get("type_qid_ratio") or 0.0
-    )
+    raw_type_count = int(review.get("raw_type_count") or 0)
     merged = int(review.get("consolidation_merged_count") or 0)
     additions = int(review.get("sufficiency_added_concepts") or 0)
     sufficiency_complete = bool(
         review.get("sufficiency_audit_complete", True))
+    rationale = str((verdict or {}).get("rationale") or "").strip()
+    verdict_flags = [
+        str(flag) for flag in (verdict or {}).get("review_flags") or []
+        if str(flag or "").strip()
+    ]
     qids = [
         str(item.get("qid") or "")
         for item in (inventory or {}).get("items") or []
@@ -535,10 +595,8 @@ def _pending_decision(
         "proceed without another explicit choice. "
         f"{str(failure)[:1500]}"
         if follow_up else (
-            f"Aegis found {type_count} Types for {comparison_count} source "
-            f"parent task(s) ({inventory_count} leaf QID(s); {ratio:.0%}). "
-            "The normal consolidation pass "
-            f"merged {merged}. "
+            f"Aegis mined {type_count} Types for {inventory_count} source "
+            f"QID(s). The normal consolidation pass merged {merged}. "
             + (
                 "The concept-sufficiency audit will run once after this "
                 "decision. "
@@ -547,9 +605,12 @@ def _pending_decision(
                     f"{additions} method concept(s). "
                 )
             )
-            + "This can be valid, but it is "
-            "also the deterministic signature of one-Type-per-question "
-            "fragmentation."
+            + (
+                f"The model fragmentation audit says: {rationale[:1200]}"
+                if rationale else
+                "The model fragmentation audit judged this taxonomy "
+                "possibly fragmented."
+            )
         )
     )
     return {
@@ -570,12 +631,7 @@ def _pending_decision(
         "checkpoint_progress": 0.76,
         "item": {
             "type_id": "TYPE-GRANULARITY-REVIEW",
-            "type_title": (
-                f"{type_count} Types for {comparison_count} parent tasks "
-                f"({inventory_count} leaf QIDs)"
-                if comparison_count != inventory_count
-                else f"{type_count} Types for {inventory_count} QIDs"
-            ),
+            "type_title": f"{type_count} Types for {inventory_count} QIDs",
             "qids": qids,
             "questions": [],
             "topic": "Chapter-wide Type taxonomy",
@@ -584,18 +640,28 @@ def _pending_decision(
         "evidence": [
             {
                 "page": "",
-                "label": (
-                    "Type-to-parent-task ratio"
-                    if comparison_count != inventory_count
-                    else "Type-to-QID ratio"
-                ),
+                "label": "Taxonomy counts",
                 "text": (
-                    f"{type_count}/{comparison_count} ({ratio:.1%}); "
-                    f"{inventory_count} leaf QID(s)"
-                    if comparison_count != inventory_count
-                    else f"{type_count}/{inventory_count} ({ratio:.1%})"
+                    f"{type_count} Type(s) from {raw_type_count} raw for "
+                    f"{inventory_count} inventory QID(s)"
                 ),
             },
+            {
+                "page": "",
+                "label": "Model fragmentation rationale",
+                "text": (
+                    rationale
+                    or "No rationale was returned; failing closed to this "
+                    "human review."
+                ),
+            },
+            *(
+                [{
+                    "page": "",
+                    "label": "Fragmentation review flags",
+                    "text": "; ".join(verdict_flags),
+                }] if verdict_flags else []
+            ),
             {
                 "page": "",
                 "label": "Ordinary consolidation result",
@@ -640,11 +706,27 @@ def resolve_or_pause(
     meta: Mapping[str, Any] | None,
     prior_decision_id: str = "",
     failure: str = "",
+    verdict: Mapping[str, Any] | None = None,
 ) -> dict[str, str]:
-    """Return a human directive or raise a durable zero-retry pause."""
+    """Return a human directive or raise a durable zero-retry pause.
 
-    if not failure and not is_anomalously_fragmented(review):
-        return {"action": "continue"}
+    ``verdict`` is the model's :func:`fragmentation_verdict` result. A
+    missing verdict on a non-failure call is a non-decision and fails
+    closed into the pause — the gate never guesses "healthy".
+    """
+
+    if not failure:
+        if verdict is None:
+            verdict = {
+                "fragmented": True,
+                "rationale": (
+                    "No fragmentation verdict was supplied; failing closed "
+                    "to a human review."
+                ),
+                "review_flags": ["fragmentation_verdict_missing"],
+            }
+        if not verdict.get("fragmented"):
+            return {"action": "continue"}
     prior = str(prior_decision_id or "")
     failure_text = str(failure or "")
     # An upstream rewind can recreate the exact pre-decision taxonomy after
@@ -680,6 +762,7 @@ def resolve_or_pause(
             review=review,
             inventory=inventory,
             failure=failure_text,
+            verdict=verdict,
         ))
     choice = str(resolution.get("choice") or "")
     # ``carry_forward`` means Aegis settled this decision by changing nothing,
@@ -704,8 +787,7 @@ __all__ = [
     "applied_result_context_hash",
     "applied_result_semantic_hash",
     "build_review",
+    "fragmentation_verdict",
     "human_resolution_context",
-    "inventory_parent_task_count",
-    "is_anomalously_fragmented",
     "resolve_or_pause",
 ]

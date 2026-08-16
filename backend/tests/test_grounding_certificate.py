@@ -1262,11 +1262,6 @@ def test_deposit_cleanup_cannot_drop_type_case_host_manifest(
         lambda current, **_kwargs: current,
     )
     monkeypatch.setattr(
-        build_concepts.concept_cleanup,
-        "dedupe_similar_titles_chapter_wide",
-        lambda current: current,
-    )
-    monkeypatch.setattr(
         build_concepts.concept_refiner,
         "refine_chapter",
         lambda current: current,

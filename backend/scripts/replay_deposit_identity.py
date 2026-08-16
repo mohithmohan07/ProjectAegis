@@ -125,9 +125,6 @@ def deposit_chain(chapter_title: str, subject: str, board: str):
             records, subject=subject, board=board,
             chapter_title=chapter_title)
 
-    def dedupe(records, _ctx):  # :979
-        return concept_cleanup.dedupe_similar_titles_chapter_wide(records)
-
     def refine(records, _ctx):  # :980
         return concept_refiner.refine_chapter(records)
 
@@ -171,7 +168,6 @@ def deposit_chain(chapter_title: str, subject: str, board: str):
     return [
         ("clean_concept_record", clean),
         ("filter_review_violations", review_filter),
-        ("dedupe_similar_titles_chapter_wide", dedupe),
         ("refine_chapter", refine),
         ("ensure_valid_learner_analysis", learner_analysis),
         ("_ensure_mastery_lines(use_api=False)", mastery),

@@ -489,6 +489,78 @@ def test_authoring_checker_accepts_either_analysis_section_alone():
     assert check({"rows": [row]}) == []
 
 
+def test_culmination_description_is_the_authored_consolidation(
+    golden_envelope, golden_rows,
+):
+    """The culmination Description is exactly the model-authored
+    consolidation paragraph — no code-composed 'Recap of <titles>' prefix
+    is ever prepended (the recap machinery is deleted)."""
+    mapping = _replay_map(golden_envelope, golden_rows)
+    topology, grounding, analysis, critic = _providers(mapping)
+
+    settled = settle.settle(
+        golden_envelope,
+        topology_provider=topology,
+        grounding_provider=grounding,
+        analysis_provider=analysis,
+        critic=critic,
+        store=kernel.DecisionStore(),
+    )
+
+    culminations = [
+        row for row in settled if not row.get("_phase32_topology_decision")
+    ]
+    assert culminations
+    for row in culminations:
+        details = str(row["concept_details"])
+        assert details.startswith(
+            "Description: Together these concepts let the learner connect"
+        ), row["concept_title"]
+        assert "Recap of" not in details
+        # The authored consolidation is mandatory, so no culmination ships
+        # with the empty-consolidation review flag on this golden replay.
+        assert not row.get("review_flags")
+
+
+def test_authoring_critic_dissent_flags_the_authored_rows(
+    golden_envelope, golden_rows,
+):
+    """Settle's content-authoring decision now runs under the live advisory
+    critic: its dissent lands as review flags on the authored rows and
+    never blocks or rewrites the authored content."""
+    mapping = _replay_map(golden_envelope, golden_rows)
+    topology, grounding, analysis, _critic = _providers(mapping)
+
+    def critic(request: dict) -> dict:
+        if request.get("stage") == "content_authoring":
+            return {
+                "verdict": "rejected",
+                "confidence": 0.95,
+                "issues": ["the analysis restates the description"],
+            }
+        return {"verdict": "verified", "confidence": 0.999, "issues": []}
+
+    settled = settle.settle(
+        golden_envelope,
+        topology_provider=topology,
+        grounding_provider=grounding,
+        analysis_provider=analysis,
+        critic=critic,
+        store=kernel.DecisionStore(),
+    )
+
+    assert len(settled) == 53
+    assert any(
+        "restates the description" in flag
+        for row in settled
+        for flag in row.get("review_flags") or []
+    )
+    # Authored content stands despite the dissent.
+    for row in settled:
+        if row.get("_phase32_topology_decision"):
+            assert "Misconception" in row["concept_details"]
+
+
 def test_critic_dissent_ships_flags_on_the_settled_rows(
     golden_envelope, golden_rows,
 ):

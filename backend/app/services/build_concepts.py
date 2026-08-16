@@ -761,7 +761,6 @@ def _deposit_concepts(
     records = concept_cleanup.filter_review_violations(
         records, subject=chapter.subject, board=chapter.board,
         chapter_title=chapter.chapter_title)
-    records = concept_cleanup.dedupe_similar_titles_chapter_wide(records)
     records = concept_refiner.refine_chapter(records)
     # The final deposit boundary must be resilient when the API repair pass
     # fails or returns generic/misclassified learner analysis. Preserve valid
@@ -862,7 +861,6 @@ def _deposit_concepts(
         strict_type_hierarchy=pre_post == "Post",
         strict_analysis_section=pre_post == "Post",
         strict_mastery_statement=pre_post == "Post",
-        strict_culmination_recap=pre_post == "Post",
         source_text=source_text if pre_post == "Post" else "",
     )
     classified_fatal = generation._fatal_errors(report)
@@ -2652,6 +2650,7 @@ def _autonomously_resolve_pending_decision(
         "reason": result.reason,
         "confidence": result.confidence,
         "evidence_refs": list(result.evidence_refs),
+        "review_flags": list(result.review_flags),
         "choice": result.choice or None,
         "instruction": result.instruction,
         "target_id": result.target_id,

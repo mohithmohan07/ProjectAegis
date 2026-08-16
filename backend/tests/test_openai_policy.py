@@ -408,7 +408,17 @@ def test_all_active_runtime_calls_declare_a_known_purpose():
     # lane (Type assignment, hub population, alignment review, and
     # description refinement now live in app/services/phase3, which has its
     # own purpose-labelled call sites).
-    assert len(generation_calls) == 41
+    # 42 with the skeleton-chunk audit verdict: whether a chunk's skeleton
+    # under-covers its source or micro-splits it is a judgment about what
+    # the text teaches, so it replaced the character-count floors/ceilings.
+    # (The type-granularity fragmentation verdict passes _openai_json as
+    # api_call into type_granularity_decision and is purpose-labelled there.)
+    # 39 after the §10 step-2 purge deleted three call sites: the dead
+    # mined-type allocator (_assign_mined_types_via_api), the dead
+    # near-duplicate merge pass (_merge_similar_concepts_via_api), and the
+    # mastery-line backfill's never-taken use_api block (mastery is
+    # authored by Settle and repaired by Polish).
+    assert len(generation_calls) == 39
     generation_purposes = [
         ast.literal_eval(keyword.value)
         for node in generation_calls

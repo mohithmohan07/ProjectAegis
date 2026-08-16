@@ -348,11 +348,6 @@ def test_deposit_cannot_remint_certificate_after_cleanup_drops_row(
         lambda current, **_kwargs: current[:1],
     )
     monkeypatch.setattr(
-        build_concepts.concept_cleanup,
-        "dedupe_similar_titles_chapter_wide",
-        lambda current: current,
-    )
-    monkeypatch.setattr(
         build_concepts.concept_refiner,
         "refine_chapter",
         lambda current: current,

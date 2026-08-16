@@ -311,9 +311,6 @@ def assemble(
             board=str(meta.get("board") or ""),
             chapter_title=str(meta.get("chapter_title") or ""),
         )
-        out_rows = concept_cleanup.dedupe_similar_titles_chapter_wide(
-            out_rows
-        )
         out_rows = concept_refiner.refine_chapter(out_rows)
         out_rows = cv.ensure_valid_learner_analysis(out_rows)
         out_rows = generation._ensure_mastery_lines_via_api(
@@ -334,7 +331,6 @@ def assemble(
         out_rows = cv.ensure_valid_learner_analysis(out_rows)
         return out_rows
 
-    rows = cr.set_culmination_recap(rows)
     rows = _deposit_deterministic_pipeline(rows)
     replayed = _deposit_deterministic_pipeline(copy.deepcopy(rows))
     if replayed != rows:

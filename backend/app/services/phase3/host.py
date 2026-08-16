@@ -378,7 +378,7 @@ def host(
         critic = critic if critic is not None else _live_critic
     store = store or kernel.DecisionStore()
     envelope_sha = str(env.get("envelope_sha256") or "")
-    policy = confidence_policy.threshold_text()
+    policy = confidence_policy.POLICY_VERSION
 
     settled_titles = _settled_index(settled_rows)
     known_blocks = {
@@ -487,8 +487,9 @@ def host(
                 "existing settled concept whenever it teaches the unit's "
                 "durable source idea; create_new only when no existing row "
                 "can host a distinct durable idea, and then define the "
-                "complete source-grounded concept. Confidence floor is "
-                f"{policy}. Separately, place EVERY qid in qid_placements "
+                "complete source-grounded concept. State your honest "
+                "confidence; a low-confidence decision ships flagged for "
+                "review. Separately, place EVERY qid in qid_placements "
                 "by understanding the whole question against the settled "
                 "concepts. Placement rules: (1) a question that falls "
                 "under one specific concept alone goes under that same "

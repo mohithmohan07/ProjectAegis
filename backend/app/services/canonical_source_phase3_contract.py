@@ -43,7 +43,6 @@ def install(generation: ModuleType | None = None) -> None:
     original_mine_types = generation._mine_types_from_inventory_via_api
     original_consolidate_types = generation._consolidate_semantic_types_via_api
     original_expand_units = generation._expand_mined_types_to_assignment_units
-    original_assign_types = generation._assign_mined_types_via_api
 
     def _compile_shadow(job: Any) -> dict[str, Any] | None:
         canonical, _report = phase2._load_or_refresh_for_job(job)
@@ -365,33 +364,6 @@ def install(generation: ModuleType | None = None) -> None:
         units = original_expand_units(types)
         return phase3.annotate_assignment_units(units)
 
-    @wraps(original_assign_types)
-    def assign_mined_types_via_api(records, *args, **kwargs):
-        graph = phase3.active_graph()
-        if not isinstance(graph, dict):
-            return original_assign_types(records, *args, **kwargs)
-        mined_types = kwargs.get("mined_types")
-        if isinstance(mined_types, dict):
-            annotated = phase3.annotate_mined_types(mined_types, graph)
-            # Preserve identity because later host certifications and checkpoint
-            # artifacts use this exact dictionary instance.
-            mined_types.clear()
-            mined_types.update(annotated)
-        canonicalized = phase3.canonicalize_record_topics(records, graph)
-        if isinstance(mined_types, dict):
-            canonicalized = phase3.ensure_type_scope_hosts(
-                canonicalized,
-                mined_types=mined_types,
-                graph=graph,
-                canonical=(phase3.active_session() or {}).get("canonical"),
-            )
-        grounded = phase3.ground_concepts(
-            canonicalized,
-            graph=graph,
-            canonical=(phase3.active_session() or {}).get("canonical"),
-        )
-        return original_assign_types(grounded, *args, **kwargs)
-
     @wraps(original_manifest)
     def artifact_manifest(directory: Path):
         manifest = original_manifest(directory)
@@ -456,7 +428,6 @@ def install(generation: ModuleType | None = None) -> None:
     generation._mine_types_from_inventory_via_api = mine_types_from_inventory_via_api
     generation._consolidate_semantic_types_via_api = consolidate_semantic_types_via_api
     generation._expand_mined_types_to_assignment_units = expand_mined_types_to_assignment_units
-    generation._assign_mined_types_via_api = assign_mined_types_via_api
 
     phase2._PHASE3_CONTRACT_VERSION = _CONTRACT_VERSION
     generation._PHASE3_SEMANTIC_GRAPH_VERSION = _CONTRACT_VERSION

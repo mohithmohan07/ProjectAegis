@@ -1,15 +1,17 @@
 """Central confidence policy for semantic generation decisions.
 
 Semantic model scores are useful evidence, but they are not interchangeable
-with source-integrity verification.  Aegis therefore keeps three explicitly
-separate gates:
+with source-integrity verification.  Aegis keeps three named decision
+classes:
 
-* ordinary semantic acceptance (hierarchy, grounding, topic and Type hosting);
+* ordinary semantic decisions (hierarchy, grounding, topic and Type
+  hosting) — the floor is a **flag trigger**: an honest sub-floor score on
+  an otherwise-valid decision ships flagged for review (`[confidence]`
+  checker defects, kernel review flags), it never blocks the run;
 * destructive semantic changes (retiring/removing a concept); and
-* source-critical verification (PDF transcription, QID and Figure identity).
-
-Only the ordinary semantic gate is intentionally relaxed.  Destructive and
-source-critical decisions retain the historical 0.96 minimum.
+* source-critical verification (PDF transcription, QID and Figure
+  identity) — evidence-admission mechanics that still refuse sub-floor
+  extraction evidence, recording the refusal instead of guessing.
 """
 from __future__ import annotations
 
@@ -19,7 +21,7 @@ from enum import Enum
 from typing import Final
 
 
-POLICY_VERSION: Final = "semantic-confidence-policy-2"
+POLICY_VERSION: Final = "semantic-confidence-policy-3"
 
 SEMANTIC_ACCEPTANCE_ENV: Final = (
     "AEGIS_SEMANTIC_ACCEPTANCE_MIN_CONFIDENCE"

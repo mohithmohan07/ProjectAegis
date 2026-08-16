@@ -40,7 +40,11 @@ def test_laws_of_exponents_final_quality_conditions():
         topic_rows = [r for r in final if r["topic"] == topic]
         assert sum(concept_refiner.is_culmination(r["concept_title"]) for r in topic_rows) == 1
         assert concept_refiner.is_culmination(topic_rows[-1]["concept_title"])
-        assert topic_rows[-1]["concept_details"].startswith("Description: Recap")
+        # The culmination Description is the authored consolidation — no
+        # code-composed "Recap" stamp.
+        culm_details = topic_rows[-1]["concept_details"]
+        assert culm_details.startswith("Description: ")
+        assert not culm_details.startswith("Description: Recap")
     normal = [r for r in final if not concept_refiner.is_culmination(r["concept_title"])]
     assert all(generation._has_meaningful_types(r["concept_details"]) for r in normal)
     artifact_re = re.compile(r"\b(MMD|Example\s+\d+|Fig(?:ure)?\s+\d+|Table\s+\d+|Exercise\s+\d+(?:\.\d+)?)\b", re.I)

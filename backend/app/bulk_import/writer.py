@@ -381,19 +381,7 @@ def _validate_concepts_workbook_bytes(
 ) -> None:
     """Read the serialized XLSX back and enforce final delivery invariants."""
     expected: dict[tuple[str, str, str, str], dict[str, str]] = {}
-    primary_titles_by_topic: dict[
-        tuple[str, str, str], list[str]
-    ] = defaultdict(list)
     for concept in concepts:
-        primary_key = (
-            normalize_question_text(concept.topic.chapter.chapter_title),
-            normalize_question_text(
-                strip_topic_title(concept.topic.topic_title)
-                or concept.topic.topic_title
-            ),
-            normalize_question_text(concept.topic.pre_post_learning),
-        )
-        primary_titles_by_topic[primary_key].append(concept.concept_title)
         for topic in _concept_placements(concept):
             key = (
                 normalize_question_text(topic.chapter.chapter_title),
@@ -527,21 +515,13 @@ def _validate_concepts_workbook_bytes(
                 issues.append(
                     f"{topic_key[1]}: expected one culmination row")
                 continue
-            culmination_title, recap = culminations[0]
+            culmination_title, _details = culminations[0]
             if len(culmination_title) > 120:
                 issues.append(
                     f"{topic_key[1]}: culmination title exceeds 120 chars")
-            recap_key = normalize_question_text(recap)
-            omitted = [
-                title
-                for title in primary_titles_by_topic.get(topic_key, ())
-                if not title.casefold().startswith("culmination")
-                if normalize_question_text(title) not in recap_key
-            ]
-            if omitted:
-                issues.append(
-                    f"{topic_key[1]}: culmination recap omits "
-                    + ", ".join(omitted))
+            # The culmination Description is the model-authored consolidation
+            # paragraph; the retired "Recap of <every title>" composition is
+            # no longer a read-back contract.
 
         if issues:
             raise ConceptWorkbookValidationError(

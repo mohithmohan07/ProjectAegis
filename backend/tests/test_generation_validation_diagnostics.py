@@ -164,7 +164,7 @@ def _strict_culmination(*, question: str = "") -> dict:
     )
 
 
-def test_final_validation_requires_mastery_and_detailed_culmination_recap():
+def test_final_validation_requires_mastery_and_authored_culmination():
     missing_mastery = _strict_normal_row()
     missing_mastery["concept_details"] = missing_mastery[
         "concept_details"
@@ -177,11 +177,14 @@ def test_final_validation_requires_mastery_and_detailed_culmination_recap():
         g._validate_final_or_raise(
             [missing_mastery, _strict_culmination()])
 
-    bare_recap = _strict_culmination()
-    bare_recap["concept_details"] = "Description: Recap"
-    with pytest.raises(RuntimeError, match="culmination_recap_format"):
+    # No canonical "Recap of ..." composition is required any more — the
+    # authored consolidation is the Description. Only an EMPTY culmination
+    # Description remains a mechanical defect.
+    empty_description = _strict_culmination()
+    empty_description["concept_details"] = "Description: "
+    with pytest.raises(RuntimeError, match="culmination_description"):
         g._validate_final_or_raise(
-            [_strict_normal_row(), bare_recap])
+            [_strict_normal_row(), empty_description])
 
 
 def test_final_repair_normalizes_newline_analysis_before_api(monkeypatch):
@@ -712,7 +715,8 @@ def test_final_repair_options_include_every_terminal_strict_contract():
     assert options["strict_type_hierarchy"] is True
     assert options["strict_analysis_section"] is True
     assert options["strict_mastery_statement"] is True
-    assert options["strict_culmination_recap"] is True
+    # The code-composed recap contract is retired with the recap machinery.
+    assert "strict_culmination_recap" not in options
     assert {
         "section_number_in_description",
         "case_example_semantic_mismatch",

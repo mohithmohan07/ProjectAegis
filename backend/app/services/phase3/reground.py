@@ -65,7 +65,7 @@ def reground_rows(
         provider = _live_grounding
         critic = critic or _live_critic
     store = kernel.DecisionStore(store_dir)
-    policy = confidence_policy.threshold_text()
+    policy = confidence_policy.POLICY_VERSION
 
     env_view = {"graph": graph, "canonical": canonical}
     topics = _topic_rows(env_view)
@@ -160,7 +160,8 @@ def reground_rows(
                     "that DO teach it — from other_topic_blocks — and "
                     "explain that in reason; such a decision ships flagged "
                     "for review. Never return an empty source_block_ids. "
-                    f"The acceptance floor is {policy}."
+                    "State your honest confidence; a low-confidence "
+                    "decision ships flagged for review."
                 ),
                 "topic": {"topic_id": topic_id, "title": topic_title},
                 "concepts": [

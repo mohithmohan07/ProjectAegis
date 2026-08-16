@@ -578,7 +578,7 @@ def settle(
         )
     store = store or kernel.DecisionStore()
     envelope_sha = str(env.get("envelope_sha256") or "")
-    policy = confidence_policy.threshold_text()
+    policy = confidence_policy.POLICY_VERSION
 
     topics = _topic_rows(env)
     blocks_by_topic = _blocks_by_topic(env)
@@ -654,9 +654,9 @@ def settle(
                     "slides from it alone (never a sliver of the parent's "
                     "text) — and its own distinct "
                     "'Achieving Mastery:' line — segments must never share "
-                    "or paraphrase one mastery sentence. Confidence must "
-                    "reflect source evidence; the acceptance floor is "
-                    f"{policy}."
+                    "or paraphrase one mastery sentence. State your honest "
+                    "confidence; a low-confidence decision ships flagged "
+                    "for review."
                 ),
                 "topic": {"topic_id": topic_id, "title": topic_title},
                 "concepts": [
@@ -744,8 +744,9 @@ def settle(
                     "later section), ground on the chapter blocks that DO "
                     "teach it — from other_topic_blocks — and explain that "
                     "in reason; such a decision ships flagged for review. "
-                    "Never return an empty source_block_ids. The "
-                    f"acceptance floor is {policy}."
+                    "Never return an empty source_block_ids. State your "
+                    "honest confidence; a low-confidence decision ships "
+                    "flagged for review."
                 ),
                 "topic": {"topic_id": topic_id, "title": topic_title},
                 "concepts": [
@@ -947,10 +948,18 @@ def settle(
                 payload=payload,
                 provider=analysis_provider,
                 checker=_authoring_checker(concept_ids, batch_culm_ids),
-                critic=None,
+                critic=critic,
                 store=store,
                 policy_version=policy,
             )
+            for position, concept_id in zip(offset_batch, concept_ids):
+                flags = _pin_flags(
+                    list(decision.get("review_flags") or []),
+                    concept_ids,
+                    concept_id,
+                )
+                if flags:
+                    local_flags.setdefault(position, []).extend(flags)
             authored_by_id = {
                 str(row.get("concept_id") or ""): row
                 for row in decision["response"].get("rows") or []
@@ -991,6 +1000,11 @@ def settle(
         )
 
         # -- culminations: structure derived, prose authored above -------
+        # The Description is the model-authored consolidation paragraph —
+        # never a code-composed "Recap of ..." title list. The authoring
+        # checker makes the consolidation mandatory, so an empty one here
+        # is an unexpected defect: the row still ships (never dropped),
+        # flagged for review.
         culm_rows: list[dict[str, Any]] = []
         for culm_index, row in enumerate(topic_culms):
             derived_blocks: list[str] = []
@@ -998,24 +1012,26 @@ def settle(
                 for block_id in source.get("_source_block_ids") or []:
                     if block_id not in derived_blocks:
                         derived_blocks.append(block_id)
-            recap = cr.recap_text([
-                r["concept_title"] for r in topic_settled
-            ])
             prose = culm_consolidations.get(f"CULM#{culm_index}", "")
-            culm_rows.append({
+            culm_row = {
                 "topic": row.get("topic"),
                 "parent_concept": _normal(row.get("parent_concept")),
                 "concept_title": _normal(row.get("concept_title")),
-                "concept_details": (
-                    "Description: " + recap + (f" {prose}" if prose else "")
-                ),
+                "concept_details": "Description: " + prose,
                 "keywords": _normal(row.get("keywords")),
                 "_semantic_topic_id": topic_id,
                 "_source_block_ids": derived_blocks,
                 "_source_grounding_contract": (
                     "derived-from-verified-topic-concepts"
                 ),
-            })
+            }
+            if not prose:
+                culm_row["review_flags"] = [
+                    "culmination shipped without an authored consolidation "
+                    "paragraph; the authoring pass returned none and no "
+                    "text was code-composed — needs review"
+                ]
+            culm_rows.append(culm_row)
         return topic_settled, local_flags, culm_rows
 
     # Topics are independent decision streams (each one's topology ->

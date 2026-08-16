@@ -354,39 +354,3 @@ def test_generic_activity_marker_is_not_repeated_in_visible_hub_note():
     assert note.count(task) == 1
 
 
-def test_culmination_title_is_topic_based_while_recap_remains_complete():
-    topic = "A Compact Topic"
-    records = [
-        {
-            "topic": topic,
-            "concept_title": (
-                "A Very Long First Concept Name That Previously Overflowed "
-                "the Culmination Title"),
-            "concept_details": "Description: First.",
-        },
-        {
-            "topic": topic,
-            "concept_title": (
-                "A Very Long Second Concept Name That Previously Made the "
-                "Title Even Longer"),
-            "concept_details": "Description: Second.",
-        },
-        {
-            "topic": topic,
-            "concept_title": "A Third Concept Previously Omitted from the Title",
-            "concept_details": "Description: Third.",
-        },
-        {
-            "topic": topic,
-            "concept_title": "A Fourth Concept Also Omitted from the Title",
-            "concept_details": "Description: Fourth.",
-        },
-    ]
-
-    result = g._enforce_culminations(records)
-    culmination = result[-1]
-
-    assert culmination["concept_title"] == f"Culmination - {topic}"
-    assert len(culmination["concept_title"]) < 120
-    for record in records:
-        assert record["concept_title"] in culmination["concept_details"]

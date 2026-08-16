@@ -153,21 +153,15 @@ def _squash(value: str) -> str:
     return " ".join(str(value or "").split())
 
 
-def _too_short(text: str) -> bool:
-    try:
-        from . import concept_validator as cv
-
-        return bool(cv._example_too_short(text))
-    except Exception:  # noqa: BLE001 — the validator is advisory here
-        return not str(text or "").strip()
-
-
 def _polish_is_usable(item: dict[str, Any], polished: str) -> str:
-    """Empty string when usable, else the reason it is not."""
+    """Empty string when usable, else the reason it is not.
+
+    Only mechanical defects revert a polish: an empty rewrite, or a dropped
+    MCQ option. Whether short wording is a usable test item is a judgment
+    the polish model and its critic own — no length check second-guesses it.
+    """
     if not str(polished or "").strip():
         return "empty polished wording"
-    if _too_short(polished):
-        return "polished wording too short"
     for option in item.get("options") or []:
         text = str(option or "").strip()
         if text and text not in polished:

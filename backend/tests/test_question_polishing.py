@@ -363,6 +363,30 @@ def test_dropped_mcq_option_invalidates_the_polish():
     assert "polished_task" not in item
 
 
+def test_short_polished_wording_is_accepted_not_reverted():
+    """A short-but-valid polish ships; no length check second-guesses it."""
+    inventory = {"items": [_item(
+        "QINV-0001",
+        "It is left as an exercise for you to define osmosis in your "
+        "own words after the discussion above.",
+    )], "stats": {}}
+
+    def short_polish(system, user, **kwargs):
+        return {"items": [{
+            "qid": "QINV-0001",
+            "polished_task": "Define osmosis.",
+            "fragments": [],
+        }]}
+
+    result = question_polishing.polish_inventory(
+        inventory, meta=META, api_call=short_polish)
+
+    item = result["items"][0]
+    assert item["polished_task"] == "Define osmosis."
+    assert item["polish_flag"] == question_polishing.FLAG_POLISHED
+    assert "too short" not in str(item.get("polish_note") or "")
+
+
 def test_unchanged_wording_records_nothing():
     result = question_polishing.polish_inventory(
         _inventory(), meta=META, api_call=_api_polish)

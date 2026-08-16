@@ -402,7 +402,9 @@ def test_normalization_drops_a_standalone_orphan_analysis_prefix():
     assert "\nMisconception/\n" not in before_mastery_out
 
 
-def test_culmination_description_becomes_recap():
+def test_culmination_description_keeps_the_authored_synthesis():
+    """The culmination Description is model-authored: refine_chapter must
+    never replace it with a code-composed recap."""
     records = [
         _rec("Solve A", "Description: a // Types: Type 01: P Case 01: c1 // Misconception: m"),
         _rec("Culmination - Topic 01",
@@ -411,21 +413,14 @@ def test_culmination_description_becomes_recap():
     ]
     out = cr.refine_chapter(records)
     culm = out[1]["concept_details"]
-    # Description collapses to exactly "Recap".
-    assert "Description: Recap" in culm
-    assert "long synthesis" not in culm
+    # The authored synthesis survives; no "Recap" stamp is applied.
+    assert "long synthesis of everything" in culm
+    assert "Description: Recap" not in culm
     # Types continue the one chapter sequence, and Misconception survives.
     assert "Type 02: Mixed" in culm
     assert "Misconceptions: keep me" in culm
     # Regular concept keeps its continuous Type numbering.
     assert "Type 01: P" in out[0]["concept_details"]
-
-
-def test_culmination_recap_when_no_description_section():
-    records = [_rec("Culmination - T",
-                    "Types: Type 01: Mix Case 01: q // Misconception: m")]
-    out = cr.set_culmination_recap([dict(r) for r in records])
-    assert out[0]["concept_details"].startswith("Description: Recap")
 
 
 def test_activity_info_hub_section_order_and_append():

@@ -103,12 +103,35 @@ def _preserve_inventory(monkeypatch) -> None:
     )
 
 
+def _stub_fragmentation_verdict(monkeypatch) -> list[int]:
+    """Drive the pause via a stubbed model verdict: fragmented while the
+    taxonomy has several Types, healthy once consolidated to one."""
+    seen_type_counts: list[int] = []
+
+    def fake_verdict(review, *, mined_types, inventory, api_call):
+        count = len((mined_types or {}).get("types") or [])
+        seen_type_counts.append(count)
+        fragmented = count > 1
+        return {
+            "fragmented": fragmented,
+            "rationale": (
+                "One Type per source question." if fragmented
+                else "A single reusable method remains."
+            ),
+            "review_flags": [],
+        }
+
+    monkeypatch.setattr(gate, "fragmentation_verdict", fake_verdict)
+    return seen_type_counts
+
+
 def test_fragmentation_pause_precedes_sufficiency_mastery_and_culmination(
     monkeypatch,
 ):
     calls: list[str] = []
     mined = _types()
     _preserve_inventory(monkeypatch)
+    _stub_fragmentation_verdict(monkeypatch)
     monkeypatch.setattr(
         g,
         "_mine_types_from_inventory_via_api",
@@ -157,41 +180,12 @@ def test_fragmentation_pause_precedes_sufficiency_mastery_and_culmination(
     }
 
 
-def test_generation_gate_uses_parent_count_for_expanded_leaf_inventory(
-    monkeypatch,
-):
-    checkpoint = _question_inventory_checkpoint(count=31)
-    checkpoint["question_task_inventory"]["source_contract"] = {
-        "parent_task_count": 26,
-    }
-    mined = _types(24)
-    _preserve_inventory(monkeypatch)
-    monkeypatch.setattr(
-        g,
-        "_mine_types_from_inventory_via_api",
-        lambda **_kwargs: copy.deepcopy(mined),
-    )
-    monkeypatch.setattr(
-        g,
-        "_consolidate_semantic_types_via_api",
-        lambda current, **_kwargs: copy.deepcopy(current),
-    )
-
-    with pytest.raises(semantic_recovery.HumanDecisionRequired) as caught:
-        _run_pre_final(checkpoint=checkpoint, emitted=[])
-
-    pending = caught.value.pending_decision
-    assert pending["item"]["type_title"] == (
-        "24 Types for 26 parent tasks (31 leaf QIDs)"
-    )
-    assert pending["evidence"][0]["text"].startswith("24/26 (92.3%)")
-
-
 def test_fragmentation_resume_runs_downstream_once_then_promotes_checkpoint(
     monkeypatch,
 ):
     mined = _types()
     _preserve_inventory(monkeypatch)
+    _stub_fragmentation_verdict(monkeypatch)
     monkeypatch.setattr(
         g,
         "_mine_types_from_inventory_via_api",
@@ -306,6 +300,7 @@ def test_consolidation_resume_feeds_only_accepted_taxonomy_downstream(
 ):
     mined = _types()
     _preserve_inventory(monkeypatch)
+    _stub_fragmentation_verdict(monkeypatch)
     monkeypatch.setattr(
         g,
         "_mine_types_from_inventory_via_api",
@@ -393,6 +388,7 @@ def test_failed_authorized_type_pair_checkpoints_then_requires_fresh_decision(
 ):
     mined = _types()
     _preserve_inventory(monkeypatch)
+    _stub_fragmentation_verdict(monkeypatch)
     monkeypatch.setattr(
         g,
         "_mine_types_from_inventory_via_api",
@@ -473,6 +469,11 @@ def test_request_started_type_checkpoint_consumes_ready_authorization():
             inventory=_inventory(),
             mined_types=mined,
             meta={"subject": "History", "chapter_title": "Chapter"},
+            verdict={
+                "fragmented": True,
+                "rationale": "One Type per source question.",
+                "review_flags": [],
+            },
         )
     pending = caught.value.pending_decision
     base_mined = copy.deepcopy(mined)
@@ -551,6 +552,7 @@ def test_still_fragmented_human_consolidation_pauses_before_downstream_work(
 ):
     mined = _types()
     _preserve_inventory(monkeypatch)
+    _stub_fragmentation_verdict(monkeypatch)
     monkeypatch.setattr(
         g,
         "_mine_types_from_inventory_via_api",

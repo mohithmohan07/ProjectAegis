@@ -17,22 +17,10 @@ from tests.conftest import convert_concept_upload, stream_events, stream_result
 
 
 def _use_specific_dry_learner_analysis(monkeypatch):
-    monkeypatch.setattr(
-        build_concepts.concept_refiner,
-        "_fallback_misconception",
-        lambda title: (
-            f"Students may believe the description of {title} guarantees the "
-            "same result in every context."
-        ),
-    )
-    monkeypatch.setattr(
-        build_concepts.concept_refiner,
-        "_fallback_error_analysis",
-        lambda title: (
-            f"Students may reverse a stated relationship while applying "
-            f"{title} to an example."
-        ),
-    )
+    # The deterministic learner-analysis fallbacks are deleted (filler is
+    # never synthesized); dry rows simply carry whatever analysis their
+    # fixtures author. Kept as a no-op seam so callers stay explicit.
+    del monkeypatch
 
 
 def test_filename_source_fallback_cannot_create_fake_delimited_sources():
@@ -958,7 +946,9 @@ def test_upload_workbook_failure_rolls_back_new_concepts(
         "concept_title": marker,
         "concept_details": (
             "Description: Learners apply a complete, source-grounded "
-            "procedure accurately. // Misconception/ Error Analysis: "
+            "procedure accurately.\nAchieving Mastery: Carrying out the "
+            "full stated procedure without skipping a required step. // "
+            "Misconception/ Error Analysis: "
             "Misconceptions: Students may believe every procedure uses the "
             "same sequence of steps.; Error Analysis: Students may omit a "
             "required step while applying the stated procedure."

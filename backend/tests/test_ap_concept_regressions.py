@@ -156,6 +156,40 @@ The nth-position rule gives a term directly.
 """
 
 
+def _fake_authored_culminations(records: list[dict]) -> list[dict]:
+    """Test stand-in for the model-authored culmination pass.
+
+    Production never synthesizes culmination rows from code any more; this
+    fixture plays the model's role by appending one authored culmination to
+    every multi-concept topic.
+    """
+    out: list[dict] = []
+    topics: dict[str, list[dict]] = {}
+    order: list[str] = []
+    for rec in records:
+        topic = rec.get("topic", "")
+        if topic not in topics:
+            topics[topic] = []
+            order.append(topic)
+        if not g.cr.is_culmination(rec.get("concept_title", "")):
+            topics[topic].append(rec)
+    for topic in order:
+        out.extend(topics[topic])
+        if len(topics[topic]) < 2:
+            continue
+        out.append({
+            "topic": topic,
+            "parent_concept": "Culmination",
+            "concept_title": f"Culmination - {topic}",
+            "concept_details": (
+                f"Description: An authored consolidation tying {topic}'s "
+                "concepts together into one applied account."
+            ),
+            "keywords": "culmination, recap, mixed application",
+        })
+    return out
+
+
 def _row(topic: str, title: str, *, evidence: str = "") -> dict:
     return {
         "topic": topic,
@@ -219,6 +253,9 @@ def test_source_topic_excerpts_group_structural_sections_under_main_topic():
         "Arithmetic Progressions",
         "nth Term of an AP",
         "Sum of First n Terms of an AP",
+        # The numbered 5.5 Summary section is structure the model sees;
+        # whether its recap contributes concepts is the model's judgment.
+        "Summary",
     ]
     nth_excerpt = groups[1]["excerpt"]
     assert "HEADING PATH: Example 3" in nth_excerpt
@@ -227,8 +264,10 @@ def test_source_topic_excerpts_group_structural_sections_under_main_topic():
     assert "A sum of ₹1000 is invested" in nth_excerpt
     assert "flower bed" in nth_excerpt
     assert "Example 3" not in groups[0]["excerpt"]
-    assert all(
-        "A Note to the Reader" not in group["excerpt"] for group in groups)
+    # Editorial postscripts are no longer withheld from the model (§3 purge):
+    # the note rides in its structurally owning topic's excerpt.
+    assert any(
+        "A Note to the Reader" in group["excerpt"] for group in groups)
 
 
 def test_exact_source_evidence_places_audited_ap_concepts_semantically():
@@ -317,8 +356,11 @@ def test_exact_source_evidence_places_audited_ap_concepts_semantically():
         ),
         "Using the Sum Formula in Problems": "Sum of First n Terms of an AP",
         "Ambiguous Shared Evidence": "Model-selected Topic",
+        # The "A Note to the Reader" postscript physically follows the 5.5
+        # Summary section; with the heading vocabulary purged its text lives
+        # in the Summary excerpt, so exact evidence grounds the row there.
         "Arithmetic Mean as the Middle Term of Three Numbers in AP": (
-            "Arithmetic Progressions"
+            "Summary"
         ),
         "Anchored Method": "Anchor-authoritative Topic",
     }
@@ -389,7 +431,14 @@ def test_ap_gpt_first_inventory_backfills_missed_examples_and_exercises(
 
     assert calls["count"] > 0
     assert inventory["stats"]["worked_examples"] == 16
-    assert inventory["stats"]["exercise_questions"] == 6
+    # Backfilled list items carry the neutral parse-time kind (§3 purge);
+    # the outline/page model verdict owns the exercise split, so the
+    # deterministic stats count them as subjective items, not exercises.
+    assert inventory["stats"]["exercise_questions"] == 0
+    assert sum(
+        item["source_kind"] == "intext_question"
+        for item in inventory["items"]
+    ) == 6
     assert inventory["stats"]["total_inventory_items"] == 22
     assert all(
         item["raw_solution_or_answer"] == ""
@@ -504,6 +553,10 @@ def test_ap_method_anchors_force_skeleton_retry_and_survive(monkeypatch):
     calls = {"count": 0}
 
     def fake_openai(system, user, **kwargs):
+        if "audit a concept-skeleton extraction" in system:
+            # The per-chunk audit is a separate advisory verdict with its own
+            # regressions; this test isolates the method-anchor retry.
+            return {"coverage": "complete", "grain": "sound", "reason": ""}
         calls["count"] += 1
         if calls["count"] == 1:
             return {"rows": [_api_row(record) for record in base]}
@@ -714,6 +767,8 @@ def test_anchor_retry_prefers_tagged_duplicate_concept_row(monkeypatch):
     calls = {"count": 0}
 
     def fake_openai(system, user, **kwargs):
+        if "audit a concept-skeleton extraction" in system:
+            return {"coverage": "complete", "grain": "sound", "reason": ""}
         calls["count"] += 1
         return {"rows": [_api_row(first if calls["count"] == 1 else retry)]}
 
@@ -754,6 +809,8 @@ def test_focused_method_recovery_restores_anchor_after_broad_retry_omits_it(
     calls: list[tuple[str, str]] = []
 
     def fake_openai(system, user, **kwargs):
+        if "audit a concept-skeleton extraction" in system:
+            return {"coverage": "complete", "grain": "sound", "reason": ""}
         calls.append((system, user))
         if len(calls) <= 2:
             return {"rows": [_api_row(untagged)]}
@@ -804,6 +861,8 @@ def test_focused_method_recovery_fails_clearly_after_malformed_responses(
     calls = {"count": 0}
 
     def fake_openai(system, user, **kwargs):
+        if "audit a concept-skeleton extraction" in system:
+            return {"coverage": "complete", "grain": "sound", "reason": ""}
         calls["count"] += 1
         if calls["count"] <= 2:
             return {"rows": [_api_row(untagged)]}
@@ -1004,7 +1063,7 @@ def test_pipeline_restores_skeleton_method_rows_before_content_passes(
         lambda **kwargs: {"types": []})
     monkeypatch.setattr(
         g, "_build_culminations_via_api",
-        lambda records, **kwargs: g._ensure_culmination_rows(records))
+        lambda records, **kwargs: _fake_authored_culminations(records))
     monkeypatch.setattr(
         g, "_repair_records_via_api",
         lambda records, **kwargs: records)
@@ -1221,7 +1280,7 @@ def test_cross_topic_split_sends_unattributed_qids_to_the_later_topic():
     ]
 
 
-def test_mathpix_latex_topic_wrappers_share_one_source_topic_key(monkeypatch):
+def test_mathpix_latex_topic_wrappers_share_one_source_topic_key():
     variants = [
         "Sum of First $ n $ Terms",
         r"Sum of First \boldsymbol{n} Terms",
@@ -1236,40 +1295,13 @@ def test_mathpix_latex_topic_wrappers_share_one_source_topic_key(monkeypatch):
         {"heading": variants[0], "body": "", "heading_level": 2},
         {"heading": "Solution", "body": "", "heading_level": 2},
     ]
+    # Without numbered structure, the fallback keeps "Solution" as its own
+    # structural heading (§3 purge) — no vocabulary folds it into the main
+    # topic; the semantic outline owns that call in production.
     assert [topic for topic, _ in g._sections_with_source_topics(sections)] == [
-        variants[2], variants[2],
+        variants[2], "Solution",
     ]
 
-    records = [_row(variants[2], "Adding a Finite Sequence")]
-    mined = {"types": [{
-        "type_id": "TYPE-0001",
-        "type_title": "Finding a Finite Sum",
-        "topic_match_hint": variants[1],
-        "source_question_ids": ["QINV-0001"],
-        "case_prompts": [{
-            "case_title": "Number of terms is given",
-            "examples": [{
-                "source_question_id": "QINV-0001",
-                "example_prompt": "Find the finite sum for the stated terms.",
-            }],
-        }],
-    }]}
-
-    def fake_assignment(system, user, **kwargs):
-        assert '"allowed_concept_ids": ["CONCEPT-0001"]' in user
-        return {"assignments": [{
-            "concept_id": "CONCEPT-0001",
-            "type_ids": ["TYPE-0001"],
-        }]}
-
-    monkeypatch.setattr(g, "_openai_json", fake_assignment)
-    out = g._assign_mined_types_via_api(
-        records, meta=g._metadata(subject="Mathematics"), mined_types=mined)
-
-    # The LaTeX-wrapped topic_match_hint resolved to the plain-text record
-    # topic (the fake asserts the allowed-candidate scoping above), and the
-    # Type landed on that record.
-    assert "Finding a Finite Sum" in out[0]["concept_details"]
     prose_anchor = {
         "anchor_id": "METHOD-ABCDEF1234",
         "topic_hint": variants[0],
@@ -1302,51 +1334,6 @@ def test_method_anchor_topic_is_restored_after_topic_restructuring():
 
     assert out[0]["topic"] == "nth Term of an AP"
     assert g._method_anchor_covered(out, anchor)
-
-
-def test_type_assignment_rejects_wrong_ap_source_topic(monkeypatch):
-    records = [
-        _row("Arithmetic Progressions", "Common Difference"),
-        _row("Sum of First n Terms of an AP", "Applying the Sum Formula"),
-    ]
-    mined = {"types": [{
-        "type_id": "TYPE-0001",
-        "type_title": "Finding a Finite AP Sum",
-        "topic_match_hint": "Sum of First n Terms of an AP",
-        "source_question_ids": ["QINV-0001"],
-        "case_prompts": [{
-            "case_title": "First term, difference, and number of terms given",
-            "examples": [{
-                "source_question_id": "QINV-0001",
-                "example_prompt": "Find the sum of 2, 7, 12, ... to 10 terms.",
-            }],
-        }],
-    }]}
-    calls = {"count": 0}
-
-    def fake_assignment(system, user, **kwargs):
-        calls["count"] += 1
-        assert '"allowed_concept_ids": ["CONCEPT-0002"]' in user
-        if calls["count"] == 1:
-            return {"assignments": [{
-                "concept_id": "CONCEPT-0001",
-                "type_ids": ["TYPE-0001"],
-            }]}
-        return {"assignments": [{
-            "concept_id": "CONCEPT-0002",
-            "type_ids": ["TYPE-0001"],
-        }]}
-
-    monkeypatch.setattr(g, "_openai_json", fake_assignment)
-    out = g._assign_mined_types_via_api(
-        records, meta=g._metadata(subject="Mathematics"),
-        mined_types=mined, max_attempts=2)
-
-    # The accepted retry has one legal source-topic destination, so it is
-    # deterministically certified without an unnecessary second API review.
-    assert calls["count"] == 2
-    assert "Finding a Finite AP Sum" not in out[0]["concept_details"]
-    assert "Finding a Finite AP Sum" in out[1]["concept_details"]
 
 
 def test_numbered_main_section_chapter_title_exception_is_explicit_in_prompts():
@@ -1483,8 +1470,10 @@ def test_representative_mathpix_ocr_edges_keep_topics_and_visual_questions():
     anchors = g._source_task_anchors(sections)
     assert len(anchors) == 2
     assert all(anchor["raw_solution_or_answer"] == "" for anchor in anchors)
+    # List items carry the neutral parse-time kind (§3 purge).
     optional = next(
-        anchor for anchor in anchors if anchor["source_kind"] == "exercise")
+        anchor for anchor in anchors
+        if anchor["source_kind"] == "intext_question")
     assert optional["topic_hint"] == "General Term"
     assert optional["requires_visual"] is True
     assert optional["image_urls"] == [
@@ -1527,7 +1516,7 @@ def test_concept_pipeline_reports_progress_after_skeleton(monkeypatch):
         lambda **kwargs: {"types": []})
     monkeypatch.setattr(
         g, "_build_culminations_via_api",
-        lambda records, **kwargs: g._ensure_culmination_rows(records))
+        lambda records, **kwargs: _fake_authored_culminations(records))
     monkeypatch.setattr(
         g, "_repair_records_via_api",
         lambda records, **kwargs: records)

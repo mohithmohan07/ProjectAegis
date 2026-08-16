@@ -579,69 +579,6 @@ def test_dedupe_rebuild_keeps_cross_topic_type_identity_on_resume():
     )
 
 
-def test_salvage_rebuild_keeps_cross_topic_type_identity_on_resume():
-    mazzini = (
-        "Write a short note on Giuseppe Mazzini and his role in Young Italy."
-    )
-    cavour = (
-        "Write a short note on Count Camillo de Cavour and Italian "
-        "unification."
-    )
-    records = [
-        {
-            "topic": "The Revolutionaries",
-            "parent_concept": "Revolutionary nationalism",
-            "concept_title": "Giuseppe Mazzini and Young Italy",
-            "concept_details": (
-                "Description: Mazzini organised revolutionary nationalism. "
-                "// Types: Type 01: Writing a concise historical note "
-                "Case 01: Revolutionary organiser Example 01: " + mazzini
-            ),
-            "keywords": "Mazzini",
-            "_origin_type_id": ["TYPE-SHARED-NOTE"],
-        },
-        {
-            "topic": "Italy Unified",
-            "parent_concept": "Italian unification",
-            "concept_title": "Cavour and Piedmont-Sardinia",
-            "concept_details": (
-                "Description: Cavour used diplomacy for unification. "
-                "// Types: Type 01: Writing a concise historical note "
-                "Case 01: Diplomatic architect Example 01: " + cavour
-                + " Type 02: Interpreting a source Case 01: Stub "
-                "Example 01: x"
-            ),
-            "keywords": "Cavour",
-            "_origin_type_id": ["TYPE-SHARED-NOTE", "TYPE-STUB"],
-        },
-    ]
-    inventory = _inventory(
-        _item("QINV-0001", mazzini, topic="The Revolutionaries"),
-        _item("QINV-0002", cavour, topic="Italy Unified"),
-    )
-
-    rendered = cr.renumber_types_continuously(records)
-    salvaged = g._salvage_short_case_examples(
-        rendered, inventory=inventory)
-    resumed = cr.renumber_types_continuously(copy.deepcopy(salvaged))
-    resumed = cr.renumber_types_continuously(copy.deepcopy(resumed))
-
-    assert "Type 01: Writing a concise historical note" in resumed[0][
-        "concept_details"
-    ]
-    assert "Case 01: Revolutionary organiser" in resumed[0][
-        "concept_details"
-    ]
-    assert "Type 01: Writing a concise historical note" in resumed[1][
-        "concept_details"
-    ]
-    assert "Case 02: Diplomatic architect" in resumed[1][
-        "concept_details"
-    ]
-    assert "Interpreting a source" not in resumed[1]["concept_details"]
-    assert all("_origin_type_id" not in record for record in resumed)
-
-
 def test_visual_drift_audit_keeps_each_qid_on_its_own_case_route():
     first = _item(
         "QINV-0001",
@@ -1285,144 +1222,6 @@ def test_host_entailment_review_preserves_unreviewed_activity_units(
     ] == ["TYPE-0001", "TYPE-ACTIVITY"]
 
 
-def test_case_scoped_host_review_preserves_reusable_type_across_hosts(
-    monkeypatch,
-):
-    monkeypatch.setattr(g.config, "use_live_generation", lambda: True)
-    first_task = "Perform the requested method for source case one."
-    second_task = "Perform the requested method for source case two."
-    mined = {"types": [{
-        "type_id": "TYPE-0001",
-        "type_title": "Applying a Supplied Method",
-        "type_description": "Apply the method requested in each source case.",
-        "task_pattern": "Apply the requested method.",
-        "source_question_ids": ["QINV-0001", "QINV-0002"],
-        "case_prompts": [
-            {
-                "case_id": "CASE-A",
-                "case_title": "Source case one",
-                "placement_scope": "normal",
-                "examples": [{
-                    "source_question_id": "QINV-0001",
-                    "example_prompt": first_task,
-                }],
-            },
-            {
-                "case_id": "CASE-B",
-                "case_title": "Source case two",
-                "placement_scope": "normal",
-                "examples": [{
-                    "source_question_id": "QINV-0002",
-                    "example_prompt": second_task,
-                }],
-            },
-        ],
-        "topic_match_hint": "Methods",
-        "placement_scope": "normal",
-        "is_activity": False,
-    }]}
-    records = [
-        {
-            "topic": "Methods",
-            "parent_concept": "Approaches",
-            "concept_title": "Method Alpha",
-            "concept_details": "Description: Apply the first method.",
-            "keywords": "",
-        },
-        {
-            "topic": "Methods",
-            "parent_concept": "Approaches",
-            "concept_title": "Method Beta",
-            "concept_details": "Description: Apply the second method.",
-            "keywords": "",
-        },
-        {
-            "topic": "Methods",
-            "parent_concept": "Theory",
-            "concept_title": "Why the Methods Work",
-            "concept_details": (
-                "Description: Explain the assumptions shared by both methods."
-            ),
-            "keywords": "",
-        },
-    ]
-
-    def review(system, user, **kwargs):
-        if kwargs["purpose"] == "concept_mapping":
-            return {"assignments": [
-                {
-                    "concept_id": "CONCEPT-0001",
-                    "type_ids": ["TYPE-0001::CASE-A::0001"],
-                },
-                {
-                    "concept_id": "CONCEPT-0002",
-                    "type_ids": ["TYPE-0001::CASE-B::0002"],
-                },
-            ]}
-        assert kwargs["purpose"] == "concept_validation"
-        if "REUSABLE TYPES SPLIT ACROSS HOSTS" in user:
-            return {"assignments": [{
-                "type_id": "TYPE-0001",
-                "concept_id": "CONCEPT-0001",
-            }]}
-        return {"assignments": [
-            {
-                "type_id": "TYPE-0001::CASE-A::0001",
-                "concept_id": "CONCEPT-0001",
-            },
-            {
-                "type_id": "TYPE-0001::CASE-B::0002",
-                "concept_id": "CONCEPT-0002",
-            },
-        ]}
-
-    monkeypatch.setattr(g, "_openai_json", review)
-    out = g._assign_mined_types_via_api(
-        records,
-        meta=g._metadata(subject="General"),
-        mined_types=mined,
-        max_attempts=1,
-    )
-
-    hosts = mined[g._PLACEMENT_CERTIFICATIONS_KEY]["hosts"]
-    assert hosts["QINV-0001"]["concept"] == "Method Alpha"
-    assert hosts["QINV-0002"]["concept"] == "Method Beta"
-    assert sum(
-        "Applying a Supplied Method" in row["concept_details"]
-        for row in out
-    ) == 2
-    alpha = next(
-        row for row in out if row["concept_title"] == "Method Alpha")
-    beta = next(
-        row for row in out if row["concept_title"] == "Method Beta")
-    assert first_task in alpha["concept_details"]
-    assert second_task not in alpha["concept_details"]
-    assert second_task in beta["concept_details"]
-    assert first_task in g._types_body(out[0]["concept_details"])
-    assert second_task in g._types_body(out[1]["concept_details"])
-    # No blanket Type is created for a theory-only sibling with no source qid.
-    assert not g._has_meaningful_types(out[2]["concept_details"])
-    assert not g._placement_certification_violations(
-        out,
-        _inventory(
-            _item("QINV-0001", first_task),
-            _item("QINV-0002", second_task),
-        ),
-        mined,
-    )
-    strict_report = cv.validate_concept_rows(
-        out,
-        allow_types=True,
-        require_culmination=False,
-        allow_culmination=True,
-        allowed_source_examples=(first_task, second_task),
-        strict_type_hierarchy=True,
-    )
-    assert "duplicate_type_definition" not in {
-        error["code"] for error in strict_report["errors"]
-    }
-
-
 def test_reusable_type_hosts_remain_distinct_without_convergence_review(
     monkeypatch,
 ):
@@ -1651,7 +1450,7 @@ def test_reusable_type_identity_preserves_mathematical_operators():
         result[1]["concept_details"])
 
 
-def test_culmination_title_uses_only_its_topic_and_has_no_synthetic_type():
+def test_merged_culmination_keeps_authored_title_and_sheds_types():
     normal = {
         "topic": "Opening Patterns",
         "parent_concept": "Patterns",
@@ -1671,7 +1470,12 @@ def test_culmination_title_uses_only_its_topic_and_has_no_synthetic_type():
     }
     result = g._merge_culmination_rows([normal], [authored])
     culmination = result[-1]
-    assert culmination["concept_title"] == "Culmination - Opening Patterns"
+    # The model-authored title survives — no deterministic rebuild — while
+    # Types on the fresh culmination are still stripped (mechanics: Types
+    # land after the dedicated placement pass).
+    assert culmination["concept_title"] == (
+        "Culmination - Later Definition and Testing"
+    )
     assert "Types:" not in culmination["concept_details"]
 
 
@@ -1684,8 +1488,11 @@ def test_parent_question_with_independent_looking_subparts_remains_atomic():
         "(b) The second application\n"
     )
     anchors = g._source_task_anchors(sections)
+    # Parse-time list items carry the neutral kind (§3 purge); the
+    # outline/page model verdict owns the exercise-vs-intext split.
     exercise = [
-        item for item in anchors if item.get("source_kind") == "exercise"
+        item for item in anchors
+        if item.get("source_kind") == "intext_question"
     ]
     assert len(exercise) == 1
     assert "(a)" in exercise[0]["raw_task"]
