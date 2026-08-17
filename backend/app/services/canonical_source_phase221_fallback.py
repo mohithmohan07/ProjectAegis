@@ -45,7 +45,11 @@ from . import progress
 # Part of every transcription cache key: bump on any material change to the
 # extraction/verification contract so sealed pages re-derive under the new
 # rules instead of replaying stale judgments.
-FALLBACK_VERSION = "2.3.2"
+# 2.4.0: the page-extraction contract records dropped furniture — each
+# omitted running header/footer/page number ships verbatim in the page's
+# ``dropped_furniture`` (R4: dropped and listed as dropped, with what it
+# said). Bumped so cached transcriptions without the record are re-read.
+FALLBACK_VERSION = "2.4.0"
 FALLBACK_COMPILER = "gpt-pdf-to-acsd-2"
 FALLBACK_ORIGIN = "gpt_pdf_acsd_fallback"
 # The marker written into the rendered MMD header. Deliberately distinct
@@ -341,9 +345,16 @@ def extraction_schema(pages: list[PdfPage]) -> dict[str, Any]:
                                 "type": "array",
                                 "items": _block_schema(),
                             },
+                            "dropped_furniture": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
                             "confidence": {"type": "number"},
                         },
-                        "required": ["page_id", "blocks", "confidence"],
+                        "required": [
+                            "page_id", "blocks", "dropped_furniture",
+                            "confidence",
+                        ],
                         "additionalProperties": False,
                     },
                 }
@@ -397,7 +408,10 @@ may be incomplete. Return every meaningful textbook block in exact visual
 reading order. Never paraphrase, summarise, complete, or infer unseen wording.
 Verbatim includes the source's own printed spelling errors — never silently
 correct a typo the page visibly carries.
-Omit only repeated running headers, footers, and bare page numbers.
+Omit only repeated running headers, footers, and bare page numbers — and
+return every line you omit VERBATIM in the page's dropped_furniture array,
+so nothing is dropped without a record of what it said. A page with no
+omitted furniture returns an empty dropped_furniture array.
 
 Block rules:
 - heading: preserve the complete visible heading and hierarchy level.
@@ -470,7 +484,12 @@ linked_visual_orders/linked_context_orders belong to task blocks alone — an
 illustrative figure beside prose or poetry needs only its tight bbox and its
 exact visible caption, and must never be rejected for missing ownership
 links or any field the contract does not define for its kind. A candidate's
-review_flags field is Aegis bookkeeping — ignore it. Canonical
+review_flags field is Aegis bookkeeping — ignore it. A page's
+dropped_furniture array is the contract's verbatim record of omitted
+repeated running headers, footers, and bare page numbers: judge only that
+the listed lines are genuinely such furniture — never demand they return
+as blocks, and reject a candidate that silently omitted furniture without
+listing it there. Canonical
 [Katex] ... [/Katex] wrapping of visibly printed mathematics IS the
 contract's required wire format — never reject it as invented markup or an
 extraction artifact; judge only whether the wrapped content matches the
@@ -636,7 +655,10 @@ def _tokens(value: str) -> set[str]:
 # decide the chapter title, the topic outline, and per-task question
 # boundaries; deterministic code only validates references and compiles.
 
-OUTLINE_VERSION = "chapter-outline-7"
+# chapter-outline-8: the judge also rules each whole task's KIND —
+# question / activity / info_hub — so the inventory's source_kind is a
+# model verdict, never a label vocabulary (Rule 1; §4 Phase 1.2).
+OUTLINE_VERSION = "chapter-outline-8"
 # The MMD rendering shape, independent of the extraction contract: bumped
 # when the renderer changes what the same page ACSD looks like as MMD (so
 # already-converted sources are recognized as stale) without invalidating
@@ -837,8 +859,16 @@ def _outline_schema() -> dict[str, Any]:
                         "properties": {
                             "page_id": {"type": "string"},
                             "reading_order": {"type": "integer"},
+                            "task_kind": {
+                                "type": "string",
+                                "enum": [
+                                    "question", "activity", "info_hub",
+                                ],
+                            },
                         },
-                        "required": ["page_id", "reading_order"],
+                        "required": [
+                            "page_id", "reading_order", "task_kind",
+                        ],
                         "additionalProperties": False,
                     },
                 },
@@ -921,6 +951,21 @@ your judgment IS the structure.
    question the chapter silently loses, so walk the digest and rule on each
    one. A task that is a single question, an activity, or a table to
    complete belongs here.
+   For each whole task, also rule its task_kind from the content itself
+   (a partitioned task is always a set of questions):
+   - "question" — something the learner answers or completes for
+     assessment: a question, fill-in, match, true/false, worked example's
+     problem, write/draw instruction.
+   - "activity" — a hands-on activity, experiment, project, or classroom
+     procedure the learner performs (numbered steps, materials, an
+     observe/record flow), whatever cue the book prints.
+   - "info_hub" — enrichment that informs rather than tasks: a
+     "do you know?" box, a fact or biography box, extra information the
+     book offers beside the teaching. If such a box was transcribed as a
+     task, ruling it info_hub is how it reaches the learner as
+     enrichment instead of a question.
+   Judge by what the content asks of the learner, never by the cue word
+   alone.
 
 Return JSON per the schema. notes: anything you judged worth flagging.
 """.strip()
@@ -1155,6 +1200,13 @@ def _normalize_chapter_outline(
     # it mentions in neither is not "left whole" — it is a block nobody ruled
     # on, and the questions inside it vanish without a trace. Name them.
     ruled: set[tuple[str, int]] = set(resolved_refs)
+    # The judge's per-task KIND rulings (chapter-outline-8): a partitioned
+    # task is by definition a set of questions; whole tasks carry the
+    # model's own verdict. Only schema-known kinds are recorded — this is
+    # mechanical validation of the enum, never a reclassification.
+    ruled_kinds: dict[tuple[str, int], str] = {
+        ref: "question" for ref in resolved_refs
+    }
     for whole in candidate.get("whole_tasks") or []:
         if not isinstance(whole, dict):
             continue
@@ -1169,6 +1221,9 @@ def _normalize_chapter_outline(
             )
             continue
         ruled.add(whole_ref)
+        kind = str(whole.get("task_kind") or "").strip().lower()
+        if kind in {"question", "activity", "info_hub"}:
+            ruled_kinds.setdefault(whole_ref, kind)
     unruled = [ref for ref in _task_block_refs(page_acsd) if ref not in ruled]
 
     if not topics and not partitions:
@@ -1182,6 +1237,10 @@ def _normalize_chapter_outline(
         "chapter_title": title,
         "topics": topics,
         "task_partitions": partitions,
+        "ruled_task_kinds": [
+            [ref[0], ref[1], kind]
+            for ref, kind in sorted(ruled_kinds.items())
+        ],
         "unruled_task_refs": [list(ref) for ref in unruled],
         "notes": [
             str(note) for note in candidate.get("notes") or [] if str(note).strip()
@@ -2567,6 +2626,18 @@ def apply_page_acsd_relationships(
     Figure/context references, and applies page-local ownership links.
     """
     _scrub_page_acsd_escape_artifacts(page_acsd)
+    # R4 — the ACSD furniture ledger: every line the page transcriber
+    # omitted (repeated running headers, footers, bare page numbers) rides
+    # the canonical verbatim, so the containers projection, the coverage
+    # ledger, and the run report can list what was dropped and what it
+    # said. Pages transcribed before the record existed contribute nothing.
+    canonical["dropped_furniture"] = [
+        str(line)
+        for page in page_acsd.get("pages") or []
+        if isinstance(page, dict)
+        for line in page.get("dropped_furniture") or []
+        if str(line or "").strip()
+    ]
     figure_payload = _figure_payload_from_canonical(canonical)
     figures_by_id = {
         str(figure.get("figure_id") or ""): figure
@@ -2632,6 +2703,15 @@ def apply_page_acsd_relationships(
         ]
         for partition in outline.get("task_partitions") or []
         if isinstance(partition, dict)
+    }
+    # The outline judge's per-task kind rulings (chapter-outline-8): the
+    # model's verdict on whether a whole task is a question, an activity,
+    # or an info hub. This is the ONLY kind authority in this lane.
+    outline_task_kinds: dict[tuple[str, int], str] = {
+        (str(row[0]), int(row[1])): str(row[2])
+        for row in outline.get("ruled_task_kinds") or []
+        if isinstance(row, (list, tuple)) and len(row) == 3
+        and str(row[2]) in {"question", "activity", "info_hub"}
     }
     page_number_by_id = {
         str(page.get("page_id") or ""): int(page.get("page_number") or 0)
@@ -2799,18 +2879,44 @@ def apply_page_acsd_relationships(
             task["raw_prompt"] = verified_prompt
             task["source_label"] = label
             task["parent_source_label"] = label
-            activity = _normal(label) in {"activity", "project"}
+            # Kind authority (§4 Phase 1.2, Rule 1): the chapter-outline
+            # judge's per-task ruling is the semantic kind verdict — the
+            # retired two-word label vocabulary ({"activity","project"})
+            # no longer classifies content. A ruled activity keeps its
+            # dual identity (activity_origin) so an assessable prompt
+            # inside it also rides Types; a ruled info_hub ships as
+            # Container-02 enrichment, never a question. An unruled task
+            # keeps the neutral default with a reviewable marker; the
+            # worked-example/exercise label mapping below is the
+            # pre-existing neutral-path presentation mechanics, applied
+            # only when the model ruled "question" or never ruled.
+            ruled_kind = outline_task_kinds.get((
+                str(page.get("page_id") or ""),
+                int(block.get("reading_order") or 0),
+            ), "")
+            activity = ruled_kind == "activity"
             task["activity_origin"] = activity
             worked = bool(re.fullmatch(
                 r"(?:solved\s+)?examples?\s*\d*", _normal(label)
             ))
-            task["source_kind"] = (
-                "activity" if activity else
-                "worked_example" if worked else (
-                    "exercise"
-                    if _normal(label) in {"write in brief", "questions", "exercises"}
-                    else "checkpoint_question"
+            if activity:
+                task["source_kind"] = "activity"
+            elif ruled_kind == "info_hub":
+                task["source_kind"] = "info_hub"
+            else:
+                task["source_kind"] = (
+                    "worked_example" if worked else (
+                        "exercise"
+                        if _normal(label) in {
+                            "write in brief", "questions", "exercises",
+                        }
+                        else "checkpoint_question"
+                    )
                 )
+            task["kind_ruling"] = (
+                "chapter_outline_task_kind"
+                if ruled_kind
+                else "not_model_ruled_flagged"
             )
 
             prompt_block_id = str(prompt_source_block.get("block_id") or "")

@@ -30,6 +30,7 @@ import threading
 from typing import Any, Callable
 
 from .. import config
+from . import containers
 from . import progress, prompts
 
 POLISHING_VERSION = 2
@@ -43,9 +44,9 @@ FLAG_KEPT = "kept_original"
 
 # Hub rows (Activities / experiment tasks / info hubs) are placed as hub
 # notes, not test questions, and Phase 3.9 compares their wire text exactly —
-# never polished.
-# Kept in lockstep with ``generation._HUB_INVENTORY_KINDS`` by a drift test.
-SKIP_KINDS = frozenset({"activity", "experiment_task", "info_hub"})
+# never polished. The vocabulary is ``containers.HUB_INVENTORY_KINDS`` —
+# the single container home; a lockstep test pins every consumer to it.
+SKIP_KINDS = containers.HUB_INVENTORY_KINDS
 
 _BATCH_SIZE = 12
 

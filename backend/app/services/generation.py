@@ -30,6 +30,7 @@ from .. import bulk_import as bi
 from .. import config, models
 from . import concept_cleanup
 from . import concept_validator as cv
+from . import containers
 from . import katex_rules as kr
 from . import concept_refiner as cr
 from . import grounding_certificate
@@ -3527,9 +3528,10 @@ def _append_activity_hub(details: str, hub_text: str) -> str:
 # Inventory kinds that belong in Activity/Info Hub. Assessable prompts originating
 # in an Activity also appear in Types, while reusing the same inventory identity.
 # info_hub covers enrichment boxes (asides, "do you know?", biography boxes,
-# source excerpts): pooled and placed with the material they enrich (Step 3),
-# never treated as questions.
-_HUB_INVENTORY_KINDS = frozenset({"activity", "experiment_task", "info_hub"})
+# source excerpts): pooled and placed with the material they enrich, never
+# treated as questions. The vocabulary lives in ``containers`` (the single
+# container home); this name is a consumer alias, pinned by a lockstep test.
+_HUB_INVENTORY_KINDS = containers.HUB_INVENTORY_KINDS
 _PLACEMENT_CERTIFICATION_VERSION = 1
 _PLACEMENT_CERTIFICATIONS_KEY = "placement_certifications"
 
@@ -3978,17 +3980,73 @@ def _activity_record_matches_owner(record: dict, item: dict) -> bool:
     )
 
 
+def _figure_hub_note(figure: dict) -> str:
+    """Render one placed source figure for the Activity/Info Hub.
+
+    ``figure`` is a recorded ``_aegis_figure_placements`` entry — the
+    Phase 2.2 placement pass's stamped block_id + url + caption. The note
+    is deterministic rendering of that recorded verdict: the caption text
+    (info) followed by its canonical ``[img]`` embed.
+    """
+    caption = re.sub(r"\s+", " ", str(figure.get("caption") or "")).strip()
+    url = str(figure.get("url") or "").strip()
+    marker = caption[:100].strip(" .:-") or str(
+        figure.get("block_id") or ""
+    ).strip()
+    note = f"Figure — {marker}: {caption}".rstrip() if caption else (
+        f"Figure — {marker}: Source figure."
+    )
+    if not note.endswith((".", "!", "?")):
+        note += "."
+    if url:
+        try:
+            alt = caption or "Source figure"
+            note = f"{note} {kr.image(url, alt)}"
+        except ValueError:
+            # A non-https/malformed URL cannot ship as an embed; the
+            # caption note still records the placement.
+            pass
+    return kr.canonicalize_rich_text(note)
+
+
+def _figure_placement_markers(record: dict) -> list[dict]:
+    """The row's recorded placed-figure entries, in stable block order."""
+    markers = [
+        dict(entry)
+        for entry in record.get("_aegis_figure_placements") or []
+        if isinstance(entry, dict) and str(entry.get("block_id") or "")
+    ]
+    markers.sort(key=lambda entry: (
+        str(entry.get("block_id") or ""), str(entry.get("url") or "")
+    ))
+    return markers
+
+
 def _normalize_activity_hubs_from_inventory(
     records: list[dict], inventory: dict | None,
     mined_types: dict | None = None,
+    placements: dict | None = None,
 ) -> list[dict]:
     """Rebuild source-owned Hub notes exactly once from authoritative items.
 
-    GPT still chooses the best normal concept.  The public note itself is
-    regenerated from the source-owned inventory so a saved checkpoint cannot
-    retain answer/result prose, a stale Figure URL, or duplicated full activity
-    instructions.  Private qid markers make the compact notes auditable even
-    when two activities have similar labels.
+    The model chooses the concept; this pass only re-renders. The public
+    note itself is regenerated from the source-owned inventory so a saved
+    checkpoint cannot retain answer/result prose, a stale Figure URL, or
+    duplicated full activity instructions.  Private qid markers make the
+    compact notes auditable even when two activities have similar labels.
+
+    Binding authority (doc §4 Phase 2.2): the placement pass's verdict —
+    passed explicitly as ``placements`` ({qid: row placement}) by Assemble
+    or riding the rows as ``_aegis_hub_placements`` markers — places the
+    hub note; a hub qid the pass never ruled falls back to the question's
+    own ``_aegis_release_qids`` route (the Host pass's placement of the
+    Type-riding activity qid). A hub item that ends bound by NEITHER
+    authority is a defect: hub items have no disposition escape, so this
+    fails closed instead of silently dropping a learner's material
+    (upstream, the placement pass with its Fixer prevents this).
+    Placed figures recorded in ``_aegis_figure_placements`` are re-rendered
+    as canonical Figure notes the same way, keeping the deposit pipeline a
+    fixpoint over them.
     """
     items: list[dict] = []
     seen_qids: set[str] = set()
@@ -4001,13 +4059,32 @@ def _normalize_activity_hubs_from_inventory(
     if inventory is None or not records:
         return records
 
+    # The Phase 2.2 placement pass's verdicts: the explicit mapping from
+    # Assemble, plus the markers Assemble stamped onto the rows (which is
+    # how every later deterministic replay of this pass — deposit parity,
+    # the Refiner's parity pipeline, checkpoint restores — sees the same
+    # binding without re-threading the mapping).
+    placed_by_qid: dict[str, int] = {}
+    for index, record in enumerate(records):
+        for qid in record.get("_aegis_hub_placements") or []:
+            placed_by_qid.setdefault(str(qid).strip(), index)
+    for qid, target in (placements or {}).items():
+        qid = str(qid or "").strip()
+        if qid and isinstance(target, int) and 0 <= target < len(records):
+            placed_by_qid.setdefault(qid, target)
+
     target_by_qid: dict[str, int] = {}
-    # Under the rewritten Phase 3 the Host pass's API placement is the
-    # hub's authority: the released rows record every question's
-    # destination in _aegis_release_qids (a Culmination row included,
-    # when the house routing rules put it there).
     for item in items:
         qid = str(item.get("qid") or "").strip()
+        if qid in placed_by_qid:
+            # The pooled placement pass ruled this item; its verdict is
+            # the hub's authority ("never where the printer put it").
+            target_by_qid[qid] = placed_by_qid[qid]
+            continue
+        # Fallback: the Host pass's API placement of the question — the
+        # released rows record every question's destination in
+        # _aegis_release_qids (a Culmination row included, when the house
+        # routing rules put it there).
         bound = next(
             (
                 index
@@ -4018,6 +4095,24 @@ def _normalize_activity_hubs_from_inventory(
         )
         if bound >= 0:
             target_by_qid[qid] = bound
+
+    unbound = [
+        str(item.get("qid") or "").strip()
+        for item in items
+        if str(item.get("qid") or "").strip() not in target_by_qid
+    ]
+    if unbound:
+        # R4, fail closed: a hub item with no recorded placement has no
+        # disposition escape — dropping it silently would lose a
+        # learner's enrichment material. Stopping is recoverable.
+        raise RuntimeError(
+            "Activity/Info Hub item(s) have no recorded placement and no "
+            "disposition is available for hub items: "
+            + ", ".join(unbound[:8])
+            + ("…" if len(unbound) > 8 else "")
+            + ". The Phase 2.2 placement pass (phase3/place.py) must rule "
+            "every pooled hub item before the deposit boundary."
+        )
 
     out: list[dict] = []
     for record in records:
@@ -4033,13 +4128,20 @@ def _normalize_activity_hubs_from_inventory(
 
     for item in items:
         qid = str(item.get("qid") or "").strip()
-        target = target_by_qid.get(qid, -1)
-        if target < 0:
-            continue
+        target = target_by_qid[qid]
         note = _compact_activity_hub_note(item)
         out[target]["concept_details"] = _append_activity_hub(
             out[target].get("concept_details") or "", note)
         _mark_activity_hub_placement(out[target], item)
+
+    # Placed source figures (Phase 2.2): re-render each row's recorded
+    # figure placements as canonical Figure notes, after the item notes.
+    for record in out:
+        for figure in _figure_placement_markers(record):
+            record["concept_details"] = _append_activity_hub(
+                record.get("concept_details") or "",
+                _figure_hub_note(figure),
+            )
 
     out = _align_activity_examples_with_hubs(out, inventory)
     if out != records:
@@ -4047,11 +4149,7 @@ def _normalize_activity_hubs_from_inventory(
             progress.log(
                 f"Normalized {len(target_by_qid)}/{len(items)} source-owned "
                 "Activity/Info Hub item(s).",
-                level=(
-                    "success"
-                    if len(target_by_qid) == len(items)
-                    else "warning"
-                ),
+                level="success",
             )
         else:
             progress.log(
@@ -4104,6 +4202,9 @@ def _hub_inventory_contract_violations(
             _compact_activity_hub_note(items_by_qid[qid])
             for qid in tagged_qids
             if qid in items_by_qid
+        ] + [
+            _figure_hub_note(figure)
+            for figure in _figure_placement_markers(record)
         ]
         actual_body = cr.activity_hub_body(
             record.get("concept_details") or "")

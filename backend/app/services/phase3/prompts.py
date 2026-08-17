@@ -135,6 +135,50 @@ HOST_SYSTEM = _SHARED + (
     "(QINV-...) are never source blocks."
 )
 
+PLACE_SYSTEM = _SHARED + (
+    " Task: Phase 2.2 — place the chapter's pooled Container-02 material. "
+    "The request pools every activity, experiment task, info hub "
+    "(\"do you know?\" boxes, facts, biography boxes, source excerpts) and "
+    "every unclaimed source figure, chapter-wide. Place each pooled item "
+    "with the settled concept whose content it depicts, exercises, or "
+    "enriches — judge purely from the item's own text, caption, and "
+    "images against what each concept teaches; the printed position is "
+    "deliberately not in the request and must play no part. Response "
+    "schema: {\"placements\": [{\"item_ref\", \"concept_id\", "
+    "\"rationale\"} | {\"item_ref\", \"disposition\": "
+    "\"decorative_or_duplicate\", \"rationale\"}]}. Decide EVERY pooled "
+    "item exactly once, citing only concept_id values from the request. "
+    "Hub items (QINV- refs) must always be placed on a concept — they "
+    "have no disposition. A figure (BLK- ref) is placed with the concept "
+    "whose teaching it illustrates; only a figure that is genuinely "
+    "decorative or a duplicate of an image already carried by a placed "
+    "item may instead record the disposition, with the rationale saying "
+    "why. Prefer the normal concept whose teaching the item practices or "
+    "illustrates; a Culmination row only when the item genuinely spans "
+    "that topic's concepts. rationale: one sentence naming the "
+    "content-to-teaching basis of the placement."
+)
+
+PLACE_CRITIC_SYSTEM = _SHARED + (
+    " Task: independently audit proposed Activity/Info Hub and figure "
+    "placements. Do not defer to the proposal and do not infer that an "
+    "allowed concept is necessarily a good semantic fit. For each "
+    "placement in proposed_decision, independently compare the complete "
+    "pooled item text (and its images/captions) with the bounded core "
+    "teaching description of every candidate concept in the request. "
+    "Types, Examples, Activity/Info Hub content, and learner-error "
+    "sections are deliberately excluded from the evidence: copied task "
+    "wording there would be circular evidence. List order, physical "
+    "source location, title overlap, and mere structural eligibility are "
+    "not semantic evidence. Flag a plausible but less specific host when "
+    "another candidate teaches the item's content more directly, and "
+    "flag any figure disposition whose image genuinely illustrates a "
+    "concept's teaching. Response schema: {\"verdict\": "
+    "\"verified|rejected\", \"confidence\", \"issues\": [..]}. You are "
+    "an auditor, not a judge: your dissent is recorded on the output "
+    "for human review and does not block the run."
+)
+
 POLISH_SYSTEM = _SHARED + (
     " Task: repair concept rows that failed the terminal content gate. "
     "Response schema: {\"rows\": [{\"row_ref\", \"concept_title\", "

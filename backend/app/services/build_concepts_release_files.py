@@ -14,6 +14,7 @@ from openpyxl.utils import get_column_letter
 
 from .. import models
 from . import concept_run_report
+from . import containers
 from . import coverage_ledger
 from . import uploads
 from .build_concepts_release import (
@@ -553,11 +554,24 @@ def build_diagnostics_zip(job: models.UploadJob) -> bytes:
                 blocks.setdefault(block_id, block)
     _index_string_block_references(blocks, payload)
 
-    run_report = concept_run_report.build_run_report(
-        payload,
-        generation_log=job.generation_log or [],
-        generation_checkpoint=job.generation_checkpoint or {},
-    )
+    # The persisted container projections and Phase 2.2 placement snapshot
+    # (when the artifact directory holds them) let the ledger account every
+    # canonical figure block and list both lanes' verbatim dropped
+    # furniture uncapped; jobs from before these artifacts existed keep the
+    # capped job-state accounting.
+    artifact_dir = _artifact_directory(job)
+    projections = containers.load_containers(artifact_dir)
+    place_snapshot: dict[str, Any] | None = None
+    if artifact_dir is not None:
+        place_path = artifact_dir / "source.phase3-place.json"
+        if place_path.is_file():
+            try:
+                loaded = json.loads(place_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    place_snapshot = loaded
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                place_snapshot = None
+
     coverage = coverage_ledger.build_coverage_ledger(
         question_inventory=job.question_inventory or {},
         records=[
@@ -565,6 +579,14 @@ def build_diagnostics_zip(job: models.UploadJob) -> bytes:
             if isinstance(row, Mapping)
         ],
         chapter_reading=(job.question_inventory or {}).get("chapter_reading"),
+        container_projections=projections,
+        place_snapshot=place_snapshot,
+    )
+    run_report = concept_run_report.build_run_report(
+        payload,
+        generation_log=job.generation_log or [],
+        generation_checkpoint=job.generation_checkpoint or {},
+        dropped_furniture=coverage.get("dropped_furniture"),
     )
 
     buffer = io.BytesIO()

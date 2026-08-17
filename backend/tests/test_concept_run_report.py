@@ -386,3 +386,41 @@ def test_report_is_quiet_when_no_subtopic_label_was_cleared():
 
     assert report["accepted_with_risk"]["cleared_subtopic_labels"] == []
     assert "subtopic labels cleared" not in run_report.render_run_report(report)
+
+
+def test_dropped_furniture_lists_the_lines_under_their_own_heading():
+    """R4: the run report lists both lanes' dropped lines verbatim — what
+    was dropped and what it said — never a bare count."""
+    report = run_report.build_run_report(
+        _payload(issues=[]),
+        dropped_furniture={
+            "chapter_reading": ["SCIENCE 6", "Page 14"],
+            "acsd": ["NATIONALISM IN EUROPE"],
+        },
+    )
+    assert report["dropped_furniture"] == {
+        "chapter_reading": ["SCIENCE 6", "Page 14"],
+        "acsd": ["NATIONALISM IN EUROPE"],
+    }
+    rendered = run_report.render_run_report(report)
+    assert "DROPPED FURNITURE" in rendered
+    assert "[chapter_reading] SCIENCE 6" in rendered
+    assert "[chapter_reading] Page 14" in rendered
+    assert "[acsd] NATIONALISM IN EUROPE" in rendered
+
+    # A stopped run reports the same section.
+    stopped = run_report.build_run_report(
+        _payload(),
+        dropped_furniture={"chapter_reading": ["MATHS STD 4"], "acsd": []},
+    )
+    assert "[chapter_reading] MATHS STD 4" in run_report.render_run_report(
+        stopped
+    )
+
+
+def test_without_furniture_the_heading_stays_absent():
+    report = run_report.build_run_report(_payload(issues=[]))
+    assert report["dropped_furniture"] == {
+        "chapter_reading": [], "acsd": [],
+    }
+    assert "DROPPED FURNITURE" not in run_report.render_run_report(report)

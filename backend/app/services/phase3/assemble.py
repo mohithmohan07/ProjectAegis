@@ -146,18 +146,106 @@ def assemble(
     env: Mapping[str, Any],
     settled_rows: list[Mapping[str, Any]],
     host_result: Mapping[str, Any],
+    placements: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Project settled rows + host maps into release-ready rows."""
+    """Project settled rows + host maps + placements into release rows.
 
+    ``placements`` is the Phase 2.2 placement pass's output (place.py).
+    Its verdicts are stamped onto the target rows as release-audit
+    markers BEFORE the deposit pipeline runs, so the pipeline's hub
+    normalizer renders them and every later deterministic replay (the
+    deposit boundary, the Refiner's parity pipeline) sees the same
+    binding riding the rows themselves.
+    """
+
+    from . import place as place_mod
     from .. import concept_refiner as cr
 
     types, cases = _type_catalog(env)
     rows = [copy.deepcopy(dict(row)) for row in settled_rows]
+    new_rows = [
+        copy.deepcopy(dict(new_row))
+        for new_row in host_result.get("new_concepts") or []
+    ]
+    # Resolve the place pass's positional concept ids back to row objects
+    # over the SAME ordered list the pass saw ([*settled, *new_concepts]);
+    # holding object references makes the resolution independent of the
+    # culmination-preserving insert below.
+    place_result = dict(placements or {})
+    row_by_place_id = dict(zip(
+        place_mod.mint_concept_ids([*rows, *new_rows]), [*rows, *new_rows]
+    ))
+    figure_pool = {
+        str(block_id): dict(meta)
+        for block_id, meta in (place_result.get("figure_pool") or {}).items()
+        if isinstance(meta, Mapping)
+    }
+    place_flags = {
+        str(ref): [str(flag) for flag in flags]
+        for ref, flags in (place_result.get("review_flags") or {}).items()
+        if isinstance(flags, list)
+    }
+
+    def _placed_row(item_ref: str, concept_id: str) -> dict[str, Any]:
+        row = row_by_place_id.get(str(concept_id))
+        if row is None:
+            raise AssemblyError(
+                f"placement for {item_ref} names a concept that does not "
+                f"exist: {str(concept_id)[:40]}"
+                " (unreachable after fixer seam — report if hit)"
+            )
+        return row
+
+    for qid, concept_id in sorted(
+        (place_result.get("hub_placements") or {}).items()
+    ):
+        row = _placed_row(str(qid), str(concept_id))
+        marks = row.setdefault("_aegis_hub_placements", [])
+        if str(qid) not in marks:
+            marks.append(str(qid))
+            marks.sort()
+        for flag in place_flags.get(str(qid), []):
+            row.setdefault("review_flags", []).append(flag)
+
+    figure_dispositions: dict[str, dict[str, str]] = {}
+    for block_id, verdict in sorted(
+        (place_result.get("figure_placements") or {}).items()
+    ):
+        block_id = str(block_id)
+        verdict = str(verdict)
+        rationale = str(
+            (place_result.get("rationales") or {}).get(block_id) or ""
+        )
+        if verdict == place_mod.FIGURE_DISPOSITION:
+            # R4: a disposition is a recorded verdict, never a silent
+            # drop — it ships in coverage and in the place snapshot.
+            figure_dispositions[block_id] = {
+                "disposition": verdict,
+                "rationale": rationale,
+            }
+            continue
+        row = _placed_row(block_id, verdict)
+        meta = figure_pool.get(block_id) or {}
+        caption = str(meta.get("caption") or "")
+        marks = row.setdefault("_aegis_figure_placements", [])
+        for url in meta.get("urls") or [""]:
+            entry = {
+                "block_id": block_id,
+                "url": str(url),
+                "caption": caption,
+            }
+            if entry not in marks:
+                marks.append(entry)
+        marks.sort(key=lambda entry: (
+            str(entry.get("block_id") or ""), str(entry.get("url") or "")
+        ))
+        for flag in place_flags.get(block_id, []):
+            row.setdefault("review_flags", []).append(flag)
+
     # A new concept joins its topic BEFORE the topic's culmination row: the
     # culmination must stay last in its topic, and the certificate seals the
     # row order, so a downstream reorder would break the lineage.
-    for new_row in host_result.get("new_concepts") or []:
-        new_row = copy.deepcopy(dict(new_row))
+    for new_row in new_rows:
         topic = _normal(new_row.get("topic")).casefold()
         insert_at = len(rows)
         for index, row in enumerate(rows):
@@ -457,5 +545,13 @@ def assemble(
             "items": len(routed) + len(unrouted),
             "routed_qids": sorted(routed),
             "unrouted": unrouted,
+            # Phase 2.2 accounting (R4): every pooled item's verdict.
+            "hub_placements": dict(
+                place_result.get("hub_placements") or {}
+            ),
+            "figure_placements": dict(
+                place_result.get("figure_placements") or {}
+            ),
+            "figure_dispositions": figure_dispositions,
         },
     }

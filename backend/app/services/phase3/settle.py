@@ -777,7 +777,15 @@ def settle(
                     "slides from it alone (never a sliver of the parent's "
                     "text) — and its own distinct "
                     "'Achieving Mastery:' line — segments must never share "
-                    "or paraphrase one mastery sentence. State your honest "
+                    "or paraphrase one mastery sentence. "
+                    "Pedagogy/activity banners and enrichment boxes — "
+                    "'Activity', 'Project', 'do you know?', fact boxes, "
+                    "discussion prompts and the like — are NEVER concepts "
+                    "of their own: they cue an action or enrich a concept, "
+                    "and their information reaches the learner through the "
+                    "concept's Activity/Info Hub after placement, not as a "
+                    "concept row. Never keep, refine, or split a row into "
+                    "such a banner-concept. State your honest "
                     "confidence; a low-confidence decision ships flagged "
                     "for review." + rules_suffix
                 ),

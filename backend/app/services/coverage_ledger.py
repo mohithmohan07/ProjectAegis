@@ -5,14 +5,19 @@ end of a run, every item the source contained is accounted for — placed
 somewhere, or flagged with a reason — and every shipped concept carries its
 learner analysis. This module computes that accounting as a pure function of
 the durable job state (question inventory, Type/Case placement ledger,
-released records), so it can be rebuilt for any finished or stopped run and
-shipped in the diagnostics export beside the run report.
+released records, and — when available — the persisted container
+projections and Phase 2.2 placement snapshot), so it can be rebuilt for any
+finished or stopped run and shipped in the diagnostics export beside the
+run report.
 
 The ledger reports; it does not block. Mid-run gates are a separate concern
 (and the process document says what should become of them). What this makes
 impossible is *silent* incompleteness: a question, hub, figure or fragment
-that reached no output row is named here, as is a concept shipped without
-its Achieving Mastery line or Misconception/ Error Analysis section.
+that reached no output row is named here — canonical figure blocks
+included, with their placement / attachment / recorded-disposition state —
+as is a concept shipped without its Achieving Mastery line or
+Misconception/ Error Analysis section, and every dropped furniture line is
+listed with what it said (R4), never reduced to a count.
 """
 from __future__ import annotations
 
@@ -20,12 +25,14 @@ import json
 import re
 from typing import Any, Mapping
 
-LEDGER_VERSION = 1
+from . import containers
+
+LEDGER_VERSION = 2
 
 _TYPE_CASE_LEDGER_KEY = "_type_case_qid_placement_ledger"
-# Kept in lockstep with ``generation._HUB_INVENTORY_KINDS``: every pooled hub
-# kind — activities, experiment tasks, and info hubs — is accounted here.
-_HUB_KINDS = frozenset({"activity", "experiment_task", "info_hub"})
+# The pooled hub kind vocabulary lives in ``containers`` (single source);
+# this name is a consumer alias, pinned by the lockstep test.
+_HUB_KINDS = containers.HUB_INVENTORY_KINDS
 _MASTERY_MARK = "Achieving Mastery:"
 _ANALYSIS_MARK = "Misconception/ Error Analysis"
 _CULMINATION_MARK = "culmination"
@@ -40,6 +47,7 @@ def _item_rows(
     items: list[dict[str, Any]],
     placed_qids: set[str],
     records_text: str,
+    hub_placements: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for item in items:
@@ -51,8 +59,11 @@ def _item_rows(
         kind = str(item.get("source_kind") or "").strip().lower()
         channel = "hub" if kind in _HUB_KINDS else "question"
         if channel == "hub":
-            # Hub notes carry private qid markers in the released rows.
-            placed = _qid_present(qid, records_text)
+            # Hub notes carry private qid markers in the released rows; the
+            # Phase 2.2 placement snapshot is a second recorded authority.
+            placed = _qid_present(qid, records_text) or (
+                qid in hub_placements
+            )
         else:
             placed = qid in placed_qids or _qid_present(qid, records_text)
         rows.append({
@@ -85,6 +96,57 @@ def _figure_rows(
         }
         for url, qid in seen.items()
     ]
+
+
+def _figure_block_rows(
+    figure_blocks: list[Mapping[str, Any]],
+    records_text: str,
+    figure_placements: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Account for EVERY canonical figure block — the blind spot closes.
+
+    States: ``placed`` (the Phase 2.2 pass placed it on a concept — the
+    stamped row marker or the recorded placement says so),
+    ``disposition_recorded`` (the pass recorded a disposition instead —
+    never silently dropped), ``attached_to_item`` (an inventory item
+    already carries its image), ``no_image_evidence`` (the block carries
+    no extractable image URL, so no embed is possible), ``unaccounted``.
+    """
+    rows: list[dict[str, Any]] = []
+    for block in figure_blocks:
+        if not isinstance(block, Mapping):
+            continue
+        block_id = str(block.get("block_id") or "")
+        if not block_id:
+            continue
+        urls = [str(url) for url in block.get("image_urls") or [] if url]
+        claimed = [
+            str(qid) for qid in block.get("claimed_by_qids") or [] if qid
+        ]
+        verdict = figure_placements.get(block_id)
+        if verdict == containers.FIGURE_DISPOSITION:
+            status = "disposition_recorded"
+        elif verdict or _qid_present(block_id, records_text):
+            status = "placed"
+        elif claimed:
+            status = "attached_to_item"
+        elif not urls:
+            status = "no_image_evidence"
+        else:
+            status = "unaccounted"
+        rows.append({
+            "block_id": block_id,
+            "status": status,
+            "image_urls": urls,
+            "caption": str(block.get("caption") or "")[:300],
+            "claimed_by_qids": claimed,
+            "disposition": (
+                verdict
+                if status == "disposition_recorded"
+                else ""
+            ),
+        })
+    return rows
 
 
 def _learner_analysis_rows(
@@ -121,8 +183,17 @@ def build_coverage_ledger(
     question_inventory: Mapping[str, Any] | None,
     records: list[Mapping[str, Any]] | None,
     chapter_reading: Mapping[str, Any] | None = None,
+    container_projections: Mapping[str, Any] | None = None,
+    place_snapshot: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Account for every source item and every shipped concept."""
+    """Account for every source item and every shipped concept.
+
+    ``container_projections`` is the persisted ``source.containers.json``
+    (canonical figure-block evidence + verbatim furniture, both lanes);
+    ``place_snapshot`` is the Phase 2.2 placement pass's recorded output
+    (``source.phase3-place.json``). Both are optional — a legacy job
+    without them keeps the item/URL accounting.
+    """
     inventory = dict(question_inventory or {})
     rows = [row for row in (records or []) if isinstance(row, Mapping)]
     items = [
@@ -148,9 +219,41 @@ def build_coverage_ledger(
         )
     }
 
-    item_rows = _item_rows(items, placed_qids, records_text)
+    place = dict(place_snapshot or {})
+    hub_placements = dict(place.get("hub_placements") or {})
+    figure_placements = dict(place.get("figure_placements") or {})
+    projections = dict(container_projections or {})
+    figure_blocks = [
+        block
+        for block in projections.get("figure_blocks") or []
+        if isinstance(block, Mapping)
+    ]
+
+    item_rows = _item_rows(items, placed_qids, records_text, hub_placements)
     figure_rows = _figure_rows(items, records_text)
+    figure_block_rows = _figure_block_rows(
+        figure_blocks, records_text, figure_placements
+    )
     analysis_rows = _learner_analysis_rows(rows)
+
+    furniture = projections.get("furniture")
+    furniture = dict(furniture) if isinstance(furniture, Mapping) else {}
+    dropped_furniture = {
+        "chapter_reading": [
+            str(line)
+            for line in (
+                furniture.get("chapter_reading")
+                or (chapter_reading or {}).get("dropped_furniture")
+                or []
+            )
+            if str(line or "").strip()
+        ],
+        "acsd": [
+            str(line)
+            for line in furniture.get("acsd") or []
+            if str(line or "").strip()
+        ],
+    }
 
     def channel_counts(channel: str) -> dict[str, int]:
         subset = [row for row in item_rows if row["channel"] == channel]
@@ -161,6 +264,11 @@ def build_coverage_ledger(
     figures_placed = sum(
         1 for row in figure_rows if row["status"] == "placed"
     )
+    block_status_counts: dict[str, int] = {}
+    for row in figure_block_rows:
+        block_status_counts[row["status"]] = (
+            block_status_counts.get(row["status"], 0) + 1
+        )
     normal_missing = [
         row for row in analysis_rows if not row["culmination"]
     ]
@@ -172,6 +280,10 @@ def build_coverage_ledger(
             "placed": figures_placed,
             "unaccounted": len(figure_rows) - figures_placed,
         },
+        "figure_blocks": {
+            "total": len(figure_block_rows),
+            **block_status_counts,
+        },
         "released_rows": len(rows),
         "rows_missing_learner_analysis": len(analysis_rows),
         "normal_rows_missing_learner_analysis": len(normal_missing),
@@ -181,6 +293,7 @@ def build_coverage_ledger(
         summary["questions"]["unaccounted"] == 0
         and summary["hubs"]["unaccounted"] == 0
         and summary["figures"]["unaccounted"] == 0
+        and block_status_counts.get("unaccounted", 0) == 0
         and not normal_missing
     )
     reading = dict(chapter_reading or {})
@@ -190,6 +303,11 @@ def build_coverage_ledger(
         "summary": summary,
         "items": item_rows,
         "figures": figure_rows,
+        "figure_blocks": figure_block_rows,
+        # R4: the lines themselves, never a bare count. Job-state caps
+        # (400 lines / 300 chars) apply upstream; the persisted container
+        # projections carry the uncapped lines and win when present.
+        "dropped_furniture": dropped_furniture,
         "rows_missing_learner_analysis": analysis_rows,
         "chapter_reading": {
             "provenance": dict(reading.get("provenance") or {}),
@@ -222,6 +340,23 @@ def render_coverage(ledger: Mapping[str, Any]) -> str:
                 if channel.get("unaccounted") else ""
             )
         )
+    blocks = summary.get("figure_blocks") or {}
+    if blocks.get("total"):
+        lines.append(
+            "  figure blocks: "
+            + ", ".join(
+                f"{blocks.get(status, 0)} {status}"
+                for status in (
+                    "placed",
+                    "attached_to_item",
+                    "disposition_recorded",
+                    "no_image_evidence",
+                    "unaccounted",
+                )
+                if blocks.get(status)
+            )
+            + f" of {blocks['total']}"
+        )
     lines.append(
         f"  flagged for review: {summary.get('flagged_for_review', 0)}"
     )
@@ -248,4 +383,30 @@ def render_coverage(ledger: Mapping[str, Any]) -> str:
             f"    unaccounted {row.get('channel')}: {row.get('qid')}"
             + (f" [{row['flag']}]" if row.get("flag") else "")
         )
+    for row in list(ledger.get("figure_blocks") or [])[:40]:
+        if row.get("status") in {"unaccounted", "disposition_recorded"}:
+            lines.append(
+                f"    figure block {row.get('block_id')}: {row.get('status')}"
+                + (
+                    f" ({row['disposition']})"
+                    if row.get("disposition") else ""
+                )
+            )
+    furniture = ledger.get("dropped_furniture") or {}
+    furniture_lines = [
+        (lane, line)
+        for lane in ("chapter_reading", "acsd")
+        for line in furniture.get(lane) or []
+    ]
+    if furniture_lines:
+        lines.append(
+            f"  dropped furniture ({len(furniture_lines)} line(s), verbatim):"
+        )
+        for lane, line in furniture_lines[:40]:
+            lines.append(f"    [{lane}] {line}")
+        if len(furniture_lines) > 40:
+            lines.append(
+                f"    … {len(furniture_lines) - 40} more line(s) in "
+                "context/coverage_ledger.json"
+            )
     return "\n".join(lines) + "\n"

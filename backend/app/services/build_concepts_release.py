@@ -50,6 +50,12 @@ _RELEASE_AUDIT_FIELDS = frozenset({
     # acceptance ships in the release payload for the reviewer's audit and
     # is stripped before DB upload like every other audit field.
     "_fixer_accepted_codes",
+    # The Phase 2.2 placement pass's stamped verdicts (place.py): which
+    # hub qids and which source figures (block_id + url + caption) the
+    # model placed on this row. They ride the release for the reviewer's
+    # audit and are stripped before DB upload.
+    "_aegis_hub_placements",
+    "_aegis_figure_placements",
 })
 
 _UNIT_ID_RE = re.compile(

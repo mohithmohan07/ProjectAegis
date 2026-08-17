@@ -29,6 +29,48 @@ def golden_envelope():
     )
 
 
+def place_replay_provider(golden_place: dict):
+    """Answer each pooled batch with the recorded Phase 2.2 verdicts.
+
+    The recorded fixture names each hub item's destination by
+    (topic_id, concept_title); the provider resolves that pair against
+    the request's own settled_concepts payload, exactly as a recorded
+    concept_id replay would.
+    """
+
+    def provider(request: dict) -> dict:
+        by_identity = {
+            (
+                str(row.get("topic_id") or ""),
+                _normal(row.get("concept_title")).casefold(),
+            ): str(row.get("concept_id") or "")
+            for row in request.get("settled_concepts") or []
+        }
+        placements = []
+        for entry in request.get("pool") or []:
+            ref = str(entry.get("item_ref") or "")
+            recorded = (golden_place.get("hub_placements") or {}).get(ref)
+            if recorded is None:
+                recorded = (golden_place.get("figure_placements") or {}).get(
+                    ref
+                )
+            assert recorded is not None, f"no recorded placement for {ref}"
+            placements.append({
+                "item_ref": ref,
+                "concept_id": by_identity[(
+                    str(recorded.get("topic_id") or ""),
+                    _normal(recorded.get("concept_title")).casefold(),
+                )],
+                "rationale": str(
+                    recorded.get("rationale")
+                    or "replayed from the golden place fixture"
+                ),
+            })
+        return {"placements": placements}
+
+    return provider
+
+
 @pytest.fixture(scope="module")
 def replay_providers(golden_envelope):
     golden_rows = json.loads(
@@ -38,6 +80,11 @@ def replay_providers(golden_envelope):
     )["records"]
     golden_hosts = json.loads(
         (settle_golden.GOLDEN / "rne_host_maps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    golden_place = json.loads(
+        (settle_golden.GOLDEN / "rne_place.json").read_text(
             encoding="utf-8"
         )
     )
@@ -60,6 +107,7 @@ def replay_providers(golden_envelope):
         "grounding": grounding,
         "analysis": analysis,
         "host": _HostProvider(),
+        "place": place_replay_provider(golden_place),
         "critic": critic,
     }
 
@@ -91,13 +139,47 @@ def test_runner_produces_publication_ready_output(
         assert _normal(cleaned["concept_title"])
         assert cleaned["concept_details"].startswith("Description:")
 
-    # Hosted rows carry the house Types section.
+    # Hosted rows carry the house Types section. One exception is a row
+    # whose ONLY Example is an _activity_origin prompt: the Phase 2.2
+    # placement pass put that item's hub on the concept its content
+    # exercises (the Wolff-account row), and the align pass moves the
+    # assessable Example WITH its hub — the dual-role identity travels
+    # together, so the origin row keeps its route marker (audit) while
+    # the visible Example renders beside its placed hub note.
     hosted = [
         row for row in result["records"]
         if row.get("_aegis_release_type_case_routes")
     ]
     assert hosted
-    assert all("// Types:" in row["concept_details"] for row in hosted)
+    without_types = [
+        _normal(row["concept_title"]) for row in hosted
+        if "// Types:" not in row["concept_details"]
+    ]
+    assert without_types == [
+        "Educated Middle-class Leadership of Liberal-nationalist Revolutions"
+    ]
+
+    # Phase 2.2: every pooled hub item was placed by the recorded model
+    # verdict and its note renders on the placed row — the marker is the
+    # release-audit trail of that placement.
+    golden_place = json.loads(
+        (settle_golden.GOLDEN / "rne_place.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    marked: dict[str, str] = {}
+    for row in result["records"]:
+        for qid in row.get("_aegis_hub_placements") or []:
+            marked[qid] = _normal(row["concept_title"])
+            assert "Activity/Info Hub:" in row["concept_details"], qid
+    assert marked == {
+        qid: _normal(entry["concept_title"])
+        for qid, entry in golden_place["hub_placements"].items()
+    }
+    # The coverage accounting names every pooled verdict (R4).
+    assert set(result["coverage"]["hub_placements"]) == set(marked)
+    assert result["coverage"]["figure_placements"] == {}
+    assert result["coverage"]["figure_dispositions"] == {}
 
     # A second run against the same store replays every decision for free.
     calls = {"n": 0}

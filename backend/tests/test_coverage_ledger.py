@@ -187,3 +187,142 @@ def test_ledger_survives_empty_state():
     assert ledger["summary"]["questions"]["total"] == 0
     assert ledger["complete"] is True
     assert "COVERAGE" in coverage_ledger.render_coverage(ledger)
+
+
+def _projections() -> dict:
+    return {
+        "figure_blocks": [
+            {"block_id": "BLK-0002",
+             "image_urls": ["https://cdn.example.com/pinhole.jpg"],
+             "unclaimed_image_urls": ["https://cdn.example.com/pinhole.jpg"],
+             "caption": "Fig. 2 - A pinhole camera",
+             "claimed_by_qids": []},
+            {"block_id": "BLK-0003",
+             "image_urls": ["img/map.png"],
+             "unclaimed_image_urls": [],
+             "caption": "Fig. 3",
+             "claimed_by_qids": ["QINV-0001"]},
+            {"block_id": "BLK-0004",
+             "image_urls": ["https://cdn.example.com/banner.jpg"],
+             "unclaimed_image_urls": ["https://cdn.example.com/banner.jpg"],
+             "caption": "",
+             "claimed_by_qids": []},
+            {"block_id": "BLK-0005",
+             "image_urls": [],
+             "unclaimed_image_urls": [],
+             "caption": "",
+             "claimed_by_qids": []},
+            {"block_id": "BLK-0006",
+             "image_urls": ["https://cdn.example.com/lost.jpg"],
+             "unclaimed_image_urls": ["https://cdn.example.com/lost.jpg"],
+             "caption": "",
+             "claimed_by_qids": []},
+        ],
+        "furniture": {
+            "chapter_reading": ["SCIENCE 6", "Page 14"],
+            "acsd": ["NATIONALISM IN EUROPE"],
+        },
+    }
+
+
+def _place_snapshot() -> dict:
+    return {
+        "hub_placements": {"QINV-0003": "CONCEPT-0001"},
+        "figure_placements": {
+            "BLK-0002": "CONCEPT-0001",
+            "BLK-0004": "decorative_or_duplicate",
+        },
+        "rationales": {"BLK-0004": "a decorative banner"},
+    }
+
+
+def test_every_canonical_figure_block_is_accounted():
+    """The blind spot closes: placed / attached / disposition-recorded /
+    no-image-evidence / unaccounted — every canonical figure block has a
+    named state, and a genuinely unaccounted one blocks completeness."""
+    inventory = _inventory()
+    inventory["_type_case_qid_placement_ledger"]["placements"][
+        "QINV-0002.2"] = {}
+    ledger = coverage_ledger.build_coverage_ledger(
+        question_inventory=inventory,
+        records=_records(),
+        container_projections=_projections(),
+        place_snapshot=_place_snapshot(),
+    )
+    by_id = {row["block_id"]: row for row in ledger["figure_blocks"]}
+    assert by_id["BLK-0002"]["status"] == "placed"
+    assert by_id["BLK-0003"]["status"] == "attached_to_item"
+    assert by_id["BLK-0004"]["status"] == "disposition_recorded"
+    assert by_id["BLK-0004"]["disposition"] == "decorative_or_duplicate"
+    assert by_id["BLK-0005"]["status"] == "no_image_evidence"
+    assert by_id["BLK-0006"]["status"] == "unaccounted"
+    assert ledger["summary"]["figure_blocks"]["total"] == 5
+    assert ledger["summary"]["figure_blocks"]["unaccounted"] == 1
+    assert ledger["complete"] is False
+
+    rendered = coverage_ledger.render_coverage(ledger)
+    assert "figure blocks:" in rendered
+    assert "BLK-0006: unaccounted" in rendered
+    assert "BLK-0004: disposition_recorded (decorative_or_duplicate)" in (
+        rendered
+    )
+
+
+def test_hub_channel_reads_the_place_snapshot_too():
+    """A hub item the placement pass ruled counts placed even when the
+    records text carries no marker (a legacy payload shape)."""
+    inventory = {
+        "items": [
+            {"qid": "QINV-0003", "source_kind": "activity",
+             "raw_task": "A1", "image_urls": []},
+        ],
+        "_type_case_qid_placement_ledger": {"placements": {}},
+    }
+    record = {
+        "concept_title": "The Concept",
+        "concept_details": (
+            "Teaching. // Misconception/ Error Analysis: Misconceptions: x "
+            "// Achieving Mastery: does the thing."
+        ),
+    }
+    without = coverage_ledger.build_coverage_ledger(
+        question_inventory=inventory, records=[record])
+    assert without["summary"]["hubs"]["unaccounted"] == 1
+    with_place = coverage_ledger.build_coverage_ledger(
+        question_inventory=inventory, records=[record],
+        place_snapshot=_place_snapshot(),
+    )
+    assert with_place["summary"]["hubs"] == {
+        "total": 1, "placed": 1, "unaccounted": 0}
+
+
+def test_dropped_furniture_is_listed_verbatim_never_a_count():
+    ledger = coverage_ledger.build_coverage_ledger(
+        question_inventory=_inventory(),
+        records=_records(),
+        container_projections=_projections(),
+    )
+    assert ledger["dropped_furniture"] == {
+        "chapter_reading": ["SCIENCE 6", "Page 14"],
+        "acsd": ["NATIONALISM IN EUROPE"],
+    }
+    rendered = coverage_ledger.render_coverage(ledger)
+    assert "dropped furniture (3 line(s), verbatim):" in rendered
+    assert "[chapter_reading] SCIENCE 6" in rendered
+    assert "[acsd] NATIONALISM IN EUROPE" in rendered
+
+
+def test_mmd_lane_furniture_falls_back_to_job_state_lines():
+    """Without the containers artifact, the chapter-reading lines from the
+    durable job state still reach the artifact JSON — as lines."""
+    ledger = coverage_ledger.build_coverage_ledger(
+        question_inventory=_inventory(),
+        records=_records(),
+        chapter_reading={
+            "provenance": {}, "census_rows": 4,
+            "dropped_furniture": ["MATHS STD 4", "41"],
+        },
+    )
+    assert ledger["dropped_furniture"]["chapter_reading"] == [
+        "MATHS STD 4", "41",
+    ]

@@ -20,6 +20,7 @@ from . import assemble as assemble_mod
 from . import envelope as envelope_mod
 from . import host as host_mod
 from . import kernel
+from . import place as place_mod
 from . import polish as polish_mod
 from . import settle as settle_mod
 
@@ -62,18 +63,43 @@ def _snapshot_settled_rows(
         pass  # snapshotting is best-effort; the store already has decisions
 
 
+def _snapshot_place(
+    placements: Mapping[str, Any],
+    store_dir: str | Path | None,
+) -> None:
+    """Persist the Phase 2.2 placement pass's recorded output.
+
+    Written beside the decision store so the coverage ledger and the
+    diagnostics export can account every pooled item — placements and
+    recorded figure dispositions alike (R4) — long after the run.
+    """
+
+    if not store_dir:
+        return
+    import json
+
+    try:
+        path = Path(store_dir).parent / "source.phase3-place.json"
+        path.write_text(
+            json.dumps(dict(placements), ensure_ascii=False, indent=1),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass  # snapshotting is best-effort; the store already has decisions
+
+
 def run(
     env: Mapping[str, Any],
     *,
     store_dir: str | Path | None = None,
     providers: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Settle → Host → Assemble. Returns rows, maps, and coverage.
+    """Settle → Host → Place → Polish → Assemble.
 
     ``providers`` is test-only injection ({"topology", "grounding",
-    "analysis", "host", "critic", "fixer"}); production omits it and the
-    passes use their live API adapters — including the live Fixer (Q13)
-    — failing closed if no API is live.
+    "analysis", "host", "place", "critic", "fixer"}); production omits it
+    and the passes use their live API adapters — including the live Fixer
+    (Q13) — failing closed if no API is live.
     """
 
     from .. import progress
@@ -107,6 +133,24 @@ def run(
         store=store,
         fixer=injected.get("fixer"),
     )
+    # Phase 2.2 (doc §4): pool Container-02 chapter-wide and let the model
+    # place every activity, info hub, and unclaimed figure BEFORE Polish
+    # converges content — the placements ride into Assemble, which stamps
+    # them on the rows the deposit pipeline renders. An empty pool skips
+    # the pass without a decision.
+    progress.step(
+        "Phase 3 — Place: pooling Container 02 for model placement",
+        value=0.93,
+    )
+    placements = place_mod.place(
+        env,
+        [*settled, *(hosts.get("new_concepts") or [])],
+        provider=injected.get("place"),
+        critic=injected.get("critic"),
+        store=store,
+        fixer=injected.get("fixer"),
+    )
+    _snapshot_place(placements, store_dir)
     # Terminal content quality (generic analysis, verbatim Descriptions)
     # is converged BEFORE Assemble seals anything, on settled and
     # host-created rows alike; only failing rows cost a model call.
@@ -131,7 +175,7 @@ def run(
         "(deterministic)",
         value=0.96,
     )
-    assembled = assemble_mod.assemble(env, settled, hosts)
+    assembled = assemble_mod.assemble(env, settled, hosts, placements)
 
     rows = assembled["rows"]
     flagged = sum(1 for row in rows if row.get("review_flags"))

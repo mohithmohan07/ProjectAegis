@@ -1255,6 +1255,43 @@ def _store_inventory(job: models.UploadJob, artifacts: dict) -> None:
             grounding_certificate.FINAL_CERTIFICATE_FIELD
         ] = copy.deepcopy(final_grounding)
     job.question_inventory = stored
+    _store_containers(job, artifacts)
+
+
+def _store_containers(job: models.UploadJob, artifacts: dict) -> None:
+    """Persist the §4 Phase-1.2 container projections beside the run.
+
+    Pure projection of recorded verdicts (chapter-reading census, the
+    canonical + its furniture ledgers, the inventory) into
+    ``<artifact_dir>/source.containers.json`` so the views — and the
+    verbatim dropped-furniture lines of both lanes, uncapped — ship in
+    diagnostics. Best-effort: a missing canonical or artifact directory
+    never blocks the run (the projection is rebuildable from durable
+    inputs).
+    """
+    from . import canonical_source_phase2 as phase2
+    from . import containers
+
+    try:
+        canonical = phase2.active_canonical()
+        if not isinstance(canonical, dict):
+            canonical = {}
+        artifact_dir = None
+        helper = getattr(uploads, "source_artifact_directory", None)
+        if callable(helper) and getattr(job, "id", None):
+            artifact_dir = helper(int(job.id))
+        containers.persist_containers(
+            artifact_dir,
+            census=artifacts.get("chapter_reading"),
+            canonical=canonical,
+            inventory=artifacts.get("question_task_inventory") or {},
+        )
+    except Exception as exc:  # noqa: BLE001 — diagnostics must never block
+        progress.log(
+            f"Container projections were not persisted ({exc}); the "
+            "views remain rebuildable from the durable artifacts.",
+            level="warning",
+        )
 
 
 def _stable_checkpoint_value(value) -> str:

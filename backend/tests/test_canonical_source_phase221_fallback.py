@@ -764,3 +764,195 @@ def test_worked_example_task_block_classifies_as_worked_example(
     task = result["canonical"]["tasks"][0]
     assert task["source_label"] == "Example 3"
     assert task["source_kind"] == "worked_example"
+
+
+def _ruled_outline(task_kind: str) -> dict:
+    """A chapter outline with the model's per-task kind ruling attached."""
+    return {
+        "version": fallback.OUTLINE_VERSION,
+        "chapter_title": "1 Number Patterns",
+        "topics": [
+            {"title": "1 Number Patterns", "kind": "content",
+             "start_page_id": "PDF-PAGE-0001", "start_reading_order": 1},
+        ],
+        "task_partitions": [],
+        "ruled_task_kinds": [["PDF-PAGE-0002", 1, task_kind]],
+        "unruled_task_refs": [],
+        "notes": [],
+        "review_flags": [],
+    }
+
+
+def test_model_ruled_info_hub_ships_source_kind_info_hub(
+    tmp_path: Path, monkeypatch,
+):
+    """§4 Phase 1.2 / Rule 1: the ACSD lane can now capture info_hub —
+    the outline judge's task_kind ruling, never a label vocabulary,
+    assigns the kind."""
+    pdf = tmp_path / "source.pdf"
+    _make_pdf(pdf)
+    artifact_dir = tmp_path / "canonical-source"
+    monkeypatch.setenv("AEGIS_PUBLIC_BASE_URL", "https://aegis.example")
+    monkeypatch.setenv("AEGIS_SOURCE_ASSET_SECRET", "test-secret")
+    monkeypatch.setattr(fallback, "_CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(
+        fallback, "derive_chapter_outline",
+        lambda _bundle: _ruled_outline("info_hub"),
+    )
+
+    def provider(pages: list[fallback.PdfPage]) -> dict:
+        result = _verified_provider(pages)
+        for page in result["pages"]:
+            if page["page_number"] != 2:
+                continue
+            task = page["blocks"][0]
+            task["source_label"] = "Do you know?"
+        return result
+
+    result = fallback.reconstruct_pdf_to_acsd(
+        pdf,
+        job_id=53,
+        artifact_dir=artifact_dir,
+        fallback_reason=["pdf_source"],
+        provider=provider,
+    )
+
+    task = result["canonical"]["tasks"][0]
+    assert task["source_kind"] == "info_hub"
+    assert task["activity_origin"] is False
+    assert task["kind_ruling"] == "chapter_outline_task_kind"
+
+
+def test_model_ruled_activity_ships_source_kind_activity(
+    tmp_path: Path, monkeypatch,
+):
+    """A ruled activity keeps its dual identity: source_kind=activity plus
+    activity_origin, with no label list involved (the cue here is a
+    publisher word no vocabulary knows)."""
+    pdf = tmp_path / "source.pdf"
+    _make_pdf(pdf)
+    artifact_dir = tmp_path / "canonical-source"
+    monkeypatch.setenv("AEGIS_PUBLIC_BASE_URL", "https://aegis.example")
+    monkeypatch.setenv("AEGIS_SOURCE_ASSET_SECRET", "test-secret")
+    monkeypatch.setattr(fallback, "_CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(
+        fallback, "derive_chapter_outline",
+        lambda _bundle: _ruled_outline("activity"),
+    )
+
+    def provider(pages: list[fallback.PdfPage]) -> dict:
+        result = _verified_provider(pages)
+        for page in result["pages"]:
+            if page["page_number"] != 2:
+                continue
+            page["blocks"][0]["source_label"] = "Karke Dekho"
+        return result
+
+    result = fallback.reconstruct_pdf_to_acsd(
+        pdf,
+        job_id=54,
+        artifact_dir=artifact_dir,
+        fallback_reason=["pdf_source"],
+        provider=provider,
+    )
+
+    task = result["canonical"]["tasks"][0]
+    assert task["source_kind"] == "activity"
+    assert task["activity_origin"] is True
+    assert task["kind_ruling"] == "chapter_outline_task_kind"
+
+
+def test_unruled_task_keeps_the_neutral_kind_and_a_flagged_marker(
+    tmp_path: Path, monkeypatch,
+):
+    """No outline ruling -> the neutral default ships with a reviewable
+    kind_ruling marker; an 'Activity' cue word alone assigns NOTHING."""
+    pdf = tmp_path / "source.pdf"
+    _make_pdf(pdf)
+    artifact_dir = tmp_path / "canonical-source"
+    monkeypatch.setenv("AEGIS_PUBLIC_BASE_URL", "https://aegis.example")
+    monkeypatch.setenv("AEGIS_SOURCE_ASSET_SECRET", "test-secret")
+    monkeypatch.setattr(fallback, "_CACHE_DIR", tmp_path / "cache")
+
+    result = fallback.reconstruct_pdf_to_acsd(
+        pdf,
+        job_id=55,
+        artifact_dir=artifact_dir,
+        fallback_reason=["pdf_source"],
+        provider=_verified_provider,
+    )
+
+    task = result["canonical"]["tasks"][0]
+    # The printed cue IS "Activity" — under the retired vocabulary that
+    # word alone minted source_kind=activity. Unruled now stays neutral.
+    assert task["source_label"] == "Activity"
+    assert task["source_kind"] == "checkpoint_question"
+    assert task["activity_origin"] is False
+    assert task["kind_ruling"] == "not_model_ruled_flagged"
+
+
+def test_outline_normalization_records_the_task_kind_rulings():
+    page_acsd = {
+        "pdf_sha256": "abc",
+        "pages": [{
+            "page_id": "PDF-PAGE-0001",
+            "page_number": 1,
+            "blocks": [
+                {"reading_order": 1, "kind": "heading", "heading_level": 1,
+                 "text": "Light"},
+                {"reading_order": 2, "kind": "task", "source_label": "",
+                 "text": "Do you know? Light once defined the metre."},
+            ],
+        }],
+    }
+    candidate = {
+        "chapter_title": "Light",
+        "topics": [{"title": "Light", "kind": "content",
+                    "start_page_id": "PDF-PAGE-0001",
+                    "start_reading_order": 1}],
+        "task_partitions": [],
+        "whole_tasks": [{"page_id": "PDF-PAGE-0001", "reading_order": 2,
+                         "task_kind": "info_hub"}],
+        "notes": [],
+    }
+    outline, flags = fallback._normalize_chapter_outline(page_acsd, candidate)
+    assert outline is not None
+    assert flags == []
+    assert outline["ruled_task_kinds"] == [["PDF-PAGE-0001", 2, "info_hub"]]
+    assert outline["unruled_task_refs"] == []
+
+
+def test_acsd_dropped_furniture_reaches_the_canonical_verbatim(
+    tmp_path: Path, monkeypatch,
+):
+    """R4 for the ACSD lane: omitted running headers/footers/page numbers
+    ride the canonical with what they said, not merely as an omission."""
+    pdf = tmp_path / "source.pdf"
+    _make_pdf(pdf)
+    artifact_dir = tmp_path / "canonical-source"
+    monkeypatch.setenv("AEGIS_PUBLIC_BASE_URL", "https://aegis.example")
+    monkeypatch.setenv("AEGIS_SOURCE_ASSET_SECRET", "test-secret")
+    monkeypatch.setattr(fallback, "_CACHE_DIR", tmp_path / "cache")
+
+    def provider(pages: list[fallback.PdfPage]) -> dict:
+        result = _verified_provider(pages)
+        result["pages"][0]["dropped_furniture"] = ["MATHS STD 4", "14"]
+        result["pages"][1]["dropped_furniture"] = ["MATHS STD 4"]
+        return result
+
+    result = fallback.reconstruct_pdf_to_acsd(
+        pdf,
+        job_id=56,
+        artifact_dir=artifact_dir,
+        fallback_reason=["pdf_source"],
+        provider=provider,
+    )
+
+    assert result["canonical"]["dropped_furniture"] == [
+        "MATHS STD 4", "14", "MATHS STD 4",
+    ]
+    # The extraction schema itself requires the record on every page.
+    schema = fallback.extraction_schema([])
+    page_schema = schema["schema"]["properties"]["pages"]["items"]
+    assert "dropped_furniture" in page_schema["properties"]
+    assert "dropped_furniture" in page_schema["required"]

@@ -306,7 +306,14 @@ def test_hub_rows_are_never_polished():
 
 
 def test_skip_kinds_match_generations_hub_kinds():
-    assert question_polishing.SKIP_KINDS == generation._HUB_INVENTORY_KINDS
+    """The single source is containers.HUB_INVENTORY_KINDS: every consumer
+    holds the SAME frozenset object, so drift is impossible by
+    construction (identity, not equality)."""
+    from app.services import containers, coverage_ledger
+
+    assert question_polishing.SKIP_KINDS is containers.HUB_INVENTORY_KINDS
+    assert generation._HUB_INVENTORY_KINDS is containers.HUB_INVENTORY_KINDS
+    assert coverage_ledger._HUB_KINDS is containers.HUB_INVENTORY_KINDS
 
 
 def test_info_hubs_are_never_polished():
