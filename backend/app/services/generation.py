@@ -12938,6 +12938,19 @@ _FATAL_CODES = {
 }
 
 
+# Mechanics, not meaning (CLAUDE.md Rule 1, Q13): schema/ID/duplicate-identity
+# codes name defects in the artifact's *identity*, not judgment calls about
+# content. The Fixer may correct the row, but these codes are NEVER
+# acceptable-with-flag — shipping two rows with one identity, or a row with
+# no identity at all, is data corruption the reviewer cannot repair.
+_FIXER_UNACCEPTABLE_CODES = frozenset({
+    "required",              # schema: a mandatory field is absent
+    "required_parent",       # schema: row lost its parent identity
+    "duplicate_title",       # identity: two rows share one concept title
+    "duplicate_topic_concept",  # identity: duplicate (topic, concept) pair
+})
+
+
 _DIAGNOSTIC_SECRET_RE = re.compile(
     r"\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{12,}|"
     r"Bearer\s+[A-Za-z0-9._~+/=-]{12,})\b",
@@ -14571,14 +14584,36 @@ def _repair_rendered_inventory_coverage(
 def _enforce_rendered_inventory_coverage(
     records: list[dict], inventory: dict | None,
     mined_types: dict | None = None,
+    *, fixer=None, fixer_store=None,
 ) -> list[dict]:
-    """Repair coverage and hard-fail on any residual placeable defect."""
+    """Repair coverage and hard-fail on any residual placeable defect.
+
+    ``fixer`` is The Fixer seam for F18-F21 (Q13): when the deterministic
+    repair/dedupe/force-place ladder still leaves a defect, each blocked
+    QID gets one recorded placement decision before the gate may raise.
+    The default (None) keeps this function fully deterministic — the
+    assemble fixpoint pipeline and tests rely on that.
+    """
+
+    def _via_fixer(current, defect_map):
+        if fixer is None or not (
+            defect_map["missing"] or defect_map["duplicate"]
+        ):
+            return current, defect_map
+        fixed = _fix_inventory_coverage_via_fixer(
+            current, inventory, mined_types,
+            fixer=fixer, store=fixer_store,
+        )
+        return fixed, _rendered_inventory_coverage_defects(fixed, inventory)
+
     out = _repair_rendered_inventory_coverage(
         records, inventory, mined_types)
     defects = _rendered_inventory_coverage_defects(out, inventory)
     if defects["duplicate"]:
         out, _removed = _dedupe_rendered_inventory_examples(out, inventory)
         defects = _rendered_inventory_coverage_defects(out, inventory)
+    if defects["duplicate"]:
+        out, defects = _via_fixer(out, defects)
     if defects["duplicate"]:
         raise RuntimeError(
             "rendered Types failed exact inventory coverage: "
@@ -14594,6 +14629,8 @@ def _enforce_rendered_inventory_coverage(
         if defects["duplicate"]:
             out, _removed = _dedupe_rendered_inventory_examples(out, inventory)
             defects = _rendered_inventory_coverage_defects(out, inventory)
+        if defects["duplicate"] or defects["missing"]:
+            out, defects = _via_fixer(out, defects)
         if defects["duplicate"]:
             raise RuntimeError(
                 "rendered Types failed exact inventory coverage: "
@@ -14616,6 +14653,8 @@ def _enforce_rendered_inventory_coverage(
     # Culmination row included; the legacy relocation pass is retired.)
     out = _align_activity_examples_with_hubs(out, inventory)
     terminal_defects = _rendered_inventory_coverage_defects(out, inventory)
+    if terminal_defects["missing"] or terminal_defects["duplicate"]:
+        out, terminal_defects = _via_fixer(out, terminal_defects)
     if terminal_defects["missing"] or terminal_defects["duplicate"]:
         raise RuntimeError(
             "rendered Types failed exact inventory coverage after final "
@@ -15067,23 +15106,590 @@ def _rebuild_types_body(
 
 
 
+# ---------------------------------------------------------------------------
+# The Fixer seams at the terminal gates (docs/aegis-restructure.md §8.2, Q13)
+# ---------------------------------------------------------------------------
+
+
+_FIXER_FALLBACK_STORE = None
+
+
+def _phase3_fixer_store():
+    """The decision store Fixer verdicts share with the phase-3 kernel.
+
+    Directory-backed beside the run's other phase-3 decisions when an
+    artifact session is active (so a resumed or deposited run replays
+    every Fixer verdict free, and the deposit twin of a final-gate block
+    reaches the same recorded decision); process-local otherwise.
+    """
+
+    from pathlib import Path
+
+    from . import canonical_source_phase3 as phase3
+    from .phase3 import kernel as p3_kernel
+
+    session = phase3.active_session()
+    artifact_dir = (
+        session.get("artifact_dir") if isinstance(session, dict) else None
+    )
+    if artifact_dir:
+        return p3_kernel.DecisionStore(Path(artifact_dir) / "phase3-decisions")
+    global _FIXER_FALLBACK_STORE
+    if _FIXER_FALLBACK_STORE is None:
+        _FIXER_FALLBACK_STORE = p3_kernel.DecisionStore()
+    return _FIXER_FALLBACK_STORE
+
+
+def _fixer_flag_row(row: dict, flag: str) -> None:
+    """Append one Fixer review flag exactly once (replays must not stack)."""
+
+    flags = list(row.get("review_flags") or [])
+    if flag not in flags:
+        flags.append(flag)
+    row["review_flags"] = flags
+
+
+def _without_fixer_accepted(records: list[dict], errors: list[dict]) -> list[dict]:
+    """Drop validator errors whose exact (row, code) pair the Fixer accepted.
+
+    An accepted defect is a *recorded decision*, never a silent skip: the
+    acceptance lives in the row's ``_fixer_accepted_codes`` release-audit
+    field and its ``review_flags``. Mechanics codes are never dropped.
+    """
+
+    remaining: list[dict] = []
+    for error in errors:
+        index = error.get("row_index", -1)
+        code = str(error.get("code") or "")
+        row = (
+            records[index]
+            if isinstance(index, int) and 0 <= index < len(records)
+            else None
+        )
+        if (
+            row is not None
+            and code
+            and code not in _FIXER_UNACCEPTABLE_CODES
+            and code in (row.get("_fixer_accepted_codes") or [])
+        ):
+            continue
+        remaining.append(error)
+    return remaining
+
+
+def _fix_validation_failures_via_fixer(
+    records: list[dict], fatal: list[dict], *, stage: str,
+    fixer, store=None, allow_corrections: bool = True,
+) -> bool:
+    """One recorded Fixer decision per failing row at a validation gate.
+
+    The Fixer either returns corrected row content (final gate only —
+    deposit rows are certificate-sealed and cannot be rewritten) or
+    explicitly accepts the defect with a flag. Mechanics codes
+    (``_FIXER_UNACCEPTABLE_CODES``) can never be accepted. Rows the
+    Fixer cannot unblock keep their defects and the gate raises exactly
+    as before. Returns whether any row content changed.
+    """
+
+    from .phase3 import fixer as p3_fixer
+    from .phase3 import kernel as p3_kernel
+
+    store = store or _phase3_fixer_store()
+    by_row: dict[int, list[dict]] = {}
+    for error in fatal:
+        index = error.get("row_index", -1)
+        if isinstance(index, int) and 0 <= index < len(records):
+            by_row.setdefault(index, []).append(error)
+
+    def _identity(value: object) -> str:
+        return " ".join(str(value or "").split()).casefold()
+
+    changed_any = False
+    for row_index in sorted(by_row):
+        row = records[row_index]
+        errors = by_row[row_index]
+        codes = sorted({str(e.get("code") or "") for e in errors if e.get("code")})
+        mechanics = sorted(set(codes) & _FIXER_UNACCEPTABLE_CODES)
+        if not allow_corrections and mechanics:
+            # Sealed row + identity defect: nothing the Fixer may do.
+            continue
+        blocked_check = []
+        for error in errors:
+            _index, _title, field, snippet = _validation_error_context(
+                records, error)
+            blocked_check.append({
+                "code": str(error.get("code") or ""),
+                "field": field,
+                "message": _diagnostic_snippet(
+                    error.get("message"), limit=400),
+                "row_text_snippet": snippet,
+            })
+        payload = {
+            "fixer": True,
+            "stage": stage,
+            "blocked_check": blocked_check,
+            "contract": {
+                "kind": "fixer.validation",
+                "rule": (
+                    "this concept row failed the terminal validator; "
+                    "EITHER return a corrected row — {\"row\": "
+                    "{\"concept_details\", \"keywords\"}, \"rationale\"} "
+                    "— that clears the named codes while keeping the "
+                    "concept's identity (topic, parent, title) and its "
+                    "meaning, OR — only when the content is genuinely "
+                    "right as written and the code misfires on it — "
+                    "return {\"accept_with_flag\": true, \"rationale\"} "
+                    "and the row ships flagged for review"
+                    if allow_corrections
+                    else "this certificate-sealed row failed the deposit "
+                    "validator; sealed content cannot be rewritten at "
+                    "this boundary — when the content is acceptable as "
+                    "written return {\"accept_with_flag\": true, "
+                    "\"rationale\"}; otherwise return "
+                    "{\"accept_with_flag\": false, \"rationale\"} and "
+                    "the gate fails closed"
+                ),
+                "mechanics_codes_never_acceptable": sorted(
+                    _FIXER_UNACCEPTABLE_CODES
+                ),
+            },
+            "row": {
+                "topic": row.get("topic"),
+                "parent_concept": row.get("parent_concept"),
+                "concept_title": row.get("concept_title"),
+                "concept_details": row.get("concept_details"),
+                "keywords": row.get("keywords"),
+            },
+            "source_evidence": str(row.get("source_evidence") or "")[:2000],
+        }
+
+        def _check(response, *, _row=row, _mechanics=mechanics):
+            defects: list[str] = []
+            if not str(response.get("rationale") or "").strip():
+                defects.append("rationale is required")
+            accept = response.get("accept_with_flag")
+            corrected = response.get("row")
+            if accept is True:
+                if _mechanics:
+                    defects.append(
+                        "mechanics code(s) "
+                        + ", ".join(_mechanics)
+                        + " can never be accepted with a flag; return a "
+                        "corrected row instead"
+                    )
+            elif isinstance(corrected, dict):
+                if not allow_corrections:
+                    defects.append(
+                        "this boundary cannot rewrite sealed rows; only "
+                        "accept_with_flag is available"
+                    )
+                for field in ("topic", "parent_concept", "concept_title"):
+                    if field in corrected and _identity(
+                        corrected.get(field)
+                    ) != _identity(_row.get(field)):
+                        defects.append(
+                            f"the corrected row must not change {field}"
+                        )
+                if not str(corrected.get("concept_details") or "").strip():
+                    defects.append(
+                        "the corrected row must carry concept_details"
+                    )
+            elif accept is False:
+                pass  # an explicit decline; the gate fails closed
+            else:
+                defects.append(
+                    "return either {\"accept_with_flag\": true|false} or "
+                    "a corrected {\"row\": {...}} object"
+                )
+            return defects
+
+        try:
+            decision = p3_kernel.decide(
+                kind="fixer.validation",
+                unit_id=f"{stage}#row{row_index}",
+                envelope_sha256=str(
+                    row.get("_source_grounding_record_sha256") or ""
+                ),
+                payload=payload,
+                provider=fixer,
+                checker=_check,
+                store=store,
+                policy_version=p3_fixer.FIXER_POLICY_VERSION,
+            )
+        except p3_kernel.ContractError:
+            continue  # protocol impossibility: the defect stands, gate raises
+        response = decision.get("response") or {}
+        rationale = " ".join(
+            str(response.get("rationale") or "").split()
+        )[:240]
+        if response.get("accept_with_flag") is True:
+            accepted = list(row.get("_fixer_accepted_codes") or [])
+            for code in codes:
+                if code in _FIXER_UNACCEPTABLE_CODES:
+                    continue
+                if code not in accepted:
+                    accepted.append(code)
+                _fixer_flag_row(
+                    row,
+                    f"fixer: blocked={code} at {stage} validation; "
+                    f"decided=accepted with flag — {rationale}",
+                )
+            row["_fixer_accepted_codes"] = accepted
+        elif isinstance(response.get("row"), dict):
+            corrected = response["row"]
+            row["concept_details"] = str(
+                corrected.get("concept_details") or ""
+            )
+            if str(corrected.get("keywords") or "").strip():
+                row["keywords"] = str(corrected.get("keywords"))
+            for code in codes:
+                _fixer_flag_row(
+                    row,
+                    f"fixer: blocked={code} at {stage} validation; "
+                    f"decided=corrected row content — {rationale}",
+                )
+            changed_any = True
+    return changed_any
+
+
+def _fix_invalid_inventory_via_fixer(
+    records: list[dict], inventory: dict | None, invalid: list[dict], *,
+    stage: str, fixer, store=None,
+) -> list[dict]:
+    """Fixer judgment over ``invalid_source_inventory`` rows (seam F23).
+
+    Only the content-judgment reasons (``empty_task``/``stub_task`` —
+    "is this a real task or an extraction stub?" is exactly the question
+    Rule 1 forbids deciding by threshold) may be accepted-with-flag; the
+    identity reasons (missing/duplicate/typed qid) are mechanics and
+    keep failing closed. Returns the invalid rows that remain blocking.
+    """
+
+    from .phase3 import fixer as p3_fixer
+    from .phase3 import kernel as p3_kernel
+
+    acceptable_reasons = {"empty_task", "stub_task"}
+    store = store or _phase3_fixer_store()
+    items = (inventory or {}).get("items") or []
+    remaining: list[dict] = []
+    for entry in invalid:
+        reason = str(entry.get("reason") or "")
+        qid = str(entry.get("qid") or "")
+        index = entry.get("index", -1)
+        item = (
+            items[index]
+            if isinstance(index, int) and 0 <= index < len(items)
+            and isinstance(items[index], dict)
+            else None
+        )
+        if reason not in acceptable_reasons or item is None:
+            remaining.append(entry)
+            continue
+        payload = {
+            "fixer": True,
+            "stage": stage,
+            "blocked_check": [
+                f"inventory row {qid or index} is invalid ({reason}): its "
+                "task text cannot participate in the exact public "
+                "coverage contract, and the terminal gate refuses to "
+                "certify an inventory containing it"
+            ],
+            "contract": {
+                "kind": "fixer.validation",
+                "rule": (
+                    "read the row's own text and context and decide: is "
+                    "this a genuine extraction stub/banner the release "
+                    "may ship without rendering (accept_with_flag: "
+                    "true), or a real learner question that must not be "
+                    "lost (accept_with_flag: false — the run then fails "
+                    "closed so the source can be re-extracted)? "
+                    "Response schema: {\"accept_with_flag\", "
+                    "\"rationale\"}"
+                ),
+            },
+            "item": {
+                "qid": qid,
+                "source_kind": str(item.get("source_kind") or ""),
+                "raw_task": str(item.get("raw_task") or "")[:800],
+                "normalized_task": str(item.get("normalized_task") or "")[:800],
+                "polished_task": str(item.get("polished_task") or "")[:800],
+                "shared_context": str(item.get("shared_context") or "")[:800],
+            },
+        }
+
+        def _check(response):
+            defects: list[str] = []
+            if not isinstance(response.get("accept_with_flag"), bool):
+                defects.append(
+                    "accept_with_flag must be true or false"
+                )
+            if not str(response.get("rationale") or "").strip():
+                defects.append("rationale is required")
+            return defects
+
+        try:
+            decision = p3_kernel.decide(
+                kind="fixer.validation",
+                unit_id=f"inventory#{qid or index}",
+                envelope_sha256="",
+                payload=payload,
+                provider=fixer,
+                checker=_check,
+                store=store,
+                policy_version=p3_fixer.FIXER_POLICY_VERSION,
+            )
+        except p3_kernel.ContractError:
+            remaining.append(entry)
+            continue
+        response = decision.get("response") or {}
+        if response.get("accept_with_flag") is not True:
+            remaining.append(entry)
+            continue
+        rationale = " ".join(
+            str(response.get("rationale") or "").split()
+        )[:240]
+        host_index = 0
+        if records:
+            best = _best_record_index_for_inventory_item(records, item)
+            if isinstance(best, int) and 0 <= best < len(records):
+                host_index = best
+        if records:
+            _fixer_flag_row(
+                records[host_index],
+                f"fixer: blocked=invalid inventory row {qid or index} "
+                f"({reason}); decided=accepted with flag — {rationale}",
+            )
+    return remaining
+
+
+def _fix_inventory_coverage_via_fixer(
+    records: list[dict], inventory: dict | None,
+    mined_types: dict | None = None, *, fixer, store=None,
+) -> list[dict]:
+    """Place every unhoused QID by one recorded Fixer decision (R4).
+
+    Seams F18-F21/F24/F38: exact-once coverage is the central R4
+    collision — a question the mechanics cannot place must be PLACED by
+    judgment, never dropped. One decision per QID (unit_id = the QID):
+    the Fixer reads the question's full wording against the concept rows
+    and names the host; the existing force-place helper is the apply
+    mechanism. A duplicate render gets one decision naming the canonical
+    placement; mechanics remove only the extra renders — the QID stays
+    placed exactly once. QIDs the Fixer cannot place keep their defects
+    and the caller raises exactly as before.
+    """
+
+    from .phase3 import fixer as p3_fixer
+    from .phase3 import kernel as p3_kernel
+
+    store = store or _phase3_fixer_store()
+    defects = _rendered_inventory_coverage_defects(records, inventory)
+    if not defects["missing"] and not defects["duplicate"]:
+        return records
+    out = [dict(record) for record in records]
+    items_by_qid = {
+        (item.get("qid") or "").strip(): item
+        for item in (inventory or {}).get("items") or []
+        if isinstance(item, dict) and (item.get("qid") or "").strip()
+    }
+
+    def _concept_summaries(indexes=None):
+        chosen = (
+            indexes
+            if indexes is not None
+            else range(len(out))
+        )
+        return [
+            {
+                "row_index": index,
+                "topic": str(out[index].get("topic") or ""),
+                "concept_title": str(
+                    out[index].get("concept_title") or ""
+                ),
+                "types_summary": _types_body(
+                    str(out[index].get("concept_details") or "")
+                )[:500],
+            }
+            for index in chosen
+        ]
+
+    def _decide_row_index(qid, item, blocked, candidate_indexes=None):
+        text = _inventory_task_text(item)
+        allowed = (
+            set(candidate_indexes)
+            if candidate_indexes is not None
+            else set(range(len(out)))
+        )
+        payload = {
+            "fixer": True,
+            "blocked_check": [blocked],
+            "contract": {
+                "kind": "fixer.qid_placement",
+                "rule": (
+                    "every source question renders exactly once (R4: "
+                    "never dropped); read the question against the "
+                    "concept rows and name the row_index of the concept "
+                    "that hosts it"
+                    + (
+                        " — choose among candidate_row_indexes only"
+                        if candidate_indexes is not None
+                        else ""
+                    )
+                    + ". Response schema: {\"row_index\", \"rationale\"}"
+                ),
+            },
+            "question": {
+                "qid": qid,
+                "kind": str(item.get("source_kind") or ""),
+                "text": text[:900],
+                "shared_context": str(item.get("shared_context") or "")[:400],
+            },
+            "concepts": _concept_summaries(
+                sorted(allowed) if candidate_indexes is not None else None
+            ),
+        }
+        if candidate_indexes is not None:
+            payload["candidate_row_indexes"] = sorted(allowed)
+
+        def _check(response):
+            check_defects: list[str] = []
+            chosen = response.get("row_index")
+            if not isinstance(chosen, int) or chosen not in allowed:
+                check_defects.append(
+                    f"row_index {chosen!r} does not name an available "
+                    "concept row"
+                )
+            if not str(response.get("rationale") or "").strip():
+                check_defects.append("rationale is required")
+            return check_defects
+
+        decision = p3_kernel.decide(
+            kind="fixer.qid_placement",
+            unit_id=str(qid),
+            envelope_sha256="",
+            payload=payload,
+            provider=fixer,
+            checker=_check,
+            store=store,
+            policy_version=p3_fixer.FIXER_POLICY_VERSION,
+        )
+        response = decision.get("response") or {}
+        rationale = " ".join(
+            str(response.get("rationale") or "").split()
+        )[:240]
+        return int(response.get("row_index")), rationale
+
+    # Duplicates first: one decision names the canonical placement, then
+    # the exact-key dedupe helper removes only the extra renders.
+    for qid in list(defects["duplicate"]):
+        item = items_by_qid.get(qid)
+        if not item:
+            continue
+        locations = _rendered_inventory_example_locations(out, item)
+        if len(locations) <= 1:
+            continue
+        try:
+            target, rationale = _decide_row_index(
+                qid,
+                item,
+                f"source question {qid} renders {len(locations)} times; "
+                "exact-once coverage (R4) requires exactly one placement",
+                candidate_indexes=locations,
+            )
+        except p3_kernel.ContractError:
+            continue  # the defect stands; the caller raises
+        candidate = [dict(record) for record in out]
+        order = [target] + [
+            index for index in range(len(candidate)) if index != target
+        ]
+        ordered, _removed = _dedupe_rendered_inventory_examples(
+            [candidate[index] for index in order],
+            {"items": [item]},
+        )
+        rebuilt = [dict(record) for record in candidate]
+        for position, index in enumerate(order):
+            rebuilt[index] = ordered[position]
+        if _rendered_inventory_example_locations(rebuilt, item) != [target]:
+            continue
+        out = rebuilt
+        _fixer_flag_row(
+            out[target],
+            f"fixer: blocked=duplicate render of {qid}; decided=kept the "
+            f"placement under "
+            f"'{str(out[target].get('concept_title') or '')[:60]}' — "
+            f"{rationale}",
+        )
+
+    # Missing QIDs: one decision per QID names the host concept; the
+    # existing force-place helper appends the exact inventory wording.
+    covered_keys = _rendered_inventory_keys_present(out, inventory)
+    for qid in _rendered_inventory_coverage_defects(out, inventory)["missing"]:
+        item = items_by_qid.get(qid)
+        if not item:
+            continue
+        text = _inventory_task_text(item)
+        key = _inventory_coverage_key(text)
+        if not text or not key or key in covered_keys:
+            continue
+        try:
+            target, rationale = _decide_row_index(
+                qid,
+                item,
+                f"source question {qid} is missing from the rendered "
+                "Types; no mechanical placement resolved a host for it",
+            )
+        except p3_kernel.ContractError:
+            continue  # the defect stands; the caller raises
+        out[target] = _append_inventory_example_to_record(
+            out[target], text, item)
+        covered_keys.add(key)
+        _fixer_flag_row(
+            out[target],
+            f"fixer: placed unhoused question {qid} under "
+            f"'{str(out[target].get('concept_title') or '')[:60]}' — "
+            f"{rationale}",
+        )
+    return out
+
+
 def _validate_final_or_raise(
     records: list[dict], *, stage: str = "final",
     inventory: dict | None = None,
     mined_types: dict | None = None,
     method_anchors: list[dict] | None = None,
     source_text: str = "",
+    fixer=None, fixer_store=None,
 ) -> dict:
-    report = cv.validate_concept_rows(
-        records, allow_types=True, require_culmination=True,
-        allow_culmination=True,
-        allowed_source_examples=_inventory_source_examples(inventory),
-        strict_type_hierarchy=True,
-        strict_analysis_section=True,
-        strict_mastery_statement=True,
-        source_text=source_text,
-    )
-    fatal = _fatal_errors(report)
+    def _run_report() -> dict:
+        return cv.validate_concept_rows(
+            records, allow_types=True, require_culmination=True,
+            allow_culmination=True,
+            allowed_source_examples=_inventory_source_examples(inventory),
+            strict_type_hierarchy=True,
+            strict_analysis_section=True,
+            strict_mastery_statement=True,
+            source_text=source_text,
+        )
+
+    report = _run_report()
+    fatal = _without_fixer_accepted(records, _fatal_errors(report))
+    if fatal and fixer is not None:
+        # The Fixer seam F22 (Q13): one recorded decision per failing row
+        # — a corrected row (final gate; deposit rows are sealed) or an
+        # explicit acceptance-with-flag — then the gate re-measures.
+        changed = _fix_validation_failures_via_fixer(
+            records, fatal, stage=stage, fixer=fixer, store=fixer_store,
+            allow_corrections=stage != "deposit",
+        )
+        if changed and stage == "final":
+            # A corrected Description is a new source claim: re-ground
+            # and re-seal exactly the drifted rows before re-validating,
+            # so the certificate chain attests the corrected content.
+            records[:] = _reground_drifted_final_source_claims(
+                list(records))
+        if changed:
+            report = _run_report()
+        fatal = _without_fixer_accepted(records, _fatal_errors(report))
     progress.log(
         f"{stage}: final validation found {len(fatal)} fatal error(s), "
         f"{report['summary'].get('warnings', 0)} warning(s).")
@@ -15111,6 +15717,14 @@ def _validate_final_or_raise(
         _invalid_inventory_items(inventory)
         if inventory is not None else []
     )
+    if invalid_inventory and fixer is not None:
+        # The Fixer seam F23 (Q13): stub/empty inventory rows are a
+        # judgment call only the source can answer; identity defects
+        # (missing/duplicate qid) stay mechanics and keep failing closed.
+        invalid_inventory = _fix_invalid_inventory_via_fixer(
+            records, inventory, invalid_inventory,
+            stage=stage, fixer=fixer, store=fixer_store,
+        )
     if invalid_inventory:
         reasons = ", ".join(
             f"{item.get('qid') or 'row-' + str(item.get('index'))}:"
@@ -15131,6 +15745,19 @@ def _validate_final_or_raise(
         if inventory is not None
         else {"missing": [], "duplicate": []}
     )
+    if (
+        (coverage_defects["missing"] or coverage_defects["duplicate"])
+        and fixer is not None
+        and inventory is not None
+    ):
+        # The Fixer seam F24 (Q13): place every unhoused QID by one
+        # recorded decision (R4 — never dropped), then re-measure.
+        records[:] = _fix_inventory_coverage_via_fixer(
+            records, inventory, mined_types,
+            fixer=fixer, store=fixer_store,
+        )
+        coverage_defects = _rendered_inventory_coverage_defects(
+            records, inventory)
     if coverage_defects["missing"] or coverage_defects["duplicate"]:
         progress.log(
             f"{stage}: exact source inventory coverage failed with "
@@ -20416,6 +21043,8 @@ def concepts_from_mmd(
         # valid.  This is a deterministic placement repair only: no API call is
         # made and no question wording is invented.  Fresh maps already pass
         # through this exact repair in their finalizer.
+        from .phase3 import fixer as p3_fixer
+
         resumed_coverage_repaired = False
         if saved_final:
             pre_resume_repair = copy.deepcopy(out)
@@ -20423,7 +21052,8 @@ def concepts_from_mmd(
                 _rendered_inventory_coverage_defects(
                     out, question_task_inventory))
             out = _enforce_rendered_inventory_coverage(
-                out, question_task_inventory, mined_types)
+                out, question_task_inventory, mined_types,
+                fixer=p3_fixer.default_provider())
             resumed_coverage_repaired = out != pre_resume_repair
             if resumed_coverage_repaired:
                 progress.log(
@@ -20452,7 +21082,8 @@ def concepts_from_mmd(
             # exact-once gate so the corrected copies are deterministically
             # deduplicated before the terminal checkpoint is validated.
             out = _enforce_rendered_inventory_coverage(
-                out, question_task_inventory, mined_types)
+                out, question_task_inventory, mined_types,
+                fixer=p3_fixer.default_provider())
             out = cr.renumber_types_continuously(out)
             out = cv.ensure_valid_learner_analysis(out)
             out = _canonicalize_concept_rich_text(out)
@@ -20529,6 +21160,7 @@ def concepts_from_mmd(
                 mined_types=mined_types,
                 method_anchors=method_anchors,
                 source_text=mmd_text,
+                fixer=p3_fixer.default_provider(),
             )
             out, final_type_case_qid_placement_ledger = (
                 _final_type_case_qid_host_manifests(

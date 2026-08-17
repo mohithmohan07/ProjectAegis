@@ -549,6 +549,106 @@ def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# the Fixer seam F2: a skeleton row that resolves to no graph topic
+
+
+def _fix_topic_resolution(
+    row: dict[str, Any],
+    topics: list[Mapping[str, Any]],
+    *,
+    row_index: int,
+    fixer: kernel.Provider,
+    store: kernel.DecisionStore,
+    envelope_sha: str,
+) -> str:
+    """One recorded Fixer decision naming the graph topic hosting ``row``.
+
+    Returns the chosen topic_id, or "" when the Fixer could not name a
+    real topic after bounded attempts (the caller then raises exactly as
+    a fixer-less run does — protocol impossibility).
+    """
+
+    from . import fixer as fixer_mod
+
+    title = _normal(row.get("concept_title") or row.get("concept"))
+    topic_ids = {
+        str(topic.get("topic_id") or "")
+        for topic in topics
+        if str(topic.get("topic_id") or "")
+    }
+    blocked = (
+        "skeleton row resolves to no graph topic: " + title[:80]
+    )
+    payload = {
+        "fixer": True,
+        "blocked_check": [blocked],
+        "contract": {
+            "kind": "fixer.topic_resolution",
+            "rule": (
+                "every skeleton row must belong to exactly one graph "
+                "topic; name the topic_id whose material this concept "
+                "belongs to. Response schema: {\"topic_id\", "
+                "\"rationale\"}"
+            ),
+        },
+        "row": {
+            "topic": row.get("topic"),
+            "parent_concept": row.get("parent_concept"),
+            "concept_title": row.get("concept_title"),
+            "concept_details": str(row.get("concept_details") or "")[:1200],
+            "keywords": row.get("keywords"),
+        },
+        "topics": [
+            {
+                "topic_id": str(topic.get("topic_id") or ""),
+                "title": str(topic.get("title") or ""),
+            }
+            for topic in topics
+        ],
+    }
+
+    def check(response: Mapping[str, Any]) -> list[str]:
+        defects: list[str] = []
+        chosen = str(response.get("topic_id") or "")
+        if chosen not in topic_ids:
+            defects.append(
+                f"topic_id {chosen or '<empty>'!r} is not a graph topic; "
+                "name one of: " + ", ".join(sorted(topic_ids))
+            )
+        if not str(response.get("rationale") or "").strip():
+            defects.append("rationale is required")
+        return defects
+
+    try:
+        decision = kernel.decide(
+            kind="fixer.topic_resolution",
+            unit_id=f"skeleton-row#{row_index}",
+            envelope_sha256=envelope_sha,
+            payload=payload,
+            provider=fixer,
+            checker=check,
+            store=store,
+            policy_version=fixer_mod.FIXER_POLICY_VERSION,
+        )
+    except kernel.ContractError:
+        return ""
+    topic_id = str(decision["response"].get("topic_id") or "")
+    title_by_id = {
+        str(topic.get("topic_id") or ""): str(topic.get("title") or "")
+        for topic in topics
+    }
+    rationale = " ".join(
+        str(decision["response"].get("rationale") or "").split()
+    )[:240]
+    row.setdefault("_fixer_review_flags", []).append(
+        f"fixer: blocked={blocked}; decided=hosted under topic "
+        f"{topic_id} ({title_by_id.get(topic_id, '')[:60]})"
+        + (f" — {rationale}" if rationale else "")
+    )
+    return topic_id
+
+
+# ---------------------------------------------------------------------------
 # the pass
 
 
@@ -560,8 +660,11 @@ def settle(
     analysis_provider: kernel.Provider | None = None,
     critic: kernel.Critic | None = None,
     store: kernel.DecisionStore | None = None,
+    fixer: kernel.Provider | None = None,
 ) -> list[dict[str, Any]]:
     """Settle every concept: one decision each, flags attached, no pauses."""
+
+    from . import fixer as fixer_mod
 
     env = envelope_mod.validate(env)
     explicit = topology_provider is not None
@@ -571,6 +674,7 @@ def settle(
         grounding_provider = grounding_provider or _live_grounding
         analysis_provider = analysis_provider or _live_analysis
         critic = critic or _live_critic
+        fixer = fixer or fixer_mod.live_fixer
     if grounding_provider is None or analysis_provider is None:
         raise ValueError(
             "settle needs grounding and analysis providers when the "
@@ -587,9 +691,23 @@ def settle(
 
     normal_rows: list[dict[str, Any]] = []
     culmination_rows: list[dict[str, Any]] = []
-    for row in env["skeleton_rows"]:
+    for row_index, row in enumerate(env["skeleton_rows"]):
         resolved = copy.deepcopy(dict(row))
         topic_id = resolve_topic_id(resolved, topics)
+        if not topic_id and fixer is not None:
+            # The Fixer seam F2 (Q13): a skeleton row that resolves to no
+            # graph topic is a judgment call — which topic hosts it — not
+            # a reason to halt. One recorded decision names the hosting
+            # topic; the row proceeds flagged. R4: the row is never
+            # dropped.
+            topic_id = _fix_topic_resolution(
+                resolved,
+                topics,
+                row_index=row_index,
+                fixer=fixer,
+                store=store,
+                envelope_sha=envelope_sha,
+            )
         if not topic_id:
             raise envelope_mod.EnvelopeError(
                 "skeleton row resolves to no graph topic: "
@@ -681,6 +799,7 @@ def settle(
                 critic=critic,
                 store=store,
                 policy_version=policy,
+                fixer=fixer,
             )
             response_by_id = {
                 str(row.get("concept_id") or ""): row
@@ -714,11 +833,17 @@ def settle(
                         "_phase32_segment_order": order,
                     }
                     index = len(topic_settled)
-                    flags = _pin_flags(
-                        list(decision.get("review_flags") or []),
-                        [c["concept_id"] for c in batch],
-                        row["concept_id"],
-                    )
+                    flags = [
+                        # A Fixer topic-resolution decision (seam F2) is
+                        # recorded on every row derived from the skeleton
+                        # row it unblocked.
+                        *(row.get("_fixer_review_flags") or []),
+                        *_pin_flags(
+                            list(decision.get("review_flags") or []),
+                            [c["concept_id"] for c in batch],
+                            row["concept_id"],
+                        ),
+                    ]
                     if flags:
                         local_flags[index] = flags
                     topic_settled.append(settled_row)
@@ -785,6 +910,7 @@ def settle(
                 critic=critic,
                 store=store,
                 policy_version=policy,
+                fixer=fixer,
             )
             grounded_by_id = {
                 str(row.get("concept_id") or ""): row
@@ -951,6 +1077,7 @@ def settle(
                 critic=critic,
                 store=store,
                 policy_version=policy,
+                fixer=fixer,
             )
             for position, concept_id in zip(offset_batch, concept_ids):
                 flags = _pin_flags(
@@ -1025,12 +1152,15 @@ def settle(
                     "derived-from-verified-topic-concepts"
                 ),
             }
+            culm_flags = list(row.get("_fixer_review_flags") or [])
             if not prose:
-                culm_row["review_flags"] = [
+                culm_flags.append(
                     "culmination shipped without an authored consolidation "
                     "paragraph; the authoring pass returned none and no "
                     "text was code-composed — needs review"
-                ]
+                )
+            if culm_flags:
+                culm_row["review_flags"] = culm_flags
             culm_rows.append(culm_row)
         return topic_settled, local_flags, culm_rows
 

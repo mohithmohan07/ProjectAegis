@@ -50,6 +50,7 @@ def reground_rows(
     store_dir: str | Path | None = None,
     provider: kernel.Provider | None = None,
     critic: kernel.Critic | None = None,
+    fixer: kernel.Provider | None = None,
 ) -> list[dict[str, Any]]:
     """Re-ground exactly the drifted rows and re-seal the full payload.
 
@@ -61,9 +62,12 @@ def reground_rows(
     """
 
     if provider is None:
+        from . import fixer as fixer_mod
+
         envelope_mod.require_live_api()
         provider = _live_grounding
         critic = critic or _live_critic
+        fixer = fixer or fixer_mod.live_fixer
     store = kernel.DecisionStore(store_dir)
     policy = confidence_policy.POLICY_VERSION
 
@@ -129,9 +133,14 @@ def reground_rows(
             None,
         )
         if topic is None:
+            # Rows reach this seam only from the sealed assembled payload,
+            # whose topic ids were resolved (or Fixer-decided, seam F2)
+            # before sealing — a miss here is a certificate-grade data
+            # defect, not a judgment call.
             raise grounding_certificate.GroundingCertificateError(
                 "final source-claim re-grounding cannot resolve the graph "
-                f"topic of row(s) {indexes}: {topic_id or '<missing>'}"
+                f"topic of row(s) {indexes}: {topic_id or '<missing>'} "
+                "(unreachable after fixer seam — report if hit)"
             )
         topic_title = str(topic.get("title") or topic_id)
         topic_blocks = blocks_by_topic.get(topic_id, [])
@@ -201,6 +210,7 @@ def reground_rows(
                 critic=critic,
                 store=store,
                 policy_version=policy,
+                fixer=fixer,
             )
             grounded_by_id = {
                 str(row.get("concept_id") or ""): row

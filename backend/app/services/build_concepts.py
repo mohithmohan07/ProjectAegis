@@ -778,6 +778,13 @@ def _deposit_concepts(
             source_text,
             stage="deposit-only cleanup",
         )
+    # The Fixer (Q13, seams F38/F39/F40): the deposit twins of the
+    # final-gate blocks reach the same content-addressed decisions — a QID
+    # the Fixer placed at the final gate replays free here, so the deposit
+    # payload stays idempotent with the certified one.
+    from .phase3 import fixer as p3_fixer
+
+    deposit_fixer = p3_fixer.default_provider() if pre_post == "Post" else None
     if pre_post == "Post" and inventory is not None:
         # A final-content checkpoint is intentionally restored without another
         # model call.  The deposit-only formatting pass above can still remove
@@ -790,7 +797,7 @@ def _deposit_concepts(
             records = generation._normalize_activity_hubs_from_inventory(
                 records, inventory, mined_types)
             records = generation._enforce_rendered_inventory_coverage(
-                records, inventory, mined_types)
+                records, inventory, mined_types, fixer=deposit_fixer)
             # Inventory repair deliberately restores exact source wording. In
             # mathematics that wording can contain bare TeX, so canonicalize
             # after the repair as well as before it. Recheck exact coverage
@@ -798,7 +805,7 @@ def _deposit_concepts(
             # never change qid ownership or placement.
             records = generation._canonicalize_concept_rich_text(records)
             records = generation._enforce_rendered_inventory_coverage(
-                records, inventory, mined_types)
+                records, inventory, mined_types, fixer=deposit_fixer)
             records = generation._canonicalize_concept_rich_text(records)
         except RuntimeError as exc:
             raise DepositValidationError(str(exc)) from exc
@@ -835,6 +842,7 @@ def _deposit_concepts(
                 inventory=inventory,
                 mined_types=mined_types,
                 source_text=source_text,
+                fixer=deposit_fixer,
             )
         except RuntimeError as exc:
             raise DepositValidationError(str(exc)) from exc
@@ -876,6 +884,17 @@ def _deposit_concepts(
             if error.get("severity") == "error"
         ]
     )
+    # Seam F40 (Q13): a fixer-accepted (row, code) pair is a recorded
+    # decision, not a silent skip — it ships flagged. Rows are sealed at
+    # this boundary, so the Fixer may only accept-with-flag here; mechanics
+    # codes are never acceptable and any remaining defect fails closed.
+    fatal = generation._without_fixer_accepted(records, fatal)
+    if fatal and deposit_fixer is not None:
+        generation._fix_validation_failures_via_fixer(
+            records, fatal, stage="deposit", fixer=deposit_fixer,
+            allow_corrections=False,
+        )
+        fatal = generation._without_fixer_accepted(records, fatal)
     progress.log(
         f"Deposit validation: {len(fatal)} fatal error(s), "
         f"{report['summary'].get('warnings', 0)} warning(s).")
@@ -2121,6 +2140,16 @@ def _existing_human_decision_pause(
         pending,
         owner_sub=owner_sub,
     )
+    if continued_id is None:
+        # Q13 (seam F48): before the retired halt fires, The Fixer picks
+        # among ALL routes — user-only ones included — once, recorded and
+        # flagged. Only protocol impossibility falls through to the raise.
+        continued_id = _apply_fixer_resolution_choice(
+            db,
+            job,
+            pending,
+            owner_sub=owner_sub,
+        )
     if continued_id:
         if agent_resolution_ids is not None:
             agent_resolution_ids.add(continued_id)
@@ -3040,6 +3069,261 @@ def _carry_forward_exhausted_scope(
     return str(recorded["resolved_decision"]["decision_id"])
 
 
+def _settle_exhausted_ceiling(
+    db: Session,
+    job: models.UploadJob,
+    pending: dict,
+    *,
+    owner_sub: str | None,
+    reason: str,
+    ceiling: str,
+) -> str | None:
+    """Q13: a returned already-carried scope still continues, best-judged.
+
+    Reached when a scope's budget is spent AND it was already carried
+    forward once (or the carry itself could not be recorded). The old
+    behavior was ``SemanticResolutionCyclesExhausted`` — a halt Q13
+    retires: instead the existing best-judgement machinery applies the
+    least-destructive offered action (or carries again), flagged with the
+    ceiling's name, and generation continues. Termination stays
+    guaranteed by the ledger-safety mechanics (``_MAX_HUMAN_DECISIONS``),
+    which this deliberately does not touch. Returns ``None`` only when
+    unattended completion is off or the action cannot be recorded — the
+    original ceilings then end the run (genuine impossibility).
+    """
+
+    if not autonomous_resolution.unattended_completion_enabled():
+        return None
+    option = (
+        autonomous_resolution.best_judgement_option(pending)
+        or autonomous_resolution.carry_forward_option()
+    )
+    try:
+        recorded = _record_human_semantic_decision_locked(
+            db,
+            job,
+            str(pending.get("decision_id") or ""),
+            choice=option["choice"],
+            instruction="",
+            target_id=option["target_id"],
+            target_concept_id=option["target_concept_id"],
+            resolved_by="agent",
+            resolution_status="consumed",
+        )
+    except (HumanDecisionConflictError, ValueError) as exc:
+        progress.log(
+            "Aegis could not settle the exhausted semantic ceiling "
+            f"({type(exc).__name__}: {exc}).",
+            level="warning",
+        )
+        return None
+    # Load-bearing wording: concept_revisions scans for "placed by best
+    # judgement" to surface these placements to the reviewer.
+    progress.log(
+        "Placed by best judgement: " + reason
+        + f" [fixer: ceiling={ceiling}] Aegis applied the least-destructive "
+        f"offered action ({option['choice']}"
+        + (
+            f" -> {option['target_id'] or option['target_concept_id']}"
+            if option["target_id"] or option["target_concept_id"]
+            else ""
+        )
+        + ") for "
+        + _decision_identity_text(pending)
+        + ", and generation continued. Review this placement in the "
+        "delivered output and correct it there if it is wrong.",
+        level="warning",
+    )
+    return str(recorded["resolved_decision"]["decision_id"])
+
+
+def _apply_fixer_resolution_choice(
+    db: Session,
+    job: models.UploadJob,
+    pending: dict,
+    *,
+    owner_sub: str | None,
+) -> str | None:
+    """Q13 retires the ``UnattendedDecisionUnavailable`` halt (seam F48).
+
+    Reached when every automatic pathway declined and the safest-action
+    fallback could not be recorded — classically because only user-only
+    routes (replace_source / custom_instruction) remained. The Fixer
+    reads the decision's full context and picks among ALL choices,
+    including user-only ones, with a rationale: it may write the custom
+    instruction itself, or settle the decision by carrying it forward.
+    ``replace_source`` stays mechanically inapplicable — no automation
+    may synthesize a replacement document — so the checker refuses it
+    and a Fixer that cannot name an applicable route is protocol
+    impossibility: the caller's raise then ends the run as before.
+    """
+
+    if not autonomous_resolution.unattended_completion_enabled():
+        return None
+    from .phase3 import fixer as p3_fixer
+    from .phase3 import kernel as p3_kernel
+
+    provider = p3_fixer.default_provider()
+    if provider is None:
+        return None
+    options = [
+        row for row in pending.get("options") or []
+        if isinstance(row, dict)
+    ]
+    offered = sorted({
+        str(row.get("choice") or "")
+        for row in options
+        if str(row.get("choice") or "")
+    })
+    allowed = sorted(
+        (set(offered) | {autonomous_resolution.CARRY_FORWARD_CHOICE})
+        - {"replace_source"}
+    )
+    payload = {
+        "fixer": True,
+        "blocked_check": [
+            "every automatic resolution pathway declined this semantic "
+            "decision and the remaining offered routes require a person; "
+            "under Q13 the run must not stop mid-run — one recorded, "
+            "flagged decision is required"
+        ],
+        "contract": {
+            "kind": "fixer.resolution_choice",
+            "rule": (
+                "pick exactly ONE applicable route: one of the offered "
+                "choices, or carry_forward (settle the decision by "
+                "changing nothing). replace_source is never applicable "
+                "— no automation may synthesize a replacement document. "
+                "custom_instruction requires you to write the exact "
+                "instruction. Response schema: {\"choice\", "
+                "\"target_id\", \"target_concept_id\", \"instruction\", "
+                "\"rationale\"}"
+            ),
+        },
+        "decision": {
+            "kind": str(pending.get("kind") or ""),
+            "phase": str(pending.get("phase") or ""),
+            "conflict": str(pending.get("conflict") or "")[:2000],
+            "diagnosis": str(pending.get("diagnosis") or "")[:2000],
+            "decision_question": str(
+                pending.get("decision_question") or ""
+            )[:2000],
+            "options": [
+                {
+                    "choice": str(row.get("choice") or ""),
+                    "label": str(row.get("label") or ""),
+                    "target_id": str(row.get("target_id") or ""),
+                    "target_concept_id": str(
+                        row.get("target_concept_id") or ""
+                    ),
+                }
+                for row in options
+            ],
+            "candidates": [
+                {
+                    "target_id": str(row.get("target_id") or ""),
+                    "concept_id": str(row.get("concept_id") or ""),
+                    "action": str(row.get("action") or ""),
+                    "title": str(row.get("title") or "")[:200],
+                    "topic": str(row.get("topic") or "")[:200],
+                    "coverage": str(row.get("coverage") or "")[:600],
+                    "gap": str(row.get("gap") or "")[:600],
+                }
+                for row in pending.get("candidates") or []
+                if isinstance(row, dict)
+            ],
+            "evidence": [
+                {
+                    "evidence_id": str(row.get("evidence_id") or ""),
+                    "label": str(row.get("label") or "")[:200],
+                    "text": str(row.get("text") or "")[:800],
+                }
+                for row in pending.get("evidence") or []
+                if isinstance(row, dict)
+            ],
+        },
+    }
+
+    def _check(response):
+        defects: list[str] = []
+        choice = str(response.get("choice") or "").strip()
+        if choice not in allowed:
+            defects.append(
+                f"choice {choice or '<empty>'!r} is not applicable; "
+                "choose one of: " + ", ".join(allowed)
+            )
+        if choice == "custom_instruction" and not str(
+            response.get("instruction") or ""
+        ).strip():
+            defects.append(
+                "custom_instruction requires a non-empty instruction"
+            )
+        if not str(response.get("rationale") or "").strip():
+            defects.append("rationale is required")
+        return defects
+
+    try:
+        decision = p3_kernel.decide(
+            kind="fixer.resolution_choice",
+            unit_id=str(pending.get("decision_id") or "decision"),
+            envelope_sha256=str(pending.get("context_hash") or ""),
+            payload=payload,
+            provider=provider,
+            checker=_check,
+            store=generation._phase3_fixer_store(),
+            policy_version=p3_fixer.FIXER_POLICY_VERSION,
+        )
+    except p3_kernel.ContractError as exc:
+        progress.log(
+            "The Fixer could not produce a mechanically applicable "
+            f"resolution choice ({exc}); the run ends as before.",
+            level="warning",
+        )
+        return None
+    response = decision.get("response") or {}
+    choice = str(response.get("choice") or "")
+    instruction = (
+        str(response.get("instruction") or "").strip()
+        if choice == "custom_instruction"
+        else ""
+    )
+    rationale = " ".join(str(response.get("rationale") or "").split())[:240]
+    try:
+        recorded = _record_human_semantic_decision_locked(
+            db,
+            job,
+            str(pending.get("decision_id") or ""),
+            choice=choice,
+            instruction=instruction,
+            target_id=str(response.get("target_id") or ""),
+            target_concept_id=str(response.get("target_concept_id") or ""),
+            resolved_by="agent",
+            resolution_status="consumed",
+            fixer_decision=True,
+        )
+    except (HumanDecisionConflictError, ValueError) as exc:
+        progress.log(
+            "Aegis could not record the Fixer's resolution choice "
+            f"({type(exc).__name__}: {exc}).",
+            level="warning",
+        )
+        return None
+    # Load-bearing wording: concept_revisions scans for "placed by best
+    # judgement" to surface these decisions to the reviewer.
+    progress.log(
+        "Placed by best judgement: every automatic pathway declined and "
+        "only user-only routes remained. [fixer: "
+        f"decided={choice}"
+        + (f" — {rationale}" if rationale else "")
+        + "] for "
+        + _decision_identity_text(pending)
+        + ", and generation continued. Review this decision in the "
+        "delivered output and correct it there if it is wrong.",
+        level="warning",
+    )
+    return str(recorded["resolved_decision"]["decision_id"])
+
+
 def _issue_pathways_exhausted(*, attempts: int, maximum: int) -> bool:
     return attempts >= maximum
 
@@ -3052,8 +3336,10 @@ def _raise_if_issue_pathways_exhausted(
 ) -> None:
     """Stop a scope that keeps returning under regenerated identities.
 
-    Reached only when the scope could not be carried forward either, so there
-    is genuinely nothing left to do but end the run with the reason recorded.
+    Reached only when the scope could be neither carried forward nor
+    settled by best judgement (Q13, seams F46/F47) — unattended completion
+    is off, or the ledger refused every recordable action — so there is
+    genuinely nothing left to do but end the run with the reason recorded.
     """
 
     if attempts < maximum:
@@ -3117,9 +3403,10 @@ def _raise_if_equivalent_resolution_attempts_exhausted(
 def _raise_if_unattended_cannot_pause(pending: dict) -> None:
     """End an unattended run instead of parking it in ``awaiting_decision``.
 
-    Reached only when every automatic pathway declined and the decision's
-    remaining routes all require a person: replacing the uploaded document or
-    writing an instruction. Neither can be synthesized.
+    Reached only when every automatic pathway declined, the decision's
+    remaining routes all require a person, AND The Fixer (Q13, seam F48)
+    could not produce — or record — a mechanically applicable choice
+    either. A source replacement can never be synthesized.
 
     This is unconditional. Generation has no mid-run pause in any
     configuration, and no setting restores one: a stalled job is worse than a
@@ -3462,6 +3749,29 @@ def _run_with_human_decision_pause(
                 active_ids.add(carried)
                 return carried
         if exhausted_reason:
+            # Q13 (seams F46/F47): a scope that returns even after being
+            # carried is settled by the least-destructive offered action
+            # — flagged with the ceiling's name — and generation
+            # continues; the ledger-safety limit still bounds the loop.
+            # The original ceilings end the run only when nothing can be
+            # recorded (unattended off, or the ledger refused the write).
+            ceiling = (
+                "equivalent_attempts"
+                if _issue_pathways_exhausted(
+                    attempts=attempts, maximum=maximum
+                )
+                else "pathway_turns"
+            )
+            settled_id = _settle_exhausted_ceiling(
+                db, job, pending,
+                owner_sub=owner_sub,
+                reason=exhausted_reason,
+                ceiling=ceiling,
+            )
+            if settled_id:
+                _charge()
+                active_ids.add(settled_id)
+                return settled_id
             _raise_if_equivalent_resolution_attempts_exhausted(
                 pending, attempts=attempts, maximum=maximum,
             )
@@ -3492,6 +3802,19 @@ def _run_with_human_decision_pause(
             _charge()
             active_ids.add(continued_id)
             return continued_id
+        # Q13 (seam F48): before the retired halt fires, The Fixer picks
+        # among ALL routes — user-only ones included — once, recorded and
+        # flagged. Only protocol impossibility falls through to the raise.
+        fixed_id = _apply_fixer_resolution_choice(
+            db,
+            job,
+            current or pending,
+            owner_sub=owner_sub,
+        )
+        if fixed_id:
+            _charge()
+            active_ids.add(fixed_id)
+            return fixed_id
         # Always raises; there is no pause to fall through to.
         _raise_if_unattended_cannot_pause(current or pending)
         raise AssertionError(  # pragma: no cover - defensive
@@ -3594,8 +3917,16 @@ def _record_human_semantic_decision_locked(
     target_concept_id: str,
     resolved_by: str = "human",
     resolution_status: str = "ready",
+    fixer_decision: bool = False,
 ) -> dict:
-    """Mutate a decision ledger while ``exclusive_job_operation`` is held."""
+    """Mutate a decision ledger while ``exclusive_job_operation`` is held.
+
+    ``fixer_decision`` marks a Fixer resolution-choice verdict (Q13, seam
+    F48): it may record a ``custom_instruction`` the Fixer wrote itself —
+    the one user-only route a model can genuinely take. ``replace_source``
+    stays forbidden for every automated caller: no automation may alter
+    the uploaded document.
+    """
     if job.status == "generated":
         raise HumanDecisionConflictError(
             "this upload has already been generated")
@@ -3619,16 +3950,26 @@ def _record_human_semantic_decision_locked(
     if choice == "custom_instruction" and not instruction:
         raise ValueError("instruction is required for custom_instruction")
     if resolved_by == "agent":
-        if not autonomous_resolution.is_automatable_choice(choice):
+        if choice == "replace_source":
             raise ValueError(
-                "an agent cannot record a source replacement or custom "
-                "instruction"
+                "an agent cannot record a source replacement"
             )
-        if instruction:
-            raise ValueError(
-                "an agent instruction must be empty; explanatory prose "
-                "belongs in the validated review reason"
-            )
+        if fixer_decision and choice == "custom_instruction":
+            # Q13 (seam F48): the Fixer may write the instruction itself;
+            # the ordinary submission validation above already required
+            # the instruction to be non-empty.
+            pass
+        else:
+            if not autonomous_resolution.is_automatable_choice(choice):
+                raise ValueError(
+                    "an agent cannot record a source replacement or custom "
+                    "instruction"
+                )
+            if instruction:
+                raise ValueError(
+                    "an agent instruction must be empty; explanatory prose "
+                    "belongs in the validated review reason"
+                )
 
     checkpoint = copy.deepcopy(job.generation_checkpoint or {})
     ledger = _human_decision_ledger(checkpoint)

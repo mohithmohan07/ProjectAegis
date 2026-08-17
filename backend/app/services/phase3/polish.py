@@ -323,6 +323,7 @@ def polish(
     *,
     provider: kernel.Provider | None = None,
     store: kernel.DecisionStore | None = None,
+    fixer: kernel.Provider | None = None,
 ) -> list[dict[str, Any]]:
     """Return rows with every terminal content failure repaired in place."""
 
@@ -345,8 +346,11 @@ def polish(
     if not failures:
         return out
     if provider is None:
+        from . import fixer as fixer_mod
+
         envelope_mod.require_live_api()
         provider = _live_polish
+        fixer = fixer or fixer_mod.live_fixer
     store = store or kernel.DecisionStore()
     envelope_sha = str(env.get("envelope_sha256") or "")
     indexes = sorted(failures)
@@ -428,6 +432,7 @@ def polish(
             policy_version="content-codes:" + ",".join(
                 sorted(CONTENT_CODES)
             ),
+            fixer=fixer,
         )
         for row in decision["response"].get("rows") or []:
             if not isinstance(row, Mapping):

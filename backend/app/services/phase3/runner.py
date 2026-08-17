@@ -71,8 +71,9 @@ def run(
     """Settle → Host → Assemble. Returns rows, maps, and coverage.
 
     ``providers`` is test-only injection ({"topology", "grounding",
-    "analysis", "host", "critic"}); production omits it and the passes
-    use their live API adapters (failing closed if no API is live).
+    "analysis", "host", "critic", "fixer"}); production omits it and the
+    passes use their live API adapters — including the live Fixer (Q13)
+    — failing closed if no API is live.
     """
 
     from .. import progress
@@ -92,6 +93,7 @@ def run(
         analysis_provider=injected.get("analysis"),
         critic=injected.get("critic"),
         store=store,
+        fixer=injected.get("fixer"),
     )
     _snapshot_settled_rows(env, settled, store_dir)
     progress.step(
@@ -103,6 +105,7 @@ def run(
         provider=injected.get("host"),
         critic=injected.get("critic"),
         store=store,
+        fixer=injected.get("fixer"),
     )
     # Terminal content quality (generic analysis, verbatim Descriptions)
     # is converged BEFORE Assemble seals anything, on settled and
@@ -118,6 +121,7 @@ def run(
         [*settled, *new_concepts],
         provider=injected.get("polish"),
         store=store,
+        fixer=injected.get("fixer"),
     )
     settled = polished[:len(settled)]
     hosts = {**hosts, "new_concepts": polished[len(settled):]}

@@ -368,14 +368,18 @@ def host(
     provider: kernel.Provider | None = None,
     critic: kernel.Critic | None = None,
     store: kernel.DecisionStore | None = None,
+    fixer: kernel.Provider | None = None,
 ) -> dict[str, Any]:
     """Certify one host per unit. Returns host_map, qid_map, new_concepts."""
+
+    from . import fixer as fixer_mod
 
     env = envelope_mod.validate(env)
     if provider is None:
         envelope_mod.require_live_api()
         provider = _live_host
         critic = critic if critic is not None else _live_critic
+        fixer = fixer or fixer_mod.live_fixer
     store = store or kernel.DecisionStore()
     envelope_sha = str(env.get("envelope_sha256") or "")
     policy = confidence_policy.POLICY_VERSION
@@ -580,6 +584,7 @@ def host(
             critic=critic,
             store=store,
             policy_version=policy,
+            fixer=fixer,
         )
         assigned = {
             str(row.get("unit_id") or ""): row

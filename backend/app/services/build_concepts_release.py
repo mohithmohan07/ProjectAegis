@@ -42,6 +42,10 @@ _RELEASE_AUDIT_FIELDS = frozenset({
     RELEASE_ROW_QIDS_FIELD,
     RELEASE_ROW_BLOCKS_FIELD,
     RELEASE_ROW_ROUTES_FIELD,
+    # Fixer-accepted validator codes (Q13, seams F22/F39/F40): a recorded
+    # acceptance ships in the release payload for the reviewer's audit and
+    # is stripped before DB upload like every other audit field.
+    "_fixer_accepted_codes",
 })
 
 _UNIT_ID_RE = re.compile(

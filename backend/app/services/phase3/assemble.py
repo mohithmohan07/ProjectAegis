@@ -5,7 +5,10 @@ bookkeeping: it renders each concept's hosted Types into the house
 ``// Types:`` section of ``concept_details``, routes every QID to its
 host row, and accounts for every inventory item. Any inconsistency here
 is a bug in our code, so this pass raises immediately — there is no
-provider to correct.
+provider to correct, and deliberately no Fixer either: with the kernel
+fixer seam upstream (Q13) these raises should be unreachable; the one
+exception is the deposit-pipeline fixpoint, where convergent drift is
+adopted mechanically with review flags and only oscillation raises.
 """
 from __future__ import annotations
 
@@ -95,13 +98,17 @@ def render_types_section(
         except (IndexError, ValueError):
             raise AssemblyError(
                 f"cannot number {prefix} from identifier {identifier!r}"
+                " (unreachable after fixer seam — report if hit)"
             )
 
     pieces: list[str] = []
     for type_id in sorted(hosted):
         mined = types.get(type_id)
         if mined is None:
-            raise AssemblyError(f"hosted unit references unknown {type_id}")
+            raise AssemblyError(
+                f"hosted unit references unknown {type_id}"
+                " (unreachable after fixer seam — report if hit)"
+            )
         piece = f"Type {_ordinal(type_id, 'Type'):02d}: {mined['title']}"
         if mined["definition"]:
             piece += f" — {mined['definition']}"
@@ -114,6 +121,7 @@ def render_types_section(
             if case is None:
                 raise AssemblyError(
                     f"hosted unit references unknown {type_id}::{case_id}"
+                    " (unreachable after fixer seam — report if hit)"
                 )
             piece += f" Case {_ordinal(case_id, 'Case'):02d}: {case['title']}"
             for example in hosted[type_id][case_id]:
@@ -168,6 +176,7 @@ def assemble(
             raise AssemblyError(
                 "two rows share a topic and title: "
                 + str(row.get("concept_title"))[:80]
+                + " (unreachable after fixer seam — report if hit)"
             )
         row_by_key[key] = row
 
@@ -178,6 +187,7 @@ def assemble(
             raise AssemblyError(
                 f"host entry for {unit_id} names a row that does not "
                 "exist: " + str(entry.get("concept_title"))[:80]
+                + " (unreachable after fixer seam — report if hit)"
             )
         for flag in entry.get("review_flags") or []:
             flags_by_key.setdefault(key, []).append(str(flag))
@@ -221,6 +231,7 @@ def assemble(
                 raise AssemblyError(
                     f"qid {qid} routes to a row that does not exist: "
                     + str((destination or entry).get("concept_title"))[:80]
+                    + " (unreachable after fixer seam — report if hit)"
                 )
             sections_by_key.setdefault(dest_key, {}).setdefault(
                 type_id, {}
@@ -250,6 +261,7 @@ def assemble(
             raise AssemblyError(
                 f"qid {qid} routes to a row that does not exist: "
                 + str(entry.get("concept_title"))[:80]
+                + " (unreachable after fixer seam — report if hit)"
             )
         row = row_by_key[key]
         qids = row.setdefault("_aegis_release_qids", [])
@@ -333,6 +345,37 @@ def assemble(
 
     rows = _deposit_deterministic_pipeline(rows)
     replayed = _deposit_deterministic_pipeline(copy.deepcopy(rows))
+    # Seam F10 (Q13): convergent drift is mechanics, not a judgment call.
+    # Iterate the deterministic pipeline (bounded) toward its own
+    # fixpoint; adopt a converged row set with a review flag on every
+    # changed row. Only genuine oscillation — a deterministic-code
+    # defect the Fixer must never paper over (it never edits code) —
+    # still raises below.
+    normalization_passes = 0
+    while replayed != rows and normalization_passes < 2:
+        if len(replayed) == len(rows):
+            for index, (before, after) in enumerate(zip(rows, replayed)):
+                if before == after:
+                    continue
+                changed_field = next(
+                    (
+                        field
+                        for field in sorted(
+                            set(before) | set(after), key=str
+                        )
+                        if before.get(field) != after.get(field)
+                    ),
+                    "",
+                )
+                after["review_flags"] = [
+                    *(after.get("review_flags") or []),
+                    "assembly output normalized by the deterministic "
+                    "deposit pipeline; "
+                    f"{changed_field or 'row content'} adjusted",
+                ]
+        normalization_passes += 1
+        rows = replayed
+        replayed = _deposit_deterministic_pipeline(copy.deepcopy(rows))
     if replayed != rows:
         changed = [
             index
