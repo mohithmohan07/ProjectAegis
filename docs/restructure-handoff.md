@@ -194,20 +194,26 @@ Math/Physics families stay Open), Q12 (group naming).
 These were raised by the step-6 map and are **decided**; treat them as part of
 the brief above.
 
-**The Open/Specific registry.** The corrected v2.0 workbook is *not* in this
-repository — `docs/aegis-restructure.md:13, 41-42, 922-923` names it only as a
-source used to prepare the restructure document. Do not invent it and do not
-reconstruct it. Use `docs/open-specific-registry-v2.md`: pass its complete
-text into the `assessment.answer_restriction` payload, hash the file into that
-pass's `policy_version`, and let a future replacement of the file re-key and
-re-decide every stored verdict automatically. That file documents its own
-replacement procedure. No code parses it or branches on subject, question
-type, keyword, or family name. The file now also carries a **calibration
-appendix** — the real `answer_restriction` verdicts from the three accepted
-reference workbooks — as recorded ground-truth evidence the model reasons
-over (still not a rule table, still passed whole). The full corrected v2.0
-workbook remains owed; committing it later is a body-swap that the policy
-hash turns into an automatic re-decide, no migration.
+**The Open/Specific registry — now in the repo (AUTHORITATIVE).** The owner
+supplied the corrected v2.0 workbook; it is committed as
+`docs/open-specific-registry-v2.xlsx` (the binary source of truth), with a
+complete faithful transcription in `docs/open-specific-registry-v2.md`
+(`status: AUTHORITATIVE`, `registry_id: registry-v2.0`). Pass the `.md`'s
+complete text into the `assessment.answer_restriction` payload and hash the
+file into that pass's `policy_version`. **No code parses it, indexes it, or
+branches on subject, question type, Policy ID (e.g. `CHEM-A01`), keyword, or
+family name** — the workbook states this of itself ("never an executable
+lookup table"; "never from command words or local matching") and its own
+legend carries the no-local-fallback invariant verbatim. Note two things the
+registry makes explicit: the Objective policy is *verify-then-classify* (after
+the API and critic verify a closed response contract and exactly one correct
+option → Specific), not a blind Objective→Specific default (which it records
+as removed); and the Math/Physics families carry paired Open/Specific policies
+(`MATH-B0n-O`/`-S`) so the carve-out lives in the evidence, not in code. The
+`.md` also keeps a small **supplementary** calibration set (the accepted
+reference-workbook verdicts) as a second corroborating source. If a further
+correction of the workbook ever arrives, swap the files: the policy hash turns
+it into an automatic re-decide, no migration.
 
 **The Refiner dispatch is step-6 code.** There is no file-level freeze on
 steps 1–5. The real constraints are: golden fixtures are recorded verdicts and
