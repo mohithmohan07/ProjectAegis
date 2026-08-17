@@ -179,6 +179,77 @@ Math/Physics families stay Open), Q12 (group naming).
   touching schema constants (full migration is step 8; do not half-migrate).
 - Wire the MES lane into the Refiner via `output_kind`.
 
+#### Step 6 — resolved questions and binding constraints
+
+These were raised by the step-6 map and are **decided**; treat them as part of
+the brief above.
+
+**The Open/Specific registry.** The corrected v2.0 workbook is *not* in this
+repository — `docs/aegis-restructure.md:13, 41-42, 922-923` names it only as a
+source used to prepare the restructure document. Do not invent it and do not
+reconstruct it. Use `docs/open-specific-registry-v2.md`: pass its complete
+text into the `assessment.answer_restriction` payload, hash the file into that
+pass's `policy_version`, and let a future replacement of the file re-key and
+re-decide every stored verdict automatically. That file documents its own
+replacement procedure. No code parses it or branches on subject, question
+type, keyword, or family name.
+
+**The Refiner dispatch is step-6 code.** There is no file-level freeze on
+steps 1–5. The real constraints are: golden fixtures are recorded verdicts and
+are never hand-edited; `rne_envelope.json` drifting is a red flag; the three
+pre-spend pause suites pass unchanged; and the `concepts_release` branch of
+`release_refiner.py` stays byte-behavior identical. An additive
+`assessment_master` dispatch at the existing `output_kind` seam, with the
+assessment logic in its own module, satisfies all of these.
+
+**The Master Refiner must not alter `question` or `question_text`.** Variant
+clustering groups questions *by their wording*, and §8.3 forbids the Refiner
+from revisiting a decision — rewording a clustered question would invalidate
+the verdict that placed it with its siblings. The question text is already
+polished at Phase 2.3 and is the learner-facing item. The Refiner polishes
+around it: rubric wording, answer prose, group descriptions. This also makes
+the §6 `question = question_text` identity a trivial unchanged-assertion
+rather than a moved-together one.
+
+**Marking arithmetic stays fail-closed.** A Fixer decision may never
+accept-with-flag a weightage-sum mismatch, a mark-decomposition error, or a
+duplicate `group_key`. That is data corruption, not judgment — the same
+principle as the existing `_FIXER_UNACCEPTABLE_CODES` set, where identity and
+certificate codes are never acceptable-with-flag.
+
+**Do not merely route around `post_generation.py`.** It is still consumed at
+`build_assessments.py:304` and `:619` (the legacy Build Assessments lane).
+Dropping it from the Output-02 path leaves its `" — {group_type}"` naming and
+deterministic cognitive-skill clustering live there, giving the codebase two
+naming conventions. Resolve it against §9's verdict for that surface — fix the
+naming per Q12, or retire the path — rather than leaving an unowned doctrine
+violation. Not a blocker for Output 02; do not drop it either.
+
+**Audit fields go in the existing list.** Steps 4 and 5 added
+`_aegis_hub_placements` and `_aegis_analysis_allotments` directly to
+`build_concepts_release._RELEASE_AUDIT_FIELDS`. Extend the same list; a
+separate assessment-local registry is indirection for no gain.
+
+**Land step 6 in verified slices.** Ten new decision kinds plus a Master
+Refiner is the largest step in the sequence. Each slice gets its own commit
+with the full suite green: (1) Q12 naming + read-back provenance ledger;
+(2) level verdict + variant clustering + group descriptions to
+`kernel.decide`; (3) routing + cells + materialization; (4) Open/Specific +
+marking as distinct passes with the registry evidence; (5) the Master Refiner
+dispatch.
+
+**Confirmed findings from the step-6 map** (act on all of them): the
+Objective→Specific executable policy at `assessment_materialization.py:64-68,
+145-148` is a §3-style residue that Q11 retires; the difficulty→tier mapping
+at `assessment_grouping.py:24-27, 100-106` is a Rule 1 violation replaced by
+an independent level verdict; the 2,000-character semantic truncations and
+`sub_question_count`-as-evidence are volume proxies to remove (counts stay
+mechanics); the Q12 read-back conflation — validating groups by visible name
+when two families share one friendly name — is real, and a manifest-only
+`(sheet,row) → group_key` provenance ledger is the fix; and Output 02 must
+route against the **staged Output-01 release payload**, never re-reading
+concept meaning from mutable database rows.
+
 ### Step 7 — Phase 03 pre-learning capture (Outputs 03–04 ship)
 Doc: §4 Phase 03, Q3, Q4/D3 (adaptive-40).
 - Capture prerequisites **during** the one Build Concepts run (the model
