@@ -134,6 +134,16 @@ suite counts and golden diffs, and never contains tool/model identifiers in
 code comments or artifacts. Extend the PR body per step with the same
 honesty (defects found included).
 
+**This branch is shared and unmerged.** Steps 1–5 live on it and PR #227 is
+open against it. Therefore: `git pull origin claude/phase-3-rewrite-migration-8wg2ax`
+before starting work *and* before every push; **never force-push, never
+rebase published history, never `reset --hard`** on this branch. A force-push
+here silently erases completed steps — it is the single worst failure mode of
+this setup, and no situation on this branch requires one. If histories have
+diverged, merge; if that looks wrong, stop and ask the owner. Do not open a
+new PR per step while the branch is unmerged — extend #227's body with a
+section per step instead.
+
 ## 4. Known residue to pick up in later steps (flagged during steps 1–5)
 
 - `" — {group_type}"` group-name minting sites in `post_generation.py` and
