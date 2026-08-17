@@ -241,12 +241,21 @@ def test_marking_uses_complete_candidate_cell_and_adopted_contract(
         "audit": candidate["_aegis_assessment_answer_restriction"],
     }
     assert payload["blueprint_evidence"] == {
-        "availability": "explicit_cell_only",
+        "total_marks_authority": "explicit_blueprint_cell",
         "explicit_blueprint_cell": cell,
-        "full_question_paper_blueprint_available": False,
-        "instruction": "Do not claim or fabricate a full Question-Paper Blueprint.",
+        "decomposition_authority": "api_per_item_verdict",
+        "external_marking_rubric": "not_part_of_contract",
+        "external_marking_rubric_consulted": False,
+        "instruction": (
+            "Author the per-item decomposition within the explicit cell's "
+            "total. No external marking-rubric document is consulted or "
+            "expected."
+        ),
     }
-    assert "no complete Question-Paper Blueprint" in payload["rules"]
+    assert "intentionally own the per-item decomposition" in payload["rules"]
+    assert "No external marking-rubric document" in payload["rules"]
+    assert "intentional decomposition authority" in payload["critic_rules"]
+    assert "No external marking-rubric document" in payload["critic_rules"]
     assert "diagram marks explicitly" in payload["rules"]
     assert "Enumerate every represented subquestion" in payload["rules"]
     assert "no marks for redundant steps" in payload["rules"]
@@ -264,14 +273,23 @@ def test_marking_uses_complete_candidate_cell_and_adopted_contract(
     assert verdict["question_duration"] == 6.0
     assert verdict["math_keyboard"] == "Yes"
     assert verdict["flags"] == []
-    assert verdict["blueprint_authority"][
-        "full_question_paper_blueprint_available"
-    ] is False
-    assert "no full Question-Paper Blueprint" in verdict[
-        "blueprint_authority"
-    ]["scope_note"]
+    assert verdict["blueprint_authority"] == {
+        "source": "explicit_blueprint_cell",
+        "cell_id": cell["cell_id"],
+        "total_marks": 4.0,
+        "total_marks_authority": "explicit_blueprint_cell",
+        "decomposition_authority": "api_per_item_verdict",
+        "answer_space_authority": "adopted_answer_space_contract",
+        "external_marking_rubric": "not_part_of_contract",
+        "external_marking_rubric_consulted": False,
+        "authority_note": (
+            "The explicit blueprint cell owns total marks and the API's "
+            "per-item verdict intentionally owns their decomposition. No "
+            "external marking-rubric document is consulted or expected."
+        ),
+    }
     authority = verdict["authority"]
-    assert authority["policy_version"] == "assessment-marking-2"
+    assert authority["policy_version"] == "assessment-marking-3"
     assert "created_at" not in authority and "provider" not in authority
     stored = store.get(authority["decision_key"])
     assert stored is not None
@@ -304,6 +322,42 @@ def test_marking_replays_without_author_critic_or_fixer(monkeypatch) -> None:
 
     assert second == first
     assert len(store.keys()) == 1
+
+
+def test_stale_v2_marking_record_redecides_under_v3_policy(monkeypatch) -> None:
+    monkeypatch.setattr(marking.config, "phase3_decision_workers", lambda: 1)
+    assert marking.MARKING_POLICY_VERSION == "assessment-marking-3"
+    pair = (_candidate(), _cell())
+    store = kernel.DecisionStore()
+    calls = 0
+
+    def author(request: dict) -> dict:
+        nonlocal calls
+        calls += 1
+        return _valid_response(request)
+
+    monkeypatch.setattr(
+        marking, "MARKING_POLICY_VERSION", "assessment-marking-2"
+    )
+    stale = marking.decide_markings(
+        [pair], meta=META, envelope_sha256=ENVELOPE_SHA256,
+        provider=author, store=store,
+    )[0]
+    monkeypatch.setattr(
+        marking, "MARKING_POLICY_VERSION", "assessment-marking-3"
+    )
+    current = marking.decide_markings(
+        [pair], meta=META, envelope_sha256=ENVELOPE_SHA256,
+        provider=author, store=store,
+    )[0]
+
+    assert calls == 2
+    assert stale["authority"]["policy_version"] == "assessment-marking-2"
+    assert current["authority"]["policy_version"] == "assessment-marking-3"
+    assert stale["authority"]["decision_key"] != (
+        current["authority"]["decision_key"]
+    )
+    assert len(store.keys()) == 2
 
 
 def test_envelope_change_rekeys_the_marking_decision(monkeypatch) -> None:
@@ -771,7 +825,7 @@ def test_fixer_is_revalidated_by_the_same_semantic_and_arithmetic_checker(
     assert fixer_calls[0]["contract"] == {
         "kind": "assessment.marking",
         "unit_id": "CAND-DESC",
-        "policy_version": "assessment-marking-2",
+        "policy_version": "assessment-marking-3",
     }
 
 

@@ -74,6 +74,9 @@ _RELEASE_AUDIT_FIELDS = frozenset({
     "_aegis_assessment_variant_cluster",
     "_aegis_assessment_group_description",
     "_aegis_assessment_group_quality",
+    # Slice-5 Master Refiner decisions. Candidate and group units share one
+    # private audit marker while retaining distinct decision kinds/policies.
+    "_aegis_assessment_master_refinement",
 })
 
 _UNIT_ID_RE = re.compile(

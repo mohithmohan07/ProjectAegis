@@ -9,6 +9,7 @@ The glue between the finished Build Concepts job and the two output files:
                   ->  one-home routing (author + critic)
                   ->  level verdicts  ->  variant clustering
                   ->  group descriptions  ->  touched-group QA
+                  ->  assessment Master Refiner
                   ->  immutable release  ->  atomic dual publication
 
 Every semantic stage already exists; this module only sequences them,
@@ -46,6 +47,7 @@ from . import assessment_source_inventory as source_inventory
 from . import assessment_profile
 from . import build_concepts_release
 from . import progress, uploads
+from . import release_refiner
 from .phase3 import envelope as phase3_envelope
 from .phase3 import kernel
 
@@ -60,6 +62,9 @@ _LEVEL_AUDIT_FIELD = "_aegis_assessment_level_verdict"
 _CLUSTER_AUDIT_FIELD = "_aegis_assessment_variant_cluster"
 _DESCRIPTION_AUDIT_FIELD = "_aegis_assessment_group_description"
 _QUALITY_AUDIT_FIELD = "_aegis_assessment_group_quality"
+_MASTER_REFINEMENT_AUDIT_FIELD = (
+    "_aegis_assessment_master_refinement"
+)
 
 _CELL_WARNING = "assessment_cell_review"
 _MATERIALIZATION_WARNING = "assessment_materialization_review"
@@ -70,6 +75,7 @@ _LEVEL_WARNING = "assessment_level_review"
 _CLUSTER_WARNING = "assessment_variant_cluster_review"
 _DESCRIPTION_WARNING = "assessment_group_description_review"
 _QUALITY_WARNING = "assessment_group_quality_review"
+_MASTER_REFINEMENT_WARNING = "assessment_master_refiner_review"
 
 _CELLS_SNAPSHOT = "source.phase3-assessment-cells.json"
 _MATERIALIZATIONS_SNAPSHOT = "source.phase3-assessment-materializations.json"
@@ -80,6 +86,9 @@ _MARKINGS_SNAPSHOT = "source.phase3-assessment-markings.json"
 _ROUTES_SNAPSHOT = "source.phase3-assessment-routes.json"
 _LEVELS_SNAPSHOT = "source.phase3-assessment-levels.json"
 _GROUPS_SNAPSHOT = "source.phase3-assessment-groups.json"
+_MASTER_REFINEMENTS_SNAPSHOT = (
+    "source.phase3-assessment-master-refinements.json"
+)
 
 
 class ReleaseRunError(ValueError):
@@ -546,6 +555,52 @@ def _snapshot_markings(
     )
 
 
+def _snapshot_master_refinements(
+    directory: Path | None,
+    *,
+    envelope_sha256: str,
+    payload: Mapping[str, Any],
+) -> None:
+    """Persist stable candidate/group Refiner audits beside the release."""
+
+    rows: list[dict[str, Any]] = []
+    for unit_kind, collection, id_field in (
+        ("candidate", "candidates", "candidate_id"),
+        ("group", "groups", "group_key"),
+    ):
+        for record in payload.get(collection) or []:
+            audit = record.get(_MASTER_REFINEMENT_AUDIT_FIELD)
+            if not isinstance(audit, Mapping):
+                continue
+            rows.append({
+                "unit_kind": unit_kind,
+                "unit_id": str(record.get(id_field) or ""),
+                "status": str(audit.get("status") or ""),
+                "changed_paths": list(audit.get("changed_paths") or []),
+                "rationale": str(audit.get("rationale") or ""),
+                "review_flags": list(audit.get("review_flags") or []),
+                "fixer": bool(audit.get("fixer")),
+                "authority": {
+                    "decision_key": str(audit.get("decision_key") or ""),
+                    "policy_version": str(
+                        audit.get("policy_version") or ""
+                    ),
+                },
+            })
+    diff = dict(payload.get("refinements") or {})
+    stable = {"rows": rows, "diff": diff}
+    _write_snapshot(
+        directory,
+        _MASTER_REFINEMENTS_SNAPSHOT,
+        {
+            "envelope_sha256": envelope_sha256,
+            "rows": rows,
+            "diff": diff,
+            "rows_sha256": rel.sha256_json(stable),
+        },
+    )
+
+
 def _snapshot_routes(
     directory: Path | None,
     *,
@@ -716,10 +771,11 @@ def run_release_for_job(
     """Run the complete assessment pipeline for one generated job.
 
     ``authorities`` optionally injects (author, critic) call pairs per stage
-    — keys: cells, materialize, route, level, cluster, describe, qa, plus an
-    optional one-call ``fixer`` tuple. Absent keys use each stage's live
-    default. Tests inject ``envelope_sha256`` and ``decision_store`` together;
-    production verifies the job's sealed envelope and uses its durable store.
+    — keys: cells, materialize, answer_restriction, marking, route, level,
+    cluster, describe, qa, refiner, plus an optional one-call ``fixer`` tuple.
+    Absent keys use each stage's live default. Tests inject
+    ``envelope_sha256`` and ``decision_store`` together; production verifies
+    the job's sealed envelope and uses its durable store.
     Returns the published release; its readiness says whether the database
     upload is open, and its manifest carries every flag and unplaced item.
     """
@@ -1337,6 +1393,145 @@ def run_release_for_job(
         "groups": groups,
         "placements": placements,
     }
+
+    # Stage 12 — read the actual rendered Master and polish only the explicit
+    # answer/rubric/group-description whitelist.  The assessment-only module
+    # decides each unit once, rolls back any identity/arithmetic/read-back
+    # regression, and never blocks this release: unavailable units remain
+    # authored byte-stable with visible review flags.
+    progress.log(
+        "Assessment release: refining final Master prose with immutable "
+        "question and marking identities."
+    )
+    master_refiner_learner_text_before = _learner_text_snapshot(
+        payload["candidates"]
+    )
+    refiner_provider, refiner_critic = _authority_pair(
+        authorities, "refiner"
+    )
+    refined_records, refinement_diff, refinement_flags = (
+        release_refiner.refine_release(
+            [payload],
+            metadata={**meta, "assessment_profile": profile},
+            provider=refiner_provider,
+            critic=refiner_critic,
+            store=store,
+            output_kind="assessment_master",
+            envelope_sha256=envelope_sha,
+            fixer=fixer,
+        )
+    )
+    if len(refined_records) == 1 and isinstance(
+        refined_records[0], Mapping
+    ):
+        payload = dict(refined_records[0])
+    # The seam itself is never-raising; a malformed delegated return is the
+    # one impossible local shape. Keep the original payload and surface the
+    # mechanics-owned warning instead of blocking publication.
+    else:
+        for record in payload["candidates"]:
+            _append_warning(record, _MASTER_REFINEMENT_WARNING)
+        for record in payload["groups"]:
+            if record.get("member_candidate_ids"):
+                _append_warning(record, _MASTER_REFINEMENT_WARNING)
+        refinement_diff = {
+            "policy_version": "assessment-master-refiner-1",
+            "decision_policies": {},
+            "output_kind": "assessment_master",
+            "changes": [],
+            "review_flags": [
+                "assessment Master Refiner returned no complete payload"
+            ],
+            "summary": (
+                "assessment Master Refiner returned no complete payload; "
+                "unrefined release staged"
+            ),
+            "resealed_after_refinement": False,
+        }
+        refinement_flags = list(refinement_diff["review_flags"])
+
+    # Defense at the orchestration boundary: the outer Refiner seam also
+    # catches import/delegation bugs. Its generic fallback preserves the
+    # payload but cannot know assessment row shapes, so translate any such
+    # release-level failure into the same visible per-row warning/audit here.
+    # Normal per-unit Refiner flags already carry their own audit and are not
+    # widened to unaffected siblings.
+    missing_audit_units = []
+    if refinement_flags:
+        for unit_kind, collection, id_field, policy_version in (
+            (
+                "candidate",
+                "candidates",
+                "candidate_id",
+                "assessment-master-refiner-candidate-1",
+            ),
+            (
+                "group",
+                "groups",
+                "group_key",
+                "assessment-master-refiner-group-1",
+            ),
+        ):
+            for record in payload.get(collection) or []:
+                if (
+                    unit_kind == "group"
+                    and not list(record.get("member_candidate_ids") or [])
+                ):
+                    # Required empty/NA shells validate and render, but they
+                    # are deliberately not Master Refiner decision units.
+                    continue
+                if isinstance(
+                    record.get(_MASTER_REFINEMENT_AUDIT_FIELD), Mapping
+                ):
+                    continue
+                missing_audit_units.append(
+                    (unit_kind, record, id_field, policy_version)
+                )
+    if missing_audit_units:
+        reason = "; ".join(
+            str(flag) for flag in refinement_flags if str(flag).strip()
+        ) or "assessment Master Refiner unavailable"
+        for unit_kind, record, _id_field, policy_version in (
+            missing_audit_units
+        ):
+            _append_warning(record, _MASTER_REFINEMENT_WARNING)
+            record[_MASTER_REFINEMENT_AUDIT_FIELD] = {
+                "unit_kind": unit_kind,
+                "decision_key": "",
+                "policy_version": policy_version,
+                "changed_paths": [],
+                "rationale": reason,
+                "review_flags": list(refinement_flags),
+                "fixer": False,
+                "status": "unavailable",
+            }
+        refinement_diff = {
+            "policy_version": "assessment-master-refiner-1",
+            "decision_policies": {
+                "assessment.master_refiner.candidate": (
+                    "assessment-master-refiner-candidate-1"
+                ),
+                "assessment.master_refiner.group": (
+                    "assessment-master-refiner-group-1"
+                ),
+            },
+            "output_kind": "assessment_master",
+            "changes": [],
+            "review_flags": list(refinement_flags),
+            "summary": reason,
+            "resealed_after_refinement": False,
+        }
+    payload["refinements"] = dict(refinement_diff)
+    candidates = list(payload.get("candidates") or [])
+    groups = list(payload.get("groups") or [])
+    _assert_learner_text_unchanged(
+        master_refiner_learner_text_before, candidates
+    )
+    _snapshot_master_refinements(
+        snapshot_directory,
+        envelope_sha256=envelope_sha,
+        payload=payload,
+    )
     release = release_service.create_release(
         db,
         chapter_id=chapter_id,

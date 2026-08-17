@@ -14,6 +14,7 @@ ASSESSMENT_AUDIT_FIELDS = {
     "_aegis_assessment_variant_cluster",
     "_aegis_assessment_group_description",
     "_aegis_assessment_group_quality",
+    "_aegis_assessment_master_refinement",
 }
 
 

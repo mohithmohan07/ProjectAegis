@@ -2,9 +2,9 @@
 
 This pass runs after ``assessment.answer_restriction``.  It receives the
 complete materialized candidate, the adopted answer-space contract, and the
-one explicit blueprint cell that owns the total marks.  No complete
-Question-Paper Blueprint artifact is available in this lane, so neither the
-prompt nor the audit fabricates one.
+one explicit blueprint cell that owns the total marks.  By permanent design,
+the API's per-item verdict owns the decomposition of that total.  No external
+marking-rubric document is consulted or expected.
 
 The model authors the mark decomposition, duration, and keyboard mode.  Local
 code checks only the response contract: exact identity and semantic
@@ -27,16 +27,17 @@ from . import semantic_confidence_policy as confidence_policy
 from .phase3 import kernel
 
 
-MARKING_POLICY_VERSION = "assessment-marking-2"
+MARKING_POLICY_VERSION = "assessment-marking-3"
 _ANSWER_RESTRICTION_AUDIT_FIELD = "_aegis_assessment_answer_restriction"
 
 MARKING_SYSTEM = (
     "You are the Aegis assessment marking author. Author the marking for ONE "
     "finalized assessment candidate after its Open/Specific answer-space "
     "contract has been adopted. The supplied explicit blueprint cell is the "
-    "sole authority for total marks. Only that cell and the adopted answer "
-    "contract are available; no complete Question-Paper Blueprint artifact "
-    "has been supplied, so do not claim, reconstruct, or invent one.\n"
+    "sole authority for total marks. You intentionally own the per-item "
+    "decomposition of that total from the finalized candidate and adopted "
+    "answer contract. No external marking-rubric document is part of this "
+    "contract, consulted, or expected; do not claim one as evidence.\n"
     "Preserve question and question_text byte-for-byte. Preserve every "
     "semantic answer, option, correct marker, rubric block, subquestion, and "
     "keyword field and preserve their order and cardinality. You may change "
@@ -71,8 +72,10 @@ MARKING_CRITIC_SYSTEM = (
     "math keyboard is actually needed. Verify that represented working and "
     "diagram contributions receive explicit marks, every represented "
     "subquestion matches the stem, and redundant steps receive no marks. "
-    "Only the explicit cell is available; "
-    "do not pretend a complete Question-Paper Blueprint artifact was supplied. "
+    "Treat the explicit cell as the total-marks authority and the API's "
+    "per-item verdict as the intentional decomposition authority. No external "
+    "marking-rubric document is consulted or expected; do not claim one as "
+    "evidence. "
     "Do not rewrite, replace, gate, or retry the author's decision. Dissent "
     "ships only as review evidence and the mechanically valid authored "
     "decision stands. State honest confidence.\n"
@@ -745,12 +748,15 @@ def _blueprint_authority(cell: Mapping[str, Any]) -> dict[str, Any]:
         "source": "explicit_blueprint_cell",
         "cell_id": str(cell.get("cell_id") or ""),
         "total_marks": float(_decimal(cell.get("marks")) or Decimal(0)),
-        "adopted_answer_contract_available": True,
-        "full_question_paper_blueprint_available": False,
-        "scope_note": (
-            "Only the explicit blueprint cell and adopted answer-space "
-            "contract were available; no full Question-Paper Blueprint "
-            "artifact was supplied or fabricated."
+        "total_marks_authority": "explicit_blueprint_cell",
+        "decomposition_authority": "api_per_item_verdict",
+        "answer_space_authority": "adopted_answer_space_contract",
+        "external_marking_rubric": "not_part_of_contract",
+        "external_marking_rubric_consulted": False,
+        "authority_note": (
+            "The explicit blueprint cell owns total marks and the API's "
+            "per-item verdict intentionally owns their decomposition. No "
+            "external marking-rubric document is consulted or expected."
         ),
     }
 
@@ -770,11 +776,15 @@ def _payload(
         "candidate": _content_evidence(candidate),
         "adopted_answer_contract": _content_evidence(contract),
         "blueprint_evidence": {
-            "availability": "explicit_cell_only",
+            "total_marks_authority": "explicit_blueprint_cell",
             "explicit_blueprint_cell": _content_evidence(cell),
-            "full_question_paper_blueprint_available": False,
+            "decomposition_authority": "api_per_item_verdict",
+            "external_marking_rubric": "not_part_of_contract",
+            "external_marking_rubric_consulted": False,
             "instruction": (
-                "Do not claim or fabricate a full Question-Paper Blueprint."
+                "Author the per-item decomposition within the explicit cell's "
+                "total. No external marking-rubric document is consulted or "
+                "expected."
             ),
         },
     }

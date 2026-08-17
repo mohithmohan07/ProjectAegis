@@ -17,10 +17,12 @@ import pytest
 from app import models
 from app.bulk_import import assessment_workbook as aw
 from app.services import assessment_release as rel
+from app.services import assessment_master_refiner
 from app.services import assessment_release_run as run
 from app.services import assessment_release_snapshot as release_snapshot
 from app.services import assessment_release_service as svc
 from app.services import build_concepts_release
+from app.services import release_refiner
 from app.services.phase3 import kernel
 
 OWNER = "local:default"
@@ -277,6 +279,35 @@ def _authorities(db, chapter, *, calls=None, qa_payloads=None):
         qa_payloads.append(copy.deepcopy(payload))
         return {"group_key": payload["group"]["group_key"], "flags": []}
 
+    def refiner_author(payload):
+        record("refiner", payload)
+        unit_kind = payload["unit_kind"]
+        refined = copy.deepcopy(payload[unit_kind])
+        if unit_kind == "candidate":
+            if refined["sheet_kind"] == "objective":
+                refined["answers"][0]["answer_content"] = "A cube"
+                refined["answer_explanation"] = (
+                    "A cube occupies space in three dimensions."
+                )
+            else:
+                refined["display_answer"] = (
+                    "A cube occupies space in all three dimensions."
+                )
+                refined["answers"][0]["answer_content"] = (
+                    "Names and justifies all three dimensions."
+                )
+        else:
+            refined["semantic_description"] = (
+                str(refined.get("semantic_description") or "").rstrip(".")
+                + ", expressed with precise grade-level wording."
+            )
+        return {
+            "record_kind": unit_kind,
+            "row_ref": payload["row_ref"],
+            "record": refined,
+            "rationale": "Polishes final prose without revisiting identity.",
+        }
+
     def verified_critic(payload):
         record("critic", payload)
         return {"verdict": "verified", "confidence": 1.0, "issues": []}
@@ -293,6 +324,7 @@ def _authorities(db, chapter, *, calls=None, qa_payloads=None):
         "cluster": (cluster_author, verified_critic),
         "describe": (describe_author, verified_critic),
         "qa": (qa_reviewer, verified_critic),
+        "refiner": (refiner_author, verified_critic),
     }, "Solid Shapes"
 
 
@@ -327,6 +359,7 @@ def test_full_pipeline_publishes_a_ready_release(db):
     q = objective_rows[0]
     assert q["question_appears_in"] == "Pre/Post-Worksheet/Test"
     assert q["answer_restriction"] == "Specific"
+    assert q["answer_content_1"] == "A cube"
     assert q["question_duration"] == 2
     assert str(q["correct_answer_1"]) == "Yes"
     # Labels mint from the concept machine identity in source order.
@@ -336,6 +369,9 @@ def test_full_pipeline_publishes_a_ready_release(db):
     assert descriptive_rows[0]["answer_restriction"] == "Open"
     assert descriptive_rows[0]["question_duration"] == 5
     assert descriptive_rows[0]["math_keyboard"] == "No"
+    assert descriptive_rows[0]["display_answer"] == (
+        "A cube occupies space in all three dimensions."
+    )
     # Both questions carry the model-authored Advanced tier even though their
     # blueprint difficulties are Less and Moderate. Two authored variant
     # families occupy that tier; the remaining required shells stay NA.
@@ -427,10 +463,13 @@ def test_full_pipeline_publishes_a_ready_release(db):
         ]["registry_id"] == "registry-v2.0"
         assert candidate["_aegis_assessment_marking"]["authority"][
             "policy_version"
-        ] == "assessment-marking-2"
+        ] == "assessment-marking-3"
         assert candidate["_aegis_assessment_marking"][
             "blueprint_authority"
-        ]["full_question_paper_blueprint_available"] is False
+        ]["decomposition_authority"] == "api_per_item_verdict"
+        assert candidate["_aegis_assessment_master_refinement"][
+            "policy_version"
+        ] == "assessment-master-refiner-candidate-1"
         assert candidate["_aegis_assessment_route"]["authority"][
             "policy_version"
         ] == "assessment-route-1"
@@ -441,6 +480,15 @@ def test_full_pipeline_publishes_a_ready_release(db):
             "policy_version"] == "assessment-group-description-1"
         assert group["_aegis_assessment_group_quality"]["authority"][
             "policy_version"] == "assessment-group-quality-1"
+        assert group["_aegis_assessment_master_refinement"][
+            "policy_version"
+        ] == "assessment-master-refiner-group-1"
+        assert group["semantic_description"].endswith(
+            "precise grade-level wording."
+        )
+
+    assert payload["refinements"]["output_kind"] == "assessment_master"
+    assert payload["refinements"]["changes"]
 
     sibling_map = {
         payload["group"]["group_key"]: {
@@ -852,7 +900,8 @@ def test_grouping_decisions_replay_without_provider_calls(db, tmp_path):
         "cluster": 1,
         "describe": 2,
         "qa": 2,
-        "critic": 17,
+        "refiner": 4,
+        "critic": 21,
     }
     assert {key: len(calls.get(key, [])) for key in expected_counts} == (
         expected_counts
@@ -879,6 +928,7 @@ def test_grouping_decisions_replay_without_provider_calls(db, tmp_path):
             "source.phase3-assessment-routes.json",
             "source.phase3-assessment-levels.json",
             "source.phase3-assessment-groups.json",
+            "source.phase3-assessment-master-refinements.json",
         )
     ]
     assert all(path.is_file() for path in snapshot_paths)
@@ -942,6 +992,115 @@ def test_route_critic_dissent_publishes_with_review_warning(db):
     )
     directory = Path(release.publication["directory"])
     assert (directory / svc.MASTER_FILENAME).is_file()  # downloads survive
+
+
+def test_master_refiner_delegate_failure_stages_unrefined_rows_with_warning(
+    db, monkeypatch,
+):
+    chapter = _chapter_with_concepts(db)
+    job = _make_job(db, chapter)
+    authorities, _ = _authorities(db, chapter)
+
+    def unavailable(*_args, **_kwargs):
+        raise RuntimeError("assessment Refiner import/delegation unavailable")
+
+    monkeypatch.setattr(
+        assessment_master_refiner, "refine_master", unavailable
+    )
+    release = run.run_release_for_job(
+        db,
+        job.id,
+        owner_sub=OWNER,
+        authorities=authorities,
+        **_decision_context(),
+    )
+
+    assert (release.diagnostics or {}).get("readiness") == (
+        svc.RELEASED_WITH_WARNINGS
+    )
+    assert release.payload["refinements"]["policy_version"] == (
+        "assessment-master-refiner-1"
+    )
+    assert release.payload["refinements"]["changes"] == []
+    for record in [
+        *release.payload["candidates"],
+        *release.payload["groups"],
+    ]:
+        assert "assessment_master_refiner_review" in record["flags"]
+        audit = record["_aegis_assessment_master_refinement"]
+        assert audit["status"] == "unavailable"
+        assert audit["review_flags"]
+    assert {
+        candidate["question"] for candidate in release.payload["candidates"]
+    } == {
+        "Which of these is a solid?",
+        "Explain why a cube is a solid.",
+    }
+
+
+def test_refiner_dissent_keeps_diff_when_required_empty_group_has_no_audit(
+    db, monkeypatch,
+):
+    chapter = _chapter_with_concepts(db)
+    job = _make_job(db, chapter)
+    authorities, _ = _authorities(db, chapter)
+
+    def dissent(_payload):
+        return {
+            "verdict": "dissent",
+            "confidence": 0.8,
+            "issues": ["Review final prose."],
+        }
+
+    authorities["refiner"] = (authorities["refiner"][0], dissent)
+    real_refine = release_refiner.refine_release
+
+    def include_empty_required_group(records, **kwargs):
+        payload = copy.deepcopy(records[0])
+        occupied = payload["groups"][0]
+        machine_prefix = str(occupied["group_key"]).split(")", 1)[0] + ")"
+        concept_name = str(occupied["group_name"]).split(" — ", 1)[0]
+        payload["groups"].append({
+            "group_key": f"{machine_prefix} BG01",
+            "concept_id": occupied["concept_id"],
+            "concept_key": occupied["concept_key"],
+            "group_type": "Basic",
+            "group_sequence": 1,
+            "group_name": f"{concept_name} — Basic",
+            "group_display_name": f"{concept_name} — Basic",
+            "family": "",
+            "semantic_description": "NA",
+            "member_candidate_ids": [],
+            "group_status": "Active",
+            "flags": [],
+        })
+        return real_refine([payload], **kwargs)
+
+    monkeypatch.setattr(
+        release_refiner, "refine_release", include_empty_required_group
+    )
+    release = run.run_release_for_job(
+        db,
+        job.id,
+        owner_sub=OWNER,
+        authorities=authorities,
+        **_decision_context(),
+    )
+
+    diff = release.payload["refinements"]
+    assert diff["changes"]
+    assert any(
+        change["after"] == "A cube" for change in diff["changes"]
+    )
+    empty = next(
+        group for group in release.payload["groups"]
+        if not group.get("member_candidate_ids")
+    )
+    assert "_aegis_assessment_master_refinement" not in empty
+    assert "assessment_master_refiner_review" not in empty["flags"]
+    assert (release.diagnostics or {}).get("readiness") == (
+        svc.RELEASED_WITH_WARNINGS
+    )
 
 
 def test_job_without_inventory_is_refused(db):

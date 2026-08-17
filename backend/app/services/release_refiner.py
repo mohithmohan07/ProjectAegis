@@ -26,13 +26,12 @@ module is §8.3's model-driven pre-stage output Refiner.
 
 Scope exclusions this round (later steps of docs/aegis-restructure.md §10):
 
-* the MES/assessment lane rendered outputs (Concept/Master files);
-* group-description quality (Output 02 groups arrive in step 6);
 * the pre-learning outputs (step 7);
 * the DB-deposit (non-release) path.
 
 The seam accepts an ``output_kind`` parameter so those lanes join without
-redesign; only ``"concepts_release"`` is implemented this round.
+redesign. ``"assessment_master"`` delegates lazily to the assessment-only
+module; the original ``"concepts_release"`` implementation below is unchanged.
 """
 from __future__ import annotations
 
@@ -544,6 +543,8 @@ def refine_release(
     critic: kernel.Critic | None = None,
     store: kernel.DecisionStore | None = None,
     output_kind: str = "concepts_release",
+    envelope_sha256: str | None = None,
+    fixer: kernel.Provider | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], list[str]]:
     """Refine the captured release rows. Never raises, never blocks.
 
@@ -558,6 +559,22 @@ def refine_release(
         if isinstance(row, Mapping)
     ]
     try:
+        if output_kind == "assessment_master":
+            # Keep the assessment implementation out of the concepts lane.
+            # In particular, concepts_release never reads its envelope/Fixer
+            # arguments and retains its original payload and decision keys.
+            from . import assessment_master_refiner
+
+            return assessment_master_refiner.refine_master(
+                original,
+                metadata=metadata,
+                instruction_set=instruction_set,
+                provider=provider,
+                critic=critic,
+                store=store,
+                envelope_sha256=envelope_sha256,
+                fixer=fixer,
+            )
         return _refine(
             original,
             metadata=metadata,

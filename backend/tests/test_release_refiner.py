@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import copy
 import io
+import sys
+import types
 
 from openpyxl import load_workbook
 
@@ -117,6 +119,122 @@ class _Provider:
                 "rationale": "polished wording for grade consistency",
             }]
         }
+
+
+def test_assessment_master_output_kind_delegates_lazily(monkeypatch):
+    records = [{"candidates": [{"candidate_id": "CAND-1"}], "groups": []}]
+    metadata = {"subject": "Mathematics", "grade": "6"}
+    instruction_set = {"slots": {"tone": "clear"}}
+    provider = lambda _payload: {}  # noqa: E731 - identity sentinel
+    critic = lambda _payload: {}  # noqa: E731 - identity sentinel
+    fixer = lambda _payload: {}  # noqa: E731 - identity sentinel
+    store = kernel.DecisionStore()
+    seen = {}
+    expected = (
+        [{"delegated": True}],
+        {
+            "policy_version": "assessment-master-refiner-1",
+            "output_kind": "assessment_master",
+            "changes": [],
+        },
+        ["assessment refiner review"],
+    )
+
+    def refine_master(received, **kwargs):
+        seen["records"] = received
+        seen.update(kwargs)
+        return expected
+
+    module_name = "app.services.assessment_master_refiner"
+    module = types.ModuleType(module_name)
+    module.refine_master = refine_master
+    monkeypatch.setitem(sys.modules, module_name, module)
+    services_package = sys.modules["app.services"]
+    monkeypatch.setattr(
+        services_package, "assessment_master_refiner", module, raising=False
+    )
+
+    actual = release_refiner.refine_release(
+        records,
+        metadata=metadata,
+        instruction_set=instruction_set,
+        provider=provider,
+        critic=critic,
+        store=store,
+        output_kind="assessment_master",
+        envelope_sha256="sealed-envelope",
+        fixer=fixer,
+    )
+
+    assert actual == expected
+    assert seen["records"] == records
+    assert seen["records"] is not records
+    assert seen["records"][0] is not records[0]
+    assert seen["metadata"] is metadata
+    assert seen["instruction_set"] is instruction_set
+    assert seen["provider"] is provider
+    assert seen["critic"] is critic
+    assert seen["store"] is store
+    assert seen["envelope_sha256"] == "sealed-envelope"
+    assert seen["fixer"] is fixer
+
+
+def test_concepts_release_ignores_assessment_only_arguments_byte_for_byte():
+    class RecordingProvider(_Provider):
+        def __init__(self):
+            super().__init__(replace=("see how", "discover how"))
+            self.payloads = []
+
+        def __call__(self, payload):
+            self.payloads.append(copy.deepcopy(payload))
+            return super().__call__(payload)
+
+    class UnreadableEnvelope:
+        def __str__(self):  # pragma: no cover - reading it fails the test
+            raise AssertionError("concepts_release read assessment envelope")
+
+    def forbidden_fixer(_payload):
+        raise AssertionError("concepts_release called assessment Fixer")
+
+    def recording_critic(log):
+        def critic(payload):
+            log.append(copy.deepcopy(payload))
+            return {"verdict": "verified", "confidence": 1.0, "issues": []}
+
+        return critic
+
+    default_provider = RecordingProvider()
+    explicit_provider = RecordingProvider()
+    default_critic_payloads = []
+    explicit_critic_payloads = []
+    default_store = kernel.DecisionStore()
+    explicit_store = kernel.DecisionStore()
+
+    implicit = release_refiner.refine_release(
+        _rows(),
+        metadata=_METADATA,
+        provider=default_provider,
+        critic=recording_critic(default_critic_payloads),
+        store=default_store,
+        envelope_sha256=UnreadableEnvelope(),
+        fixer=forbidden_fixer,
+    )
+    explicit = release_refiner.refine_release(
+        _rows(),
+        metadata=_METADATA,
+        provider=explicit_provider,
+        critic=recording_critic(explicit_critic_payloads),
+        store=explicit_store,
+        output_kind="concepts_release",
+        envelope_sha256=UnreadableEnvelope(),
+        fixer=forbidden_fixer,
+    )
+
+    assert explicit == implicit
+    assert explicit_provider.payloads == default_provider.payloads
+    assert explicit_critic_payloads == default_critic_payloads
+    assert explicit_store.keys() == default_store.keys()
+    assert len(explicit_store.keys()) == len(_rows())
 
 
 def test_a_refinement_lands_with_a_recorded_diff_and_row_mark():

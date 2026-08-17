@@ -1,10 +1,10 @@
 # Restructure handoff — method, conventions, and briefs for §10 steps 6–12
 
-Steps 1–5 of `docs/aegis-restructure.md` §10 are complete on branch
-`claude/phase-3-rewrite-migration-8wg2ax` (PR #227, commits `19479be..ef9160a`).
-This document hands the remaining steps to the next implementer. It is not a
+Steps 1–6 of `docs/aegis-restructure.md` §10 are complete on branch
+`claude/phase-3-rewrite-migration-8wg2ax` (PR #227, history through this
+commit). This document hands steps 7–12 to the next implementer. It is not a
 spec — the spec is `docs/aegis-restructure.md` plus the §12 decision register.
-It records **how the first five steps were built**, so steps 6–12 stay
+It records **how the first six steps were built**, so steps 7–12 stay
 consistent in method, code shape, and discipline.
 
 ## 0. The two documents that outrank this one
@@ -259,12 +259,14 @@ Blueprint & Analysis* is deliberately **not** adopted as runtime evidence —
 do not hunt for it, do not wire it in, do not fail closed waiting on it.
 (This reverses the earlier "missing owner artifact" framing.) The legacy,
 admin-overridable `assessment.rubric` prompt is likewise not the decomposition
-authority. Code carry-over for slice 5 / next-in-lane: the marking pass may
-keep recording an audit fact that no rubric document was consulted, but drop
-any wording — in code comments, the audit marker, or
-`docs/assessment-decision-registry.md` — that implies a *pending* or *missing*
-dependency; the model authoring the breakdown is the intended permanent
-design, not a fallback.
+authority. Slice 5 resolves the code carry-over: the marking pass may
+keep recording the permanent audit fact that no external rubric document was
+consulted, but no wording — in code comments, the audit marker, or
+`docs/assessment-decision-registry.md` — may imply a *pending* or *missing*
+dependency. Slice 5 advances this evidence contract to
+`assessment-marking-3`: the model authoring the breakdown is the intended
+permanent design, not a fallback, and existing v2 decisions remain immutable
+historical records.
 
 **The Refiner dispatch is step-6 code.** There is no file-level freeze on
 steps 1–5. The real constraints are: golden fixtures are recorded verdicts and
@@ -273,6 +275,20 @@ pre-spend pause suites pass unchanged; and the `concepts_release` branch of
 `release_refiner.py` stays byte-behavior identical. An additive
 `assessment_master` dispatch at the existing `output_kind` seam, with the
 assessment logic in its own module, satisfies all of these.
+
+**Slice 5 decision identities and release behavior (resolved).** Candidate
+prose uses `assessment.master_refiner.candidate` /
+`assessment-master-refiner-candidate-1`; group descriptions use
+`assessment.master_refiner.group` /
+`assessment-master-refiner-group-1`. Both stamp the shared private audit
+`_aegis_assessment_master_refinement`. They run after question-label minting
+and before release freeze. Their independent critic is advisory and every
+author/Fixer/validation failure is nonblocking: restore the affected
+unrefined unit, record `assessment_master_refiner_review`, and continue to a
+downloadable release. Arithmetic and production workbook read-back run after
+the pass; a new defect rolls back its unit and can never ship as an
+accept-with-flag result. The ordered diff is stored on the release without a
+new visible workbook sheet or schema field.
 
 **The Master Refiner must not alter `question` or `question_text`.** Variant
 clustering groups questions *by their wording*, and §8.3 forbids the Refiner
@@ -302,13 +318,14 @@ violation. Not a blocker for Output 02; do not drop it either.
 `build_concepts_release._RELEASE_AUDIT_FIELDS`. Extend the same list; a
 separate assessment-local registry is indirection for no gain.
 
-**Land step 6 in verified slices.** Ten new decision kinds plus a Master
-Refiner is the largest step in the sequence. Each slice gets its own commit
-with the full suite green: (1) Q12 naming + read-back provenance ledger;
+**Step 6 landed in five verified slices.** Ten new decision kinds plus a
+Master Refiner made this the largest step in the sequence. Each slice has its
+own commit and independent audit with the full suite green: (1) Q12 naming +
+read-back provenance ledger;
 (2) level verdict + variant clustering + group descriptions to
 `kernel.decide`; (3) routing + cells + materialization; (4) Open/Specific +
 marking as distinct passes with the registry evidence; (5) the Master Refiner
-dispatch.
+dispatch. Preserve these settled contracts while implementing steps 7–12.
 
 **Confirmed findings from the step-6 map** (act on all of them): the
 Objective→Specific executable policy at `assessment_materialization.py:64-68,
